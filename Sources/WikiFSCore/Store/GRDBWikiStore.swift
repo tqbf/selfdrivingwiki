@@ -4241,25 +4241,10 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    /// Compatibility forwarder — the protected contract under `.preserve`.
+    /// See `deleteResources(_:)` for the atomicity + event guarantees.
     public func deletePage(id: PageID) throws {
-        try mutate(event: { _ in
-            self.localEvent(.page, id: id.rawValue, change: .deleted)
-        }) { db in
-            // FK safety: page_links, attachments, source_links all have FKs
-            // onto pages(id) WITHOUT ON DELETE CASCADE (unlike page_chunks).
-            // Clear every dependent row first, then delete the page — all in
-            // ONE transaction (dbWriter.write provides this).
-            try db.execute(sql: "DELETE FROM page_links WHERE from_page_id = ? OR to_page_id = ?;",
-                           arguments: [id.rawValue, id.rawValue])
-            try db.execute(sql: "DELETE FROM source_links WHERE from_page_id = ?;",
-                           arguments: [id.rawValue])
-            try db.execute(sql: "DELETE FROM attachments WHERE page_id = ?;",
-                           arguments: [id.rawValue])
-            try db.execute(sql: "DELETE FROM refs WHERE owner_id = ? AND kind = 'page-content';",
-                           arguments: [id.rawValue])
-            try db.execute(sql: "DELETE FROM pages WHERE id = ?;",
-                           arguments: [id.rawValue])
-        }
+        try deleteResources(ResourceDeletionRequest(target: .page(id), linkPolicy: .preserve))
     }
 
     public func resolveTitleToID(_ title: String) throws -> PageID? {
@@ -4287,63 +4272,73 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         try mutate(event: { _ in
             self.localEvent(.page, id: pageID.rawValue, change: .updated)
         }) { db in
-            // Delete all existing outgoing page + source links, then insert the
-            // resolved subset. Faithful port of `SQLiteWikiStore.replaceLinks`:
-            // canonical-ULID targets validate by id (direct row fetch); legacy
-            // and forward links resolve by name via `resolveLinkTarget`. All
-            // resolvers used here are the `*Locked` variants that take the
-            // in-transaction `db` — the public `resolveTitleToID` /
-            // `resolveSourceByName` open their own `dbWriter.read`, which would
-            // re-enter the DatabasePool's serial queue and hit GRDB's fatal
-            // "Database methods are not reentrant".
-            try db.execute(sql: "DELETE FROM page_links WHERE from_page_id = ?;",
-                           arguments: [pageID.rawValue])
-            try db.execute(sql: "DELETE FROM source_links WHERE from_page_id = ?;",
-                           arguments: [pageID.rawValue])
-            for link in parsedLinks {
-                switch link.linkType {
-                case .page:
-                    let resolved: PageID?
-                    if let id = try self.canonicalLinkID(link, in: db) {
-                        resolved = id
-                    } else {
-                        resolved = try self.resolveLinkTarget(
-                            link, using: self.resolveTitleToIDLocked, in: db)
-                    }
-                    guard let resolved else { continue }
-                    try db.execute(sql: """
-                    INSERT OR IGNORE INTO page_links (from_page_id, to_page_id, link_text)
-                    VALUES (?, ?, ?);
-                    """, arguments: [pageID.rawValue, resolved.rawValue, link.linkText])
-                case .source:
-                    let resolved: SourceID?
-                    if let id = try self.canonicalLinkID(link, in: db) {
-                        resolved = SourceID(rawValue: id.rawValue)
-                    } else {
-                        resolved = try self.resolveLinkTarget(
-                            link, using: self.resolveSourceByNameLocked, in: db)
-                    }
-                    guard let resolved else { continue }
-                    // Resolve the `@vN` ordinal (1-based) to a concrete smv id;
-                    // NULL when unpinned or out-of-range (follows the active ref).
-                    let pinID = try link.versionPin.flatMap {
-                        try self.resolveVersionPin($0, sourceID: resolved, in: db)
-                    }
-                    // Embed source links (`![[source:…]]`) write a DISTINCT edge
-                    // with role='embed' — the `source_links_edge` unique index
-                    // treats (from, to, role, pin) as distinct, so a cite + embed
-                    // to the same source coexist as separate rows (Phase 4a, AC.3).
-                    let role = link.isEmbed ? "embed" : "cite"
-                    try db.execute(sql: """
-                    INSERT OR IGNORE INTO source_links
-                        (from_page_id, to_source_id, link_text, role, pinned_version_id)
-                    VALUES (?, ?, ?, ?, ?);
-                    """, arguments: [pageID.rawValue, resolved.rawValue, link.linkText,
-                                     role, pinID?.rawValue])
-                case .chat:
-                    // Chat links resolve at render time (no persisted graph edge).
-                    continue
+            try self.replaceLinksLocked(from: pageID, parsedLinks: parsedLinks, on: db)
+        }
+    }
+
+    /// The db-handle core of `replaceLinks` — same resolution rules, no
+    /// transaction, no event. Callers already inside a write transaction (the
+    /// protected deletion's unlink rewrites) route through this instead of the
+    /// public mutator, which would re-enter the writer queue and deadlock.
+    private func replaceLinksLocked(
+        from pageID: PageID, parsedLinks: [ParsedLink], on db: Database
+    ) throws {
+        // Delete all existing outgoing page + source links, then insert the
+        // resolved subset. Faithful port of `SQLiteWikiStore.replaceLinks`:
+        // canonical-ULID targets validate by id (direct row fetch); legacy
+        // and forward links resolve by name via `resolveLinkTarget`. All
+        // resolvers used here are the `*Locked` variants that take the
+        // in-transaction `db` — the public `resolveTitleToID` /
+        // `resolveSourceByName` open their own `dbWriter.read`, which would
+        // re-enter the DatabasePool's serial queue and hit GRDB's fatal
+        // "Database methods are not reentrant".
+        try db.execute(sql: "DELETE FROM page_links WHERE from_page_id = ?;",
+                       arguments: [pageID.rawValue])
+        try db.execute(sql: "DELETE FROM source_links WHERE from_page_id = ?;",
+                       arguments: [pageID.rawValue])
+        for link in parsedLinks {
+            switch link.linkType {
+            case .page:
+                let resolved: PageID?
+                if let id = try self.canonicalLinkID(link, in: db) {
+                    resolved = id
+                } else {
+                    resolved = try self.resolveLinkTarget(
+                        link, using: self.resolveTitleToIDLocked, in: db)
                 }
+                guard let resolved else { continue }
+                try db.execute(sql: """
+                INSERT OR IGNORE INTO page_links (from_page_id, to_page_id, link_text)
+                VALUES (?, ?, ?);
+                """, arguments: [pageID.rawValue, resolved.rawValue, link.linkText])
+            case .source:
+                let resolved: SourceID?
+                if let id = try self.canonicalLinkID(link, in: db) {
+                    resolved = SourceID(rawValue: id.rawValue)
+                } else {
+                    resolved = try self.resolveLinkTarget(
+                        link, using: self.resolveSourceByNameLocked, in: db)
+                }
+                guard let resolved else { continue }
+                // Resolve the `@vN` ordinal (1-based) to a concrete smv id;
+                // NULL when unpinned or out-of-range (follows the active ref).
+                let pinID = try link.versionPin.flatMap {
+                    try self.resolveVersionPin($0, sourceID: resolved, in: db)
+                }
+                // Embed source links (`![[source:…]]`) write a DISTINCT edge
+                // with role='embed' — the `source_links_edge` unique index
+                // treats (from, to, role, pin) as distinct, so a cite + embed
+                // to the same source coexist as separate rows (Phase 4a, AC.3).
+                let role = link.isEmbed ? "embed" : "cite"
+                try db.execute(sql: """
+                INSERT OR IGNORE INTO source_links
+                    (from_page_id, to_source_id, link_text, role, pinned_version_id)
+                VALUES (?, ?, ?, ?, ?);
+                """, arguments: [pageID.rawValue, resolved.rawValue, link.linkText,
+                                 role, pinID?.rawValue])
+            case .chat:
+                // Chat links resolve at render time (no persisted graph edge).
+                continue
             }
         }
     }
@@ -4854,18 +4849,479 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    /// Compatibility forwarder — the protected contract under `.preserve`.
+    /// Provenance blockers throw the typed restriction before any write.
+    /// See `deleteResources(_:)` for the atomicity + event guarantees.
     public func deleteSource(id: SourceID) throws {
-        try mutate(event: { _ in
-            self.localEvent(.source, id: id.rawValue, change: .deleted)
-        }) { db in
-            if let blockers = try self.provenanceDeletionBlockers(sourceID: id, on: db) {
-                throw WikiStoreError.deletionRestricted(.provenance(blockers))
-            }
-            // source_versions cascade on DELETE, but blobs and activities do
-            // not — they're left for lazy GC (vacuumBlobs/vacuumActivities).
-            try db.execute(sql: "DELETE FROM sources WHERE id = ?;",
-                           arguments: [id.rawValue])
+        try deleteResources(ResourceDeletionRequest(target: .source(id), linkPolicy: .preserve))
+    }
+
+    // MARK: - Protected deletion (issue #219 hardening)
+    //
+    // One write transaction owns impact discovery, provenance validation,
+    // optional link rewrites, mandatory bookmark cleanup, and target deletion.
+    // Events are buffered by `mutateBatch` and emitted strictly after commit —
+    // a rollback emits nothing, and a missing target emits no false
+    // target-deleted event.
+
+    /// TEST SEAM — never passed by production code. `deleteResources` offers
+    /// an internal overload taking a `ProtectedDeletionFailurePoint` so tests
+    /// can throw at a deterministic stage (default `.none`, the only value
+    /// production uses). A parameter, not stored state: nothing to reset, no
+    /// unsynchronized access.
+    public func deletionImpact(for targets: Set<ResourceDeletionTarget>) throws -> DeletionImpact {
+        try dbWriter.read { db in
+            try self.deletionImpact(for: targets, on: db)
         }
+    }
+
+    @discardableResult
+    public func deleteResources(_ request: ResourceDeletionRequest) throws -> ResourceDeletionResult {
+        try deleteResources(request, failurePoint: .none)
+    }
+
+    /// Internal overload backing the test seam. Internal to the module; app
+    /// and CLI code only ever see the public single-argument form.
+    func deleteResources(
+        _ request: ResourceDeletionRequest,
+        failurePoint: ProtectedDeletionFailurePoint
+    ) throws -> ResourceDeletionResult {
+        try mutateBatch(events: { result in
+            var events: [ResourceChangeEvent] = []
+            // Rewritten linking pages first …
+            for pageID in result.rewrittenPageIDs {
+                events.append(self.localEvent(.page, id: pageID.rawValue, change: .updated))
+            }
+            // … then every removed bookmark leaf (one tree invalidation per
+            // leaf — subscribers reload the complete tree, which also picks
+            // up renumbered siblings, so no per-sibling position events) …
+            for bookmarkID in result.removedBookmarkIDs {
+                events.append(self.localEvent(.bookmark, id: bookmarkID.rawValue, change: .deleted))
+            }
+            // … and finally one deleted event per target row that actually
+            // existed (never a false event for a missing id).
+            for target in ResourceDeletionTarget.sorted(Set(result.deletedTargets)) {
+                switch target {
+                case .page(let id):
+                    events.append(self.localEvent(.page, id: id.rawValue, change: .deleted))
+                case .source(let id):
+                    events.append(self.localEvent(.source, id: id.rawValue, change: .deleted))
+                }
+            }
+            return events
+        }) { db in
+            try self.deleteResourcesLocked(request, failurePoint: failurePoint, on: db)
+        }
+    }
+
+    /// The db-handle core of the protected deletion. Runs entirely inside the
+    /// caller's `mutateBatch` savepoint; never opens a transaction or emits an
+    /// event.
+    private func deleteResourcesLocked(
+        _ request: ResourceDeletionRequest,
+        failurePoint: ProtectedDeletionFailurePoint,
+        on db: Database
+    ) throws -> ResourceDeletionResult {
+        let pageIDs = request.pageIDs
+        let sourceIDs = request.sourceIDs
+
+        // 1. Recheck the impact INSIDE the write transaction. The pre-delete
+        //    snapshot the UI showed is advisory — this re-read is authoritative.
+        let impact = try deletionImpact(for: request.targets, on: db)
+
+        // 2. Provenance validation BEFORE the first mutation (AC.6): any
+        //    blocker — even one whose citing page is itself selected for
+        //    deletion — stops the complete batch with zero writes.
+        if let blockers = NonEmptyProvenanceDeletionBlockers(impact.provenanceBlockers) {
+            throw WikiStoreError.deletionRestricted(.provenance(blockers))
+        }
+
+        // 3. Optional link rewrites (AC.4, AC.5): each distinct linking page
+        //    is rewritten at most once, and pages in the deletion set are
+        //    excluded (their bodies vanish with them).
+        var rewrittenPageIDs: [PageID] = []
+        if request.linkPolicy == .unlink {
+            for linkingPage in impact.linkingPages {
+                if try rewritePageUnlinkingTargets(
+                    pageID: linkingPage.pageID,
+                    deletedPageIDs: pageIDs,
+                    deletedSourceIDs: sourceIDs,
+                    on: db)
+                {
+                    rewrittenPageIDs.append(linkingPage.pageID)
+                }
+            }
+        }
+        try throwIfFailureInjected(failurePoint, at: .afterRewrite)
+
+        // 4. Mandatory bookmark cleanup (AC.1, AC.2, AC.14): every leaf
+        //    pointing at a deleted target goes, with sibling renumbering —
+        //    even when the target row itself is already gone (stale rows).
+        let removedBookmarkIDs = try deleteBookmarksMatching(
+            pageIDs: pageIDs, sourceIDs: sourceIDs, on: db)
+        try throwIfFailureInjected(failurePoint, at: .afterBookmarkCleanup)
+
+        // 5. Target rows + dependent graph rows (AC.14: a missing target is an
+        //    idempotent no-op and produces no result entry).
+        try throwIfFailureInjected(failurePoint, at: .beforeTargetDeletion)
+        var deletedTargets: [ResourceDeletionTarget] = []
+        for id in pageIDs {
+            if try deletePageTargetRow(id, on: db) { deletedTargets.append(.page(id)) }
+        }
+        for id in sourceIDs {
+            if try deleteSourceTargetRow(id, on: db) { deletedTargets.append(.source(id)) }
+        }
+
+        return ResourceDeletionResult(
+            deletedTargets: deletedTargets,
+            rewrittenPageIDs: rewrittenPageIDs,
+            removedBookmarkIDs: removedBookmarkIDs,
+            incomingLinkCount: impact.incomingLinkCount)
+    }
+
+    /// Throws when the test seam names exactly `expected`. Production runs
+    /// with `.none`, which matches nothing.
+    private func throwIfFailureInjected(
+        _ failurePoint: ProtectedDeletionFailurePoint,
+        at expected: ProtectedDeletionFailurePoint
+    ) throws {
+        guard failurePoint == expected else { return }
+        throw WikiStoreError.unexpected(
+            "protected deletion failure injected at \(expected) (test seam)")
+    }
+
+    /// Computes the deletion impact on an open database handle — shared by the
+    /// read-side `deletionImpact(for:)` and the in-transaction recheck inside
+    /// `deleteResourcesLocked`, so the preflight snapshot and the write-time
+    /// truth can never drift in shape.
+    private func deletionImpact(
+        for targets: Set<ResourceDeletionTarget>, on db: Database
+    ) throws -> DeletionImpact {
+        let pageIDs = ResourceDeletionTarget.sorted(targets).compactMap(\.pageID)
+        let sourceIDs = ResourceDeletionTarget.sorted(targets).compactMap(\.sourceID)
+        let pageStrings = pageIDs.map(\.rawValue)
+        let sourceStrings = sourceIDs.map(\.rawValue)
+
+        // Incoming linking pages (both link kinds), excluding pages that are
+        // themselves in the deletion set.
+        var linkingIDStrings: Set<String> = []
+        if !pageStrings.isEmpty {
+            let rows = try String.fetchAll(db, sql: """
+            SELECT DISTINCT from_page_id FROM page_links
+            WHERE to_page_id IN (\(Self.placeholders(pageStrings.count)));
+            """, arguments: StatementArguments(pageStrings))
+            linkingIDStrings.formUnion(rows)
+        }
+        if !sourceStrings.isEmpty {
+            let rows = try String.fetchAll(db, sql: """
+            SELECT DISTINCT from_page_id FROM source_links
+            WHERE to_source_id IN (\(Self.placeholders(sourceStrings.count)));
+            """, arguments: StatementArguments(sourceStrings))
+            linkingIDStrings.formUnion(rows)
+        }
+        linkingIDStrings.subtract(pageStrings)
+        let linkingIDs = linkingIDStrings.sorted().map(PageID.init(rawValue:))
+
+        // Presentation titles for the linking pages (nil when the row vanished).
+        var titles: [String: String] = [:]
+        if !linkingIDs.isEmpty {
+            let linkingStrings = linkingIDs.map(\.rawValue)
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT id, title FROM pages WHERE id IN (\(Self.placeholders(linkingStrings.count)));
+            """, arguments: StatementArguments(linkingStrings))
+            for row in rows {
+                let rowID: String = row["id"]
+                let title: String? = row["title"]
+                if let title { titles[rowID] = title }
+            }
+        }
+        let linkingPages = linkingIDs.map { id in
+            DeletionLinkingPage(pageID: id, title: titles[id.rawValue])
+        }
+
+        // Incoming link EDGE count, excluding edges that start on a page in
+        // the deletion set (those spans vanish with their page — they neither
+        // survive as ghost links nor get unlinked).
+        var incomingLinkCount = 0
+        if !pageStrings.isEmpty {
+            incomingLinkCount += try Int.fetchOne(db, sql: """
+            SELECT COUNT(*) FROM page_links
+            WHERE to_page_id IN (\(Self.placeholders(pageStrings.count)))
+              AND from_page_id NOT IN (\(Self.placeholders(pageStrings.count)));
+            """, arguments: StatementArguments(pageStrings + pageStrings)) ?? 0
+        }
+        if !sourceStrings.isEmpty {
+            incomingLinkCount += try Int.fetchOne(db, sql: """
+            SELECT COUNT(*) FROM source_links
+            WHERE to_source_id IN (\(Self.placeholders(sourceStrings.count)))
+              AND from_page_id NOT IN (\(Self.placeholders(pageStrings.count)));
+            """, arguments: StatementArguments(sourceStrings + pageStrings)) ?? 0
+        }
+
+        // Matching bookmark leaves. Only page/source REF kinds match — folders
+        // and chat refs are untouched by construction.
+        var matchedNodes: [(id: String, parentID: String?)] = []
+        if !pageStrings.isEmpty || !sourceStrings.isEmpty {
+            var conditions: [String] = []
+            var values: [String] = []
+            if !pageStrings.isEmpty {
+                conditions.append("(kind = ? AND target_id IN (\(Self.placeholders(pageStrings.count))))")
+                values.append(BookmarkNodeKind.pageRef.rawValue)
+                values.append(contentsOf: pageStrings)
+            }
+            if !sourceStrings.isEmpty {
+                conditions.append("(kind = ? AND target_id IN (\(Self.placeholders(sourceStrings.count))))")
+                values.append(BookmarkNodeKind.sourceRef.rawValue)
+                values.append(contentsOf: sourceStrings)
+            }
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT id, parent_id FROM bookmark_nodes
+            WHERE \(conditions.joined(separator: " OR "))
+            ORDER BY id ASC;
+            """, arguments: StatementArguments(values))
+            for row in rows {
+                let parentID: String? = row["parent_id"]
+                matchedNodes.append((row["id"], parentID))
+            }
+        }
+
+        // Folder display paths (presentation): walk each matched node's parent
+        // chain through the folder-label map. Same spelling as the model's
+        // `bookmarkDisplayPath` — `"Bookmarks"` for root-level nodes.
+        let folderMap = try Self.folderLabels(on: db)
+        let matchedBookmarks: [DeletionBookmarkImpact] = matchedNodes.map { node in
+            let path = Self.bookmarkFolderPath(
+                parentID: node.parentID, folderLabels: folderMap) ?? "Bookmarks"
+            return DeletionBookmarkImpact(
+                nodeID: BookmarkID(rawValue: node.id),
+                folderPath: path)
+        }
+
+        // Provenance blockers for the selected sources, in the raw
+        // (page, version, source) SQL order, deduplicated across sources.
+        var blockers: [ProvenanceDeletionBlocker] = []
+        var seenBlockers = Set<ProvenanceDeletionBlocker>()
+        for sourceID in sourceIDs {
+            for blocker in try provenanceDeletionBlockers(sourceID: sourceID, on: db)?.values ?? [] {
+                if seenBlockers.insert(blocker).inserted {
+                    blockers.append(blocker)
+                }
+            }
+        }
+
+        return DeletionImpact(
+            linkingPages: linkingPages,
+            bookmarks: matchedBookmarks,
+            provenanceBlockers: blockers,
+            incomingLinkCount: incomingLinkCount)
+    }
+
+    /// `(?, ?, …)` with `count` placeholders — the expanded IN-clause form.
+    /// The store binds IN lists by explicit placeholders (GRDB expands each
+    /// bound value), which keeps every argument a plain `String` at the type
+    /// level instead of a nested array.
+    private static func placeholders(_ count: Int) -> String {
+        Array(repeating: "?", count: count).joined(separator: ", ")
+    }
+
+    /// All folder nodes as `(id → (parent, label))`, for display-path walks.
+    private static func folderLabels(on db: Database) throws -> [String: (parent: String?, label: String)] {
+        let rows = try Row.fetchAll(db, sql: """
+        SELECT id, parent_id, label FROM bookmark_nodes WHERE kind = ?;
+        """, arguments: [BookmarkNodeKind.folder.rawValue])
+        var map: [String: (parent: String?, label: String)] = [:]
+        for row in rows {
+            let parentID: String? = row["parent_id"]
+            let label: String? = row["label"]
+            map[row["id"]] = (parentID, label ?? "")
+        }
+        return map
+    }
+
+    /// The slash-delimited folder path above `parentID` (`"Bookmarks"` when
+    /// the node sits at the root or the chain can't be resolved). Mirrors
+    /// `BookmarkNode.displayPath` + the model's `bookmarkDisplayPath`.
+    private static func bookmarkFolderPath(
+        parentID: String?, folderLabels: [String: (parent: String?, label: String)]
+    ) -> String? {
+        guard let parentID else { return nil } // root-level → caller says "Bookmarks"
+        var segments: [String] = []
+        var current: String? = parentID
+        var depth = 0
+        let maxDepth = 64
+        while let id = current, depth < maxDepth {
+            depth += 1
+            guard let folder = folderLabels[id] else { break }
+            if !folder.label.isEmpty { segments.insert(folder.label, at: 0) }
+            current = folder.parent
+        }
+        let path = segments.joined(separator: " / ")
+        return path.isEmpty ? nil : path
+    }
+
+    /// Rewrites one linking page's body so every span pointing at a deleted
+    /// target becomes plain text, then persists the rewrite (new immutable
+    /// version + rebuilt link rows) inside the caller's transaction. Returns
+    /// `false` when the page was skipped (in the deletion set, missing, or
+    /// nothing matched). Only the MATCHING spans change — unrelated links and
+    /// protected code ranges stay byte-identical (AC.4) — and the page's
+    /// `page_links` / `source_links` rows are rebuilt from the final body in
+    /// the same transaction.
+    private func rewritePageUnlinkingTargets(
+        pageID: PageID,
+        deletedPageIDs: [PageID],
+        deletedSourceIDs: [SourceID],
+        on db: Database
+    ) throws -> Bool {
+        // Never rewrite a page that is itself being deleted (AC.5).
+        guard !deletedPageIDs.contains(pageID) else { return false }
+        guard let row = try Row.fetchOne(db, sql: """
+        SELECT title, body_markdown FROM pages WHERE id = ?;
+        """, arguments: [pageID.rawValue]) else { return false }
+        let title: String = row["title"]
+        let body: String = row["body_markdown"]
+
+        // Name-based links still resolve here because the target rows are
+        // deleted LATER in this same transaction.
+        guard let rewritten = try LinkUnlinker.unlink(
+            in: body,
+            unlinkPageIDs: Set(deletedPageIDs),
+            unlinkSourceIDs: Set(deletedSourceIDs),
+            resolvePageName: { try self.resolveTitleToIDLocked($0, in: db) },
+            resolveSourceName: { try self.resolveSourceByNameLocked($0, in: db) }
+        ) else { return false }
+
+        try persistPageRewrite(pageID: pageID, title: title, body: rewritten, on: db)
+        return true
+    }
+
+    /// Persists one rewritten page through the internal version-write helper —
+    /// the same page-version + provenance + mirror + ref rules as `updatePage`
+    /// (minus amend coalescing, so a batch rewrite is always a deterministic
+    /// new version) — and rebuilds the page's link rows from the final body,
+    /// all on the caller's database handle. Emits nothing; the outer
+    /// `mutateBatch` owns the event batch.
+    private func persistPageRewrite(
+        pageID: PageID, title: String, body: String, on db: Database
+    ) throws {
+        let bodyData = Data(body.utf8)
+        let hash = portableSHA256(bodyData)
+            .map { String(format: "%02x", $0) }.joined()
+        let now = Date()
+        let slug = try uniqueSlug(from: title, id: pageID, on: db)
+        let head = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
+        _ = try createPageVersionWithProvenance(on: db, request: .init(
+            pageID: pageID, head: head, mergeParentID: nil, title: title, body: body,
+            bodyData: bodyData, hash: hash,
+            activityAgent: .pageAuthor(PageAuthor.agent("unlink").rawValue),
+            activityKind: "edit", now: now, nowTS: now.timeIntervalSince1970,
+            provenance: [],
+            publication: .main(slug: slug, mirrorMutation: .append)))
+        try replaceLinksLocked(
+            from: pageID, parsedLinks: WikiLinkParser.parse(body), on: db)
+    }
+
+    /// Deletes every bookmark leaf whose (kind, target_id) matches the given
+    /// page/source ids, renumbers each affected sibling group, and returns the
+    /// removed node ids in deterministic (raw ULID) order.
+    private func deleteBookmarksMatching(
+        pageIDs: [PageID], sourceIDs: [SourceID], on db: Database
+    ) throws -> [BookmarkID] {
+        let pageStrings = pageIDs.map(\.rawValue)
+        let sourceStrings = sourceIDs.map(\.rawValue)
+        guard !pageStrings.isEmpty || !sourceStrings.isEmpty else { return [] }
+
+        var conditions: [String] = []
+        var values: [String] = []
+        if !pageStrings.isEmpty {
+            conditions.append("(kind = ? AND target_id IN (\(Self.placeholders(pageStrings.count))))")
+            values.append(BookmarkNodeKind.pageRef.rawValue)
+            values.append(contentsOf: pageStrings)
+        }
+        if !sourceStrings.isEmpty {
+            conditions.append("(kind = ? AND target_id IN (\(Self.placeholders(sourceStrings.count))))")
+            values.append(BookmarkNodeKind.sourceRef.rawValue)
+            values.append(contentsOf: sourceStrings)
+        }
+        let rows = try Row.fetchAll(db, sql: """
+        SELECT id, parent_id FROM bookmark_nodes
+        WHERE \(conditions.joined(separator: " OR "))
+        ORDER BY id ASC;
+        """, arguments: StatementArguments(values))
+        guard !rows.isEmpty else { return [] }
+
+        var removedIDs: [String] = []
+        var affectedParents: Set<String?> = []
+        for row in rows {
+            let id: String = row["id"]
+            let parentID: String? = row["parent_id"]
+            removedIDs.append(id)
+            affectedParents.insert(parentID)
+        }
+        try db.execute(
+            sql: "DELETE FROM bookmark_nodes WHERE id IN (\(Self.placeholders(removedIDs.count)));",
+            arguments: StatementArguments(removedIDs))
+        for parent in affectedParents {
+            try Self.renumberBookmarkSiblings(parentID: parent, on: db)
+        }
+        return removedIDs.map(BookmarkID.init(rawValue:))
+    }
+
+    /// Makes one sibling group's positions contiguous (0, 1, 2, …), oldest
+    /// first. Shared by `deleteBookmarkNode` and the protected deletion's
+    /// batch cleanup.
+    private static func renumberBookmarkSiblings(parentID: String?, on db: Database) throws {
+        let parentColumn = parentID != nil ? "parent_id = ?" : "parent_id IS NULL"
+        let sibRows = try Row.fetchAll(
+            db,
+            sql: "SELECT id FROM bookmark_nodes WHERE \(parentColumn) ORDER BY position ASC;",
+            arguments: parentID.map { [$0] } ?? []
+        )
+        for (i, row) in sibRows.enumerated() {
+            let childID: String = row["id"]
+            try db.execute(
+                sql: "UPDATE bookmark_nodes SET position = ? WHERE id = ?;",
+                arguments: [i, childID]
+            )
+        }
+    }
+
+    /// Deletes one page row and its dependent graph rows (the FK sweep the
+    /// legacy `deletePage` owned). Returns `false` when the page row is
+    /// already gone (idempotent no-op).
+    private func deletePageTargetRow(_ id: PageID, on db: Database) throws -> Bool {
+        let exists = try Int.fetchOne(
+            db, sql: "SELECT 1 FROM pages WHERE id = ?;",
+            arguments: [id.rawValue]) ?? 0
+        guard exists == 1 else { return false }
+        // FK safety: page_links, attachments, source_links all have FKs
+        // onto pages(id) WITHOUT ON DELETE CASCADE (unlike page_chunks).
+        // Clear every dependent row first, then delete the page.
+        try db.execute(sql: "DELETE FROM page_links WHERE from_page_id = ? OR to_page_id = ?;",
+                       arguments: [id.rawValue, id.rawValue])
+        try db.execute(sql: "DELETE FROM source_links WHERE from_page_id = ?;",
+                       arguments: [id.rawValue])
+        try db.execute(sql: "DELETE FROM attachments WHERE page_id = ?;",
+                       arguments: [id.rawValue])
+        try db.execute(sql: "DELETE FROM refs WHERE owner_id = ? AND kind = 'page-content';",
+                       arguments: [id.rawValue])
+        try db.execute(sql: "DELETE FROM pages WHERE id = ?;",
+                       arguments: [id.rawValue])
+        return true
+    }
+
+    /// Deletes one source row (its versions cascade; blobs and activities fall
+    /// to lazy GC). Returns `false` when the source row is already gone
+    /// (idempotent no-op). Provenance validation already ran for the whole
+    /// batch before the first mutation.
+    private func deleteSourceTargetRow(_ id: SourceID, on db: Database) throws -> Bool {
+        let exists = try Int.fetchOne(
+            db, sql: "SELECT 1 FROM sources WHERE id = ?;",
+            arguments: [id.rawValue]) ?? 0
+        guard exists == 1 else { return false }
+        try db.execute(sql: "DELETE FROM sources WHERE id = ?;",
+                       arguments: [id.rawValue])
+        return true
     }
 
     /// The page-version provenance edges that prevent `sourceID` from being
@@ -8356,28 +8812,9 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 sql: "DELETE FROM bookmark_nodes WHERE id = ?;",
                 arguments: [id.rawValue]
             )
-            // Renumber old siblings to be contiguous.
-            let parentColumn: String
-            let parentArg: String?
-            if let oldParent {
-                parentColumn = "parent_id = ?"
-                parentArg = oldParent
-            } else {
-                parentColumn = "parent_id IS NULL"
-                parentArg = nil
-            }
-            let sibRows = try Row.fetchAll(
-                db,
-                sql: "SELECT id FROM bookmark_nodes WHERE \(parentColumn) ORDER BY position ASC;",
-                arguments: parentArg.map { [$0] } ?? []
-            )
-            for (i, row) in sibRows.enumerated() {
-                let childID: String = row["id"]
-                try db.execute(
-                    sql: "UPDATE bookmark_nodes SET position = ? WHERE id = ?;",
-                    arguments: [i, childID]
-                )
-            }
+            // Renumber old siblings to be contiguous (shared with the
+            // protected deletion's batch cleanup).
+            try Self.renumberBookmarkSiblings(parentID: oldParent, on: db)
         }
     }
 

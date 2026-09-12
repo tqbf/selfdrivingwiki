@@ -65,6 +65,110 @@ the shared `PageUpsert.upsert` seam, so the link graph (`page_links` /
 `source_links`) stays consistent with the stored bytes exactly as an in-app or
 `wikictl` edit would.
 
+## Hardening follow-up (shared protected deletion contract)
+
+The first implementation assembled the cleanup from separate store calls: the
+model unlinked bodies with `PageUpsert`, removed bookmarks one by one, and then
+called `deletePage` / `deleteSource`. That left bypasses, race windows, and
+partial-write risks. A store-level contract now closes them.
+
+### The contract
+
+- **`ResourceDeletionRequest` / `ResourceDeletionResult`**
+  (`Sources/WikiFSCore/Core/DeletionImpact.swift`) carry a typed target set
+  (`ResourceDeletionTarget.page(PageID)` / `.source(SourceID)` — separate id
+  namespaces share one request), a `ResourceDeletionLinkPolicy`
+  (`.preserve` keeps ghost links, `.unlink` converts matching spans to plain
+  display text), and the committed outcome: deleted targets, rewritten pages,
+  removed bookmark ids, and the incoming-link count.
+- **`DeletionImpact`** now carries stable identities (linking page ids with
+  titles, bookmark node ids with folder paths) plus presentation strings, a
+  deterministic order, and the incoming-link edge count.
+- **`WikiStore.deleteResources(_:)`** is the one deletion seam. Impact
+  recheck, provenance validation, optional rewrites, mandatory bookmark
+  cleanup with sibling renumbering, and target deletion all run in ONE
+  `mutateBatch` transaction. Events are buffered and emitted strictly after
+  commit: `.page .updated` per rewritten page, `.bookmark .deleted` per
+  removed leaf, one `.deleted` event per target row that existed. A rollback
+  emits nothing. `deletePage(id:)` and `deleteSource(id:)` are compatibility
+  forwarders into the `.preserve` request, so no supported caller can leave
+  invalid bookmarks.
+- **Atomicity seam for tests** — an internal `ProtectedDeletionFailurePoint`
+  on the store (production default `.none`) throws after the rewrite, after
+  bookmark cleanup, or before target deletion, so the rollback contract is
+  deterministic and string-free.
+- **Batch semantics** — each linking page rewrites at most once through the
+  internal `createPageVersionWithProvenance` + `replaceLinksLocked` helpers
+  (same version/provenance rules as `updatePage`, no amend coalescing); pages
+  in the deletion set are never rewritten; one blocked source stops the whole
+  batch before the first mutation; duplicate ids have one effect; missing
+  targets are idempotent no-ops that still remove stale bookmarks and emit no
+  false target event.
+
+### Callers
+
+- **`WikiStoreModel`** — one protected delete per resource type
+  (`delete(_:unlinkIncomingLinks:)`, `deleteSource(_:unlinkIncomingLinks:)`);
+  the model-side bookmark loops and unlink orchestration are gone. Model-side
+  history, tab, and error handling run only after the store operation
+  succeeds. A provenance blocker surfaces as the friendly "Can't Delete
+  Source" alert from the typed catch.
+- **UI** — both container views share `DeletionConfirmationCoordinator`
+  (`Sources/WikiFS/Deletion/`), which produces the finite typed outcome:
+  `.deleteImmediately`, `.confirm(presentation)`, `.blocked(presentation)`,
+  or `.failed(presentation)`. A failed impact read routes to `.failed` and
+  exposes no dialog actions, so it can never invoke deletion. The shared
+  `DeletionOutcomeDialog` modifier renders the one confirmation surface.
+- **`wikictl page delete`** — routes through the same contract. New
+  `--unlink-incoming` flag chooses the policy. Stdout stays the deleted page
+  id; a stderr notice reports the bookmark and link counts.
+
+### Verification
+
+- `swift test --filter DeletionIncomingReferenceTests` — 27 tests: atomic
+  batches, batch rewrite-once, provenance gate, the three rollback failure
+  points (state compared before/after), the post-commit event batch, sibling
+  renumbering after a deleted bookmark event, dedup, missing targets, the
+  legacy forwarders, and the model batch path (one request per selection; a
+  blocked multi-source batch changes nothing and surfaces the error).
+- `swift test --filter StoreEmissionExhaustivenessTests` — guards
+  `deleteResources` on `mutateBatch` and both forwarders on forwarding.
+- `WIKIFS_APP_TESTS=1 swift test --filter DeletionConfirmationCoordinatorTests`
+  — 8 tests: every impact state, typed decision mapping, batch aggregation,
+  impact-read failure, and the container wiring source contract.
+- `WIKIFS_APP_TESTS=1 swift test --filter EnumeratorDeletionTests` — one
+  protected delete reports the target and the bookmark leaf deletions.
+- `swift test --filter WikiCtlCommandTests` — parser flags, stdout contract,
+  ghost links vs unlinked bodies, bookmark cleanup counts.
+- `make build` and `make test` — full gates, warnings as errors.
+
+### Independent review outcome
+
+An independent review (different model family) verified the transaction
+boundaries, event timing, typed id separation, and SwiftUI blocked/failed
+flows as clean, and raised three fixes, all applied:
+
+1. **HIGH — batch UI path.** The containers looped single-target model calls
+   for a multi-selection, so the store's all-or-nothing batch guarantee did
+   not reach the UI. The model now exposes one-request-per-selection entries
+   (`delete(_:unlinkIncomingLinks:)` for pages, `deleteSources(...)` and the
+   error-decorating `performPageDeletion` / `performSourceDeletion` for the
+   views), and both containers send the whole selection at once.
+2. **HIGH — home-page cleanup on failure.** The containers cleared the home
+   page even when the deletion failed. Cleanup now keys off
+   `result.deletedTargets` from the committed result, so metadata survives a
+   failed delete untouched.
+3. **MEDIUM — CLI `didCommit` on a no-op.** `wikictl page delete` on a
+   missing target reported `didCommit: true` and woke the app. `didCommit`
+   now reflects actual committed change; the stdout id contract is unchanged
+   (pinned by `wikictlPageDeleteMissingTargetIsIdempotentNoCommit`).
+
+The review also noted that the stderr notice counts incoming link EDGES, not
+Markdown span occurrences (`[[B]] … [[B]]` from one page counts as one).
+That is deliberate: the edge count is the store's deterministic measure, the
+ghost-link placeholder renders per target rather than per span, and the
+contract documents the semantics. No change made.
+
 ## Verification
 
 - `make build` — full app + File Provider build, signed, green.

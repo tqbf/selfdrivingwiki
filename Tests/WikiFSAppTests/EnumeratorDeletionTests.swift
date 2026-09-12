@@ -169,6 +169,42 @@ struct EnumeratorDeletionTests {
         #expect(changeObs.finishedWithError == nil)
     }
 
+    /// AC.13 (issue #219 hardening): one protected deletion reports BOTH the
+    /// deleted target (pages/by-id) AND the deleted bookmark leaf (bookmarks)
+    /// through the File Provider projection.
+    @Test func protectedDeleteReportsTargetAndBookmarkDeletions() throws {
+        let s = try seed()
+        let page = try s.store.createPage(title: "Protected Target")
+        let ref = try s.store.createBookmarkNode(
+            parentID: nil, position: 0, content: .page(page.id))
+
+        let pagesEnum = WikiFSEnumerator(container: Projection.Identity.pagesByID,
+                                         projection: s.projection)
+        let bookmarksEnum = WikiFSEnumerator(container: Projection.Identity.bookmarks,
+                                             projection: s.projection)
+
+        // Seed both baselines (each enumerator owns its known-item set).
+        for enumerator in [pagesEnum, bookmarksEnum] {
+            let obs = MockEnumerationObserver()
+            enumerator.enumerateItems(for: obs, startingAt: NSFileProviderPage(NSFileProviderPage.initialPageSortedByName as Data))
+        }
+        let anchor = NSFileProviderSyncAnchor(Data(s.projection.changeToken().utf8))
+
+        // ONE protected delete removes the page row and its bookmark leaf.
+        _ = try s.store.deleteResources(ResourceDeletionRequest(
+            targets: [.page(page.id)], linkPolicy: .preserve))
+
+        let pagesChange = MockChangeObserver()
+        pagesEnum.enumerateChanges(for: pagesChange, from: anchor)
+        #expect(pagesChange.deleted.contains(Projection.Identity.pageByID(page.id.rawValue)))
+        #expect(pagesChange.finishedWithError == nil)
+
+        let bookmarksChange = MockChangeObserver()
+        bookmarksEnum.enumerateChanges(for: bookmarksChange, from: anchor)
+        #expect(bookmarksChange.deleted.contains(Projection.Identity.bookmarkPageRef(ref.id.rawValue)))
+        #expect(bookmarksChange.finishedWithError == nil)
+    }
+
     @Test func deletingChatReportsDidDeleteItems() throws {
         let s = try seed()
         let chat = try s.store.createChat(kind: .edit, title: "A Chat")

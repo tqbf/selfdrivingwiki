@@ -68,7 +68,7 @@ struct NavigationSaveTests {
         #expect(model.summaries.count == 2)
 
         let firstID = model.summaries.first { $0.title == "First" }!.id
-        model.delete(firstID)
+        try model.delete(firstID, unlinkIncomingLinks: false)
         model.reloadFromStore()
         // Rebuilt from source — not a stale cache.
         #expect(model.summaries.count == 1)

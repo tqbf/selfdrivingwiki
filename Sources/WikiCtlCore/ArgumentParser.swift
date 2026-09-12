@@ -215,7 +215,7 @@ public enum ArgumentParser {
             guard let id = options.value("--id") else {
                 throw Failure.usage("page delete: --id is required")
             }
-            return .page(.delete(id: PageID(rawValue: id)))
+            return .page(.delete(id: PageID(rawValue: id), unlinkIncoming: options.flag("--unlink-incoming")))
 
         case "search":
             guard let query = options.value("--query") else {

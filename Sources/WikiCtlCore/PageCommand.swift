@@ -40,7 +40,11 @@ public enum PageCommand {
         /// `appendPageVersion` and a mismatch throws `PageConflictError`
         /// (Phase 1: agent CAS writes).
         case add(id: PageID?, title: String, body: BodySource, expectHead: PageVersionID? = nil, workspace: String? = nil, author: String? = nil, provenance: [PageVersionSourceInput] = [])
-        case delete(id: PageID)
+        /// Delete the page through the store's protected contract (issue #219
+        /// hardening): bookmarks targeting the page are ALWAYS removed, and
+        /// `unlinkIncoming` picks whether incoming `[[link]]` spans become
+        /// plain text (true) or stay as ghost links (false, the default).
+        case delete(id: PageID, unlinkIncoming: Bool = false)
         /// Semantic search: find pages by meaning (cosine similarity via
         /// Swift-side `VectorCosine`), falling back to LIKE title match.
         case search(query: String, limit: Int)
@@ -103,8 +107,8 @@ public enum PageCommand {
             let body = try resolveBodySource(bodySource)
             return try upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, author: author,
                               provenance: mergedAgentIngestProvenance(provenance), in: store, validator: validator, linter: linter)
-        case .delete(let id):
-            return try delete(id: id, in: store)
+        case .delete(let id, let unlinkIncoming):
+            return try delete(id: id, unlinkIncoming: unlinkIncoming, in: store)
         case .search(let query, let limit):
             return try search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
         case .history(let selector):
@@ -401,9 +405,24 @@ public enum PageCommand {
 
     // MARK: - delete
 
-    private static func delete(id: PageID, in store: WikiStore) throws -> Result {
-        try store.deletePage(id: id)
-        return Result(output: id.rawValue, didCommit: true)
+    /// Deletes through the shared protected contract. The stdout contract is
+    /// unchanged (the page id); a concise stderr notice reports the mandatory
+    /// bookmark cleanup and what happened to the incoming links. `didCommit`
+    /// reflects actual committed change: a missing target with no stale
+    /// bookmarks is an idempotent no-op and posts no change notification.
+    private static func delete(id: PageID, unlinkIncoming: Bool, in store: WikiStore) throws -> Result {
+        let result = try store.deleteResources(ResourceDeletionRequest(
+            target: .page(id),
+            linkPolicy: unlinkIncoming ? .unlink : .preserve))
+        let bookmarkCount = result.removedBookmarkIDs.count
+        let linkCount = result.incomingLinkCount
+        let linkDisposition = unlinkIncoming ? "unlinked" : "preserved as ghost links"
+        let notice = "removed \(bookmarkCount) bookmark\(bookmarkCount == 1 ? "" : "s"); "
+            + "\(linkCount) incoming link\(linkCount == 1 ? "" : "s") \(linkDisposition)"
+        let didCommit = !result.deletedTargets.isEmpty
+            || !result.removedBookmarkIDs.isEmpty
+            || !result.rewrittenPageIDs.isEmpty
+        return Result(output: id.rawValue, didCommit: didCommit, stderrOutput: notice)
     }
 
     // MARK: - search

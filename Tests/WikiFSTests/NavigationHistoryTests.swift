@@ -125,7 +125,7 @@ struct NavigationHistoryTests {
 
         model.select(.page(a.id))
         model.select(.page(b.id))
-        model.delete(a.id)
+        try model.delete(a.id, unlinkIncomingLinks: false)
 
         #expect(!model.canNavigateBack)
     }
