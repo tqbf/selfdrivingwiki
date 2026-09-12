@@ -294,7 +294,7 @@ public actor ACPBackend: AgentBackend {
         watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval,
         drainGraceTimeout: Duration = .seconds(3),
         maxConcurrentExecutors: Int = 1,
-        resolveBunRuntime: @escaping @Sendable () async -> String? = ACPBackend.defaultResolveBunRuntime
+        resolveBunRuntime: @escaping @Sendable () async -> RuntimeCommandResolution? = ACPBackend.defaultResolveBunRuntime
     ) {
         self.permissionPolicy = permissionPolicy
         self.permissionBudget = budget
@@ -306,12 +306,13 @@ public actor ACPBackend: AgentBackend {
         self.resolveBunRuntime = resolveBunRuntime
     }
 
-    /// Resolves the absolute bun path used to canonicalize JS-adapter launches
+    /// Resolves the bun runtime used to canonicalize JS-adapter launches
     /// (#1257 Level 1). The default goes through the same login-shell locator
     /// the extractor runtimes use, so the app knows one runtime, not the
-    /// user's node/npm state. Returns nil when bun is unresolvable — the
-    /// original command then runs unchanged (logged).
-    static let defaultResolveBunRuntime: @Sendable () async -> String? = {
+    /// user's node/npm state. The full resolution (including the pinned
+    /// executable identity) is retained so reuse can verify the binary has
+    /// not been swapped underneath the cached path.
+    static let defaultResolveBunRuntime: @Sendable () async -> RuntimeCommandResolution? = {
         // "bun" is a fixed valid runtime name; this init only validates
         // arbitrary strings, so the failure branch is unreachable.
         // swiftlint:disable:next silent_try_optional
@@ -319,22 +320,44 @@ public actor ACPBackend: AgentBackend {
         guard case .resolved(let resolution) = await RuntimeCommandLocator().locate(name) else {
             return nil
         }
-        return resolution.executableURL.path
+        return resolution
     }
 
     /// The bun resolver for adapter canonicalization (injectable for tests).
-    private let resolveBunRuntime: @Sendable () async -> String?
-    /// Memoized resolution — `startProcess` runs once per process launch, but
-    /// fallback-provider backends each pay for a locate; cache per actor.
-    private var cachedBunPath: String?
+    private let resolveBunRuntime: @Sendable () async -> RuntimeCommandResolution?
+    /// Memoized resolution. Outer nil = not attempted yet; inner nil = the
+    /// resolver already failed for this backend (negative-cached, so a
+    /// bun-less machine pays for one locate, not one per start). A successful
+    /// resolution keeps its pinned identity for reuse verification.
+    private var cachedBunResolution: RuntimeCommandResolution??
 
-    /// The memoized bun path, or nil when the resolver failed (the original
-    /// command runs unchanged and the failure is logged by the caller).
-    private func resolvedBunPath() async -> String? {
-        if let cachedBunPath { return cachedBunPath }
+    /// The memoized bun resolution, or nil when unresolvable (the original
+    /// command runs unchanged; the caller logs that fallback). A cached
+    /// resolution whose pinned identity no longer matches the file at its
+    /// path (a mise version switch, say) is discarded and re-resolved once.
+    private func resolvedBunResolution() async -> RuntimeCommandResolution? {
+        switch cachedBunResolution {
+        case .none:
+            break // not attempted — resolve below
+        case .some(.none):
+            return nil // the resolver already failed for this backend
+        case .some(.some(let resolution)):
+            if Self.resolutionStillValid(resolution) { return resolution }
+            break // stale — re-resolve once below
+        }
         let resolved = await resolveBunRuntime()
-        cachedBunPath = resolved
+        cachedBunResolution = .some(resolved)
         return resolved
+    }
+
+    /// The locator's documented contract: the pinned identity is verified
+    /// before reuse, so a replaced or rewritten executable is not silently
+    /// exec'd across a memoized resolution.
+    private static func resolutionStillValid(_ resolution: RuntimeCommandResolution) -> Bool {
+        guard case .identity(let identity) = RuntimeFileProbe.probe(resolution.executableURL) else {
+            return false
+        }
+        return identity == resolution.identity
     }
 
     /// `fs` read/write + `terminal` — mirrors paseo's `BASE_ACP_CLIENT_CAPABILITIES`
@@ -391,22 +414,29 @@ public actor ACPBackend: AgentBackend {
             throw ACPBackendError.noAgentConfigured
         }
 
-        // #1257 Level 1: JS-adapter shapes (npx / npm exec / bunx) launch
-        // through the resolved absolute bun instead of the user's node/npm
-        // state. Unresolvable bun keeps the original command (logged once,
-        // memoized per backend) — the npx path still works.
-        let canonical = Self.canonicalizedAdapterLaunch(
+        // #1257 Level 1: JS-adapter shapes (npx / npm exec|x / bunx, and bun x
+        // launches) are canonicalized through the resolved absolute bun, so
+        // the launch does not depend on the user's node/npm state. The shape
+        // gate runs first: non-adapter launches never pay for the locate. An
+        // unresolvable bun keeps the configured command (negative-cached per
+        // backend, logged here) — the npx path still works.
+        if Self.isJSAdapterLaunch(
             executablePath: spawn.executablePath,
-            arguments: spawn.arguments,
-            resolvedBunPath: await resolvedBunPath())
-        if canonical.executablePath != spawn.executablePath {
-            DebugLog.agent("ACPBackend.startProcess: adapter canonicalized to \(canonical.executablePath) x")
-            spawn = AgentSpawnConfig(
-                executablePath: canonical.executablePath,
-                arguments: canonical.arguments,
-                workingDirectory: spawn.workingDirectory,
-                apiKey: spawn.apiKey,
-                environment: spawn.environment)
+            arguments: spawn.arguments) {
+            if let resolution = await resolvedBunResolution() {
+                let canonical = Self.canonicalizedSpawn(
+                    spawn,
+                    resolvedBunPath: resolution.executableURL.path)
+                DebugLog.agent(
+                    "ACPBackend.startProcess: adapter canonicalized " +
+                    "\(spawn.executablePath) \(spawn.arguments.joined(separator: " ")) → " +
+                    "\(canonical.executablePath) \(canonical.arguments.joined(separator: " "))")
+                spawn = canonical
+            } else {
+                DebugLog.agent(
+                    "ACPBackend.startProcess: bun unresolved — launching configured " +
+                    "\(spawn.executablePath) \(spawn.arguments.joined(separator: " ")) unchanged")
+            }
         }
 
         // Create the verbose debug logger (complete ACP wire trace) from the
@@ -1987,38 +2017,75 @@ public actor ACPBackend: AgentBackend {
             defines: effective.defines)
     }
 
-    /// Rewrites JS-adapter launch shapes (`npx`, `npm exec`, `bunx`) to run
-    /// through the resolved absolute bun as `bun x <package spec...>` (#1257
-    /// Level 1): the launch stops depending on the user's node/npm state, and
-    /// the sandbox's provider-home layering then sees a `bun x` command and
-    /// layers `~/.bun` instead of `~/.npm`. Shapes that are already canonical
-    /// (`bun x ...`), plain provider binaries, or a nil/unresolvable bun
-    /// return the inputs unchanged. npx/npm flags are passed through verbatim;
-    /// configure adapter commands without runner flags.
-    static func canonicalizedAdapterLaunch(
-        executablePath: String,
-        arguments: [String],
-        resolvedBunPath: String?
-    ) -> (executablePath: String, arguments: [String]) {
-        guard let resolvedBunPath, !resolvedBunPath.isEmpty else {
-            return (executablePath, arguments)
-        }
+    /// True when the configured launch is a JS-adapter shape this backend
+    /// canonicalizes: executable basename `npx`, `bunx`, `npm exec`/`npm x`,
+    /// or an already-`bun x` launch (that last one is repointed at the
+    /// resolved bun so it stops depending on whatever `bun` the PATH had).
+    /// Plain provider binaries (claude, codex, gemini, ...) are never
+    /// rewritten, and `.cmd`/`.exe` shims are out of scope (macOS-only app).
+    static func isJSAdapterLaunch(executablePath: String, arguments: [String]) -> Bool {
         let basename = (executablePath as NSString).lastPathComponent.lowercased()
-        let isNpx = basename == "npx"
-        let isBunx = basename == "bunx"
-        let isNpmExec = basename == "npm" && arguments.first == "exec"
-        guard isNpx || isBunx || isNpmExec else {
-            return (executablePath, arguments)
+        if basename == "npx" || basename == "bunx" { return true }
+        if basename == "npm", arguments.first == "exec" || arguments.first == "x" { return true }
+        if basename == "bun", arguments.first == "x" { return true }
+        return false
+    }
+
+    /// Rewrites a JS-adapter spawn to run through the resolved absolute bun as
+    /// `bun x <package spec...>` (#1257 Level 1): the launch stops depending
+    /// on the user's node/npm state, and the sandbox's provider-home layering
+    /// then sees a `bun x` command and layers `~/.bun` instead of `~/.npm`.
+    /// Every other `AgentSpawnConfig` field (working directory, API key,
+    /// environment) is preserved verbatim. npx-only runner flags (`-y`,
+    /// `--yes`) and a leading `--` separator are stripped — `bun x` does not
+    /// document them — and everything after the package spec passes through
+    /// unchanged. Non-adapter shapes and a nil/empty `resolvedBunPath` return
+    /// the spawn untouched (the caller logs that fallback).
+    static func canonicalizedSpawn(
+        _ spawn: AgentSpawnConfig,
+        resolvedBunPath: String?
+    ) -> AgentSpawnConfig {
+        guard let resolvedBunPath, !resolvedBunPath.isEmpty,
+              isJSAdapterLaunch(
+                executablePath: spawn.executablePath,
+                arguments: spawn.arguments)
+        else {
+            return spawn
         }
-        var spec = arguments
-        if isNpmExec {
-            // `npm exec [--] <pkg> ...` — both flag orders exist.
-            spec = Array(spec.dropFirst())
-            if spec.first == "--" {
-                spec = Array(spec.dropFirst())
-            }
+        let basename = (spawn.executablePath as NSString).lastPathComponent.lowercased()
+        var spec = spawn.arguments
+        if basename == "npm" {
+            // `npm exec [--] <pkg> ...` (and the `npm x` alias) — both flag
+            // orders exist.
+            spec = strippingLeadingRunnerFlags(Array(spec.dropFirst()))
+        } else if basename == "bun" {
+            // Already `bun x <spec>` — keep the arguments, repoint the binary.
+            return AgentSpawnConfig(
+                executablePath: resolvedBunPath,
+                arguments: spawn.arguments,
+                workingDirectory: spawn.workingDirectory,
+                apiKey: spawn.apiKey,
+                environment: spawn.environment)
+        } else {
+            spec = strippingLeadingRunnerFlags(spec)
         }
-        return (resolvedBunPath, ["x"] + spec)
+        return AgentSpawnConfig(
+            executablePath: resolvedBunPath,
+            arguments: ["x"] + spec,
+            workingDirectory: spawn.workingDirectory,
+            apiKey: spawn.apiKey,
+            environment: spawn.environment)
+    }
+
+    /// Drops leading npx/npm-only runner flags and a leading `--` separator
+    /// (which `bun x` tolerates but does not document) so the rewritten argv
+    /// carries only the package spec and its arguments.
+    private static func strippingLeadingRunnerFlags(_ arguments: [String]) -> [String] {
+        var result = arguments
+        while let first = result.first, first == "-y" || first == "--yes" || first == "--" {
+            result = Array(result.dropFirst())
+        }
+        return result
     }
 
     /// Fail-closed usability gate for the seatbelt front-end: it must exist as

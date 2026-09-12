@@ -100,10 +100,16 @@ public struct ACPProviderModelProbe: Sendable {
             throw ACPProviderModelProbeError.notConfigured
         }
         let profile = BackendProfile(providerHints: hints)
-        guard let spawn = ACPBackend.resolveSpawnConfig(from: profile) else {
+        guard let configuredSpawn = ACPBackend.resolveSpawnConfig(from: profile) else {
             DebugLog.agent("ACPProviderModelProbe: FAIL resolveSpawnConfig nil provider=\(provider.id)")
             throw ACPProviderModelProbeError.notConfigured
         }
+        // #1257 Level 1: canonicalize adapter shapes exactly like
+        // `ACPBackend.startProcess`, so the probe exercises the same runtime
+        // an actual chat launch will use (and the cached model list matches).
+        let spawn = ACPBackend.canonicalizedSpawn(
+            configuredSpawn,
+            resolvedBunPath: await ACPBackend.defaultResolveBunRuntime()?.executableURL.path)
 
         // The probe CWD is a throwaway temp dir — the probe must NOT call
         // `ACPBackend.deliverSystemPrompt` (that writes CLAUDE.md/AGENTS.md
