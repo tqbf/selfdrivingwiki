@@ -59,7 +59,7 @@ struct ActivityWindowTypedTranscriptTests {
     /// the known skill warning stays visible, regardless of the user's chat
     /// Tool-call-display preference.
     @Test func keepsCanonicalDetailedRows() {
-        let warning = "Warning: Skill descriptions were shortened to fit the 2% skills context budget."
+        let warning = AgentPresentationPreamble.knownWarningSentence
         let turn = ChatTurnID(rawValue: "turn-activity")
         let items: [ChatTranscriptItem] = [
             .message(ChatTranscriptMessageItem(

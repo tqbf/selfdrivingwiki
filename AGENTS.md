@@ -420,8 +420,12 @@ cat "$C/wikis.json"                      # registry: name → ULID
 sqlite3 "$C/<ulid>.sqlite" ".tables"     # pages, chats, chat_messages, …
 ```
 
-Schema lives in `Sources/WikiFSCore/SQLiteWikiStore.swift`
-(`createFreshSchemaV20` / `createChatTablesV23` / the `migrate(from:)` ladder).
+Schema lives in `Sources/WikiFSCore/Store/GRDBWikiStore.swift`
+(`createFreshSchema` / `createChatTablesV23` / the version ladder in
+`migrate(from:)`, currently at v53). Persistent chats are THREE tables:
+`chat_transcript_items` is the durable transcript the app reads;
+`chat_messages` is the flat compatibility projection (export, search index,
+summarizer source); `chats` holds the per-chat row (title, config, ordering).
 Persistent chats are two tables: `chats` (one row per conversation) and
 `chat_messages` (one row per persistable `AgentEvent`) — see
 `plans/chat-and-persistence.md`.

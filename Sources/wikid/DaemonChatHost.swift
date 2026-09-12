@@ -448,9 +448,6 @@ final class DaemonChatHost: @unchecked Sendable {
     /// RC5: this is the daemon-native generalization of the app's
     /// `summarizePendingMessages` + `runModelSummarization`.
     ///
-    /// Also mirrors the FIRST summarizable message's summary into
-    /// `chats.summary` (issue #411) — the sole writer of that column now that
-    /// the launcher's always-truncated path is gone.
     private func summarizePendingMessages(
         chatID: ChatID, wikiID: WikiID
     ) {
@@ -470,9 +467,6 @@ final class DaemonChatHost: @unchecked Sendable {
         }
         guard !pending.isEmpty else { return }
 
-        // The message whose summary doubles as `chats.summary` (issue #411).
-        let chatSummaryMessageID = MessageSummarizer.chatSummaryMessageID(in: messages)
-
         let services = providerServices
         Task { @MainActor in
             do {
@@ -485,24 +479,21 @@ final class DaemonChatHost: @unchecked Sendable {
                 switch preparation {
                 case .defaultTruncation:
                     Self.writeDefaultSummaries(
-                        chatID: chatID, pending: pending, store: store,
-                        chatSummaryMessageID: chatSummaryMessageID)
+                        chatID: chatID, pending: pending, store: store)
                 case .model(let preparation):
                     await Self.runModelSummarization(
                         chatID: chatID,
                         pending: pending,
                         services: services,
                         preparation: preparation,
-                        store: store,
-                        chatSummaryMessageID: chatSummaryMessageID)
+                        store: store)
                     await services.release(preparation.selection.token)
                 }
             } catch AgentProviderRuntimeError.unavailable {
                 Self.writeDefaultSummaries(
                     chatID: chatID,
                     pending: pending,
-                    store: store,
-                    chatSummaryMessageID: chatSummaryMessageID)
+                    store: store)
             } catch {
                 DebugLog.agent("DaemonChatHost: summarization preparation failed: \(error)")
             }
@@ -590,8 +581,7 @@ final class DaemonChatHost: @unchecked Sendable {
 
     @MainActor
     private static func writeDefaultSummaries(
-        chatID: ChatID, pending: [ChatMessage], store: GRDBWikiStore,
-        chatSummaryMessageID: PageID?
+        chatID: ChatID, pending: [ChatMessage], store: GRDBWikiStore
     ) {
         for msg in pending {
             guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
@@ -601,9 +591,6 @@ final class DaemonChatHost: @unchecked Sendable {
                 try store.updateMessageSummary(
                     chatID: chatID, messageID: msg.id,
                     summary: summary, kind: .defaultTruncation)
-                if msg.id == chatSummaryMessageID {
-                    try store.updateChatSummary(chatID: chatID, summary: summary)
-                }
             } catch {
                 DebugLog.store("DaemonChatHost: summary write failed: \(error)")
             }
@@ -617,8 +604,7 @@ final class DaemonChatHost: @unchecked Sendable {
         pending: [ChatMessage],
         services: any AgentProviderServices,
         preparation: AgentOperationPreparation,
-        store: GRDBWikiStore,
-        chatSummaryMessageID: PageID?
+        store: GRDBWikiStore
     ) async {
         for msg in pending {
             guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
@@ -636,10 +622,6 @@ final class DaemonChatHost: @unchecked Sendable {
                 try store.updateMessageSummary(
                     chatID: chatID, messageID: msg.id,
                     summary: summary, kind: .model)
-                // Keep the model's one-sentence result verbatim in chats.summary.
-                if msg.id == chatSummaryMessageID {
-                    try store.updateChatSummary(chatID: chatID, summary: summary)
-                }
             } catch {
                 DebugLog.store("DaemonChatHost.runModelSummarization: write failed: \(error)")
             }

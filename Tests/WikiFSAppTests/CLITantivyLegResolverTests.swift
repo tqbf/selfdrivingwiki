@@ -15,8 +15,8 @@ import Testing
 /// it via the same `StoreBackedTantivyContentSource` the app uses, then verify
 /// the resolver returns the indexed pages as a best-first BM25 leg (which the
 /// store's 3-arg `searchSimilar(query:limit:bm25Leg:)` then fuses with the
-/// cosine leg via RRF). The fuzzy-typo AC for `wikictl page search "erikson"`
-/// (finds "Erickson") is covered by `resolvePageLegSurfacesFuzzyTypoMatches`.
+/// cosine leg via RRF). The fuzzy-typo AC for `wikictl page search "mendal"`
+/// (finds "Mendel") is covered by `resolvePageLegSurfacesFuzzyTypoMatches`.
 ///
 /// These are fast: they open a temp SQLite DB, build a small Tantivy index
 /// (3-5 docs), and call one resolver method per test. They live in the fast
@@ -140,8 +140,8 @@ struct CLITantivyLegResolverTests {
     }
 
     @Test func resolvePageLegSurfacesFuzzyTypoMatches() async throws {
-        // AC #637: `wikictl page search "erikson"` (one-character typo) returns
-        // "Erickson"-style pages. Tantivy's `fuzzyFields` are configured with
+        // AC #637: `wikictl page search "mendal"` (one-character typo) returns
+        // "Mendel"-style pages. Tantivy's `fuzzyFields` are configured with
         // edit-distance 1 on title + body (`TantivyIndexer.swift:108-111`),
         // so the resolver's leg should include the correctly-spelled page
         // even though the query is misspelled.
@@ -149,18 +149,18 @@ struct CLITantivyLegResolverTests {
         defer { try? fm.removeItem(at: container) }
         let wikiID = WikiID(rawValue: "01TEST0003")
         let store = try tempStore(in: container, wikiID: wikiID)
-        let page = try store.createPage(title: "Milton H. Erickson")
-        try store.updatePage(id: page.id, title: "Milton H. Erickson",
-                             body: "Milton H. Erickson was an American psychiatrist specializing in clinical hypnosis.")
+        let page = try store.createPage(title: "Gregor Mendel")
+        try store.updatePage(id: page.id, title: "Gregor Mendel",
+                             body: "Gregor Mendel was an Augustinian friar specializing in the genetics of pea plants.")
 
-        // Query with a one-character typo ("erikson" vs "erickson"). Fuzzy
+        // Query with a one-character typo ("mendal" vs "Mendel"). Fuzzy
         // matching (edit-distance 1) should still surface the page. The
         // resolver's internal `rebuildIfNeeded()` populates the index from
         // the store on first call.
         let leg = await CLITantivyLegResolver.resolvePageLeg(
             wikiID: wikiID, containerDirectory: container,
-            store: store, query: "erikson", limit: 10)
-        #expect(leg != nil, "fuzzy match should find Erickson despite the typo")
+            store: store, query: "mendal", limit: 10)
+        #expect(leg != nil, "fuzzy match should find Mendel despite the typo")
         #expect(leg?.contains { $0.id == page.id } ?? false)
     }
 

@@ -186,6 +186,40 @@ struct MessageSummaryTests {
         #expect(counts.2 == 1, "cancelCount")
     }
 
+    @Test func modelSummary_stripsKnownPreambleFromBackendReply() async {
+        // The summarizer backend is itself an ACP agent and may prepend the
+        // known skills-budget warning to its own reply. The warning must
+        // never land in a cached per-message summary (chat_messages.summary,
+        // which feeds the outline's response text).
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [
+                .assistantText("\(AgentPresentationPreamble.knownWarningSentence)\n\nA concise summary."),
+                .messageStop,
+            ])
+        ])
+        let profile = BackendProfile()
+        let result = await MessageSummarizer.modelSummary(
+            text: "Some long assistant text that needs summarizing.",
+            backend: backend,
+            profile: profile)
+        #expect(result == "A concise summary.")
+    }
+
+    @Test func modelSummary_warningOnlyReply_returnsNil() async {
+        // A reply that is only the known preamble yields nothing usable —
+        // the caller leaves summary = NULL so the message is retriable.
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [
+                .assistantText(AgentPresentationPreamble.knownWarningSentence),
+                .messageStop,
+            ])
+        ])
+        let profile = BackendProfile()
+        let result = await MessageSummarizer.modelSummary(
+            text: "Content.", backend: backend, profile: profile)
+        #expect(result == nil)
+    }
+
     @Test func modelSummary_resultEventFallback() async {
         // Some agents emit everything in .result instead of streaming
         // .assistantText — modelSummary should take it as fallback (mirrors
@@ -480,7 +514,7 @@ struct MessageSummaryTests {
         // A message that ONLY carries the ACP skills-budget warning has
         // nothing to summarize — it must never become a summary, the
         // chats.summary, or a title input.
-        let warning = "Warning: Skill descriptions were shortened to fit the 2% skills context budget. "
+        let warning = "\(AgentPresentationPreamble.knownWarningSentence) "
         #expect(MessageSummarizer.textToSummarize(from: .assistantText(warning)) == nil)
 
         // A message that OPENS with the warning keeps the content after it.
@@ -497,7 +531,7 @@ struct MessageSummaryTests {
     /// The summarizer now removes ONLY the known skill warning — never an
     /// arbitrary `Warning:` line — and keeps a final incomplete prefix.
     @Test func textToSummarizeRemovesKnownSkillWarning() {
-        let sentence = "Warning: Skill descriptions were shortened to fit the 2% skills context budget."
+        let sentence = AgentPresentationPreamble.knownWarningSentence
         // Complete warning-only: nothing to summarize.
         #expect(MessageSummarizer.textToSummarize(from: .assistantText(sentence)) == nil)
         #expect(MessageSummarizer.textToSummarize(from: .assistantText(sentence + "\n\n")) == nil)

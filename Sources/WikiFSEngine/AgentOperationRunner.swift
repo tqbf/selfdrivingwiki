@@ -599,7 +599,7 @@ public enum AgentOperationRunner {
     /// sink (e.g. on a second turn) is a no-op for already-summarized rows.
     ///
     /// **Chat-level summary (issue #411):** the FIRST summarizable message's
-    /// summary is mirrored into `chats.summary` (the chats-list subtitle) as it
+    /// summary is cached on the message as it
     /// is written. This is the only writer of that column — the launcher no
     /// longer computes its own always-truncated version, which is what made the
     /// subtitle abbreviate even in Model mode.
@@ -643,39 +643,27 @@ public enum AgentOperationRunner {
             msg.summary == nil
                 && (MessageSummarizer.textToSummarize(from: msg.event)?.isEmpty == false)
         }
-        let chatSummaryMessageID = MessageSummarizer.chatSummaryMessageID(in: messages)
         guard !pending.isEmpty else { return }
         guard let services = launcher.providerServices else {
-            Self.writeDefaultSummaries(
-                chatID: chatID,
-                pending: pending,
-                store: store,
-                chatSummaryMessageID: chatSummaryMessageID)
+            Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
             return
         }
         do {
             let preparation = try await services.prepareSummarization()
             switch preparation {
             case .defaultTruncation:
-                Self.writeDefaultSummaries(
-                    chatID: chatID, pending: pending, store: store,
-                    chatSummaryMessageID: chatSummaryMessageID)
+                Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
             case .model(let preparation):
                 await Self.runModelSummarization(
                     chatID: chatID,
                     pending: pending,
                     services: services,
                     preparation: preparation,
-                    store: store,
-                    chatSummaryMessageID: chatSummaryMessageID)
+                    store: store)
                 await services.release(preparation.selection.token)
             }
         } catch AgentProviderRuntimeError.unavailable {
-            Self.writeDefaultSummaries(
-                chatID: chatID,
-                pending: pending,
-                store: store,
-                chatSummaryMessageID: chatSummaryMessageID)
+            Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
         } catch {
             DebugLog.agent("AgentOperationRunner: summarization preparation failed: \(error)")
         }
@@ -683,15 +671,13 @@ public enum AgentOperationRunner {
 
     @MainActor
     private static func writeDefaultSummaries(
-        chatID: ChatID, pending: [ChatMessage], store: WikiStoreModel,
-        chatSummaryMessageID: PageID?
+        chatID: ChatID, pending: [ChatMessage], store: WikiStoreModel
     ) {
         for msg in pending {
             guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
             let summary = MessageSummarizer.defaultSummary(for: text)
             guard !summary.isEmpty else { continue }
             store.updateMessageSummary(chatID: chatID, messageID: msg.id, summary: summary, kind: .defaultTruncation)
-            if msg.id == chatSummaryMessageID { store.updateChatSummary(chatID: chatID, summary: summary) }
         }
     }
 
@@ -702,8 +688,7 @@ public enum AgentOperationRunner {
         pending: [ChatMessage],
         services: any AgentProviderServices,
         preparation: AgentOperationPreparation,
-        store: WikiStoreModel,
-        chatSummaryMessageID: PageID?
+        store: WikiStoreModel
     ) async {
         for msg in pending {
             guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
@@ -717,9 +702,6 @@ public enum AgentOperationRunner {
                 store.updateMessageSummary(
                     chatID: chatID, messageID: msg.id,
                     summary: summary, kind: .model)
-                if msg.id == chatSummaryMessageID {
-                    store.updateChatSummary(chatID: chatID, summary: summary)
-                }
             } catch {
                 DebugLog.agent("AgentOperationRunner: model summary failed: \(error.localizedDescription)")
             }

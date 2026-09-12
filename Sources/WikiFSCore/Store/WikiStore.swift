@@ -1011,8 +1011,6 @@ public protocol WikiStore: AnyObject, Sendable {
 
     /// Write the one-line summary of the model's first response (issue #411),
     /// bumping `updated_at`. Throws `.notFound` if no chat has `id`.
-    func updateChatSummary(chatID: ChatID, summary: String) throws
-
     /// Write or clear the ACP session ID for resume (#830). Pass `nil` to
     /// clear (terminal teardown / permanent resume failure). Bumps
     /// `updated_at`.

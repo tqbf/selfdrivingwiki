@@ -222,7 +222,7 @@ struct EditorAutocompleteHostedTests {
         let fake = FakeAutocomplete()
         await fake.setNextResult([
             TantivyShadowSearchResult(documentID: "page:01PAGE0001", kind: .page,
-                                      title: "Erickson", score: 1.0),
+                                      title: "Erlandson", score: 1.0),
             TantivyShadowSearchResult(documentID: "page:01PAGE0002", kind: .page,
                                       title: "Erlang Guide", score: 0.9),
         ])
@@ -259,7 +259,7 @@ struct EditorAutocompleteHostedTests {
         let fake = FakeAutocomplete()
         await fake.setNextResult([
             TantivyShadowSearchResult(documentID: "page:01PAGE0001", kind: .page,
-                                      title: "Erickson", score: 1.0),
+                                      title: "Erlandson", score: 1.0),
         ])
         let hooks = WikiLinkAutocompleteHooks(
             fetch: { partial, kind in await fake.fetch(partial, kind) },
@@ -331,7 +331,7 @@ struct EditorAutocompleteHostedTests {
             text: textBinding, autocomplete: hooks, scheduler: scheduler)
         defer { Self.releaseWindow(window) }
 
-        type("[[page:Erickson]]", into: textView, coordinator: coordinator)
+        type("[[page:Erlandson]]", into: textView, coordinator: coordinator)
         #expect(scheduler.pendingCount == 0, "no schedule should be created for a closed link")
 
         await scheduler.fireAll()
@@ -438,7 +438,7 @@ struct EditorAutocompleteHostedTests {
         let fake = FakeAutocomplete()
         await fake.setNextResult([
             TantivyShadowSearchResult(documentID: "page:01PAGE0001", kind: .page,
-                                      title: "Erickson", score: 1.0),
+                                      title: "Erlandson", score: 1.0),
         ])
         let hooks = WikiLinkAutocompleteHooks(
             fetch: { partial, kind in await fake.fetch(partial, kind) },
@@ -463,7 +463,7 @@ struct EditorAutocompleteHostedTests {
         // After commit, the editor's text should reflect the canonical
         // `[[page:ULID|Title]]` form for the selected hit (the top row, since
         // nothing was explicitly arrow-key-selected).
-        #expect(textView.string == "[[page:01PAGE0001|Erickson]]",
+        #expect(textView.string == "[[page:01PAGE0001|Erlandson]]",
                 "commit should replace the trigger span with the canonical form; got \(textView.string)")
     }
 
@@ -482,7 +482,7 @@ struct EditorAutocompleteHostedTests {
         let fake = FakeAutocomplete()
         await fake.setNextResult([
             TantivyShadowSearchResult(documentID: "page:01PAGE0001", kind: .page,
-                                      title: "Erickson", score: 1.0),
+                                      title: "Erlandson", score: 1.0),
         ])
         let hooks = WikiLinkAutocompleteHooks(
             fetch: { partial, kind in await fake.fetch(partial, kind) },

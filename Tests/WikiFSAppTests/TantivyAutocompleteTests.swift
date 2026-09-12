@@ -7,7 +7,7 @@ import Foundation
 /// `TantivySearchService.autocomplete(...)` (issues #436 / #638, plan §6b/§6c).
 ///
 /// Mirrors `TantivyShadowIndexTests` (in-memory content source + temp index
-/// dir per test). The headline AC is `"Erl"` → `"Erickson"` via distance-2
+/// dir per test). The headline AC is `"Erl"` → `"Erlandson"` via distance-2
 /// prefix-fuzzy on title (the #638 case the plan-reviewer corrected us on:
 /// MUST use the query-string path with `prefix: true`, NOT the structured
 /// `.fuzzy` enum which has no `prefix`).
@@ -58,11 +58,11 @@ struct TantivyAutocompleteTests {
             contentSource: source)
     }
 
-    // MARK: - AC #1: "Erl" → "Erickson" (the #638 headline case)
+    // MARK: - AC #1: "Erl" → "Erlandson" (the #638 headline case)
 
     @Test func shortPrefixSurfacesLongerTitleViaPrefixFuzzy() async throws {
         // This is the headline AC of #638. A naive whole-token edit-distance
-        // query would score "Erl" as distance-6 from "Erickson" and miss it.
+        // query would score "Erl" as distance-6 from "Erlandson" and miss it.
         // The query-string path with `prefix: true` (the reviewer correction)
         // is what makes this work — the fuzzy automaton expands as a prefix.
         let (indexDir, fm) = makeTempDir()
@@ -71,7 +71,7 @@ struct TantivyAutocompleteTests {
         let source = InMemoryContentSource()
         let service = try makeService(source: source, dir: indexDir)
 
-        await source.upsert(makeSnapshot(ulid: "01PAGE00001", kind: .page, title: "Erickson"))
+        await source.upsert(makeSnapshot(ulid: "01PAGE00001", kind: .page, title: "Erlandson"))
         await source.upsert(makeSnapshot(ulid: "01PAGE00002", kind: .page, title: "Erlang"))
         await source.upsert(makeSnapshot(ulid: "01PAGE00003", kind: .page, title: "Erie"))
         await service.indexer.upsert(ulid: "01PAGE00001", kind: .page)
@@ -81,8 +81,8 @@ struct TantivyAutocompleteTests {
         let hits = await service.autocomplete(
             partial: "Erl", kinds: [.page], distance: 2, limit: 8)
 
-        #expect(hits.contains { $0.title == "Erickson" },
-                "AC #1: 'Erl' must surface 'Erickson' via prefix-fuzzy — the #638 headline")
+        #expect(hits.contains { $0.title == "Erlandson" },
+                "AC #1: 'Erl' must surface 'Erlandson' via prefix-fuzzy — the #638 headline")
         #expect(hits.contains { $0.title == "Erlang" })
         #expect(hits.contains { $0.title == "Erie" })
     }
@@ -90,20 +90,20 @@ struct TantivyAutocompleteTests {
     // MARK: - AC #2: typo tolerance (distance 1–2)
 
     @Test func typoDistanceOneSurfacesTarget() async throws {
-        // `Erlckson` is edit-distance 1 from `Erickson` (extra `l`).
+        // `Erlanson` is edit-distance 1 from `Erlandson` (deleted `d`).
         let (indexDir, fm) = makeTempDir()
         defer { try? fm.removeItem(at: indexDir) }
 
         let source = InMemoryContentSource()
         let service = try makeService(source: source, dir: indexDir)
 
-        await source.upsert(makeSnapshot(ulid: "01PAGE00010", kind: .page, title: "Erickson"))
+        await source.upsert(makeSnapshot(ulid: "01PAGE00010", kind: .page, title: "Erlandson"))
         await service.indexer.upsert(ulid: "01PAGE00010", kind: .page)
 
         let hits = await service.autocomplete(
-            partial: "Erlckson", kinds: [.page], distance: 2, limit: 8)
+            partial: "Erlanson", kinds: [.page], distance: 2, limit: 8)
 
-        #expect(hits.contains { $0.title == "Erickson" },
+        #expect(hits.contains { $0.title == "Erlandson" },
                 "AC #2: a distance-1 typo on a longer title should still resolve")
     }
 

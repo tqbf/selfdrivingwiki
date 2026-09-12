@@ -42,11 +42,11 @@ struct WikiLinkPrefixScannerTests {
 
     @Test func bareOpenBracketsDefaultToPage() {
         // Per WikiLinkParser.classify (:52), bare `[[Foo` is a page link.
-        let text = "Some text [[Erickson"
+        let text = "Some text [[Erlandson"
         let caret = text.count
         let trigger = WikiLinkPrefixScanner.openLink(at: caret, in: text)
         #expect(trigger?.kind == .page)
-        #expect(trigger?.partial == "Erickson")
+        #expect(trigger?.partial == "Erlandson")
     }
 
     // MARK: - Rejection: closed/aliased links (AC #6 — don't fire once closed)
@@ -142,14 +142,14 @@ struct WikiLinkPrefixScannerTests {
     // MARK: - Caret position mid-text
 
     @Test func caretMidTokenReadsPartialPrefix() {
-        // `[[page:Erickson` with the caret after "Eri" should yield partial "Eri".
-        let text = "[[page:Erickson"
-        let caret = "[[page:Eri".count
+        // `[[page:Erlandson` with the caret after "Erla" should yield partial "Erla".
+        let text = "[[page:Erlandson"
+        let caret = "[[page:Erla".count
         let trigger = WikiLinkPrefixScanner.openLink(at: caret, in: text)
-        #expect(trigger?.partial == "Eri")
-        // Range covers only `[[page:Eri` (up to the caret).
+        #expect(trigger?.partial == "Erla")
+        // Range covers only `[[page:Erla` (up to the caret).
         let span = String(text[trigger!.range])
-        #expect(span == "[[page:Eri")
+        #expect(span == "[[page:Erla")
     }
 
     @Test func caretAfterClosedLinkAndNewOpenLinkDetectsTheNewOne() {

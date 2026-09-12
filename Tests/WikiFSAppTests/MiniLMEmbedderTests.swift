@@ -157,7 +157,7 @@ private func distinctLongPassages() -> [String] {
         autonomic nervous system as a layered substrate of social engagement, \
         mobilization, and shutdown. Heart rate variability serves as a non-invasive \
         window onto vagal tone, and biofeedback interventions that train slow paced \
-        breathing have shown measurable effects on autonomic balance. Hypnosis and \
+        breathing have shown measurable effects on autonomic balance. Relaxation and \
         suggestion modulate autonomic output as well, which is why clinicians pair \
         them with biofeedback for anxiety and pain regulation. The repeated finding \
         across studies is that autistic participants exhibit reduced respiratory \

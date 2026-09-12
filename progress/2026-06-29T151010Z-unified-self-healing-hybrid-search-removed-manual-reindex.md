@@ -40,7 +40,7 @@ pre-existing sources. Verified via `DebugLog` + direct sqlite counts.
 **Verified:** `swift build` clean; **1202 tests pass**. Against a snapshot copy
 of the real DB, applying the FTS self-heal steps took `source_search` 0→71 and
 `sources_fts` 0→71, and the bm25 query returned relevant hits for "dissociation"
-and "hypnosis". (The embedding half can't run under raw sqlite3 — it needs
+and "photosynthesis". (The embedding half can't run under raw sqlite3 — it needs
 `NLEmbedding` — but is the same path covered by unit tests; it populates on the
 app's next open.)
 

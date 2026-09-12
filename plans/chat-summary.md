@@ -23,7 +23,7 @@ There are **two existing "summary" surfaces** — do not confuse them:
 
 | Surface | Granularity | Storage | Compute | Status |
 |---|---|---|---|---|
-| `ChatSummary.summary` / `summaryAt` | **One row per CHAT** (issue #411) | `chats.summary` + `chats.summary_at` columns | first-sentence truncation, run once in `AgentLauncher.finish()` | **Shipped.** Leave as-is. |
+| `ChatSummary.summary` / `summaryAt` | **One row per CHAT** (issue #411) | `chats.summary` + `chats.summary_at` columns | first-sentence truncation, run once in `AgentLauncher.finish()` | **Removed** — schema v53, 2026-09-12 (#1262): the column is no longer read anywhere. |
 | `ChatOutlineEntry.response` | **One per turn** (UI-only, recomputed on render) | none — recomputed every render via `ChatSummary.summaryExtract` | first-sentence truncation, on the fly | **Shipped.** This is the site we extend. |
 
 **This feature** adds a **per-message** (`chat_messages`) summary that is:

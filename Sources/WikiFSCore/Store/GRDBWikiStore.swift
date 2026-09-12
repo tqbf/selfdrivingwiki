@@ -158,7 +158,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 52
+    private static let currentSchemaVersion = 53
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1550,6 +1550,21 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             version = 52
         }
 
+        // v52→v53: remove the chat-level `summary`/`summary_at` columns. The
+        // mirrored one-line answer summary (issue #411) is no longer read
+        // anywhere — the sidebar row shows the stored title and the creation
+        // date — and the per-message summaries in `chat_messages` (which feed
+        // the outline) are unaffected. Guarded like every other step so
+        // already-converged databases pass through.
+        if version < 53 {
+            try db.inTransaction(.immediate) {
+                try Self.dropChatSummaryColumnsV53(in: db)
+                try db.execute(sql: "PRAGMA user_version = 53;")
+                return .commit
+            }
+            version = 53
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -2066,8 +2081,6 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             title              TEXT NOT NULL,
             created_at         REAL NOT NULL,
             updated_at         REAL NOT NULL,
-            summary            TEXT,
-            summary_at         REAL,
             acp_session_id     TEXT,
             model_provider_id  TEXT,
             model_id           TEXT,
@@ -2910,6 +2923,22 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    /// The v52→53 migration step: drop the chat-level one-line answer
+    /// summary columns (issue #411 successor). The mirrored `chats.summary`
+    /// is no longer read anywhere; per-message summaries in `chat_messages`
+    /// (which feed the outline) are unaffected.
+    private static func dropChatSummaryColumnsV53(in db: Database) throws {
+        let columns = try tableColumnInfo("chats", in: db)
+        guard columns.contains("summary") || columns.contains("summary_at") else { return }
+
+        if columns.contains("summary") {
+            try db.execute(sql: "ALTER TABLE chats DROP COLUMN summary;")
+        }
+        if columns.contains("summary_at") {
+            try db.execute(sql: "ALTER TABLE chats DROP COLUMN summary_at;")
+        }
+    }
+
     /// The v35→36 migration step (issue #411 — chat summary).
     private static func migrateV35ToV36(in db: Database) throws {
         let columns = try tableColumnInfo("chats", in: db)
@@ -3373,8 +3402,6 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             title              TEXT NOT NULL,
             created_at         REAL NOT NULL,
             updated_at         REAL NOT NULL,
-            summary            TEXT,
-            summary_at         REAL,
             acp_session_id     TEXT,
             model_provider_id  TEXT,
             model_id           TEXT,
@@ -9879,20 +9906,14 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             let rows = try Row.fetchAll(db, sql: """
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                   c.summary, c.summary_at, c.acp_session_id,
+                   c.acp_session_id,
                    c.model_provider_id, c.model_id,
                    c.configured_thinking_option_id, c.effective_thinking_option_id
             FROM chats c
             ORDER BY c.updated_at DESC, c.rowid DESC;
             """)
             return rows.map { row in
-                let summary: String? = row["summary"]
-                let summaryAt: Double? = row["summary_at"]
-                return Self.readChatSummary(
-                    from: row,
-                    summary: summary,
-                    summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) }
-                )
+                Self.readChatSummary(from: row)
             }
         }
     }
@@ -10038,18 +10059,6 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
-    public func updateChatSummary(chatID: ChatID, summary: String) throws {
-        try mutate(event: { _ in
-            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
-        }) { db in
-            try db.execute(sql: """
-            UPDATE chats SET summary = ?, summary_at = ?, updated_at = ?
-            WHERE id = ?;
-            """, arguments: [summary, Date().timeIntervalSince1970,
-                            Date().timeIntervalSince1970, chatID.rawValue])
-        }
-    }
-
     /// Write (or clear) the ACP session ID for resume (#830). Bumps
     /// `updated_at`. Routes through `mutate(event:_:)` so it emits a
     /// `.chat .updated` event. Pass `nil` to clear (terminal teardown /
@@ -10146,20 +10155,14 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             let rows = try Row.fetchAll(db, sql: """
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                   c.summary, c.summary_at, c.acp_session_id,
+                   c.acp_session_id,
                    c.model_provider_id, c.model_id,
                    c.configured_thinking_option_id, c.effective_thinking_option_id
             FROM chats c
             ORDER BY c.id ASC;
             """)
             return rows.map { row in
-                let summary: String? = row["summary"]
-                let summaryAt: Double? = row["summary_at"]
-                return Self.readChatSummary(
-                    from: row,
-                    summary: summary,
-                    summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) }
-                )
+                Self.readChatSummary(from: row)
             }
         }
     }
@@ -10251,7 +10254,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 let rows = try Row.fetchAll(db, sql: """
                     SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                            (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                           c.summary, c.summary_at, cc.embedding, c.acp_session_id,
+                           cc.embedding, c.acp_session_id,
                            c.model_provider_id, c.model_id,
                            c.configured_thinking_option_id, c.effective_thinking_option_id
                     FROM chat_chunks cc
@@ -10273,12 +10276,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                     .sorted { $0.value.sim > $1.value.sim }
                     .prefix(pool)
                     .map { _, entry in
-                        let summary: String? = entry.row["summary"]
-                        let summaryAt: Double? = entry.row["summary_at"]
-                        return Self.readChatSummary(
-                            from: entry.row,
-                            summary: summary,
-                            summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) })
+                        return Self.readChatSummary(from: entry.row)
                     }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
@@ -10985,9 +10983,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// Read a complete ChatSummary from a GRDB Row. Every caller selects the
     /// provider/model and thinking-selection columns so list, get, search, and
     /// File Provider projections preserve the same durable state.
-    private static func readChatSummary(
-        from row: Row, summary: String?, summaryAt: Date?
-    ) -> ChatSummary {
+    private static func readChatSummary(from row: Row) -> ChatSummary {
         let acpSessionId: String? = row["acp_session_id"]
         let modelProviderId: String? = row["model_provider_id"]
         let modelId: String? = row["model_id"]
@@ -11000,8 +10996,6 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             createdAt: Date(timeIntervalSince1970: row["created_at"]),
             updatedAt: Date(timeIntervalSince1970: row["updated_at"]),
             messageCount: row["msg_count"],
-            summary: summary,
-            summaryAt: summaryAt,
             acpSessionId: acpSessionId.map { AcpSessionID(rawValue: $0) },
             modelProviderId: modelProviderId.map { ProviderID(rawValue: $0) },
             modelId: modelId.map { ModelID(rawValue: $0) },
@@ -12075,20 +12069,14 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 sql: """
                 SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                        (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                       c.summary, c.summary_at, c.acp_session_id,
+                       c.acp_session_id,
                        c.model_provider_id, c.model_id,
                        c.configured_thinking_option_id, c.effective_thinking_option_id
                 FROM chats c WHERE c.id = ?;
                 """,
                 arguments: [id.rawValue]
             ) else { throw WikiStoreError.chatNotFound(id) }
-            let summary: String? = row["summary"]
-            let summaryAt: Double? = row["summary_at"]
-            return Self.readChatSummary(
-                from: row,
-                summary: summary,
-                summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) }
-            )
+            return Self.readChatSummary(from: row)
         }
     }
 

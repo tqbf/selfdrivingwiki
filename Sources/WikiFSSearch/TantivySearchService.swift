@@ -67,7 +67,7 @@ final class TantivySearchService: Sendable {
     /// pre-scope to one kind (`[[page:` → `[.page]`) or open it up later.
     /// See `TantivyIndexer.autocomplete(...)` for the query-string-path
     /// rationale (prefix-true on title is load-bearing for the
-    /// `"Erl" → "Erickson"` headline case).
+    /// `"Erl" → "Erlandson"` headline case).
     func autocomplete(
         partial: String,
         kinds: Set<TantivyDocumentKind>,

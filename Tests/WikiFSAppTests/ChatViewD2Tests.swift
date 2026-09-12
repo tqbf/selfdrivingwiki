@@ -316,7 +316,6 @@ struct ChatViewD2Tests {
     /// removed because the agent reads via wikictl (DB-direct), not the mount.
     @Test func canSendPredicateTrueWithDraftTextAndIdleAgent() {
         #expect(ChatDetailView.canSendPredicate(
-            hasMount: true,
             runState: .idle,
             hasDraftText: true,
             isChatOperationConfigured: true) == true)
@@ -326,7 +325,6 @@ struct ChatViewD2Tests {
     /// the mount guard was removed (issue #441).
     @Test func canSendPredicateTrueWithoutMount() {
         #expect(ChatDetailView.canSendPredicate(
-            hasMount: false,
             runState: .idle,
             hasDraftText: true,
             isChatOperationConfigured: true) == true)
@@ -335,7 +333,6 @@ struct ChatViewD2Tests {
     /// `canSendPredicate` returns false when generating (can't send mid-response).
     @Test func canSendPredicateFalseWhileGenerating() {
         #expect(ChatDetailView.canSendPredicate(
-            hasMount: true,
             runState: .answering,
             hasDraftText: true,
             isChatOperationConfigured: true) == false)
@@ -345,7 +342,6 @@ struct ChatViewD2Tests {
     /// generation gate.
     @Test func canSendPredicateFalseWhileQueued() {
         #expect(ChatDetailView.canSendPredicate(
-            hasMount: true,
             runState: .queued,
             hasDraftText: true,
             isChatOperationConfigured: true) == false)
@@ -354,7 +350,6 @@ struct ChatViewD2Tests {
     /// `canSendPredicate` returns false with no draft text.
     @Test func canSendPredicateFalseWithNoDraftText() {
         #expect(ChatDetailView.canSendPredicate(
-            hasMount: true,
             runState: .idle,
             hasDraftText: false,
             isChatOperationConfigured: true) == false)

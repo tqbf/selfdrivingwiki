@@ -15,7 +15,6 @@ Sources/WikiFSCore/Store/WikiStore.swift	func appendChatMessages(chatID: ChatID,
 Sources/WikiFSCore/Store/WikiStore.swift	func chatMessages(chatID: ChatID) throws -> [ChatMessage]
 Sources/WikiFSCore/Store/WikiStore.swift	func renameChat(id: ChatID, to title: String) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func deleteChat(id: ChatID) throws
-Sources/WikiFSCore/Store/WikiStore.swift	func updateChatSummary(chatID: ChatID, summary: String) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) throws
 Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID,
@@ -40,7 +39,6 @@ Sources/WikiFSCore/Store/WikiStore.swift	func missingChatEmbeddingWork() -> [(id
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func getChat(id: ChatID) throws -> ChatSummary
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func selectChat(byID id: ChatID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func getChat(id: ChatID) -> ChatSummary?
-Sources/WikiFSCore/Store/WikiStoreModel.swift	public func updateChatSummary(chatID: ChatID, summary: String) {
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) {
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func deleteChat(id: ChatID) {
 Sources/WikiFSEngine/AgentLauncher.swift	public var activeChatID: ChatID?

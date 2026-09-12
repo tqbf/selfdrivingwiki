@@ -615,7 +615,7 @@ struct ChatDetailPresentationTests {
     /// warning-plus-text cache uses its cleaned remainder, and an incomplete
     /// final prefix stays (completeOnly semantics).
     @Test func staleCachedWarningCannotReappearInOutline() {
-        let warning = "Warning: Skill descriptions were shortened to fit the 2% skills context budget."
+        let warning = AgentPresentationPreamble.knownWarningSentence
         let turnID = ChatTurnID(rawValue: "turn-cache")
         let promptRow = ChatDisplayRow.userMessage(
             id: ChatMessageID(rawValue: "q"),
@@ -707,9 +707,7 @@ private extension ChatDetailPresentation.RemoteState {
         runningKind: WikiOperation.Kind? = nil,
         preflightError: String? = nil,
         pendingPermissions: [PendingPermission] = [],
-        runStartedAt: Date? = nil,
-        projectionInput: TranscriptProjectionInput = .empty,
-        exitStatus: Int32? = nil
+        projectionInput: TranscriptProjectionInput = .empty
     ) -> Self {
         .init(
             runState: runState,
@@ -717,9 +715,7 @@ private extension ChatDetailPresentation.RemoteState {
             runningKind: runningKind,
             preflightError: preflightError,
             pendingPermissions: pendingPermissions,
-            runStartedAt: runStartedAt,
-            projectionInput: projectionInput,
-            exitStatus: exitStatus
+            projectionInput: projectionInput
         )
     }
 }

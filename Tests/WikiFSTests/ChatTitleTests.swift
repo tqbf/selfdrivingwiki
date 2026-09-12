@@ -32,4 +32,28 @@ import Foundation
     @Test func emptyMessageFallsBackToNewChat() {
         #expect(ChatSummary.title(fromFirstMessage: "") == "New Chat")
     }
+
+    // MARK: - Injected skills-budget preamble
+
+    private static let warning =
+        AgentPresentationPreamble.knownWarningSentence
+
+    @Test("warning-prefixed message derives the title from the real question")
+    func warningPrefixStrippedFromTitle() {
+        let message = "\(Self.warning)\n\nWhat is a tide pool?"
+        #expect(ChatSummary.title(fromFirstMessage: message)
+                == "What is a tide pool?")
+    }
+
+    @Test("a warning-only message derives to New Chat")
+    func warningOnlyMessageFallsBackToNewChat() {
+        #expect(ChatSummary.title(fromFirstMessage: Self.warning) == "New Chat")
+        #expect(ChatSummary.title(fromFirstMessage: "\(Self.warning)\n\n") == "New Chat")
+    }
+
+    @Test("an unrelated Warning: line is preserved — only the known family is stripped")
+    func unrelatedWarningLinesArePreserved() {
+        let message = "Warning: the disk is nearly full\nplease check"
+        #expect(ChatSummary.title(fromFirstMessage: message) == "Warning: the disk is nearly full")
+    }
 }

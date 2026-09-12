@@ -4527,16 +4527,6 @@ public final class WikiStoreModel {
         }
     }
 
-    public func updateChatSummary(chatID: ChatID, summary: String) {
-        do {
-            try store.updateChatSummary(chatID: chatID, summary: summary)
-            // No manual reload — the bus fires reloadFromStore() async after the
-            // update.
-        } catch {
-            DebugLog.store("WikiStoreModel.updateChatSummary failed: \(error)")
-        }
-    }
-
     /// `@MainActor` wrapper for the ACP session ID write/clear (#830). Written
     /// at spawn time (persist) and on resume failure (clear). No manual reload
     /// — the bus fires `reloadFromStore()` async after the store write.
