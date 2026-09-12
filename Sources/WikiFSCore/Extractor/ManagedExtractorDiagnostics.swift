@@ -42,6 +42,16 @@ public enum ManagedExtractorDiagnostics {
         case nonzeroExit(command: String, termination: String, stderrTail: String)
         /// The extractor's stdout violated the protocol.
         case protocolFailure(command: String, detail: String)
+        /// A macOS spawn was confined by the per-spawn seatbelt profile.
+        /// `networkDenied` mirrors the manifest's network capability: `true`
+        /// means the package runs with `(deny network*)`.
+        case sandboxApplied(networkDenied: Bool)
+        /// macOS confinement could not be applied, so no child was spawned
+        /// (fail closed).
+        case sandboxUnavailable(command: String, detail: String)
+        /// Diagnostic-only Linux builds apply no seatbelt; the spawn runs
+        /// unwrapped and this line makes the gap visible in the log.
+        case sandboxUnavailablePlatform(command: String)
 
         /// The one-line Console form. The prefix names the category so every
         /// failure stage is distinguishable in the log (AC.7). Every
@@ -68,6 +78,12 @@ public enum ManagedExtractorDiagnostics {
                 return "nonzero extractor exit: command=\(safe(command)) termination=\(safe(termination)) stderr=\(safe(tail))"
             case let .protocolFailure(command, detail):
                 return "protocol failure: command=\(safe(command)) detail=\(safe(detail))"
+            case let .sandboxApplied(networkDenied):
+                return "sandbox applied: network-denied=\(networkDenied)"
+            case let .sandboxUnavailable(command, detail):
+                return "sandbox unavailable: command=\(safe(command)) detail=\(safe(detail))"
+            case let .sandboxUnavailablePlatform(command):
+                return "sandbox unavailable on this platform: command=\(safe(command)) (spawned unsandboxed)"
             }
         }
     }

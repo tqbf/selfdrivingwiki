@@ -339,6 +339,133 @@ struct ManagedExtractorProcessExecutorTests {
         #expect(await processIsGone(childPID))
     }
 
+    // MARK: - Seatbelt enforcement (AC.2, AC.3, AC.4, AC.8)
+
+    /// AC.3: a sandboxed package cannot write outside the operation layout,
+    /// while its in-root output write still succeeds. The fixture attempts
+    /// the escape itself and records the verdict in the report markdown.
+    @Test func sandboxedProcessCannotWriteOutsideOperationRoot() async throws {
+        // The escape target is a sibling of the whole fixture root —
+        // deliberately outside the operation root — and is created up front
+        // so a failure is the seatbelt denial, never ENOENT.
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("managed-extractor-outside-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: outside) }
+            catch { Issue.record("outside target cleanup failed: \(error)") }
+        }
+        let target = outside.appendingPathComponent("escape.txt")
+        let fixture = try Fixture(
+            mode: "outside-write \(target.path)",
+            maximumDurationMilliseconds: 30_000)
+        defer { fixture.cleanup() }
+
+        let result = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+
+        #expect(result.terminationCause == .exited(code: 0))
+        let markdown = try String(contentsOf: fixture.outputURL, encoding: .utf8)
+        #expect(markdown.contains("OUTSIDE=denied"))
+        #expect(!FileManager.default.fileExists(atPath: target.path))
+    }
+
+    /// AC.2: without the manifest `network` capability, a live TCP connect is
+    /// denied — the child reports the denial AND the listener observed no
+    /// connection.
+    @Test func networkDeniedWithoutCapability() async throws {
+        let listener = try LocalListener()
+        defer { listener.close() }
+        let fixture = try Fixture(
+            mode: "tcp-connect 127.0.0.1 \(listener.port)",
+            maximumDurationMilliseconds: 30_000)
+        defer { fixture.cleanup() }
+
+        let result = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+
+        #expect(result.terminationCause == .exited(code: 0))
+        let markdown = try String(contentsOf: fixture.outputURL, encoding: .utf8)
+        #expect(markdown.contains("NETWORK=denied"))
+        #expect(!listener.hasPendingConnection())
+    }
+
+    /// AC.2: with the capability the fence is absent entirely and the same
+    /// connect succeeds end to end — the child reports success and the
+    /// listener observed the real connection.
+    @Test func networkAllowedWithCapability() async throws {
+        let listener = try LocalListener()
+        defer { listener.close() }
+        let fixture = try Fixture(
+            mode: "tcp-connect 127.0.0.1 \(listener.port)",
+            maximumDurationMilliseconds: 30_000,
+            capabilities: [.network])
+        defer { fixture.cleanup() }
+
+        let result = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+
+        #expect(result.terminationCause == .exited(code: 0))
+        let markdown = try String(contentsOf: fixture.outputURL, encoding: .utf8)
+        #expect(markdown.contains("NETWORK=ok"))
+        #expect(listener.hasPendingConnection())
+        listener.acceptOne()
+    }
+
+    /// AC.8: every successful macOS spawn logs whether it was confined, and
+    /// the flag mirrors the manifest's network capability.
+    @Test func sandboxAppliedDiagnosticMirrorsManifestCapability() async throws {
+        let deniedDiagnostics = CapturingExtractorDiagnosticsSink()
+        let denied = try Fixture(mode: "success")
+        defer { denied.cleanup() }
+        _ = try await ManagedExtractorProcessExecutor(
+            diagnostics: deniedDiagnostics).execute(denied.operation)
+        #expect(deniedDiagnostics.lines.contains("sandbox applied: network-denied=true"))
+
+        let allowedDiagnostics = CapturingExtractorDiagnosticsSink()
+        let allowed = try Fixture(mode: "success", capabilities: [.network])
+        defer { allowed.cleanup() }
+        _ = try await ManagedExtractorProcessExecutor(
+            diagnostics: allowedDiagnostics).execute(allowed.operation)
+        #expect(allowedDiagnostics.lines.contains("sandbox applied: network-denied=false"))
+    }
+
+    /// AC.4: an unusable sandbox front-end prevents ANY spawn — typed
+    /// `sandboxUnavailable` error, the diagnostic line, and no fixture
+    /// output. Parameterized over the three failure shapes: missing path,
+    /// non-executable regular file, executable directory (non-regular node).
+    @Test("sandbox front-end unusable fails closed", arguments: [
+        SandboxFrontEndCase.missingPath,
+        SandboxFrontEndCase.nonExecutableFile,
+        SandboxFrontEndCase.executableDirectory,
+    ])
+    func sandboxUnavailableFailsClosed(_ testCase: SandboxFrontEndCase) async throws {
+        let fixture = try Fixture(mode: "success", maximumDurationMilliseconds: 30_000)
+        defer { fixture.cleanup() }
+        let sandboxURL: URL
+        switch testCase {
+        case .missingPath:
+            sandboxURL = fixture.root.appendingPathComponent("no-such-sandbox-exec")
+        case .nonExecutableFile:
+            sandboxURL = fixture.root.appendingPathComponent("sandbox-exec-plain-file")
+            try Data("not an executable\n".utf8).write(to: sandboxURL)
+            guard chmod(sandboxURL.path, 0o400) == 0 else { throw POSIXError(.EIO) }
+        case .executableDirectory:
+            sandboxURL = fixture.root.appendingPathComponent("sandbox-exec-dir", isDirectory: true)
+            try FileManager.default.createDirectory(at: sandboxURL, withIntermediateDirectories: true)
+            guard chmod(sandboxURL.path, 0o700) == 0 else { throw POSIXError(.EIO) }
+        }
+        let diagnostics = CapturingExtractorDiagnosticsSink()
+        let executor = ManagedExtractorProcessExecutor(
+            diagnostics: diagnostics,
+            sandboxExecutableURL: sandboxURL)
+
+        await #expect(throws: ManagedExtractorProcessError.sandboxUnavailable) {
+            _ = try await executor.execute(fixture.operation)
+        }
+
+        #expect(diagnostics.lines.contains { $0.hasPrefix("sandbox unavailable: command=") })
+        // Nothing ran: the fixture never wrote its output.
+        #expect(!FileManager.default.fileExists(atPath: fixture.outputURL.path))
+    }
+
     private func waitForFile(_ url: URL) async throws {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(5))
@@ -529,6 +656,86 @@ private final class FrameCollector: @unchecked Sendable {
     }
 
     var values: [ExtractorProtocolFrame] { lock.withLock { storage } }
+}
+
+/// The three shapes of an unusable sandbox front-end the fail-closed test
+/// exercises: missing path, non-executable regular file, executable
+/// directory (non-regular node).
+enum SandboxFrontEndCase: String, CaseIterable, Sendable {
+    case missingPath
+    case nonExecutableFile
+    case executableDirectory
+}
+
+/// A loopback TCP listener on an ephemeral port. The network tests use it to
+/// observe whether a sandboxed child can really open a connection — the
+/// child's report alone would not distinguish "denied" from "tried nothing".
+private final class LocalListener: @unchecked Sendable {
+    let port: Int
+    private let fileDescriptor: Int32
+
+    init() throws {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        var reuse: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: INADDR_LOOPBACK.bigEndian)
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0, listen(fd, 1) == 0 else {
+            Darwin.close(fd)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        var resolved = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &resolved) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &length)
+            }
+        }
+        guard named == 0 else {
+            Darwin.close(fd)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        fileDescriptor = fd
+        port = Int(UInt16(bigEndian: resolved.sin_port))
+    }
+
+    /// True when a connection is waiting in the listen backlog.
+    func hasPendingConnection() -> Bool {
+        var pollSet = [pollfd(fd: fileDescriptor, events: Int16(POLLIN), revents: 0)]
+        return poll(&pollSet, 1, 250) > 0
+    }
+
+    /// Accepts and immediately closes one pending connection, so the allowed
+    /// path's connect is fully consumed before the listener shuts down.
+    func acceptOne() {
+        let accepted = accept(fileDescriptor, nil, nil)
+        if accepted >= 0 { Darwin.close(accepted) }
+    }
+
+    func close() {
+        Darwin.close(fileDescriptor)
+    }
+}
+
+/// In-memory diagnostics sink for asserting the exact Console lines the
+/// executor emits (AC.8): sandbox-applied flags and fail-closed events.
+private final class CapturingExtractorDiagnosticsSink: ExtractorDiagnosticsSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    func send(_ line: String) {
+        lock.withLock { storage.append(line) }
+    }
+
+    var lines: [String] { lock.withLock { storage } }
 }
 
 private final class Fixture: @unchecked Sendable {

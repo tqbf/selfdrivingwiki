@@ -58,6 +58,100 @@ private func spawnChild() throws -> pid_t {
     return childPID
 }
 
+/// Maps a failed write attempt to the OUTSIDE report verdict. `denied` is
+/// reserved for the seatbelt shapes — EPERM/EACCES, or Foundation's
+/// no-permission wrapper around them. Any other failure gets a distinct
+/// `error-...` label so an environment without enforcement fails loudly
+/// instead of silently matching.
+private func writeVerdict(_ error: any Error) -> String {
+    func posixVerdict(_ code: Int) -> String {
+        (code == Int(EPERM) || code == Int(EACCES)) ? "denied" : "error-\(code)"
+    }
+    if let posix = error as? POSIXError {
+        return posixVerdict(posix.errorCode)
+    }
+    if let cocoa = error as? CocoaError {
+        if cocoa.code == .fileWriteNoPermission { return "denied" }
+        if let underlying = cocoa.userInfo[NSUnderlyingErrorKey] as? POSIXError {
+            return posixVerdict(underlying.errorCode)
+        }
+    }
+    return "error-\(String(describing: error))"
+}
+
+/// Shared tail of the sandbox-enforcement modes: write the report markdown
+/// INSIDE the operation root (which the profile allows) and emit a valid
+/// progress + result terminal exchange, so the host sees a successful
+/// operation whose markdown carries the verdict.
+private func emitCompletion(
+    requestID: UUID,
+    outputPath: String,
+    markdown: String
+) -> Bool {
+    do {
+        let outputURL = URL(fileURLWithPath: outputPath)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        try Data(markdown.utf8).write(to: outputURL)
+        try write(Frame(
+            kind: "progress",
+            payload: Progress(
+                requestID: requestID,
+                completedUnitCount: 1,
+                totalUnitCount: 1,
+                message: "complete")))
+        try write(Frame(
+            kind: "result",
+            payload: Result(
+                requestID: requestID,
+                outputPath: outputPath,
+                markdownByteCount: markdown.utf8.count)))
+        return true
+    } catch {
+        return false
+    }
+}
+
+/// Direct BSD-socket connect probe with a bounded 3 s timeout — no `nc`/`curl`,
+/// because the child environment is a deliberately closed allowlist. Returns a
+/// verdict string for the NETWORK report: `ok` when the connection was
+/// established, `denied` when the seatbelt refused it (EPERM/EACCES), and a
+/// distinct `error-<errno>` otherwise so an environment without enforcement
+/// fails loudly instead of silently matching.
+private func probeTCP(host: String, port: Int) -> String {
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(clamping: port).bigEndian
+    guard inet_pton(AF_INET, host, &address.sin_addr) == 1 else { return "error-host" }
+    let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+    guard descriptor >= 0 else { return "error-socket-\(errno)" }
+    defer { close(descriptor) }
+    let flags = fcntl(descriptor, F_GETFL, 0)
+    guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+        return "error-fcntl-\(errno)"
+    }
+    let connectResult = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    if connectResult == 0 { return "ok" }
+    if errno == EPERM || errno == EACCES { return "denied" }
+    guard errno == EINPROGRESS else { return "error-connect-\(errno)" }
+    var pollSet = [pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)]
+    guard poll(&pollSet, 1, 3_000) > 0 else { return "error-timeout" }
+    var socketError: Int32 = 0
+    var length = socklen_t(MemoryLayout<Int32>.size)
+    guard getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &socketError, &length) == 0 else {
+        return "error-getsockopt-\(errno)"
+    }
+    if socketError == 0 { return "ok" }
+    if socketError == EPERM || socketError == EACCES { return "denied" }
+    return "error-\(socketError)"
+}
+
 let input = FileHandle.standardInput.readDataToEndOfFile()
 let requestData = input.last == 0x0A ? input.dropLast() : input[...]
 private let request: Request
@@ -183,6 +277,44 @@ case "htmlsuccess":
                     author: "Jane Doe",
                     wordCount: 2))))
     } catch {
+        exit(3)
+    }
+case let modeLine where modeLine.hasPrefix("outside-write"):
+    // "outside-write <absolute path OUTSIDE the operation root>". The write
+    // attempt must be denied by the seatbelt; the report markdown still lands
+    // inside the operation root and carries the verdict.
+    let target = String(modeLine.dropFirst("outside-write".count))
+        .trimmingCharacters(in: .whitespaces)
+    let outcome: String
+    do {
+        try Data("outside".utf8).write(to: URL(fileURLWithPath: target))
+        outcome = "ok"
+    } catch {
+        outcome = writeVerdict(error)
+    }
+    guard emitCompletion(
+        requestID: request.requestID,
+        outputPath: request.outputPath,
+        markdown: "# Fixture\nOUTSIDE=\(outcome)\n")
+    else {
+        exit(3)
+    }
+case let modeLine where modeLine.hasPrefix("tcp-connect"):
+    // "tcp-connect <host> <port>". Reports whether a TCP connection was
+    // established; under the seatbelt it must be denied unless the manifest
+    // declared the network capability.
+    let parts = modeLine.dropFirst("tcp-connect".count)
+        .split(separator: " ", omittingEmptySubsequences: true)
+        .map(String.init)
+    guard parts.count == 2, let port = Int(parts[1]) else {
+        exit(4)
+    }
+    let outcome = probeTCP(host: parts[0], port: port)
+    guard emitCompletion(
+        requestID: request.requestID,
+        outputPath: request.outputPath,
+        markdown: "# Fixture\nNETWORK=\(outcome)\n")
+    else {
         exit(3)
     }
 default:

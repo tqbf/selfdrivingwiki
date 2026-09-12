@@ -107,6 +107,28 @@ struct ManagedExtractorDiagnosticsTests {
         #expect(capped.count == 10)
     }
 
+    /// The sandbox events: every confinement outcome is distinguishable,
+    /// one-line, and command-tagged like the failure categories.
+    @Test func sandboxEventsAreDistinctAndSafe() {
+        let applied = ManagedExtractorDiagnostics.Event.sandboxApplied(networkDenied: true).consoleLine
+        #expect(applied == "sandbox applied: network-denied=true")
+
+        let allowed = ManagedExtractorDiagnostics.Event.sandboxApplied(networkDenied: false).consoleLine
+        #expect(allowed == "sandbox applied: network-denied=false")
+
+        let unavailable = ManagedExtractorDiagnostics.Event.sandboxUnavailable(
+            command: "bun",
+            detail: "line1\nline2 \u{07}").consoleLine
+        #expect(unavailable.hasPrefix("sandbox unavailable: command=bun"))
+        #expect(unavailable.contains("\n") == false)
+        #expect(unavailable.contains("\u{07}") == false)
+
+        let platform = ManagedExtractorDiagnostics.Event.sandboxUnavailablePlatform(
+            command: "bun").consoleLine
+        #expect(platform.hasPrefix("sandbox unavailable on this platform: command=bun"))
+        #expect(platform.contains("unsandboxed"))
+    }
+
     /// The production sink writes lines to the extraction channel; the
     /// in-memory sink used by tests records them unchanged. Neither ever
     /// receives a multi-line payload from the formatter.
