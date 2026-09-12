@@ -293,7 +293,9 @@ public actor ACPBackend: AgentBackend {
         turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout,
         watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval,
         drainGraceTimeout: Duration = .seconds(3),
-        maxConcurrentExecutors: Int = 1
+        maxConcurrentExecutors: Int = 1,
+        resolveBunRuntime: @escaping @Sendable () async -> RuntimeCommandResolution? = ACPBackend.defaultResolveBunRuntime,
+        probeExecutable: @escaping @Sendable (URL) -> RuntimeExecutableProbeOutcome = RuntimeFileProbe.probe
     ) {
         self.permissionPolicy = permissionPolicy
         self.permissionBudget = budget
@@ -302,6 +304,98 @@ public actor ACPBackend: AgentBackend {
         self.watchdogPollInterval = watchdogPollInterval
         self.drainGraceTimeout = drainGraceTimeout
         self.maxConcurrentExecutors = max(1, maxConcurrentExecutors)
+        self.resolveBunRuntime = resolveBunRuntime
+        self.probeExecutable = probeExecutable
+    }
+
+    /// Resolves the bun runtime used to canonicalize JS-adapter launches
+    /// (#1257 Level 1). The default goes through the same login-shell locator
+    /// the extractor runtimes use, so the app knows one runtime, not the
+    /// user's node/npm state. The full resolution (including the pinned
+    /// executable identity) is retained so reuse can verify the binary has
+    /// not been swapped underneath the cached path.
+    static let defaultResolveBunRuntime: @Sendable () async -> RuntimeCommandResolution? = {
+        guard let name = ExtractorRuntimeName(rawValue: "bun") else { return nil }
+        guard case .resolved(let resolution) = await RuntimeCommandLocator().locate(name) else {
+            return nil
+        }
+        return resolution
+    }
+
+    /// The bun resolver for adapter canonicalization (injectable for tests).
+    private let resolveBunRuntime: @Sendable () async -> RuntimeCommandResolution?
+    /// The identity probe applied to a cached resolution before reuse
+    /// (injectable so the memoization contract is testable without a real
+    /// file on disk).
+    private let probeExecutable: @Sendable (URL) -> RuntimeExecutableProbeOutcome
+
+    /// Memoized bun resolution lifecycle. `notAttempted` defers the
+    /// (potentially slow, login-shell) locate until an adapter-shaped launch
+    /// actually needs it; `inFlight` parks the shared locate so concurrent
+    /// starts run exactly one; `resolved(nil)` negative-caches a failed
+    /// resolution for this backend — an accepted deviation from the locator's
+    /// never-cache-failures contract, because backends are retained and the
+    /// npx fallback still works (a bun installed later is picked up by the
+    /// next backend); `resolved(.some)` keeps the pinned identity, re-probed
+    /// before every reuse so a swapped binary invalidates the cache.
+    private enum BunResolutionState {
+        case notAttempted
+        case inFlight(Task<RuntimeCommandResolution?, Never>)
+        case resolved(RuntimeCommandResolution?)
+    }
+
+    private var bunResolutionState: BunResolutionState = .notAttempted
+
+    /// The memoized bun resolution, or nil when unresolvable (the original
+    /// command runs unchanged; the caller logs that fallback). Concurrent
+    /// callers share one locate; a stale cached identity (binary replaced
+    /// under the cached path) re-resolves exactly once. Internal (not
+    /// private) so the memoization contract — positive memo, negative memo,
+    /// stale-identity re-resolve-once — is directly testable through the
+    /// injected resolver/probe seams without spawning a process.
+    func resolvedBunResolution() async -> RuntimeCommandResolution? {
+        let resolutionTask: Task<RuntimeCommandResolution?, Never>
+        switch bunResolutionState {
+        case .notAttempted:
+            let task = Task { await self.resolveBunRuntime() }
+            bunResolutionState = .inFlight(task)
+            resolutionTask = task
+        case .inFlight(let task):
+            resolutionTask = task
+        case .resolved(.some(let resolution))
+        where Self.resolutionStillValid(resolution, probing: probeExecutable):
+            return resolution
+        case .resolved(.some):
+            // Stale: the binary under the cached path was replaced.
+            // Re-resolve exactly once below.
+            let task = Task { await self.resolveBunRuntime() }
+            bunResolutionState = .inFlight(task)
+            resolutionTask = task
+        case .resolved(.none):
+            return nil
+        }
+        let resolved = await resolutionTask.value
+        // Generation guard (committee round 2): a stale waiter — one whose
+        // await resumed after a newer locate was parked — must not clobber
+        // the newer in-flight state. Task is Equatable (identity-based), so
+        // this commits only if our generation is still current.
+        if case .inFlight(let current) = bunResolutionState, current == resolutionTask {
+            bunResolutionState = .resolved(resolved)
+        }
+        return resolved
+    }
+
+    /// The locator's documented contract: the pinned identity is verified
+    /// before reuse, so a replaced or rewritten executable is not silently
+    /// exec'd across a memoized resolution.
+    private static func resolutionStillValid(
+        _ resolution: RuntimeCommandResolution,
+        probing probe: @Sendable (URL) -> RuntimeExecutableProbeOutcome
+    ) -> Bool {
+        guard case .identity(let identity) = probe(resolution.executableURL) else {
+            return false
+        }
+        return identity == resolution.identity
     }
 
     /// `fs` read/write + `terminal` — mirrors paseo's `BASE_ACP_CLIENT_CAPABILITIES`
@@ -353,10 +447,64 @@ public actor ACPBackend: AgentBackend {
         profile: BackendProfile,
         onExit: @escaping @Sendable (Int) -> Void
     ) async throws {
-        guard let spawn = Self.resolveSpawnConfig(from: profile) else {
+        guard var spawn = Self.resolveSpawnConfig(from: profile) else {
             DebugLog.agent("ACPBackend.startProcess: FAIL noAgentConfigured")
             throw ACPBackendError.noAgentConfigured
         }
+
+        // Fail-closed seatbelt gate FIRST (committee round 2): when a sandbox
+        // is requested, the front-end is verified before anything else —
+        // including bun canonicalization, which shells out to a login shell.
+        // "Sandbox unavailable" must mean nothing ran at all, not merely that
+        // no agent was exec'd.
+        #if os(macOS)
+        if profile.sandbox != nil,
+           !Self.sandboxExecutableIsUsable(at: SandboxProfile.sandboxExecutablePath) {
+            DebugLog.agent("ACPBackend.startProcess: sandbox front-end unusable — refusing to spawn (fail closed)")
+            throw ACPBackendError.sandboxUnavailable
+        }
+        #endif
+
+        // #1257 Level 1: JS-adapter shapes (npx / npm exec|x / bunx, and bun x
+        // launches) are canonicalized to run through the resolved absolute bun
+        // as the package runner — moving the package cache off ~/.npm (the
+        // first-chat EPERM). Scope note (committee round 2): this
+        // canonicalizes the RUNNER and the cache; the adapter process itself
+        // may still exec Node via its own shebang unless `--bun` is adopted
+        // (follow-up). The shape gate runs first: non-adapter launches never
+        // pay for the locate. An unresolvable bun — or adapter flags/spec
+        // forms the rewrite cannot translate — keeps the configured command
+        // (negative-cached per backend, logged here) — the npx path still
+        // works.
+        let configuredSpawn = spawn
+        let configuredDescription = spawn.executablePath + " "
+            + spawn.arguments.joined(separator: " ")
+        var usedCanonicalBun = false
+        var bunResolutionUsed: RuntimeCommandResolution?
+        if Self.isJSAdapterLaunch(
+            executablePath: spawn.executablePath,
+            arguments: spawn.arguments) {
+            if let resolution = await resolvedBunResolution(),
+               let canonical = Self.canonicalizedSpawn(
+                    spawn,
+                    resolvedBunPath: resolution.executableURL.path) {
+                DebugLog.agent(
+                    "ACPBackend.startProcess: adapter canonicalized " +
+                    "\(configuredDescription) → " +
+                    "\(canonical.executablePath) \(canonical.arguments.joined(separator: " "))")
+                spawn = canonical
+                usedCanonicalBun = true
+                bunResolutionUsed = resolution
+            } else {
+                DebugLog.agent(
+                    "ACPBackend.startProcess: launching configured " +
+                    "\(configuredDescription) unchanged (bun unresolved, or adapter " +
+                    "runner flags not translatable)")
+            }
+        }
+        // A start cancelled while waiting on the shared bun locate must not
+        // continue toward process launch (committee round 2).
+        try Task.checkCancellation()
 
         // Create the verbose debug logger (complete ACP wire trace) from the
         // profile's debugLogURL. Returns nil (no-op) when disabled or the
@@ -398,17 +546,13 @@ public actor ACPBackend: AgentBackend {
         // `sandbox-exec -p <profile> -D k=v ... -- <agent> <args...>`: writes
         // fenced to the wiki DB + scratch + `~/.claude` (+ the provider's
         // config home), the resolved `pdf2md` script exec/read-denied; reads,
-        // network, and other exec stay open. Fail closed on macOS: an unusable
-        // front-end starts no process.
+        // network, and other exec stay open. Fail closed on macOS: the gate
+        // at the top of this function already verified the front-end.
         var spawnExecutablePath = spawn.executablePath
         var spawnArguments = spawn.arguments
         var spawnEnvironment = env
         #if os(macOS)
         if let sandbox = profile.sandbox {
-            guard Self.sandboxExecutableIsUsable(at: SandboxProfile.sandboxExecutablePath) else {
-                DebugLog.agent("ACPBackend.startProcess: sandbox front-end unusable — refusing to spawn (fail closed)")
-                throw ACPBackendError.sandboxUnavailable
-            }
             let plan = Self.sandboxedSpawnPlan(
                 invocation: sandbox,
                 executablePath: spawn.executablePath,
@@ -426,6 +570,21 @@ public actor ACPBackend: AgentBackend {
             DebugLog.agent("sandbox: unavailable on this platform — spawning UNSANDBOXED")
         }
         #endif
+
+        // Committee round 2: the pinned bun identity is re-verified at the
+        // final pre-launch seam — the canonicalization-time probe does not
+        // cover the window between canonicalization and exec. A binary
+        // swapped under the cached path falls back to the configured command
+        // (fail safe), which is exactly what ran before this branch.
+        if usedCanonicalBun,
+           let resolution = bunResolutionUsed,
+           !Self.resolutionStillValid(resolution, probing: probeExecutable) {
+            DebugLog.agent(
+                "ACPBackend.startProcess: resolved bun changed before launch — " +
+                "using configured \(configuredDescription) unchanged")
+            spawnExecutablePath = configuredSpawn.executablePath
+            spawnArguments = configuredSpawn.arguments
+        }
 
         // #733 + #737: capture stderr during the launch/initialize window.
         // The stderr stream is single-consumer (`AsyncStream` — two iterators
@@ -1934,6 +2093,109 @@ public actor ACPBackend: AgentBackend {
                 invocation: effective),
             environment: environment,
             defines: effective.defines)
+    }
+
+    /// True when the configured launch is a JS-adapter shape this backend
+    /// canonicalizes: executable basename `npx`, `bunx`, `npm exec`/`npm x`,
+    /// or an already-`bun x` launch (that last one is repointed at the
+    /// resolved bun so it stops depending on whatever `bun` the PATH had).
+    /// Plain provider binaries (claude, codex, gemini, ...) are never
+    /// rewritten, and `.cmd`/`.exe` shims are out of scope (macOS-only app).
+    static func isJSAdapterLaunch(executablePath: String, arguments: [String]) -> Bool {
+        let basename = (executablePath as NSString).lastPathComponent.lowercased()
+        if basename == "npx" || basename == "bunx" { return true }
+        if basename == "npm", arguments.first == "exec" || arguments.first == "x" { return true }
+        if basename == "bun", arguments.first == "x" { return true }
+        return false
+    }
+
+    /// Rewrites a JS-adapter spawn to run through the resolved absolute bun as
+    /// `bun x <package spec...>` (#1257 Level 1): the package runner and
+    /// cache stop depending on the user's node/npm state (the adapter process
+    /// itself may still exec Node via its own shebang unless `--bun` is
+    /// adopted — #1257 follow-up), and the sandbox's provider-home layering
+    /// then sees a `bun x` command and layers `~/.bun` instead of `~/.npm`.
+    /// Every other `AgentSpawnConfig` field (working directory, API key,
+    /// environment) is preserved verbatim.
+    ///
+    /// Returns `nil` when the launch must keep the configured command:
+    /// non-adapter shapes, a nil/empty `resolvedBunPath` (bun unresolvable),
+    /// or leading runner flags the rewrite cannot translate (`npx --quiet
+    /// pkg`, `npx -p @scope/pkg bin`, `npm exec --prefer-online -- pkg` — a
+    /// flag left in place would land in package-spec position and break a
+    /// launch that worked before; fail safe instead of guessing). `bunx` and
+    /// `bun x` keep their arguments verbatim — they are already bun-family —
+    /// and only get repointed at the resolved binary.
+    static func canonicalizedSpawn(
+        _ spawn: AgentSpawnConfig,
+        resolvedBunPath: String?
+    ) -> AgentSpawnConfig? {
+        guard let resolvedBunPath, !resolvedBunPath.isEmpty,
+              isJSAdapterLaunch(
+                executablePath: spawn.executablePath,
+                arguments: spawn.arguments)
+        else {
+            return nil
+        }
+        let basename = (spawn.executablePath as NSString).lastPathComponent.lowercased()
+        if basename == "bun" {
+            // Already `bun x <spec>` — repoint the binary, keep the argv.
+            return AgentSpawnConfig(
+                executablePath: resolvedBunPath,
+                arguments: spawn.arguments,
+                workingDirectory: spawn.workingDirectory,
+                apiKey: spawn.apiKey,
+                environment: spawn.environment)
+        }
+        if basename == "bunx" {
+            // `bunx <spec>` is `bun x <spec>` — restore the subcommand and
+            // repoint; its flags are bun's own and pass verbatim.
+            return AgentSpawnConfig(
+                executablePath: resolvedBunPath,
+                arguments: ["x"] + spawn.arguments,
+                workingDirectory: spawn.workingDirectory,
+                apiKey: spawn.apiKey,
+                environment: spawn.environment)
+        }
+        var spec = spawn.arguments
+        if basename == "npm" {
+            // `npm exec [--] <pkg> ...` (and the `npm x` alias) — both flag
+            // orders exist.
+            spec = strippingLeadingRunnerFlags(Array(spec.dropFirst()))
+        } else {
+            spec = strippingLeadingRunnerFlags(spec)
+        }
+        // Fail safe on anything the rewrite cannot translate: leading runner
+        // flags (`npx --quiet pkg`, `npx -p @scope/pkg bin`,
+        // `npm exec --prefer-online -- pkg`) and spec forms `bun x` cannot
+        // execute (`github:org/repo`, `git+ssh://…`, `https://…/pkg.tgz`,
+        // `file:../adapter`, `./local-adapter`). A flag left here would land
+        // in package-spec position and an exotic spec would fail at launch —
+        // both break launches that worked before. The caller falls back to
+        // the configured command and logs it.
+        guard let head = spec.first, !head.hasPrefix("-"),
+              !head.hasPrefix("."), !head.hasPrefix("/"),
+              !head.contains(":"), !head.hasSuffix(".tgz")
+        else {
+            return nil
+        }
+        return AgentSpawnConfig(
+            executablePath: resolvedBunPath,
+            arguments: ["x"] + spec,
+            workingDirectory: spawn.workingDirectory,
+            apiKey: spawn.apiKey,
+            environment: spawn.environment)
+    }
+
+    /// Drops leading npx/npm-only runner flags and a leading `--` separator
+    /// (which `bun x` tolerates but does not document) so the rewritten argv
+    /// carries only the package spec and its arguments.
+    private static func strippingLeadingRunnerFlags(_ arguments: [String]) -> [String] {
+        var result = arguments
+        while let first = result.first, first == "-y" || first == "--yes" || first == "--" {
+            result = Array(result.dropFirst())
+        }
+        return result
     }
 
     /// Fail-closed usability gate for the seatbelt front-end: it must exist as
