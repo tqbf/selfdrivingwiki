@@ -42,14 +42,41 @@ persistently-true flag would steal focus on every tab revisit.
 path sends a message immediately, so there is no composer interaction to
 focus.
 
+## Follow-up: the omnibox was stealing the focus (same day)
+
+The store contract above was correct, but the running app still landed focus
+in the omnibox search bar. Root cause: `AddressBarView.hasContentLoaded`
+derives from `addressString`, and the `.chat(id)` case returned "" while the
+row title is empty — i.e. for EVERY brand-new chat. The empty state fired
+`focusIfEmpty()`, which bumped the omnibox focus token (`onAppear` /
+`onChange(of: hasContentLoaded)`), and the omnibox's own async hop out-raced
+or overtook the composer's `makeFirstResponder`.
+
+Fix: `AddressBarView.chatAddress(in:chatID:)` (new `nonisolated static` seam)
+returns "[[chat:New Chat]]" for an untitled or missing row, matching the
+canonical "New Chat" label used by the tab title and the sidebar cell. An open
+chat now always counts as loaded content, so the omnibox never autofocuses
+over it. Tests: `AddressBarAddressTests` (4, in `WikiFSAppTests`) pin titled,
+untitled, whitespace-title, and missing-row resolution, including the
+load-bearing non-empty assertion.
+
+Note: `WIKIFS_APP_TESTS=1 swift test` currently fails on `main` in four
+pre-existing suites (`EnvVarHints`, `AgentProvidersConfigPhase1Tests`,
+`SourceDetailViewContentKindTests`, `QueueEngineClientConformanceTests`) —
+verified identical on a clean `main` checkout; none are in CI or `make test`
+gates and none touch this change.
+
 ## Verification
 
 - `make build` — clean.
 - `swift test --filter NewChatSidebarProjectionTests` — 17 tests pass,
   including 4 new ones (request set on create; consumed once, by its own chat
   only; retargeted by a second create; failed create leaves nothing pending).
+- `WIKIFS_APP_TESTS=1 swift test --filter AddressBarAddressTests` — 4 tests
+  pass.
 - `make test` — full suite, 4378 tests in 469 suites, all pass.
 
 Not verified: keyboard focus in the running app (no UI automation in this
 repo). The AppKit mechanism is the same one the legacy draft surface already
-used; the store-side contract is pinned by the new tests.
+used; the store-side and address-resolution contracts are pinned by the new
+tests.
