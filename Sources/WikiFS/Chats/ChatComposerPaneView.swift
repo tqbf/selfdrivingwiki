@@ -8,6 +8,11 @@ struct ChatComposerPaneProps {
     let composer: ChatDetailPresentation.Composer
     let queuedMessages: [PendingQueuedMessage]
     let autoFocus: Bool
+    /// Invoked after `autoFocus` actually moved keyboard focus into the
+    /// composer (see `ComposerTextView.onAutoFocused`). ChatDetailView uses it
+    /// to consume the store's one-shot new-chat focus request. `nil` when
+    /// there is no request to consume.
+    let onAutoFocused: (() -> Void)?
     let attachments: [ChatAttachment]
     let remoteSession: RemoteChatSession
     let store: WikiStoreModel
@@ -60,6 +65,7 @@ struct ChatComposerPaneView: View {
                     onSubmit: props.onSubmit,
                     measuredHeight: props.composerHeight,
                     autoFocus: props.autoFocus,
+                    onAutoFocused: props.onAutoFocused,
                     autocomplete: props.autocomplete,
                     onRecallQueued: props.onRecallQueued
                 )

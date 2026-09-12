@@ -111,6 +111,66 @@ struct NewChatSidebarProjectionTests {
         #expect(try store.listChats().map(\.id) == [chatID])
     }
 
+    // MARK: - Composer focus on create (one-shot request)
+
+    /// `beginNewChat` opens a DURABLE `.chat(id)` tab, so ChatDetailView's
+    /// legacy `chatID == nil` autofocus never fires for it. The one-shot
+    /// `pendingComposerFocusChatID` marker is how the new chat's composer
+    /// receives keyboard focus exactly once.
+    @Test("beginNewChat requests composer focus for the chat it opened")
+    func beginNewChatRequestsComposerFocus() throws {
+        let (model, _) = try makeModel()
+
+        model.beginNewChat()
+
+        let chatID = try #require(activeChatID(model))
+        #expect(model.pendingComposerFocusChatID == chatID)
+    }
+
+    @Test("composer focus request is consumed once, by its own chat only")
+    func composerFocusRequestConsumedOnceByItsOwnChat() throws {
+        let (model, _) = try makeModel()
+        model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
+
+        // A different chat's composer must not consume the request.
+        model.consumeComposerFocusRequest(for: ChatID(rawValue: "other"))
+        #expect(model.pendingComposerFocusChatID == chatID)
+
+        // The legacy draft surface (nil) never consumes the request either.
+        model.consumeComposerFocusRequest(for: nil)
+        #expect(model.pendingComposerFocusChatID == chatID)
+
+        // The matching chat consumes it exactly once.
+        model.consumeComposerFocusRequest(for: chatID)
+        #expect(model.pendingComposerFocusChatID == nil)
+        model.consumeComposerFocusRequest(for: chatID)
+        #expect(model.pendingComposerFocusChatID == nil)
+    }
+
+    @Test("a second beginNewChat retargets the focus request to the newest chat")
+    func secondBeginNewChatRetargetsFocusRequest() throws {
+        let (model, _) = try makeModel()
+
+        model.beginNewChat()
+        let firstID = try #require(activeChatID(model))
+        model.beginNewChat()
+        let secondID = try #require(activeChatID(model))
+
+        #expect(firstID != secondID)
+        #expect(model.pendingComposerFocusChatID == secondID)
+    }
+
+    @Test("a failed beginNewChat leaves no focus request pending")
+    func failedBeginNewChatLeavesNoFocusRequest() throws {
+        let (model, _, _) = try makeReadOnlyModel()
+
+        model.beginNewChat()
+
+        // No row was created, so no composer can claim a focus request.
+        #expect(model.pendingComposerFocusChatID == nil)
+    }
+
     // MARK: - AC.2 Resolve the durable row after navigation
 
     @Test("new chat resolves from the store after switching to a page and back")
