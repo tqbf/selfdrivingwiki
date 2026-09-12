@@ -149,16 +149,18 @@ enum ExtractorSandboxProfile {
     /// `-p <profile> -D k=v … -- <executable> <args…>`. Byte-for-byte the
     /// argv pattern the deleted `OperationCommand.applySandbox` used for the
     /// pre-ACP agent (verified in git at
-    /// `a79469d5^:Sources/WikiFSCore/OperationCommand.swift`).
+    /// `a79469d5^:Sources/WikiFSCore/OperationCommand.swift`). Delegates to
+    /// `SandboxProfile.wrappedArguments` so the agent and extractor wrap
+    /// shapes share one implementation.
     static func wrappedArguments(
         executablePath: String,
         arguments: [String],
         invocation: SandboxProfile.SandboxInvocation
     ) -> [String] {
-        ["-p", invocation.profile]
-            + invocation.defines.flatMap { ["-D", "\($0.0)=\($0.1)"] }
-            + ["--", executablePath]
-            + arguments
+        SandboxProfile.wrappedArguments(
+            executablePath: executablePath,
+            arguments: arguments,
+            invocation: invocation)
     }
 }
 #endif

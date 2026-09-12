@@ -304,5 +304,67 @@ import ACPModel
         #expect(drained == 2)
         #expect(delegate.pendingSnapshot().isEmpty)
     }
+
+    // MARK: - Seatbelt application (issue #1251)
+
+    /// The provider config-home derivation mirrors `launchHint`'s substring
+    /// convention: the command tokens are the truth, not a provider id. Claude
+    /// needs no extras (the base profile already allows `~/.claude`); Codex and
+    /// Gemini write distinct config homes; unknown commands get none — a
+    /// denied config-home write is the visible signal to add a mapping.
+    @Test func providerHomeSubpathsDeriveFromCommandTokens() {
+        #expect(ACPBackend.providerHomeSubpaths(
+            forCommand: "/opt/homebrew/bin/bun x @agentclientprotocol/claude-agent-acp") == [])
+        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/codex acp") == [".codex"])
+        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/gemini --experimental-acp") == [".gemini"])
+        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/hermes acp") == [])
+    }
+
+    /// Fail-closed usability gate: the real system front-end passes; a
+    /// missing path, a non-executable regular file, and a directory all fail.
+    @Test func sandboxExecutableIsUsableRejectsUnusablePaths() throws {
+        #expect(ACPBackend.sandboxExecutableIsUsable(at: SandboxProfile.sandboxExecutablePath))
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-sandbox-gate-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { Issue.record("sandbox gate cleanup failed: \(error)") }
+        }
+
+        #expect(!ACPBackend.sandboxExecutableIsUsable(at: root.appendingPathComponent("missing").path))
+
+        let plainFile = root.appendingPathComponent("plain")
+        try Data("#!/bin/sh\n".utf8).write(to: plainFile)
+        guard chmod(plainFile.path, 0o400) == 0 else { throw POSIXError(.EIO) }
+        #expect(!ACPBackend.sandboxExecutableIsUsable(at: plainFile.path))
+
+        #expect(!ACPBackend.sandboxExecutableIsUsable(at: root.path))
+    }
+
+    /// The profile carries the resolved invocation to the backend — the seam
+    /// issue #1251 found missing. Defaults stay nil (unsandboxed) for call
+    /// sites that intentionally skip confinement (none today; the resolver
+    /// fail-opens and logs).
+    @Test func backendProfileThreadsSandboxInvocation() {
+        let base = BackendProfile(providerHints: [:])
+        #expect(base.sandbox == nil)
+
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let confined = BackendProfile(providerHints: [:], sandbox: invocation)
+        #expect(confined.sandbox == invocation)
+    }
+
+    /// Pin the TMPDIR relocation constants the wrap writes into the child
+    /// environment: the launcher pre-creates `<scratch>/.tmp`
+    /// (`createSandboxTmpDir`), so the values must not drift apart.
+    @Test func tmpRelocationTargetsThePrecreatedScratchTmp() {
+        #expect(ACPBackend.tmpRelocationLeaf == ".tmp")
+        #expect(ACPBackend.tmpRelocationKey == "TMPDIR")
+    }
 }
 #endif

@@ -1,8 +1,13 @@
 # Agent seatbelt sandbox (write whitelist)
 
-**Status:** Implemented on `main`. Confines the spawned agent process's filesystem
-**writes** to a strict allowlist via the macOS seatbelt (`/usr/bin/sandbox-exec`).
-Provider-agnostic, macOS 15+, opt-in (off by default).
+**Status:** Implemented on `main` and APPLIED to every spawn (issue #1251).
+Confines the spawned agent process's filesystem **writes** to a strict allowlist
+via the macOS seatbelt (`/usr/bin/sandbox-exec`). Provider-agnostic, macOS 15+,
+always on for Ingest/Edit/chat spawns — `AgentLauncher` resolves the invocation
+into `BackendProfile.sandbox`, and `ACPBackend.startProcess` wraps the spawn
+argv (`-p <profile> -D … -- <agent>`) and relocates `TMPDIR` into the scratch
+dir, fail-closed when the front-end is unusable. See also
+`plans/extractor-sandbox.md` for the managed-extractor twin of this fence.
 
 ## What it does
 
