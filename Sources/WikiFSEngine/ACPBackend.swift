@@ -293,7 +293,8 @@ public actor ACPBackend: AgentBackend {
         turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout,
         watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval,
         drainGraceTimeout: Duration = .seconds(3),
-        maxConcurrentExecutors: Int = 1
+        maxConcurrentExecutors: Int = 1,
+        resolveBunRuntime: @escaping @Sendable () async -> String? = ACPBackend.defaultResolveBunRuntime
     ) {
         self.permissionPolicy = permissionPolicy
         self.permissionBudget = budget
@@ -302,6 +303,38 @@ public actor ACPBackend: AgentBackend {
         self.watchdogPollInterval = watchdogPollInterval
         self.drainGraceTimeout = drainGraceTimeout
         self.maxConcurrentExecutors = max(1, maxConcurrentExecutors)
+        self.resolveBunRuntime = resolveBunRuntime
+    }
+
+    /// Resolves the absolute bun path used to canonicalize JS-adapter launches
+    /// (#1257 Level 1). The default goes through the same login-shell locator
+    /// the extractor runtimes use, so the app knows one runtime, not the
+    /// user's node/npm state. Returns nil when bun is unresolvable — the
+    /// original command then runs unchanged (logged).
+    static let defaultResolveBunRuntime: @Sendable () async -> String? = {
+        // "bun" is a fixed valid runtime name; this init only validates
+        // arbitrary strings, so the failure branch is unreachable.
+        // swiftlint:disable:next silent_try_optional
+        guard let name = try? ExtractorRuntimeName(validating: "bun") else { return nil }
+        guard case .resolved(let resolution) = await RuntimeCommandLocator().locate(name) else {
+            return nil
+        }
+        return resolution.executableURL.path
+    }
+
+    /// The bun resolver for adapter canonicalization (injectable for tests).
+    private let resolveBunRuntime: @Sendable () async -> String?
+    /// Memoized resolution — `startProcess` runs once per process launch, but
+    /// fallback-provider backends each pay for a locate; cache per actor.
+    private var cachedBunPath: String?
+
+    /// The memoized bun path, or nil when the resolver failed (the original
+    /// command runs unchanged and the failure is logged by the caller).
+    private func resolvedBunPath() async -> String? {
+        if let cachedBunPath { return cachedBunPath }
+        let resolved = await resolveBunRuntime()
+        cachedBunPath = resolved
+        return resolved
     }
 
     /// `fs` read/write + `terminal` — mirrors paseo's `BASE_ACP_CLIENT_CAPABILITIES`
@@ -353,9 +386,27 @@ public actor ACPBackend: AgentBackend {
         profile: BackendProfile,
         onExit: @escaping @Sendable (Int) -> Void
     ) async throws {
-        guard let spawn = Self.resolveSpawnConfig(from: profile) else {
+        guard var spawn = Self.resolveSpawnConfig(from: profile) else {
             DebugLog.agent("ACPBackend.startProcess: FAIL noAgentConfigured")
             throw ACPBackendError.noAgentConfigured
+        }
+
+        // #1257 Level 1: JS-adapter shapes (npx / npm exec / bunx) launch
+        // through the resolved absolute bun instead of the user's node/npm
+        // state. Unresolvable bun keeps the original command (logged once,
+        // memoized per backend) — the npx path still works.
+        let canonical = Self.canonicalizedAdapterLaunch(
+            executablePath: spawn.executablePath,
+            arguments: spawn.arguments,
+            resolvedBunPath: await resolvedBunPath())
+        if canonical.executablePath != spawn.executablePath {
+            DebugLog.agent("ACPBackend.startProcess: adapter canonicalized to \(canonical.executablePath) x")
+            spawn = AgentSpawnConfig(
+                executablePath: canonical.executablePath,
+                arguments: canonical.arguments,
+                workingDirectory: spawn.workingDirectory,
+                apiKey: spawn.apiKey,
+                environment: spawn.environment)
         }
 
         // Create the verbose debug logger (complete ACP wire trace) from the
@@ -1934,6 +1985,40 @@ public actor ACPBackend: AgentBackend {
                 invocation: effective),
             environment: environment,
             defines: effective.defines)
+    }
+
+    /// Rewrites JS-adapter launch shapes (`npx`, `npm exec`, `bunx`) to run
+    /// through the resolved absolute bun as `bun x <package spec...>` (#1257
+    /// Level 1): the launch stops depending on the user's node/npm state, and
+    /// the sandbox's provider-home layering then sees a `bun x` command and
+    /// layers `~/.bun` instead of `~/.npm`. Shapes that are already canonical
+    /// (`bun x ...`), plain provider binaries, or a nil/unresolvable bun
+    /// return the inputs unchanged. npx/npm flags are passed through verbatim;
+    /// configure adapter commands without runner flags.
+    static func canonicalizedAdapterLaunch(
+        executablePath: String,
+        arguments: [String],
+        resolvedBunPath: String?
+    ) -> (executablePath: String, arguments: [String]) {
+        guard let resolvedBunPath, !resolvedBunPath.isEmpty else {
+            return (executablePath, arguments)
+        }
+        let basename = (executablePath as NSString).lastPathComponent.lowercased()
+        let isNpx = basename == "npx"
+        let isBunx = basename == "bunx"
+        let isNpmExec = basename == "npm" && arguments.first == "exec"
+        guard isNpx || isBunx || isNpmExec else {
+            return (executablePath, arguments)
+        }
+        var spec = arguments
+        if isNpmExec {
+            // `npm exec [--] <pkg> ...` — both flag orders exist.
+            spec = Array(spec.dropFirst())
+            if spec.first == "--" {
+                spec = Array(spec.dropFirst())
+            }
+        }
+        return (resolvedBunPath, ["x"] + spec)
     }
 
     /// Fail-closed usability gate for the seatbelt front-end: it must exist as

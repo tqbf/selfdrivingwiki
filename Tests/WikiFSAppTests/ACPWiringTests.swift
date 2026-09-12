@@ -461,5 +461,79 @@ import ACPModel
             "(allow file-write* (subpath (string-append (param \"HOME\") \"/.npm\")))") == true)
         #expect(plan.environment["TMPDIR"] == "/tmp/scratch/.tmp")
     }
+
+    // MARK: - Adapter canonicalization (#1257 Level 1)
+
+    /// An npx-launched adapter rewrites to `<resolved bun> x <spec>` — the
+    /// exact shape whose npm-cache write EPERM'd the first wrapped chat.
+    @Test func canonicalizedAdapterLaunchRewritesNpxThroughResolvedBun() {
+        let launch = ACPBackend.canonicalizedAdapterLaunch(
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["@agentclientprotocol/claude-agent-acp"],
+            resolvedBunPath: "/Users/me/.local/share/mise/installs/bun/1.4.0/bin/bun")
+        #expect(launch.executablePath == "/Users/me/.local/share/mise/installs/bun/1.4.0/bin/bun")
+        #expect(launch.arguments == ["x", "@agentclientprotocol/claude-agent-acp"])
+        // The rewritten command is a `bun x` shape, so the provider-home
+        // layering drops ~/.npm and layers ~/.bun instead.
+        #expect(ACPBackend.providerHomeSubpaths(
+            forCommand: launch.executablePath + " " + launch.arguments.joined(separator: " ")
+        ) == [".bun"])
+    }
+
+    /// `npm exec` in both flag orders rewrites; `bunx` aliases to `bun x`.
+    @Test func canonicalizedAdapterLaunchHandlesNpmExecAndBunx() {
+        let bun = "/usr/local/bin/bun"
+        let execNoDash = ACPBackend.canonicalizedAdapterLaunch(
+            executablePath: "/usr/local/bin/npm",
+            arguments: ["exec", "@agentclientprotocol/claude-agent-acp"],
+            resolvedBunPath: bun)
+        #expect(execNoDash == (bun, ["x", "@agentclientprotocol/claude-agent-acp"]))
+        let execWithDash = ACPBackend.canonicalizedAdapterLaunch(
+            executablePath: "/usr/local/bin/npm",
+            arguments: ["exec", "--", "@agentclientprotocol/claude-agent-acp", "--port", "9"],
+            resolvedBunPath: bun)
+        #expect(execWithDash.arguments == ["x", "@agentclientprotocol/claude-agent-acp", "--port", "9"])
+        let bunxAlias = ACPBackend.canonicalizedAdapterLaunch(
+            executablePath: "/usr/local/bin/bunx",
+            arguments: ["@agentclientprotocol/claude-agent-acp"],
+            resolvedBunPath: bun)
+        #expect(bunxAlias.arguments == ["x", "@agentclientprotocol/claude-agent-acp"])
+    }
+
+    /// Already-canonical shapes and non-adapter binaries pass through
+    /// unchanged; a missing resolution keeps the original command.
+    @Test func canonicalizedAdapterLaunchPassesThroughNonAdapterShapes() {
+        let bun = "/usr/local/bin/bun"
+        // Already a bun x launch — canonical, untouched.
+        let canonical = ACPBackend.canonicalizedAdapterLaunch(
+            executablePath: "/some/user/bun",
+            arguments: ["x", "@agentclientprotocol/claude-agent-acp"],
+            resolvedBunPath: bun)
+        #expect(canonical == ("/some/user/bun", ["x", "@agentclientprotocol/claude-agent-acp"]))
+        // Plain provider binaries never rewrite (even when the command
+        // mentions a package name in an argument position we don't own).
+        let plain = ACPBackend.canonicalizedAdapterLaunch(
+            executablePath: "/usr/local/bin/claude",
+            arguments: ["-p", "hi"],
+            resolvedBunPath: bun)
+        #expect(plain == ("/usr/local/bin/claude", ["-p", "hi"]))
+        // codex-style provider binaries pass through.
+        let codex = ACPBackend.canonicalizedAdapterLaunch(
+            executablePath: "/usr/local/bin/codex",
+            arguments: ["acp"],
+            resolvedBunPath: bun)
+        #expect(codex == ("/usr/local/bin/codex", ["acp"]))
+        // No resolved bun (locate failed) → original command runs unchanged.
+        let unresolved = ACPBackend.canonicalizedAdapterLaunch(
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["@agentclientprotocol/claude-agent-acp"],
+            resolvedBunPath: nil)
+        #expect(unresolved == ("/Users/me/.local/bin/npx", ["@agentclientprotocol/claude-agent-acp"]))
+        let emptyBun = ACPBackend.canonicalizedAdapterLaunch(
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["@agentclientprotocol/claude-agent-acp"],
+            resolvedBunPath: "")
+        #expect(emptyBun == ("/Users/me/.local/bin/npx", ["@agentclientprotocol/claude-agent-acp"]))
+    }
 }
 #endif
