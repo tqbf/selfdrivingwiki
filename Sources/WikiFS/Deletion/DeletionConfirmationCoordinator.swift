@@ -39,11 +39,16 @@ struct DeletionDialogPresentation: Equatable {
     }
 }
 
-/// Presentation for the provenance-blocked state: the blocking pages are
-/// named and the only action is acknowledgment — deletion is not offered.
+/// Presentation for the provenance-blocked state. The dialog stays a delete
+/// confirmation, but instead of a dead end it names the blocking pages as
+/// clickable entries the user can open to remove the reference.
 struct DeletionBlockedPresentation: Equatable {
     let title: String
-    let message: String
+    /// The explanatory intro (why deletion is blocked).
+    let intro: String
+    /// The distinct blocking pages with resolved titles, in deterministic
+    /// order — each renders as a clickable "Open …" action.
+    let blockingPages: [DeletionLinkingPage]
 }
 
 /// Presentation for a failed impact read (or any deletion-surface error the
@@ -79,7 +84,7 @@ enum DeletionConfirmationOutcome: Equatable {
         switch self {
         case .deleteImmediately: return ""
         case .confirm(let p): return p.message
-        case .blocked(let p): return p.message
+        case .blocked(let p): return p.intro
         case .failed(let p): return p.message
         }
     }
@@ -92,9 +97,17 @@ enum DeletionConfirmationOutcome: Equatable {
         }
     }
 
+    /// The pages named by the blocked state, for the clickable "Open …"
+    /// actions. Empty for every other state.
+    var blockingPages: [DeletionLinkingPage] {
+        if case .blocked(let p) = self { return p.blockingPages }
+        return []
+    }
+
     /// The destructive actions this outcome may invoke. Only `.confirm`
     /// exposes any — blocked and failed states can never route a deletion
-    /// through a dialog action.
+    /// through a dialog action. (The blocked state's "Open …" actions are
+    /// navigation, not deletion.)
     var availableActions: [DeletionDialogAction] {
         switch self {
         case .confirm(let p): return p.actions
@@ -116,13 +129,19 @@ enum DeletionResourceKind {
         }
     }
 
-    var blockedTitle: String { "Can't Delete Source" }
-
     var failureTitle: String {
         switch self {
         case .page: return "Couldn't Delete Page"
         case .source: return "Couldn't Delete Source"
         }
+    }
+
+    /// Title for the provenance-blocked dialog. Provenance blockers only
+    /// exist for sources (a page version citing the source as evidence), so
+    /// both kind branches use the same source wording; the count picks the
+    /// plural.
+    func blockedTitle(blockedSourceCount: Int) -> String {
+        blockedSourceCount == 1 ? "Source Is In Use" : "Sources Are In Use"
     }
 
     func failureMessage(for error: Error) -> String {
@@ -217,16 +236,24 @@ struct DeletionConfirmationCoordinator {
     }
 
     private func blockedPresentation(for impact: DeletionImpact) -> DeletionBlockedPresentation {
-        let pageIDs = Set(impact.provenanceBlockers.map(\.pageID))
-        let names = pageIDs.compactMap { id in
-            pageTitle?(id) ?? impact.linkingPages.first { $0.pageID == id }?.title
-        }.sorted()
-        let namesText = names.isEmpty
-            ? "\(pageIDs.count) page\(pageIDs.count == 1 ? "" : "s")"
-            : names.joined(separator: ", ")
+        // Distinct blocking sources set the plural; distinct blocking pages
+        // become the clickable entries (titled only — an untitled row cannot
+        // be opened).
+        let sourceCount = Set(impact.provenanceBlockers.map(\.sourceID)).count
+        var seen = Set<PageID>()
+        var pages: [DeletionLinkingPage] = []
+        for blocker in impact.provenanceBlockers where seen.insert(blocker.pageID).inserted {
+            let title = pageTitle?(blocker.pageID)
+                ?? impact.linkingPages.first { $0.pageID == blocker.pageID }?.title
+            if let title {
+                pages.append(DeletionLinkingPage(pageID: blocker.pageID, title: title))
+            }
+        }
         return DeletionBlockedPresentation(
-            title: kind.blockedTitle,
-            message: "This source is referenced as evidence by page versions (\(namesText)). Remove those references before deleting.")
+            title: kind.blockedTitle(blockedSourceCount: sourceCount),
+            intro: "This source is referenced as evidence by page versions. "
+                + "Remove those references before deleting:",
+            blockingPages: pages)
     }
 }
 
@@ -273,11 +300,15 @@ extension DeletionImpact {
 
 /// Renders the coordinator's outcome as the one confirmationDialog both the
 /// pages and the sources containers show. Each outcome surfaces exactly its
-/// own action set: confirm → the presentation's actions, blocked/failed → OK
+/// own action set: confirm → the presentation's actions, blocked → the
+/// blocking pages as clickable "Open …" actions plus Cancel, failed → OK
 /// only, immediate → nothing (the caller deletes without a dialog).
 struct DeletionOutcomeDialog: ViewModifier {
     @Binding var outcome: DeletionConfirmationOutcome?
     let onAction: (DeletionDialogAction) -> Void
+    /// Opens one of the blocked state's blocking pages (the containers route
+    /// this to a page tab). Nil where blockers cannot occur (pages).
+    var onOpenPage: ((PageID) -> Void)? = nil
 
     func body(content: Content) -> some View {
         content.confirmationDialog(
@@ -303,7 +334,17 @@ struct DeletionOutcomeDialog: ViewModifier {
             ForEach(presentation.actions, id: \.self) { action in
                 actionButton(action)
             }
-        case .blocked, .failed:
+        case .blocked(let presentation):
+            // The blocking pages as clickable entries: opening one dismisses
+            // the dialog so the user can remove the reference, then retry.
+            ForEach(presentation.blockingPages, id: \.pageID) { page in
+                Button("Open “\(page.title ?? page.pageID.rawValue)”") {
+                    onOpenPage?(page.pageID)
+                    outcome = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { outcome = nil }
+        case .failed:
             Button("OK", role: .cancel) { outcome = nil }
         case .deleteImmediately, .none:
             EmptyView()
@@ -330,11 +371,15 @@ struct DeletionOutcomeDialog: ViewModifier {
 
 extension View {
     /// Attach the shared delete-confirmation surface driven by the
-    /// `DeletionConfirmationCoordinator` outcome.
+    /// `DeletionConfirmationCoordinator` outcome. `onOpenPage` handles the
+    /// blocked state's clickable blocking pages (pass nil where blockers
+    /// cannot occur).
     func deletionOutcomeDialog(
         _ outcome: Binding<DeletionConfirmationOutcome?>,
-        onAction: @escaping (DeletionDialogAction) -> Void
+        onAction: @escaping (DeletionDialogAction) -> Void,
+        onOpenPage: ((PageID) -> Void)? = nil
     ) -> some View {
-        modifier(DeletionOutcomeDialog(outcome: outcome, onAction: onAction))
+        modifier(DeletionOutcomeDialog(
+            outcome: outcome, onAction: onAction, onOpenPage: onOpenPage))
     }
 }

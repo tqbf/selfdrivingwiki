@@ -99,15 +99,31 @@ struct DeletionConfirmationCoordinatorTests {
         #expect(bmPresentation.message.contains("2 bookmarks"))
         #expect(bmPresentation.message.contains("will be removed"))
 
-        // 4. Provenance blocker: blocked, OK only.
-        let blocked = makeCoordinator(
-            kind: .page, impacts: [impact(blockers: [blocker()])], sink: sink).evaluate()
-        guard case .blocked(let blockedPresentation) = blocked else {
+        // 4. Provenance blocker: blocked with clickable blocking pages.
+        let blockedPage = blocker().pageID
+        let withResolver = DeletionConfirmationCoordinator(
+            kind: .page,
+            loadImpacts: { [impact(blockers: [blocker()])] },
+            onDelete: { sink.record($0) },
+            pageTitle: { _ in "Claim" },
+            selectionCount: 1)
+        guard case .blocked(let blockedPresentation) = withResolver.evaluate() else {
             Issue.record("expected .blocked for provenance blockers")
             return
         }
-        #expect(blockedPresentation.title == "Can't Delete Source")
-        #expect(blockedPresentation.message.contains("Remove those references"))
+        #expect(blockedPresentation.title == "Source Is In Use")
+        #expect(blockedPresentation.intro.contains("Remove those references"))
+        // The blocking page resolves to a clickable entry.
+        #expect(blockedPresentation.blockingPages == [
+            DeletionLinkingPage(pageID: blockedPage, title: "Claim"),
+        ])
+        // The outcome exposes the same pages for the dialog's Open actions,
+        // and still offers NO destructive actions in the blocked state.
+        let blockedOutcome = withResolver.evaluate()
+        if case .blocked = blockedOutcome {
+            #expect(blockedOutcome.blockingPages.count == 1)
+            #expect(blockedOutcome.availableActions.isEmpty)
+        }
 
         // 5. Loader throws: failed, and NO decision recorded for any route.
         let failing = DeletionConfirmationCoordinator(
@@ -149,7 +165,11 @@ struct DeletionConfirmationCoordinatorTests {
             Issue.record("expected .blocked")
             return
         }
-        #expect(blockedPresentation.message.contains("page versions"))
+        #expect(blockedPresentation.title == "Source Is In Use")
+        #expect(blockedPresentation.intro.contains("page versions"))
+        // Without a title resolver the blocking page cannot be opened, so it
+        // does not become a clickable entry (the intro still explains why).
+        #expect(blockedPresentation.blockingPages.isEmpty)
 
         // Immediate when nothing references the source.
         #expect(makeCoordinator(kind: .source, impacts: [impact()], sink: sink).evaluate()

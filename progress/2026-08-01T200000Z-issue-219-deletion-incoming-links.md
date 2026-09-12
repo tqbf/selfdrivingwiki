@@ -118,7 +118,11 @@ partial-write risks. A store-level contract now closes them.
   `.deleteImmediately`, `.confirm(presentation)`, `.blocked(presentation)`,
   or `.failed(presentation)`. A failed impact read routes to `.failed` and
   exposes no dialog actions, so it can never invoke deletion. The shared
-  `DeletionOutcomeDialog` modifier renders the one confirmation surface.
+  `DeletionOutcomeDialog` modifier renders the one confirmation surface. A
+  provenance-blocked source shows "Source Is In Use" with each blocking page
+  as a clickable "Open …" action — the user opens the page, removes the
+  reference, then retries the delete (operator-directed change from the
+  earlier OK-only "Can't Delete Source" alert).
 - **`wikictl page delete`** — routes through the same contract. New
   `--unlink-incoming` flag chooses the policy. Stdout stays the deleted page
   id; a stderr notice reports the bookmark and link counts.

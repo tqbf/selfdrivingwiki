@@ -118,9 +118,17 @@ struct SourcesContainerView: View {
                 }
             )
         }
-        .deletionOutcomeDialog($deletionOutcome) { action in
-            handleDeletionAction(action)
-        }
+        .deletionOutcomeDialog(
+            $deletionOutcome,
+            onAction: { action in
+                handleDeletionAction(action)
+            },
+            onOpenPage: { pageID in
+                // A clickable blocking page: open it so the user can remove
+                // the provenance reference, then retry the delete.
+                store.openTab(.page(pageID))
+            }
+        )
     }
 
     private var sourcesHeader: some View {
