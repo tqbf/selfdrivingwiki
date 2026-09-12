@@ -93,6 +93,12 @@ public struct BackendProfile: Sendable {
     /// files for post-hoc debugging — the verbose companion to the lightweight
     /// `run.jsonl`. nil = debug logging disabled.
     public var debugLogURL: URL?
+    /// The resolved seatbelt confinement for this run (issue #1251). When
+    /// non-nil, `ACPBackend.startProcess` wraps the agent spawn with
+    /// `sandbox-exec` (writes fenced to the wiki DB + scratch + provider
+    /// config homes; the resolved `pdf2md` script exec/read-denied). nil =
+    /// spawn unsandboxed (fail-open on resolver misconfiguration, logged).
+    public var sandbox: SandboxProfile.SandboxInvocation?
 
     public init(
         model: String? = nil,
@@ -101,7 +107,8 @@ public struct BackendProfile: Sendable {
         isReadOnly: Bool = false,
         executionAccess: AgentExecutionAccess = .standard,
         cli: CLIProfile? = nil,
-        debugLogURL: URL? = nil
+        debugLogURL: URL? = nil,
+        sandbox: SandboxProfile.SandboxInvocation? = nil
     ) {
         self.model = model
         self.providerHints = providerHints
@@ -110,6 +117,7 @@ public struct BackendProfile: Sendable {
         self.executionAccess = executionAccess
         self.cli = cli
         self.debugLogURL = debugLogURL
+        self.sandbox = sandbox
     }
 }
 

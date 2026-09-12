@@ -1,8 +1,16 @@
 # Agent seatbelt sandbox (write whitelist)
 
-**Status:** Implemented on `main`. Confines the spawned agent process's filesystem
-**writes** to a strict allowlist via the macOS seatbelt (`/usr/bin/sandbox-exec`).
-Provider-agnostic, macOS 15+, opt-in (off by default).
+**Status:** Implemented on `main` and APPLIED to every AgentLauncher
+Ingest/Edit/chat ACP process spawn (issue #1251). Confines the spawned agent
+process's filesystem **writes** to a strict allowlist via the macOS seatbelt
+(`/usr/bin/sandbox-exec`). Provider-agnostic, macOS 15+, always on for those
+spawns — `AgentLauncher` resolves the invocation into `BackendProfile.sandbox`,
+and `ACPBackend.startProcess` wraps the spawn argv (`-p <profile> -D … -- <agent>`)
+and relocates `TMPDIR` into the scratch dir, fail-closed when the front-end is
+unusable. Other LLM-agent consumers (ACP extraction client, message summarizer,
+the capability probe) do not thread a sandbox yet; see the PR for #1251.
+See also `plans/extractor-sandbox.md` for the managed-extractor twin of this
+fence.
 
 ## What it does
 
@@ -36,9 +44,10 @@ Explicitly NOT guarded (accepted non-goals):
 ## How it's invoked
 
 The seatbelt composes *around* the configured provider command, so swapping providers
-needs no profile change. `OperationCommand.build` (when `sandbox` is non-nil) sets
-`executable = /usr/bin/sandbox-exec` and prepends `-p <profile> -D HOME=… -D
-SCRATCH_DIR=… -D WIKI_DB=… -- <providerExe>` to the unchanged provider argv.
+needs no profile change. `ACPBackend.startProcess` (when `BackendProfile.sandbox`
+is non-nil) rewrites the spawn to `executable = /usr/bin/sandbox-exec` and prepends
+`-p <profile> -D HOME=… -D SCRATCH_DIR=… -D WIKI_DB=… -- <providerExe>` to the
+unchanged provider argv (`SandboxProfile.wrappedArguments`).
 
 The profile is **generated in Swift** (`SandboxProfile.generate`) and passed as one
 argv element via `sandbox-exec -p`:
@@ -71,16 +80,21 @@ is defensive). (Verified: a `/tmp`-based scratch dir is denied; the same profile
 
 ### Provider self-write relocation
 
-The provider process writes its own config/temp to run. Those are **relocated into the
-scratch dir** so the allowlist stays tiny and provider-agnostic. `OperationCommand`
-sets (only when sandbox is on), as distinct env keys that never clobber
-`WIKI_ROOT`/`WIKI_DB`/`PATH`:
+The provider process writes its own config/temp to run. Those are **relocated or
+allowed** so the allowlist stays small. Today (issue #1251 wiring):
 
-- `CLAUDE_CONFIG_DIR=<scratch>/.claude-config` — Claude Code's config/history.
-- `TMPDIR=<scratch>/.tmp` — node/CLI temp.
+- `TMPDIR=<scratch>/.tmp` — node/CLI temp. `ACPBackend.startProcess` sets this on
+  the wrapped spawn; `AgentLauncher.createSandboxTmpDir` creates the directory
+  first (including the `.tmp` under each fallback-provider scratch).
+- `~/.claude` + `~/.claude.json` — allowed directly by the base profile (the
+  transcript must persist there). Credential/execution subpaths are denied by
+  `claudeHomeDenyRules`.
+- Other providers' config homes (`~/.codex`, `~/.gemini`) are layered per spawn
+  command via `SandboxProfile.invocation(_:addingHomeSubpaths:)` — same
+  command-substring convention as `launchHint`.
 
-The launcher creates both subdirectories before spawn (the app process is unsandboxed;
-only the spawned child is confined).
+The launcher creates the scratch `.tmp` subdirectories before spawn (the app
+process is unsandboxed; only the spawned child is confined).
 
 ### `WIKI_DB` is not conflated
 
@@ -103,17 +117,19 @@ Loaded fresh at spawn time so Settings changes apply on the next run.
 
 ## Adapting for non-claude providers
 
-Claude Code's two write locations are relocated by the two env vars above. A different
-provider may write its state/temp elsewhere. To adapt:
+Claude Code's write locations are covered by the base profile plus the TMPDIR
+relocation. A different provider may write its state/temp elsewhere. To adapt:
 
 1. Run once with the sandbox on; if the provider errors on a write, it hit a denial.
 2. Find the denied path (see Diagnosing a denied write below).
-3. Either relocate it into the scratch dir via the provider's env var (add the env in
-   `OperationCommand.applySandbox` alongside `CLAUDE_CONFIG_DIR`/`TMPDIR`), or add the
-   path to **extra allowed paths** in Settings → Agent → Sandbox.
+3. If the write belongs in a config home, add a mapping entry in
+   `ACPBackend.providerHomeSubpaths(forCommand:)` (command substring →
+   `~`-relative directory). Otherwise relocate it via the provider's env var in
+   `BackendProfile.providerHints` (`env.`-prefixed hints reach the child).
 
-This is provider-specific env knowledge, but the seatbelt **profile** is
-provider-agnostic — it never names a provider.
+This is provider-specific env knowledge, but the seatbelt **profile** stays
+provider-neutral — the extra home allowance is data derived from the spawn
+command, not a named provider policy in the profile.
 
 ## Diagnosing a denied write
 
@@ -141,15 +157,21 @@ env or allowlist the path.
 - **Stray writes fail closed.** A provider writing outside scratch/DB that isn't
   relocated is denied and the run may error. Correct behavior; diagnose + relocate.
 - **Fail-open on misconfiguration** (unresolvable HOME/scratch/DB) skips the sandbox
-  and logs a warning — acceptable because the feature is opt-in and default-off.
+  and logs a warning — the resolver's documented contract; the APPLICATION seam is
+  fail-closed (an unusable `sandbox-exec` refuses to spawn at all).
 
 ## Files
 
-- `Sources/WikiFSCore/SandboxConfig.swift` — config + `parsedExtraAllowedPaths`.
-- `Sources/WikiFSCore/SandboxProfile.swift` — `SandboxInvocation` + pure
-  `generate(...)` / `invocation(...)`.
-- `Sources/WikiFSCore/OperationCommand.swift` — `sandbox:` param + `applySandbox`.
-- `Sources/WikiFS/AgentLauncher.swift` — `resolveSandboxInvocation` + relocation dirs.
-- `Sources/WikiFS/AgentCommandSettingsView.swift` — Sandbox section.
-- `Sources/WikiFSCore/ClaudePromptHelp.swift` — Command Template reflects the sandbox.
-- Tests: `SandboxConfigTests`, `SandboxProfileTests`, `SandboxedOperationCommandTests`.
+- `Sources/WikiFSCore/Core/SandboxProfile.swift` — `SandboxInvocation` + pure
+  `generate(...)` / `invocation(...)` / `wrappedArguments(...)` /
+  `invocation(_:addingHomeSubpaths:)`.
+- `Sources/WikiFSEngine/ACPBackend.swift` — `BackendProfile.sandbox` application:
+  `sandboxedSpawnPlan`, `sandboxExecutableIsUsable` (fail closed),
+  `providerHomeSubpaths(forCommand:)`.
+- `Sources/WikiFSEngine/AgentLauncher.swift` — `resolveSandboxInvocation` +
+  `createSandboxTmpDir` + threading into every `BackendProfile` spawn site.
+- Tests: `SandboxProfileTests` (pure profiles + argv), `ACPWiringTests`
+  seatbelt section (mapping, gate, plan builder, threading), and the live
+  probes recorded in `progress/2026-09-12T160100Z-agent-sandbox-apply-acp.md`.
+- `plans/extractor-sandbox.md` — the managed-extractor twin of this fence
+  (shared `wrappedArguments`).

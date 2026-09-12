@@ -392,6 +392,41 @@ public actor ACPBackend: AgentBackend {
         let onStdoutChunk = profile.cli?.onStdoutChunk
         let onStderrChunk = profile.cli?.onStderrChunk
 
+        // Seatbelt confinement (issue #1251 — the seam the deleted
+        // `OperationCommand.applySandbox` used to own). When the launcher
+        // resolved a sandbox, the spawn runs as
+        // `sandbox-exec -p <profile> -D k=v ... -- <agent> <args...>`: writes
+        // fenced to the wiki DB + scratch + `~/.claude` (+ the provider's
+        // config home), the resolved `pdf2md` script exec/read-denied; reads,
+        // network, and other exec stay open. Fail closed on macOS: an unusable
+        // front-end starts no process.
+        var spawnExecutablePath = spawn.executablePath
+        var spawnArguments = spawn.arguments
+        var spawnEnvironment = env
+        #if os(macOS)
+        if let sandbox = profile.sandbox {
+            guard Self.sandboxExecutableIsUsable(at: SandboxProfile.sandboxExecutablePath) else {
+                DebugLog.agent("ACPBackend.startProcess: sandbox front-end unusable — refusing to spawn (fail closed)")
+                throw ACPBackendError.sandboxUnavailable
+            }
+            let plan = Self.sandboxedSpawnPlan(
+                invocation: sandbox,
+                executablePath: spawn.executablePath,
+                arguments: spawn.arguments,
+                environment: env,
+                scratchDirectory: profile.scratchDirectory)
+            spawnExecutablePath = plan.executablePath
+            spawnArguments = plan.arguments
+            spawnEnvironment = plan.environment
+            DebugLog.agent("sandbox: applied — confining agent writes; network + reads open; defines=\(plan.defines.map { $0.0 })")
+        }
+        #else
+        if profile.sandbox != nil {
+            // Diagnostic-only Linux builds have no seatbelt; the gap is loud.
+            DebugLog.agent("sandbox: unavailable on this platform — spawning UNSANDBOXED")
+        }
+        #endif
+
         // #733 + #737: capture stderr during the launch/initialize window.
         // The stderr stream is single-consumer (`AsyncStream` — two iterators
         // split elements), so we start ONE stderr task here that both buffers
@@ -413,10 +448,10 @@ public actor ACPBackend: AgentBackend {
         let initResponse: InitializeResponse
         do {
             try await client.launch(
-                agentPath: spawn.executablePath,
-                arguments: spawn.arguments,
+                agentPath: spawnExecutablePath,
+                arguments: spawnArguments,
                 workingDirectory: spawn.workingDirectory,
-                environment: env
+                environment: spawnEnvironment
             )
 
             DebugLog.agent("ACPBackend.startProcess: process launched, sending initialize")
@@ -1847,6 +1882,103 @@ public actor ACPBackend: AgentBackend {
             environment: environment)
     }
 
+    // MARK: - Seatbelt application (issue #1251)
+
+    /// The scratch-relative leaf the launcher pre-creates for a sandboxed
+    /// spawn (`AgentLauncher.createSandboxTmpDir`); the wrapped agent's
+    /// `TMPDIR` points here so temp writes land inside the allowlist.
+    static let tmpRelocationLeaf = ".tmp"
+    static let tmpRelocationKey = "TMPDIR"
+
+    /// The derived plan for a sandbox-confined agent spawn. Pure data —
+    /// `startProcess` applies it to `client.launch`; tests pin the shape
+    /// without spawning. (Not `Equatable`: the defines tuple array has no
+    /// synthesized conformance, and no test compares whole plans.)
+    struct SandboxedSpawnPlan: Sendable {
+        let executablePath: String
+        let arguments: [String]
+        let environment: [String: String]
+        /// The profile parameters the effective invocation references (the
+        /// base invocation's defines, unchanged by the provider-home extras).
+        let defines: [(String, String)]
+    }
+
+    /// Builds the wrapped spawn plan for one agent launch: the executable
+    /// becomes `sandbox-exec`, the argv becomes
+    /// `-p <profile> -D k=v ... -- <agent> <args...>` with provider config
+    /// homes layered into the effective profile, and `TMPDIR` is relocated to
+    /// `<scratchDirectory>/.tmp` — the leaf the launcher pre-creates via
+    /// `createSandboxTmpDir` (same relocation the deleted `applySandbox`
+    /// performed). Pure; the fail-closed front-end usability gate runs in
+    /// `startProcess` before this is consulted.
+    static func sandboxedSpawnPlan(
+        invocation: SandboxProfile.SandboxInvocation,
+        executablePath: String,
+        arguments: [String],
+        environment: [String: String],
+        scratchDirectory: URL?
+    ) -> SandboxedSpawnPlan {
+        let effective = SandboxProfile.invocation(
+            invocation,
+            addingHomeSubpaths: providerHomeSubpaths(
+                forCommand: executablePath + " " + arguments.joined(separator: " ")))
+        var environment = environment
+        if let scratchPath = scratchDirectory?.path {
+            environment[tmpRelocationKey] = scratchPath + "/" + tmpRelocationLeaf
+        }
+        return SandboxedSpawnPlan(
+            executablePath: SandboxProfile.sandboxExecutablePath,
+            arguments: SandboxProfile.wrappedArguments(
+                executablePath: executablePath,
+                arguments: arguments,
+                invocation: effective),
+            environment: environment,
+            defines: effective.defines)
+    }
+
+    /// Fail-closed usability gate for the seatbelt front-end: it must exist as
+    /// an executable regular file (symlinks followed — that target is what
+    /// gets exec'd). Internal so the tests can pin the real path and the
+    /// refusal shapes.
+    static func sandboxExecutableIsUsable(at path: String) -> Bool {
+        var status = stat()
+        guard stat(path, &status) == 0,
+              status.st_mode & S_IFMT == S_IFREG,
+              status.st_mode & S_IXUSR != 0 else {
+            return false
+        }
+        return true
+    }
+
+    /// `~`-relative config-home subpaths the base agent profile does not
+    /// already allow, derived from the spawn's full command with the same
+    /// substring convention as `launchHint` (a user could rename a provider id
+    /// without changing the command, so the command tokens are the truth).
+    /// Package runners write their install caches under `~` at startup —
+    /// npx/npm into `~/.npm`, `bun x`/bunx into `~/.bun` — and the ACP
+    /// adapters launch through them, so without these the very first wrapped
+    /// spawn dies on EPERM. Provider config homes follow: codex writes
+    /// `~/.codex`, gemini `~/.gemini`. Unknown commands get no extras — a
+    /// denied config-home write surfaces as a visible failure and lands here
+    /// as a new mapping entry.
+    static func providerHomeSubpaths(forCommand command: String) -> [String] {
+        let fullCommand = command.lowercased()
+        var subpaths: [String] = []
+        if fullCommand.contains("npx") || fullCommand.contains("npm") {
+            subpaths.append(".npm")
+        }
+        if fullCommand.contains("bunx") || fullCommand.contains("bun x") {
+            subpaths.append(".bun")
+        }
+        if fullCommand.contains("codex") {
+            subpaths.append(".codex")
+        }
+        if fullCommand.contains("gemini") {
+            subpaths.append(".gemini")
+        }
+        return subpaths
+    }
+
     // MARK: - Launch failure diagnostics (#733 + #737)
 
     /// Determines the env-var hint for a launch failure based on the spawn
@@ -2290,6 +2422,11 @@ struct TurnRecoveryGrace: Sendable {
 
 enum ACPBackendError: Error, LocalizedError {
     case noAgentConfigured
+    /// Issue #1251 fail-closed gate: the profile carried a resolved sandbox
+    /// but the seatbelt front-end (`/usr/bin/sandbox-exec`) is missing or not
+    /// an executable regular file. No process is spawned — a confined agent
+    /// never falls back to running unsandboxed.
+    case sandboxUnavailable
     /// The agent advertised `authMethods` but no API key is configured in Settings.
     case missingAPIKey
     /// `Client.authenticate` returned `success: false` (bad/expired key, etc.).
@@ -2339,6 +2476,11 @@ enum ACPBackendError: Error, LocalizedError {
             return """
             The ACP agent requires authentication but no API key is configured. \
             Add one in Settings → Agent → ACP Agent.
+            """
+        case .sandboxUnavailable:
+            return """
+            The agent sandbox could not be set up, so the run was not started. \
+            /usr/bin/sandbox-exec is missing or not executable.
             """
         case .authenticationFailed(let detail):
             let suffix = detail.map { " (\($0))" } ?? ""

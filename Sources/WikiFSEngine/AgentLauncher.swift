@@ -1270,28 +1270,6 @@ public final class AgentLauncher {
         return (preparation, prepared, chain)
     }
 
-    /// Applies launcher-owned operation details to a service-owned, secrets-bearing
-    /// prepared profile. The service supplies all provider identity, command,
-    /// credential, model, and policy data; this layer may only add local paths and
-    /// non-secret provenance/workspace environment hints.
-    private func profile(
-        from prepared: AgentProviderPreparedBackend,
-        scratch: URL,
-        executionAccess: AgentExecutionAccess,
-        cli: CLIProfile,
-        adding hints: [String: String] = [:]
-    ) -> BackendProfile {
-        var providerHints = prepared.profile.providerHints
-        for (key, value) in hints { providerHints[key] = value }
-        return BackendProfile(
-            providerHints: providerHints,
-            scratchDirectory: scratch,
-            isReadOnly: false,
-            executionAccess: executionAccess,
-            cli: cli,
-            debugLogURL: debugFolderURL)
-    }
-
     /// Wait for the shared generation gate on the given lane, returning `true`
     /// iff this caller acquired it (and `holdsGenerationSlot` is now `true`).
     /// Returns `false` if the wait was cancelled before the slot was handed over
@@ -1571,6 +1549,14 @@ public final class AgentLauncher {
             return
         }
 
+        // Resolve the seatbelt confinement BEFORE the resume attempt: the
+        // resume path may itself spawn a fresh process, and the one-shot spawn
+        // below reuses the same invocation (issue #1251).
+        let pdf2mdScriptPath = resolvePdf2mdScriptPath()
+        let sandbox = resolveSandboxInvocation(
+            wikiID: wikiID, scratch: scratch, dir: dir, pdf2mdScriptPath: pdf2mdScriptPath)
+        if sandbox != nil { createSandboxTmpDir(in: scratch) }
+
         // #813 Phase 3: Attempt to resume from a previous ACP session if available
         var resumedSession: SessionHandle? = nil
         if let queueStore = queueStore,
@@ -1595,7 +1581,8 @@ public final class AgentLauncher {
                         onStdoutChunk: { _ in },
                         onStderrChunk: { _ in }
                     ),
-                        debugLogURL: nil
+                        debugLogURL: nil,
+                        sandbox: sandbox
                     )) {
                         resumedSession = handle
                         DebugLog.agent("run: successfully resumed ACP session \(sessionId)")
@@ -1607,11 +1594,6 @@ public final class AgentLauncher {
                 }
             }
         }
-
-        let pdf2mdScriptPath = resolvePdf2mdScriptPath()
-        let sandbox = resolveSandboxInvocation(
-            wikiID: wikiID, scratch: scratch, dir: dir, pdf2mdScriptPath: pdf2mdScriptPath)
-        if sandbox != nil { createSandboxTmpDir(in: scratch) }
 
         // RESERVE per-run metadata. isRunning is already `true` (set above).
         // Note: runStartedAt is set inside setGenerating(true) below.
@@ -1667,7 +1649,8 @@ public final class AgentLauncher {
                 wikiRoot: wikiRoot,
                 wikiID: wikiID,
                 systemPrompt: systemPrompt,
-                wikictlDirectory: wikictlDirectory
+                wikictlDirectory: wikictlDirectory,
+                sandbox: sandbox
             )
             return
         }
@@ -1706,7 +1689,8 @@ public final class AgentLauncher {
             isReadOnly: false,
             executionAccess: executionAccess,
             cli: cli,
-            debugLogURL: debugFolderURL)
+            debugLogURL: debugFolderURL,
+            sandbox: sandbox)
 
         do {
             let resolvedPathDescription = resolvedPath ?? "provider runtime"
@@ -1862,7 +1846,8 @@ public final class AgentLauncher {
         wikiRoot: String,
         wikiID: WikiID,
         systemPrompt: String,
-        wikictlDirectory: String
+        wikictlDirectory: String,
+        sandbox: SandboxProfile.SandboxInvocation?
     ) async {
         // Safety net: if any code path exits without calling finish() (e.g. an
         // unexpected throw from a future adding await between phases), ensure the
@@ -2080,7 +2065,8 @@ public final class AgentLauncher {
             operation: operation,
             wikiRoot: wikiRoot,
             wikiID: wikiID,
-            phaseName: "planner"
+            phaseName: "planner",
+            sandbox: sandbox
         ) else {
             // Planner failed — fall back to single-session ACP ingest on the
             // same resolution (the #604 collapsed default provider).
@@ -2093,7 +2079,8 @@ public final class AgentLauncher {
                 makeCLIProfile: makeCLIProfile,
                 backend: backend,
                 provider: provider,
-                providerHints: plannerHints)
+                providerHints: plannerHints,
+                sandbox: sandbox)
             return
         }
 
@@ -2126,7 +2113,8 @@ public final class AgentLauncher {
                 makeCLIProfile: makeCLIProfile,
                 backend: backend,
                 provider: provider,
-                providerHints: plannerHints)
+                providerHints: plannerHints,
+                sandbox: sandbox)
             return
         }
         DebugLog.agent("runACPIngest: plan loaded — \(plan.pages.count) pages across \(plan.distinctSourceFiles.count) source file(s)")
@@ -2143,7 +2131,8 @@ public final class AgentLauncher {
             scratchDirectory: scratch,
             isReadOnly: false,
             executionAccess: .fullAccess,
-            cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
+            cli: makeCLIProfile(operation), debugLogURL: debugFolderURL,
+            sandbox: sandbox)
         let maxConcurrent = await (backend as? ACPBackend)?.maxConcurrentExecutorCount() ?? 1
 
         if maxConcurrent > 1 && plan.distinctSourceFiles.count > 1 {
@@ -2227,7 +2216,8 @@ public final class AgentLauncher {
                     operation: operation,
                     wikiRoot: wikiRoot,
                     wikiID: wikiID,
-                    phaseName: "executor[\(sourceFile)]"
+                    phaseName: "executor[\(sourceFile)]",
+                    sandbox: sandbox
                 ) {
                     let executorProviderLabel = quotaFallback.plannerProviderId == executorProvider.id
                         ? executorProvider.label
@@ -2316,7 +2306,8 @@ public final class AgentLauncher {
             operation: operation,
             wikiRoot: wikiRoot,
             wikiID: wikiID,
-            phaseName: "finalizer"
+            phaseName: "finalizer",
+            sandbox: sandbox
         ) {
             await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
             if let acp = backend as? ACPBackend {
@@ -2622,7 +2613,8 @@ public final class AgentLauncher {
         operation: WikiOperation,
         wikiRoot: String,
         wikiID: WikiID,
-        phaseName: String
+        phaseName: String,
+        sandbox: SandboxProfile.SandboxInvocation?
     ) async -> SessionHandle? {
         var attemptChain = chain
         while let descriptor = quotaFallback.firstLiveDescriptor(in: attemptChain) {
@@ -2697,6 +2689,9 @@ public final class AgentLauncher {
             } else {
                 phaseScratch = scratch.appending(path: "fallback-\(provider.id.rawValue)")
                 DebugLog.trying("create phaseScratch directory", operation: { try FileManager.default.createDirectory(at: phaseScratch, withIntermediateDirectories: true) })
+                // The wrapped agent's TMPDIR points at `<scratch>/.tmp`; a
+                // fallback scratch is a NEW root, so its `.tmp` must exist too.
+                if sandbox != nil { createSandboxTmpDir(in: phaseScratch) }
             }
 
             let profile = BackendProfile(
@@ -2704,7 +2699,8 @@ public final class AgentLauncher {
                 scratchDirectory: phaseScratch,
                 isReadOnly: false,
                 executionAccess: .fullAccess,
-                cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
+                cli: makeCLIProfile(operation), debugLogURL: debugFolderURL,
+                sandbox: sandbox)
 
             let prompt = buildPrompt(provider)
 
@@ -2932,7 +2928,8 @@ public final class AgentLauncher {
         makeCLIProfile: (WikiOperation) -> CLIProfile,
         backend: AgentBackend,
         provider: AgentProvider,
-        providerHints: [String: String]
+        providerHints: [String: String],
+        sandbox: SandboxProfile.SandboxInvocation?
     ) async {
         currentIngestPhase = "fallback-single"
         let profile = BackendProfile(
@@ -2940,7 +2937,8 @@ public final class AgentLauncher {
             scratchDirectory: scratch,
             isReadOnly: false,
             executionAccess: .fullAccess,
-            cli: makeCLIProfile(operation), debugLogURL: debugFolderURL)
+            cli: makeCLIProfile(operation), debugLogURL: debugFolderURL,
+            sandbox: sandbox)
         var promptText = operation.prompt(wikiRoot: wikiRoot)
         promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
 
@@ -3621,7 +3619,8 @@ public final class AgentLauncher {
             scratchDirectory: scratch,
             isReadOnly: false,
             cli: cli,
-            debugLogURL: debugFolderURL)
+            debugLogURL: debugFolderURL,
+            sandbox: sandbox)
         DebugLog.agent("startInteractiveQuery: profile built providerHints keys=\(profile.providerHints.keys.sorted()) scratch=\(scratch.lastPathComponent)")
 
         // #830: Attempt to resume a prior ACP session for this chat. Mirrors

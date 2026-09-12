@@ -343,6 +343,50 @@ public enum SandboxProfile {
         ]
     }
 
+    // MARK: - Applying an invocation to a spawn
+
+    /// The seatbelt front-end the deleted `OperationCommand.applySandbox` (and
+    /// now `ACPBackend.startProcess`) wraps a spawn with.
+    public static let sandboxExecutablePath = "/usr/bin/sandbox-exec"
+
+    /// Assemble the `sandbox-exec` argv that wraps a real spawn:
+    /// `-p <profile> -D k=v ... -- <executable> <args...>`. Byte-for-byte the
+    /// pattern the deleted `OperationCommand.applySandbox` used for the agent
+    /// and `ExtractorSandboxProfile.wrappedArguments` uses for extractors —
+    /// that method now delegates here so the two wrap shapes cannot drift.
+    public static func wrappedArguments(
+        executablePath: String,
+        arguments: [String],
+        invocation: SandboxInvocation
+    ) -> [String] {
+        ["-p", invocation.profile]
+            + invocation.defines.flatMap { ["-D", "\($0.0)=\($0.1)"] }
+            + ["--", executablePath]
+            + arguments
+    }
+
+    /// A copy of `base` with one extra writable `~`-relative subpath per
+    /// entry: `(allow file-write* (subpath (string-append (param "HOME")
+    /// "/<subpath>")))`. Used for provider config homes the base profiles
+    /// don't already allow (Codex writes `~/.codex`, Gemini `~/.gemini`;
+    /// `~/.claude` is already allowed by the base profile). The appended
+    /// allows come after every base rule; they cannot shadow the
+    /// `PDF2MD_SCRIPT` exec/read denies (different operation classes) or the
+    /// claude-home credential denies (disjoint subtrees). `HOME` is already a
+    /// define on every invocation this module builds, so no new defines are
+    /// added. An empty list returns `base` unchanged.
+    public static func invocation(
+        _ base: SandboxInvocation,
+        addingHomeSubpaths subpaths: [String]
+    ) -> SandboxInvocation {
+        guard !subpaths.isEmpty else { return base }
+        var profile = base.profile
+        for subpath in subpaths {
+            profile += "(allow file-write* (subpath (string-append (param \"HOME\") \"/\(subpath)\")))\n"
+        }
+        return SandboxInvocation(profile: profile, defines: base.defines)
+    }
+
     // MARK: - Helpers
 
     /// The base directory Claude Code uses for its per-session temp dirs:

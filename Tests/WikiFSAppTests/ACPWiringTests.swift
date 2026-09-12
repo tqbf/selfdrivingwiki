@@ -304,5 +304,162 @@ import ACPModel
         #expect(drained == 2)
         #expect(delegate.pendingSnapshot().isEmpty)
     }
+
+    // MARK: - Seatbelt application (issue #1251)
+
+    /// The provider config-home derivation mirrors `launchHint`'s substring
+    /// convention: the command tokens are the truth, not a provider id.
+    /// Package runners layer their own caches (npx → `~/.npm`, `bun x` →
+    /// `~/.bun`) and providers layer their config homes (codex → `~/.codex`,
+    /// gemini → `~/.gemini`); a plain claude binary needs nothing (the base
+    /// profile already allows `~/.claude`). Unknown commands get no extras —
+    /// a denied config-home write is the visible signal to add a mapping.
+    @Test func providerHomeSubpathsDeriveFromCommandTokens() {
+        // The exact launch shape that failed on the first wrapped chat:
+        // npx writes ~/.npm/_cacache before the adapter even starts.
+        #expect(ACPBackend.providerHomeSubpaths(
+            forCommand: "/Users/me/.local/bin/npx @agentclientprotocol/claude-agent-acp") == [".npm"])
+        // bun x adapters get the bun install cache instead.
+        #expect(ACPBackend.providerHomeSubpaths(
+            forCommand: "/opt/homebrew/bin/bun x @agentclientprotocol/claude-agent-acp") == [".bun"])
+        // A plain claude binary needs no runner cache and no extra home.
+        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/claude") == [])
+        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/codex acp") == [".codex"])
+        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/gemini --experimental-acp") == [".gemini"])
+        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/hermes acp") == [])
+    }
+
+    /// Fail-closed usability gate: the real system front-end passes; a
+    /// missing path, a non-executable regular file, and a directory all fail.
+    @Test func sandboxExecutableIsUsableRejectsUnusablePaths() throws {
+        #expect(ACPBackend.sandboxExecutableIsUsable(at: SandboxProfile.sandboxExecutablePath))
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-sandbox-gate-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { Issue.record("sandbox gate cleanup failed: \(error)") }
+        }
+
+        #expect(!ACPBackend.sandboxExecutableIsUsable(at: root.appendingPathComponent("missing").path))
+
+        let plainFile = root.appendingPathComponent("plain")
+        try Data("#!/bin/sh\n".utf8).write(to: plainFile)
+        guard chmod(plainFile.path, 0o400) == 0 else { throw POSIXError(.EIO) }
+        #expect(!ACPBackend.sandboxExecutableIsUsable(at: plainFile.path))
+
+        #expect(!ACPBackend.sandboxExecutableIsUsable(at: root.path))
+    }
+
+    /// The profile carries the resolved invocation to the backend — the seam
+    /// issue #1251 found missing. Defaults stay nil (unsandboxed) for call
+    /// sites that intentionally skip confinement (none today; the resolver
+    /// fail-opens and logs).
+    @Test func backendProfileThreadsSandboxInvocation() {
+        let base = BackendProfile(providerHints: [:])
+        #expect(base.sandbox == nil)
+
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let confined = BackendProfile(providerHints: [:], sandbox: invocation)
+        #expect(confined.sandbox == invocation)
+    }
+
+    /// Pin the TMPDIR relocation constants the wrap writes into the child
+    /// environment: the launcher pre-creates `<scratch>/.tmp`
+    /// (`createSandboxTmpDir`), so the values must not drift apart.
+    @Test func tmpRelocationTargetsThePrecreatedScratchTmp() {
+        #expect(ACPBackend.tmpRelocationLeaf == ".tmp")
+        #expect(ACPBackend.tmpRelocationKey == "TMPDIR")
+    }
+
+    /// The derived spawn plan wraps the real agent behind `sandbox-exec`,
+    /// layers the provider's config home into the effective profile, and
+    /// relocates TMPDIR into the scratch `.tmp` leaf — while preserving the
+    /// rest of the child environment.
+    @Test func sandboxedSpawnPlanWrapsArgvRelocatesTmpdirAndLayersProviderHome() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/usr/local/bin/codex",
+            arguments: ["acp"],
+            environment: ["WIKI_DB": "01WIKI", "PATH": "/usr/bin:/bin"],
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch"))
+
+        #expect(plan.executablePath == "/usr/bin/sandbox-exec")
+        #expect(plan.arguments.first == "-p")
+        #expect(plan.arguments.contains("--"))
+        #expect(plan.arguments.count > 3)
+        if let separator = plan.arguments.firstIndex(of: "--") {
+            #expect(Array(plan.arguments[(separator + 1)...]) == ["/usr/local/bin/codex", "acp"])
+        } else {
+            Issue.record("wrapped argv lost the -- separator")
+        }
+        // Provider config home for the codex command is layered in.
+        #expect(plan.arguments.contains("-D") == true)
+        let profileText = plan.arguments.first { $0.contains("file-write*") } ?? ""
+        #expect(profileText.contains("\"/.codex\""))
+        // Defines pass through unchanged by the extras.
+        #expect(plan.defines.map { $0.0 } == invocation.defines.map { $0.0 })
+        // TMPDIR relocated into the scratch .tmp; other env preserved.
+        #expect(plan.environment["TMPDIR"] == "/tmp/scratch/.tmp")
+        #expect(plan.environment["WIKI_DB"] == "01WIKI")
+        #expect(plan.environment["PATH"] == "/usr/bin:/bin")
+    }
+
+    /// A plain claude binary launch layers nothing: the plan's embedded
+    /// profile equals the base invocation's exactly (no appended allow
+    /// rules), and a nil scratch skips the TMPDIR relocation.
+    @Test func sandboxedSpawnPlanAddsNothingForPlainClaudeBinary() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/usr/local/bin/claude",
+            arguments: [],
+            environment: [:],
+            scratchDirectory: nil)
+
+        #expect(plan.defines.map { $0.0 } == invocation.defines.map { $0.0 })
+        #expect(plan.defines.map { $0.1 } == invocation.defines.map { $0.1 })
+        // The single -p payload is byte-identical to the base profile.
+        let profilePayload = plan.arguments.first { $0.contains("(version 1)") }
+        #expect(profilePayload == invocation.profile)
+        // No provider-home extras were appended.
+        #expect(plan.arguments.contains("\"/.npm\"") == false)
+        #expect(plan.arguments.contains("\"/.codex\"") == false)
+        // nil scratch → no TMPDIR relocation, no invented env.
+        #expect(plan.environment["TMPDIR"] == nil)
+        #expect(plan.environment.isEmpty)
+    }
+
+    /// The first-chat regression (#1251 follow-up): an npx-launched adapter
+    /// must get `~/.npm` layered into the effective profile, or the wrapped
+    /// spawn dies on EPERM writing the npm package cache.
+    @Test func sandboxedSpawnPlanLayersNpmCacheForNpxLaunches() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["@agentclientprotocol/claude-agent-acp"],
+            environment: [:],
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch"))
+
+        let profilePayload = plan.arguments.first { $0.contains("(version 1)") }
+        #expect(profilePayload?.contains(
+            "(allow file-write* (subpath (string-append (param \"HOME\") \"/.npm\")))") == true)
+        #expect(plan.environment["TMPDIR"] == "/tmp/scratch/.tmp")
+    }
 }
 #endif

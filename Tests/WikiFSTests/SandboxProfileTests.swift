@@ -349,4 +349,59 @@ struct SandboxProfileTests {
     #expect(p.contains("(deny file-write* (subpath (string-append (param \"HOME\") \"/.claude/hooks\")))"))
     #expect(!p.contains("(deny file-write* (literal (string-append (param \"HOME\") \"/.claude/hooks\")))"))
   }
+
+  // MARK: - Provider config-home extras (issue #1251)
+
+  /// Empty extras return the base invocation unchanged — providers whose
+  /// config home the base profile already allows (claude) must compile to a
+  /// byte-identical profile.
+  @Test func addingHomeSubpathsEmptyIsIdentity() {
+    let base = SandboxProfile.invocation(
+      homePath: "/Users/me", scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    let same = SandboxProfile.invocation(base, addingHomeSubpaths: [])
+    #expect(same == base)
+  }
+
+  /// Each extra subpath appends one `allow file-write*` rule that reuses the
+  /// existing HOME define; defines are unchanged (HOME is already present).
+  @Test func addingHomeSubpathsAppendsAllowRulesWithoutNewDefines() throws {
+    let base = SandboxProfile.invocation(
+      homePath: "/Users/me", scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    let widened = SandboxProfile.invocation(base, addingHomeSubpaths: [".codex"])
+    #expect(widened.profile.contains(
+      "(allow file-write* (subpath (string-append (param \"HOME\") \"/.codex\")))"))
+    // Appended AFTER the base rules (last-match-wins semantics stay intact).
+    #expect(widened.profile.hasSuffix(
+      "(allow file-write* (subpath (string-append (param \"HOME\") \"/.codex\")))\n"))
+    #expect(widened.defines.map { $0.0 } == base.defines.map { $0.0 })
+    #expect(widened.defines.map { $0.1 } == base.defines.map { $0.1 })
+    // Two extras append two rules in order.
+    let both = SandboxProfile.invocation(base, addingHomeSubpaths: [".codex", ".gemini"])
+    #expect(both.profile.contains("\"/.codex\""))
+    #expect(both.profile.contains("\"/.gemini\""))
+    let codexRange = try #require(both.profile.range(of: "\"/.codex\""))
+    let geminiRange = try #require(both.profile.range(of: "\"/.gemini\""))
+    #expect(codexRange.lowerBound < geminiRange.lowerBound)
+  }
+
+  /// The shared argv wrap: `-p <profile> -D k=v … -- <executable> <args…>`,
+  /// the exact pattern the deleted `OperationCommand.applySandbox` used.
+  @Test func wrappedArgumentsMatchesDeletedApplySandboxPattern() {
+    let invocation = SandboxProfile.SandboxInvocation(
+      profile: "(version 1)",
+      defines: [("HOME", "/Users/me"), ("SCRATCH_DIR", "/tmp/scratch")])
+    let wrapped = SandboxProfile.wrappedArguments(
+      executablePath: "/usr/local/bin/claude",
+      arguments: ["--print", "hi"],
+      invocation: invocation)
+    #expect(wrapped == [
+      "-p", "(version 1)",
+      "-D", "HOME=/Users/me",
+      "-D", "SCRATCH_DIR=/tmp/scratch",
+      "--", "/usr/local/bin/claude",
+      "--print", "hi",
+    ])
+    // The front-end path is the absolute system location, never a PATH search.
+    #expect(SandboxProfile.sandboxExecutablePath == "/usr/bin/sandbox-exec")
+  }
 }
