@@ -119,6 +119,11 @@ public enum ManagedExtractorProcessError: Error, Equatable, Sendable {
     case cancellation
     case outputLimit
     case processTermination(ProcessTerminationCause)
+    /// macOS seatbelt confinement could not be applied, so nothing was
+    /// spawned. Fail closed: a managed package never runs unsandboxed on
+    /// macOS (Linux diagnostic builds spawn unwrapped and are loudly logged
+    /// instead).
+    case sandboxUnavailable
 }
 
 extension ManagedExtractorProcessError: LocalizedError {
@@ -151,15 +156,38 @@ extension ManagedExtractorProcessError: LocalizedError {
             "The extractor exceeded its output limit."
         case .processTermination(let cause):
             "The extractor process stopped unexpectedly (\(cause))."
+        case .sandboxUnavailable:
+            "The extractor sandbox could not be set up, so the package did not run."
         }
     }
 }
 
 public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable {
     private let diagnostics: any ExtractorDiagnosticsSink
+    /// The seatbelt front-end this executor requires and applies on macOS.
+    /// Injectable so the fail-closed tests can point at a missing,
+    /// non-executable, or non-regular path; production always uses
+    /// `ExtractorSandboxProfile.sandboxExecutablePath`.
+    let sandboxExecutableURL: URL?
 
     public init(diagnostics: (any ExtractorDiagnosticsSink)? = nil) {
         self.diagnostics = diagnostics ?? DebugLogExtractorDiagnosticsSink()
+        #if os(macOS)
+        self.sandboxExecutableURL = URL(fileURLWithPath: ExtractorSandboxProfile.sandboxExecutablePath)
+        #else
+        self.sandboxExecutableURL = nil
+        #endif
+    }
+
+    /// Test seam: an explicit sandbox-executable URL. On macOS a `nil` here
+    /// fails closed (typed `sandboxUnavailable`, nothing spawns); on Linux it
+    /// is ignored because Linux applies no seatbelt.
+    init(
+        diagnostics: (any ExtractorDiagnosticsSink)? = nil,
+        sandboxExecutableURL: URL?
+    ) {
+        self.diagnostics = diagnostics ?? DebugLogExtractorDiagnosticsSink()
+        self.sandboxExecutableURL = sandboxExecutableURL
     }
 
     public func execute(
@@ -218,15 +246,49 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
                         for: launch.executableIdentity)).consoleLine)
                 throw error
             }
-            handle = try RaceFreeProcessGroupRunner.launch(.init(
-                executableURL: launch.executableURL,
+            // Seatbelt confinement (macOS): build the per-spawn profile from
+            // the validated operation layout plus manifest capabilities,
+            // require the sandbox front-end (fail closed), and wrap the
+            // spawn argv. Identity pinning above is unchanged — it validated
+            // the real target before this wrap. The result continues to
+            // report the real executable, never sandbox-exec.
+            var spawnExecutableURL = launch.executableURL
+            var spawnArguments = launch.arguments
+            #if os(macOS)
+            let networkDenied = !operation.manifest.capabilities.contains(.network)
+            let sandboxInvocation = ExtractorSandboxProfile.invocation(
+                paths: operation.paths,
+                capabilities: operation.manifest.capabilities,
+                durableTokenCacheRoot: operation.durableTokenCacheRoot)
+            let sandboxURL = try requireSandboxExecutable(
+                sandboxExecutableURL,
+                command: launch.commandDescription)
+            spawnExecutableURL = sandboxURL
+            spawnArguments = ExtractorSandboxProfile.wrappedArguments(
+                executablePath: launch.executableURL.path,
                 arguments: launch.arguments,
+                invocation: sandboxInvocation)
+            #else
+            // Linux diagnostic builds apply no seatbelt; the gap is loud.
+            diagnostics.send(ManagedExtractorDiagnostics.Event.sandboxUnavailablePlatform(
+                command: launch.commandDescription).consoleLine)
+            #endif
+            handle = try RaceFreeProcessGroupRunner.launch(.init(
+                executableURL: spawnExecutableURL,
+                arguments: spawnArguments,
                 environment: environment,
                 currentDirectoryURL: operation.paths.operationRoot,
                 standardInput: input,
                 stdoutLimit: stdoutLimit,
                 stderrLimit: ExtractorHostLimits.maximumStandardErrorByteCount,
                 observeStdout: { protocolState.consume($0) }))
+            #if os(macOS)
+            // The spawn is live inside the profile. Mirrors `runtimeResolved`
+            // observability: every successful macOS spawn logs whether it
+            // was network-confined (AC.8).
+            diagnostics.send(ManagedExtractorDiagnostics.Event.sandboxApplied(
+                networkDenied: networkDenied).consoleLine)
+            #endif
             cancellationSlot.install(handle)
         } catch let error as RaceFreeProcessGroupError {
             diagnostics.send(ManagedExtractorDiagnostics.Event.spawnFailure(
@@ -506,6 +568,36 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         let root = root.standardizedFileURL.path
         return candidate == root || candidate.hasPrefix(root + "/")
     }
+
+    /// Fail-closed gate for macOS: the seatbelt front-end must exist as an
+    /// executable regular file (symlinks followed — the target is what gets
+    /// exec'd). A missing path, a non-executable file, or a directory means
+    /// NO spawn at all: a managed package never runs unsandboxed on macOS.
+    /// Sends the `sandboxUnavailable` diagnostic, then throws the typed
+    /// error.
+    #if os(macOS)
+    private func requireSandboxExecutable(
+        _ url: URL?,
+        command: String
+    ) throws -> URL {
+        func unusable(_ detail: String) -> ManagedExtractorProcessError {
+            diagnostics.send(ManagedExtractorDiagnostics.Event.sandboxUnavailable(
+                command: command,
+                detail: detail).consoleLine)
+            return ManagedExtractorProcessError.sandboxUnavailable
+        }
+        guard let url else {
+            throw unusable("no sandbox executable was configured")
+        }
+        var status = stat()
+        guard stat(url.path, &status) == 0,
+              status.st_mode & S_IFMT == S_IFREG,
+              status.st_mode & S_IXUSR != 0 else {
+            throw unusable("\(url.path) is missing or not an executable regular file")
+        }
+        return url
+    }
+    #endif
 }
 
 /// One validated launch: the executable to spawn, its pinned identity, the

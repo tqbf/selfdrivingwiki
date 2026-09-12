@@ -361,7 +361,12 @@ public enum SandboxProfile {
     /// `/tmp` → `/private/tmp`); `realpath` does. Falls back to the input when the
     /// path doesn't exist yet (`realpath` returns nil for non-existent paths), since
     /// a non-existent path can't be symlink-resolved and the seatbelt will create it.
-    private static func canonical(_ path: String) -> String {
+    ///
+    /// Internal (not private) so the managed-extractor profile
+    /// (`ExtractorSandboxProfile`) shares the exact same canonicalization —
+    /// both profiles must resolve roots the way the seatbelt kernel matcher
+    /// does, and they must not drift.
+    static func canonical(_ path: String) -> String {
         var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
         guard let resolved = realpath(path, &buf) else { return path }
         return String(cString: resolved)
