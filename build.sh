@@ -383,6 +383,13 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+	<!-- Add from URL defaults scheme-less input to HTTPS, but honors an explicit
+	     HTTP URL selected by the user. Because those hosts are not known at build
+	     time, a fixed NSExceptionDomains allowlist cannot support this workflow. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key><true/>
+	</dict>
 	<!-- Per-developer ids read at runtime by WikiIdentifiers (Bundle.main path).
 	     WIKIDaemonServiceID is the name the app passes to
 	     NSXPCConnection(serviceName:) — it MUST match wikid.xpc's
