@@ -272,6 +272,16 @@ public final class WikiStoreModel {
     /// cleared. `nil` means no pre-fill is waiting.
     public var pendingChatQuestion: String?
 
+    /// The chat created by the most recent ``beginNewChat(prefill:)`` whose
+    /// composer still needs keyboard focus. `beginNewChat` opens a DURABLE
+    /// `.chat(id)` tab, so `ChatDetailView`'s legacy `chatID == nil` autofocus
+    /// never fires for it — this marker is how the new chat's detail view
+    /// knows it was just created and should focus its composer once. Consumed
+    /// (cleared) by ``consumeComposerFocusRequest(for:)`` the moment the
+    /// focus actually lands, so navigating away and back to the same tab
+    /// doesn't steal focus again.
+    public private(set) var pendingComposerFocusChatID: ChatID?
+
     /// Rebuild `chats` from the store. Best-effort (`try?`) — the history list
     /// degrading to empty on a store hiccup must never crash the sidebar.
     ///
@@ -332,9 +342,25 @@ public final class WikiStoreModel {
             pendingChatQuestion = prefill
         }
         chats.insert(chat, at: 0)
+        // One-shot composer-focus request: the new chat's detail view is built
+        // with `chatID != nil`, so the legacy draft autofocus doesn't apply —
+        // without this, creating a chat leaves keyboard focus wherever it was
+        // and the user has to click into the composer before typing.
+        pendingComposerFocusChatID = chat.id
         openTab(.chat(chat.id))
         // The persisted row becomes visible and selected in the Chats sidebar.
         requestSidebarReveal(.chat(chat.id))
+    }
+
+    /// One-shot consumption of ``pendingComposerFocusChatID``: clears it when
+    /// (and only when) it still points at `chatID`. Called by the chat
+    /// detail view after its composer actually became first responder, so the
+    /// request survives until focus lands but never re-fires on later
+    /// navigation to the same tab. A `nil` chatID (the legacy draft surface)
+    /// never consumes the request.
+    public func consumeComposerFocusRequest(for chatID: ChatID?) {
+        guard let chatID, pendingComposerFocusChatID == chatID else { return }
+        pendingComposerFocusChatID = nil
     }
 
     /// Write the provisional first-line title for a chat the app just sent

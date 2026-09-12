@@ -42,6 +42,13 @@ struct ComposerTextView: NSViewRepresentable {
     /// it's added to a window. Used by ChatDetailView's draft state so the user can
     /// start typing immediately after clicking "Add chat".
     var autoFocus: Bool = false
+    /// Invoked asynchronously after `autoFocus` has actually moved keyboard
+    /// focus to the text view (inside a window). Lets the caller consume a
+    /// one-shot focus request — without this, a request that stays set would
+    /// re-fire on every later remount of the same view identity (e.g.
+    /// navigating away from and back to the chat tab, which rebuilds the
+    /// `NSViewRepresentable` because of `.id(chatID)`).
+    var onAutoFocused: (() -> Void)? = nil
 
     // MARK: - Wiki-link autocomplete (#436 / #638)
 
@@ -249,11 +256,16 @@ struct ComposerTextView: NSViewRepresentable {
         scrollView.documentView = textView
 
         if autoFocus {
-            DispatchQueue.main.async { [weak scrollView] in
+            DispatchQueue.main.async { [weak scrollView, onAutoFocused] in
+                // No window yet → leave a pending focus request unconsumed; a
+                // later mount of this composer can still claim it.
                 guard let scrollView,
                       let tv = scrollView.documentView as? NSTextView,
-                      tv.window?.firstResponder !== tv else { return }
-                tv.window?.makeFirstResponder(tv)
+                      let window = tv.window else { return }
+                if window.firstResponder !== tv {
+                    window.makeFirstResponder(tv)
+                }
+                onAutoFocused?()
             }
         }
         return scrollView

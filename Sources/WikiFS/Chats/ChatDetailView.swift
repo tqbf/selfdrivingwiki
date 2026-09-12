@@ -470,7 +470,14 @@ struct ChatDetailView: View {
         return ChatComposerPaneProps(
             composer: presentation.composer,
             queuedMessages: queuedMessages,
-            autoFocus: chatID == nil,
+            // Legacy draft surface focuses unconditionally. A durable chat
+            // focuses only when it was JUST created (`beginNewChat` set the
+            // one-shot request) — otherwise every remount of this tab would
+            // steal keyboard focus back into the composer.
+            autoFocus: chatID == nil || chatID == store.pendingComposerFocusChatID,
+            onAutoFocused: chatID == nil ? nil : { [weak store] in
+                store?.consumeComposerFocusRequest(for: chatID)
+            },
             attachments: attachments,
             remoteSession: remoteSession,
             store: store,
