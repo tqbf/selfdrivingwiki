@@ -635,6 +635,21 @@ import ACPModel
                     arguments: ["@agentclientprotocol/claude-agent-acp"]),
                 resolvedBunPath: missing) == nil)
         }
+        // Committee round 2: spec forms `bun x` cannot execute fail safe to
+        // the configured command instead of breaking working launches.
+        for unsupported in [
+            "github:org/repo",
+            "git+ssh://git@github.com/org/repo.git",
+            "https://example.com/adapter/pkg.tgz",
+            "file:../adapter",
+            "./local-adapter",
+        ] {
+            #expect(ACPBackend.canonicalizedSpawn(
+                ACPBackend.AgentSpawnConfig(
+                    executablePath: "/Users/me/.local/bin/npx",
+                    arguments: [unsupported]),
+                resolvedBunPath: bun) == nil, "spec \(unsupported) must fail safe")
+        }
     }
 
     /// The shape gate that keeps non-adapter launches from paying for the
@@ -656,6 +671,66 @@ import ACPModel
             executablePath: "/usr/local/bin/claude", arguments: []))
         #expect(!ACPBackend.isJSAdapterLaunch(
             executablePath: "/usr/local/bin/codex", arguments: ["acp"]))
+    }
+
+    /// Committee round 2 (M4): the primary happy path keeps a plan-level
+    /// guard — a canonicalized `bun x` command must produce the `/.bun`
+    /// write allowance in the emitted seatbelt profile and must not keep the
+    /// `/.npm` allowance, or the original first-chat EPERM regresses
+    /// undetected.
+    @Test func sandboxedSpawnPlanForCanonicalizedBunXLayersBunCache() throws {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let canonical = try #require(ACPBackend.canonicalizedSpawn(
+            ACPBackend.AgentSpawnConfig(
+                executablePath: "/Users/me/.local/bin/npx",
+                arguments: ["@agentclientprotocol/claude-agent-acp"]),
+            resolvedBunPath: "/resolved/bun"))
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: canonical.executablePath,
+            arguments: canonical.arguments,
+            environment: [:],
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch"))
+
+        let profilePayload = plan.arguments.first { $0.contains("(version 1)") }
+        #expect(profilePayload?.contains(
+            "(allow file-write* (subpath (string-append (param \"HOME\") \"/.bun\")))") == true)
+        #expect(profilePayload?.contains("\"/.npm\"") == false)
+        #expect(plan.executablePath == SandboxProfile.sandboxExecutablePath)
+    }
+
+    /// Committee round 2 (Sol MAJOR-2 + Claude M3): concurrent first callers
+    /// share ONE locate (the in-flight task), and the shared result is not
+    /// lost to a stale waiter overwriting a newer generation.
+    @Test func concurrentBunResolutionCallersShareOneLocate() async throws {
+        let identity = RuntimeExecutableIdentity(device: 1, inode: 300, mode: 0o100755, size: 10)
+        let bunName = try #require(ExtractorRuntimeName(rawValue: "bun"))
+        let counter = InvocationCounter()
+        let backend = ACPBackend(resolveBunRuntime: {
+            counter.bump()
+            // A small real suspension so callers genuinely overlap.
+            do { try await Task.sleep(for: .milliseconds(50)) } catch {}
+            return RuntimeCommandResolution(
+                command: bunName,
+                source: .loginShell,
+                executableURL: URL(fileURLWithPath: "/synthetic/bun"),
+                identity: identity,
+                description: RuntimePathDescription(
+                    redactedPath: "bun", basename: "bun", fingerprint: "test"))
+        })
+
+        await withTaskGroup(of: RuntimeCommandResolution?.self) { group in
+            for _ in 0..<5 {
+                group.addTask { await backend.resolvedBunResolution() }
+            }
+            for await resolution in group {
+                #expect(resolution?.executableURL.path == "/synthetic/bun")
+            }
+        }
+        #expect(counter.value == 1)
     }
 }
 #endif

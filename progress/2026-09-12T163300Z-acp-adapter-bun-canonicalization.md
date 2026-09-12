@@ -16,13 +16,12 @@ wrapped chat died on an `EPERM` write to `~/.npm/_cacache` under the seatbelt.
 `ACPBackend.startProcess` now canonicalizes adapter-shaped commands —
 executable basename `npx`, `bunx`, `npm exec`/`npm x`, or an already-`bun x`
 launch — through the bun resolved via `RuntimeCommandLocator` (the extractor
-runtimes' login-shell locator), as `<bun> x <package spec...>`. The executing
-runtime no longer depends on which node/npm the PATH resolves; note the
-configured command's first token must still exist on PATH for provider
-resolution (`resolveACPProviderSpawn`), and the adapter itself still execs the
-user's `claude` binary. Level 2 (vendored, digest-pinned adapter in
-`Contents/Helpers/`) removes the remaining PATH dependence and stays open on
-#1257.
+runtimes' login-shell locator), as `<bun> x <package spec...>`. This
+canonicalizes the package RUNNER and cache (the `~/.npm/_cacache` write no
+longer happens); the adapter process itself may still exec Node via its own
+shebang unless `--bun` is adopted, and the configured command's first token
+must still exist on PATH for provider resolution — adopting `--bun` and/or
+vendoring (Level 2) closes the rest.
 
 Mechanics:
 
