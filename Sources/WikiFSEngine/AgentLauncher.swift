@@ -1270,28 +1270,6 @@ public final class AgentLauncher {
         return (preparation, prepared, chain)
     }
 
-    /// Applies launcher-owned operation details to a service-owned, secrets-bearing
-    /// prepared profile. The service supplies all provider identity, command,
-    /// credential, model, and policy data; this layer may only add local paths and
-    /// non-secret provenance/workspace environment hints.
-    private func profile(
-        from prepared: AgentProviderPreparedBackend,
-        scratch: URL,
-        executionAccess: AgentExecutionAccess,
-        cli: CLIProfile,
-        adding hints: [String: String] = [:]
-    ) -> BackendProfile {
-        var providerHints = prepared.profile.providerHints
-        for (key, value) in hints { providerHints[key] = value }
-        return BackendProfile(
-            providerHints: providerHints,
-            scratchDirectory: scratch,
-            isReadOnly: false,
-            executionAccess: executionAccess,
-            cli: cli,
-            debugLogURL: debugFolderURL)
-    }
-
     /// Wait for the shared generation gate on the given lane, returning `true`
     /// iff this caller acquired it (and `holdsGenerationSlot` is now `true`).
     /// Returns `false` if the wait was cancelled before the slot was handed over
@@ -2711,6 +2689,9 @@ public final class AgentLauncher {
             } else {
                 phaseScratch = scratch.appending(path: "fallback-\(provider.id.rawValue)")
                 DebugLog.trying("create phaseScratch directory", operation: { try FileManager.default.createDirectory(at: phaseScratch, withIntermediateDirectories: true) })
+                // The wrapped agent's TMPDIR points at `<scratch>/.tmp`; a
+                // fallback scratch is a NEW root, so its `.tmp` must exist too.
+                if sandbox != nil { createSandboxTmpDir(in: phaseScratch) }
             }
 
             let profile = BackendProfile(

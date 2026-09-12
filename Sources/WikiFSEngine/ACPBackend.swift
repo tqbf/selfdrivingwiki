@@ -399,8 +399,7 @@ public actor ACPBackend: AgentBackend {
         // fenced to the wiki DB + scratch + `~/.claude` (+ the provider's
         // config home), the resolved `pdf2md` script exec/read-denied; reads,
         // network, and other exec stay open. Fail closed on macOS: an unusable
-        // front-end starts no process. Identity pinning is not affected — the
-        // agent path is user-configured, not content-verified.
+        // front-end starts no process.
         var spawnExecutablePath = spawn.executablePath
         var spawnArguments = spawn.arguments
         var spawnEnvironment = env
@@ -410,23 +409,16 @@ public actor ACPBackend: AgentBackend {
                 DebugLog.agent("ACPBackend.startProcess: sandbox front-end unusable — refusing to spawn (fail closed)")
                 throw ACPBackendError.sandboxUnavailable
             }
-            let effectiveSandbox = SandboxProfile.invocation(
-                sandbox,
-                addingHomeSubpaths: Self.providerHomeSubpaths(forCommand: spawn.executablePath + " " + spawn.arguments.joined(separator: " ")))
-            spawnExecutablePath = SandboxProfile.sandboxExecutablePath
-            spawnArguments = SandboxProfile.wrappedArguments(
+            let plan = Self.sandboxedSpawnPlan(
+                invocation: sandbox,
                 executablePath: spawn.executablePath,
                 arguments: spawn.arguments,
-                invocation: effectiveSandbox)
-            // Relocate TMPDIR into the scratch dir (the launcher pre-creates
-            // `<scratch>/.tmp` via `createSandboxTmpDir`) so the agent's temp
-            // writes land inside the allowlist instead of EPERM-ing on
-            // /var/folders. Same relocation the deleted `applySandbox` did.
-            if let scratchPath = profile.scratchDirectory?.path {
-                spawnEnvironment[Self.tmpRelocationKey] =
-                    scratchPath + "/" + Self.tmpRelocationLeaf
-            }
-            DebugLog.agent("sandbox: applied — confining agent writes; network + reads open; defines=\(effectiveSandbox.defines.map { $0.0 })")
+                environment: env,
+                scratchDirectory: profile.scratchDirectory)
+            spawnExecutablePath = plan.executablePath
+            spawnArguments = plan.arguments
+            spawnEnvironment = plan.environment
+            DebugLog.agent("sandbox: applied — confining agent writes; network + reads open; defines=\(plan.defines.map { $0.0 })")
         }
         #else
         if profile.sandbox != nil {
@@ -1897,6 +1889,52 @@ public actor ACPBackend: AgentBackend {
     /// `TMPDIR` points here so temp writes land inside the allowlist.
     static let tmpRelocationLeaf = ".tmp"
     static let tmpRelocationKey = "TMPDIR"
+
+    /// The derived plan for a sandbox-confined agent spawn. Pure data —
+    /// `startProcess` applies it to `client.launch`; tests pin the shape
+    /// without spawning. (Not `Equatable`: the defines tuple array has no
+    /// synthesized conformance, and no test compares whole plans.)
+    struct SandboxedSpawnPlan: Sendable {
+        let executablePath: String
+        let arguments: [String]
+        let environment: [String: String]
+        /// The profile parameters the effective invocation references (the
+        /// base invocation's defines, unchanged by the provider-home extras).
+        let defines: [(String, String)]
+    }
+
+    /// Builds the wrapped spawn plan for one agent launch: the executable
+    /// becomes `sandbox-exec`, the argv becomes
+    /// `-p <profile> -D k=v ... -- <agent> <args...>` with provider config
+    /// homes layered into the effective profile, and `TMPDIR` is relocated to
+    /// `<scratchDirectory>/.tmp` — the leaf the launcher pre-creates via
+    /// `createSandboxTmpDir` (same relocation the deleted `applySandbox`
+    /// performed). Pure; the fail-closed front-end usability gate runs in
+    /// `startProcess` before this is consulted.
+    static func sandboxedSpawnPlan(
+        invocation: SandboxProfile.SandboxInvocation,
+        executablePath: String,
+        arguments: [String],
+        environment: [String: String],
+        scratchDirectory: URL?
+    ) -> SandboxedSpawnPlan {
+        let effective = SandboxProfile.invocation(
+            invocation,
+            addingHomeSubpaths: providerHomeSubpaths(
+                forCommand: executablePath + " " + arguments.joined(separator: " ")))
+        var environment = environment
+        if let scratchPath = scratchDirectory?.path {
+            environment[tmpRelocationKey] = scratchPath + "/" + tmpRelocationLeaf
+        }
+        return SandboxedSpawnPlan(
+            executablePath: SandboxProfile.sandboxExecutablePath,
+            arguments: SandboxProfile.wrappedArguments(
+                executablePath: executablePath,
+                arguments: arguments,
+                invocation: effective),
+            environment: environment,
+            defines: effective.defines)
+    }
 
     /// Fail-closed usability gate for the seatbelt front-end: it must exist as
     /// an executable regular file (symlinks followed — that target is what

@@ -366,5 +366,70 @@ import ACPModel
         #expect(ACPBackend.tmpRelocationLeaf == ".tmp")
         #expect(ACPBackend.tmpRelocationKey == "TMPDIR")
     }
+
+    /// The derived spawn plan wraps the real agent behind `sandbox-exec`,
+    /// layers the provider's config home into the effective profile, and
+    /// relocates TMPDIR into the scratch `.tmp` leaf — while preserving the
+    /// rest of the child environment.
+    @Test func sandboxedSpawnPlanWrapsArgvRelocatesTmpdirAndLayersProviderHome() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/usr/local/bin/codex",
+            arguments: ["acp"],
+            environment: ["WIKI_DB": "01WIKI", "PATH": "/usr/bin:/bin"],
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch"))
+
+        #expect(plan.executablePath == "/usr/bin/sandbox-exec")
+        #expect(plan.arguments.first == "-p")
+        #expect(plan.arguments.contains("--"))
+        #expect(plan.arguments.count > 3)
+        if let separator = plan.arguments.firstIndex(of: "--") {
+            #expect(Array(plan.arguments[(separator + 1)...]) == ["/usr/local/bin/codex", "acp"])
+        } else {
+            Issue.record("wrapped argv lost the -- separator")
+        }
+        // Provider config home for the codex command is layered in.
+        #expect(plan.arguments.contains("-D") == true)
+        let profileText = plan.arguments.first { $0.contains("file-write*") } ?? ""
+        #expect(profileText.contains("\"/.codex\""))
+        // Defines pass through unchanged by the extras.
+        #expect(plan.defines.map { $0.0 } == invocation.defines.map { $0.0 })
+        // TMPDIR relocated into the scratch .tmp; other env preserved.
+        #expect(plan.environment["TMPDIR"] == "/tmp/scratch/.tmp")
+        #expect(plan.environment["WIKI_DB"] == "01WIKI")
+        #expect(plan.environment["PATH"] == "/usr/bin:/bin")
+    }
+
+    /// Claude's config home is allowed by the base profile, so the plan's
+    /// embedded profile equals the base invocation's exactly (no appended
+    /// allow rules), and a nil scratch skips the TMPDIR relocation.
+    @Test func sandboxedSpawnPlanAddsNothingForClaudeCommands() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/opt/homebrew/bin/bun",
+            arguments: ["x", "@agentclientprotocol/claude-agent-acp"],
+            environment: [:],
+            scratchDirectory: nil)
+
+        #expect(plan.defines.map { $0.0 } == invocation.defines.map { $0.0 })
+        #expect(plan.defines.map { $0.1 } == invocation.defines.map { $0.1 })
+        // The single -p payload is byte-identical to the base profile.
+        let profilePayload = plan.arguments.first { $0.contains("(version 1)") }
+        #expect(profilePayload == invocation.profile)
+        // No provider-home extras were appended.
+        #expect(plan.arguments.contains("\"/.codex\"") == false)
+        #expect(plan.arguments.contains("\"/.gemini\"") == false)
+        // nil scratch → no TMPDIR relocation, no invented env.
+        #expect(plan.environment["TMPDIR"] == nil)
+        #expect(plan.environment.isEmpty)
+    }
 }
 #endif

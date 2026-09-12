@@ -45,10 +45,12 @@ Changes:
   one unrelated pre-existing flake in `RaceFreeProcessGroupRunnerTests`
   — `pipeFailure(9)` under full-suite parallel load — passes in isolation,
   twice, and is untouched by this diff).
-- `WIKIFS_APP_TESTS=1 swift test --filter ACPWiringTests`: 22 passed,
-  including the four new seam tests (provider-home mapping, front-end
-  usability gate, profile threading, TMPDIR relocation pins). SandboxProfile
-  tests: 45 passed including the three new wrap/extra-subpath tests.
+- `WIKIFS_APP_TESTS=1 swift test --filter ACPWiringTests`: 24 passed, including
+  the six new seam tests (provider-home mapping, front-end usability gate,
+  profile threading, TMPDIR relocation constants, and the derived
+  `sandboxedSpawnPlan` — argv wrap shape, provider-home layering, TMPDIR
+  relocation, and the nil-scratch/claude no-op cases). SandboxProfile tests:
+  45 passed including the three new wrap/extra-subpath tests.
 - Denial-verification probes (per provider, issue #1251's requirement),
   real CLIs under the exact production profile + scratch cwd + relocated
   TMPDIR:
@@ -69,3 +71,11 @@ Changes:
 - Missing provider for live verification (gemini CLI not exercised) — the
   mapping table covers `.gemini`, and a denied config-home write is the
   designed signal if the allowance is wrong.
+- Deliberate scope boundary: other LLM-agent subprocess consumers do NOT
+  thread a sandbox yet — `ACPExtractionClient` and `MessageSummarizer`
+  build nil-sandbox `BackendProfile`s, and `ACPProviderModelProbe` calls
+  `Client.launch` directly (a capability probe, not a turn). Widening
+  confinement to those consumers is the natural follow-up.
+- Fallback-provider scratches (`<scratch>/fallback-<provider>`) get their
+  own `.tmp` created before the wrapped spawn — the wrapped agent's TMPDIR
+  must exist in every scratch root.
