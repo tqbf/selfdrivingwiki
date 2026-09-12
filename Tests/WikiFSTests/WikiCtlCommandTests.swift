@@ -164,7 +164,24 @@ struct WikiCtlCommandTests {
     @Test func parsesDelete() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "page", "delete", "--id", "01Z"], env: noEnv)
-        #expect(invocation.command == .page(.delete(id: PageID(rawValue: "01Z"))))
+        #expect(invocation.command == .page(.delete(id: PageID(rawValue: "01Z"), unlinkIncoming: false)))
+    }
+
+    @Test func parsesPageDeleteWithUnlinkFlag() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "page", "delete", "--id", "01Z", "--unlink-incoming"], env: noEnv)
+        #expect(invocation.command == .page(.delete(id: PageID(rawValue: "01Z"), unlinkIncoming: true)))
+    }
+
+    @Test func parsesPageDeleteWithoutUnlinkFlag() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "page", "delete", "--id", "01Z"], env: noEnv)
+        guard case .page(.delete(_, let unlinkIncoming)) = invocation.command else {
+            Issue.record("expected .page(.delete)")
+            return
+        }
+        // Compatibility: the flag is absent → ghost links are preserved.
+        #expect(!unlinkIncoming)
     }
 
     @Test func rejectsUnknownCommand() {
@@ -299,6 +316,85 @@ struct WikiCtlCommandTests {
         let result = try PageCommand.run(.delete(id: id), in: store)
         #expect(result.didCommit)
         #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
+    }
+
+    // MARK: - protected page delete (issue #219 hardening, AC.11 / AC.12)
+
+    /// AC.11: the no-flag delete keeps the stdout contract (the page id),
+    /// removes bookmarks targeting the page, and preserves incoming Markdown
+    /// as ghost links. The stderr notice reports the cleanup counts.
+    @Test func wikictlPageDeletePreservesStdoutAndGhostLinks() throws {
+        let store = try tempStore()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
+        _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
+
+        let result = try PageCommand.run(.delete(id: b.id, unlinkIncoming: false), in: store)
+
+        // Stdout contract: the deleted page id.
+        #expect(result.output == b.id.rawValue)
+        #expect(result.didCommit)
+        // Stdout carries ONLY the id — the notice goes to stderr.
+        #expect(!result.output.contains("bookmark"))
+        #expect(result.stderrOutput?.contains("removed 1 bookmark") == true)
+        #expect(result.stderrOutput?.contains("preserved as ghost links") == true)
+        // Incoming Markdown keeps the [[…]] syntax (a ghost link; the setup
+        // upsert canonicalized it, so assert the span survived).
+        let ghostBody = try store.getPage(id: a.id).bodyMarkdown
+        #expect(ghostBody.contains("[[") && ghostBody.contains("]]"))
+        // The bookmark targeting B is gone.
+        #expect(try store.listBookmarkNodes().isEmpty)
+    }
+
+    /// AC.1: the CLI delete (through the shared protected contract) removes
+    /// bookmarks targeting the deleted page even when no links exist.
+    @Test func wikictlPageDeleteRemovesTargetBookmarks() throws {
+        let store = try tempStore()
+        let b = try store.createPage(title: "B")
+        _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
+
+        let result = try PageCommand.run(.delete(id: b.id, unlinkIncoming: false), in: store)
+
+        #expect(result.output == b.id.rawValue)
+        #expect(try store.listBookmarkNodes().isEmpty)
+    }
+
+    /// AC.12: `--unlink-incoming` converts inbound links to plain display
+    /// text, keeps the stdout contract, and reports the unlinked count.
+    @Test func wikictlPageDeleteUnlinksIncomingMarkdown() throws {
+        let store = try tempStore()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]] end", author: "user")
+        let alias = try store.createPage(title: "C")
+        try PageUpsert.upsert(in: store, id: alias.id, title: "C", body: "see [[B|bee]] too", author: "user")
+
+        let result = try PageCommand.run(.delete(id: b.id, unlinkIncoming: true), in: store)
+
+        // Stdout contract unchanged.
+        #expect(result.output == b.id.rawValue)
+        // The stderr notice reports the unlinked count.
+        #expect(result.stderrOutput?.contains("2 incoming links unlinked") == true)
+        // Both linking pages now carry plain display text (alias preserved).
+        #expect(try store.getPage(id: a.id).bodyMarkdown == "see B end")
+        #expect(try store.getPage(id: alias.id).bodyMarkdown == "see bee too")
+        // No link rows survive.
+        #expect(try store.listAllLinks().isEmpty)
+    }
+
+    /// Review fix (didCommit semantics): a missing target with no stale
+    /// bookmarks is an idempotent no-op — stdout keeps the id contract but NO
+    /// change notification posts.
+    @Test func wikictlPageDeleteMissingTargetIsIdempotentNoCommit() throws {
+        let store = try tempStore()
+        let ghost = PageID(rawValue: "01GHOSTPAGE0000000000000000")
+
+        let result = try PageCommand.run(.delete(id: ghost, unlinkIncoming: false), in: store)
+
+        #expect(result.output == ghost.rawValue)
+        #expect(!result.didCommit)
+        #expect(result.stderrOutput?.contains("removed 0 bookmarks") == true)
     }
 
     // MARK: - page info (page provenance, #page-provenance)

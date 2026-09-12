@@ -277,7 +277,40 @@ public protocol WikiStore: AnyObject, Sendable {
     ) throws -> WikiPage
     func createPage(title: String, createdBy: String?, provenance: [PageVersionSourceInput]) throws -> WikiPage
     func updatePage(id: PageID, title: String, body: String, lastEditedBy: String?, provenance: [PageVersionSourceInput]) throws
+    /// Compatibility forwarder: deletes one page through the protected
+    /// contract with the `.preserve` link policy (ghost links stay, matching
+    /// bookmarks are always removed). Equivalent to
+    /// `deleteResources(ResourceDeletionRequest(target: .page(id), linkPolicy: .preserve))`.
     func deletePage(id: PageID) throws
+
+    // MARK: - Protected deletion (issue #219 hardening)
+    //
+    // The single deletion seam for supported writers (app model, `wikictl`).
+    // Impact discovery, provenance validation, optional link rewrites, bookmark
+    // cleanup, and target deletion all happen in ONE write transaction, and the
+    // post-commit event batch is emitted only after that transaction commits.
+    // The legacy single-target methods below forward through the `.preserve`
+    // request so no supported caller can bypass mandatory bookmark cleanup.
+
+    /// Compute what references the given targets — linking pages, matching
+    /// bookmarks, provenance blockers, and the incoming-link edge count — as
+    /// one deterministic snapshot. Throwing (never an empty result on failure):
+    /// a failed read surfaces as an error so callers cannot mistake it for
+    /// "nothing references these targets". Read-only; emits nothing.
+    func deletionImpact(for targets: Set<ResourceDeletionTarget>) throws -> DeletionImpact
+
+    /// Delete the request's targets under its link policy in ONE transaction:
+    /// rechecked impact → provenance validation (any blocker throws the typed
+    /// restriction before the first mutation) → optional `.unlink` rewrites →
+    /// mandatory bookmark-leaf removal (with sibling renumbering) → target-row
+    /// deletion with dependent graph cleanup. Any failure rolls back the whole
+    /// operation and emits nothing; a commit emits `.page .updated` per
+    /// rewritten page, `.bookmark .deleted` per removed bookmark, and one
+    /// `.deleted` event per target row that actually existed. Missing targets
+    /// are idempotent no-ops (stale matching bookmarks are still removed, but
+    /// no target-deleted event is emitted for a row that wasn't there).
+    @discardableResult
+    func deleteResources(_ request: ResourceDeletionRequest) throws -> ResourceDeletionResult
 
     /// Resolve a page *title* to its id, or nil if no page has that title.
     /// On duplicate titles, the lowest ULID (oldest page) wins. Used by
@@ -392,7 +425,11 @@ public protocol WikiStore: AnyObject, Sendable {
     /// resolves the active version for the source that owns it.
     func sourceVersion(id: SourceVersionID) throws -> SourceVersion?
 
-    /// Remove a source by id.
+    /// Compatibility forwarder: deletes one source through the protected
+    /// contract with the `.preserve` link policy (citations stay as ghost
+    /// links, matching bookmarks are always removed). Provenance blockers
+    /// still throw the typed deletion restriction before any write. Equivalent
+    /// to `deleteResources(ResourceDeletionRequest(target: .source(id), linkPolicy: .preserve))`.
     func deleteSource(id: SourceID) throws
 
     /// The page versions whose provenance cites `sourceID`, making the source

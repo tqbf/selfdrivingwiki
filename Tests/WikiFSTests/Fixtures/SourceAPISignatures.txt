@@ -73,7 +73,7 @@ Sources/WikiFSCore/Store/WikiStoreModel.swift	@MainActor public func sourceConte
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func sourceID(forDisplayName displayName: String) -> SourceID?
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func selectSource(byID id: SourceID, anchor: String? = nil,
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func renameSource(id: SourceID, to newDisplayName: String)
-Sources/WikiFSCore/Store/WikiStoreModel.swift	public func deleteSource(_ id: SourceID)
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func deleteSource(_ id: SourceID, unlinkIncomingLinks: Bool)
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func sourceBytes(id: SourceID) -> Data?
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference)
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference)

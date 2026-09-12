@@ -392,19 +392,20 @@ import SQLite3
         #expect(nodes.isEmpty)
     }
 
-    @Test func targetDeletedRefBecomesStale() throws {
+    /// Protected-delete invariant (issue #219 hardening): a supported page
+    /// deletion ALWAYS removes bookmarks targeting it — a bookmark to a
+    /// missing page is invalid, so no stale ref may survive.
+    @Test func protectedDeleteRemovesTargetingRefNotStale() throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let page = try store.createPage(title: "Doomed")
-        let ref = try store.createBookmarkNode(
+        _ = try store.createBookmarkNode(
             parentID: nil, position: 0, content: .page(page.id))
 
-        // Delete the page.
+        // Delete the page through the protected contract.
         try store.deletePage(id: page.id)
 
-        // The ref is still there (stale — not auto-deleted).
-        let nodes = try store.listBookmarkNodes()
-        #expect(nodes.count == 1)
-        #expect(nodes.first?.content == ref.content)
+        // The ref is GONE (mandatory bookmark cleanup), not stale.
+        #expect(try store.listBookmarkNodes().isEmpty)
     }
 
     // MARK: - Move/reorder (AC.4)

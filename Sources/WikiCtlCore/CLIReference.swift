@@ -265,9 +265,17 @@ public enum CLIReference {
                         "wikictl page add --title Draft --body-file - --expect-head 01ABC --author chat:01XYZ",
                     ]),
                 CLILeaf(
-                    "delete", summary: "delete a page",
-                    commandLine: "delete --id Y",
-                    options: [CLIOption("--id <page-id>", required: true, summary: "the page to delete")]),
+                    "delete", summary: "delete a page (removes bookmarks targeting it)",
+                    commandLine: "delete --id Y [--unlink-incoming]",
+                    options: [
+                        CLIOption("--id <page-id>", required: true, summary: "the page to delete"),
+                        CLIOption("--unlink-incoming", summary: "convert incoming links to plain text instead of leaving ghost links"),
+                    ],
+                    details: [
+                        "Bookmarks pointing at the page are always removed.",
+                        "Without --unlink-incoming, incoming [[links]] keep their text and render as ghost links; with it, they become plain display text.",
+                        "The cleanup counts are printed on stderr; stdout stays the deleted page id.",
+                    ]),
                 CLILeaf(
                     "search", summary: "semantic search (cosine similarity); falls back to LIKE title match",
                     commandLine: "search --query X [--limit N]",
