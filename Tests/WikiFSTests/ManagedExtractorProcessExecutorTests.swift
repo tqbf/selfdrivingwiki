@@ -351,7 +351,10 @@ struct ManagedExtractorProcessExecutorTests {
         let outside = FileManager.default.temporaryDirectory
             .appendingPathComponent("managed-extractor-outside-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: outside) }
+        defer {
+            do { try FileManager.default.removeItem(at: outside) }
+            catch { Issue.record("outside target cleanup failed: \(error)") }
+        }
         let target = outside.appendingPathComponent("escape.txt")
         let fixture = try Fixture(
             mode: "outside-write \(target.path)",

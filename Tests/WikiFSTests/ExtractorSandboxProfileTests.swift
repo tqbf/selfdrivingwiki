@@ -173,7 +173,10 @@ struct ExtractorSandboxProfileTests {
         let suffix = "extractor-sandbox-\(UUID().uuidString)"
         let tmpRoot = URL(fileURLWithPath: "/tmp/\(suffix)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmpRoot, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpRoot) }
+        defer {
+            do { try FileManager.default.removeItem(at: tmpRoot) }
+            catch { Issue.record("tmp root cleanup failed: \(error)") }
+        }
         let operationRoot = tmpRoot.appendingPathComponent("operation", isDirectory: true)
         try FileManager.default.createDirectory(at: operationRoot, withIntermediateDirectories: true)
         let paths = ManagedExtractorProcessPaths(

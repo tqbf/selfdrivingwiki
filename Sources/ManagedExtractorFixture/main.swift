@@ -58,6 +58,27 @@ private func spawnChild() throws -> pid_t {
     return childPID
 }
 
+/// Maps a failed write attempt to the OUTSIDE report verdict. `denied` is
+/// reserved for the seatbelt shapes — EPERM/EACCES, or Foundation's
+/// no-permission wrapper around them. Any other failure gets a distinct
+/// `error-...` label so an environment without enforcement fails loudly
+/// instead of silently matching.
+private func writeVerdict(_ error: any Error) -> String {
+    func posixVerdict(_ code: Int) -> String {
+        (code == Int(EPERM) || code == Int(EACCES)) ? "denied" : "error-\(code)"
+    }
+    if let posix = error as? POSIXError {
+        return posixVerdict(posix.errorCode)
+    }
+    if let cocoa = error as? CocoaError {
+        if cocoa.code == .fileWriteNoPermission { return "denied" }
+        if let underlying = cocoa.userInfo[NSUnderlyingErrorKey] as? POSIXError {
+            return posixVerdict(underlying.errorCode)
+        }
+    }
+    return "error-\(String(describing: error))"
+}
+
 /// Shared tail of the sandbox-enforcement modes: write the report markdown
 /// INSIDE the operation root (which the profile allows) and emit a valid
 /// progress + result terminal exchange, so the host sees a successful
@@ -269,7 +290,7 @@ case let modeLine where modeLine.hasPrefix("outside-write"):
         try Data("outside".utf8).write(to: URL(fileURLWithPath: target))
         outcome = "ok"
     } catch {
-        outcome = "denied"
+        outcome = writeVerdict(error)
     }
     guard emitCompletion(
         requestID: request.requestID,
