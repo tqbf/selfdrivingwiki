@@ -450,6 +450,14 @@ public final class RemoteChatSession {
         _ loader: @escaping @MainActor @Sendable (ChatTranscriptCursor?) throws -> ChatTranscriptPage
     ) {
         onLoadCommittedHistoryPage = loader
+        guard let syncState,
+              let committedCursor = syncState.projection?.committedCursor,
+              syncState.loadedCommittedCursor < committedCursor else { return }
+        // Rehydration may accept a daemon snapshot before the detail view mounts
+        // and installs its store-backed loader. The initial history effect has
+        // nowhere to load from in that ordering, so resume the accepted cursor
+        // now instead of waiting for another daemon update that may never come.
+        scheduleCommittedHistoryLoad(to: committedCursor)
     }
 
     // MARK: - Reset

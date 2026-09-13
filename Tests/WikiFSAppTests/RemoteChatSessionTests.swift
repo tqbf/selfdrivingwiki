@@ -322,6 +322,41 @@ struct RemoteChatSessionTests {
         #expect(syncState.projection?.transcriptOverlay.isEmpty == true)
     }
 
+    @Test func installingHistoryLoaderAfterHydrationResumesCommittedHistoryLoad() async throws {
+        let session = makeSession()
+        let turnID = ChatTurnID(rawValue: "turn-1")
+        var loaderCallCount = 0
+
+        session.hydrate(from: makeSnapshot(
+            sequence: 1,
+            committedCursor: ChatTranscriptCursor(rawValue: 1)
+        ))
+        try await Task.sleep(for: .milliseconds(50))
+
+        session.installHistoryLoader { after in
+            loaderCallCount += 1
+            #expect(after == nil)
+            return ChatTranscriptPage(
+                items: [
+                    PersistedChatTranscriptItem(
+                        cursor: ChatTranscriptCursor(rawValue: 1),
+                        item: makeMessage(role: .user, turnID: turnID, text: "hello"),
+                        projectedEventJSON: nil,
+                        projectedPlainText: "hello",
+                        createdAt: Date(timeIntervalSince1970: 20)
+                    )
+                ],
+                checkpoint: ChatTranscriptCursor(rawValue: 1),
+                nextCursor: nil
+            )
+        }
+
+        await expectEventually((session.syncState?.committedItems.count ?? 0) == 1)
+        #expect(loaderCallCount == 1)
+        #expect(session.syncState?.loadedCommittedCursor == ChatTranscriptCursor(rawValue: 1))
+        #expect(session.displayTranscript.rows.map(\.textForSearch) == ["hello"])
+    }
+
     @Test func markNotLiveRelinquishesLivenessClaim() {
         let session = makeSession()
         session.hydrate(from: makeSnapshot(lifecycle: .ready))

@@ -123,6 +123,103 @@ struct ChatDetailPresentationTests {
         #expect(persisted.transcript.isAnswering == false)
     }
 
+    @Test func incompleteLiveProjectionKeepsDurableOutlineDuringRehydration() {
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "P", count: 22))
+        let persistedTurnID = ChatTurnID(rawValue: "persisted-turn")
+        let persistedItems = persisted([
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "persisted-question"),
+                turnID: persistedTurnID,
+                role: .user,
+                text: "Why did the outline disappear?",
+                createdAt: .distantPast
+            )),
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "persisted-answer"),
+                turnID: persistedTurnID,
+                role: .assistant,
+                text: "The live history mirror was incomplete.",
+                createdAt: .distantPast
+            )),
+        ])
+        let liveItems: [ChatTranscriptItem] = [
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "live-answer"),
+                turnID: ChatTurnID(rawValue: "live-turn"),
+                role: .assistant,
+                text: "Live transcript remains visible.",
+                createdAt: .distantPast
+            )),
+        ]
+
+        let presentation = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatResolution: .available(ChatSummary.fixture(id: chatID)),
+            showsInternals: false,
+            remoteSession: .fixture(
+                sessionChatID: chatID,
+                runState: .answering,
+                projectionInput: TranscriptProjectionInput(items: liveItems, activeContentBlock: nil)
+            ),
+            persistedTranscriptItems: persistedItems,
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        #expect(presentation.transcript.displayTranscript.rows.map(\.textForSearch) == [
+            "Live transcript remains visible.",
+        ])
+        #expect(presentation.outlineEntries.count == 1)
+        #expect(presentation.outlineEntries.first?.question == "Why did the outline disappear?")
+        #expect(presentation.outlineEntries.first?.response == "The live history mirror was incomplete.")
+    }
+
+    @Test func emptyLiveProjectionKeepsDurableTranscriptAndOutlineDuringRehydration() {
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "R", count: 22))
+        let turnID = ChatTurnID(rawValue: "persisted-turn")
+        let persistedItems = persisted([
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "persisted-question"),
+                turnID: turnID,
+                role: .user,
+                text: "Why did the outline disappear?",
+                createdAt: .distantPast
+            )),
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "persisted-answer"),
+                turnID: turnID,
+                role: .assistant,
+                text: "The live history mirror was temporarily empty.",
+                createdAt: .distantPast
+            )),
+        ])
+
+        let presentation = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatResolution: .available(ChatSummary.fixture(id: chatID)),
+            showsInternals: false,
+            remoteSession: .fixture(
+                sessionChatID: chatID,
+                runState: .answering,
+                projectionInput: .empty
+            ),
+            persistedTranscriptItems: persistedItems,
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        #expect(presentation.transcript.displayTranscript.rows.map(\.textForSearch) == [
+            "Why did the outline disappear?",
+            "The live history mirror was temporarily empty.",
+        ])
+        #expect(presentation.transcript.isAnswering)
+        #expect(presentation.outlineEntries.count == 1)
+        #expect(presentation.outlineEntries.first?.question == "Why did the outline disappear?")
+        #expect(presentation.outlineEntries.first?.response == "The live history mirror was temporarily empty.")
+    }
+
     // MARK: - Optimistic outgoing echo
 
     private func outgoingEchoFixture(

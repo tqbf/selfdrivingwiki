@@ -71,17 +71,26 @@ struct ChatDetailPresentation {
         let visiblePendingOutgoing = pendingOutgoing
             .filter { authoritativeTurnIDs.contains($0.id) == false }
         let echoItems = outgoingEchoItems(from: visiblePendingOutgoing)
+        // A matching live session normally owns the transcript. During
+        // rehydration, however, liveness can arrive before its history mirror.
+        // Keep the populated durable snapshot until the live projection has at
+        // least one item; otherwise the visible transcript and outline briefly
+        // collapse to empty. A genuinely new chat has no durable items, so its
+        // empty live projection remains authoritative.
+        let usesLiveTranscript = isLiveChat
+            && (!remoteSession.projectionInput.items.isEmpty || persistedTranscriptItems.isEmpty)
+        let transcriptItems = usesLiveTranscript
+            ? remoteSession.projectionInput.items
+            : persistedTranscriptItems.map(\.item)
+        let activeContentBlock = usesLiveTranscript
+            ? remoteSession.projectionInput.activeContentBlock
+            : nil
         // Canonical first (one row per durable item — what Activity renders),
         // then the human-facing presentation projection for this surface.
-        let canonicalTranscript = isLiveChat
-            ? ChatDisplayProjection.project(
-                items: remoteSession.projectionInput.items + echoItems,
-                activeContentBlock: remoteSession.projectionInput.activeContentBlock
-            ).transcript
-            : ChatDisplayProjection.project(
-                items: persistedTranscriptItems.map(\.item) + echoItems,
-                activeContentBlock: nil
-            ).transcript
+        let canonicalTranscript = ChatDisplayProjection.project(
+            items: transcriptItems + echoItems,
+            activeContentBlock: activeContentBlock
+        ).transcript
         let displayTranscript = ChatTranscriptPresentationProjection.project(
             transcript: canonicalTranscript,
             toolCallDisplayMode: toolCallDisplayMode
@@ -109,12 +118,32 @@ struct ChatDetailPresentation {
             isChatOperationConfigured: isChatOperationConfigured,
             isDraftSubmitPending: isDraftSubmitPending
         )
-        let outlineEntries = buildOutlineEntries(
+        let projectedOutlineEntries = buildOutlineEntries(
             displayTranscript: displayTranscript,
-            cachedResponseSummaries: isLiveChat
+            cachedResponseSummaries: usesLiveTranscript
                 ? [:]
                 : cachedResponseSummaries(from: persistedTranscriptItems)
         )
+        let outlineEntries: [ChatOutlineEntry]
+        if isLiveChat, projectedOutlineEntries.isEmpty, !persistedTranscriptItems.isEmpty {
+            // The live projection may become nonempty before its committed
+            // history contains a prompt-bearing turn. Keep the last complete
+            // durable outline through that partial rehydration frame while the
+            // transcript itself remains live-authoritative.
+            let persistedDisplayTranscript = ChatTranscriptPresentationProjection.project(
+                transcript: ChatDisplayProjection.project(
+                    items: persistedTranscriptItems.map(\.item),
+                    activeContentBlock: nil
+                ).transcript,
+                toolCallDisplayMode: toolCallDisplayMode
+            )
+            outlineEntries = buildOutlineEntries(
+                displayTranscript: persistedDisplayTranscript,
+                cachedResponseSummaries: cachedResponseSummaries(from: persistedTranscriptItems)
+            )
+        } else {
+            outlineEntries = projectedOutlineEntries
+        }
         let contentState: ContentState
         if showsInternals && controls.showsDebugControls {
             contentState = .internals
