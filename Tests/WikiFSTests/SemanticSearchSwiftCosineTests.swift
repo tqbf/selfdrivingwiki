@@ -271,7 +271,7 @@ struct SemanticSearchSwiftCosineTests {
         let bm25Leg = [ChatSummary(
             id: chatB.id, kind: chatB.kind, title: chatB.title,
             createdAt: chatB.createdAt, updatedAt: chatB.updatedAt,
-            messageCount: 0, summary: nil, summaryAt: nil)]
+            messageCount: 0)]
         let hits = try store.searchSimilarChats(query: "alpha", limit: 10, bm25Leg: bm25Leg)
         #expect(hits.count == 2)
         // chatB (dual-leg) ranks first due to RRF boosting.

@@ -7,7 +7,7 @@ import WikiFSCore
 /// removal preserves them. Unrelated warnings always survive.
 @Suite struct AgentPresentationPreambleTests {
     private static let sentence =
-        "Warning: Skill descriptions were shortened to fit the 2% skills context budget."
+        AgentPresentationPreamble.knownWarningSentence
 
     /// Every incremental proper prefix — including mid-word cut points — plus
     /// the complete warning itself is hidden under the streaming policy.

@@ -67,7 +67,7 @@ struct Issue235IngestExtractionLockTests {
         // text (was previously only a hidden .help() tooltip).
         let caption = ChatDetailView.composerCaptionText(
             runState: .queued,
-            hasChatID: true, isLiveChat: true,
+            isLiveChat: true,
             isChatOperationConfigured: true)
         #expect(caption == "Waiting for the other session to finish before sending…")
     }
@@ -76,7 +76,7 @@ struct Issue235IngestExtractionLockTests {
         // Even in draft state (chatID == nil), the waiting caption shows.
         let caption = ChatDetailView.composerCaptionText(
             runState: .queued,
-            hasChatID: false, isLiveChat: false,
+            isLiveChat: false,
             isChatOperationConfigured: true)
         #expect(caption == "Waiting for the other session to finish before sending…")
     }
@@ -84,7 +84,7 @@ struct Issue235IngestExtractionLockTests {
     @Test func captionNilWhenIdle() {
         let caption = ChatDetailView.composerCaptionText(
             runState: .idle,
-            hasChatID: true, isLiveChat: true,
+            isLiveChat: true,
             isChatOperationConfigured: true)
         #expect(caption == nil)
     }
@@ -94,7 +94,7 @@ struct Issue235IngestExtractionLockTests {
         // chat shows the "Another chat is responding" caption.
         let caption = ChatDetailView.composerCaptionText(
             runState: .answering,
-            hasChatID: true, isLiveChat: false,
+            isLiveChat: false,
             isChatOperationConfigured: true)
         #expect(caption == "Another chat is responding — wait or stop it.")
     }
@@ -104,7 +104,7 @@ struct Issue235IngestExtractionLockTests {
         // responding…" caption (replaces the old orange banner).
         let caption = ChatDetailView.composerCaptionText(
             runState: .answering,
-            hasChatID: true, isLiveChat: true,
+            isLiveChat: true,
             isChatOperationConfigured: true)
         #expect(caption == "Agent is responding…")
     }
@@ -114,7 +114,7 @@ struct Issue235IngestExtractionLockTests {
         // actionable outcome without contradictory Boolean inputs.
         let caption = ChatDetailView.composerCaptionText(
             runState: .queued,
-            hasChatID: true, isLiveChat: false,
+            isLiveChat: false,
             isChatOperationConfigured: true)
         #expect(caption == "Waiting for the other session to finish before sending…")
     }

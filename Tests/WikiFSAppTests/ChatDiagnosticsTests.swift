@@ -50,7 +50,7 @@ struct ChatDiagnosticsTests {
     /// presentation filter removes it, but the diagnostic trace must retain
     /// the exact bytes for debugging.
     @Test func fullDiagnosticTraceRetainsKnownSkillWarning() {
-        let warning = "Warning: Skill descriptions were shortened to fit the 2% skills context budget."
+        let warning = AgentPresentationPreamble.knownWarningSentence
         let trace = ChatDiagnosticTrace(source: .app)
         let chat = ChatDiagnosticCorrelation.Value(rawValue: "warning-chat")
 

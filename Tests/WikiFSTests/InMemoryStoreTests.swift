@@ -65,17 +65,17 @@ struct InMemoryStoreTests {
         // cleanly on the `:memory:` `DatabaseQueue` (no WAL pragma, no
         // file-based checkpoint).
         let store = try TestStoreFactory.inMemory()
-        _ = try store.createPage(title: "Hypnosis")
+        _ = try store.createPage(title: "Photosynthesis")
         let page = try store.createPage(title: "Notes")
         try store.updatePage(id: page.id, title: "Notes",
-                             body: "Details about clinical hypnosis and suggestion.")
+                             body: "Details about plant photosynthesis and respiration.")
         // nil leg → no BM25 results (FTS5 dropped; cosine gated).
-        #expect(try store.searchSimilar(query: "hypnosis", limit: 10, bm25Leg: nil).isEmpty)
+        #expect(try store.searchSimilar(query: "photosynthesis", limit: 10, bm25Leg: nil).isEmpty)
         // Fabricated leg targeting the page → pass-through unchanged.
         let leg = [WikiPageSummary(
             id: page.id, title: page.title,
             updatedAt: page.updatedAt, createdAt: page.createdAt)]
-        let hits = try store.searchSimilar(query: "hypnosis", limit: 10, bm25Leg: leg)
+        let hits = try store.searchSimilar(query: "photosynthesis", limit: 10, bm25Leg: leg)
         #expect(hits.contains { $0.id == page.id })
     }
 

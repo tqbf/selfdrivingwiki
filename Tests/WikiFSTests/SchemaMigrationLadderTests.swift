@@ -7,7 +7,7 @@ import SQLite3
 #endif
 @testable import WikiFSCore
 
-@Suite struct SchemaV52MigrationTests {
+@Suite struct SchemaMigrationLadderTests {
     @Test func freshSchemaContainsOKFTrustTablesAndIndexes() throws {
         let store = try TestStoreFactory.inMemory()
         for table in [
@@ -26,19 +26,47 @@ import SQLite3
             #expect(store.scalarText(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='\(index)';") == "1")
         }
-        #expect(store.pragmaValue("user_version") == "52")
+        #expect(store.pragmaValue("user_version") == "53")
     }
 
     @Test func v51MigratesWithoutBackfillOrDataLoss() throws {
         let fixture = try v51Fixture()
         let migrated = try GRDBWikiStore(databaseURL: fixture.url)
-        #expect(migrated.pragmaValue("user_version") == "52")
+        #expect(migrated.pragmaValue("user_version") == "53")
         #expect(try migrated.getPage(id: fixture.pageID).title == "Historical page")
         #expect(try migrated.getSource(id: fixture.sourceID).filename == "historical.txt")
         #expect(migrated.scalarText("SELECT COUNT(*) FROM page_okf_metadata;") == "0")
         #expect(migrated.scalarText("SELECT COUNT(*) FROM source_markdown_okf_metadata;") == "0")
         #expect(migrated.scalarText("SELECT COUNT(*) FROM page_okf_verifications;") == "0")
         #expect(migrated.scalarText("SELECT COUNT(*) FROM source_markdown_okf_verifications;") == "0")
+    }
+
+    @Test func v52DBWithChatSummaryColumnsMigratesToV53() throws {
+        // A v52 database still carries `chats.summary`/`summary_at` (the
+        // mirrored one-line answer summary). Reintroduce them by hand on a
+        // file-backed store, stamp back to 52, and reopen: the migration
+        // must drop both columns and stamp 53.
+        let pair = try TestStoreFactory.fileBacked(prefix: "schema-v53")
+        pair.store.close()
+        try MetadataSQLiteFixtureSupport.execute("""
+        ALTER TABLE chats ADD COLUMN summary TEXT;
+        ALTER TABLE chats ADD COLUMN summary_at REAL;
+        INSERT INTO chats (id, kind, title, created_at, updated_at, summary, summary_at)
+        VALUES ('survivor', 'edit', 'Survivor', 1, 1, 'tainted summary', 2);
+        INSERT INTO chat_messages (id, chat_id, seq, role, event_json, text, created_at)
+        VALUES ('m1', 'survivor', 0, 'user', '{"userText":{"_0":"Why?"}}', 'Why?', 1);
+        PRAGMA user_version = 52;
+        """, at: pair.url)
+
+        let migrated = try GRDBWikiStore(databaseURL: pair.url)
+        #expect(migrated.pragmaValue("user_version") == "53")
+        #expect(migrated.scalarText(
+            "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name IN ('summary', 'summary_at');") == "0")
+        // The drop must not lose the rows the columns rode on (F12b).
+        #expect(migrated.scalarText(
+            "SELECT title FROM chats WHERE id = 'survivor';") == "Survivor")
+        #expect(migrated.scalarText(
+            "SELECT COUNT(*) FROM chat_messages WHERE chat_id = 'survivor';") == "1")
     }
 
     @Test func v52MigrationEnforcesTargetForeignKeysAndStatusChecks() throws {
@@ -73,7 +101,7 @@ import SQLite3
         store = nil
 
         let reopened = try GRDBWikiStore(databaseURL: fixture.url)
-        #expect(reopened.pragmaValue("user_version") == "52")
+        #expect(reopened.pragmaValue("user_version") == "53")
         #expect(try reopened.pageOKFMetadata(
             versionID: fixture.pageVersionID, includeCorrected: false)?.metadata.status == .stable)
     }

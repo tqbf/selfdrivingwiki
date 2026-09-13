@@ -69,7 +69,7 @@ struct ChatTranscriptPresentationProjectionTests {
     }
 
     private let knownWarning =
-        "Warning: Skill descriptions were shortened to fit the 2% skills context budget."
+        AgentPresentationPreamble.knownWarningSentence
 
     // MARK: - Modes
 

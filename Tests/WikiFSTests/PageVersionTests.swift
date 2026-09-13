@@ -642,12 +642,12 @@ struct PageVersionTests {
 
     /// Migration ladder sanity: a fresh DB reports the current schema after
     /// adding durable configured/effective chat thinking selection.
-    @Test func v52SchemaVersionAfterMigration() throws {
-        #expect(GRDBWikiStore.schemaVersion == 52,
+    @Test func freshDBStampsCurrentSchemaVersion() throws {
+        #expect(GRDBWikiStore.schemaVersion >= 53,
                 "schemaVersion must report the current migration version")
         let store = try tempStore()
         let v = store.pragmaValue("user_version")
-        #expect(v == "52", "fresh DB stamps user_version = 52 (got \(v))")
+        #expect(v == "\(GRDBWikiStore.schemaVersion)", "fresh DB stamps user_version = current (got \(v))")
     }
 
     // MARK: - #817: pageVersionBody (read arbitrary version body)

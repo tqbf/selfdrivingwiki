@@ -121,7 +121,7 @@ import Testing
         let leg = [ChatSummary(
             id: chat.id, kind: chat.kind, title: chat.title,
             createdAt: chat.createdAt, updatedAt: chat.updatedAt,
-            messageCount: chat.messageCount, summary: nil, summaryAt: nil)]
+            messageCount: chat.messageCount)]
         let fused = try store.searchSimilarChats(query: "budget", limit: 10, bm25Leg: leg)
         #expect(fused.count == 1)
         #expect(fused.first?.id == chat.id)

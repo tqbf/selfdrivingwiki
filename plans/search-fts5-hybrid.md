@@ -11,7 +11,7 @@ Make search actually work. Today it is either **broken** (the sqlite-vec semanti
 layer never loads — macOS system SQLite is built with `SQLITE_OMIT_LOAD_EXTENSION`,
 so `sqlite3_load_extension` / `sqlite3_enable_load_extension` don't exist and `dlsym`
 returns NULL) or it degrades to **filename-only `LIKE`**. Neither path reads the
-document body, so a query like `hypnosis` finds nothing.
+document body, so a query like `photosynthesis` finds nothing.
 
 This plan adds three things:
 
@@ -26,7 +26,7 @@ This plan adds three things:
 
 Verified facts grounding this plan:
 - `PRAGMA compile_options` → `ENABLE_FTS5`, `OMIT_LOAD_EXTENSION` (system SQLite).
-- `bm25()` + `MATCH 'hypnosis'` returns the matching row on the system SQLite.
+- `bm25()` + `MATCH 'photosynthesis'` returns the matching row on the system SQLite.
 - The running app logs: `loadVecExtension: dlsym FAILED … semantic search disabled`
   → `searchSimilarSources: … vec=false` → `LIKE FALLBACK (body NOT searched)`.
 - `pages` and `sources` are normal **rowid** tables (no `WITHOUT ROWID`), so
@@ -127,7 +127,7 @@ RRF_score(d) = Σ_i  1 / (k + rank_i(d))      // k = 60 (standard)
 ## Acceptance Criteria
 
 - **AC.1** Exact body term with zero filename overlap returns the source/page (the
-  `hypnosis` case) — FTS, works under `swift test`.
+  `photosynthesis` case) — FTS, works under `swift test`.
 - **AC.2** Paraphrase query returns the relevant doc when vec is available (cosine).
 - **AC.3** A doc ranking high in **both** vec and FTS ranks above one in only one (RRF).
 - **AC.4** vec unavailable → search still returns results (FTS-only); never an empty

@@ -19,10 +19,7 @@ struct ChatDetailPresentation {
         let runningKind: WikiOperation.Kind?
         let preflightError: String?
         let pendingPermissions: [PendingPermission]
-        let runStartedAt: Date?
         let projectionInput: TranscriptProjectionInput
-        let exitStatus: Int32?
-
     }
 
     struct Controls {
@@ -52,7 +49,6 @@ struct ChatDetailPresentation {
     let preflightBannerMessage: String?
     let showsThinkingIndicator: Bool
     let outlineEntries: [ChatOutlineEntry]
-    let chatInspectorAvailable: Bool
 
     static func make(
         chatID: ChatID?,
@@ -108,7 +104,6 @@ struct ChatDetailPresentation {
             isChatOperationConfigured: isChatOperationConfigured
         )
         let canSend = canSendPredicate(
-            hasMount: true,
             runState: remoteSession.runState,
             hasDraftText: hasDraftText,
             isChatOperationConfigured: isChatOperationConfigured,
@@ -150,7 +145,6 @@ struct ChatDetailPresentation {
                 isEnabled: composerEnabled,
                 caption: composerCaptionText(
                     runState: remoteSession.runState,
-                    hasChatID: chatID != nil,
                     isLiveChat: isLiveChat,
                     isChatOperationConfigured: isChatOperationConfigured,
                     isDraftSubmitPending: isDraftSubmitPending
@@ -180,8 +174,7 @@ struct ChatDetailPresentation {
                 isLiveChat: isLiveChat
             ),
             showsThinkingIndicator: transcriptIsAnswering,
-            outlineEntries: outlineEntries,
-            chatInspectorAvailable: !outlineEntries.isEmpty
+            outlineEntries: outlineEntries
         )
     }
 
@@ -314,12 +307,10 @@ struct ChatDetailPresentation {
 
     static func composerCaptionText(
         runState: ChatRunState,
-        hasChatID: Bool,
         isLiveChat: Bool,
         isChatOperationConfigured: Bool,
         isDraftSubmitPending: Bool = false
     ) -> String? {
-        _ = hasChatID
         if isChatOperationConfigured == false {
             return "Configure an enabled provider and model in Settings → Providers before sending."
         }
@@ -338,13 +329,11 @@ struct ChatDetailPresentation {
     }
 
     static func canSendPredicate(
-        hasMount: Bool,
         runState: ChatRunState,
         hasDraftText: Bool,
         isChatOperationConfigured: Bool,
         isDraftSubmitPending: Bool = false
     ) -> Bool {
-        _ = hasMount
         return isChatOperationConfigured
             && !runState.isAnswering
             && runState != .queued

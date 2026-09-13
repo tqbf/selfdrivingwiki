@@ -53,6 +53,16 @@ public enum AgentPresentationPreamble {
         }
 
         let firstContentLine = lines[firstContentIndex].trimmingCharacters(in: .whitespaces)
+
+        // Near-miss canary: a line that OPENS like the skills-budget banner
+        // but is not the exact known sentence means the vendor reworded it.
+        // Surface it in diagnostics instead of silently preserving new banner
+        // text in titles, summaries, and exports.
+        if firstContentLine.hasPrefix("Warning: Skill descriptions"),
+           !firstContentLine.hasPrefix(knownWarningSentence) {
+            DebugLog.chatLive("AgentPresentationPreamble: unrecognized 'Warning: Skill descriptions' variant — the banner may have been reworded; preserved verbatim: \(firstContentLine.prefix(140))")
+        }
+
         if firstContentLine.hasPrefix(knownWarningSentence) {
             return remainder(afterWarningLineAt: firstContentIndex, in: lines)
         }

@@ -895,10 +895,10 @@ struct WikiCtlCommandTests {
     @Test func resolveByDisplayName() throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "Matthews1999.pdf", data: Data("raw".utf8))
-        try store.renameSource(id: ingested.id, to: "Ericksonian Hypnosis: A Review")
+        try store.renameSource(id: ingested.id, to: "Cognitive Ethology: A Review")
         // Agent sees display name in `source list`, should be able to use it.
         let result = try SourceCommand.run(
-            .cat(.name("Ericksonian Hypnosis: A Review"), markdown: false), in: store, cwd: "/tmp")
+            .cat(.name("Cognitive Ethology: A Review"), markdown: false), in: store, cwd: "/tmp")
         #expect(result.payload == .bytes(Data("raw".utf8)))
     }
 

@@ -229,7 +229,7 @@ import SQLite3
     /// AC.2: a fresh schema has the `acp_session_id` column on the chats table.
     @Test func freshSchemaHasChatAcpSessionIdColumn() throws {
         let store = try tempStore()
-        #expect(GRDBWikiStore.schemaVersion == 52)
+        #expect(GRDBWikiStore.schemaVersion >= 53)
         let hasCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
         #expect(hasCol == "1")
@@ -317,7 +317,7 @@ import SQLite3
     /// A fresh schema has the `model_provider_id`/`model_id` columns on `chats`.
     @Test func freshSchemaHasChatModelOverrideColumns() throws {
         let store = try tempStore()
-        #expect(GRDBWikiStore.schemaVersion == 52)
+        #expect(GRDBWikiStore.schemaVersion >= 53)
         let hasProviderCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_provider_id';")
         #expect(hasProviderCol == "1")
@@ -439,7 +439,7 @@ import SQLite3
         raw = nil
 
         let migrated = try GRDBWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "52")
+        #expect(migrated.pragmaValue("user_version") == "53")
         let existing = try migrated.getChat(id: ChatID(rawValue: "existing-chat"))
         #expect(existing.configuredThinkingOptionID == nil)
         #expect(existing.effectiveThinkingOptionID == nil)

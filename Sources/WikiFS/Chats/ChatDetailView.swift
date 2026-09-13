@@ -64,9 +64,7 @@ struct ChatDetailView: View {
             runningKind: remoteSession.runningKind,
             preflightError: remoteSession.preflightError,
             pendingPermissions: remoteSession.pendingPermissions,
-            runStartedAt: remoteSession.runStartedAt,
-            projectionInput: remoteSession.displayProjectionInput,
-            exitStatus: remoteSession.exitStatus
+            projectionInput: remoteSession.displayProjectionInput
         )
     }
 
@@ -234,9 +232,14 @@ struct ChatDetailView: View {
             installOutgoingEnvironment()
             updateRightSidebarRegistration()
         }
-        .onChange(of: presentation.outlineEntries) { _, _ in
-            updateRightSidebarRegistration()
-        }
+        // The right sidebar renders the outline as a captured snapshot: it
+        // re-renders only when a NEW registration arrives (see
+        // SidebarRegistrationRefresh below for why BOTH triggers matter).
+        .modifier(SidebarRegistrationRefresh(
+            projectionInput: remoteSession.displayProjectionInput,
+            outlineEntries: presentation.outlineEntries,
+            onRefresh: updateRightSidebarRegistration
+        ))
         .onChange(of: remoteSession.runState) { _, _ in
             if let chatID, !isLiveChat {
                 loadPersistedTranscript(chatID: chatID)
@@ -727,7 +730,10 @@ struct ChatDetailView: View {
         // The durable row's provisional title appears the moment the user
         // sends — no cross-process round trip.
         if let chatID {
-            store.applyProvisionalChatTitle(chatID: chatID, userText: message)
+            // The wire message (attachment refs included) is what the daemon
+            // derives its title from — pass the same text so both writers
+            // converge byte-for-byte instead of by inverse-strip coincidence.
+            store.applyProvisionalChatTitle(chatID: chatID, userText: payload.wireMessage)
         }
         outgoing.send(chatID: chatID, payload: payload, makeRequest: makeSubmitRequest)
     }
@@ -785,7 +791,7 @@ struct ChatDetailView: View {
         guard isChatOperationConfigured, let pending = queuedMessages.first else { return }
         queuedMessages.removeFirst()
         if let chatID {
-            store.applyProvisionalChatTitle(chatID: chatID, userText: pending.draftText)
+            store.applyProvisionalChatTitle(chatID: chatID, userText: pending.wireMessage)
         }
         outgoing.send(
             chatID: chatID,
@@ -891,14 +897,12 @@ struct ChatDetailView: View {
 
     static func composerCaptionText(
         runState: ChatRunState,
-        hasChatID: Bool,
         isLiveChat: Bool,
         isChatOperationConfigured: Bool,
         isDraftSubmitPending: Bool = false
     ) -> String? {
         ChatDetailPresentation.composerCaptionText(
             runState: runState,
-            hasChatID: hasChatID,
             isLiveChat: isLiveChat,
             isChatOperationConfigured: isChatOperationConfigured,
             isDraftSubmitPending: isDraftSubmitPending
@@ -906,14 +910,12 @@ struct ChatDetailView: View {
     }
 
     nonisolated static func canSendPredicate(
-        hasMount: Bool,
         runState: ChatRunState,
         hasDraftText: Bool,
         isChatOperationConfigured: Bool,
         isDraftSubmitPending: Bool = false
     ) -> Bool {
         ChatDetailPresentation.canSendPredicate(
-            hasMount: hasMount,
             runState: runState,
             hasDraftText: hasDraftText,
             isChatOperationConfigured: isChatOperationConfigured,
@@ -937,6 +939,30 @@ struct ChatDetailView: View {
         }
         persistedTranscriptItems = items
         updateRightSidebarRegistration()
+    }
+}
+
+/// Sidebar invalidation for the chat surface. The right sidebar renders the
+/// outline as a captured snapshot and re-renders only when a new registration
+/// object arrives, so every input the outline depends on must be enumerated
+/// here and force a re-registration:
+///
+/// - `projectionInput`: session rehydration transiently empties it (daemon
+///   attaching, history not yet mirrored) and live turns grow it per delta.
+///   Without this trigger the sidebar freezes whichever frame was current —
+///   an outline rendered blank for a chat whose transcript was fully visible.
+/// - `outlineEntries`: covers projection changes that alter the entry list
+///   without changing the input shape.
+@MainActor
+private struct SidebarRegistrationRefresh: ViewModifier {
+    let projectionInput: TranscriptProjectionInput
+    let outlineEntries: [ChatOutlineEntry]
+    let onRefresh: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: projectionInput) { _, _ in onRefresh() }
+            .onChange(of: outlineEntries) { _, _ in onRefresh() }
     }
 }
 

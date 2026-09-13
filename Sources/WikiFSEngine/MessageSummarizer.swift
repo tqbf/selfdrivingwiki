@@ -200,7 +200,16 @@ public enum MessageSummarizer {
             DebugLog.ingest("MessageSummarizer: model returned empty output for prompt=\(prompt.prefix(40))...")
             return nil
         }
-        return trimmed
+
+        // The summarizer-stage backend is itself an ACP agent and may prepend
+        // the known skills-budget warning to its own reply. Strip it so the
+        // banner never lands in a cached summary or title; a reply that is
+        // only the warning yields nothing usable.
+        guard let visible = AgentPresentationPreamble.visibleText(trimmed, policy: .completeOnly) else {
+            DebugLog.ingest("MessageSummarizer.oneShotReply: reply was only the known preamble")
+            return nil
+        }
+        return visible
     }
 
     /// Extract the summarizable text from an `AgentEvent` (the source for a
@@ -211,7 +220,7 @@ public enum MessageSummarizer {
     /// ACP backends open replies with meta preambles — a skills-budget
     /// `Warning:` line, a `Thinking:` dump — which are not content. Leading
     /// preamble lines are stripped; a message that is ONLY preamble yields nil
-    /// so it is never summarized and never becomes `chats.summary` or a title
+    /// so it is never summarized and never becomes a title
     /// input.
     public static func textToSummarize(from event: AgentEvent) -> String? {
         switch event {
@@ -247,26 +256,6 @@ public enum MessageSummarizer {
         let rest = lines.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return rest.isEmpty ? nil : rest
-    }
-
-    /// The message whose summary doubles as the CHAT-level summary
-    /// (`chats.summary`, issue #411): the FIRST summarizable message in the
-    /// chat. PURE — `messages` must be in store order.
-    ///
-    /// `chats.summary` is not a summary of the whole conversation; it is the
-    /// gist of the opening answer, shown as the chats-list row subtitle. Rather
-    /// than compute it separately (the pre-#411-unification design, which always
-    /// truncated regardless of the summarizer mode), both hosts now MIRROR the
-    /// first message's cached summary into the chat row. That gives one writer,
-    /// one condensing policy, and — in Model mode — zero extra model calls: the
-    /// chat summary is a copy of a per-message summary that was computed anyway.
-    ///
-    /// Returns nil when no message has summarizable text.
-    public static func chatSummaryMessageID(in messages: [ChatMessage]) -> PageID? {
-        messages.first { msg in
-            guard let text = textToSummarize(from: msg.event) else { return false }
-            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }?.id
     }
 
     /// Run a one-shot model summarization via the injected `AgentBackend`

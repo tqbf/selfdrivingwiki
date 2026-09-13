@@ -168,9 +168,7 @@ struct DurableNewChatHostedTests {
             runningKind: nil,
             preflightError: nil,
             pendingPermissions: [],
-            runStartedAt: nil,
-            projectionInput: .empty,
-            exitStatus: nil)
+            projectionInput: .empty)
 
         let deleted = ChatDetailPresentation.make(
             chatID: missingID,

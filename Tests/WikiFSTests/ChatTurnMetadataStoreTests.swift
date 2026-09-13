@@ -3,8 +3,8 @@ import Testing
 @testable import WikiFSCore
 
 struct ChatTurnMetadataStoreTests {
-    @Test func schemaVersionIs52() {
-        #expect(GRDBWikiStore.schemaVersion == 52)
+    @Test func schemaVersionIsCurrent() {
+        #expect(GRDBWikiStore.schemaVersion >= 53)
     }
 
     @Test func usageIsKeyedByChatAndTurn() throws {

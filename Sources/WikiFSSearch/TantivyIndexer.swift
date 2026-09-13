@@ -133,7 +133,7 @@ public actor TantivyIndexer {
     /// (`TantivySwiftSearchQuery` + `TantivySwiftFuzzyField`), NOT the structured
     /// `TantivyQuery.fuzzy` enum. The structured `.fuzzy` case has no `prefix`
     /// parameter, and without `prefix: true` distance-2 fuzzy on a short
-    /// partial like `"Erl"` will not surface `"Erickson"` (whole-token edit
+    /// partial like `"Erl"` will not surface `"Erlandson"` (whole-token edit
     /// distance 6). The query-string path's `TantivySwiftFuzzyField` exposes
     /// both `distance: UInt8` AND `prefix: Bool` — this is the same path the
     /// shipped sidebar search uses (`search(query:kind:limit:)` above), with
