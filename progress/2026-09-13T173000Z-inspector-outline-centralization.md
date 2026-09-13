@@ -47,6 +47,27 @@ A checkpoint commit landed first so this refactor is one bisectable diff:
 `fe9a6aee fix(inspector): defer chat outline registration and remount
 inspector per subject`.
 
+## Implementation review
+
+A `general-purpose` reviewer audited the refactor commit against the plan
+(verdict: request changes). Dispositions:
+
+- Fixed (churn): page and source still had direct re-registration calls
+  (`draftBody`, `currentMarkdownContent`, `sourcesVersion`, `headVersion`,
+  `isEditing`, `showsSourceOutlineTab`) that bypassed the payload equality
+  gate and republished per keystroke. Removed; the payload observer is the
+  invalidation path for outline content. One deliberate exception stays:
+  `sourceInspectorTabs` changes must republish because `availableTabs` lives
+  in the registration but not in the payload, and a flip with zero parsed
+  headings leaves the payload equal.
+- Rebutted (API shape): the plan sketched the content enum as a nested
+  `InspectorOutlinePayload.Content`; the implementation uses a top-level
+  `InspectorOutlineContent` with the same two cases. Behavior, equality, and
+  test coverage are identical; the top-level name keeps use sites readable.
+- Rebutted (coverage wording): the cross-type journey runs in cyclic order
+  page → source → chat → page, which contains all three directed boundaries
+  the plan lists.
+
 Out of scope, flagged for a follow-up plan: the operator's live wiki misses
 the `renderer_source_preferences` table and logs a SQLite error at every
 source registration. The missing-table hosted test proves this is unrelated to

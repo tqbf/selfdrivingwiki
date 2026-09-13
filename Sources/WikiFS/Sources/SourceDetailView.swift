@@ -560,15 +560,17 @@ struct SourceDetailView: View {
             isEditing = false
             updateRightSidebarRegistration()
         }
+        // Tab availability and outline applicability both feed `outlinePayload`
+        // (its empty-content gate is the same `showsSourceOutlineTab`
+        // condition), so the payload observer below republishes the
+        // registration when they change. One exception needs a direct trigger:
+        // `sourceInspectorTabs` is carried in the registration but not in the
+        // payload, and a flip with zero parsed headings leaves the payload
+        // equal. It flips rarely, so no churn risk. Equal-payload keystrokes
+        // still publish nothing.
         .onChange(of: sourceInspectorTabs) { _, _ in
             updateRightSidebarRegistration()
         }
-        .onChange(of: showsSourceOutlineTab) { _, _ in updateRightSidebarRegistration() }
-        // The sidebar renders the last accepted registration's payload value,
-        // so caret moves and content switches must re-publish the
-        // registration. All of those inputs converge into `outlinePayload`;
-        // observing it is the single invalidation path (see
-        // SidebarRegistrationRefresh).
         .modifier(SidebarRegistrationRefresh(
             outlinePayload: outlinePayload,
             onRefresh: { updateRightSidebarRegistration() }
@@ -589,7 +591,8 @@ struct SourceDetailView: View {
                 headVersion = store.processedMarkdownHead(for: file)
                 refreshRendererPresentation()
             }
-            updateRightSidebarRegistration()
+            // headVersion feeds `outlinePayload`; a real content change
+            // re-registers through the payload observer.
         }
         .background { findShortcutButton }
         .overlay(alignment: .top) { findBarOverlay }
@@ -597,7 +600,8 @@ struct SourceDetailView: View {
         .onChange(of: currentMarkdownContent) { _, newContent in
             findModel.content = newContent
             findModel.search()
-            updateRightSidebarRegistration()
+            // Content changes reach the registration through the payload
+            // observer; this handler only syncs the find bar.
         }
         .onChange(of: findModel.isShowing) { _, showing in
             if showing {
@@ -631,7 +635,7 @@ struct SourceDetailView: View {
             editBuffer = content
             isEditing = true
             shouldRestoreEditing = false
-            updateRightSidebarRegistration()
+            // The editBuffer change republishes via the payload observer.
         }
         .onChange(of: isEditing) { _, newValue in
             if let id = store.activeTabID {
@@ -639,7 +643,7 @@ struct SourceDetailView: View {
             }
             if newValue { isHeaderExpanded = true } // reveal Save/Cancel
             if !newValue { shouldRestoreEditing = false; caretCharIndex = nil }
-            updateRightSidebarRegistration()
+            // The content/caret change republishes via the payload observer.
         }
     }
 

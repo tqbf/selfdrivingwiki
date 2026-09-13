@@ -189,13 +189,11 @@ struct PageDetailView: View {
             guard findModel.currentMatchIndex > 0 else { return }
             findVersion &+= 1
         }
-        .onChange(of: store.draftBody) { _, _ in
-            updateRightSidebarRegistration()
-        }
-        // The sidebar renders the last accepted registration's payload value,
-        // so caret moves and content edits must re-publish the registration.
-        // All of those inputs converge into `outlinePayload`; observing it is
-        // the single invalidation path (see SidebarRegistrationRefresh).
+        // Draft edits and caret moves re-register through the payload observer
+        // below, not a direct onChange: the payload only changes when the rows
+        // or the highlight bucket change, so equal-payload keystrokes publish
+        // nothing. Provenance and metadata changes still re-register directly
+        // — they live in the registration but not in the payload.
         .modifier(SidebarRegistrationRefresh(
             outlinePayload: outlinePayload,
             onRefresh: { updateRightSidebarRegistration() }
