@@ -17,7 +17,7 @@ import WikiFSCore
 ///   - **Default backend** — pure truncation via `ChatSummary.summaryExtract`.
 ///   - **Model backend** — driven end-to-end via `FakeAgentBackend` (AC.4
 ///     automated model half).
-///   - **Store round-trip** — `updateMessageSummary` + `chatMessages` read-back
+///   - **Store round-trip** — `updateMessageSummary` + transcript page read-back
 ///     on a real in-memory SQLite DB (AC.1 + AC.6).
 @Suite
 struct MessageSummaryTests {
@@ -144,10 +144,27 @@ struct MessageSummaryTests {
     func unavailableProviderRuntimeFallsBackToDefaultSummary() async throws {
         let store = try TestStoreFactory.inMemory()
         let model = WikiStoreModel(store: store)
-        let chat = try #require(model.startChat(kind: .edit, firstMessage: "Question"))
-        model.appendChatEvents(
+        let chat = try store.createChat(kind: .edit, title: "Question")
+        // v54 (#1266): seed through the durable transcript — the rows the
+        // summarizer scans and writes to (`createChat` only makes the row;
+        // `startChat` would seed `chat_messages` directly and desync the
+        // transcript/compatibility lockstep the durable append maintains).
+        _ = try store.appendChatTranscriptItems(
             chatID: chat.id,
-            events: [.assistantText(String(repeating: "summary source ", count: 20))])
+            items: [
+                .message(ChatTranscriptMessageItem(
+                    messageID: ChatMessageID(rawValue: "user-1"),
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    role: .user,
+                    text: "Question",
+                    createdAt: Date())),
+                .message(ChatTranscriptMessageItem(
+                    messageID: ChatMessageID(rawValue: "assistant-1"),
+                    turnID: ChatTurnID(rawValue: "turn-2"),
+                    role: .assistant,
+                    text: String(repeating: "summary source ", count: 20),
+                    createdAt: Date())),
+            ])
         let launcher = AgentLauncher(
             providerServices: UnavailableAgentProviderServices())
 
@@ -156,13 +173,17 @@ struct MessageSummaryTests {
             store: model,
             launcher: launcher)
 
+        let page = try store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
         let summarized = try #require(
-            model.chatMessages(chatID: chat.id).first { message in
-                if case .assistantText = message.event { return true }
+            page.items.first { item in
+                if case .message(let message) = item.item { return message.role == .assistant }
                 return false
             })
-        #expect(summarized.summaryKind == .defaultTruncation)
         #expect(summarized.summary?.isEmpty == false)
+        // The Default summarizer kind is recorded on the transcript row.
+        #expect(store.scalarText(
+            "SELECT summary_kind FROM chat_transcript_items WHERE chat_id = '\(chat.id.rawValue)' AND cursor = \(summarized.cursor.rawValue);")
+            == ChatMessageSummaryKind.defaultTruncation.rawValue)
     }
 
     // MARK: - Model backend (§4.3 — injectable AgentBackend seam, AC.4)
@@ -376,18 +397,17 @@ struct MessageSummaryTests {
     }
 
     @Test func summaryNullForNewMessages() throws {
-        // AC.1 (read side): newly-appended messages have nil summary fields.
+        // AC.1 (read side): newly-appended transcript items have nil summary.
         let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Chat")
-        _ = try store.appendChatMessages(
-            chatID: chat.id,
-            events: [.userText("q"), .assistantText("Some answer.")])
-        let messages = try store.chatMessages(chatID: chat.id)
-        #expect(messages.count == 2)
-        for msg in messages {
-            #expect(msg.summary == nil, "summary should be nil for \(msg.event)")
-            #expect(msg.summaryKind == nil)
-            #expect(msg.summaryAt == nil)
+        _ = try Self.appendAssistant(
+            store, chatID: chat.id, id: "a1", text: "Some answer.")
+        let items = try store
+            .readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+            .items
+        #expect(items.count == 1)
+        for item in items {
+            #expect(item.summary == nil, "summary should be nil for \(item.item)")
         }
     }
 
@@ -395,19 +415,21 @@ struct MessageSummaryTests {
         // AC.6 (compute-once path): write a summary, read it back — cached.
         let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Chat")
-        let inserted = try store.appendChatMessages(
-            chatID: chat.id,
-            events: [.assistantText("Long answer.")])
-        let target = try #require(inserted.first)
+        let target = try Self.appendAssistant(
+            store, chatID: chat.id, id: "a1", text: "Long answer.")
         try store.updateMessageSummary(
-            chatID: chat.id, messageID: target.id,
+            chatID: chat.id, cursor: target.cursor,
             summary: "Cached one-liner.", kind: .model)
 
-        let after = try store.chatMessages(chatID: chat.id)
-        let updated = try #require(after.first { $0.id == target.id })
+        let items = try store
+            .readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+            .items
+        let updated = try #require(items.first { $0.cursor == target.cursor })
         #expect(updated.summary == "Cached one-liner.")
-        #expect(updated.summaryKind == .model)
-        #expect(updated.summaryAt != nil)
+        // The kind round-trips through the `summary_kind` column.
+        #expect(store.scalarText(
+            "SELECT summary_kind FROM chat_transcript_items WHERE chat_id = '\(chat.id.rawValue)' AND cursor = \(target.cursor.rawValue);")
+            == ChatMessageSummaryKind.model.rawValue)
     }
 
     @Test func summaryWrittenForOneMessage_doesNotAffectOthers() throws {
@@ -415,43 +437,46 @@ struct MessageSummaryTests {
         // granularity, not per-chat).
         let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Chat")
-        let inserted = try store.appendChatMessages(
-            chatID: chat.id,
-            events: [.assistantText("first."), .assistantText("second.")])
+        let first = try Self.appendAssistant(
+            store, chatID: chat.id, id: "a1", text: "first.")
+        _ = try Self.appendAssistant(
+            store, chatID: chat.id, id: "a2", text: "second.")
         try store.updateMessageSummary(
-            chatID: chat.id, messageID: inserted[0].id,
+            chatID: chat.id, cursor: first.cursor,
             summary: "first summary.", kind: .defaultTruncation)
 
-        let after = try store.chatMessages(chatID: chat.id)
-        #expect(after[0].summary == "first summary.")
-        #expect(after[1].summary == nil)
-        #expect(after[1].summaryKind == nil)
+        let items = try store
+            .readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+            .items
+        #expect(items.count == 2)
+        #expect(items.first { $0.cursor == first.cursor }?.summary == "first summary.")
+        #expect(items.first { $0.cursor != first.cursor }?.summary == nil)
     }
 
     @Test func idempotency_alreadySummarized_isSkippedByFilter() throws {
-        // AC.6 (cache short-circuit): the summarizePendingMessages filter
-        // (`msg.summary == nil`) skips already-summarized rows. Verify the
-        // round-trip supports this: after a write, the message's summary is
-        // non-nil so it would be filtered out on the next pass.
+        // AC.6 (cache short-circuit): the summarizer's pending filter
+        // (`summary == nil`) skips already-summarized rows. After a write, the
+        // pending set derived from the transcript is empty.
         let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Chat")
-        let inserted = try store.appendChatMessages(
-            chatID: chat.id, events: [.assistantText("text.")])
+        let inserted = try Self.appendAssistant(
+            store, chatID: chat.id, id: "a1", text: "text.")
         try store.updateMessageSummary(
-            chatID: chat.id, messageID: inserted[0].id,
+            chatID: chat.id, cursor: inserted.cursor,
             summary: "done.", kind: .defaultTruncation)
 
-        // Re-read: the message now has a non-nil summary, so a filter like
-        // `messages.filter { $0.summary == nil }` excludes it.
-        let messages = try store.chatMessages(chatID: chat.id)
-        let pending = messages.filter { $0.summary == nil }
-        #expect(pending.isEmpty, "already-summarized message should be filtered out")
+        // Re-read: the pending set excludes the summarized item.
+        let items = try store
+            .readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+            .items
+        #expect(MessageSummarizer.pendingSummaryTargets(from: items).isEmpty,
+                "already-summarized message should be filtered out")
     }
 
     // MARK: - Model-level messageVersion (#858)
 
     /// The core bug: `ChatSummary` has no per-message fields, so writing a
-    /// `chat_messages.summary` leaves the `chats` array `==` after
+    /// per-message summary leaves the `chats` array `==` after
     /// `reloadChats()`. `.onChange(of: chats)` would never fire. The
     /// `messageVersion` counter fixes this — it bumps unconditionally in
     /// `reloadChats()`, giving SwiftUI an always-changing observable.
@@ -459,18 +484,17 @@ struct MessageSummaryTests {
         let store = try TestStoreFactory.inMemory()
         let model = WikiStoreModel(store: store)
         let chat = try store.createChat(kind: .edit, title: "Chat")
-        let inserted = try store.appendChatMessages(
-            chatID: chat.id, events: [.assistantText("Long answer.")])
-        let target = try #require(inserted.first)
+        let target = try Self.appendAssistant(
+            store, chatID: chat.id, id: "a1", text: "Long answer.")
 
         model.reloadChats()
         let chatsBefore = model.chats
         let versionBefore = model.messageVersion
 
-        // Write a per-message summary — changes `chat_messages` but NOT any
-        // `ChatSummary` field (summary is per-message, not per-chat).
+        // Write a per-message summary — changes the transcript item but NOT
+        // any `ChatSummary` field (summary is per-message, not per-chat).
         try store.updateMessageSummary(
-            chatID: chat.id, messageID: target.id,
+            chatID: chat.id, cursor: target.cursor,
             summary: "Cached.", kind: .model)
 
         model.reloadChats()
@@ -482,11 +506,28 @@ struct MessageSummaryTests {
         #expect(model.messageVersion > versionBefore,
                 "messageVersion must bump even when chats is ==")
 
-        // The summary IS in the DB — readable via chatMessages.
-        let msgs = model.chatMessages(chatID: chat.id)
-        let updated = try #require(msgs.first { $0.id == target.id })
+        // The summary IS in the DB — readable via the transcript page.
+        let items = try store
+            .readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+            .items
+        let updated = try #require(items.first { $0.cursor == target.cursor })
         #expect(updated.summary == "Cached.")
-        #expect(updated.summaryKind == .model)
+    }
+
+    /// Append one assistant transcript item (the durable rows the summarizer
+    /// scans); returns the persisted item with its cursor.
+    private static func appendAssistant(
+        _ store: GRDBWikiStore, chatID: ChatID, id: String, text: String
+    ) throws -> PersistedChatTranscriptItem {
+        let inserted = try store.appendChatTranscriptItems(
+            chatID: chatID,
+            items: [.message(ChatTranscriptMessageItem(
+                messageID: ChatMessageID(rawValue: id),
+                turnID: ChatTurnID(rawValue: "turn-\(id)"),
+                role: .assistant,
+                text: text,
+                createdAt: Date()))])
+        return try #require(inserted.first)
     }
 
     /// `messageVersion` bumps on every `reloadChats()` call, even back-to-back

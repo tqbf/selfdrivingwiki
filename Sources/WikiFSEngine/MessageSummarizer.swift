@@ -233,6 +233,37 @@ public enum MessageSummarizer {
         }
     }
 
+    /// Extract the summarizable text from a durable transcript item (v54,
+    /// issue #1266 — the summarizer scans `chat_transcript_items`, not the
+    /// compatibility `chat_messages` projection). Only assistant messages
+    /// carry a summary surface; user/tool/notice/failure items yield nil.
+    /// PURE. Mirrors `textToSummarize(from: AgentEvent)` — through the v46
+    /// persistence projection an assistant transcript message IS an
+    /// `.assistantText` event.
+    public static func textToSummarize(from item: ChatTranscriptItem) -> String? {
+        guard case .message(let message) = item, message.role == .assistant else {
+            return nil
+        }
+        return summarizableAssistantText(message.text)
+    }
+
+    /// The summarizer's pending set: transcript items with no cached summary
+    /// plus their summarizable text, paired with the durable cursor the write
+    /// back targets (`updateMessageSummary`). Compute-once (AC.6) falls out of
+    /// the `summary == nil` filter. PURE.
+    public static func pendingSummaryTargets(
+        from items: [PersistedChatTranscriptItem]
+    ) -> [(cursor: ChatTranscriptCursor, text: String)] {
+        var pending: [(cursor: ChatTranscriptCursor, text: String)] = []
+        for persisted in items {
+            guard persisted.summary == nil,
+                  let text = textToSummarize(from: persisted.item),
+                  !text.isEmpty else { continue }
+            pending.append((cursor: persisted.cursor, text: text))
+        }
+        return pending
+    }
+
     /// Drop the known skills-budget warning (via the shared
     /// `completeOnly` filter) plus leading blank / `Thinking:` lines from
     /// assistant text. PURE. Returns nil when nothing substantive remains.

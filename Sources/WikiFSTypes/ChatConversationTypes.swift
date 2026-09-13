@@ -513,10 +513,11 @@ public struct PersistedChatTranscriptItem: Hashable, Sendable, Codable {
     public let projectedEventJSON: String?
     public let projectedPlainText: String
     public let createdAt: Date
-    /// Cached summary from the compatibility `chat_messages` row at this
-    /// cursor. The store joins it by the durable cursor/sequence relationship;
-    /// it is deliberately not keyed by the compatibility row's `PageID`.
-    public let cachedResponseSummary: String?
+    /// The message's cached one-line summary (chat-summary plan §4.2; v54:
+    /// issue #1266). Lives on the durable transcript row itself, keyed by the
+    /// durable cursor — `chat_messages` is a pure export/index projection and
+    /// carries no app-owned state. `nil` until the summarizer runs.
+    public let summary: String?
 
     public init(
         cursor: ChatTranscriptCursor,
@@ -524,18 +525,18 @@ public struct PersistedChatTranscriptItem: Hashable, Sendable, Codable {
         projectedEventJSON: String?,
         projectedPlainText: String,
         createdAt: Date,
-        cachedResponseSummary: String?
+        summary: String?
     ) {
         self.cursor = cursor
         self.item = item
         self.projectedEventJSON = projectedEventJSON
         self.projectedPlainText = projectedPlainText
         self.createdAt = createdAt
-        self.cachedResponseSummary = cachedResponseSummary
+        self.summary = summary
     }
 
-    /// Source-compatible initializer for callers that do not have a cached
-    /// summary (newly appended rows and existing test fixtures).
+    /// Source-compatible initializer for callers that do not have a summary
+    /// (newly appended rows and existing test fixtures).
     public init(
         cursor: ChatTranscriptCursor,
         item: ChatTranscriptItem,
@@ -548,7 +549,7 @@ public struct PersistedChatTranscriptItem: Hashable, Sendable, Codable {
         self.projectedEventJSON = projectedEventJSON
         self.projectedPlainText = projectedPlainText
         self.createdAt = createdAt
-        self.cachedResponseSummary = nil
+        self.summary = nil
     }
 }
 

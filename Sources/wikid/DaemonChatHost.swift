@@ -453,17 +453,15 @@ final class DaemonChatHost: @unchecked Sendable {
     ) {
         guard let store = storeResolver(wikiID) else { return }
 
-        let messages: [ChatMessage]
+        // v54 (#1266): pending summaries are detected on the durable
+        // transcript (`chat_transcript_items`), the same rows the outline
+        // reads — not on the compatibility `chat_messages` projection.
+        let pending: [(cursor: ChatTranscriptCursor, text: String)]
         do {
-            messages = try store.chatMessages(chatID: chatID)
+            pending = try Self.pendingSummaryTargets(chatID: chatID, store: store)
         } catch {
-            DebugLog.store("DaemonChatHost.summarizePendingMessages: chatMessages failed: \(error)")
+            DebugLog.store("DaemonChatHost.summarizePendingMessages: transcript read failed: \(error)")
             return
-        }
-
-        let pending = messages.filter { msg in
-            msg.summary == nil
-                && (MessageSummarizer.textToSummarize(from: msg.event)?.isEmpty == false)
         }
         guard !pending.isEmpty else { return }
 
@@ -498,6 +496,26 @@ final class DaemonChatHost: @unchecked Sendable {
                 DebugLog.agent("DaemonChatHost: summarization preparation failed: \(error)")
             }
         }
+    }
+
+    /// Read the full durable transcript (paged) and extract the summarizer's
+    /// pending set — unsummarized assistant items with their summarizable
+    /// text, keyed by the cursor `updateMessageSummary` writes to.
+    private static func pendingSummaryTargets(
+        chatID: ChatID, store: GRDBWikiStore
+    ) throws -> [(cursor: ChatTranscriptCursor, text: String)] {
+        var items: [PersistedChatTranscriptItem] = []
+        var after: ChatTranscriptCursor?
+        // Page budget: 1000 pages × 200 items is far beyond any real
+        // transcript; guards against a concurrent-writer livelock.
+        for _ in 0..<1000 {
+            let page = try store.readChatTranscriptPage(
+                chatID: chatID, after: after, limit: 200)
+            items.append(contentsOf: page.items)
+            guard let next = page.nextCursor else { break }
+            after = next
+        }
+        return MessageSummarizer.pendingSummaryTargets(from: items)
     }
 
     /// Upgrade the provisional chat title (durable-chat identity, first-send
@@ -581,15 +599,16 @@ final class DaemonChatHost: @unchecked Sendable {
 
     @MainActor
     private static func writeDefaultSummaries(
-        chatID: ChatID, pending: [ChatMessage], store: GRDBWikiStore
+        chatID: ChatID,
+        pending: [(cursor: ChatTranscriptCursor, text: String)],
+        store: GRDBWikiStore
     ) {
-        for msg in pending {
-            guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
-            let summary = MessageSummarizer.defaultSummary(for: text)
+        for target in pending {
+            let summary = MessageSummarizer.defaultSummary(for: target.text)
             guard !summary.isEmpty else { continue }
             do {
                 try store.updateMessageSummary(
-                    chatID: chatID, messageID: msg.id,
+                    chatID: chatID, cursor: target.cursor,
                     summary: summary, kind: .defaultTruncation)
             } catch {
                 DebugLog.store("DaemonChatHost: summary write failed: \(error)")
@@ -601,17 +620,16 @@ final class DaemonChatHost: @unchecked Sendable {
     @MainActor
     private static func runModelSummarization(
         chatID: ChatID,
-        pending: [ChatMessage],
+        pending: [(cursor: ChatTranscriptCursor, text: String)],
         services: any AgentProviderServices,
         preparation: AgentOperationPreparation,
         store: GRDBWikiStore
     ) async {
-        for msg in pending {
-            guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
+        for target in pending {
             let summary: String
             do {
                 guard let value = try await services.modelSummary(
-                    text: text,
+                    text: target.text,
                     preparation: preparation) else { continue }
                 summary = value
             } catch {
@@ -620,7 +638,7 @@ final class DaemonChatHost: @unchecked Sendable {
             }
             do {
                 try store.updateMessageSummary(
-                    chatID: chatID, messageID: msg.id,
+                    chatID: chatID, cursor: target.cursor,
                     summary: summary, kind: .model)
             } catch {
                 DebugLog.store("DaemonChatHost.runModelSummarization: write failed: \(error)")

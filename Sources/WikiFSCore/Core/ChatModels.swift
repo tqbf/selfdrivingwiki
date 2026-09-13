@@ -139,7 +139,9 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     }
 }
 
-/// Which summarizer produced a `chat_messages.summary` row. The raw values
+/// Which summarizer produced a transcript-item `summary` (chat-summary plan
+/// §4.2; stored in `chat_transcript_items.summary_kind` since v54, #1266).
+/// The raw values
 /// are EXPLICIT and must match the `summary_kind` column spec exactly —
 /// without them Swift would derive the rawValue from the case name
 /// (`"defaultTruncation"`), mismatching the column and breaking round-trips
@@ -166,19 +168,10 @@ public struct ChatMessage: Identifiable, Equatable, Sendable {
     public var id: PageID
     public var chatID: ChatID
     /// Dense, 0-based per-chat ordering. Assigned by the store on append.
+    /// The one-based durable transcript cursor is `seq + 1`.
     public var seq: Int
     public var event: AgentEvent
     public var createdAt: Date
-    /// Cached one-line summary for the message (chat-summary plan §4.2).
-    /// Written once per turn via `updateMessageSummary` and never recomputed;
-    /// feeds the outline's response text. `nil` until the summarizer runs.
-    public var summary: String?
-    /// Which summarizer produced `summary`. `nil` alongside `summary`. Stored
-    /// as `ChatMessageSummaryKind.rawValue` in the `summary_kind` column.
-    public var summaryKind: ChatMessageSummaryKind?
-    /// When the summary was written, for staleness display. `nil` alongside
-    /// `summary`.
-    public var summaryAt: Date?
     /// True when this row is a mid-generation streaming checkpoint not yet
     /// finalized (#826). Draft rows decode to a normal `.assistantText` and
     /// render as the (partial) assistant message; the flag is available for an
@@ -188,9 +181,6 @@ public struct ChatMessage: Identifiable, Equatable, Sendable {
 
     public init(
         id: PageID, chatID: ChatID, seq: Int, event: AgentEvent, createdAt: Date,
-        summary: String? = nil,
-        summaryKind: ChatMessageSummaryKind? = nil,
-        summaryAt: Date? = nil,
         isDraft: Bool = false
     ) {
         self.id = id
@@ -198,9 +188,6 @@ public struct ChatMessage: Identifiable, Equatable, Sendable {
         self.seq = seq
         self.event = event
         self.createdAt = createdAt
-        self.summary = summary
-        self.summaryKind = summaryKind
-        self.summaryAt = summaryAt
         self.isDraft = isDraft
     }
 }

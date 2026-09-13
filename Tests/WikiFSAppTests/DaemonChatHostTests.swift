@@ -209,25 +209,46 @@ struct DaemonChatHostTests {
             databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
 
         let chat = try store.createChat(kind: .edit, title: "Test")
-        _ = try store.appendChatMessages(chatID: chat.id, events: [
-            .userText("What is this wiki about?"),
-            .assistantText("This is a test wiki about software engineering. It covers various topics."),
+        // v54 (#1266): summaries live on the durable transcript items — seed
+        // through `appendChatTranscriptItems`.
+        let inserted = try store.appendChatTranscriptItems(chatID: chat.id, items: [
+            .message(ChatTranscriptMessageItem(
+                messageID: ChatMessageID(rawValue: "user-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                role: .user,
+                text: "What is this wiki about?",
+                createdAt: Date())),
+            .message(ChatTranscriptMessageItem(
+                messageID: ChatMessageID(rawValue: "assistant-1"),
+                turnID: ChatTurnID(rawValue: "turn-2"),
+                role: .assistant,
+                text: "This is a test wiki about software engineering. It covers various topics.",
+                createdAt: Date())),
         ])
 
-        // Verify the message has no summary yet
-        var messages = try store.chatMessages(chatID: chat.id)
-        #expect(messages.allSatisfy { $0.summary == nil })
+        // Verify the items have no summary yet
+        var items = try store
+            .readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+            .items
+        #expect(items.allSatisfy { $0.summary == nil })
 
         // Write a summary (what summarizePendingMessages does)
-        let assistantMsg = messages.first { $0.event.chatRole == "assistant" }!
+        let assistantMsg = inserted.first { item in
+            if case .message(let message) = item.item { return message.role == .assistant }
+            return false
+        }!
         try store.updateMessageSummary(
-            chatID: chat.id, messageID: assistantMsg.id,
+            chatID: chat.id, cursor: assistantMsg.cursor,
             summary: "Test wiki overview", kind: .defaultTruncation)
 
-        messages = try store.chatMessages(chatID: chat.id)
-        let summarized = messages.first { $0.id == assistantMsg.id }!
+        items = try store
+            .readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+            .items
+        let summarized = items.first { $0.cursor == assistantMsg.cursor }!
         #expect(summarized.summary == "Test wiki overview")
-        #expect(summarized.summaryKind == .defaultTruncation)
+        #expect(store.scalarText(
+            "SELECT summary_kind FROM chat_transcript_items WHERE chat_id = '\(chat.id.rawValue)' AND cursor = \(assistantMsg.cursor.rawValue);")
+            == ChatMessageSummaryKind.defaultTruncation.rawValue)
     }
 
     @Test func daemonControllerPathDisablesLegacyStreamingCheckpointSink() async throws {
@@ -1195,11 +1216,22 @@ struct DaemonChatHostTests {
             == ChatSummary.title(fromFirstMessage: question))
 
         // Deterministic post-turn state: the opening question and the first
-        // reply are in chat_messages (the controller's own persistence may
-        // also land them; the title pass reads whatever is there).
-        _ = try store.appendChatMessages(chatID: empty.id, events: [
-            .userText(question),
-            .assistantText("A venturi mask entrains room air with an oxygen jet."),
+        // reply are in the durable transcript (v54 #1266 — the rows the
+        // summarizer pass scans; the durable append mirrors them into
+        // `chat_messages` for the title pass).
+        _ = try store.appendChatTranscriptItems(chatID: empty.id, items: [
+            .message(ChatTranscriptMessageItem(
+                messageID: ChatMessageID(rawValue: "user-1"),
+                turnID: ChatTurnID(rawValue: "turn-model-title"),
+                role: .user,
+                text: question,
+                createdAt: Date())),
+            .message(ChatTranscriptMessageItem(
+                messageID: ChatMessageID(rawValue: "assistant-1"),
+                turnID: ChatTurnID(rawValue: "turn-model-title"),
+                role: .assistant,
+                text: "A venturi mask entrains room air with an oxygen jet.",
+                createdAt: Date())),
         ])
         host.summarizePendingMessagesForTesting(chatID: empty.id, wikiID: wikiID)
 

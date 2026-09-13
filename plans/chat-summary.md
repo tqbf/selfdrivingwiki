@@ -4,8 +4,8 @@
 > Swift 6.0). Companion to `plans/chat-and-persistence.md` and
 > `plans/event-bus.md`.
 >
-> **STATUS: implementation in progress.** Branch `chat-summary`, PR — never
-> push/merge `main`.
+> **STATUS: implementation complete.** The per-message summary shipped at
+> v40 and moved onto the durable transcript row at v54 (below).
 >
 > **Revision note (v2):** This version corrects the Default-vs-Model encoding
 > (§5/§6 — `provider(forStage:)` is non-optional and falls back to the global
@@ -14,6 +14,37 @@
 > (§3.5/§8), makes the model backend injectable so AC.4's model half is
 > automated (§4.3), adds an explicit AC↔test table (§9), pins explicit enum raw
 > values (§4.1), and mirrors the real `migrateV35ToV36` migration idiom (§3.3).
+>
+> **Revision note (v54, issue #1266):** The per-message summary moved from
+> `chat_messages` to `chat_transcript_items`. The summary belongs to the
+> durable transcript row, and the outline reads transcript pages. The v54
+> shape:
+>
+> - `chat_transcript_items` carries `summary`, `summary_kind`, and
+>   `summary_at`.
+> - `updateMessageSummary` takes a `ChatTranscriptCursor`, not a `PageID`.
+>   The cursor keys the durable row; the compatibility `PageID` never enters
+>   the summary path.
+> - The ordinal join in `readChatTranscriptPage` is deleted. The read selects
+>   `chat_transcript_items.summary` directly.
+> - `cachedResponseSummaries` in `ChatDetailPresentation` is renamed to
+>   `responseSummaries`. It reads the transcript item's own field, and the
+>   display-time warning strip is gone.
+> - `chat_messages` is a pure export/index projection. v54 dropped its summary
+>   columns, so it holds no app-owned state. The fresh-schema creator and the
+>   migrated shape agree.
+> - The summarizer pending scan reads transcript pages, not `chatMessages()`.
+>   `MessageSummarizer.pendingSummaryTargets` extracts the pending set; the
+>   write-back targets the item's cursor.
+> - The v54 migration also rewrote skills-budget-warning rows once: stored
+>   titles in `chats` (plus the `chat_search` sidecar title copy), and cached
+>   summaries during the move. A content-bearing title keeps its cleaned
+>   remainder. A warning-only title is rewritten to the provisional question
+>   title, or "New Chat" when no question is recoverable. A warning-only
+>   summary returns to unsummarized, so the summarizer recomputes it clean.
+>   After this pass the display-time strips in `ChatsCellView.rowTitle` and
+>   `buildOutlineEntries`, and their tests, deleted cleanly — the expiry the
+>   issue asked for.
 
 ---
 
@@ -24,7 +55,8 @@ There are **two existing "summary" surfaces** — do not confuse them:
 | Surface | Granularity | Storage | Compute | Status |
 |---|---|---|---|---|
 | `ChatSummary.summary` / `summaryAt` | **One row per CHAT** (issue #411) | `chats.summary` + `chats.summary_at` columns | first-sentence truncation, run once in `AgentLauncher.finish()` | **Removed** — schema v53, 2026-09-12 (#1262): the column is no longer read anywhere. |
-| `ChatOutlineEntry.response` | **One per turn** (UI-only, recomputed on render) | none — recomputed every render via `ChatSummary.summaryExtract` | first-sentence truncation, on the fly | **Shipped.** This is the site we extend. |
+| Per-message summary (`PersistedChatTranscriptItem.summary`) | **One row per assistant transcript item** (this feature) | `chat_transcript_items.summary` + `summary_kind` + `summary_at` (v54, #1266; was `chat_messages` v40–v53) | Default truncation or pinned model, computed once | **Shipped; moved onto the transcript row at v54.** |
+| `ChatOutlineEntry.response` | **One per turn** (UI-only, recomputed on render) | none — recomputed every render via `ChatSummary.summaryExtract` | first-sentence truncation, on the fly | **Shipped.** |
 
 **This feature** adds a **per-message** (`chat_messages`) summary that is:
 

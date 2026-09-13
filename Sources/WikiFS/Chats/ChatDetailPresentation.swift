@@ -120,9 +120,9 @@ struct ChatDetailPresentation {
         )
         let projectedOutlineEntries = buildOutlineEntries(
             displayTranscript: displayTranscript,
-            cachedResponseSummaries: usesLiveTranscript
+            responseSummaries: usesLiveTranscript
                 ? [:]
-                : cachedResponseSummaries(from: persistedTranscriptItems)
+                : responseSummaries(from: persistedTranscriptItems)
         )
         let outlineEntries: [ChatOutlineEntry]
         if isLiveChat, projectedOutlineEntries.isEmpty, !persistedTranscriptItems.isEmpty {
@@ -139,7 +139,7 @@ struct ChatDetailPresentation {
             )
             outlineEntries = buildOutlineEntries(
                 displayTranscript: persistedDisplayTranscript,
-                cachedResponseSummaries: cachedResponseSummaries(from: persistedTranscriptItems)
+                responseSummaries: responseSummaries(from: persistedTranscriptItems)
             )
         } else {
             outlineEntries = projectedOutlineEntries
@@ -268,7 +268,7 @@ struct ChatDetailPresentation {
 
     static func buildOutlineEntries(
         displayTranscript: ChatDisplayTranscript,
-        cachedResponseSummaries: [ChatMessageID: String] = [:]
+        responseSummaries: [ChatMessageID: String] = [:]
     ) -> [ChatOutlineEntry] {
         displayTranscript.sections.compactMap { section -> ChatOutlineEntry? in
             guard case .turn(let turn) = section,
@@ -280,19 +280,19 @@ struct ChatDetailPresentation {
                 if case .assistantMessage = row { return true }
                 return false
             }
-            // Cached summaries predate this projection, so they are sanitized
-            // here: a stale cached skill warning must not re-enter the
-            // outline through the back door. When the cached value cleans to
-            // empty, fall back to the (already cleaned) assistant row text.
-            let cachedSummary: String?
+            // v54 (#1266): the cached summary lives on the durable transcript
+            // row and was stripped of preamble at derivation time — no
+            // display-time preamble compensation. Absent summaries fall back
+            // to on-the-fly extraction from the (already cleaned) assistant
+            // row text.
+            let responseSummary: String?
             if case .assistantMessage(let responseID, _, _, _, _) = response {
-                cachedSummary = cachedResponseSummaries[responseID]
-                    .flatMap { AgentPresentationPreamble.visibleText($0, policy: .completeOnly) }
+                responseSummary = responseSummaries[responseID]
                     .flatMap { $0.isEmpty ? nil : $0 }
             } else {
-                cachedSummary = nil
+                responseSummary = nil
             }
-            let summary = cachedSummary ?? response.map {
+            let summary = responseSummary ?? response.map {
                 ChatSummary.summaryExtract(from: $0.textForSearch, maxLength: 200)
             }
             return ChatOutlineEntry(
@@ -305,16 +305,15 @@ struct ChatDetailPresentation {
         }
     }
 
-    /// Summary cache and display row identity meet only at the persisted
-    /// transcript boundary. `cachedResponseSummary` was joined by cursor/seq;
-    /// this extracts the transcript message ID from that same row rather than
-    /// converting the unrelated compatibility `chat_messages.id` namespace.
-    private static func cachedResponseSummaries(
+    /// Summary and display row identity meet only at the persisted transcript
+    /// boundary. Since v54 (#1266) the summary lives on the transcript item
+    /// itself; this keys it by the transcript message ID the display row uses.
+    private static func responseSummaries(
         from persistedItems: [PersistedChatTranscriptItem]
     ) -> [ChatMessageID: String] {
         var summaries: [ChatMessageID: String] = [:]
         for persistedItem in persistedItems {
-            guard let summary = persistedItem.cachedResponseSummary,
+            guard let summary = persistedItem.summary,
                   case .message(let message) = persistedItem.item,
                   message.role == .assistant
             else { continue }

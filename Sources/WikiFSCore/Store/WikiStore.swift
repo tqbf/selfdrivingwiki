@@ -1033,13 +1033,15 @@ public protocol WikiStore: AnyObject, Sendable {
     /// One chat summary by id. Throws `.notFound` if no chat has `id`.
     func getChat(id: ChatID) throws -> ChatSummary
 
-    /// Write the cached one-line summary for a single assistant message
-    /// (chat-summary plan §3.5). The chat row is the change-emission resource
-    /// (there is no `.message` resource kind); emits `.chat .updated` with the
-    /// chat's id. Idempotent at the SQL level; the caller short-circuits on a
-    /// non-nil cached summary to enforce compute-once (AC.6).
+    /// Write the cached one-line summary for a single transcript item
+    /// (chat-summary plan §3.5; v54, issue #1266 — the summary lives on the
+    /// durable `chat_transcript_items` row, keyed by cursor). The chat row is
+    /// the change-emission resource (there is no `.message` resource kind);
+    /// emits `.chat .updated` with the chat's id. Idempotent at the SQL level;
+    /// the caller short-circuits on a non-nil cached summary to enforce
+    /// compute-once (AC.6).
     func updateMessageSummary(
-        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+        chatID: ChatID, cursor: ChatTranscriptCursor, summary: String, kind: ChatMessageSummaryKind
     ) throws
 
     /// Upsert a streaming assistant row under a stable draft handle (#826).

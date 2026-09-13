@@ -442,9 +442,8 @@ final class ChatsCellView: NSTableCellView {
         iconView.image = NSImage(systemSymbolName: ResourceKind.chat.systemImageName,
                                   accessibilityDescription: nil)
         // Title: the summary-model's one-line summary when the summarizer
-        // produced one, otherwise the stored title — the user's question —
-        // with the known injected skills-budget warning stripped (rows created
-        // before the derivation fix carry it). Subtitle: the creation date.
+        // produced one, otherwise the stored title — the user's question.
+        // Subtitle: the creation date.
         let title = Self.rowTitle(for: chat)
         titleField.stringValue = title
         toolTip = title
@@ -463,15 +462,16 @@ final class ChatsCellView: NSTableCellView {
 
     /// The row's title line: the chat's stored title — the user's question,
     /// or the model-generated title when the summarizer stage is configured —
-    /// with the known skills-budget warning stripped. A title that cleans to
-    /// nothing (warning-only rows created before the derivation fix) falls
-    /// back to "New Chat". Mirrors the tab title and chat header so every
-    /// surface names the chat identically. The cached response summary
-    /// (`chats.summary`) deliberately does NOT appear: it summarizes the
-    /// answer, not the chat, and previously shadowed the title here. Pure
-    /// seam so the contract is testable without hosting AppKit views.
+    /// with an empty title falling back to "New Chat". v54 (#1266): the
+    /// skills-budget preamble strip is gone — the v54 migration rewrote
+    /// warning-tainted titles in place, so stored titles are clean.
+    /// Mirrors the tab title and chat header so every surface names the chat
+    /// identically. The per-message summary deliberately does NOT appear: it
+    /// summarizes the answer, not the chat, and previously shadowed the title
+    /// here. Pure seam so the contract is testable without hosting AppKit
+    /// views.
     nonisolated static func rowTitle(for chat: ChatSummary) -> String {
-        AgentPresentationPreamble.visibleText(chat.title, policy: .completeOnly) ?? "New Chat"
+        chat.title.isEmpty ? "New Chat" : chat.title
     }
 
     /// The row's subtitle: the chat's creation date, per the row design

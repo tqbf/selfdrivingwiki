@@ -578,9 +578,9 @@ struct StoreEmissionTests {
         #expect(events.last?.id == chat.id.rawValue)
     }
 
-    /// Per-message summary emit (chat-summary plan §3.5 + AC.2). The new
+    /// Per-message summary emit (chat-summary plan §3.5 + AC.2). The
     /// `updateMessageSummary` mutator MUST route through `mutate()` and emit a
-    /// `.chat .updated` event on the chat the message belongs to (the
+    /// `.chat .updated` event on the chat the item belongs to (the
     /// projection + model subscribe to `.chat` changes; there is no
     /// `.message` resource kind). Modeled on
     /// `appendChatMessagesEmitsChatUpdated` above.
@@ -588,11 +588,17 @@ struct StoreEmissionTests {
         let (store, _, rec) = try makeHarness()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")
         try await drain(rec)
-        let messages = try store.appendChatMessages(
-            chatID: chat.id, events: [AgentEvent.assistantText("text.")])
+        let inserted = try store.appendChatTranscriptItems(
+            chatID: chat.id,
+            items: [.message(ChatTranscriptMessageItem(
+                messageID: ChatMessageID(rawValue: "assistant-1"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                role: .assistant,
+                text: "text.",
+                createdAt: Date()))])
         try await drain(rec)
         try store.updateMessageSummary(
-            chatID: chat.id, messageID: messages[0].id,
+            chatID: chat.id, cursor: inserted[0].cursor,
             summary: "one-liner.", kind: .defaultTruncation)
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .chat)

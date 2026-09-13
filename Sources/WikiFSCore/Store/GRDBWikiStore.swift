@@ -158,7 +158,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 53
+    private static let currentSchemaVersion = 54
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1565,6 +1565,30 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             version = 53
         }
 
+        // v53→v54: the per-message summary moves onto `chat_transcript_items`
+        // (issue #1266). The summary is consumed by transcript reads (the chat
+        // outline), so it belongs on the durable transcript row, keyed by the
+        // durable cursor — not on the compatibility `chat_messages`
+        // projection, keyed by an unrelated `PageID`. The step:
+        //   1. adds `summary`/`summary_kind`/`summary_at` to
+        //      `chat_transcript_items`,
+        //   2. backfills them from `chat_messages` through the documented
+        //      seq↔cursor mapping (`cursor = seq + 1`),
+        //   3. rewrites skills-budget-warning rows (titles + summaries)
+        //      written before the derivation/summarizer seams stripped the
+        //      warning themselves (7937b383 / bb3e7884), so the display-time
+        //      compensations and their tests delete cleanly,
+        //   4. drops the summary columns from `chat_messages`, leaving it a
+        //      pure export/index projection with no app-owned state.
+        if version < 54 {
+            try db.inTransaction(.immediate) {
+                try Self.moveMessageSummaryToTranscriptItemsV54(in: db)
+                try db.execute(sql: "PRAGMA user_version = 54;")
+                return .commit
+            }
+            version = 54
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -2245,7 +2269,13 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS chat_turns_claim_id ON chat_turns(claim_id) WHERE claim_id IS NOT NULL;")
     }
 
-    private static func createChatTranscriptItemsV46(in db: Database) throws {
+    /// The CURRENT transcript-items shape (fresh schema path). Fresh databases
+    /// stamp `user_version = currentSchemaVersion` directly without running
+    /// the ladder, so this creator must always carry the latest columns — the
+    /// v54 `summary` trio (#1266). The ladder's v46 rebuild uses the
+    /// historical `createChatPhase2TablesV46` shape and gains the columns
+    /// through the v54 migration step instead.
+    private static func createChatTranscriptItemsV54(in db: Database) throws {
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chat_transcript_items (
             chat_id               TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -2255,6 +2285,9 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             projected_event_json  TEXT,
             projected_text        TEXT NOT NULL DEFAULT '',
             created_at            REAL NOT NULL,
+            summary               TEXT,
+            summary_kind          TEXT,
+            summary_at            REAL,
             PRIMARY KEY (chat_id, cursor)
         ) WITHOUT ROWID;
         """)
@@ -2939,6 +2972,150 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    /// The v53→54 migration step (issue #1266 — summary onto transcript
+    /// items + bounded legacy preamble compensations). Idempotent: every
+    /// schema change is guarded, and the backfills converge.
+    private static func moveMessageSummaryToTranscriptItemsV54(in db: Database) throws {
+        // 0. The v46 rebuild guarantees this table exists on every real
+        //    ladder path; create it for partial synthetic schemas so the
+        //    step stays total (at the historical v46 shape — the ALTERs
+        //    below then converge it).
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS chat_transcript_items (
+            chat_id               TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            cursor                INTEGER NOT NULL,
+            item_kind             TEXT NOT NULL,
+            item_json             TEXT NOT NULL,
+            projected_event_json  TEXT,
+            projected_text        TEXT NOT NULL DEFAULT '',
+            created_at            REAL NOT NULL,
+            PRIMARY KEY (chat_id, cursor)
+        ) WITHOUT ROWID;
+        """)
+
+        // 1. Add the summary columns. Guarded so fresh-schema databases
+        //    (`createChatTranscriptItemsV54` already carries the trio) and
+        //    re-runs pass through.
+        if !(try hasColumn("summary", on: "chat_transcript_items", in: db)) {
+            try db.execute(sql: "ALTER TABLE chat_transcript_items ADD COLUMN summary TEXT;")
+        }
+        if !(try hasColumn("summary_kind", on: "chat_transcript_items", in: db)) {
+            try db.execute(sql: "ALTER TABLE chat_transcript_items ADD COLUMN summary_kind TEXT;")
+        }
+        if !(try hasColumn("summary_at", on: "chat_transcript_items", in: db)) {
+            try db.execute(sql: "ALTER TABLE chat_transcript_items ADD COLUMN summary_at REAL;")
+        }
+
+        // 2. Backfill through the documented seq↔cursor mapping: the dense
+        //    zero-based `chat_messages.seq` is the one-based durable
+        //    transcript cursor minus one. Legacy-only chats (no transcript
+        //    items) simply have nothing to backfill into. Guarded on the
+        //    source trio existing: `chat_messages` carried it from v40
+        //    through v53, but a schema created fresh at ≥54 never had it
+        //    (and a v52-era DB reaching this step through the ladder cannot
+        //    backfill what was already dropped).
+        if try hasColumn("summary", on: "chat_messages", in: db),
+           try hasColumn("summary_kind", on: "chat_messages", in: db),
+           try hasColumn("summary_at", on: "chat_messages", in: db) {
+            try db.execute(sql: """
+            UPDATE chat_transcript_items
+            SET summary = (
+                    SELECT m.summary FROM chat_messages AS m
+                    WHERE m.chat_id = chat_transcript_items.chat_id
+                      AND m.seq = chat_transcript_items.cursor - 1),
+                summary_kind = (
+                    SELECT m.summary_kind FROM chat_messages AS m
+                    WHERE m.chat_id = chat_transcript_items.chat_id
+                      AND m.seq = chat_transcript_items.cursor - 1),
+                summary_at = (
+                    SELECT m.summary_at FROM chat_messages AS m
+                    WHERE m.chat_id = chat_transcript_items.chat_id
+                      AND m.seq = chat_transcript_items.cursor - 1)
+            WHERE summary IS NULL;
+            """)
+        }
+
+        // 3a. Sanitize the moved summaries. Rows written before bb3e7884 can
+        //    carry the skills-budget warning the summarizer now strips at
+        //    derivation time. Warning-only summaries NULL back to
+        //    unsummarized so the summarizer recomputes them clean.
+        let movedSummaries = try Row.fetchAll(db, sql: """
+        SELECT chat_id, cursor, summary FROM chat_transcript_items
+        WHERE summary IS NOT NULL;
+        """)
+        for row in movedSummaries {
+            let chatID: String = row["chat_id"]
+            let cursor: Int64 = row["cursor"]
+            let raw: String = row["summary"]
+            let cleaned = AgentPresentationPreamble.visibleText(raw, policy: .completeOnly)
+            if let cleaned, !cleaned.isEmpty {
+                guard cleaned != raw else { continue }
+                try db.execute(sql: """
+                UPDATE chat_transcript_items SET summary = ?
+                WHERE chat_id = ? AND cursor = ?;
+                """, arguments: [cleaned, chatID, cursor])
+            } else {
+                // Warning-only (visibleText yields nil when nothing
+                // substantive remains) or empty: unsummarize the row.
+                try db.execute(sql: """
+                UPDATE chat_transcript_items
+                SET summary = NULL, summary_kind = NULL, summary_at = NULL
+                WHERE chat_id = ? AND cursor = ?;
+                """, arguments: [chatID, cursor])
+            }
+        }
+
+        // 3b. Sanitize stored titles. Rows written before 7937b383 store the
+        //    warning as (part of) the title. Warning-only titles rewrite to
+        //    the provisional question title (exactly what first-send titling
+        //    would have written); when no question is recoverable, "New Chat"
+        //    — today's display fallback. The `chat_search` sidecar carries a
+        //    title copy, so it is rewritten in the same pass.
+        let chatTitles = try Row.fetchAll(db, sql: "SELECT id, title FROM chats;")
+        for row in chatTitles {
+            let chatID: String = row["id"]
+            let raw: String = row["title"]
+            guard !raw.isEmpty else { continue }
+            let cleaned = AgentPresentationPreamble.visibleText(raw, policy: .completeOnly)
+            let replacement: String?
+            switch cleaned {
+            case .some(let visible) where !visible.isEmpty && visible != raw:
+                // Content-bearing tainted title: keep the cleaned remainder.
+                replacement = visible
+            case .some(let visible) where !visible.isEmpty:
+                // Clean title, already correct.
+                replacement = nil
+            case .some, .none:
+                // Warning-only title (visibleText yields nil when nothing
+                // substantive remains): recover the provisional question
+                // title — exactly what first-send titling would have
+                // written; when no question is recoverable, "New Chat"
+                // (the display fallback these rows rendered as before).
+                let firstUserText = try String.fetchOne(db, sql: """
+                SELECT text FROM chat_messages
+                WHERE chat_id = ? AND role = 'user'
+                ORDER BY seq ASC LIMIT 1;
+                """, arguments: [chatID])
+                let provisional = firstUserText
+                    .map { ChatSummary.title(fromFirstMessage: $0) } ?? ""
+                replacement = provisional.isEmpty ? "New Chat" : provisional
+            }
+            guard let replacement else { continue }
+            try db.execute(sql: "UPDATE chats SET title = ? WHERE id = ?;",
+                           arguments: [replacement, chatID])
+            try db.execute(sql: "UPDATE chat_search SET title = ? WHERE chat_id = ?;",
+                           arguments: [replacement, chatID])
+        }
+
+        // 4. Drop the summary columns from `chat_messages`. After this the
+        //    compatibility projection carries no app-owned state.
+        let messageColumns = try tableColumnInfo("chat_messages", in: db)
+        for column in ["summary", "summary_kind", "summary_at"]
+        where messageColumns.contains(column) {
+            try db.execute(sql: "ALTER TABLE chat_messages DROP COLUMN \(column);")
+        }
+    }
+
     /// The v35→36 migration step (issue #411 — chat summary).
     private static func migrateV35ToV36(in db: Database) throws {
         let columns = try tableColumnInfo("chats", in: db)
@@ -3419,9 +3596,6 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             event_json  TEXT NOT NULL,
             text        TEXT NOT NULL DEFAULT '',
             created_at  REAL NOT NULL,
-            summary     TEXT,
-            summary_kind TEXT,
-            summary_at  REAL,
             is_draft    INTEGER NOT NULL DEFAULT 0,
             draft_handle TEXT
         );
@@ -3451,7 +3625,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         );
         """)
         try createChatTurnsV48(in: db)
-        try createChatTranscriptItemsV46(in: db)
+        try createChatTranscriptItemsV54(in: db)
 
         // v30: page versions (W0).
         try db.execute(sql: """
@@ -9841,18 +10015,16 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             ) ?? 0
             let checkpoint = ChatTranscriptCursor(rawValue: checkpointRaw)
             let lowerBound = cursor?.rawValue ?? 0
-            // `chat_messages` is the compatibility projection: its dense
-            // zero-based seq is the one-based durable transcript cursor minus one.
+            // v54 (#1266): the summary lives on the durable transcript row
+            // itself; no compatibility join is needed.
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                SELECT ti.chat_id, ti.cursor, ti.item_json, ti.projected_event_json,
-                       ti.projected_text, ti.created_at, m.summary AS cached_response_summary
-                FROM chat_transcript_items AS ti
-                LEFT JOIN chat_messages AS m
-                    ON m.chat_id = ti.chat_id AND m.seq = ti.cursor - 1
-                WHERE ti.chat_id = ? AND ti.cursor > ?
-                ORDER BY ti.cursor ASC
+                SELECT chat_id, cursor, item_json, projected_event_json,
+                       projected_text, created_at, summary
+                FROM chat_transcript_items
+                WHERE chat_id = ? AND cursor > ?
+                ORDER BY cursor ASC
                 LIMIT ?;
                 """,
                 arguments: [chatID.rawValue, lowerBound, max(0, limit)]
@@ -9922,7 +10094,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     public func chatMessages(chatID: ChatID) throws -> [ChatMessage] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
-            SELECT id, seq, event_json, created_at, summary, summary_kind, summary_at, is_draft
+            SELECT id, seq, event_json, created_at, is_draft
             FROM chat_messages
             WHERE chat_id = ? ORDER BY seq ASC;
             """, arguments: [chatID.rawValue])
@@ -9934,21 +10106,12 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                     let data = json.data(using: .utf8),
                     let event = DebugLog.trying("listChatMessages", operation: { try decoder.decode(AgentEvent.self, from: data) })
                 else { continue }
-                // Decode-if-present for the nullable summary columns
-                // (chat-summary plan §3.4). Pre-v40 rows and unsummarized
-                // messages surface as nil.
-                let summary: String? = row["summary"]
-                let summaryKindRaw: String? = row["summary_kind"]
-                let summaryAtDouble: Double? = row["summary_at"]
                 out.append(ChatMessage(
                     id: PageID(rawValue: row["id"]),
                     chatID: chatID,
                     seq: row["seq"],
                     event: event,
                     createdAt: Date(timeIntervalSince1970: row["created_at"]),
-                    summary: summary,
-                    summaryKind: summaryKindRaw.flatMap(ChatMessageSummaryKind.init(rawValue:)),
-                    summaryAt: summaryAtDouble.map { Date(timeIntervalSince1970: $0) },
                     isDraft: (row["is_draft"] as Int?) == 1
                 ))
             }
@@ -10126,8 +10289,11 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
-    /// Write the cached one-line summary for a single assistant message
-    /// (chat-summary plan §3.5). Routes through `mutate(event:_:)` and emits a
+    /// Write the cached one-line summary for a single transcript item
+    /// (chat-summary plan §3.5; v54, issue #1266 — the summary lives on the
+    /// durable `chat_transcript_items` row, keyed by the durable cursor, and
+    /// a missing cursor row is a silent no-op because the caller's pending
+    /// snapshot was stale). Routes through `mutate(event:_:)` and emits a
     /// `.chat .updated` event on the chat the message belongs to — the
     /// projection + model subscribe to `.chat` changes, and there is no
     /// standalone `.message` resource kind (`chat_messages` cascade-delete with
@@ -10135,17 +10301,17 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// row overwrites the cached values), but the caller is expected to
     /// short-circuit when `summary` is non-nil (compute-once, AC.6).
     public func updateMessageSummary(
-        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+        chatID: ChatID, cursor: ChatTranscriptCursor, summary: String, kind: ChatMessageSummaryKind
     ) throws {
         try mutate(event: { _ in
             self.localEvent(.chat, id: chatID.rawValue, change: .updated)
         }) { db in
             try db.execute(sql: """
-            UPDATE chat_messages
+            UPDATE chat_transcript_items
             SET summary = ?, summary_kind = ?, summary_at = ?
-            WHERE id = ?;
+            WHERE chat_id = ? AND cursor = ?;
             """, arguments: [summary, kind.rawValue,
-                            Date().timeIntervalSince1970, messageID.rawValue])
+                            Date().timeIntervalSince1970, chatID.rawValue, cursor.rawValue])
         }
     }
 
@@ -10797,14 +10963,14 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         let projectedEventJSON: String? = row["projected_event_json"]
         let projectedText: String = row["projected_text"]
         let createdAt: Double = row["created_at"]
-        let cachedResponseSummary: String? = row["cached_response_summary"]
+        let summary: String? = row["summary"]
         return PersistedChatTranscriptItem(
             cursor: cursor,
             item: item,
             projectedEventJSON: projectedEventJSON,
             projectedPlainText: projectedText,
             createdAt: Date(timeIntervalSince1970: createdAt),
-            cachedResponseSummary: cachedResponseSummary
+            summary: summary
         )
     }
 

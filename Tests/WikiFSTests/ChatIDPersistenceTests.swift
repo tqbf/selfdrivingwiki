@@ -355,6 +355,10 @@ struct ChatIDPersistenceTests {
             "4|projected_event_json|TEXT|0|NULL|0",
             "5|projected_text|TEXT|1|''|0",
             "6|created_at|REAL|1|NULL|0",
+            // v54 (#1266): the per-message summary lives on the durable row.
+            "7|summary|TEXT|0|NULL|0",
+            "8|summary_kind|TEXT|0|NULL|0",
+            "9|summary_at|REAL|0|NULL|0",
         ])
     }
 }

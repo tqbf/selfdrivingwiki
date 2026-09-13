@@ -504,18 +504,16 @@ struct ChatDetailPresentationTests {
                 )),
             ]
         )
-        let compatibilityAssistant = try #require(
-            store.chatMessages(chatID: chat.id).first { message in
-                message.event == .assistantText(assistantText)
-            }
-        )
-        // The compatibility message id is independently generated. This makes
-        // a PageID-to-ChatMessageID conversion unable to find the summary.
-        #expect(compatibilityAssistant.id.rawValue != assistantMessageID.rawValue)
-        #expect(compatibilityAssistant.seq == 1)
+        // v54 (#1266): the summary is written to the durable transcript row,
+        // keyed by the cursor.
+        let firstPage = try store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+        let target = try #require(firstPage.items.first { item in
+            guard case .message(let message) = item.item else { return false }
+            return message.messageID == assistantMessageID
+        })
         try store.updateMessageSummary(
             chatID: chat.id,
-            messageID: compatibilityAssistant.id,
+            cursor: target.cursor,
             summary: "Distinctive model summary.",
             kind: .model
         )
@@ -525,8 +523,7 @@ struct ChatDetailPresentationTests {
             guard case .message(let message) = item.item else { return false }
             return message.messageID == assistantMessageID
         })
-        #expect(persistedAssistant.cursor.rawValue - 1 == Int64(compatibilityAssistant.seq))
-        #expect(persistedAssistant.cachedResponseSummary == "Distinctive model summary.")
+        #expect(persistedAssistant.summary == "Distinctive model summary.")
         let presentation = ChatDetailPresentation.make(
             chatID: chat.id,
             chatResolution: .available(chat),
@@ -706,82 +703,13 @@ struct ChatDetailPresentationTests {
 
     // MARK: - Stale cached summaries vs. the known warning
 
-    /// A cached response summary predates the presentation projection. When
-    /// it contains the complete known skill warning it must not re-enter the
-    /// outline: a warning-only cache falls back to the cleaned row text, a
-    /// warning-plus-text cache uses its cleaned remainder, and an incomplete
-    /// final prefix stays (completeOnly semantics).
-    @Test func staleCachedWarningCannotReappearInOutline() {
-        let warning = AgentPresentationPreamble.knownWarningSentence
-        let turnID = ChatTurnID(rawValue: "turn-cache")
-        let promptRow = ChatDisplayRow.userMessage(
-            id: ChatMessageID(rawValue: "q"),
-            turnID: turnID,
-            text: "Question",
-            createdAt: .distantPast
-        )
-
-        func transcriptWithResponse(_ responseID: String, _ text: String) -> ChatDisplayTranscript {
-            ChatDisplayTranscript(sections: [
-                .turn(ChatDisplayTurn(
-                    id: .turn(
-                        turnID: turnID,
-                        firstRow: .message(ChatMessageID(rawValue: "q"))
-                    ),
-                    turnID: turnID,
-                    prompt: promptRow,
-                    rows: [
-                        promptRow,
-                        .assistantMessage(
-                            id: ChatMessageID(rawValue: responseID),
-                            turnID: turnID,
-                            text: text,
-                            createdAt: .distantPast,
-                            contentState: .final
-                        ),
-                    ]
-                )),
-            ])
-        }
-
-        // 1. Complete cached warning only → cleaned cache is empty → fall
-        //    back to the (already cleaned) assistant row summary.
-        let rowID = ChatMessageID(rawValue: "row-1")
-        let fallbackTranscript = transcriptWithResponse("row-1", "Tidal pools form twice daily.")
-        let fallback = ChatDetailPresentation.buildOutlineEntries(
-            displayTranscript: fallbackTranscript,
-            cachedResponseSummaries: [rowID: warning]
-        )
-        #expect(fallback.count == 1)
-        #expect(fallback[0].response == "Tidal pools form twice daily.")
-
-        // 2. Cached warning plus substantive text → cleaned cache wins
-        //    (precedence over the row extract).
-        let precedence = ChatDetailPresentation.buildOutlineEntries(
-            displayTranscript: transcriptWithResponse("row-2", "A different row body."),
-            cachedResponseSummaries: [ChatMessageID(rawValue: "row-2"): warning + "\n\nCached answer."]
-        )
-        #expect(precedence.count == 1)
-        #expect(precedence[0].response == "Cached answer.")
-
-        // 3. Incomplete prefix cached → preserved (never treated as the
-        //    complete warning).
-        let partial = "Warning: Skill descriptions were shortened"
-        let preserved = ChatDetailPresentation.buildOutlineEntries(
-            displayTranscript: transcriptWithResponse("row-3", partial),
-            cachedResponseSummaries: [ChatMessageID(rawValue: "row-3"): partial]
-        )
-        #expect(preserved.count == 1)
-        #expect(preserved[0].response == partial)
-
-        // 4. Warning-only row in the transcript: the projection drops the
-        //    row entirely, so the outline entry has no response even when a
-        //    stale cached summary exists for the dropped ID.
-        let canonical = ChatDisplayProjection.project(items: [], activeContentBlock: nil).transcript
-        let droppedTranscript = ChatTranscriptPresentationProjection.project(
-            transcript: canonical, toolCallDisplayMode: .summary)
-        #expect(droppedTranscript.sections.isEmpty)
-    }
+    /// DELETED with v54 (#1266): the display-time preamble strip this test
+    /// exercised is gone. The v54 migration rewrote warning-tainted cached
+    /// summaries and titles in place, and the summarizer strips the warning
+    /// at derivation time, so a tainted summary can no longer exist.
+    /// (It asserted: warning-only cache falls back to row text;
+    /// warning-plus-text cache uses its cleaned remainder; incomplete final
+    /// prefix stays.)
 
 }
 
@@ -843,18 +771,14 @@ private extension ChatMessage {
     static func fixture(
         chatID: ChatID = ChatID(rawValue: "01J" + String(repeating: "Z", count: 22)),
         seq: Int,
-        event: AgentEvent,
-        summary: String? = nil,
-        summaryKind: ChatMessageSummaryKind? = nil
+        event: AgentEvent
     ) -> Self {
         .init(
             id: PageID(rawValue: "01J" + String(format: "%022d", seq)),
             chatID: chatID,
             seq: seq,
             event: event,
-            createdAt: Date(timeIntervalSince1970: TimeInterval(seq)),
-            summary: summary,
-            summaryKind: summaryKind
+            createdAt: Date(timeIntervalSince1970: TimeInterval(seq))
         )
     }
 }

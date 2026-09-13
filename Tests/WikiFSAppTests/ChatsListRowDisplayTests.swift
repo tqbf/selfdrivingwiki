@@ -6,14 +6,13 @@ import WikiFSCore
 
 /// The left-hand chat list row contract: the title line is the chat's stored
 /// title (the user's question, or the model-generated title when the
-/// summarizer stage is configured) with the known injected skills-budget
-/// warning stripped, and the subtitle is the creation date. These tests pin
-/// the seams
+/// summarizer stage is configured), and the subtitle is the creation date.
+/// These tests pin the seams
 /// `ChatsCellView.rowTitle(for:)` and `ChatsCellView.rowSubtitle(for:)`.
+/// (v54, #1266: the skills-budget warning strip is gone — the v54 migration
+/// rewrote warning-tainted stored titles in place, so stored titles are
+/// clean and the display-time compensation deleted.)
 @Suite struct ChatsListRowDisplayTests {
-
-    private let warningTitle =
-        AgentPresentationPreamble.knownWarningSentence
 
     private func makeChat(
         title: String,
@@ -34,12 +33,11 @@ import WikiFSCore
     // The cached response summary (chats.summary) was REMOVED (schema v53),
     // so it can no longer shadow the title — rowTitle reads only the stored
     // title, structurally.
-
-    @Test("a stored warning title cleans to the New Chat fallback")
-    func warningOnlyStoredTitleFallsBack() {
-        let chat = makeChat(title: warningTitle)
-        #expect(ChatsCellView.rowTitle(for: chat) == "New Chat")
-    }
+    //
+    // The "warning title cleans to New Chat" test was DELETED with v54
+    // (#1266): the display-time strip it exercised is gone and the migration
+    // rewrote warning-tainted titles (warning-only rows → the provisional
+    // question title, or "New Chat" when unrecoverable).
 
     @Test("an empty stored title falls back to New Chat")
     func emptyStoredTitleFallsBack() {

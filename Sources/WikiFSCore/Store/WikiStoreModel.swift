@@ -4603,11 +4603,11 @@ public final class WikiStoreModel {
     /// DB write (no inference inside a transaction). No manual reload — the bus
     /// fires `reloadFromStore()` async after the `.chat .updated` emit.
     public func updateMessageSummary(
-        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+        chatID: ChatID, cursor: ChatTranscriptCursor, summary: String, kind: ChatMessageSummaryKind
     ) {
         do {
             try store.updateMessageSummary(
-                chatID: chatID, messageID: messageID, summary: summary, kind: kind)
+                chatID: chatID, cursor: cursor, summary: summary, kind: kind)
         } catch {
             DebugLog.store("WikiStoreModel.updateMessageSummary failed: \(error)")
         }

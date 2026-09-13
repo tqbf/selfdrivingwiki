@@ -638,11 +638,20 @@ public enum AgentOperationRunner {
         store: WikiStoreModel,
         launcher: AgentLauncher
     ) async {
-        let messages = store.chatMessages(chatID: chatID)
-        let pending = messages.filter { msg in
-            msg.summary == nil
-                && (MessageSummarizer.textToSummarize(from: msg.event)?.isEmpty == false)
+        // v54 (#1266): pending summaries are detected on the durable
+        // transcript (`chat_transcript_items`), not the compatibility
+        // `chat_messages` projection.
+        var items: [PersistedChatTranscriptItem] = []
+        var after: ChatTranscriptCursor?
+        // Page budget: guards against a concurrent-writer livelock.
+        for _ in 0..<1000 {
+            let page = store.readChatTranscriptPage(
+                chatID: chatID, after: after, limit: 200)
+            items.append(contentsOf: page.items)
+            guard let next = page.nextCursor else { break }
+            after = next
         }
+        let pending = MessageSummarizer.pendingSummaryTargets(from: items)
         guard !pending.isEmpty else { return }
         guard let services = launcher.providerServices else {
             Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
@@ -671,13 +680,14 @@ public enum AgentOperationRunner {
 
     @MainActor
     private static func writeDefaultSummaries(
-        chatID: ChatID, pending: [ChatMessage], store: WikiStoreModel
+        chatID: ChatID,
+        pending: [(cursor: ChatTranscriptCursor, text: String)],
+        store: WikiStoreModel
     ) {
-        for msg in pending {
-            guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
-            let summary = MessageSummarizer.defaultSummary(for: text)
+        for target in pending {
+            let summary = MessageSummarizer.defaultSummary(for: target.text)
             guard !summary.isEmpty else { continue }
-            store.updateMessageSummary(chatID: chatID, messageID: msg.id, summary: summary, kind: .defaultTruncation)
+            store.updateMessageSummary(chatID: chatID, cursor: target.cursor, summary: summary, kind: .defaultTruncation)
         }
     }
 
@@ -685,22 +695,21 @@ public enum AgentOperationRunner {
     @MainActor
     private static func runModelSummarization(
         chatID: ChatID,
-        pending: [ChatMessage],
+        pending: [(cursor: ChatTranscriptCursor, text: String)],
         services: any AgentProviderServices,
         preparation: AgentOperationPreparation,
         store: WikiStoreModel
     ) async {
-        for msg in pending {
-            guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
+        for target in pending {
             do {
                 guard let summary = try await services.modelSummary(
-                    text: text,
+                    text: target.text,
                     preparation: preparation) else {
-                    DebugLog.ingest("summarizePendingMessages: summarizer returned nil for message id=\(msg.id.rawValue.prefix(8))")
+                    DebugLog.ingest("summarizePendingMessages: summarizer returned nil for cursor=\(target.cursor.rawValue)")
                     continue
                 }
                 store.updateMessageSummary(
-                    chatID: chatID, messageID: msg.id,
+                    chatID: chatID, cursor: target.cursor,
                     summary: summary, kind: .model)
             } catch {
                 DebugLog.agent("AgentOperationRunner: model summary failed: \(error.localizedDescription)")
