@@ -297,6 +297,12 @@ struct ContentView: View {
             if rightInspector.isPresented, let registration = rightInspector.registration {
                 Divider()
                 RightSidebarHostView(registration: registration)
+                    // Every detail kind supplies the same generic host shape,
+                    // but its outline closure and bindings belong to one
+                    // subject. Force a new subtree at the selection boundary so
+                    // page/source/chat switches cannot retain the outgoing
+                    // inspector's captured content for an initial blank frame.
+                    .id(registration.subject)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }

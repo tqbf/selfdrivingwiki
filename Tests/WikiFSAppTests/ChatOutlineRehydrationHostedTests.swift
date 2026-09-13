@@ -93,7 +93,11 @@ struct ChatOutlineRehydrationHostedTests {
         store.reloadChats()
         store.openTab(.chat(chat.id))
 
-        let inspector = WindowRightInspectorController()
+        var acceptedChatRegistrations: [RightSidebarRegistration] = []
+        let inspector = WindowRightInspectorController { registration in
+            guard registration.subject == .chat(chat.id) else { return }
+            acceptedChatRegistrations.append(registration)
+        }
         let hosting = NSHostingController(rootView: HostedChatWithInspector(
             store: store,
             chatID: chat.id,
@@ -110,6 +114,22 @@ struct ChatOutlineRehydrationHostedTests {
             inspector.registration?.subject == .chat(chat.id)
         }
         #expect(durableOutlineRegistered, "the durable chat outline must register before rehydration")
+        let firstChatRegistration = try #require(acceptedChatRegistrations.first)
+        let firstOutlineHosting = NSHostingController(rootView: firstChatRegistration.outline())
+        let firstOutlineWindow = NSWindow(contentViewController: firstOutlineHosting)
+        firstOutlineWindow.setContentSize(NSSize(width: Self.outlineWidth, height: 760))
+        firstOutlineWindow.orderFront(nil)
+        defer { firstOutlineWindow.orderOut(nil) }
+        await settleRendering()
+        let firstRegistrationBrightPixels = try brightOutlinePixelCount(
+            in: firstOutlineWindow.contentView,
+            outlineWidth: Self.outlineWidth
+        )
+        #expect(
+            firstRegistrationBrightPixels >= Self.minimumBrightOutlinePixels,
+            "the first accepted chat registration must already contain the durable outline"
+        )
+
         await settleRendering()
         let brightPixelsBefore = try brightOutlinePixelCount(in: window.contentView)
         #expect(
@@ -259,14 +279,17 @@ struct ChatOutlineRehydrationHostedTests {
         return true
     }
 
-    private func brightOutlinePixelCount(in view: NSView?) throws -> Int {
+    private func brightOutlinePixelCount(
+        in view: NSView?,
+        outlineWidth: CGFloat = Self.outlineWidth
+    ) throws -> Int {
         let view = try #require(view)
         view.layoutSubtreeIfNeeded()
         let scale = view.window?.backingScaleFactor ?? 1
         let outlineBounds = NSRect(
-            x: view.bounds.maxX - CGFloat(Self.outlineWidth),
+            x: view.bounds.maxX - outlineWidth,
             y: view.bounds.minY,
-            width: CGFloat(Self.outlineWidth),
+            width: outlineWidth,
             height: view.bounds.height
         )
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: outlineBounds))
@@ -280,7 +303,7 @@ struct ChatOutlineRehydrationHostedTests {
             return 0
         }
         let bytesPerPixel = (bitmap.bitsPerPixel + 7) / 8
-        let width = Int(Self.outlineWidth * scale)
+        let width = Int(outlineWidth * scale)
         var brightPixels = 0
         for y in 0..<bitmap.pixelsHigh {
             let row = data.advanced(by: y * bitmap.bytesPerRow)

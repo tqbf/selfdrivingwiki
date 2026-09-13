@@ -1103,6 +1103,9 @@ struct SourceDetailView: View {
     }
 
     private func updateRightSidebarRegistration() {
+        DebugLog.tabs(
+            "Source outline registration published: source=\(file.id.rawValue) markdownChars=\(currentMarkdownContent?.count ?? -1) outlineTab=\(showsSourceOutlineTab)"
+        )
         rightInspector.updateRegistration(
             RightSidebarRegistration(
                 subject: .source(file.id),
@@ -1194,6 +1197,9 @@ struct SourceDetailView: View {
 
     @ViewBuilder
     private func sourceSidebarOutlineView() -> some View {
+        let _ = DebugLog.tabs(
+            "Source outline redraw: markdownChars=\(currentMarkdownContent?.count ?? -1) outlineTab=\(showsSourceOutlineTab)"
+        )
         if let markdown = currentMarkdownContent, showsSourceOutlineTab {
             outlineView(markdown: markdown)
         }

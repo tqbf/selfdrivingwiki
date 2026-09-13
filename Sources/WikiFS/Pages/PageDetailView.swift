@@ -397,6 +397,9 @@ struct PageDetailView: View {
 
     private func updateRightSidebarRegistration() {
         guard let pageID = currentPageID else { return }
+        DebugLog.tabs(
+            "Page outline registration published: page=\(pageID.rawValue) markdownChars=\(store.draftBody.count)"
+        )
         rightInspector.updateRegistration(
             RightSidebarRegistration(
                 subject: .page(pageID),
@@ -740,7 +743,10 @@ struct PageOutlineView: View {
     }
     
     var body: some View {
-        ScrollViewReader { proxy in
+        let _ = DebugLog.tabs(
+            "PageOutline redraw: markdownChars=\(markdown.count) headings=\(headings.count)"
+        )
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 6) {
                     ForEach(headings) { heading in
@@ -838,6 +844,9 @@ struct PageOutlineView: View {
         }
         
         headings = items
+        DebugLog.tabs(
+            "PageOutline parsed: markdownChars=\(markdown.count) headings=\(items.count)"
+        )
     }
 
     // MARK: - Inline markup stripping

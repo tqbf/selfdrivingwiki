@@ -7,7 +7,8 @@ struct ChatInspectorOutlineView: View {
     let onSelect: (ChatOutlineEntry.ID) -> Void
 
     var body: some View {
-        ScrollView {
+        let _ = DebugLog.tabs("Chat outline redraw: entries=\(entries.count)")
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
                 ForEach(entries, id: \.id) { entry in
                     outlineRow(entry)

@@ -32,6 +32,11 @@ struct RightSidebarRegistration {
 final class WindowRightInspectorController {
     var isPresented = false
     var registration: RightSidebarRegistration?
+    @ObservationIgnored private let onRegistrationAccepted: ((RightSidebarRegistration) -> Void)?
+
+    init(onRegistrationAccepted: ((RightSidebarRegistration) -> Void)? = nil) {
+        self.onRegistrationAccepted = onRegistrationAccepted
+    }
 
     var isAvailable: Bool { registration != nil }
 
@@ -49,7 +54,13 @@ final class WindowRightInspectorController {
             )
             return
         }
+        if let previous = self.registration?.subject, previous != registration.subject {
+            DebugLog.tabs(
+                "Right inspector subject replaced: previous=\(previous) next=\(registration.subject)"
+            )
+        }
         self.registration = registration
+        onRegistrationAccepted?(registration)
     }
 
     /// Clears sidebar availability for selections that have no inspector.

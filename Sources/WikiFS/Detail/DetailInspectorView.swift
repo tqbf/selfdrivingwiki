@@ -175,6 +175,9 @@ struct DetailInspectorView<Outline: View>: View {
                         performAction: performMetadataAction,
                         openLink: openMetadataLink)
                 case .outline:
+                    let _ = DebugLog.tabs(
+                        "Inspector outline branch: tab=\(InspectorTab.normalizedFallback(selection: inspectorTab, availableTabs: availableTabs).rawValue) available=\(availableTabs.map(\.rawValue))"
+                    )
                     outline()
                 case .history:
                     ScrollView {
