@@ -7,7 +7,7 @@ status: complete
 
 # v54 — per-message summary on chat_transcript_items; legacy preamble compensations bounded (#1266)
 
-## What changed
+## Progress
 
 Issue #1266 recorded two v54-scale cleanups. Both shipped in one schema pass.
 
@@ -50,7 +50,7 @@ once:
 After the backfill, the display-time strips in `ChatsCellView.rowTitle` and
 `ChatDetailPresentation.buildOutlineEntries`, and their tests, deleted.
 
-## Decisions
+**Decisions:**
 
 - **Guarded ALTERs, guarded backfill.** Fresh databases stamp the current
   version and never run the ladder, so the fresh-path creator
@@ -71,7 +71,7 @@ After the backfill, the display-time strips in `ChatsCellView.rowTitle` and
   caught it: warning-only rows must rewrite (titles) or unsummarize
   (summaries), not survive.
 
-## Tests
+## Verification
 
 - `SchemaMigrationLadderTests.v53DBMovesPerMessageSummaryAndRewritesTaintedRows`:
   backfill through the seq↔cursor mapping, tainted/clean/warning-only
@@ -84,3 +84,6 @@ After the backfill, the display-time strips in `ChatsCellView.rowTitle` and
   trips move to the cursor-keyed API and durable-transcript seeding.
 - The strip-behavior tests (`staleCachedWarningCannotReappearInOutline`,
   the rowTitle warning test) are deleted with the strips.
+- `ChatAPISignatureManifestTests` manifest updated to the cursor-keyed
+  `updateMessageSummary` signature (the reviewed chat API boundary moved
+  with the change).

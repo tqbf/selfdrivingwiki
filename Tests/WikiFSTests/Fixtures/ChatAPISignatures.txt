@@ -19,7 +19,7 @@ Sources/WikiFSCore/Store/WikiStore.swift	func updateChatAcpSessionId(chatID: Cha
 Sources/WikiFSCore/Store/WikiStore.swift	func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) throws
 Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID,
 Sources/WikiFSCore/Store/WikiStore.swift	func getChat(id: ChatID) throws -> ChatSummary
-Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
+Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID, cursor: ChatTranscriptCursor, summary: String, kind: ChatMessageSummaryKind
 Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID, handle: String, event: AgentEvent, isDraft: Bool
 Sources/WikiFSCore/Store/WikiStore.swift	func finalizeStaleDrafts(forChat chatID: ChatID) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func enqueuePersistedChatTurn(chatID: ChatID, submission: ChatTurnSubmission) throws -> PersistedChatTurn
