@@ -28,7 +28,11 @@ struct InspectorTabTests {
             availableTabs: [.metadata, .history], metadataState: .idle,
             origin: nil, history: [], onOpenChat: { _ in }, onCompareVersions: nil,
             metadataRouter: .init(openPage: { _ in true }, openSource: { _ in true }, openChat: { _ in true }, selectActivity: { _ in true }, comparePageVersions: { _ in true }, compareSourceExtractions: { _ in true }, copy: { _ in true }, openURL: { _ in true }),
-            outline: { AnyView(EmptyView()) })
+            outline: InspectorOutlinePayload(
+                subject: .page(PageID(rawValue: "page")),
+                content: .headings([]),
+                highlightedItemID: nil),
+            onOutlineSelect: { _ in })
         #expect(registration.availableTabs == [InspectorTab.metadata, .history])
     }
 
@@ -79,7 +83,11 @@ struct InspectorTabTests {
                 compareSourceExtractions: { _ in true },
                 copy: { _ in true },
                 openURL: { _ in true }),
-            outline: { AnyView(EmptyView()) })
+            outline: InspectorOutlinePayload(
+                subject: subject,
+                content: .headings([]),
+                highlightedItemID: nil),
+            onOutlineSelect: { _ in })
     }
 
     @Test func legacyOutlineDecodes() {

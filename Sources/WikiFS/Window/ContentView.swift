@@ -685,10 +685,9 @@ private struct RightSidebarHostView: View {
             openMetadataLink: { target in
                 do { try registration.metadataRouter.route(link: target) }
                 catch { DebugLog.tabs("Metadata link failed: \(error.localizedDescription)") }
-            }
-        ) {
-            registration.outline()
-        }
+            },
+            outline: registration.outline,
+            onOutlineSelect: registration.onOutlineSelect)
     }
 }
 

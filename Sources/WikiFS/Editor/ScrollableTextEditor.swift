@@ -10,7 +10,7 @@ import WikiFSSearch
 ///
 /// `charOffset` is an `NSString` (UTF-16 code-unit) index into the editor's
 /// text — the same coordinate space `NSTextView` uses for ranges. This matches
-/// the `charOffset` computed by `PageOutlineView.parseHeadings`.
+/// the `charOffset` computed by `OutlineParser.headings(in:)`.
 struct EditorScrollRequest: Equatable {
     let charOffset: Int
     /// Monotonic counter. The editor only acts when this value changes, so

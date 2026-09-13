@@ -41,7 +41,7 @@ struct ChatOutlineRehydrationHostedTests {
                     fileProvider: FileProviderFacade()
                 )
                 if let registration = inspector.registration {
-                    registration.outline()
+                    InspectorOutlineView(payload: registration.outline, onSelect: { _ in })
                         .frame(width: ChatOutlineRehydrationHostedTests.outlineWidth)
                 }
             }
@@ -115,7 +115,18 @@ struct ChatOutlineRehydrationHostedTests {
         }
         #expect(durableOutlineRegistered, "the durable chat outline must register before rehydration")
         let firstChatRegistration = try #require(acceptedChatRegistrations.first)
-        let firstOutlineHosting = NSHostingController(rootView: firstChatRegistration.outline())
+        // Value oracle: the FIRST accepted chat registration must already
+        // carry the durable transcript as a non-empty chatTurns payload.
+        if case .chatTurns(let firstTurns) = firstChatRegistration.outline.content {
+            #expect(
+                !firstTurns.isEmpty,
+                "the first accepted chat payload must contain the durable turns")
+        } else {
+            Issue.record("chat outline payload must carry chatTurns content")
+        }
+        let firstOutlineHosting = NSHostingController(rootView: InspectorOutlineView(
+            payload: firstChatRegistration.outline,
+            onSelect: { _ in }))
         let firstOutlineWindow = NSWindow(contentViewController: firstOutlineHosting)
         firstOutlineWindow.setContentSize(NSSize(width: Self.outlineWidth, height: 760))
         firstOutlineWindow.orderFront(nil)

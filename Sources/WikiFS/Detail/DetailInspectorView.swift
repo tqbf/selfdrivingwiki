@@ -59,8 +59,8 @@ enum InspectorTab: String, CaseIterable, Codable {
 /// The legacy History case remains renderable for compatibility with callers
 /// that still supply it, but current page and source registrations do not.
 ///
-/// - **Outline tab**: renders the `@ViewBuilder` closure passed by the caller
-///   (the page's `PageOutlineView` or the source's outline view).
+/// - **Outline tab**: renders ``InspectorOutlineView`` from the
+///   `InspectorOutlinePayload` value passed by the caller.
 /// - **History tab**: renders ``ProvenancePanel`` (origin + edit history).
 ///
 /// Shared between page, source, and chat details. The resizable width divider lives at this level
@@ -70,7 +70,7 @@ enum InspectorTab: String, CaseIterable, Codable {
 /// The `inspectorTab` and `outlineWidth` are `@Binding`s so each caller can
 /// persist them under its own `@AppStorage` key (page vs. source) without
 /// desync when switching views.
-struct DetailInspectorView<Outline: View>: View {
+struct DetailInspectorView: View {
     @Binding var inspectorTab: InspectorTab
     @Binding var outlineWidth: Double
     let availableTabs: [InspectorTab]
@@ -85,7 +85,8 @@ struct DetailInspectorView<Outline: View>: View {
     var onCompareVersions: (() -> Void)? = nil
     var performMetadataAction: (MetadataActionTarget) -> Void = { _ in }
     var openMetadataLink: (MetadataLinkTarget) -> Void = { _ in }
-    @ViewBuilder let outline: () -> Outline
+    let outline: InspectorOutlinePayload
+    let onOutlineSelect: (InspectorOutlineSelection) -> Void
 
     @State private var dragStartWidth: Double? = nil
     /// Transient width while the divider is being dragged. Kept as local state
@@ -175,10 +176,7 @@ struct DetailInspectorView<Outline: View>: View {
                         performAction: performMetadataAction,
                         openLink: openMetadataLink)
                 case .outline:
-                    let _ = DebugLog.tabs(
-                        "Inspector outline branch: tab=\(InspectorTab.normalizedFallback(selection: inspectorTab, availableTabs: availableTabs).rawValue) available=\(availableTabs.map(\.rawValue))"
-                    )
-                    outline()
+                    InspectorOutlineView(payload: outline, onSelect: onOutlineSelect)
                 case .history:
                     ScrollView {
                         ProvenancePanel(

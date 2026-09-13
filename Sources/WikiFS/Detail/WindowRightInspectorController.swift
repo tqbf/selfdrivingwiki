@@ -21,7 +21,13 @@ struct RightSidebarRegistration {
     let onOpenChat: (ChatID) -> Void
     let onCompareVersions: (() -> Void)?
     let metadataRouter: MetadataActionRouter
-    let outline: () -> AnyView
+    /// The outline content as a value, derived by the producing detail view.
+    /// Values (not view-producing closures) cannot outlive the state that
+    /// built them, so a registration never renders stale or empty rows.
+    let outline: InspectorOutlinePayload
+    /// Routes an outline row tap back to the producer that owns the
+    /// jump/scroll behavior for its surface.
+    let onOutlineSelect: (InspectorOutlineSelection) -> Void
 }
 
 /// Window-scoped state for the unified trailing sidebar. Detail surfaces
@@ -54,11 +60,11 @@ final class WindowRightInspectorController {
             )
             return
         }
-        if let previous = self.registration?.subject, previous != registration.subject {
-            DebugLog.tabs(
-                "Right inspector subject replaced: previous=\(previous) next=\(registration.subject)"
-            )
-        }
+        // Single production seam for outline content: one line per accepted
+        // payload. The renderer's redraw log is the only other outline seam.
+        DebugLog.tabs(
+            "Inspector outline payload accepted: subject=\(registration.subject) kind=\(registration.outline.contentKindDescription) rows=\(registration.outline.rowCount) isEmpty=\(registration.outline.isEmpty)"
+        )
         self.registration = registration
         onRegistrationAccepted?(registration)
     }

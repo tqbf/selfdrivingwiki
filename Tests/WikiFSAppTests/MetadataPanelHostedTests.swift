@@ -56,7 +56,11 @@ struct MetadataPanelHostedTests {
             metadataState: .loaded(model()),
             origin: nil,
             history: [],
-            outline: { EmptyView() })
+            outline: InspectorOutlinePayload(
+                subject: .changeLog,
+                content: .headings([]),
+                highlightedItemID: nil),
+            onOutlineSelect: { _ in })
         let mounted = try await mount(view, width: 220)
         defer { mounted.close() }
 

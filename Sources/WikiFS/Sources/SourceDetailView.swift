@@ -564,6 +564,15 @@ struct SourceDetailView: View {
             updateRightSidebarRegistration()
         }
         .onChange(of: showsSourceOutlineTab) { _, _ in updateRightSidebarRegistration() }
+        // The sidebar renders the last accepted registration's payload value,
+        // so caret moves and content switches must re-publish the
+        // registration. All of those inputs converge into `outlinePayload`;
+        // observing it is the single invalidation path (see
+        // SidebarRegistrationRefresh).
+        .modifier(SidebarRegistrationRefresh(
+            outlinePayload: outlinePayload,
+            onRefresh: { updateRightSidebarRegistration() }
+        ))
         // #842 PR2 C6, #1179: refresh the derived head whenever the store's
         // source data reloads. Extraction and transcript writes
         // (`appendDerivedMarkdown`) never touch the `sources` row, so a rebuild
@@ -1082,8 +1091,8 @@ struct SourceDetailView: View {
     /// `body` so the type-checker can resolve each subtree independently.
     ///
     /// Uses the shared `DetailInspectorView` (same as `PageDetailView`) so
-    /// sources get the same tabbed inspector. The outline tab renders the
-    /// source's `PageOutlineView`.
+    /// sources get the same tabbed inspector. The outline tab renders
+    /// `InspectorOutlineView` from the registered outline payload.
     ///
     /// The explicit `.frame(maxWidth: .infinity, maxHeight: .infinity,
     /// alignment: .topLeading)` on `contentArea` is load-bearing and mirrors
@@ -1091,8 +1100,8 @@ struct SourceDetailView: View {
     /// `WikiReaderView` (an `NSViewRepresentable` wrapping a `WKWebView`)
     /// reports no intrinsic content size and SwiftUI leaves the layout
     /// indeterminate — for sources whose outline is hidden (PR #648's
-    /// `isOutlineApplicable` guard removed the always-present
-    /// `PageOutlineView` sibling that previously helped pin the `HStack`'s
+    /// `isOutlineApplicable` guard removed the always-present outline
+    /// sibling that previously helped pin the `HStack`'s
     /// vertical extent), the indeterminate layout leaks into the header area.
     /// The header's Show in List / Share / Reveal in Finder buttons render
     /// above, but no longer receive their click. Issue #656.
@@ -1102,10 +1111,26 @@ struct SourceDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    /// The outline payload for the current source, derived in the body so
+    /// caret moves and content switches re-derive it;
+    /// `SidebarRegistrationRefresh` observes it and re-registers on change.
+    /// Nil or outline-inapplicable markdown yields an empty payload — the
+    /// inspector then shows the explicit empty state.
+    private var outlinePayload: InspectorOutlinePayload {
+        let headings: [OutlineHeading]
+        if let markdown = currentMarkdownContent, showsSourceOutlineTab {
+            headings = OutlineParser.headings(in: markdown)
+        } else {
+            headings = []
+        }
+        return InspectorOutlinePayload(
+            subject: .source(file.id),
+            content: .headings(headings),
+            highlightedItemID: OutlineParser.activeHeadingID(
+                caretUTF16Offset: caretCharIndex ?? -1, headings: headings))
+    }
+
     private func updateRightSidebarRegistration() {
-        DebugLog.tabs(
-            "Source outline registration published: source=\(file.id.rawValue) markdownChars=\(currentMarkdownContent?.count ?? -1) outlineTab=\(showsSourceOutlineTab)"
-        )
         rightInspector.updateRegistration(
             RightSidebarRegistration(
                 subject: .source(file.id),
@@ -1133,8 +1158,16 @@ struct SourceDetailView: View {
                     },
                     copy: MetadataActionRouter.systemClipboardCopy,
                     openURL: { NSWorkspace.shared.open($0) }),
-                outline: {
-                    AnyView(sourceSidebarOutlineView())
+                outline: outlinePayload,
+                onOutlineSelect: { selection in
+                    guard case .heading(let heading) = selection else { return }
+                    if isEditing {
+                        editorScrollRequest = EditorScrollRequest(
+                            charOffset: heading.charOffset,
+                            version: (editorScrollRequest?.version ?? 0) + 1)
+                    } else {
+                        store.jumpToAnchorInCurrentSelection(heading.id)
+                    }
                 }
             ),
             activeSelection: store.selection
@@ -1194,29 +1227,6 @@ struct SourceDetailView: View {
             okfMetadata: okfMetadata))
     }
 
-
-    @ViewBuilder
-    private func sourceSidebarOutlineView() -> some View {
-        let _ = DebugLog.tabs(
-            "Source outline redraw: markdownChars=\(currentMarkdownContent?.count ?? -1) outlineTab=\(showsSourceOutlineTab)"
-        )
-        if let markdown = currentMarkdownContent, showsSourceOutlineTab {
-            outlineView(markdown: markdown)
-        }
-    }
-
-    private func outlineView(markdown: String) -> some View {
-        PageOutlineView(markdown: markdown,
-                        caretCharIndex: caretCharIndex) { heading in
-            if isEditing {
-                editorScrollRequest = EditorScrollRequest(
-                    charOffset: heading.charOffset,
-                    version: (editorScrollRequest?.version ?? 0) + 1)
-            } else {
-                store.jumpToAnchorInCurrentSelection(heading.id)
-            }
-        }
-    }
 
     // MARK: - Content area
 
