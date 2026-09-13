@@ -3,6 +3,14 @@ import Testing
 @testable import WikiFSCore
 
 @Suite(.serialized) struct AgentProvidersConfigStoreTests {
+    // CI's 3-vCPU runner starves the cooperative pool under the full parallel
+    // suite (neighboring trivial tests wall-clock ~29 s there), so the store's
+    // 5 s production lock deadline can elapse on scheduler delay alone —
+    // delayed `Task.sleep` resumptions count against it even though the lock
+    // holder released in microseconds. These tests assert serialization
+    // semantics, not lock latency, so give the deadline starvation headroom.
+    private static let lockTimeout: Duration = .seconds(60)
+
     private func directory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("provider-store-\(UUID().uuidString)", isDirectory: true)
@@ -14,8 +22,8 @@ import Testing
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }
         try AgentProvidersConfig.seed(discovered: []).writeAtomically(to: directory)
-        let first = AgentProvidersConfigStore(directory: directory)
-        let second = AgentProvidersConfigStore(directory: directory)
+        let first = AgentProvidersConfigStore(directory: directory, lockTimeout: Self.lockTimeout)
+        let second = AgentProvidersConfigStore(directory: directory, lockTimeout: Self.lockTimeout)
         async let selected = first.mutate {
             $0.settingSelectedModel(ModelID(rawValue: "opus"), forProvider: ProviderID(rawValue: "claude-acp"))
         }
@@ -38,6 +46,7 @@ import Testing
         let signals = SignalCounter()
         let store = AgentProvidersConfigStore(
             directory: directory,
+            lockTimeout: Self.lockTimeout,
             write: { _, _ in throw TestFailure.write },
             postLocal: { _ in signals.incrementLocal() },
             postDarwin: { signals.incrementDarwin() })
@@ -58,6 +67,7 @@ import Testing
         let observed = GenerationRecorder(directory: directory)
         let store = AgentProvidersConfigStore(
             directory: directory,
+            lockTimeout: Self.lockTimeout,
             postLocal: { _ in observed.record() },
             postDarwin: { observed.record() })
         _ = try await store.mutate {
@@ -66,7 +76,7 @@ import Testing
         #expect(observed.snapshot() == [1, 1])
         // A second coordinator can acquire immediately, proving signals ran
         // after the first coordinator released the kernel and process gates.
-        let second = try await AgentProvidersConfigStore(directory: directory).mutate { $0 }
+        let second = try await AgentProvidersConfigStore(directory: directory, lockTimeout: Self.lockTimeout).mutate { $0 }
         #expect(second.generation == 2)
     }
 }
