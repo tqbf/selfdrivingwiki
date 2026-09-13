@@ -87,6 +87,5 @@ the outline.
   `Inspector outline redraw`, one site each; no legacy strings.
 - AC.8 (operator live check in the installed signed app: pane populated on
   open for a page, the `iZ_hhezC1mA` source, and a chat, with
-  `payload accepted … rows>0` in the unified log) remains a human gate for
-  the operator; automated screen capture is unavailable in this environment.
-  `make run` installs and launches the build for that check.
+  `payload accepted … rows>0` in the unified log) — **confirmed by the
+  operator in the running app on 2026-09-13** ("it works").
