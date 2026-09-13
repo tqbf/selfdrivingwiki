@@ -8,6 +8,10 @@ import WikiFSCore
 /// The shell renders this as a sibling column, while detail views keep owning
 /// their local state and callbacks.
 struct RightSidebarRegistration {
+    /// The detail selection that owns this registration. Async work from a
+    /// departing detail can finish after the next detail appears, so the
+    /// controller accepts the payload only while this subject is still active.
+    let subject: WikiSelection
     let inspectorTab: Binding<InspectorTab>
     let outlineWidth: Binding<Double>
     let availableTabs: [InspectorTab]
@@ -31,11 +35,29 @@ final class WindowRightInspectorController {
 
     var isAvailable: Bool { registration != nil }
 
-    func updateRegistration(_ registration: RightSidebarRegistration?) {
-        self.registration = registration
-        if registration == nil {
-            isPresented = false
+    /// Replaces the sidebar payload only when its owner is still the active
+    /// detail. SwiftUI may finish a canceled task or deliver an `onChange`
+    /// callback from the outgoing page/source/chat after the incoming detail
+    /// has registered; rejecting that stale write keeps the new outline alive.
+    func updateRegistration(
+        _ registration: RightSidebarRegistration,
+        activeSelection: WikiSelection?
+    ) {
+        guard registration.subject == activeSelection else {
+            DebugLog.tabs(
+                "Right inspector ignored stale registration: subject=\(registration.subject) active=\(String(describing: activeSelection))"
+            )
+            return
         }
+        self.registration = registration
+    }
+
+    /// Clears sidebar availability for selections that have no inspector.
+    /// This is owned by the window selection seam rather than departing detail
+    /// views, so an old detail cannot close a newly registered inspector.
+    func clearRegistration() {
+        registration = nil
+        isPresented = false
     }
 
     func toggle() {

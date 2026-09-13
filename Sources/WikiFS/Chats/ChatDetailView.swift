@@ -500,12 +500,10 @@ struct ChatDetailView: View {
     }
 
     private func updateRightSidebarRegistration() {
-        guard chatID != nil else {
-            rightInspector.updateRegistration(nil)
-            return
-        }
+        guard let chatID else { return }
         rightInspector.updateRegistration(
             RightSidebarRegistration(
+                subject: .chat(chatID),
                 inspectorTab: $inspectorTab,
                 outlineWidth: $outlineWidth,
                 availableTabs: InspectorTab.persistedChatAvailableTabs,
@@ -533,7 +531,8 @@ struct ChatDetailView: View {
                         }
                     )
                 }
-            )
+            ),
+            activeSelection: store.selection
         )
     }
 

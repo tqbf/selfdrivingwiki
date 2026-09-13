@@ -202,7 +202,6 @@ struct PageDetailView: View {
             guard let pageID = currentPageID else {
                 provenanceOrigin = nil
                 provenanceHistory = []
-                rightInspector.updateRegistration(nil)
                 return
             }
             provenanceOrigin = store.pageOrigin(for: pageID)
@@ -397,8 +396,10 @@ struct PageDetailView: View {
     }
 
     private func updateRightSidebarRegistration() {
+        guard let pageID = currentPageID else { return }
         rightInspector.updateRegistration(
             RightSidebarRegistration(
+                subject: .page(pageID),
                 inspectorTab: $inspectorTab,
                 outlineWidth: $outlineWidth,
                 availableTabs: InspectorTab.pageAvailableTabs,
@@ -430,7 +431,8 @@ struct PageDetailView: View {
                         }
                     )
                 }
-            )
+            ),
+            activeSelection: store.selection
         )
     }
 

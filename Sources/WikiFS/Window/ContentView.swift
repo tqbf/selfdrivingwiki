@@ -122,7 +122,7 @@ struct ContentView: View {
             case .page, .source, .chat:
                 break
             case .none, .newChat, .changeLog, .bookmark:
-                rightInspector.updateRegistration(nil)
+                rightInspector.clearRegistration()
             }
         }
         // Package-declared rich fences: thread the registry state into the

@@ -1105,6 +1105,7 @@ struct SourceDetailView: View {
     private func updateRightSidebarRegistration() {
         rightInspector.updateRegistration(
             RightSidebarRegistration(
+                subject: .source(file.id),
                 inspectorTab: $inspectorTab,
                 outlineWidth: $outlineWidth,
                 availableTabs: sourceInspectorTabs,
@@ -1132,7 +1133,8 @@ struct SourceDetailView: View {
                 outline: {
                     AnyView(sourceSidebarOutlineView())
                 }
-            )
+            ),
+            activeSelection: store.selection
         )
     }
 

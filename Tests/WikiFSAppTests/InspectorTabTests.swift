@@ -1,6 +1,7 @@
 import SwiftUI
 import Testing
 @testable import WikiFS
+import WikiFSCore
 
 struct InspectorTabTests {
     @Test func pageTabsExcludeHistory() {
@@ -22,6 +23,7 @@ struct InspectorTabTests {
 
     @Test @MainActor func registrationCarriesOrderedTabsNotBooleans() {
         let registration = RightSidebarRegistration(
+            subject: .page(PageID(rawValue: "page")),
             inspectorTab: .constant(.metadata), outlineWidth: .constant(220),
             availableTabs: [.metadata, .history], metadataState: .idle,
             origin: nil, history: [], onOpenChat: { _ in }, onCompareVersions: nil,
@@ -29,6 +31,57 @@ struct InspectorTabTests {
             outline: { AnyView(EmptyView()) })
         #expect(registration.availableTabs == [InspectorTab.metadata, .history])
     }
+
+    @Test @MainActor func stalePageRefreshCannotReplaceActiveChatRegistration() throws {
+        let page = WikiSelection.page(PageID(rawValue: "page"))
+        let chat = WikiSelection.chat(ChatID(rawValue: "chat"))
+        let controller = WindowRightInspectorController()
+
+        controller.updateRegistration(registration(subject: page), activeSelection: page)
+        controller.isPresented = true
+        controller.updateRegistration(registration(subject: chat), activeSelection: chat)
+        controller.updateRegistration(registration(subject: page), activeSelection: chat)
+
+        #expect(try #require(controller.registration).subject == chat)
+        #expect(controller.isPresented)
+    }
+
+    @Test @MainActor func nonInspectorSelectionClearsAndClosesSidebar() {
+        let page = WikiSelection.page(PageID(rawValue: "page"))
+        let controller = WindowRightInspectorController()
+        controller.updateRegistration(registration(subject: page), activeSelection: page)
+        controller.isPresented = true
+
+        controller.clearRegistration()
+
+        #expect(controller.registration == nil)
+        #expect(controller.isPresented == false)
+    }
+
+    @MainActor
+    private func registration(subject: WikiSelection) -> RightSidebarRegistration {
+        RightSidebarRegistration(
+            subject: subject,
+            inspectorTab: .constant(.outline),
+            outlineWidth: .constant(220),
+            availableTabs: [.metadata, .outline],
+            metadataState: .idle,
+            origin: nil,
+            history: [],
+            onOpenChat: { _ in },
+            onCompareVersions: nil,
+            metadataRouter: .init(
+                openPage: { _ in true },
+                openSource: { _ in true },
+                openChat: { _ in true },
+                selectActivity: { _ in true },
+                comparePageVersions: { _ in true },
+                compareSourceExtractions: { _ in true },
+                copy: { _ in true },
+                openURL: { _ in true }),
+            outline: { AnyView(EmptyView()) })
+    }
+
     @Test func legacyOutlineDecodes() {
         #expect(InspectorTab.decodePersisted("outline") == .outline)
     }
