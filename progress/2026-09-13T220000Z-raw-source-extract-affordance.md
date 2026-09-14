@@ -2,7 +2,7 @@
 timestamp: 2026-09-13T220000Z
 title: Raw Source Extract affordance (#1252)
 branch: feature/show-extract-button-raw-source
-status: implemented; verification limited by stale SwiftPM process
+status: implemented; CI compiler fix pending verification
 ---
 
 # Raw Source Extract affordance (#1252)
@@ -23,7 +23,8 @@ the derived Markdown head.
 
 ## Verification
 
-The macOS app-target build compiled the changed engine and SwiftUI files without
-diagnostics. The focused app-test target and normal `make build` gate could not
-finish because interrupted SwiftPM processes retained the shared `.build` lock;
-the waiting attempts were stopped after they produced no further progress.
+CI reported that the added view complexity caused SwiftUI type checking to fail
+at the existing active-tab lookup. The lookup now uses a local tab array and a
+separate closure expression. A local scratch build passed the modified
+`SourceDetailView` compilation point without that diagnostic; the full target
+was stopped during unrelated remaining compilation after no further output.
