@@ -73,6 +73,10 @@ public protocol ExtractionServices: Sendable {
     func prepareYouTubeTranscript() async throws -> ProcessPackageYouTubeTranscript
     /// Active package registration claims used for import recognition.
     func registeredExtractionInputs() async -> RegisteredExtractionInputs
+    /// Active package registrations with manifest-derived presentation data.
+    /// This is a read-only snapshot for UI affordances; execution still goes
+    /// through the managed extraction queue.
+    func activeRegistrationSnapshots() async -> [ExtractorRouteRegistrationSnapshot]
 }
 
 public extension ExtractionServices {
@@ -117,6 +121,10 @@ public extension ExtractionServices {
 
     func registeredExtractionInputs() async -> RegisteredExtractionInputs {
         .none
+    }
+
+    func activeRegistrationSnapshots() async -> [ExtractorRouteRegistrationSnapshot] {
+        []
     }
 }
 
@@ -198,6 +206,10 @@ public actor MutableExtractionServices: ExtractionServices {
 
     public func registeredExtractionInputs() async -> RegisteredExtractionInputs {
         await installed.registeredExtractionInputs()
+    }
+
+    public func activeRegistrationSnapshots() async -> [ExtractorRouteRegistrationSnapshot] {
+        await installed.activeRegistrationSnapshots()
     }
 }
 

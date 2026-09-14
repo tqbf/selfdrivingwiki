@@ -113,6 +113,10 @@ struct SourceDetailView: View {
     /// Cached once per source lifecycle so body evaluation and editor changes do
     /// not repeatedly synchronously fetch the complete SQLite blob.
     @State private var sourceBytesSnapshot: Data?
+    /// Active package registrations used to decide whether Raw Source has a
+    /// next step. The snapshot is presentation data only; execution remains
+    /// owned by the managed extraction queue.
+    @State private var activeExtractorRegistrations: [ExtractorRouteRegistrationSnapshot] = []
     /// Quote to highlight in the PDF view, set when a `[[source:Name#"…"]]` link
     /// targets an un-extracted PDF. Consumed from `store.pendingScrollAnchor`.
     @State private var pdfQuote: String?
@@ -372,6 +376,14 @@ struct SourceDetailView: View {
     /// predicate).
     private var needsExtraction: Bool { isExtractable && !hasMarkdown }
 
+    private var rawSourceExtractor: RawSourceExtractorMatch? {
+        guard !hasMarkdown, currentMarkdownContent == nil else { return nil }
+        return Self.rawSourceExtractorMatch(
+            mimeType: file.mimeType,
+            ext: file.ext,
+            registrations: activeExtractorRegistrations)
+    }
+
     /// `true` when this source has ≥2 extraction alternatives — the gate for the
     /// "Compare Extractions…" button (compare is meaningless with one).
     private var hasMultipleExtractions: Bool {
@@ -510,6 +522,7 @@ struct SourceDetailView: View {
             editHistory = []
             isRefreshable = false
             sourceBytesSnapshot = nil
+            activeExtractorRegistrations = []
             beginRendererPresentationLoading()
             pdfQuote = nil
             pinnedExtraction = nil
@@ -524,6 +537,7 @@ struct SourceDetailView: View {
             origin = store.sourceOrigin(for: file.id)
             editHistory = store.sourceEditHistory(for: file.id)
             isRefreshable = store.isSourceRefreshable(for: file.id)
+            activeExtractorRegistrations = await extractionCoordinator.activeRegistrationSnapshots()
             resolveRendererPresentation()
             updateRightSidebarRegistration()
         }
@@ -796,7 +810,7 @@ struct SourceDetailView: View {
                     if hasExtractionChip, let head = headVersion {
                         extractionProvenanceChip(head: head)
                     }
-                    if needsExtraction {
+                    if needsExtraction || rawSourceExtractor != nil {
                         // No derivation yet → Extract is the call-to-action:
                         // prominent and leftmost, with Ingest stepped down to
                         // secondary until there's markdown worth ingesting.
@@ -807,7 +821,10 @@ struct SourceDetailView: View {
                         // sources dispatch to the inline package-only
                         // `runDocxExtraction` path for the same reason; PDF
                         // sources go through the queue as before.
-                        Button(isExtracting || isThisFileExtracting ? "Extracting…" : "Extract",
+                        Button(
+                            isExtracting || isThisFileExtracting
+                                ? "Extracting…"
+                                : (rawSourceExtractor.map { "Extract with \($0.packageName)" } ?? "Extract"),
                                systemImage: "doc.plaintext") {
                             DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.isHTMLSource(file)), docx=\(SourceRendererPresentationPlanner.isDOCXSource(file))")
                             Task {
@@ -2048,9 +2065,37 @@ private struct PDFTaskKey: Hashable {
     let anchorVersion: Int
 }
 
+/// Manifest-derived presentation for the one active package chosen to act on
+/// a Raw Source. Matching is deterministic so multiple compatible package
+/// registrations never produce multiple primary buttons.
+struct RawSourceExtractorMatch: Equatable, Sendable {
+    let packageName: String
+    let registration: ExtractorReference
+}
+
 // MARK: - PR2 testable seam — Extract / Transcribe affordance (§5.4)
 
 extension SourceDetailView {
+
+    /// Pure input matching for the Raw Source affordance. Active registrations
+    /// are supplied by the extraction runtime; unavailable catalog entries are
+    /// never passed here. MIME and extension claims are both accepted because
+    /// malformed/binary sources may retain only one reliable input fact.
+    nonisolated static func rawSourceExtractorMatch(
+        mimeType: String?,
+        ext: String?,
+        registrations: [ExtractorRouteRegistrationSnapshot]
+    ) -> RawSourceExtractorMatch? {
+        return ExtractorRouteTableBuilder.activeRegistration(
+            mimeType: mimeType,
+            filenameExtension: ext,
+            registrations: registrations)
+            .map {
+                RawSourceExtractorMatch(
+                    packageName: $0.packageName.isEmpty ? $0.displayName : $0.packageName,
+                    registration: $0.reference)
+            }
+    }
 
     /// The single-affordance decision for a source's content type, computed
     /// from the registry BEFORE any runtime guard (signing helper present /
