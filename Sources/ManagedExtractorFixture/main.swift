@@ -211,7 +211,9 @@ case "success", "environment", "linger":
     // Mode "linger": the protocol exchange is complete, but the wrapper
     // process outlives the package — the observed `uv run` hang. The host
     // must treat the terminal frame as completion and reap the group.
+    // alarm(2) is the failsafe when no supervisor ever reaps it (#1259).
     if mode == "linger" {
+        alarm(600)
         while true { _ = Darwin.pause() }
     }
 case "failure":
@@ -232,6 +234,8 @@ case "malformed", "malformed-hold":
         exit(3)
     }
     if mode == "malformed-hold" {
+        // Failsafe ceiling: never linger forever without a supervisor (#1259).
+        alarm(600)
         while true { _ = Darwin.pause() }
     }
 case "nonzero":
@@ -249,6 +253,9 @@ case "hold":
     } catch {
         exit(3)
     }
+    // Failsafe ceiling: the hold exists to be killed by the supervising
+    // runner's verified group signal; alarm(2) covers a dead supervisor (#1259).
+    alarm(600)
     while true { _ = Darwin.pause() }
 case "htmlsuccess":
     let markdown = "# Hello\n\nWorld.\n"

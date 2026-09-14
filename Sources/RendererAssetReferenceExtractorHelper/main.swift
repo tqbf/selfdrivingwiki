@@ -1,5 +1,8 @@
 import Foundation
 import JavaScriptCore
+#if canImport(Darwin)
+import Darwin
+#endif
 
 // renderer-asset-reference-extractor-helper
 //
@@ -25,6 +28,25 @@ import JavaScriptCore
 //
 // Every field is validated BEFORE decoding or evaluating. The helper exits
 // after one invocation.
+//
+// Failsafes (#1259): supervision is the parent's contract, but a parent that
+// dies without killing the process group — a test crash, a SIGKILL, a
+// parallel-load flake — must not leave a non-terminating extractor spinning
+// a full core forever. The helper therefore arms two host-side failsafes
+// BEFORE reading its frame, and neither is visible to the JavaScript (they
+// live in the Swift host; the JSContext still sees no timers and no way to
+// learn about time):
+//
+//   1. Self-deadline. A fixed 60 s ceiling — six times the manifest
+//      contract's maximum declared extractor deadline (10 s,
+//      `RendererAssetConstraints.maximumExtractorExecutionSeconds`) — after
+//      which the helper exits(3) no matter what it is doing.
+//   2. Orphan detection. The parent PID recorded at startup is polled; when
+//      it changes (reparented, i.e. the supervisor died) or was already
+//      launchd at birth, the helper exits(4) within one poll interval.
+//
+// A stdout write that cannot complete exits nonzero rather than hanging or
+// spinning: SIGPIPE is ignored and frames are delivered with raw write(2).
 
 // MARK: - Limits (mirror the manifest contract ceilings; the parent enforces
 // its own bounds before spawning, and the helper re-checks defensively)
@@ -37,6 +59,16 @@ private enum Bounds {
     static let maximumReferenceLength = 512
     static let maximumOutputRecordsBytes = 256 * 1_024
     static let maximumEntryFunctionLength = 128
+
+    // Failsafe ceilings. The self-deadline is deliberately far above any
+    // legitimate extraction (the manifest contract caps declared deadlines
+    // at 10 s), so it can only ever fire on a run that is already lost.
+    static let selfDeadlineSeconds = 60
+    static let orphanPollMilliseconds = 1_000
+    // Overrides may only SHORTEN a ceiling (a shorter deadline is strictly
+    // safer), and never below a floor that keeps the poll negligible.
+    static let minimumSelfDeadlineOverrideSeconds = 1
+    static let minimumOrphanPollOverrideMilliseconds = 50
 }
 
 private enum HelperError: Error, CustomStringConvertible {
@@ -52,6 +84,7 @@ private enum HelperError: Error, CustomStringConvertible {
     case unresolvedEntry
     case evaluationFailed(String)
     case outputTooLarge
+    case stdoutUnwritable
 
     var description: String {
         switch self {
@@ -67,8 +100,19 @@ private enum HelperError: Error, CustomStringConvertible {
         case .unresolvedEntry: "unresolved entry"
         case .evaluationFailed: "evaluation failed"
         case .outputTooLarge: "output too large"
+        case .stdoutUnwritable: "output unwritable"
         }
     }
+}
+
+// Exit codes that report which failsafe fired, so an autopsy of a dead
+// helper can distinguish the outcomes. 0 (success), 1 (extraction failure,
+// ok:false frame written), and 2 (failure frame unwritable) are the
+// protocol outcomes; 3+ are failsafes and usage.
+private enum FailsafeExitCode {
+    static let selfDeadlineExceeded: Int32 = 3
+    static let orphaned: Int32 = 4
+    static let usage: Int32 = 64
 }
 
 // MARK: - Identifier-safety (mirrors rendererJavaScriptIdentifier in
@@ -121,6 +165,27 @@ private func readFrame(_ handle: FileHandle) throws -> Data {
     return payload
 }
 
+/// Write all of `data` to stdout with raw write(2). A dead stdout surfaces
+/// as EPIPE (false) instead of an ObjC exception Foundation cannot throw
+/// across, and SIGPIPE is ignored at startup — so a vanished parent turns
+/// into a clean nonzero exit instead of an unkillable spin (#1259).
+private func writeAllToStandardOutput(_ data: Data) -> Bool {
+    data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
+        guard var cursor = raw.bindMemory(to: UInt8.self).baseAddress else { return true }
+        var remaining = raw.count
+        while remaining > 0 {
+            let written = write(STDOUT_FILENO, cursor, remaining)
+            if written < 0 {
+                if errno == EINTR { continue }
+                return false
+            }
+            cursor += written
+            remaining -= written
+        }
+        return true
+    }
+}
+
 private func writeFrame(_ data: Data) throws {
     precondition(data.count <= UInt32.max)
     var header = Data()
@@ -128,14 +193,102 @@ private func writeFrame(_ data: Data) throws {
     header.append(UInt8((data.count >> 16) & 0xff))
     header.append(UInt8((data.count >> 8) & 0xff))
     header.append(UInt8(data.count & 0xff))
-    FileHandle.standardOutput.write(header)
-    FileHandle.standardOutput.write(data)
+    guard writeAllToStandardOutput(header), writeAllToStandardOutput(data) else {
+        throw HelperError.stdoutUnwritable
+    }
 }
 
 private func writeJSONFrame(_ value: [String: Any]) throws {
     let data = try JSONSerialization.data(withJSONObject: value, options: [])
     guard data.count <= Bounds.maximumOutputRecordsBytes else { throw HelperError.outputTooLarge }
     try writeFrame(data)
+}
+
+// MARK: - Failsafes (defense in depth inside the helper)
+
+/// One bounded static diagnostic line, written best-effort: the failsafe
+/// path must never block, throw, or fail to terminate.
+private func bestEffortStderrDiagnostic(_ line: String) {
+    let message = Array((line + "\n").utf8)
+    _ = message.withUnsafeBufferPointer { buffer in
+        write(STDERR_FILENO, buffer.baseAddress, buffer.count)
+    }
+}
+
+/// Failsafe timing. Only shortening overrides are accepted, so no caller —
+/// including a hostile one that can already choose the whole command line —
+/// can weaken the guarantees; the production client passes no arguments.
+private struct FailsafeConfiguration {
+    var selfDeadlineSeconds: Int
+    var orphanPollMilliseconds: Int
+}
+
+private func overrideValue(_ prefix: String, _ argument: String) -> String? {
+    guard argument.hasPrefix(prefix) else { return nil }
+    return String(argument.dropFirst(prefix.count))
+}
+
+/// Returns nil when any argument is unrecognized or out of range, which the
+/// caller treats as a usage error: this helper is spawned argument-free in
+/// production, so anything else is a mistake worth failing fast on.
+private func parseFailsafeConfiguration(_ arguments: [String]) -> FailsafeConfiguration? {
+    var configuration = FailsafeConfiguration(
+        selfDeadlineSeconds: Bounds.selfDeadlineSeconds,
+        orphanPollMilliseconds: Bounds.orphanPollMilliseconds)
+    for argument in arguments {
+        if let value = overrideValue("--self-deadline-seconds=", argument),
+           let seconds = Int(value),
+           seconds >= Bounds.minimumSelfDeadlineOverrideSeconds {
+            configuration.selfDeadlineSeconds = min(seconds, Bounds.selfDeadlineSeconds)
+        } else if let value = overrideValue("--orphan-poll-milliseconds=", argument),
+                  let milliseconds = Int(value),
+                  milliseconds >= Bounds.minimumOrphanPollOverrideMilliseconds {
+            configuration.orphanPollMilliseconds = min(milliseconds, Bounds.orphanPollMilliseconds)
+        } else {
+            return nil
+        }
+    }
+    return configuration
+}
+
+/// Arm both failsafes BEFORE the frame read, so every later phase — a
+/// blocked stdin read, a stuck JavaScript loop, a blocked stdout write — is
+/// covered. The returned timers must stay retained by the caller's frame
+/// for the life of the process.
+private func armFailsafes(
+    _ configuration: FailsafeConfiguration
+) -> (deadline: DispatchSourceTimer, orphanPoll: DispatchSourceTimer) {
+    // Orphaned at birth: launchd as the recorded parent means there is no
+    // supervisor and never was one — this helper is always spawned as a
+    // child of a live app, daemon, or test process.
+    guard getppid() != 1 else {
+        bestEffortStderrDiagnostic("orphaned at startup; exiting")
+        exit(FailsafeExitCode.orphaned)
+    }
+    let initialParentProcessID = getppid()
+    let queue = DispatchQueue(label: "renderer-asset-reference-extractor-helper.failsafes")
+
+    let deadline = DispatchSource.makeTimerSource(queue: queue)
+    deadline.setEventHandler {
+        bestEffortStderrDiagnostic("self-deadline exceeded; exiting")
+        exit(FailsafeExitCode.selfDeadlineExceeded)
+    }
+    deadline.schedule(deadline: .now() + .seconds(configuration.selfDeadlineSeconds))
+    deadline.resume()
+
+    let orphanPoll = DispatchSource.makeTimerSource(queue: queue)
+    orphanPoll.setEventHandler {
+        if getppid() != initialParentProcessID {
+            bestEffortStderrDiagnostic("supervisor disappeared; exiting")
+            exit(FailsafeExitCode.orphaned)
+        }
+    }
+    orphanPoll.schedule(
+        deadline: .now() + .milliseconds(configuration.orphanPollMilliseconds),
+        repeating: .milliseconds(configuration.orphanPollMilliseconds))
+    orphanPoll.resume()
+
+    return (deadline, orphanPoll)
 }
 
 // MARK: - Request/record validation
@@ -234,12 +387,22 @@ private func run() {
             }
             try writeJSONFrame(["ok": false, "reason": reason])
         } catch {
-            // Even the failure frame is bounded; if it cannot be written
-            // there is nothing more to do. Exit nonzero.
+            // Even the failure frame is bounded; if it cannot be written —
+            // including a dead stdout — there is nothing more to do. Exit
+            // nonzero rather than continue.
             exit(2)
         }
         exit(1)
     }
 }
 
+// Failsafes first: they must cover every later phase, including a blocked
+// frame read, a stuck extraction, and an unwritable response. The sources
+// stay retained by this top-level frame for the life of the process.
+signal(SIGPIPE, SIG_IGN)
+guard let failsafes = parseFailsafeConfiguration(Array(CommandLine.arguments.dropFirst())) else {
+    bestEffortStderrDiagnostic("unrecognized argument")
+    exit(FailsafeExitCode.usage)
+}
+let failsafeSources = armFailsafes(failsafes)
 run()
