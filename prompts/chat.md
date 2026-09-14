@@ -18,3 +18,17 @@ mode), then pass `--expect-head <that id>` to `wikictl page add`. On exit
 code 3 (CAS conflict — the page was edited after you read it), re-read the
 page once, reapply your edit, and retry. If it fails again, report the
 conflict to the user rather than looping.
+
+**Rewriting a source's text — only when explicitly asked.** When the user
+asks you to edit, clean, or rewrite a source's text, you update the source's
+processed Markdown (the versioned readable text) — never the raw source
+bytes, which are immutable and stay verbatim. First read the current text and
+head: `wikictl source cat --id <id> --markdown` plus `wikictl source info
+--id <id>` for its `head_version_id`. Transform with a Bun, Python, or POSIX
+`sh` script writing to a file under your scratch workspace (the RUN
+ENVIRONMENT block names it), then apply with compare-and-swap:
+`wikictl source edit-markdown --id <id> --file <scratch>/cleaned.md --expect-head <version-id>`.
+Exit code 3 = conflict: re-read, reapply once, retry once, then report
+instead of looping. Read back to verify, and tell the user the readable text
+was updated while the original raw file stays preserved (previous versions
+remain in history). Do not offer or perform this unless the user asks.

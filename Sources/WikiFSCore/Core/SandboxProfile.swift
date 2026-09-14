@@ -19,6 +19,13 @@ import Foundation
 /// channel only. See `plans/sandbox-agent.md` for the threat model and the
 /// `sandbox-exec` syntax research that underpins this.
 ///
+/// Temp-file contract: the launcher relocates the agent's standard temp files
+/// under the scratch (`TMPDIR=<scratch>/.tmp`, plus a defensive zsh
+/// `TMPPREFIX=<scratch>/.tmp/zsh` compatibility leaf). Because both live under
+/// the `SCRATCH_DIR` subpath allow, heredoc/process-substitution temp files are
+/// writable inside the sandbox without any `/tmp` allowance — this profile must
+/// NOT permit `/tmp/zsh*` globally.
+///
 /// The ONE read/exec carve-out: the resolved `pdf2md` script is denied for both
 /// `process-exec*` and `file-read*` (`pdf2mdDenyRules()`), so a sandboxed agent can't
 /// run the bundled extractor or feed it to `uv --script`. Everything else stays

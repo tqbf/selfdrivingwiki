@@ -57,7 +57,11 @@ struct ACPChatResumeTests {
 
     /// AC.7: when `priorAcpSessionId` is set and `resume()` returns a handle,
     /// `backend.start()` is NOT called (resume succeeded) and the first
-    /// message sent is the raw user message (not the task prompt + preamble).
+    /// message sent is a RUN ENVIRONMENT refresh + the raw user message —
+    /// not the full task prompt, and not the bare message (the resumed
+    /// context still references the PREVIOUS run's scratch/state paths, so
+    /// the new run context must supersede them). The displayed text stays
+    /// the raw user message.
     @Test func continueChatResumesAndSkipsFreshStart() async throws {
         let tempDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -90,7 +94,11 @@ struct ACPChatResumeTests {
         #expect(startCount == 0)
         let sentTexts = try await waitForSendCount(atLeast: 1, on: backend)
         #expect(sentTexts.count == 1)
-        #expect(sentTexts[0] == "user question")
+        // Resume refresh: the CURRENT run context supersedes prior paths.
+        #expect(sentTexts[0].contains("RUN ENVIRONMENT"))
+        #expect(sentTexts[0].contains("supersedes any paths"))
+        #expect(sentTexts[0].hasSuffix("# USER MESSAGE\nuser question"))
+        #expect(!sentTexts[0].contains("Wikictl first"))
     }
 
     /// AC.8: when `priorAcpSessionId` is set and `resume()` returns nil,

@@ -38,7 +38,7 @@ For EACH assigned page:
 ### Write rules
 
 - The ONLY way to create or update content is `wikictl`. The wiki mount is READ-ONLY.
-- Always use `--body-file ./body.md`, never shell pipes or heredocs.
+- Deliver bodies via a scratch FILE (`--body-file <scratch>/body.md`) — the robust default; short stdin pipes or quoted heredocs (`<<'EOF'`) also work inside the sandbox.
 - After a write, read it back with `wikictl page get` (the mount lags the database by ~5s).
 
 **CAS discipline for page writes:** Before writing a page, run

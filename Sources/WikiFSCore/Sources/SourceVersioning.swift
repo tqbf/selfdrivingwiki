@@ -164,6 +164,24 @@ public struct PageConflictError: Error, Equatable {
     }
 }
 
+/// Thrown by `appendUserProcessedMarkdown` when a CAS check fails on a
+/// source's processed-markdown chain: another writer (a human, an extraction,
+/// another agent) advanced the active head after the caller read it, so the
+/// caller's `expectedHead` is stale. Carries the actual current head so the
+/// caller can re-read, reapply once, and retry. The write throws BEFORE any
+/// row, ref, or FTS change — a conflict leaves no trace.
+public struct SourceMarkdownConflictError: Error, Equatable {
+    public let sourceID: SourceID
+    public let expectedHead: SourceMarkdownVersionID
+    public let currentHead: SourceMarkdownVersionID?
+
+    public init(sourceID: SourceID, expectedHead: SourceMarkdownVersionID, currentHead: SourceMarkdownVersionID?) {
+        self.sourceID = sourceID
+        self.expectedHead = expectedHead
+        self.currentHead = currentHead
+    }
+}
+
 // MARK: - Workspaces (W1, PR #312)
 
 /// The lifecycle state of a workspace. Transitions: `open` → `merging` →

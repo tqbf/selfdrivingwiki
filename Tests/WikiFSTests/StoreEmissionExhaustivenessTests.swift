@@ -21,6 +21,7 @@ struct StoreEmissionExhaustivenessTests {
             "public func restorePage(",
             "public func revertPage(",
             "public func appendDerivedMarkdown(",
+            "public func appendUserProcessedMarkdown(",
         ] {
             guard let start = source.range(of: signature)?.lowerBound else {
                 Issue.record("missing classified public mutator \(signature)")

@@ -73,6 +73,28 @@ public enum WikiOperation: Equatable, Sendable {
     }
   }
 
+  /// The staged `WIKI_STATE.md` scratch path when this operation stages one
+  /// (every op does today). Exposed so the run-context builder can inject the
+  /// absolute path into prompts without pattern-matching the op again.
+  public var stateFilePath: String? {
+    switch self {
+    case .ingest(_, _, let stateFilePath, _): return stateFilePath
+    case .query(_, let stateFilePath): return stateFilePath
+    case .queryChat(let stateFilePath, _): return stateFilePath
+    case .lint(let stateFilePath): return stateFilePath
+    case .lintPage(_, _, let stateFilePath): return stateFilePath
+    }
+  }
+
+  /// The staged raw-source scratch paths (ingest only — the other ops stage
+  /// no source bytes).
+  public var stagedSourcePaths: [String] {
+    switch self {
+    case .ingest(_, let stagedSourcePaths, _, _): return stagedSourcePaths
+    case .query, .queryChat, .lint, .lintPage: return []
+    }
+  }
+
   public enum Kind: String, CaseIterable, Sendable {
     case ingest
     case query

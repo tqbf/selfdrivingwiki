@@ -356,6 +356,40 @@ struct StoreEmissionTests {
         #expect(events.last?.id == s.id.rawValue)
     }
 
+    @Test func userMarkdownCASMatchEmitsExactlyOneSourceUpdate() async throws {
+        let (store, _, rec) = try makeHarness()
+        let s = try addSeedSource(store)
+        _ = try store.appendProcessedMarkdown(sourceID: s.id, content: "v1", origin: .extraction, note: nil)
+        let head = try #require(try store.processedMarkdownHead(sourceID: s.id))
+        try await drain(rec, expected: 2)
+
+        // CAS match: exactly ONE source update event after the commit.
+        _ = try store.appendUserProcessedMarkdown(
+            sourceID: s.id, content: "user rewrite", expectedHead: head.id)
+        let events = try await awaitEvents(rec)
+        #expect(events.count == 1)
+        #expect(events.last?.kind == .source)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == s.id.rawValue)
+    }
+
+    @Test func userMarkdownCASConflictEmitsNothing() async throws {
+        let (store, _, rec) = try makeHarness()
+        let s = try addSeedSource(store)
+        _ = try store.appendProcessedMarkdown(sourceID: s.id, content: "v1", origin: .extraction, note: nil)
+        let stale = try #require(try store.processedMarkdownHead(sourceID: s.id))
+        _ = try store.appendProcessedMarkdown(sourceID: s.id, content: "v2", origin: .extraction, note: nil)
+        try await drain(rec, expected: 3)
+
+        // Stale expected head: the write throws before commit — the bus stays
+        // completely silent (no version, ref, FTS, or event side effect).
+        #expect(throws: SourceMarkdownConflictError.self) {
+            try store.appendUserProcessedMarkdown(
+                sourceID: s.id, content: "stale rewrite", expectedHead: stale.id)
+        }
+        await assertNoEventsDelivered(rec)
+    }
+
     @Test func recordMarkdownExtractionEmitsSourceUpdated() async throws {
         let (store, _, rec) = try makeHarness()
         let s = try addSeedSource(store)

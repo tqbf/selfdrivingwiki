@@ -57,10 +57,12 @@ struct SystemPromptTests {
         #expect(!body.contains("$WIKICTL"))
         // Write-via-wikictl-never-the-filesystem + read-only mount.
         #expect(body.contains("READ-ONLY"))
-        // WIKI_DB selects the wiki, so do not pass --wiki.
+        // WIKI_DB and the trusted invocation: the RUN ENVIRONMENT block names
+        // the absolute `wikictl --wiki <id>` form; env vars are conveniences.
         #expect(body.contains("WIKI_DB"))
-        #expect(body.contains("do NOT pass"))
+        #expect(body.contains("RUN ENVIRONMENT"))
         #expect(body.contains("--wiki"))
+        #expect(body.contains("convenience"))
         // The read-after-write escape hatch (the mount lags).
         #expect(body.contains("Read back what you just wrote"))
     }

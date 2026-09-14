@@ -127,6 +127,24 @@ func run() async -> Int32 {
         """
         FileHandle.standardError.write(Data(message.utf8))
         return 3
+    } catch let conflict as SourceMarkdownConflictError {
+        // CAS conflict on a processed-markdown rewrite — the chain's head
+        // moved after the caller read it (another writer won the race). Exit
+        // code 3 (same convention as the page CAS) signals the agent to
+        // re-read, reapply once, and retry once — never loop.
+        let actual = conflict.currentHead?.rawValue ?? "(none)"
+        let message = """
+        wikictl: CAS conflict on source \(conflict.sourceID.rawValue) — \
+        expected head \(conflict.expectedHead.rawValue), \
+        but actual head is \(actual). \
+        Re-read the processed markdown (`source cat --markdown`), re-read \
+        head_version_id (`source info`), reapply your edit, and retry once. \
+        Nothing was written. If it conflicts again, report the conflict \
+        instead of retrying.
+
+        """
+        FileHandle.standardError.write(Data(message.utf8))
+        return 3
     } catch let failure as SourceCommand.Failure {
         FileHandle.standardError.write(Data("wikictl: \(failure)\n".utf8))
         return 1

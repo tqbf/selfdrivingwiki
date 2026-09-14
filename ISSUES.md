@@ -3,6 +3,23 @@
 Running list of known limitations / rough edges. Not bugs to fix right now —
 things we've decided to live with, with enough context to revisit later.
 
+## Claude Code shared temp namespace is writable inside the agent fence
+
+The base agent profile allows writes under `/private/tmp/claude-<uid>`
+(`CLAUDE_TMP`, pre-existing since the #1251 wiring) and under any
+`/private/tmp/claude-<hex>-cwd` marker directory (the
+`agentRuntimeWriteRules` regex). Claude Code stages per-session shell state
+there and derives paths from the cwd, so the allow is broad: a sandboxed agent
+running as this account can write into temp/state trees belonging to OTHER
+Claude sessions of the same user, and the cwd-marker regex is not bound to the
+current run. This is wider than scratch + active DB by design-for-compatibility,
+not by accident; it does not grant `/tmp` generally.
+
+Follow-up direction: resolve the exact per-session temp/marker paths before
+spawn (or pre-create unique app-owned directories and bind those literals),
+then narrow the defines and replace the regex with exact per-run paths. Live
+coverage for the denial shape would go in `AgentSandboxProcessTests`.
+
 ## `[[wiki-link]]` delimiter collisions (residual edges)
 
 The link grammar reserves `#`, `|`, `]`, and the `source:`/`page:` prefixes,

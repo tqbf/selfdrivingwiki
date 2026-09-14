@@ -103,16 +103,38 @@ struct HeadVersionEchoTests {
 
     // MARK: - source edit-markdown / set-active
 
-    @Test func sourceEditMarkdownEchoesHeadOnStderr() throws {
+    @Test func sourceEditMarkdownEchoesNewHead() throws {
         let store = try tempStore()
         let src = try store.addSource(filename: "doc.md", data: Data("bytes".utf8))
         _ = try store.appendProcessedMarkdown(sourceID: src.id, content: "# v1", origin: .extraction, note: nil)
+        let headBefore = try #require(try store.processedMarkdownHead(sourceID: src.id))
 
         let result = try SourceCommand.run(
-            .editMarkdown(.id(src.id), content: .inline("# v2")), in: store, cwd: "/tmp")
+            .editMarkdown(.id(src.id), content: .inline("# v2"), expectedHead: headBefore.id),
+            in: store, cwd: "/tmp")
         let head = try store.processedMarkdownHead(sourceID: src.id)
         #expect(result.didCommit)
         #expect(result.stderrOutput == headLine(head?.id.rawValue))
+        #expect(head?.id != headBefore.id, "the echoed head is the NEW head, not the expected one")
+    }
+
+    @Test func sourceMarkdownCASConflictProducesNoHeadLine() throws {
+        let store = try tempStore()
+        let src = try store.addSource(filename: "doc3.md", data: Data("bytes".utf8))
+        _ = try store.appendProcessedMarkdown(sourceID: src.id, content: "# v1", origin: .extraction, note: nil)
+        let headBefore = try #require(try store.processedMarkdownHead(sourceID: src.id))
+        _ = try store.appendProcessedMarkdown(sourceID: src.id, content: "# v2 raced", origin: .extraction, note: nil)
+
+        // A stale expected head throws before any Result exists, so no stderr
+        // head line can leak from a failed write.
+        let stale = SourceMarkdownConflictError(
+            sourceID: src.id, expectedHead: headBefore.id,
+            currentHead: try store.processedMarkdownHead(sourceID: src.id)?.id)
+        #expect(throws: stale) {
+            try SourceCommand.run(
+                .editMarkdown(.id(src.id), content: .inline("# late"), expectedHead: headBefore.id),
+                in: store, cwd: "/tmp")
+        }
     }
 
     @Test func sourceSetActiveEchoesTheNominatedHead() throws {

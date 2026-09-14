@@ -521,10 +521,18 @@ public actor ACPBackend: AgentBackend {
 
         DebugLog.agent("ACPBackend.startProcess: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))")
         // Build the environment so the agent can find wikictl + the wiki DB.
-        // Exports WIKI_DB/WIKICTL/PATH (NOT WIKI_ROOT — mount is optional;
-        // wikictl is the primary read surface, issue #441).
+        // The typed `runContext` owns the protected run keys: its values
+        // overwrite whatever provider hints supplied (WIKI_DB/WIKICTL/PATH are
+        // conveniences, not capabilities; scratch + TMPDIR/TMPPREFIX come only
+        // from the run context). WIKI_ROOT is intentionally NOT exported — the
+        // mount is optional; wikictl is the primary read surface (#441).
         let env: [String: String]
-        if let cli = profile.cli {
+        if let runContext = profile.runContext {
+            env = runContext.environment(
+                providerEnvironment: spawn.environment,
+                baseEnvironment: ProcessInfo.processInfo.environment)
+            DebugLog.agent("ACPBackend.startProcess: \(runContext.diagnosticDescription)")
+        } else if let cli = profile.cli {
             env = Self.buildAgentEnv(
                 from: cli,
                 baseEnv: ProcessInfo.processInfo.environment,
@@ -756,9 +764,9 @@ public actor ACPBackend: AgentBackend {
         let client = warm.client
         let permissionDelegate = warm.permissionDelegate
         let fanout = warm.notificationFanout
-        let spawn = Self.resolveSpawnConfig(from: profile)
 
-        let workingDir = profile.scratchDirectory?.path ?? spawn?.workingDirectory ?? FileManager.default.currentDirectoryPath
+        let workingDir = Self.requestedSessionCWD(for: profile)
+            ?? FileManager.default.currentDirectoryPath
         // Deliver the system prompt via the spec-compliant on-disk mechanism
         // (issue #427). ACP's NewSessionRequest has no systemPrompt field — the
         // spec models system context as CLAUDE.md/AGENTS.md in the cwd. The File
@@ -1432,8 +1440,7 @@ public actor ACPBackend: AgentBackend {
         }
 
         let client = newWarm.client
-        let cwd = profile.scratchDirectory?.path
-            ?? Self.resolveSpawnConfig(from: profile)?.workingDirectory
+        let cwd = Self.requestedSessionCWD(for: profile)
             ?? FileManager.default.currentDirectoryPath
         let acpSessionId = SessionId(sessionID)
 
@@ -2041,6 +2048,20 @@ public actor ACPBackend: AgentBackend {
             environment: environment)
     }
 
+    /// The canonical session cwd for a profile: the typed run context's
+    /// canonical timestamped scratch when present, else the profile's scratch
+    /// directory, else the spawn config's working directory. The launcher
+    /// supplies the canonical scratch on EVERY operation profile — the
+    /// trailing fallbacks cover legacy/internal profiles only. Internal so
+    /// `ACPWiringTests` can pin the preference order without spawning.
+    static func requestedSessionCWD(for profile: BackendProfile) -> String? {
+        if let runContext = profile.runContext {
+            return runContext.scratchDirectory.path
+        }
+        return profile.scratchDirectory?.path
+            ?? Self.resolveSpawnConfig(from: profile)?.workingDirectory
+    }
+
     // MARK: - Seatbelt application (issue #1251)
 
     /// The scratch-relative leaf the launcher pre-creates for a sandboxed
@@ -2284,11 +2305,16 @@ public actor ACPBackend: AgentBackend {
         static let pathSeparator = ":"
     }
 
-    /// Builds the environment dict for the agent subprocess. Exports `WIKI_DB`,
-    /// `WIKICTL`, and prepends the wikictl directory to `PATH`. `WIKI_ROOT` is
-    /// intentionally NOT exported — the mount is optional; wikictl is the primary
-    /// read surface (issue #441). The task-prompt path (`WikiOperation.wikiRootLine`)
-    /// still gives the agent the resolved mount path inline when available.
+    /// Builds the environment dict for the agent subprocess — the LEGACY path
+    /// used only when a profile carries `cli` without the typed `runContext`.
+    /// Exports `WIKI_DB`, `WIKICTL`, and prepends the wikictl directory to
+    /// `PATH`. These exports are CONVENIENCES for adapters that preserve the
+    /// environment: correctness never depends on them (the operation prompt
+    /// carries the absolute trusted invocation + scratch paths; adapters have
+    /// been observed sanitizing both). `WIKI_ROOT` is intentionally NOT
+    /// exported — the mount is optional; wikictl is the primary read surface
+    /// (issue #441). The task-prompt path (`WikiOperation.wikiRootLine`) still
+    /// gives the agent the resolved mount path inline when available.
     /// Extracted from `start()` so it is unit-testable without a subprocess.
     static func buildAgentEnv(
         from cli: CLIProfile,

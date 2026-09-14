@@ -25,7 +25,7 @@ For each source, record the ingest in the log. The source files and their IDs ar
 ### Write rules
 
 - The ONLY way to create or update content is `wikictl`. The wiki mount is READ-ONLY.
-- Always use `--body-file ./index.md`, never shell pipes or heredocs.
+- Deliver bodies via a scratch FILE (`--body-file <scratch>/index.md`) — the robust default; short stdin pipes or quoted heredocs (`<<'EOF'`) also work inside the sandbox.
 
 IMPORTANT:
 - Do NOT dispatch sub-agents, background tasks, or async agents.

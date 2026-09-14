@@ -32,8 +32,10 @@ struct WikiTreeRendererTests {
         #expect(body.contains("wikictl log append"))
         // Mount discipline.
         #expect(body.contains("read-only"))
-        #expect(body.contains("do not pass `--wiki`") || body.contains("never pass --wiki")
-            || body.contains("never pass `--wiki`"))
+        // The trusted absolute invocation carries --wiki; the RUN ENVIRONMENT
+        // block in the task prompt supplies it.
+        #expect(body.contains("RUN ENVIRONMENT"))
+        #expect(body.contains("--wiki"))
     }
 
     @Test func foldsInTheLiveCounts() {

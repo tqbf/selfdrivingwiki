@@ -6346,6 +6346,60 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         return version
     }
 
+    /// The CAS-protected `.user` rewrite seam (CLI `source edit-markdown`).
+    /// Inside ONE `mutate` transaction: read the active head with the
+    /// db-taking helper, compare it with `expectedHead`, and only on a match
+    /// store the blob, insert one `.user` version whose parent is that head,
+    /// update the active `source-derived` ref, and refresh inline FTS. On
+    /// mismatch the throw happens BEFORE any write — no version, no ref, no
+    /// FTS row, no event, no embedding work, no head diagnostic. Post-commit
+    /// behavior mirrors `appendProcessedMarkdown`: exactly one source-update
+    /// event (via `mutate`'s event seam) and one embedding schedule.
+    public func appendUserProcessedMarkdown(
+        sourceID: SourceID, content: String, expectedHead: SourceMarkdownVersionID
+    ) throws -> SourceMarkdownVersion {
+        let version: SourceMarkdownVersion = try mutate(event: { _ in
+            self.localEvent(.source, id: sourceID.rawValue, change: .updated)
+        }) { db in
+            // CAS read with the db-taking helper (the public
+            // `processedMarkdownHead` re-enters `dbWriter.read` — deadlock).
+            guard let currentHead = try self.processedMarkdownHead(sourceID: sourceID, on: db) else {
+                throw WikiStoreError.noProcessedMarkdown(sourceID)
+            }
+            guard currentHead.id == expectedHead else {
+                throw SourceMarkdownConflictError(
+                    sourceID: sourceID, expectedHead: expectedHead,
+                    currentHead: currentHead.id)
+            }
+            let id = SourceMarkdownVersionID(rawValue: ULID.generate())
+            let now = Date()
+            // CAS the body: hash → INSERT OR IGNORE blob.
+            let blobHash = try self.storeMarkdownBlob(content, on: db)
+
+            try db.execute(sql: """
+            INSERT INTO source_markdown_versions
+              (id, file_id, parent_id, origin, note, created_at,
+               blob_hash, mime_type, technique)
+            VALUES (?, ?, ?, 'user', NULL, ?, ?, 'text/markdown', NULL);
+            """, arguments: [id.rawValue, sourceID.rawValue, currentHead.id.rawValue,
+                             now.timeIntervalSince1970, blobHash])
+            try self.upsertMarkdownDerivedRef(
+                sourceID: sourceID, versionID: id, now: now.timeIntervalSince1970, on: db)
+
+            // FTS refresh inline (pure SQL) so keyword search finds the new content.
+            self.upsertSourceSearch(sourceID: sourceID, body: content, on: db)
+
+            return SourceMarkdownVersion(
+                id: id, sourceID: sourceID, parentID: currentHead.id,
+                content: content, origin: .user, note: nil, createdAt: now,
+                blobHash: blobHash, mimeType: MimeType.markdown, technique: nil
+            )
+        }
+        // Post-commit: re-embed from the just-written content + name.
+        reembedSource(sourceID: sourceID, body: content)
+        return version
+    }
+
     /// Canonical append-only persistence for extraction and transcript output.
     /// All rows that describe one derived artifact commit together, followed by
     /// one source update event outside the transaction.
@@ -11553,6 +11607,12 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// probe).
 
 
+    /// Test seam: when non-nil, invoked IN PLACE of the real embedding work
+    /// (name read + chunked embeddings + chunk store). Lets `StoreEmissionTests`
+    /// / `SourceEmbeddingSearchTests` count embedding schedules for the CAS
+    /// write seams without loading an embedder. Not set in production code.
+    var reembedInterceptor: (@Sendable (SourceID, String) -> Void)?
+
     /// Best-effort re-embed of `sourceID` from `body`. Runs POST-commit (never
     /// inside `mutate`): reads the source name on its own, runs MLX chunked
     /// embeddings out-of-transaction, then writes via the existing public
@@ -11560,6 +11620,10 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// loaded (the model must be available to embed). Mirrors
     /// `SQLiteWikiStore.reembedSource` minus the lock-holding.
     private func reembedSource(sourceID: SourceID, body: String) {
+        if let reembedInterceptor {
+            reembedInterceptor(sourceID, body)
+            return
+        }
         guard let title = DebugLog.trying("reembedSource", operation: {
             try dbWriter.read { db in
                 try String.fetchOne(

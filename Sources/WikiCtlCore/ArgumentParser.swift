@@ -445,18 +445,30 @@ public enum ArgumentParser {
         case "edit-markdown":
             // `--content` is inline; `--file` defers to BodySource resolution
             // (read at execution time, not parse time — the parser stays pure).
+            // `--expect-head` is REQUIRED: the CAS token protects a concurrent
+            // human/extraction/agent rewrite from being silently clobbered.
             let selector = try options.requireSourceSelector()
             let contentValue = options.value("--content")
             let fileValue = options.value("--file")
+            guard let rawHead = options.value("--expect-head"),
+                  !rawHead.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Failure.usage("""
+                source edit-markdown: --expect-head <version-id> is required — \
+                read the chain head first (`source info --id <id>` prints \
+                head_version_id), then retry with it. On exit 3 (conflict), \
+                re-read, reapply once, retry once.
+                """)
+            }
+            let expectedHead = SourceMarkdownVersionID(rawValue: rawHead)
             switch (contentValue, fileValue) {
             case (.some, .some):
                 throw Failure.usage("source edit-markdown: pass exactly one of --content / --file, not both")
             case (.none, .none):
                 throw Failure.usage("source edit-markdown: pass --content <text> or --file <path>")
             case (let content?, nil):
-                return .source(.editMarkdown(selector, content: .inline(content)))
+                return .source(.editMarkdown(selector, content: .inline(content), expectedHead: expectedHead))
             case (nil, let file?):
-                return .source(.editMarkdown(selector, content: .file(file)))
+                return .source(.editMarkdown(selector, content: .file(file), expectedHead: expectedHead))
             }
 
         case "rename":

@@ -2,8 +2,9 @@
 
 A read-only map of this Self Driving Wiki wiki. Everything under the mount is served
 read-only — WRITE only through the `wikictl` command (see the cheatsheet
-below). `wikictl` already targets THIS wiki via the `$WIKI_DB` environment
-variable, so never pass `--wiki`.
+below). Call `wikictl` in the trusted absolute invocation form from your task's
+RUN ENVIRONMENT block (`…/wikictl --wiki <wiki-id> …`) — it targets this wiki
+even when the `$WIKI_DB` convenience is dropped.
 
 Current contents: {{pageCount}} page{{pageNoun}}, {{sourceCount}} source{{sourceNoun}}, {{chatCount}} chat{{chatNoun}}.
 
@@ -34,7 +35,9 @@ Current contents: {{pageCount}} page{{pageNoun}}, {{sourceCount}} source{{source
 - `wikictl index set --body-file ./index.md`             — rewrite index.md.
 - `wikictl log append --kind ingest|query|lint --title "…" [--note "…"]` — record an action.
 
-Pass page/index bodies via a FILE (`--body-file <path>`), never a shell pipe
-or heredoc — the sandbox drops a piped/heredoc'd body and `wikictl`
-refuses an empty body. After any write, read it back with `wikictl page get` — the
+Deliver page/index bodies via a scratch FILE (`--body-file <absolute path>`
+under the SCRATCH WORKSPACE from your RUN ENVIRONMENT block) — the robust
+default for substantial Markdown. Stdin pipes and quoted heredocs also work
+inside the sandbox (temp files are confined beneath the scratch `.tmp`), but
+prefer files. After any write, read it back with `wikictl page get` — the
 read-only mount lags a few seconds, so don't `cat` the mount to verify a fresh write.

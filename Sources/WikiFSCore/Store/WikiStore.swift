@@ -11,6 +11,9 @@ public enum WikiStoreError: Error, CustomStringConvertible {
     case sourceNotFound(SourceID)
     case sourceVersionNotFound(SourceVersionID)
     case sourceMarkdownVersionNotFound(SourceMarkdownVersionID)
+    /// Thrown by `appendUserProcessedMarkdown` when the source has no
+    /// processed-markdown chain yet — extract/seed first, then rewrite.
+    case noProcessedMarkdown(SourceID)
     case deletionRestricted(ResourceDeletionRestriction)
     case invalidBookmarkRow(id: String, reason: String)
     case invalidRendererEventID(String)
@@ -34,6 +37,7 @@ public enum WikiStoreError: Error, CustomStringConvertible {
         case .sourceNotFound(let id): return "Source not found: \(id.rawValue)"
         case .sourceVersionNotFound(let id): return "Source version not found: \(id.rawValue)"
         case .sourceMarkdownVersionNotFound(let id): return "Source markdown version not found: \(id.rawValue)"
+        case .noProcessedMarkdown(let id): return "Source has no processed markdown yet: \(id.rawValue) — extract or seed it first"
         case .deletionRestricted(.provenance(let blockers)):
             return "Source deletion restricted by \(blockers.values.count) page version provenance reference(s)"
         case .invalidBookmarkRow(let id, let reason): return "Invalid bookmark row \(id): \(reason)"
@@ -575,6 +579,19 @@ public protocol WikiStore: AnyObject, Sendable {
     func appendProcessedMarkdown(sourceID: SourceID, content: String,
                                  origin: SourceMarkdownOrigin, note: String?,
                                  technique: String?) throws -> SourceMarkdownVersion
+
+    /// Append a `.user` processed-markdown version with compare-and-swap on
+    /// the active head: the write commits ONLY when the chain's current head
+    /// still equals `expectedHead`; otherwise it throws
+    /// `SourceMarkdownConflictError` before any row, ref, FTS, event, or
+    /// embedding change. This is the CAS-protected write seam for user/agent
+    /// processed-source rewrites (CLI `source edit-markdown`); the trusted
+    /// extraction/transcript writers keep using `appendProcessedMarkdown` /
+    /// `appendDerivedMarkdown`.
+    @discardableResult
+    func appendUserProcessedMarkdown(
+        sourceID: SourceID, content: String, expectedHead: SourceMarkdownVersionID
+    ) throws -> SourceMarkdownVersion
 
     /// Append typed, non-user derived markdown and make it the active source
     /// markdown head. This is the canonical persistence seam for extraction and

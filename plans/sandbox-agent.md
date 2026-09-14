@@ -160,6 +160,90 @@ env or allowlist the path.
   and logs a warning — the resolver's documented contract; the APPLICATION seam is
   fail-closed (an unusable `sandbox-exec` refuses to spawn at all).
 
+## Run context: absolute paths, temp relocation, heredocs (2026-09)
+
+This section records the run-context contract added after the heredoc denial in
+chat `01M2EXC4NEDK5WYEMZGFADYXCH`. Feature plan:
+`plans/agent-scripting-and-processed-source-rewrite.md`.
+
+### The adapter cannot be trusted with cwd or environment
+
+An ACP adapter may move its nested tool working directory and drop environment
+variables. Codex ACP did both: tools ran in a chat-level cache directory, and
+`WIKI_DB` was gone. Correctness therefore comes from three places that no
+adapter can sanitize:
+
+1. **The typed run context** (`AgentRunContext`, `WikiFSEngine`). One value per
+   run carries the canonical timestamped scratch, `<scratch>/.tmp`, the optional
+   zsh prefix `<scratch>/.tmp/zsh`, the typed `WikiID`, the trusted absolute
+   `wikictl` path, and the effective `PATH`. The launcher builds it once per
+   run and threads it through every `BackendProfile`.
+2. **The protected environment.** `ACPBackend.startProcess` merges provider
+   hints first, then overwrites `WIKI_DB`, `WIKICTL`, `WIKI_SCRATCH`, `PATH`,
+   `TMPDIR`, and `TMPPREFIX` from the run context. Provider config cannot
+   redirect wiki routing, the scratch, or temp relocation.
+3. **The prompt.** Every operation prompt (one-shot, each ingest phase,
+   fallback, interactive chat) ends with a RUN ENVIRONMENT block. It states the
+   absolute scratch, temp, state, and staged-source paths and renders the
+   trusted invocation as `'/abs/wikictl' --wiki <ulid>` through one tested
+   quoting helper (`ShellQuoting`). The agent copies the command line from the
+   prompt. Nested cwd, `PATH`, `WIKI_DB`, and `WIKICTL` are conveniences.
+
+The profile text is prompt data, not an unforgeable capability. The Seatbelt
+active-DB literal allowlist stays the security boundary: a mistaken or
+malicious cross-wiki command cannot write (`AgentSandboxProcessTests.
+productionSandboxPreventsCrossWikiMutation` proves the denial with the real
+`wikictl` binary). No executable stored in agent-writable scratch is generated
+or trusted.
+
+### Temp files and heredocs — measured behavior
+
+- zsh stages heredoc temp files under `TMPPREFIX` (default `/tmp/zsh…`,
+  independent of `TMPDIR`). The run context sets `TMPPREFIX=<scratch>/.tmp/zsh`,
+  so zsh heredocs work inside the fence. This is a compatibility setting for
+  adapters that launch zsh (the rbenv-init case). zsh is not selected or
+  required anywhere.
+- macOS `/bin/sh` and `/bin/bash` stage heredoc temp files in `/tmp`
+  REGARDLESS of `TMPDIR`. An in-shell heredoc therefore cannot run inside the
+  fence. This is why the profile must NOT permit `/tmp` or `/tmp/zsh*`:
+  the allow would be global. Heredoc bodies reach sandboxed `/bin/sh` through
+  stdin or a scratch file instead.
+- Standard temp files (`mktemp`, runtimes, SQLite) honor `TMPDIR` and work
+  under `<scratch>/.tmp`.
+
+The launcher creates `.tmp` and `.tmp/zsh` before every spawn (and before the
+sandbox applies), through `AgentRunContext.createTempDirectories()`.
+
+### User PATH discovery is shell-neutral
+
+The effective `PATH` is the helper directory followed by the user environment
+PATH. That PATH comes from one login-shell hop through the account's configured
+shell (`$SHELL`, else the passwd record) — never a hard-coded `/bin/zsh`. The
+hop feeds environment discovery only; agent scripts must not depend on login
+shell startup files. A failed or implausible result (empty, or whitespace such
+as fish renders) falls back to the inherited process PATH
+(`UserEnvironmentPath`, tested with an injected runner).
+
+### CAS-protected processed-source rewrite
+
+`wikictl source edit-markdown` now REQUIRES `--expect-head <version-id>` and
+writes only through `appendUserProcessedMarkdown` — one store transaction that
+compares the active head, then appends one `.user` version, advances the
+`source-derived` ref, refreshes FTS, emits one event, and schedules one
+embedding. A stale head throws `SourceMarkdownConflictError` before any write;
+the CLI maps it to exit 3 with a re-read/reapply/retry-once message.
+`source info` prints `head_version_id` so agents can read the CAS token.
+Raw source bytes stay immutable; the File Provider projection stays read-only.
+
+### Live coverage
+
+`AgentSandboxProcessTests` (macOS, `WIKIFS_APP_TESTS=1`) runs the real
+`/usr/bin/sandbox-exec`: `/bin/sh` transform + outside-write denial, stdin-fed
+heredoc transform, zsh heredoc with scratch `TMPPREFIX`, installed Bun/Python
+smokes (capability-gated skips), the absolute `wikictl --wiki` CAS rewrite with
+`WIKI_DB`/`WIKICTL`/`PATH` removed, and the cross-wiki denial. The deterministic
+half lives in `AgentRunContextTests` and `AgentRuntimePathTests`.
+
 ## Files
 
 - `Sources/WikiFSCore/Core/SandboxProfile.swift` — `SandboxInvocation` + pure

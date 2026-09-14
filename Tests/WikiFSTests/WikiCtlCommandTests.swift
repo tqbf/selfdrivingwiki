@@ -926,26 +926,54 @@ struct WikiCtlCommandTests {
 
     @Test func parsesEditMarkdownWithContent() throws {
         let invocation = try ArgumentParser.parse(
-            ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--content", "new body"], env: noEnv)
-        #expect(invocation.command == .source(.editMarkdown(.id(SourceID(rawValue: "01ABC")), content: .inline("new body"))))
+            ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--content", "new body",
+             "--expect-head", "01HEAD"], env: noEnv)
+        #expect(invocation.command == .source(.editMarkdown(
+            .id(SourceID(rawValue: "01ABC")), content: .inline("new body"),
+            expectedHead: SourceMarkdownVersionID(rawValue: "01HEAD"))))
     }
 
     @Test func parsesEditMarkdownWithFile() throws {
         let invocation = try ArgumentParser.parse(
-            ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--file", "edit.md"], env: noEnv)
-        #expect(invocation.command == .source(.editMarkdown(.id(SourceID(rawValue: "01ABC")), content: .file("edit.md"))))
+            ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--file", "edit.md",
+             "--expect-head", "01HEAD"], env: noEnv)
+        #expect(invocation.command == .source(.editMarkdown(
+            .id(SourceID(rawValue: "01ABC")), content: .file("edit.md"),
+            expectedHead: SourceMarkdownVersionID(rawValue: "01HEAD"))))
     }
 
     @Test func parsesEditMarkdownByName() throws {
         let invocation = try ArgumentParser.parse(
-            ["--wiki", "W", "source", "edit-markdown", "--name", "report.md", "--content", "updated"], env: noEnv)
-        #expect(invocation.command == .source(.editMarkdown(.name("report.md"), content: .inline("updated"))))
+            ["--wiki", "W", "source", "edit-markdown", "--name", "report.md", "--content", "updated",
+             "--expect-head", "01HEAD"], env: noEnv)
+        #expect(invocation.command == .source(.editMarkdown(
+            .name("report.md"), content: .inline("updated"),
+            expectedHead: SourceMarkdownVersionID(rawValue: "01HEAD"))))
+    }
+
+    @Test func editMarkdownRequiresExpectHead() throws {
+        // CAS is mandatory on the CLI: a blind rewrite is a usage error, and
+        // the message must be actionable (name the flag + how to read a head).
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(
+                ["--wiki", "W", "source", "edit-markdown", "--id", "x", "--content", "body"],
+                env: noEnv)
+        }
+        do {
+            _ = try ArgumentParser.parse(
+                ["--wiki", "W", "source", "edit-markdown", "--id", "x", "--content", "body"],
+                env: noEnv)
+        } catch let failure as ArgumentParser.Failure {
+            #expect(failure.description.contains("--expect-head"))
+            #expect(failure.description.contains("source info"))
+        }
     }
 
     @Test func editMarkdownRejectsBothContentAndFile() {
         #expect(throws: ArgumentParser.Failure.self) {
             try ArgumentParser.parse(
-                ["--wiki", "W", "source", "edit-markdown", "--id", "x", "--content", "a", "--file", "b.md"],
+                ["--wiki", "W", "source", "edit-markdown", "--id", "x", "--content", "a", "--file", "b.md",
+                 "--expect-head", "01HEAD"],
                 env: noEnv)
         }
     }
@@ -953,30 +981,35 @@ struct WikiCtlCommandTests {
     @Test func editMarkdownRequiresContentOrFile() {
         #expect(throws: ArgumentParser.Failure.self) {
             try ArgumentParser.parse(
-                ["--wiki", "W", "source", "edit-markdown", "--id", "x"], env: noEnv)
+                ["--wiki", "W", "source", "edit-markdown", "--id", "x", "--expect-head", "01HEAD"],
+                env: noEnv)
         }
     }
 
     @Test func editMarkdownRequiresSelector() {
         #expect(throws: ArgumentParser.Failure.self) {
             try ArgumentParser.parse(
-                ["--wiki", "W", "source", "edit-markdown", "--content", "x"], env: noEnv)
+                ["--wiki", "W", "source", "edit-markdown", "--content", "x", "--expect-head", "01HEAD"],
+                env: noEnv)
         }
     }
 
-    // MARK: - edit-markdown dispatch
+    // MARK: - edit-markdown dispatch (CAS)
 
-    @Test func editMarkdownAppendsUserVersion() throws {
+    @Test func editMarkdownWithMatchingHeadAppendsUserVersion() throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         // Append first version (extraction).
         _ = try store.appendProcessedMarkdown(
             sourceID: ingested.id, content: "original", origin: .extraction, note: nil)
+        let headBefore = try #require(try store.processedMarkdownHead(sourceID: ingested.id))
         // Small delay ensures the next ULID is strictly later.
         usleep(2000)
-        // Run edit-markdown which appends a "user" version.
+        // Run edit-markdown with the CURRENT head — the CAS match appends a
+        // "user" version whose parent is the expected head.
         let result = try SourceCommand.run(
-            .editMarkdown(.id(ingested.id), content: .inline("edited")), in: store, cwd: "/tmp")
+            .editMarkdown(.id(ingested.id), content: .inline("edited"), expectedHead: headBefore.id),
+            in: store, cwd: "/tmp")
         #expect(result.didCommit)
 
         // Verify the chain has 2 versions.
@@ -994,15 +1027,73 @@ struct WikiCtlCommandTests {
         #expect(history[1].parentID == nil)
     }
 
+    @Test func editMarkdownRejectsStaleHeadWithoutMutation() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
+        _ = try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "v1", origin: .extraction, note: nil)
+        let staleHead = try #require(try store.processedMarkdownHead(sourceID: ingested.id))
+        // Another writer advances the chain.
+        _ = try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "v2 (raced)", origin: .extraction, note: nil)
+
+        let conflict = SourceMarkdownConflictError(
+            sourceID: ingested.id, expectedHead: staleHead.id,
+            currentHead: try store.processedMarkdownHead(sourceID: ingested.id)?.id)
+        #expect(throws: conflict) {
+            try SourceCommand.run(
+                .editMarkdown(.id(ingested.id), content: .inline("stale edit"),
+                              expectedHead: staleHead.id),
+                in: store, cwd: "/tmp")
+        }
+
+        // Nothing changed: exactly 2 versions, head is the raced writer's.
+        let history = try store.processedMarkdownHistory(sourceID: ingested.id)
+        #expect(history.count == 2)
+        #expect(try store.processedMarkdownHead(sourceID: ingested.id)?.content == "v2 (raced)")
+    }
+
+    @Test func onlyOneWriterCanAppendFromTheSameHead() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
+        _ = try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "base", origin: .extraction, note: nil)
+        let sharedHead = try #require(try store.processedMarkdownHead(sourceID: ingested.id))
+
+        // Two writers read the same head, then both write.
+        _ = try? SourceCommand.run(
+            .editMarkdown(.id(ingested.id), content: .inline("writer A"),
+                          expectedHead: sharedHead.id),
+            in: store, cwd: "/tmp")
+        // Writer B still expects the SHARED head — it must lose the race.
+        do {
+            _ = try SourceCommand.run(
+                .editMarkdown(.id(ingested.id), content: .inline("writer B"),
+                              expectedHead: sharedHead.id),
+                in: store, cwd: "/tmp")
+            Issue.record("expected SourceMarkdownConflictError for the second writer")
+        } catch let error as SourceMarkdownConflictError {
+            #expect(error.expectedHead == sharedHead.id)
+            #expect(error.currentHead != nil && error.currentHead != sharedHead.id)
+        }
+        // Exactly one successful append.
+        let history = try store.processedMarkdownHistory(sourceID: ingested.id)
+        #expect(history.count == 2)
+        let userVersions = history.filter { $0.origin == .user }
+        #expect(userVersions.count == 1)
+    }
+
     @Test func editMarkdownCommitsAndAppends() throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
             sourceID: ingested.id, content: "original", origin: .extraction, note: nil)
+        let headBefore = try #require(try store.processedMarkdownHead(sourceID: ingested.id))
         // Small delay ensures the next ULID is strictly later.
         usleep(2000)
         let result = try SourceCommand.run(
-            .editMarkdown(.id(ingested.id), content: .inline("edited")), in: store, cwd: "/tmp")
+            .editMarkdown(.id(ingested.id), content: .inline("edited"), expectedHead: headBefore.id),
+            in: store, cwd: "/tmp")
         #expect(result.didCommit)
         let head = try store.processedMarkdownHead(sourceID: ingested.id)
         #expect(head?.content == "edited")
@@ -1014,27 +1105,58 @@ struct WikiCtlCommandTests {
         let ingested = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
         do {
             _ = try SourceCommand.run(
-                .editMarkdown(.id(ingested.id), content: .inline("edited")), in: store, cwd: "/tmp")
+                .editMarkdown(.id(ingested.id), content: .inline("edited"),
+                              expectedHead: SourceMarkdownVersionID(rawValue: "01NOCHAIN")),
+                in: store, cwd: "/tmp")
             Issue.record("expected SourceCommand.Failure")
         } catch let error as SourceCommand.Failure {
-            #expect(error.description == "no processed markdown for this source")
+            #expect(error.description.contains("no processed markdown"))
         } catch {
             Issue.record("unexpected error: \(error)")
         }
     }
 
-    @Test func editMarkdownByNameResolvesAndCommits() throws {
+    @Test func editMarkdownAcceptsFileInputFromScratchStylePath() throws {
         let store = try tempStore()
-        let ingested = try store.addSource(filename: "unique.md", data: Data("hello".utf8))
+        let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
             sourceID: ingested.id, content: "v1", origin: .extraction, note: nil)
-        // Small delay ensures the next ULID is strictly later.
-        usleep(2000)
+        let headBefore = try #require(try store.processedMarkdownHead(sourceID: ingested.id))
+
+        // A scratch-style file path (absolute, deep, with a space) — the shape
+        // a run-context scratch produces.
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikictl-cas-test \((UUID().uuidString as NSString).lastPathComponent)")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let bodyPath = scratch.appendingPathComponent("cleaned.md")
+        try Data("cleaned via file".utf8).write(to: bodyPath)
+
         let result = try SourceCommand.run(
-            .editMarkdown(.name("unique.md"), content: .inline("v2")), in: store, cwd: "/tmp")
+            .editMarkdown(.id(ingested.id), content: .file(bodyPath.path), expectedHead: headBefore.id),
+            in: store, cwd: "/tmp")
         #expect(result.didCommit)
-        let head = try store.processedMarkdownHead(sourceID: ingested.id)
-        #expect(head?.content == "v2")
+        #expect(try store.processedMarkdownHead(sourceID: ingested.id)?.content == "cleaned via file")
+    }
+
+    @Test func sourceInfoPrintsHeadVersionIDForCasReads() throws {
+        let store = try tempStore()
+        let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
+        // No chain yet — no head line.
+        let before = try SourceCommand.run(.info(.id(ingested.id)), in: store, cwd: "/tmp")
+        guard case .text(let infoBefore) = before.payload else {
+            Issue.record("expected text payload"); return
+        }
+        #expect(!infoBefore.contains("head_version_id"))
+
+        _ = try store.appendProcessedMarkdown(
+            sourceID: ingested.id, content: "v1", origin: .extraction, note: nil)
+        let head = try #require(try store.processedMarkdownHead(sourceID: ingested.id))
+        let after = try SourceCommand.run(.info(.id(ingested.id)), in: store, cwd: "/tmp")
+        guard case .text(let infoAfter) = after.payload else {
+            Issue.record("expected text payload"); return
+        }
+        #expect(infoAfter.contains("head_version_id\t\(head.id.rawValue)"))
     }
 
     // MARK: - Darwin notification naming

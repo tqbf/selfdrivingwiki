@@ -381,13 +381,17 @@ public enum CLIReference {
                         CLIOption("--markdown", summary: "export the processed-markdown sibling instead"),
                     ]),
                 CLILeaf(
-                    "edit-markdown", summary: "replace the processed-markdown HEAD",
-                    commandLine: "edit-markdown (--id X | --name N) (--content <md> | --file <path|->)",
+                    "edit-markdown", summary: "replace the processed-markdown HEAD (CAS-protected)",
+                    commandLine: "edit-markdown (--id X | --name N) (--content <md> | --file <path|->) --expect-head <version-id>",
                     options: [
                         CLIOption("--id <source-id>", summary: "source selector — exactly one of --id / --name"),
                         CLIOption("--name <name>", summary: "source selector — exactly one of --id / --name"),
                         CLIOption("--content <md>", summary: "inline replacement — exactly one of --content / --file"),
                         CLIOption("--file <path|->", summary: "replacement from a file or stdin — exactly one of --content / --file"),
+                        CLIOption("--expect-head <version-id>", required: true, summary: "CAS: the head_version_id you read; fails with exit 3 if HEAD moved"),
+                    ],
+                    details: [
+                        "Replaces the ACTIVE processed-markdown version only — raw source bytes are never modified. Read head_version_id first (`source info --id <id>`), pass it as --expect-head; on exit 3 re-read, reapply, and retry once. On success the new head_version_id goes to stderr (text mode).",
                     ]),
                 CLILeaf(
                     "search", summary: "semantic search of sources (cosine; falls back to LIKE name match)",
@@ -406,7 +410,7 @@ public enum CLIReference {
                         CLIOption("--version-id <smv-id>", summary: "legacy alias for --version"),
                     ]),
                 CLILeaf(
-                    "info", summary: "print source identity + processing provenance",
+                    "info", summary: "print source identity + processing provenance (+ head_version_id when a processed chain exists)",
                     commandLine: "info (--id X | --name N)",
                     options: [
                         CLIOption("--id <source-id>", summary: "source selector — exactly one of --id / --name"),
@@ -876,7 +880,8 @@ public enum CLIReference {
             "  0  success",
             "  1  runtime error — the operation failed",
             "  2  usage error — bad arguments; usage goes to stderr",
-            "  3  CAS conflict — `page add --expect-head` lost a race; re-read, reapply, retry once",
+            "  3  CAS conflict — `page add --expect-head` lost a race; re-read, reapply, retry once\n" +
+            "     (same code for `source edit-markdown --expect-head` on a processed-markdown rewrite)",
         ]
     }
 

@@ -58,8 +58,10 @@ public protocol AgentBackend: Sendable {
 ///
 /// The launcher resolves app-level concerns (scratch dir, bundled `wikictl`
 /// path, log layout) and passes them in here; `ACPBackend` reads `model`/
-/// `providerHints` for routing and `cli` for the env vars it needs to spawn
-/// (`WIKI_DB`/`WIKICTL`/`PATH`) — see `CLIProfile`.
+/// `providerHints` for routing and `cli`/`runContext` for the spawn
+/// environment (`WIKI_DB`/`WIKICTL`/`PATH` are CONVENIENCES exported from
+/// `runContext` — adapters may drop them; correctness flows from the absolute
+/// paths injected into the operation prompt — see `CLIProfile`).
 /// The execution access the application authorizes for an ACP session.
 ///
 /// This is distinct from `PermissionPolicy`: it controls an agent's own
@@ -99,6 +101,14 @@ public struct BackendProfile: Sendable {
     /// config homes; the resolved `pdf2md` script exec/read-denied). nil =
     /// spawn unsandboxed (fail-open on resolver misconfiguration, logged).
     public var sandbox: SandboxProfile.SandboxInvocation?
+    /// The typed per-run capability context (`AgentRunContext`): canonical
+    /// scratch, scratch-local temp roots, typed wiki id, trusted absolute
+    /// `wikictl` path, and the effective PATH. The launcher sets it on every
+    /// operation profile; `ACPBackend` exports its protected environment keys
+    /// (over provider hints) and points the session cwd at the canonical
+    /// scratch. nil only on legacy/internal profiles that never spawn an
+    /// operation agent (e.g. the message summarizer, extraction clients).
+    public var runContext: AgentRunContext?
 
     public init(
         model: String? = nil,
@@ -108,7 +118,8 @@ public struct BackendProfile: Sendable {
         executionAccess: AgentExecutionAccess = .standard,
         cli: CLIProfile? = nil,
         debugLogURL: URL? = nil,
-        sandbox: SandboxProfile.SandboxInvocation? = nil
+        sandbox: SandboxProfile.SandboxInvocation? = nil,
+        runContext: AgentRunContext? = nil
     ) {
         self.model = model
         self.providerHints = providerHints
@@ -118,6 +129,7 @@ public struct BackendProfile: Sendable {
         self.cli = cli
         self.debugLogURL = debugLogURL
         self.sandbox = sandbox
+        self.runContext = runContext
     }
 }
 

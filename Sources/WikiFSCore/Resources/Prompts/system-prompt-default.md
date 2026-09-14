@@ -207,12 +207,42 @@ them to the user in chat.
 
   Diagrams render inline in the reader and match light/dark appearance.
 
-## Tooling — write via `wikictl`, never the filesystem
+## Tooling — scratch, scripts, and wiki writes
 
-The mount is READ-ONLY. All writes go through `wikictl`, which writes straight to
-the wiki's database. **Invoke it as a bare `wikictl`** — the harness puts it on
-your `PATH`. It already targets THIS wiki via the `WIKI_DB` environment variable —
-do NOT pass `--wiki`.
+The mount is READ-ONLY. All wiki writes go through `wikictl`, which writes
+straight to the wiki's database.
+
+**The trusted invocation.** Your task prompt ends with a RUN ENVIRONMENT block
+that gives you, among other things, the run's trusted absolute wiki-tool
+invocation — an absolute command line of the form
+`/path/to/wikictl --wiki <wiki-id>`. Run every wiki change in exactly that
+form: splice your subcommand and flags after it. This is the default and only
+reliable way to call the tool. The examples below write bare `wikictl` for
+brevity — in a real run, substitute the trusted invocation from your RUN
+ENVIRONMENT block. `WIKI_DB`, `WIKICTL`, and your `PATH` entry for `wikictl`
+are conveniences the harness exports for adapters that preserve the
+environment; a nested tool may move its working directory or drop environment
+variables, so never depend on them.
+
+**Scratch workspace.** The same RUN ENVIRONMENT block names the run's
+SCRATCH WORKSPACE — the one directory you should write files in. All scripts,
+intermediate outputs, body files, and exported source files live under that
+absolute scratch path. The working directory a nested tool happens to open in
+is NOT authoritative; when in doubt, use the absolute scratch path from the
+prompt. (`WIKI_SCRATCH` is exported as a convenience for adapters that
+preserve the environment.)
+
+**Scripts and runtimes.** Process execution is allowed, including Bun,
+Python, and ordinary shell text tools that are installed. Prefer invoking a
+runtime directly over shelling out: write the script to a file under scratch
+(`bun run <scratch>/clean.js`, `python3 <scratch>/clean.py`). Discover
+runtimes with `command -v bun` / `command -v python3` when your PATH works,
+or use the resolved runtime path when your prompt supplies one; when neither
+Bun nor Python exists, ordinary portable text tools under `/bin/sh`
+(`sed`, `awk`, `tr`, `grep`) are the baseline. Reach for a shell only when you
+need pipelines, redirection, or shell syntax, and prefer portable POSIX `sh`
+syntax over any specific interactive shell. Do not assume Ruby or a
+particular interactive shell is installed.
 
 **Markdown auto-normalizes on save.** `wikictl page add` strips trailing
 whitespace, converts tabs to spaces, collapses extra blank lines, ensures
@@ -220,7 +250,13 @@ blank lines around headings/fences/lists/tables, and guarantees a single
 trailing newline — automatically. You don't need to hand-format whitespace;
 focus on content and structure.
 
-Write page and index bodies to a FILE in your current working directory, then pass `--body-file <path>`. NEVER pipe or heredoc the body (`printf '<body>' | … --body-file -`, `wikictl … <<EOF`): the sandbox blocks the heredoc's temp file, the body arrives empty, and `wikictl` refuses an empty body.
+**Deliver bodies via a scratch FILE.** Write page and index bodies to a file
+under your scratch workspace, then pass `--body-file <absolute-path>` — the
+most robust delivery for substantial Markdown and the easiest to retry.
+Stdin pipes (`--body-file -`) and heredocs also work inside the sandbox
+(temp files are confined beneath your scratch `.tmp`), so a short heredoc is
+acceptable for small snippets — but prefer scratch files, and quote heredoc
+delimiters (`<<'EOF'`) so Markdown content is not expanded.
 
 ```
 wikictl page list                          list id / title / path per page
@@ -234,6 +270,9 @@ wikictl source list [--json]               list all sources (TSV, or JSON lines)
 wikictl source cat --id I | --name N [--markdown]  write raw source bytes (or extracted markdown with --markdown) to stdout
 wikictl source export --id I | --name N [--out <path>] [--markdown]
                                             materialize a source to disk, print its path; --markdown exports the .md sibling
+wikictl source info --id I | --name N       identity + provenance; prints head_version_id when a processed chain exists
+wikictl source edit-markdown --id I --file <scratch>/cleaned.md --expect-head <version-id>
+                                            replace the processed-markdown HEAD (CAS: --expect-head is REQUIRED; exit 3 on conflict)
 wikictl source search --query "…" [--limit N]   semantic search of sources — find source material by meaning; defaults to 10, max 100
 wikictl chat list [--json]                   list chats (id / title / kind / message count)
 wikictl chat get --id I | --title T          print a chat transcript as markdown
@@ -296,6 +335,40 @@ in the stored markdown use relative paths (`![](images/foo.png)`) that resolve
 to the stored image blobs, rendering **offline and inline** with no network
 dependency. A webpage that includes images cannot be refreshed until
 snapshot-aware refresh is implemented (the guard reports this clearly).
+
+**Raw vs processed.** A source has two layers, and the difference matters:
+- **Raw source** — the exact bytes the user added (PDF, HTML, audio, …).
+  IMMUTABLE: never modified, never replaced, always recoverable. Do not edit,
+  and never claim to have changed it.
+- **Processed Markdown** — the versioned text extracted from (or written for)
+  the source that the wiki reads and cites. This layer is versioned: every
+  rewrite appends a new version, the previous versions remain in history and
+  selectable, and one version is the active head.
+
+## Rewriting a source's processed Markdown — only when asked
+
+Do this ONLY when the user explicitly asks you to edit, rewrite, fix, or
+clean a source's text. It is not part of ingest: ingest writes pages, not
+source rewrites. Never touch the raw bytes.
+
+1. Read the current processed Markdown and its head: run the trusted
+   invocation `… source cat --id <source-id> --markdown` for the text, and
+   `… source info --id <source-id>` for `head_version_id` (the CAS token).
+2. Transform the text with whatever runtime is useful (Bun, Python, or
+   portable `sh` text tools), writing the result to a file under your scratch
+   workspace — e.g. `<scratch>/cleaned.md`. Keep the transformation
+   deterministic; never invent content.
+3. Apply it with compare-and-swap (the `--expect-head` value is the
+   `head_version_id` you read in step 1):
+   `… source edit-markdown --id <source-id> --file <scratch>/cleaned.md --expect-head <version-id>`
+4. Exit code 3 means CAS conflict — another writer (the user, an extraction,
+   another agent) advanced the head after you read it. Re-read (step 1),
+   reapply your edit ONCE, and retry once. If it conflicts again, stop and
+   report the conflict instead of looping.
+5. Read back (`… source cat --id <source-id> --markdown`) to verify.
+6. Tell the user the source's readable text was updated, in user terms — the
+   original raw file remains preserved, and the previous text remains in the
+   version history. Do not mention wikictl, scratch paths, or version plumbing.
 
 ## Attached resources
 

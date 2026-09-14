@@ -192,6 +192,61 @@ struct SourceEmbeddingSearchTests {
         }
     }
 
+    // MARK: - CAS rewrite embedding schedules (reembedInterceptor spy)
+
+    /// One CAS-matched user rewrite schedules EXACTLY one embedding update.
+    @Test func userMarkdownCASMatchSchedulesOneEmbedding() throws {
+        let store = try tempStore()
+        let s = try store.addSource(filename: "note.md", data: Data("# Hi".utf8))
+        _ = try store.appendProcessedMarkdown(sourceID: s.id, content: "v1", origin: .extraction, note: nil)
+        let head = try #require(try store.processedMarkdownHead(sourceID: s.id))
+
+        let spy = EmbedSpy()
+        store.reembedInterceptor = spy.record
+        defer { store.reembedInterceptor = nil }
+
+        _ = try store.appendUserProcessedMarkdown(
+            sourceID: s.id, content: "user rewrite", expectedHead: head.id)
+        #expect(spy.count == 1)
+        #expect(spy.bodies == ["user rewrite"])
+        #expect(spy.sourceIDs == [s.id])
+    }
+
+    /// A CAS-conflicted rewrite schedules NO embedding work — the throw
+    /// happens before commit, so the post-commit hook never runs.
+    @Test func userMarkdownCASConflictDoesNotScheduleEmbedding() throws {
+        let store = try tempStore()
+        let s = try store.addSource(filename: "note.md", data: Data("# Hi".utf8))
+        _ = try store.appendProcessedMarkdown(sourceID: s.id, content: "v1", origin: .extraction, note: nil)
+        let stale = try #require(try store.processedMarkdownHead(sourceID: s.id))
+        _ = try store.appendProcessedMarkdown(sourceID: s.id, content: "v2", origin: .extraction, note: nil)
+
+        let spy = EmbedSpy()
+        store.reembedInterceptor = spy.record
+        defer { store.reembedInterceptor = nil }
+
+        #expect(throws: SourceMarkdownConflictError.self) {
+            try store.appendUserProcessedMarkdown(
+                sourceID: s.id, content: "stale rewrite", expectedHead: stale.id)
+        }
+        #expect(spy.count == 0)
+    }
+
+    /// Minimal lock-guarded spy for the store's post-commit re-embed hook.
+    private final class EmbedSpy: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var count = 0
+        private(set) var bodies: [String] = []
+        private(set) var sourceIDs: [SourceID] = []
+        func record(_ id: SourceID, _ body: String) {
+            lock.lock()
+            count += 1
+            bodies.append(body)
+            sourceIDs.append(id)
+            lock.unlock()
+        }
+    }
+
     // MARK: - Cascade (ON DELETE CASCADE)
 
     @Test func deletingSourceRemovesItsChunkRows() throws {
