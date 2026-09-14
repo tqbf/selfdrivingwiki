@@ -526,11 +526,14 @@ struct AgentProviderRuntimeTests {
             resolvePermissionPolicy: { _ in .bypass })
 
         // Park preparation inside command resolution, dispose underneath it.
+        let startedAt = Date()
         let prepareTask = Task {
             _ = try? await service.prepareSummarization()
         }
         try await waitFor { await signals.values.contains("resolve-entered") }
-        let scratchBefore = Self.summarizerScratchPaths()
+        // Only dirs CREATED after we started can be ours — the temp root is
+        // shared with concurrently-running suites.
+        let scratchBefore = Self.summarizerScratchPaths(createdAfter: startedAt)
         #expect(!scratchBefore.isEmpty, "the parked preparation already owns its scratch")
 
         await service.dispose()
@@ -541,20 +544,29 @@ struct AgentProviderRuntimeTests {
         // snapshot remains and the parked preparation's scratch is gone.
         let activeAfter = await service.activeSnapshotCount()
         #expect(activeAfter == 0)
-        let after = Set(Self.summarizerScratchPaths())
-        #expect(scratchBefore.allSatisfy { !after.contains($0) },
-                "a disposal that races preparation still removes the scratch")
+        // Bounded poll: the parked scratch must disappear.
+        try await waitFor(
+            { Self.summarizerScratchPaths(createdAfter: startedAt).isEmpty },
+            timeout: .seconds(2),
+            pollInterval: .milliseconds(20))
     }
 
     /// Parked-preparation scratch dirs are visible under the temp root by the
-    /// production name prefix.
-    private static func summarizerScratchPaths() -> [String] {
+    /// production name prefix, optionally scoped to dirs created after a
+    /// timestamp so concurrently-running suites do not pollute the check.
+    private static func summarizerScratchPaths(createdAfter date: Date? = nil) -> [String] {
         let contents = (try? FileManager.default.contentsOfDirectory(
             at: FileManager.default.temporaryDirectory,
-            includingPropertiesForKeys: nil)) ?? []
-        return contents
-            .filter { $0.lastPathComponent.hasPrefix("summarizer-") }
-            .map { $0.path }
+            includingPropertiesForKeys: [URLResourceKey.creationDateKey])) ?? []
+        return contents.filter { url in
+            guard url.lastPathComponent.hasPrefix("summarizer-") else { return false }
+            if let date,
+               let created = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate,
+               created < date {
+                return false
+            }
+            return true
+        }.map { $0.path }
     }
 
     // MARK: - Catalog sandbox ordering (issue #1276, AC.4)

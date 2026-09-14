@@ -234,13 +234,16 @@ public struct ACPProviderModelProbe: Sendable {
         // there is no shared transport (Paseo parity: spawnProcess(PROBE_ENV)).
         let client = makeClient()
 
-        // Review HIGH: the probe race runs in an UNSTRUCTURED task with a hard
-        // bound. A structured task group cannot return until every child
+        // Review HIGH: the probe race runs in an UNSTRUCTURED task behind a
+        // HARD BOUND. A structured task group cannot return until every child
         // finishes, so a child that ignores cooperative cancellation would pin
         // the scope forever, defeat the advertised timeout, and keep the
-        // subprocess + scratch alive. With the bound, the caller is unblocked
-        // and the subprocess is terminated even then; the abandoned race task
-        // stays parked holding only the terminated client.
+        // subprocess + scratch alive. `boundedRace` resumes on WHICHEVER lands
+        // first — the race result or the bound — so the caller is unblocked
+        // and the subprocess is terminated even then. If the bound wins, the
+        // abandoned race task stays parked holding the (now terminated) client
+        // and value-typed plan data; the scratch tree was already removed, so
+        // any late write from the dead child's cwd fails harmlessly.
         let race = Task {
             try await withThrowingTaskGroup(of: ACPProviderCatalogObservation.self) { group in
                 // The probe work child: launch → initialize → (auth) →
@@ -265,18 +268,9 @@ public struct ACPProviderModelProbe: Sendable {
                 return first
             }
         }
-        let hardBound = Task {
-            try await Task.sleep(for: timeout + Self.hardBoundGrace)
-            throw ACPProviderModelProbeError.timedOut
-        }
-
-        let outcome: Result<ACPProviderCatalogObservation, Error>
-        do {
-            outcome = .success(try await race.value)
-        } catch {
-            outcome = .failure(error)
-        }
-        hardBound.cancel()
+        let outcome = await Self.boundedRace(
+            race,
+            timeout: timeout + Self.hardBoundGrace)
 
         // SUCCESS path: terminate the subprocess outside the race. Paseo's
         // `finally { closeProbe }` parity (acp-agent.ts:881-884) — and on the
@@ -303,6 +297,55 @@ public struct ACPProviderModelProbe: Sendable {
     /// past it the probe stops waiting, terminates the subprocess, and throws
     /// `.timedOut`.
     static let hardBoundGrace: Duration = .seconds(2)
+
+    /// Resume a value exactly once; later attempts are no-ops. The race
+    /// primitive behind `boundedRace` — actor isolation serializes the
+    /// once-check, so a losing racer can never double-resume a continuation.
+    private actor BoundedRaceBox<Value: Sendable> {
+        private var settledValue: Value?
+        private var continuation: CheckedContinuation<Value, Never>?
+
+        func resume(_ value: Value) {
+            guard settledValue == nil else { return }
+            settledValue = value
+            continuation?.resume(returning: value)
+            continuation = nil
+        }
+
+        func wait() async -> Value {
+            if let settledValue { return settledValue }
+            return await withCheckedContinuation { continuation = $0 }
+        }
+    }
+
+    /// Await `task`, but never past `timeout`: whichever lands first — the
+    /// task's result or the deadline (throwing `.timedOut`) — is returned.
+    /// Cancellation of the losing racer is harmless: the box settles once.
+    private static func boundedRace(
+        _ task: Task<ACPProviderCatalogObservation, Error>,
+        timeout: Duration
+    ) async -> Result<ACPProviderCatalogObservation, Error> {
+        let box = BoundedRaceBox<Result<ACPProviderCatalogObservation, Error>>()
+        let bound = Task {
+            do {
+                try await Task.sleep(for: timeout)
+            } catch {
+                return // the race already won — nothing to settle
+            }
+            await box.resume(.failure(ACPProviderModelProbeError.timedOut))
+        }
+        let racer = Task {
+            do {
+                await box.resume(.success(try await task.value))
+            } catch {
+                await box.resume(.failure(error))
+            }
+        }
+        let outcome = await box.wait()
+        bound.cancel()
+        _ = racer // stays parked only if the bound won; its result is settled
+        return outcome
+    }
 
     /// The racing probe operation: launch → initialize → (auth) → newSession →
     /// map to `[CachedModelInfo]`. NEVER tears down the client — the caller's

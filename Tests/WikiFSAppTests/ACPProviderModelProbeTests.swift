@@ -645,6 +645,41 @@ struct ACPProviderModelProbeTests {
         // No wiki database reaches the probe plan.
         #expect(plan.defines.contains { $0.0 == "WIKI_DB" } == false)
     }
+    /// The hard bound is REAL: a launch that ignores cooperative cancellation
+    /// (and would pin a structured task group forever) cannot pin the probe —
+    /// discoverObservation returns .timedOut within timeout + grace, the
+    /// subprocess terminate path runs, and the scratch sweep still fires.
+    @Test func hardBoundUnblocksACancellationIgnoringLaunch() async throws {
+        let probe = ACPProviderModelProbe(
+            provider: AgentProvider(
+                id: ProviderID(rawValue: "claude"),
+                label: "Claude",
+                command: ["/usr/local/bin/claude"]),
+            resolvedCommand: ["/usr/local/bin/claude"],
+            apiKey: nil,
+            sandboxUsability: { _ in true },
+            resolveBunRuntime: { nil },
+            makeClient: { Client() },
+            performLaunch: { _, _, _ in
+                // Pin FAR past the bound: ignore cancellation for 30s.
+                let deadline = ContinuousClock.now + .seconds(30)
+                while ContinuousClock.now < deadline {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                throw ACPProviderModelProbeError.underlying(CancellationError())
+            })
+
+        let started = ContinuousClock.now
+        do {
+            _ = try await probe.discoverObservation(timeout: .seconds(1))
+            Issue.record("expected .timedOut from the hard bound")
+        } catch let error as ACPProviderModelProbeError {
+            #expect(error == .timedOut)
+        }
+        let elapsed = ContinuousClock.now - started
+        #expect(elapsed < .seconds(10),
+                "the hard bound must unblock the caller promptly, took \(elapsed)")
+    }
 }
 
 private final class Counter: Sendable {
