@@ -559,15 +559,31 @@ public actor ACPBackend: AgentBackend {
         // config home), the resolved `pdf2md` script exec/read-denied; reads,
         // network, and other exec stay open. Fail closed on macOS: the gate
         // at the top of this function already verified the front-end.
-        var spawnExecutablePath = spawn.executablePath
-        var spawnArguments = spawn.arguments
+        //
+        // Issue #1276 (review CRITICAL): the pinned-bun staleness fallback is
+        // decided BEFORE the plan is built, and the plan wraps the FINAL
+        // underlying spawn (`effectiveSpawn`). Applying the plan first and
+        // falling back to the raw configured command afterwards would strip
+        // `sandbox-exec` off the launch on exactly this TOCTOU path.
+        var effectiveSpawn = spawn
+        if usedCanonicalBun,
+           let resolution = bunResolutionUsed,
+           !Self.resolutionStillValid(resolution, probing: probeExecutable) {
+            DebugLog.agent(
+                "ACPBackend.startProcess: resolved bun changed before launch — " +
+                "using configured \(configuredDescription) unchanged")
+            effectiveSpawn = configuredSpawn
+        }
+
+        var spawnExecutablePath = effectiveSpawn.executablePath
+        var spawnArguments = effectiveSpawn.arguments
         var spawnEnvironment = env
         #if os(macOS)
         if let sandbox = profile.sandbox {
             let plan = Self.sandboxedSpawnPlan(
                 invocation: sandbox,
-                executablePath: spawn.executablePath,
-                arguments: spawn.arguments,
+                executablePath: effectiveSpawn.executablePath,
+                arguments: effectiveSpawn.arguments,
                 environment: env,
                 scratchDirectory: profile.scratchDirectory)
             spawnExecutablePath = plan.executablePath
@@ -581,21 +597,6 @@ public actor ACPBackend: AgentBackend {
             DebugLog.agent("sandbox: unavailable on this platform — spawning UNSANDBOXED")
         }
         #endif
-
-        // Committee round 2: the pinned bun identity is re-verified at the
-        // final pre-launch seam — the canonicalization-time probe does not
-        // cover the window between canonicalization and exec. A binary
-        // swapped under the cached path falls back to the configured command
-        // (fail safe), which is exactly what ran before this branch.
-        if usedCanonicalBun,
-           let resolution = bunResolutionUsed,
-           !Self.resolutionStillValid(resolution, probing: probeExecutable) {
-            DebugLog.agent(
-                "ACPBackend.startProcess: resolved bun changed before launch — " +
-                "using configured \(configuredDescription) unchanged")
-            spawnExecutablePath = configuredSpawn.executablePath
-            spawnArguments = configuredSpawn.arguments
-        }
 
         // #733 + #737: capture stderr during the launch/initialize window.
         // The stderr stream is single-consumer (`AsyncStream` — two iterators
@@ -620,7 +621,7 @@ public actor ACPBackend: AgentBackend {
             try await client.launch(
                 agentPath: spawnExecutablePath,
                 arguments: spawnArguments,
-                workingDirectory: spawn.workingDirectory,
+                workingDirectory: effectiveSpawn.workingDirectory,
                 environment: spawnEnvironment
             )
 

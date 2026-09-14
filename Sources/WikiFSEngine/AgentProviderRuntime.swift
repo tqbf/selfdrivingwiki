@@ -550,15 +550,31 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             permissionPolicy: .bypass,
             permissionBudget: nil,
             turnCeiling: TurnLivenessPolicy.ceiling(for: .chat))
-        let snapshot = try await makeSnapshot(
-            configuration: configuration,
-            operation: .interactive,
-            providerOverride: nil,
-            modelOverride: nil,
-            thinkingOverride: nil,
-            stages: [.summarizer],
-            policyOverride: policy,
-            summarizerScratch: scratch)
+        // Review HIGH: `makeSnapshot` suspends (command resolution). On
+        // failure the scratch is removed — a failed preparation leaks no
+        // temp directory.
+        let snapshot: Snapshot
+        do {
+            snapshot = try await makeSnapshot(
+                configuration: configuration,
+                operation: .interactive,
+                providerOverride: nil,
+                modelOverride: nil,
+                thinkingOverride: nil,
+                stages: [.summarizer],
+                policyOverride: policy,
+                summarizerScratch: scratch)
+        } catch {
+            scratch.remove()
+            throw error
+        }
+        // Review HIGH: disposal may have raced the suspension above. A
+        // disposed runtime never regains an LLM spawn path — remove the
+        // scratch and refuse instead of resurrecting a snapshot.
+        guard !disposed else {
+            scratch.remove()
+            throw AgentProviderRuntimeError.unavailable
+        }
         snapshots[snapshotID] = snapshot
         return .model(try makePreparation(snapshotID: snapshotID, stage: .summarizer, providerID: nil))
     }
@@ -671,22 +687,29 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         let snapshotID = record.snapshotID
         let snapshot = snapshots.removeValue(forKey: snapshotID)
         tokens = tokens.filter { $0.value.snapshotID != snapshotID }
-        // Issue #1276 teardown order — retire, quiesce, terminate, remove:
+        // Issue #1276 review HIGH: DETACH this snapshot's cached backends
+        // BEFORE any suspension, so an overlapping `dispose` can never capture
+        // (and shut down) a backend whose lease is still active.
+        let cachePrefix = snapshotID.uuidString + ":"
+        var detached: [any AgentBackend] = []
+        for (key, backend) in cachedBackends where key.hasPrefix(cachePrefix) {
+            detached.append(backend)
+        }
+        cachedBackends = cachedBackends.filter { !$0.key.hasPrefix(cachePrefix) }
+        // Teardown order — retire, quiesce, terminate, remove:
         // 1. RETIRE: new summary/title work is rejected from here on.
         // 2. QUIESCE: every lease acquired before retirement finishes (the
-        //    in-flight operation still uses the cached backend).
+        //    in-flight operation still uses its cached backend).
         if let gate = snapshot?.summarizerLease {
             await gate.retire()
             await gate.awaitQuiesce()
         }
-        // 3. TERMINATE each cached backend at the process level — a cached
+        // 3. TERMINATE each detached backend at the process level — a cached
         //    backend is NOT terminated by dropping it, and `cancel(_:)` is
         //    session-scoped.
-        let cachePrefix = snapshotID.uuidString + ":"
-        for (key, backend) in cachedBackends where key.hasPrefix(cachePrefix) {
+        for backend in detached {
             await backend.shutdown()
         }
-        cachedBackends = cachedBackends.filter { !$0.key.hasPrefix(cachePrefix) }
         // 4. ONLY NOW remove the scratch — no process can still use it.
         snapshot?.summarizerScratch?.remove()
     }
@@ -702,23 +725,26 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         }
     }
 
-    /// Full runtime shutdown (issue #1276): same retire → quiesce → terminate
-    /// → remove ordering as `release`, applied to every live snapshot. Async
-    /// because it drains leases and terminates processes; owners already await
-    /// it (actor method).
+    /// Full runtime shutdown (issue #1276): same detach → retire → quiesce →
+    /// terminate → remove ordering as `release`, applied to every live
+    /// snapshot. Async because it drains leases and terminates processes;
+    /// owners already await it (actor method). The cache is detached before
+    /// the first suspension, so two overlapping `dispose()` calls (or a
+    /// `dispose` racing a `release`) can never double-shutdown a backend or
+    /// shut one down while its lease is active.
     public func dispose() async {
         disposed = true
         let retiring = snapshots
         snapshots.removeAll()
         tokens.removeAll()
+        let backends = cachedBackends
+        cachedBackends.removeAll()
         for snapshot in retiring.values {
             if let gate = snapshot.summarizerLease {
                 await gate.retire()
                 await gate.awaitQuiesce()
             }
         }
-        let backends = cachedBackends
-        cachedBackends.removeAll()
         for (_, backend) in backends {
             await backend.shutdown()
         }

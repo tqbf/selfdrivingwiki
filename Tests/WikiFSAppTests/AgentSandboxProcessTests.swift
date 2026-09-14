@@ -552,13 +552,21 @@ struct AgentSandboxProcessTests {
         #expect(inside.outputText.contains("beta heading"), "the transform wrote inside the scratch")
 
         // OUT-SIDE: a write to a SIBLING of the scratch (matching no allow
-        // rule) must be denied and leave no artifact.
-        let outside = root.appendingPathComponent("outside-denied.md")
-        let outsideScript = "echo nope > '\(outside.path)'"
+        // rule) must be denied and leave no artifact — including a wiki-DB-
+        // SHAPED file and a global /private/tmp location, both of which the
+        // read-only profile must never allow (review LOW #9).
+        let outsideDB = root.appendingPathComponent("wiki.sqlite")
+        let outsideTmp = "/private/tmp/1276-\(UUID().uuidString)"
+        let outsideScript = """
+        echo nope > '\(outsideDB.path)'
+        echo nope > '\(outsideTmp)'
+        """
         let denied = try await runPlan(makePlan(outsideScript))
-        #expect(denied.status != 0, "the outside write must be denied, not silently allowed")
-        #expect(!FileManager.default.fileExists(atPath: outside.path),
-                "a denied write must not leave an artifact")
+        #expect(denied.status != 0, "outside-scratch writes must be denied, not silently allowed")
+        #expect(!FileManager.default.fileExists(atPath: outsideDB.path),
+                "a denied wiki-DB-shaped write must not leave an artifact")
+        #expect(!FileManager.default.fileExists(atPath: outsideTmp),
+                "a denied global-temp write must not leave an artifact")
     }
 }
 #endif

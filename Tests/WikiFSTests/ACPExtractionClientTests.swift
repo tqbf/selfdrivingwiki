@@ -238,5 +238,27 @@ struct ACPExtractionClientTests {
             containerDirectory: FileManager.default.temporaryDirectory,
             backendFactory: backendFactory)
     }
+
+    /// End-to-end delta collection (review LOW: the switch tests above mirror
+    /// production logic by hand — this one drives the REAL `convert` with a
+    /// fake backend, so a regression in `convert`'s own collection loop fails).
+    @Test func convert_collectsAssistantTextDeltaThroughRealConvert() async throws {
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [
+                .assistantTextDelta("# Hello\n\n"),
+                .assistantTextDelta("world"),
+                .messageStop,
+            ])
+        ])
+        let client = makeClient(backendFactory: { _ in backend })
+        let markdown = try await client.convert(
+            pdfData: Data("%PDF-1.4 tiny".utf8),
+            filename: "doc.pdf",
+            onProgress: nil)
+        #expect(markdown == "# Hello\n\nworld")
+        // One-shot: the session is cancelled after collection.
+        let cancelled = await backend.cancelledSessionIDs
+        #expect(cancelled.count == 1)
+    }
 }
 #endif // os(macOS)

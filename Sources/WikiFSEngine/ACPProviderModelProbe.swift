@@ -150,6 +150,16 @@ public struct ACPProviderModelProbe: Sendable {
     ) async throws -> ACPProviderCatalogObservation {
         DebugLog.agent("ACPProviderModelProbe.discoverObservation: enter provider=\(provider.id) timeout=\(timeout)")
 
+        // Fail-closed gate at the DIRECT launch seam (issue #1276, review
+        // MEDIUM): it runs before EVERYTHING — hints, spawn configuration,
+        // scratch creation, bun resolution. The runtime boundary checks
+        // before command resolution; this second check protects independent
+        // probe callers, and nothing at all happens on an unusable system.
+        guard sandboxUsability(SandboxProfile.sandboxExecutablePath) else {
+            DebugLog.agent("ACPProviderModelProbe: sandbox front-end unusable — refusing to probe (fail closed)")
+            throw ACPProviderModelProbeError.sandboxUnavailable
+        }
+
         // Build the spawn profile via the SAME construction ACPBackend uses —
         // `resolveSpawnConfig` handles PATH resolution, env.* hints, and the
         // Keychain key. We pass NO selectedModelId: the probe reads the agent's
@@ -189,20 +199,11 @@ public struct ACPProviderModelProbe: Sendable {
         // client terminate below has already run when this fires.
         defer { scratch.remove() }
 
-        // Fail-closed gate at the DIRECT launch seam (issue #1276): the
-        // runtime boundary checks before command resolution; this second check
-        // protects independent probe callers. Nothing is resolved, created, or
-        // launched when the seatbelt front-end is unusable.
-        guard sandboxUsability(SandboxProfile.sandboxExecutablePath) else {
-            DebugLog.agent("ACPProviderModelProbe: sandbox front-end unusable — refusing to launch (fail closed)")
-            throw ACPProviderModelProbeError.sandboxUnavailable
-        }
-
         // #1257 Level 1: canonicalize adapter shapes exactly like
         // `ACPBackend.startProcess`, so the probe exercises the same runtime
         // an actual chat launch will use (and the cached model list matches).
         // The bun locate is gated on the adapter shape (it shells out to a
-        // login shell) and accepted outside the probe's own 60 s race below —
+        // login shell) and accepted outside the probe's own timeout race below —
         // a bun-less machine pays it once per probe on the npx fallback path.
         let bunPath = ACPBackend.isJSAdapterLaunch(
             executablePath: configuredSpawn.executablePath,
@@ -233,13 +234,17 @@ public struct ACPProviderModelProbe: Sendable {
         // there is no shared transport (Paseo parity: spawnProcess(PROBE_ENV)).
         let client = makeClient()
 
-        do {
-            let result: ACPProviderCatalogObservation = try await withThrowingTaskGroup(
-                of: ACPProviderCatalogObservation.self
-            ) { group in
+        // Review HIGH: the probe race runs in an UNSTRUCTURED task with a hard
+        // bound. A structured task group cannot return until every child
+        // finishes, so a child that ignores cooperative cancellation would pin
+        // the scope forever, defeat the advertised timeout, and keep the
+        // subprocess + scratch alive. With the bound, the caller is unblocked
+        // and the subprocess is terminated even then; the abandoned race task
+        // stays parked holding only the terminated client.
+        let race = Task {
+            try await withThrowingTaskGroup(of: ACPProviderCatalogObservation.self) { group in
                 // The probe work child: launch → initialize → (auth) →
-                // newSession → map to CachedModelInfo. Teardown happens
-                // OUTSIDE this group (never inside the racing operation).
+                // newSession → map to CachedModelInfo.
                 group.addTask {
                     try await self.runProbe(
                         on: client,
@@ -247,7 +252,8 @@ public struct ACPProviderModelProbe: Sendable {
                         configuredSpawn: spawn,
                         probeCWD: scratch.directoryURL.path)
                 }
-                // The timeout child: wins the race if the probe takes too long.
+                // The inner timeout child: usually the first to finish and
+                // cancels a cancellation-responsive work child.
                 group.addTask {
                     try await Task.sleep(for: timeout)
                     throw ACPProviderModelProbeError.timedOut
@@ -255,27 +261,48 @@ public struct ACPProviderModelProbe: Sendable {
                 guard let first = try await group.next() else {
                     throw ACPProviderModelProbeError.timedOut
                 }
-                // Cancel the loser (whichever child didn't finish first).
                 group.cancelAll()
                 return first
             }
-            // SUCCESS path: terminate the subprocess outside the race, then
-            // return the discovered list. Paseo's `finally { closeProbe }`
-            // parity (acp-agent.ts:881-884).
-            await Self.terminateAndLog(client, reason: "success", providerID: provider.id)
-            return result
+        }
+        let hardBound = Task {
+            try await Task.sleep(for: timeout + Self.hardBoundGrace)
+            throw ACPProviderModelProbeError.timedOut
+        }
+
+        let outcome: Result<ACPProviderCatalogObservation, Error>
+        do {
+            outcome = .success(try await race.value)
         } catch {
-            // ERROR / TIMEOUT path: terminate the subprocess outside the race
-            // so it ALWAYS runs even if the work child was cancelled mid-flight
-            // (avoids the orphan-on-timeout race — the explicit do/catch is
-            // the legal-Swift equivalent of `defer { try? await terminate() }`,
-            // which the plan specified but is illegal: `defer` is synchronous).
-            await Self.terminateAndLog(client, reason: "error/timeout", providerID: provider.id)
+            outcome = .failure(error)
+        }
+        hardBound.cancel()
+
+        // SUCCESS path: terminate the subprocess outside the race. Paseo's
+        // `finally { closeProbe }` parity (acp-agent.ts:881-884) — and on the
+        // hard-bound path this is what actually kills the pinned subprocess.
+        let succeeded: Bool
+        if case .success = outcome { succeeded = true } else { succeeded = false }
+        await Self.terminateAndLog(
+            client,
+            reason: succeeded ? "success" : "error/timeout",
+            providerID: provider.id)
+
+        switch outcome {
+        case .success(let observation):
+            return observation
+        case .failure(let error):
             // Map ACP/SDK errors to the probe error type before rethrowing so
             // the Settings row sees a focused message.
             throw Self.mapProbeError(error)
         }
     }
+
+    /// Extra grace the hard bound grants beyond `timeout` (review HIGH): a
+    /// cancellation-responsive child unwinds through the inner race within it;
+    /// past it the probe stops waiting, terminates the subprocess, and throws
+    /// `.timedOut`.
+    static let hardBoundGrace: Duration = .seconds(2)
 
     /// The racing probe operation: launch → initialize → (auth) → newSession →
     /// map to `[CachedModelInfo]`. NEVER tears down the client — the caller's

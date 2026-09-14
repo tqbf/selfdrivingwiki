@@ -348,10 +348,18 @@ struct AgentProviderRuntimeTests {
             await service.release(preparation.selection.token)
             await order.record("release-done")
         }
-        try await Task.sleep(for: .milliseconds(150))
-        let midFlight = await order.values
-        #expect(!midFlight.contains("shutdown"), "no backend shutdown while a summary lease is active")
-        #expect(!midFlight.contains("release-done"), "release must not complete before quiescence")
+        // Race-exposure window (250 ms): a BROKEN release would reach shutdown
+        // here. The hard ordering proof is the final sequence below; this
+        // bounded window is what makes a broken teardown LIKELY to be caught,
+        // rather than only possible.
+        do {
+            try await waitFor(
+                { await order.values.contains("shutdown") },
+                timeout: .milliseconds(250))
+            Issue.record("backend shutdown ran while the summary lease was still active")
+        } catch is TeardownTimeout {
+            // Expected: release is still quiescing.
+        }
         #expect(FileManager.default.fileExists(atPath: scratchPath),
                 "scratch survives while a cached backend can still use it")
 
@@ -417,10 +425,14 @@ struct AgentProviderRuntimeTests {
             await service.dispose()
             await order.record("dispose-done")
         }
-        try await Task.sleep(for: .milliseconds(150))
-        let midFlight = await order.values
-        #expect(!midFlight.contains("shutdown"))
-        #expect(!midFlight.contains("dispose-done"))
+        do {
+            try await waitFor(
+                { await order.values.contains("shutdown") },
+                timeout: .milliseconds(250))
+            Issue.record("backend shutdown ran while the title lease was still active")
+        } catch is TeardownTimeout {
+            // Expected: dispose is still quiescing.
+        }
         #expect(FileManager.default.fileExists(atPath: scratchPath))
 
         await gate.open()
@@ -442,6 +454,107 @@ struct AgentProviderRuntimeTests {
             throw AgentProviderRuntimeError.noProvider
         }
         return preparation
+    }
+
+    @Test("Overlapping release and dispose tear the backend down exactly once")
+    func overlappingReleaseAndDisposeNeverDoubleShutdown() async throws {
+        let config = LockedBox(configuration(summarizer: true))
+        let order = TeardownOrder()
+        let gate = GateBox()
+        let gated = GatedSummarizerBackend(gate: gate, order: order, replyText: "summary")
+        let service = AgentProviderRuntime(
+            readConfiguration: { config.read() },
+            resolveCommand: { providers in
+                Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    provider.command.map { (provider.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            makeBackend: { _, _, _ in gated })
+
+        let preparation = try await summarizerPreparation(service)
+        let prepared = try await service.preparedBackend(
+            from: preparation.selection.token,
+            stage: .summarizer)
+        let scratchPath = try #require(prepared.profile.scratchDirectory).path
+
+        // One ACTIVE lease; both teardown paths race it.
+        let summaryTask = Task {
+            _ = try? await service.modelSummary(text: "text", preparation: preparation)
+        }
+        try await waitFor { await order.values.contains("send-start") }
+
+        let releaseTask = Task {
+            await service.release(preparation.selection.token)
+            await order.record("release-done")
+        }
+        let disposeTask = Task {
+            await service.dispose()
+            await order.record("dispose-done")
+        }
+
+        await gate.open()
+        try await waitForTask(releaseTask)
+        try await waitForTask(disposeTask)
+        await summaryTask.value
+
+        let values = await order.values
+        let shutdowns = values.filter { $0 == "shutdown" }
+        #expect(shutdowns.count == 1,
+                "exactly one shutdown across overlapping teardowns, got \(shutdowns.count)")
+        let sendEnd = try #require(values.firstIndex(of: "send-end"))
+        let shutdownIndex = try #require(values.firstIndex(of: "shutdown"))
+        #expect(shutdownIndex > sendEnd,
+                "even under overlap, shutdown never precedes the active lease draining")
+        #expect(!FileManager.default.fileExists(atPath: scratchPath))
+    }
+
+    @Test("Disposal during summarizer preparation removes the scratch and refuses")
+    func disposalDuringPreparationRemovesScratchAndRefuses() async throws {
+        let config = LockedBox(configuration(summarizer: true))
+        let commandGate = GateBox()
+        let signals = TeardownOrder()
+        let service = AgentProviderRuntime(
+            readConfiguration: { config.read() },
+            resolveCommand: { _ in
+                await signals.record("resolve-entered")
+                await commandGate.wait()
+                return [:]
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass })
+
+        // Park preparation inside command resolution, dispose underneath it.
+        let prepareTask = Task {
+            _ = try? await service.prepareSummarization()
+        }
+        try await waitFor { await signals.values.contains("resolve-entered") }
+        let scratchBefore = Self.summarizerScratchPaths()
+        #expect(!scratchBefore.isEmpty, "the parked preparation already owns its scratch")
+
+        await service.dispose()
+        await commandGate.open()
+        await prepareTask.value
+
+        // The disposed runtime never resurrects the snapshot: no active
+        // snapshot remains and the parked preparation's scratch is gone.
+        let activeAfter = await service.activeSnapshotCount()
+        #expect(activeAfter == 0)
+        let after = Set(Self.summarizerScratchPaths())
+        #expect(scratchBefore.allSatisfy { !after.contains($0) },
+                "a disposal that races preparation still removes the scratch")
+    }
+
+    /// Parked-preparation scratch dirs are visible under the temp root by the
+    /// production name prefix.
+    private static func summarizerScratchPaths() -> [String] {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: FileManager.default.temporaryDirectory,
+            includingPropertiesForKeys: nil)) ?? []
+        return contents
+            .filter { $0.lastPathComponent.hasPrefix("summarizer-") }
+            .map { $0.path }
     }
 
     // MARK: - Catalog sandbox ordering (issue #1276, AC.4)
@@ -558,18 +671,20 @@ private final class PolicyRecorder: Sendable {
 struct TeardownTimeout: Error {}
 
 /// A one-shot open/close gate the tests use to park a fake backend's `send`
-/// mid-turn, so release/dispose ordering is observable.
+/// mid-turn, so release/dispose ordering is observable. Supports multiple
+/// waiters; `open()` is idempotent and releases them all.
 private actor GateBox {
-    private var continuation: CheckedContinuation<Void, Never>?
+    private var continuations: [CheckedContinuation<Void, Never>] = []
     private var opened = false
     func wait() async {
         if opened { return }
-        await withCheckedContinuation { continuation = $0 }
+        await withCheckedContinuation { continuations.append($0) }
     }
     func open() {
         opened = true
-        continuation?.resume()
-        continuation = nil
+        let waiters = continuations
+        continuations = []
+        for waiter in waiters { waiter.resume() }
     }
 }
 
