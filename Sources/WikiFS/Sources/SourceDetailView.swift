@@ -630,7 +630,10 @@ struct SourceDetailView: View {
         }
         .onChange(of: store.activeTabID) { _, newID in
             lastKnownActiveTabID = newID
-            let tab = store.tabs.first(where: { $0.id == newID })
+            let tabs = store.tabs
+            let tab = tabs.first { tab in
+                tab.id == newID
+            }
             guard tab?.isEditing == true else {
                 shouldRestoreEditing = false
                 return
