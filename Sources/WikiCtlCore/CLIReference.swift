@@ -655,6 +655,47 @@ public enum CLIReference {
         okfOperations.first { $0.name == name }
     }
 
+    // MARK: - Contextual result guidance
+
+    /// Returns the short, executable next-step trailer for a command result.
+    ///
+    /// The command templates live beside the parser's command table so a
+    /// suggestion cannot drift into a command or option that `wikictl` does
+    /// not recognize. Runtime values deliberately remain placeholders: the
+    /// agent can fill them from the result or its surrounding context.
+    public static func helpTrailer(
+        for command: ArgumentParser.Command,
+        output: String = ""
+    ) -> String? {
+        let commands: [String]
+        switch command {
+        case .page(.add):
+            commands = [
+                "wikictl page get --id <id> --json",
+                "wikictl page history --id <id>",
+            ]
+        case .source(.addURL):
+            commands = [
+                "wikictl source cat --id <id> --markdown",
+                "wikictl source refresh --id <id>",
+            ]
+        case .source(.addFile):
+            commands = [
+                "wikictl source cat --id <id> --markdown",
+                "wikictl source search --query <text>",
+            ]
+        case .page(.list(json: false)),
+             .page(.search) where output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+            commands = ["wikictl page add --title <title> --body-file -"]
+        case .source(.list(json: false)),
+             .source(.search) where output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+            commands = ["wikictl source add --body-file <path> --name <name>"]
+        default:
+            return nil
+        }
+        return "help[]\n" + commands.map { "  \($0)" }.joined(separator: "\n") + "\n"
+    }
+
     /// The option set the parser accepts for a family (the union of its
     /// leaves' options). Feeds `ArgumentParser.Options` so parsing and help
     /// share one definition.

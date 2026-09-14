@@ -159,17 +159,40 @@ public struct WikiCtlRunner {
                 resolver.containerDirectory)
         }
 
+        return Self.output(
+            for: result,
+            command: resolvedCommand,
+            changedWikiID: result.didCommit ? descriptor.id : nil)
+    }
+
+    static func output(
+        for result: SourceCommand.Result,
+        command: ArgumentParser.Command,
+        changedWikiID: WikiID? = nil
+    ) -> Output {
         let stdout: Data
+        let outputText: String?
         switch result.payload {
         case .text(let text):
+            outputText = text
             stdout = text.isEmpty ? Data() : Data("\(text)\n".utf8)
         case .bytes(let bytes):
+            outputText = nil
             stdout = bytes
+        }
+        var stderrText = result.stderrOutput ?? ""
+        if let outputText,
+           let trailer = CLIReference.helpTrailer(for: command, output: outputText)
+        {
+            if !stderrText.isEmpty, !stderrText.hasSuffix("\n") {
+                stderrText += "\n"
+            }
+            stderrText += trailer
         }
         return Output(
             stdout: stdout,
-            stderr: Data((result.stderrOutput ?? "").utf8),
-            changedWikiID: result.didCommit ? descriptor.id : nil)
+            stderr: Data(stderrText.utf8),
+            changedWikiID: changedWikiID)
     }
 
     public func runDumpConfig(overlay: String?) throws -> Output {
