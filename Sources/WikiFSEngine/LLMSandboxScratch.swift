@@ -45,6 +45,13 @@ public struct LLMSandboxScratch: Sendable {
     ///     absolute path; `SandboxProfile.readOnlyInvocation` canonicalizes it
     ///     for the seatbelt matchers.
     ///   - namePrefix: the scratch directory's name prefix (e.g. `acp-probe`).
+    ///   - strict: when true, the invocation is
+    ///     `SandboxProfile.strictReadOnlyInvocation` (W^X scratch/temp, pivot
+    ///     exec denies, credential read denies) instead of the plain read-only
+    ///     profile. A profile choice ONLY — the directory layout, `remove()`,
+    ///     and lease ownership are identical either way. Summarizer children
+    ///     pass true; extraction and probes stay on the plain profile until
+    ///     separately validated.
     ///   - homePath: the current-user home passed to the profile as `HOME`
     ///     (the provider runtime homes hang off it).
     ///   - pdf2mdScriptPath: when non-nil, the same `pdf2md` exec/read deny
@@ -53,12 +60,17 @@ public struct LLMSandboxScratch: Sendable {
         under parent: URL? = nil,
         namePrefix: String,
         homePath: String = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory(),
-        pdf2mdScriptPath: String? = nil
+        pdf2mdScriptPath: String? = nil,
+        strict: Bool = false
     ) throws -> LLMSandboxScratch {
         let base = parent ?? FileManager.default.temporaryDirectory
         let directory = base.appendingPathComponent(
             "\(namePrefix)-\(UUID().uuidString)", isDirectory: true)
-        return try adopt(directory: directory, homePath: homePath, pdf2mdScriptPath: pdf2mdScriptPath)
+        return try adopt(
+            directory: directory,
+            homePath: homePath,
+            pdf2mdScriptPath: pdf2mdScriptPath,
+            strict: strict)
     }
 
     /// Adopt an EXISTING unique directory (the extraction staging directory)
@@ -68,19 +80,26 @@ public struct LLMSandboxScratch: Sendable {
     public static func adopt(
         directory: URL,
         homePath: String = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory(),
-        pdf2mdScriptPath: String? = nil
+        pdf2mdScriptPath: String? = nil,
+        strict: Bool = false
     ) throws -> LLMSandboxScratch {
         let tempDirectory = directory.appendingPathComponent(Self.tempLeaf, isDirectory: true)
         DebugLog.trying("create llm scratch", operation: {
             try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
         })
+        let sandbox = strict
+            ? SandboxProfile.strictReadOnlyInvocation(
+                homePath: homePath,
+                scratchDir: directory.path,
+                pdf2mdScriptPath: pdf2mdScriptPath)
+            : SandboxProfile.readOnlyInvocation(
+                homePath: homePath,
+                scratchDir: directory.path,
+                pdf2mdScriptPath: pdf2mdScriptPath)
         return LLMSandboxScratch(
             directoryURL: directory,
             tempDirectoryURL: tempDirectory,
-            sandbox: SandboxProfile.readOnlyInvocation(
-                homePath: homePath,
-                scratchDir: directory.path,
-                pdf2mdScriptPath: pdf2mdScriptPath))
+            sandbox: sandbox)
     }
 
     /// Delete the scratch tree. Best-effort and logged (never throws) — the

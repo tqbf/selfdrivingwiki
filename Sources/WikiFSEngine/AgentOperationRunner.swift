@@ -712,7 +712,11 @@ public enum AgentOperationRunner {
                     chatID: chatID, cursor: target.cursor,
                     summary: summary, kind: .model)
             } catch {
-                DebugLog.agent("AgentOperationRunner: model summary failed: \(error.localizedDescription)")
+                // Issue #1276 strict tier: a launch failure (e.g. an adapter
+                // the strict sandbox fences) must DEGRADE to the default
+                // truncation summary — never leave the message unsummarized.
+                DebugLog.agent("AgentOperationRunner: model summary failed — degrading to truncation: \(error.localizedDescription)")
+                Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
             }
         }
     }

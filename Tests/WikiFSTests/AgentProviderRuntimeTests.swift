@@ -289,6 +289,16 @@ struct AgentProviderRuntimeTests {
         #expect(sandbox.defines.first { $0.0 == "SCRATCH_DIR" }?.1 == SandboxProfile.canonical(scratchURL.path))
         #expect(sandbox.defines.contains { $0.0 == "WIKI_DB" } == false)
         #expect(sandbox.profile.contains("(deny file-write*)"))
+        // Issue #1276 strict tier: the summarizer carries the strict trailer —
+        // W^X scratch no-exec and the credential read denies — unless the
+        // WIKIFS_SUMMARIZER_STRICT=0 escape hatch is set for this run.
+        if AgentProviderRuntime.strictSummarizerEnabled {
+            #expect(sandbox.trailer.isEmpty == false, "the summarizer runs the strict profile tier")
+            #expect(sandbox.trailer.contains(
+                "(deny process-exec* (subpath (param \"SCRATCH_DIR\")))"))
+            #expect(sandbox.trailer.contains { $0.contains("/.ssh") })
+            #expect(sandbox.trailer.contains { $0.contains("/usr/bin/open") })
+        }
         // The scratch-local temp root exists before any spawn.
         #expect(FileManager.default.fileExists(atPath: scratchURL.appendingPathComponent(".tmp").path))
 

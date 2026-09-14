@@ -436,6 +436,15 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         #endif
     }
 
+    /// The strict summarizer sandbox tier is default-on; setting
+    /// `WIKIFS_SUMMARIZER_STRICT=0` disables it without a rebuild. The
+    /// escape hatch exists because an unknown adapter could fail to launch
+    /// under the strict denies — and when it does, summarization degrades to
+    /// default truncation (never silently disappears; see the model-summary
+    /// call sites).
+    public static let strictSummarizerEnabled: Bool =
+        ProcessInfo.processInfo.environment["WIKIFS_SUMMARIZER_STRICT"] != "0"
+
     public init(
         readConfiguration: @escaping ConfigurationReader,
         resolveCommand: @escaping CommandResolver,
@@ -543,7 +552,12 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         // sandbox) for their full lifetime; `release`/`dispose` remove it only
         // after the leases drain and the backends terminate. A scratch
         // allocation failure throws — summarization never runs unsandboxed.
-        let scratch = try LLMSandboxScratch.make(namePrefix: "summarizer")
+        // The summarizer runs the STRICT profile tier (W^X scratch/temp, macOS
+        // pivot exec denies, credential read denies): a one-shot LLM call with
+        // no file-tool needs is the most fenceable spawn in the app.
+        let scratch = try LLMSandboxScratch.make(
+            namePrefix: "summarizer",
+            strict: Self.strictSummarizerEnabled)
         let snapshotID = UUID()
         let policy = AgentOperationPolicy(
             kind: .interactive,

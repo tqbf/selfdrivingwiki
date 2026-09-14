@@ -43,24 +43,54 @@ public enum SandboxProfile {
     /// sandbox is on: the profile text (one string, passed via `sandbox-exec -p`) plus
     /// the `-D key=value` profile-parameter pairs it references. Equatable so the
     /// pure argv-assembly in `OperationCommand` is unit-testable.
+    ///
+    /// The profile is split into a `baseProfile` and a `trailer` because the
+    /// seatbelt is purely LAST-MATCH-WINS (verified empirically on macOS 15: a
+    /// later rule wins over an earlier one regardless of specificity — an allow
+    /// placed after a broad deny re-opens it, and vice versa).
+    /// `invocation(_:addingHomeSubpaths:)` appends per-spawn write allows to the
+    /// BASE, and the trailer is carried through unchanged and always emitted
+    /// last — so strict-mode denies (which must stay last) cannot be defeated
+    /// by later layering.
     public struct SandboxInvocation: Equatable, Sendable {
-        /// The seatbelt profile text. One argument element (passed via
-        /// `sandbox-exec -p <profile>`).
-        public let profile: String
+        /// The seatbelt rules emitted before any per-spawn layering. One
+        /// argument element prefix (passed via `sandbox-exec -p <profile>`).
+        public let baseProfile: String
+        /// Rules that MUST remain the last matching rules — strict-mode denies
+        /// appended after every base rule and carried through layering.
+        /// Empty for every non-strict invocation.
+        public let trailer: [String]
         /// `sandbox-exec -D` profile-parameter pairs, in emit order. The profile
         /// references these by `(param "<key>")`. These are profile variables — they
         /// are NOT injected into the child process environment (so `-D WIKI_DB=<path>`
         /// does not collide with the `WIKI_DB=<ulid>` env var `wikictl` uses).
         public let defines: [(String, String)]
 
+        /// The complete seatbelt profile text handed to `sandbox-exec -p`:
+        /// `baseProfile` followed by the trailer (always last).
+        public var profile: String {
+            baseProfile + trailer.map { $0 + "\n" }.joined()
+        }
+
+        /// The back-compat memberwise shape: no trailer. Every non-strict
+        /// invocation is built through this.
         public init(profile: String, defines: [(String, String)]) {
-            self.profile = profile
+            self.init(baseProfile: profile, trailer: [], defines: defines)
+        }
+
+        /// The layered shape: allows folded into the base, strict denies kept
+        /// in the trailer so they remain the last matching rules.
+        public init(baseProfile: String, trailer: [String], defines: [(String, String)]) {
+            self.baseProfile = baseProfile
+            self.trailer = trailer
             self.defines = defines
         }
 
         // MARK: - Equatable (tuples aren't Equatable by default)
         public static func == (lhs: SandboxInvocation, rhs: SandboxInvocation) -> Bool {
-            guard lhs.profile == rhs.profile, lhs.defines.count == rhs.defines.count else {
+            guard lhs.baseProfile == rhs.baseProfile,
+                  lhs.trailer == rhs.trailer,
+                  lhs.defines.count == rhs.defines.count else {
                 return false
             }
             return zip(lhs.defines, rhs.defines).allSatisfy { $0.0 == $1.0 && $0.1 == $1.1 }
@@ -206,6 +236,128 @@ public enum SandboxProfile {
             defines.append(("PDF2MD_SCRIPT", resolvedPdf2md))
         }
         return SandboxInvocation(profile: profile, defines: defines)
+    }
+
+    /// Build the STRICT read-only `SandboxInvocation` for the summarizer child
+    /// (issue #1276 follow-up): the read-only profile above, plus a trailer of
+    /// last-matching denies that closes the execution and credential-read
+    /// channels for a one-shot LLM call with no file-tool needs:
+    ///
+    /// - **W^X on writable land** — nothing the child (or any descendant)
+    ///   writes into the scratch or temp can be executed or mapped
+    ///   executable. Deliberately NOT extended to `~/.bun`/`~/.npm`/`~/.claude`:
+    ///   those are write-allowed AND exec-bearing by design (`bun x` runs
+    ///   packages from its cache), so denying exec there bricks the shipped
+    ///   adapters.
+    /// - **macOS pivot/escape exec denies** — `open` and `launchctl` are
+    ///   launchd-spawned OUTSIDE the seatbelt (a complete fence escape);
+    ///   AppleScript/Shortcuts can drive other apps; `security` dumps the
+    ///   keychain; `crontab`/`at` persist. No summarizer needs any of them.
+    /// - **Named credential/data read denies** — network is open, so a read
+    ///   IS exfiltration. Deliberately does NOT deny the adapter auth files
+    ///   (`~/.claude/.credentials.json`, `~/.codex/auth.json`) — the child
+    ///   must authenticate. Never denies `$HOME` broadly: every common
+    ///   adapter binary and runtime lives under HOME.
+    ///
+    /// Interpreter denies (`uv`, `bun`, `python3`, `node`) are deliberately
+    /// ABSENT — an arbitrary ACP adapter may BE one of them, and denying
+    /// `python3` while the adapter's own runtime runs free buys nothing.
+    /// The trailer is emitted LAST (after `invocation(_:addingHomeSubpaths:)`
+    /// layering) because the seatbelt is last-match-wins.
+    public static func strictReadOnlyInvocation(
+        homePath: String,
+        scratchDir: String,
+        claudeTempBase: String = defaultClaudeTempBase(),
+        pdf2mdScriptPath: String? = nil
+    ) -> SandboxInvocation {
+        let base = readOnlyInvocation(
+            homePath: homePath,
+            scratchDir: scratchDir,
+            claudeTempBase: claudeTempBase,
+            pdf2mdScriptPath: pdf2mdScriptPath)
+        return SandboxInvocation(
+            baseProfile: base.baseProfile,
+            trailer: strictDenyTrailer(),
+            defines: base.defines)
+    }
+
+    /// The strict trailer: last-matching deny rules, in three independently
+    /// testable groups.
+    private static func strictDenyTrailer() -> [String] {
+        writableLandExecDenies()
+            + macOSPivotExecDenies()
+            + sensitiveReadDenies()
+    }
+
+    /// W^X: nothing the child can write may be executed or mapped executable.
+    /// Covers the scratch (cwd + relocated `TMPDIR`), Claude's per-session
+    /// temp base, and the canonical temp roots. Paths are canonical
+    /// (`/private/tmp`, never `/tmp`) — the kernel matcher resolves against
+    /// the realpath.
+    private static func writableLandExecDenies() -> [String] {
+        [
+            "(deny process-exec* (subpath (param \"SCRATCH_DIR\")))",
+            "(deny file-map-executable (subpath (param \"SCRATCH_DIR\")))",
+            "(deny process-exec* (subpath (param \"CLAUDE_TMP\")))",
+            "(deny file-map-executable (subpath (param \"CLAUDE_TMP\")))",
+            "(deny process-exec* (subpath \"/private/tmp\"))",
+            "(deny file-map-executable (subpath \"/private/tmp\"))",
+            "(deny process-exec* (subpath \"/private/var/tmp\"))",
+            "(deny file-map-executable (subpath \"/private/var/tmp\"))",
+        ]
+    }
+
+    /// macOS privilege pivots and sandbox escapes: `open`/`launchctl` are
+    /// launchd-spawned outside the fence entirely; AppleScript/Shortcuts can
+    /// drive other apps and launder TCC consent; `security` dumps the
+    /// keychain; `crontab`/`at` persist; `sudo` fails more cleanly denied.
+    /// All literal paths verified present on macOS 15.
+    private static func macOSPivotExecDenies() -> [String] {
+        [
+            "(deny process-exec* (literal \"/usr/bin/open\"))",
+            "(deny process-exec* (literal \"/bin/launchctl\"))",
+            "(deny process-exec* (literal \"/usr/bin/osascript\"))",
+            "(deny process-exec* (literal \"/usr/bin/osacompile\"))",
+            "(deny process-exec* (literal \"/usr/bin/automator\"))",
+            "(deny process-exec* (literal \"/usr/bin/shortcuts\"))",
+            "(deny process-exec* (literal \"/usr/bin/security\"))",
+            "(deny process-exec* (literal \"/usr/bin/crontab\"))",
+            "(deny process-exec* (literal \"/usr/bin/at\"))",
+            "(deny process-exec* (literal \"/usr/bin/sudo\"))",
+        ]
+    }
+
+    /// Named credential/data stores, read-denied — with open network, a read
+    /// is exfiltration. Paths are built in-profile from `(param "HOME")` (no
+    /// trailing-slash roots: `string-append` does not normalize), so no new
+    /// `-D` defines are needed and non-existent leaves simply never match.
+    /// Deliberately excludes `~/.npmrc`/`~/.bunfig.toml` (registry auth reads
+    /// on every install — a paranoid-tier candidate) and the adapter auth
+    /// files the child must read to authenticate.
+    private static func sensitiveReadDenies() -> [String] {
+        var rules: [String] = [
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/.ssh\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/.aws\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/.gnupg\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/.config/gcloud\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/.config/gh\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/.kube\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/.docker\")))",
+            "(deny file-read* (literal (string-append (param \"HOME\") \"/.netrc\")))",
+            "(deny file-read* (literal (string-append (param \"HOME\") \"/.git-credentials\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/Library/Keychains\")))",
+            "(deny file-read* (subpath \"/Library/Keychains\"))",
+        ]
+        // High-value personal data — cheap defense-in-depth behind TCC.
+        rules.append(contentsOf: [
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/Library/Messages\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/Library/Mail\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/Library/Cookies\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/Library/Safari\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/Library/Application Support/Firefox\")))",
+            "(deny file-read* (subpath (string-append (param \"HOME\") \"/Library/Application Support/Google/Chrome\")))",
+        ])
+        return rules
     }
 
     /// Build a `SandboxInvocation` from the three spawn-time paths. The scratch dir and
@@ -378,21 +530,26 @@ public enum SandboxProfile {
     /// "/<subpath>")))`. Used for provider config homes the base profiles
     /// don't already allow (Codex writes `~/.codex`, Gemini `~/.gemini`;
     /// `~/.claude` is already allowed by the base profile). The appended
-    /// allows come after every base rule; they cannot shadow the
-    /// `PDF2MD_SCRIPT` exec/read denies (different operation classes) or the
-    /// claude-home credential denies (disjoint subtrees). `HOME` is already a
-    /// define on every invocation this module builds, so no new defines are
-    /// added. An empty list returns `base` unchanged.
+    /// allows fold into the BASE (before the trailer); they cannot shadow the
+    /// `PDF2MD_SCRIPT` exec/read denies (different operation classes), the
+    /// claude-home credential denies (disjoint subtrees), or a strict trailer
+    /// (carried through unchanged and always emitted after them — the
+    /// seatbelt is last-match-wins, so strict denies must stay last).
+    /// `HOME` is already a define on every invocation this module builds, so
+    /// no new defines are added. An empty list returns `base` unchanged.
     public static func invocation(
         _ base: SandboxInvocation,
         addingHomeSubpaths subpaths: [String]
     ) -> SandboxInvocation {
         guard !subpaths.isEmpty else { return base }
-        var profile = base.profile
+        var baseProfile = base.baseProfile
         for subpath in subpaths {
-            profile += "(allow file-write* (subpath (string-append (param \"HOME\") \"/\(subpath)\")))\n"
+            baseProfile += "(allow file-write* (subpath (string-append (param \"HOME\") \"/\(subpath)\")))\n"
         }
-        return SandboxInvocation(profile: profile, defines: base.defines)
+        return SandboxInvocation(
+            baseProfile: baseProfile,
+            trailer: base.trailer,
+            defines: base.defines)
     }
 
     // MARK: - Helpers

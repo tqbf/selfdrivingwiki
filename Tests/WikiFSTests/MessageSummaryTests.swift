@@ -188,6 +188,72 @@ struct MessageSummaryTests {
 
     // MARK: - Model backend (§4.3 — injectable AgentBackend seam, AC.4)
 
+    @Test @MainActor
+    func modelSummaryLaunchFailureDegradesToDefaultTruncation() async throws {
+        // Issue #1276 strict tier: a model-summary LAUNCH failure (e.g. an
+        // adapter the strict sandbox fences) must DEGRADE to the default
+        // truncation summary — never leave the row unsummarized.
+        let store = try TestStoreFactory.inMemory()
+        let model = WikiStoreModel(store: store)
+        let chat = try store.createChat(kind: .edit, title: "Question")
+        _ = try store.appendChatTranscriptItems(
+            chatID: chat.id,
+            items: [
+                .message(ChatTranscriptMessageItem(
+                    messageID: ChatMessageID(rawValue: "user-1"),
+                    turnID: ChatTurnID(rawValue: "turn-1"),
+                    role: .user,
+                    text: "Question",
+                    createdAt: Date())),
+                .message(ChatTranscriptMessageItem(
+                    messageID: ChatMessageID(rawValue: "assistant-1"),
+                    turnID: ChatTurnID(rawValue: "turn-2"),
+                    role: .assistant,
+                    text: String(repeating: "summary source ", count: 20),
+                    createdAt: Date())),
+            ])
+
+        // A REAL runtime prepares the summarizer snapshot (valid token); the
+        // fake then throws on modelSummary — the strict-fence launch failure.
+        let config = AgentProvidersConfig(
+            providers: [
+                AgentProvider(
+                    id: ProviderID(rawValue: "claude"),
+                    label: "Claude",
+                    command: ["/usr/local/bin/claude"]),
+            ],
+            selectedModelIds: [:],
+            ingestStageModelIds: ["summarizer": ModelID(rawValue: "summary-model")],
+            stageProviderIds: ["summarizer": ProviderID(rawValue: "claude")])
+        let runtime = AgentProviderRuntime(
+            readConfiguration: { config },
+            resolveCommand: { providers in
+                Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    provider.command.map { (provider.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass })
+        let launcher = AgentLauncher(
+            providerServices: ThrowingModelSummaryServices(runtime: runtime))
+
+        await AgentOperationRunner.summarizePendingMessagesForTesting(
+            chatID: chat.id,
+            store: model,
+            launcher: launcher)
+
+        let page = try store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+        let summarized = try #require(
+            page.items.first { item in
+                if case .message(let message) = item.item { return message.role == .assistant }
+                return false
+            })
+        #expect(summarized.summary?.isEmpty == false, "the row degrades to a truncation summary")
+        #expect(store.scalarText(
+            "SELECT summary_kind FROM chat_transcript_items WHERE chat_id = '\(chat.id.rawValue)' AND cursor = \(summarized.cursor.rawValue);")
+            == ChatMessageSummaryKind.defaultTruncation.rawValue)
+    }
+
     @Test func modelSummary_streamsAssistantTextAsSummary() async {
         // The model half of AC.4, automated: one assistant turn in → summary
         // out via the injected FakeAgentBackend (no real subprocess).
@@ -651,6 +717,85 @@ struct MessageSummaryTests {
         #expect(counts.0 == 1, "the start was attempted exactly once")
         #expect(counts.1 == 0, "no turn is sent after a failed start")
         #expect(counts.2 == 0, "no session exists to cancel")
+    }
+}
+
+/// A provider-services fake whose summarizer PREPARATION succeeds (a real
+/// `AgentProviderRuntime` behind the scenes, so the preparation token is
+/// genuine) but whose model summary always THROWS — the strict-fence launch
+/// failure shape (issue #1276). Everything else is unavailable.
+private struct ThrowingModelSummaryServices: AgentProviderServices {
+    struct LaunchFailure: Error {}
+
+    let runtime: AgentProviderRuntime
+
+    func prepareInteractive(
+        providerOverride: ProviderID?,
+        modelOverride: ModelID?,
+        configuredThinkingOptionID: ChatConfigurationValueID?,
+        priorEffectiveThinkingOptionID: ChatConfigurationValueID?
+    ) async throws -> AgentInteractivePreparation {
+        try await runtime.prepareInteractive(
+            providerOverride: providerOverride,
+            modelOverride: modelOverride,
+            configuredThinkingOptionID: configuredThinkingOptionID,
+            priorEffectiveThinkingOptionID: priorEffectiveThinkingOptionID)
+    }
+
+    func prepare(
+        _ operation: AgentProviderOperationKind,
+        providerOverride: ProviderID?,
+        modelOverride: ModelID?,
+        thinkingOverride: String?
+    ) async throws -> AgentOperationPreparation {
+        try await runtime.prepare(
+            operation,
+            providerOverride: providerOverride,
+            modelOverride: modelOverride,
+            thinkingOverride: thinkingOverride)
+    }
+
+    func preparation(
+        from token: AgentProviderAttemptToken,
+        stage: AgentProviderStage
+    ) async throws -> AgentOperationPreparation {
+        try await runtime.preparation(from: token, stage: stage)
+    }
+
+    func fallbackPreparation(
+        from token: AgentProviderAttemptToken,
+        stage: AgentProviderStage,
+        fallbackProviderID: ProviderID
+    ) async throws -> AgentOperationPreparation {
+        try await runtime.fallbackPreparation(
+            from: token,
+            stage: stage,
+            fallbackProviderID: fallbackProviderID)
+    }
+
+    func prepareSummarization() async throws -> AgentProviderSummaryPreparation {
+        try await runtime.prepareSummarization()
+    }
+
+    func discoverCatalog(
+        for provider: AgentProvider
+    ) async throws -> ACPProviderCatalogObservation {
+        throw LaunchFailure()
+    }
+
+    func modelSummary(
+        text: String,
+        preparation: AgentOperationPreparation
+    ) async throws -> String? {
+        throw LaunchFailure()
+    }
+
+    func release(_ token: AgentProviderAttemptToken) async {
+        await runtime.release(token)
+    }
+
+    func readiness() async -> Bool {
+        await runtime.readiness()
     }
 }
 #endif // os(macOS)

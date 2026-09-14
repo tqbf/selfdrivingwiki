@@ -568,5 +568,146 @@ struct AgentSandboxProcessTests {
         #expect(!FileManager.default.fileExists(atPath: outsideTmp),
                 "a denied global-temp write must not leave an artifact")
     }
+
+    // MARK: - Strict summarizer tier (issue #1276), live
+
+    /// The REAL strict summarizer fence: `LLMSandboxScratch.make(strict: true)`
+    /// wrapped through `SandboxProfile.wrappedArguments`. Proves, against the
+    /// real `/usr/bin/sandbox-exec`:
+    ///
+    /// - W^X: a binary planted in the scratch (or its `.tmp` temp root) cannot
+    ///   execute — and the SAME plant EXECUTES under the plain read-only
+    ///   profile (control: the deny is the strict rule, not the harness).
+    /// - A script stored inside the scratch still runs via an outside
+    ///   interpreter (scratch stays readable; the adapter's own binary is
+    ///   unaffected).
+    /// - Named credential reads are denied; benign temp-HOME reads are not.
+    /// - The macOS pivots (`open`, `osascript`) are denied.
+    /// - Ordinary scratch writes and the installed Python runtime keep
+    ///   working.
+    @Test func strictSummarizerProfileBlocksPlantedExecCredentialReadsAndPivots() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("strict-summarizer-\(UUID().uuidString)", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { Issue.record("strict-summarizer cleanup failed: \(error)") }
+        }
+
+        let scratch = try LLMSandboxScratch.make(
+            under: root,
+            namePrefix: "summarizer",
+            homePath: home.path,
+            strict: true)
+        let plainControl = try LLMSandboxScratch.make(
+            under: root,
+            namePrefix: "plain-readonly",
+            homePath: home.path)
+
+        // A fake credential store, seeded UNSANDBOXED like the real one.
+        let sshDir = home.appendingPathComponent(".ssh", isDirectory: true)
+        try FileManager.default.createDirectory(at: sshDir, withIntermediateDirectories: true)
+        try Data("SECRET-KEY-MATERIAL".utf8).write(to: sshDir.appendingPathComponent("id_rsa"))
+
+        func runSandboxed(_ scratchWorld: LLMSandboxScratch, script: String) async throws -> ProcessResult {
+            let wrapped = SandboxProfile.wrappedArguments(
+                executablePath: "/bin/sh",
+                arguments: ["-c", script],
+                invocation: scratchWorld.sandbox)
+            var environment = ProcessInfo.processInfo.environment
+            environment["HOME"] = home.path
+            environment["PATH"] = "/usr/bin:/bin"
+            environment["TMPDIR"] = scratchWorld.tempDirectoryURL.path
+            return try await run(
+                executablePath: SandboxProfile.sandboxExecutablePath,
+                arguments: wrapped,
+                environment: environment)
+        }
+
+        let scratchPath = scratch.directoryURL.path
+
+        // Plant helper: a freshly-written shebang script (NOT a copy of a
+        // trust-cache-signed system binary — AMFI SIGKILLs those copies on
+        // macOS 15 regardless of any sandbox, which would make the control
+        // meaningless).
+        func plantScript(at path: String, marker: String) -> String {
+            """
+            printf '#!/bin/sh\\necho \(marker)\\n' > '\(path)'
+            chmod +x '\(path)'
+            '\(path)'
+            """
+        }
+
+        // L1 (control first): under the PLAIN read-only profile the planted
+        // script EXECUTES — proving the harness allows this shape at all.
+        let control = try await runSandboxed(
+            plainControl,
+            script: plantScript(
+                at: plainControl.directoryURL.path + "/implant.sh",
+                marker: "planted-exec-ok"))
+        #expect(control.status == 0 && control.outputText.contains("planted-exec-ok"),
+                "control: the plain read-only profile must allow the planted exec (stderr: \(control.errorText))")
+
+        // L1: the same plant under STRICT is denied.
+        let planted = try await runSandboxed(
+            scratch,
+            script: plantScript(at: scratchPath + "/implant.sh", marker: "pwned"))
+        #expect(planted.status != 0, "a scratch-planted binary must not execute under strict")
+        #expect(!planted.outputText.contains("pwned"))
+
+        // L6: the relocated TMPDIR leaf inside the scratch is covered too.
+        let tmpPlanted = try await runSandboxed(
+            scratch,
+            script: plantScript(at: scratchPath + "/.tmp/implant.sh", marker: "pwned"))
+        #expect(tmpPlanted.status != 0, "the relocated TMPDIR leaf must not be an exec hole")
+
+        // L2: an outside binary executes; a scratch-stored SCRIPT is still
+        // readable and runs through the outside interpreter.
+        let outsideScript = "/bin/echo outside-ok"
+        let outside = try await runSandboxed(scratch, script: outsideScript)
+        #expect(outside.status == 0 && outside.outputText.contains("outside-ok"),
+                "strict must not brick the child's own exec (stderr: \(outside.errorText))")
+        let scriptInScratch = scratch.directoryURL.appendingPathComponent("task.sh")
+        try Data("#!/bin/sh\necho script-ok\n".utf8).write(to: scriptInScratch)
+        let viaInterpreter = try await runSandboxed(
+            scratch, script: "/bin/sh '\(scratchPath)/task.sh'")
+        #expect(viaInterpreter.status == 0 && viaInterpreter.outputText.contains("script-ok"),
+                "scratch stays READABLE — scripts run via outside interpreters (stderr: \(viaInterpreter.errorText))")
+
+        // L3: the named credential read is denied…
+        let credentialScript = "cat '\(home.path)/.ssh/id_rsa'"
+        let credential = try await runSandboxed(scratch, script: credentialScript)
+        #expect(credential.status != 0, "the .ssh read must be denied under strict")
+        #expect(!credential.outputText.contains("SECRET-KEY-MATERIAL"))
+        // …while a benign temp-HOME read is not (no blanket HOME deny). The
+        // probe file sits in the HOME root — `ls .ssh` would match the .ssh
+        // subpath deny itself.
+        try Data("benign".utf8).write(to: home.appendingPathComponent("notes.txt"))
+        let benign = try await runSandboxed(scratch, script: "cat '\(home.path)/notes.txt'")
+        #expect(benign.status == 0 && benign.outputText.contains("benign"),
+                "strict must not be a blanket HOME read deny")
+
+        // L5: the macOS pivots are denied.
+        let openScript = "/usr/bin/open -a 'Finder'"
+        let openAttempt = try await runSandboxed(scratch, script: openScript)
+        #expect(openAttempt.status != 0, "`open` is a launchd-spawn escape and must be denied")
+        let osascriptScript = "/usr/bin/osascript -e 'return 1'"
+        let osascriptAttempt = try await runSandboxed(scratch, script: osascriptScript)
+        #expect(osascriptAttempt.status != 0, "osascript must be denied under strict")
+
+        // L4: ordinary scratch writes keep working.
+        let writeScript = "echo ok > '\(scratchPath)/out.txt'"
+        let write = try await runSandboxed(scratch, script: writeScript)
+        #expect(write.status == 0, "scratch writes must keep working (stderr: \(write.errorText))")
+        #expect(FileManager.default.fileExists(atPath: scratchPath + "/out.txt"))
+
+        // L9: the installed Python interpreter is unaffected (capability-gated).
+        if Self.python3Installed {
+            let python = try await runSandboxed(scratch, script: "/usr/bin/python3 -c 'print(\"PY-OK\")'")
+            #expect(python.status == 0 && python.outputText.contains("PY-OK"),
+                    "the system interpreter must keep working under strict (stderr: \(python.errorText))")
+        }
+    }
 }
 #endif

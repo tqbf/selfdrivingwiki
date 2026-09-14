@@ -590,7 +590,17 @@ final class DaemonChatHost: @unchecked Sendable {
                     try store.setChatTitleIfEmpty(chatID: chatID, title: provisional)
                 }
             } catch {
-                DebugLog.store("DaemonChatHost.refreshChatTitle: model title failed: \(error)")
+                // Issue #1276 strict tier: a launch failure must degrade to
+                // the provisional title — the same contract as an unusable
+                // reply, never a silent untitled row.
+                DebugLog.store("DaemonChatHost.refreshChatTitle: model title failed — falling back to the provisional title: \(error)")
+                if currentTitle.isEmpty, let provisional {
+                    do {
+                        try store.setChatTitleIfEmpty(chatID: chatID, title: provisional)
+                    } catch {
+                        DebugLog.store("DaemonChatHost.refreshChatTitle: fallback title failed: \(error)")
+                    }
+                }
             }
         case .defaultTruncation:
             guard currentTitle.isEmpty, let provisional else { return }
@@ -638,7 +648,11 @@ final class DaemonChatHost: @unchecked Sendable {
                     preparation: preparation) else { continue }
                 summary = value
             } catch {
-                DebugLog.agent("DaemonChatHost: model summary failed: \(error.localizedDescription)")
+                // Issue #1276 strict tier: a launch failure must DEGRADE to
+                // the default truncation summary — never leave the message
+                // unsummarized.
+                DebugLog.agent("DaemonChatHost: model summary failed — degrading to truncation: \(error.localizedDescription)")
+                Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
                 continue
             }
             do {

@@ -261,6 +261,53 @@ smokes (capability-gated skips), the absolute `wikictl --wiki` CAS rewrite with
 `WIKI_DB`/`WIKICTL`/`PATH` removed, and the cross-wiki denial. The deterministic
 half lives in `AgentRunContextTests` and `AgentRuntimePathTests`.
 
+## Strict summarizer tier (issue #1276 follow-up)
+
+The summarizer child is the most fenceable LLM spawn in the app: one-shot, no
+file tools, no wiki database, and its input is directly prompt-injectable. It
+runs the **strict** profile — `SandboxProfile.strictReadOnlyInvocation`, the
+read-only profile plus a **trailer** of last-matching denies:
+
+- **W^X on writable land**: `process-exec*` + `file-map-executable` denied
+  under the scratch (including the relocated `TMPDIR`), `CLAUDE_TMP`,
+  `/private/tmp`, and `/private/var/tmp`. Nothing the child writes can run or
+  be mapped executable.
+- **macOS pivot/escape exec denies**: `open` and `launchctl` (launchd spawns
+  them outside the fence entirely), `osascript`, `osacompile`, `automator`,
+  `shortcuts`, `security`, `crontab`, `at`, `sudo`.
+- **Named credential/data read denies**: `~/.ssh`, `~/.aws`, `~/.gnupg`,
+  `~/.config/gcloud`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.netrc`,
+  `~/.git-credentials`, `Library/Keychains`, plus the personal-data set
+  (`Messages`, `Mail`, `Cookies`, `Safari`, Firefox/Chrome profiles). Network
+  is open, so a read is exfiltration.
+
+Deliberate limits (an adapter is ARBITRARY — it may itself be `uv`, `bun`, or
+`node`, so interpreter denies and blanket `$HOME` denies are rejected; the
+adapter auth files must stay readable for authentication; the provider-home
+write allows stay because `bun x`/`npx` write their caches there).
+
+**Structural invariant:** the seatbelt is purely LAST-MATCH-WINS (verified
+empirically — a later rule wins regardless of specificity).
+`SandboxInvocation` therefore carries `baseProfile` + `trailer` with a
+computed `profile`; `invocation(_:addingHomeSubpaths:)` folds per-spawn write
+allows into the BASE and the trailer is always emitted last. A deny that can
+be re-opened by later layering is impossible by construction.
+
+**Failure contract:** a strict-mode launch failure degrades — model summaries
+fall back to `defaultSummary` truncation per target, and chat titles fall back
+to the provisional text. It never leaves a silent unsummarized row, and never
+retries unfenced. Escape hatch: `WIKIFS_SUMMARIZER_STRICT=0` (no rebuild).
+Before relying on strict with a new adapter, smoke it: start a chat, confirm a
+model title + summary appear, and check
+`log show --predicate 'process == "sandboxd"' --last 5m --info --debug` for
+denials naming the adapter.
+
+Extraction and provider-model probes stay on the plain read-only profile until
+they get their own smoke pass (see the issues filed from this work). Residual
+risks: network exfiltration, the adapter's own runtime as a full interpreter,
+and the write+exec overlap in `~/.bun`/`~/.npm` (that overlap is what makes
+`bun x` work).
+
 ## Files
 
 - `Sources/WikiFSCore/Core/SandboxProfile.swift` — `SandboxInvocation` + pure
