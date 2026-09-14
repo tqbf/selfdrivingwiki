@@ -39,6 +39,7 @@ struct QueueEngineClientConformanceTests {
     @Test func allProtocolMethodsAreCallable() async throws {
         let engine = makeEngine()
         let client: any QueueEngineClient = engine
+        await engine.start()
 
         // events — verify it's a valid stream (always succeeds; compile-time check).
         let _ = client.events

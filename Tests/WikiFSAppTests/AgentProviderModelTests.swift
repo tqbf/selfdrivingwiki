@@ -614,15 +614,15 @@ import ACPModel
         #expect(msg?.contains("Settings → Providers") == true)
     }
 
-    @Test func readinessMessageMentionsBunForBunProvider() {
+    @Test func readinessMessageMentionsMiseForBunProvider() {
         // The default Claude provider uses `bun` — the message should mention
-        // bun.sh when the binary isn't found.
+        // the mise installation path when the binary isn't found.
         let msg = AgentLauncher.readinessMessage(
             for: .claudeAcpDefault,
             resolveCommand: { _ in nil })
         #expect(msg != nil)
         #expect(msg?.contains("bun") == true)
-        #expect(msg?.contains("bun.sh") == true)
+        #expect(msg?.contains("mise install") == true)
     }
 }
 #endif

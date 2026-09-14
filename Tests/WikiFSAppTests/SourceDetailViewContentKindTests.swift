@@ -31,6 +31,11 @@ import WikiFSTypes
 ///   full `isTranscribable` view predicate — beyond the seam's scope).
 @Suite struct SourceDetailViewContentKindTests {
 
+    private static let registeredDocx = RegisteredExtractionInputs(claims: [.init(
+        kind: .docx,
+        mimeTypes: [MimeType.docx],
+        filenameExtensions: ["docx"])])
+
     // MARK: - Per-kind affordance (the closed table)
 
     @Test("PDF → Extract")
@@ -70,7 +75,14 @@ import WikiFSTypes
             provider: nil, ext: "docx") == .extract)
         // Ext fallback (nil mime + .docx) also extracts.
         #expect(SourceDetailView.extractionAffordance(
-            mimeType: nil, provider: .localFile, ext: "docx") == .extract)
+            mimeType: nil,
+            provider: .localFile,
+            ext: "docx",
+            registeredInputs: Self.registeredDocx) == .extract)
+        #expect(SourceDetailView.extractionAffordance(
+            mimeType: nil,
+            provider: .localFile,
+            ext: "docx") == .none)
         // Legacy .doc (application/msword) has no path — never Extract.
         #expect(SourceDetailView.extractionAffordance(
             mimeType: "application/msword", provider: .localFile, ext: "doc") == .none)

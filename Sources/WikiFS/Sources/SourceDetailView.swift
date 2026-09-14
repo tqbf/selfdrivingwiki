@@ -157,13 +157,14 @@ struct SourceDetailView: View {
     /// Transcribe button gating switches on this kind's `capabilities` rather
     /// than re-deriving the PDF/HTML/transcript decision ad-hoc. Kept `private`
     /// to the view; tests exercise the same `resolve(mimeType:provider:ext:)`
-    /// call via the `internal static` seam (`SourceDetailView.extractionDecision`,
-    /// below).
+    /// call via the `internal static` seam below, with active extractor
+    /// registrations supplied by the store.
     private var contentKind: ContentKind {
         ContentKind.resolve(
             mimeType: file.mimeType,
             provider: origin?.provider,
-            ext: file.ext)
+            ext: file.ext,
+            registeredInputs: store.registeredExtractionInputs)
     }
 
     private var hasMarkdown: Bool { headVersion != nil }
@@ -2081,6 +2082,8 @@ extension SourceDetailView {
     /// reach it without instantiating a `SourceDetailView` (which needs a
     /// `WikiStoreModel`, `AgentLauncher`, `ExtractionCoordinator`, etc.).
     /// Mirrors the PR1 `BackgroundIngestCoordinator.ingestionDecision` seam.
+    /// Registration-driven kinds, such as DOCX, must receive the active
+    /// registration set from the caller.
     ///
     /// `nonisolated` because it's pure (a single `ContentKind.resolve(...)`
     /// call with no actor dependencies) despite the enclosing SwiftUI `View`
@@ -2092,9 +2095,14 @@ extension SourceDetailView {
     nonisolated static func extractionAffordance(
         mimeType: String?,
         provider: SourceProvider?,
-        ext: String?
+        ext: String?,
+        registeredInputs: RegisteredExtractionInputs = .none
     ) -> ExtractionAffordance {
-        let kind = ContentKind.resolve(mimeType: mimeType, provider: provider, ext: ext)
+        let kind = ContentKind.resolve(
+            mimeType: mimeType,
+            provider: provider,
+            ext: ext,
+            registeredInputs: registeredInputs)
         switch kind.capabilities.extractionPath {
         case .pdfBackend, .htmlToMarkdown, .docxBackend: return .extract
         case .podcastTranscript, .youtubeTranscript:   return .transcribe

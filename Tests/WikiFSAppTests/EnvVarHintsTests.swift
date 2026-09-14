@@ -33,10 +33,10 @@ struct EnvVarHintsTests {
         #expect(hints?.contains(where: { $0.key == "CODEX_PATH" }) == true)
     }
 
-    @Test func geminiSurfacesGeminiApiKey() {
+    @Test func geminiDoesNotSuggestGeminiApiKey() {
         let hints = EnvVarHints.hints(forProviderID: "gemini")
         #expect(hints != nil)
-        #expect(hints?.contains(where: { $0.key == "GEMINI_API_KEY" }) == true)
+        #expect(hints?.contains(where: { $0.key == "GEMINI_API_KEY" }) == false)
     }
 
     @Test func gooseSurfacesGooseProvider() {
@@ -73,7 +73,7 @@ struct EnvVarHintsTests {
         // Every hint across every provider that returns non-nil must have a
         // non-empty key + description — an empty hint would render as a blank
         // line in the editor footer.
-        let providerIDs = ["claude-acp", "gemini", "codex", "opencode", "goose"]
+        let providerIDs = ["claude-acp", "gemini", "codex", "goose"]
         for id in providerIDs {
             guard let hints = EnvVarHints.hints(forProviderID: id) else {
                 Issue.record("Expected hints for provider \(id)")
@@ -85,6 +85,10 @@ struct EnvVarHintsTests {
                 #expect(!hint.description.isEmpty, "Description should not be empty for \(id)/\(hint.key)")
             }
         }
+    }
+
+    @Test func opencodeHasNoHintsWhenOnlySecretVariablesAreKnown() {
+        #expect(EnvVarHints.hints(forProviderID: "opencode") == nil)
     }
 }
 #endif // os(macOS)
