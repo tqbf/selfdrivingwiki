@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 import WikiFSTypes
+import WikiFSEngine
 @testable import WikiFS
 
 /// Tests for the PR2 §5.4 migration of `SourceDetailView`'s Extract /
@@ -165,6 +166,43 @@ import WikiFSTypes
     func unknownIsNone() {
         #expect(SourceDetailView.extractionAffordance(
             mimeType: nil, provider: nil, ext: nil) == .none)
+    }
+
+    @Test("Raw Source matches an active registered extractor by MIME")
+    func rawSourceUsesRegisteredExtractor() throws {
+        let registration = ExtractorRouteRegistrationSnapshot(
+            reference: try reference(packageID: "org.example.pdf2md"),
+            displayName: "PDF Extractor",
+            packageName: "pdf2md",
+            kinds: [.pdf],
+            mimeTypes: [try ExtractorMIMEType(validating: "application/pdf")],
+            filenameExtensions: [try ExtractorFileExtension(validating: "pdf")])
+
+        let match = SourceDetailView.rawSourceExtractorMatch(
+            mimeType: "application/pdf",
+            ext: "pdf",
+            registrations: [registration])
+
+        #expect(match?.packageName == "pdf2md")
+    }
+
+    @Test("Raw Source has no extractor action without an active match")
+    func rawSourceDoesNotOfferUnmatchedExtractor() {
+        let match = SourceDetailView.rawSourceExtractorMatch(
+            mimeType: "application/octet-stream",
+            ext: "bin",
+            registrations: [])
+
+        #expect(match == nil)
+    }
+
+    private func reference(packageID: String) throws -> ExtractorReference {
+        ExtractorReference(
+            revision: ExtractorPackageRevisionID(
+                packageID: try ExtractorPackageID(validating: packageID),
+                version: try ExtractorPackageVersion(validating: "1.0.0"),
+                digest: try ExtractorPackageDigest(hex: String(repeating: "00", count: 32))),
+            registrationID: try ExtractorRegistrationID(validating: "main"))
     }
 
     // MARK: - Exhaustive partition (closed-table invariant)
