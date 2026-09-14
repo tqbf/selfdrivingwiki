@@ -258,6 +258,269 @@ struct AgentProviderRuntimeTests {
         #expect(!rendered.contains("/secret"))
         #expect(!rendered.contains("key-not-public"))
         #expect(!rendered.contains("do-not-leak"))
+        // Issue #1276: dispose tears the snapshot down (scratch removed) so
+        // the test leaves no temp directories behind.
+        await service.dispose()
+    }
+
+    // MARK: - Summarizer sandbox ownership + teardown ordering (issue #1276)
+
+    @Test("Summarizer preparation returns a read-only profile with a unique owned scratch")
+    func summarizerBackendOwnsReadOnlySandboxScratch() async throws {
+        let config = LockedBox(configuration(summarizer: true))
+        let counts = RuntimeCounts()
+        let service = runtime(config: config, counts: counts)
+
+        let first = try await service.prepareSummarization()
+        guard case .model(let firstPreparation) = first else {
+            Issue.record("expected model summarization")
+            return
+        }
+        let prepared = try await service.preparedBackend(
+            from: firstPreparation.selection.token,
+            stage: .summarizer)
+        let profile = prepared.profile
+        #expect(profile.isReadOnly)
+        let scratchURL = try #require(profile.scratchDirectory, "summarizer profiles own a scratch directory")
+        let sandbox = try #require(profile.sandbox, "summarizer profiles name a read-only sandbox")
+        // The invocation's SCRATCH_DIR is the EXACT owned directory (the
+        // seatbelt's canonical form of it) and the wiki database is NOT
+        // allowed — no define, no allowance.
+        #expect(sandbox.defines.first { $0.0 == "SCRATCH_DIR" }?.1 == SandboxProfile.canonical(scratchURL.path))
+        #expect(sandbox.defines.contains { $0.0 == "WIKI_DB" } == false)
+        #expect(sandbox.profile.contains("(deny file-write*)"))
+        // The scratch-local temp root exists before any spawn.
+        #expect(FileManager.default.fileExists(atPath: scratchURL.appendingPathComponent(".tmp").path))
+
+        // Each preparation owns a UNIQUE scratch directory.
+        let second = try await service.prepareSummarization()
+        guard case .model(let secondPreparation) = second else {
+            Issue.record("expected second model summarization")
+            return
+        }
+        let prepared2 = try await service.preparedBackend(
+            from: secondPreparation.selection.token,
+            stage: .summarizer)
+        let scratch2 = try #require(prepared2.profile.scratchDirectory)
+        #expect(scratch2.path != scratchURL.path, "each snapshot owns its own scratch")
+
+        await service.release(firstPreparation.selection.token)
+        await service.release(secondPreparation.selection.token)
+        #expect(!FileManager.default.fileExists(atPath: scratchURL.path))
+        #expect(!FileManager.default.fileExists(atPath: scratch2.path))
+    }
+
+    @Test("Release waits for the active summary, shuts the backend down, then removes scratch")
+    func releaseWaitsForActiveSummaryBeforeBackendShutdownAndScratchRemoval() async throws {
+        let config = LockedBox(configuration(summarizer: true))
+        let counts = RuntimeCounts()
+        let order = TeardownOrder()
+        let gate = GateBox()
+        let gated = GatedSummarizerBackend(gate: gate, order: order, replyText: "one line summary")
+        let service = AgentProviderRuntime(
+            readConfiguration: { config.read() },
+            resolveCommand: { providers in
+                counts.incrementCommands()
+                return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    provider.command.map { (provider.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            makeBackend: { _, _, _ in gated })
+
+        let preparation = try await summarizerPreparation(service)
+        let prepared = try await service.preparedBackend(
+            from: preparation.selection.token,
+            stage: .summarizer)
+        let scratchPath = try #require(prepared.profile.scratchDirectory).path
+        #expect(FileManager.default.fileExists(atPath: scratchPath))
+
+        // An ACTIVE summary: its `send` parks on the gate mid-turn.
+        let summaryTask = Task {
+            await order.record("summary-returned")
+            _ = try? await service.modelSummary(text: "long text", preparation: preparation)
+        }
+        try await waitFor { await order.values.contains("send-start") }
+
+        // Release must NOT tear anything down while the summary is active.
+        let releaseTask = Task {
+            await service.release(preparation.selection.token)
+            await order.record("release-done")
+        }
+        try await Task.sleep(for: .milliseconds(150))
+        let midFlight = await order.values
+        #expect(!midFlight.contains("shutdown"), "no backend shutdown while a summary lease is active")
+        #expect(!midFlight.contains("release-done"), "release must not complete before quiescence")
+        #expect(FileManager.default.fileExists(atPath: scratchPath),
+                "scratch survives while a cached backend can still use it")
+
+        // Finish the summary — release then completes in the pinned order.
+        await gate.open()
+        try await waitForTask(releaseTask)
+        await summaryTask.value
+        let final = await order.values
+        let sendStart = try #require(final.firstIndex(of: "send-start"))
+        let sendEnd = try #require(final.firstIndex(of: "send-end"))
+        let shutdownIndex = try #require(final.firstIndex(of: "shutdown"))
+        let done = try #require(final.firstIndex(of: "release-done"))
+        #expect(sendEnd > sendStart)
+        #expect(shutdownIndex > sendEnd, "shutdown happens only after the summary drained")
+        #expect(done > shutdownIndex)
+        #expect(!FileManager.default.fileExists(atPath: scratchPath),
+                "scratch is removed only after the backend terminated")
+
+        // Retired snapshot: new work is rejected.
+        do {
+            _ = try await service.modelSummary(text: "more text", preparation: preparation)
+            Issue.record("post-release summary must be rejected")
+        } catch let error as AgentProviderRuntimeError {
+            #expect(error == .invalidToken)
+        }
+    }
+
+    @Test("Dispose waits for the active title, shuts the backend down, then removes scratch")
+    func disposeWaitsForActiveTitleBeforeBackendShutdownAndScratchRemoval() async throws {
+        let config = LockedBox(configuration(summarizer: true))
+        let counts = RuntimeCounts()
+        let order = TeardownOrder()
+        let gate = GateBox()
+        let gated = GatedSummarizerBackend(gate: gate, order: order, replyText: "Titled Nicely")
+        let service = AgentProviderRuntime(
+            readConfiguration: { config.read() },
+            resolveCommand: { providers in
+                counts.incrementCommands()
+                return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    provider.command.map { (provider.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            makeBackend: { _, _, _ in gated })
+
+        let preparation = try await summarizerPreparation(service)
+        let prepared = try await service.preparedBackend(
+            from: preparation.selection.token,
+            stage: .summarizer)
+        let scratchPath = try #require(prepared.profile.scratchDirectory).path
+
+        // An ACTIVE title generation parks on the gate mid-turn.
+        let titleTask = Task {
+            _ = try? await service.modelTitle(
+                question: "What is a venturi mask?",
+                answer: "An oxygen delivery device…",
+                preparation: preparation)
+        }
+        try await waitFor { await order.values.contains("send-start") }
+
+        let disposeTask = Task {
+            await service.dispose()
+            await order.record("dispose-done")
+        }
+        try await Task.sleep(for: .milliseconds(150))
+        let midFlight = await order.values
+        #expect(!midFlight.contains("shutdown"))
+        #expect(!midFlight.contains("dispose-done"))
+        #expect(FileManager.default.fileExists(atPath: scratchPath))
+
+        await gate.open()
+        try await waitForTask(disposeTask)
+        await titleTask.value
+        let final = await order.values
+        let sendEnd = try #require(final.firstIndex(of: "send-end"))
+        let shutdownIndex = try #require(final.firstIndex(of: "shutdown"))
+        let done = try #require(final.firstIndex(of: "dispose-done"))
+        #expect(shutdownIndex > sendEnd)
+        #expect(done > shutdownIndex)
+        #expect(!FileManager.default.fileExists(atPath: scratchPath))
+    }
+
+    /// `prepareSummarization` unwrapped to its preparation.
+    private func summarizerPreparation(_ service: AgentProviderRuntime) async throws -> AgentOperationPreparation {
+        let result = try await service.prepareSummarization()
+        guard case .model(let preparation) = result else {
+            throw AgentProviderRuntimeError.noProvider
+        }
+        return preparation
+    }
+
+    // MARK: - Catalog sandbox ordering (issue #1276, AC.4)
+
+    @Test("discoverCatalog returns the probe observation through the sandbox gate")
+    func discoverCatalogReturnsProbeObservation() async throws {
+        let config = LockedBox(configuration())
+        let counts = RuntimeCounts()
+        let observation = ACPProviderCatalogObservation(
+            providerID: alpha,
+            fingerprint: nil,
+            models: [],
+            currentModelID: nil,
+            thinkingCapability: nil)
+        let probedCommand = LockedBox<[String]?>(nil)
+        let service = AgentProviderRuntime(
+            readConfiguration: { config.read() },
+            resolveCommand: { providers in
+                counts.incrementCommands()
+                return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    provider.command.map { (provider.id, $0) }
+                })
+            },
+            readCredential: { _ in "key" },
+            resolvePermissionPolicy: { _ in .bypass },
+            probeCatalog: { _, resolvedCommand, _ in
+                probedCommand.mutate { $0 = resolvedCommand }
+                return observation
+            })
+
+        let result = try await service.discoverCatalog(for: config.read().providers[0])
+        #expect(result == observation)
+        #expect(probedCommand.read() == ["/secret/alpha"])
+        #expect(counts.commandCalls == 1)
+    }
+
+    @Test("An unusable sandbox makes discoverCatalog fail before command resolution")
+    func catalogSandboxFailurePrecedesCommandResolution() async throws {
+        let config = LockedBox(configuration())
+        let counts = RuntimeCounts()
+        let service = AgentProviderRuntime(
+            readConfiguration: { config.read() },
+            resolveCommand: { providers in
+                counts.incrementCommands()
+                return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    provider.command.map { (provider.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            probeCatalog: { _, _, _ in
+                Issue.record("the probe must never run when the sandbox is unusable")
+                throw ACPProviderModelProbeError.notConfigured
+            },
+            sandboxUsability: { _ in false })
+
+        await #expect(throws: ACPProviderModelProbeError.sandboxUnavailable) {
+            try await service.discoverCatalog(for: config.read().providers[0])
+        }
+        #expect(counts.commandCalls == 0,
+                "command resolution must not run before the sandbox gate passes")
+    }
+
+    @Test("discoverCatalog surfaces the typed sandbox-unavailable error")
+    func discoverCatalogSurfacesSandboxUnavailable() async throws {
+        let config = LockedBox(configuration())
+        let service = AgentProviderRuntime(
+            readConfiguration: { config.read() },
+            resolveCommand: { _ in [:] },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            sandboxUsability: { _ in false })
+
+        do {
+            _ = try await service.discoverCatalog(for: config.read().providers[0])
+            Issue.record("expected sandboxUnavailable")
+        } catch let error as ACPProviderModelProbeError {
+            #expect(error == .sandboxUnavailable)
+        }
     }
 }
 
@@ -288,4 +551,105 @@ private final class PolicyRecorder: Sendable {
     private let storage = Mutex<[PermissionPolicy]>([])
     var values: [PermissionPolicy] { storage.withLock { $0 } }
     func record(_ policy: PermissionPolicy) { storage.withLock { $0.append(policy) } }
+}
+
+// MARK: - Issue #1276 test doubles (nonblocking — no Thread.sleep, no semaphores)
+
+struct TeardownTimeout: Error {}
+
+/// A one-shot open/close gate the tests use to park a fake backend's `send`
+/// mid-turn, so release/dispose ordering is observable.
+private actor GateBox {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var opened = false
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func open() {
+        opened = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+/// Append-only event log for teardown-order assertions.
+private actor TeardownOrder {
+    private var storage: [String] = []
+    func record(_ event: String) { storage.append(event) }
+    var values: [String] { storage }
+}
+
+/// A scripted summarizer backend whose `send` parks on a `GateBox` until the
+/// test opens it. Records the release/dispose lifecycle events in order:
+/// send-start → (parked) → send-end → cancel → shutdown.
+private actor GatedSummarizerBackend: AgentBackend {
+    private let gate: GateBox
+    private let order: TeardownOrder
+    private let replyText: String
+    private var sessionCounter = 0
+
+    init(gate: GateBox, order: TeardownOrder, replyText: String) {
+        self.gate = gate
+        self.order = order
+        self.replyText = replyText
+    }
+
+    func start(
+        profile: BackendProfile,
+        systemPrompt: String,
+        onExit: @escaping @Sendable (Int) -> Void
+    ) async throws -> SessionHandle {
+        sessionCounter += 1
+        return SessionHandle(id: "gated-\(sessionCounter)")
+    }
+
+    func send(_ turn: TurnInput, into session: SessionHandle) async -> AsyncStream<AgentEvent> {
+        await order.record("send-start")
+        await gate.wait()
+        await order.record("send-end")
+        return AsyncStream { continuation in
+            continuation.yield(.assistantText(replyText))
+            continuation.yield(.messageStop)
+            continuation.finish()
+        }
+    }
+
+    func resume(sessionID: String, profile: BackendProfile) async throws -> SessionHandle? { nil }
+
+    func cancel(_ session: SessionHandle) async {
+        await order.record("cancel")
+    }
+
+    func shutdown() async {
+        await order.record("shutdown")
+    }
+}
+
+/// Poll a predicate until it holds or the timeout elapses. Task.sleep only —
+/// never a blocking wait (house rule, #1051).
+private func waitFor(
+    _ predicate: () async -> Bool,
+    timeout: Duration = .seconds(5),
+    pollInterval: Duration = .milliseconds(20)
+) async throws {
+    let deadline = ContinuousClock.now + timeout
+    while !(await predicate()) {
+        if ContinuousClock.now >= deadline { throw TeardownTimeout() }
+        try await Task.sleep(for: pollInterval)
+    }
+}
+
+/// Await a task's completion, racing it against a diagnosed timeout so a
+/// starved pool fails fast instead of hanging the suite.
+private func waitForTask(_ task: Task<Void, Never>, timeout: Duration = .seconds(10)) async throws {
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        group.addTask { await task.value }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw TeardownTimeout()
+        }
+        try await group.next()
+        group.cancelAll()
+    }
 }

@@ -53,6 +53,8 @@ actor FakeAgentBackend: AgentBackend {
     private(set) var startCount = 0
     private(set) var sendCount = 0
     private(set) var cancelCount = 0
+    /// #1276: process-level shutdown calls (release/dispose ordering).
+    private(set) var shutdownCount = 0
     /// Session IDs in start order.
     private(set) var startedSessionIDs: [String] = []
     /// Sent prompt texts in send order.
@@ -157,6 +159,12 @@ actor FakeAgentBackend: AgentBackend {
     func cancel(_ session: SessionHandle) async {
         cancelCount += 1
         cancelledSessionIDs.append(session.id)
+    }
+
+    /// No subprocess behind a fake — record the call so lifetime tests can
+    /// assert the release ordering (lease drain → shutdown → scratch removal).
+    func shutdown() async {
+        shutdownCount += 1
     }
 }
 #endif

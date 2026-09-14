@@ -376,6 +376,85 @@ import ACPModel
         #expect(ACPBackend.tmpRelocationKey == "TMPDIR")
     }
 
+    /// AC.5 (issue #1276): the pure launch-policy check fails a sandboxed
+    /// profile CLOSED when the front-end is unusable — the decision is
+    /// available (and testable) BEFORE any launch preparation runs. Unfenced
+    /// profiles pass: `BackendProfile` is shared with fakes/low-level tests, so
+    /// a nil sandbox is a constructor decision (source-audited), not a global
+    /// rejection here.
+    @Test func sandboxRequestFailsClosedBeforeSpawnPreparation() {
+        let sandboxed = BackendProfile(
+            providerHints: [:],
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch"),
+            isReadOnly: true,
+            sandbox: SandboxProfile.invocation(
+                homePath: "/Users/me",
+                scratchDir: "/private/tmp/scratch",
+                wikiDBPath: "/db/wiki.sqlite"))
+        let violation = ACPBackend.launchPolicyViolation(profile: sandboxed, sandboxUsable: false)
+        guard case .sandboxUnavailable? = violation else {
+            Issue.record("a requested sandbox with an unusable front-end must fail closed with .sandboxUnavailable, got \(String(describing: violation))")
+            return
+        }
+        #expect(ACPBackend.launchPolicyViolation(profile: sandboxed, sandboxUsable: true) == nil)
+
+        let unfenced = BackendProfile(providerHints: [:])
+        #expect(ACPBackend.launchPolicyViolation(profile: unfenced, sandboxUsable: false) == nil,
+                "an unfenced profile is the constructor's audited decision, not a launch rejection")
+    }
+
+    /// AC.2 (issue #1276): the EXTRACTION-shaped effective plan — built through
+    /// the same shared production helper `convert` uses — wraps the adapter
+    /// behind `sandbox-exec`, allows NO wiki database and NO global
+    /// temporary-directory write, points TMPDIR at the exact scratch `.tmp`,
+    /// and layers only the documented provider-home extras.
+    @Test func extractionEffectivePlanHasNoWikiOrGlobalTempAllowance() throws {
+        let staging = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wiki-extraction-wiring-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            do { try FileManager.default.removeItem(at: staging) }
+            catch { Issue.record("staging cleanup failed: \(error)") }
+        }
+        let scratch = try LLMSandboxScratch.adopt(directory: staging)
+        let profile = ACPExtractionClient.makeProfile(
+            providerHints: [:],
+            scratch: scratch)
+
+        // No wiki DB anywhere in the invocation.
+        #expect(profile.sandbox?.defines.contains { $0.0 == "WIKI_DB" } == false)
+        let profileText = try #require(profile.sandbox?.profile)
+        #expect(!profileText.contains("WIKI_DB"), "no wiki database define reaches the profile")
+
+        // No global temporary-directory write allow (only the scratch subtree,
+        // the documented provider homes, and the narrow runtime rules).
+        #expect(!profileText.contains("(allow file-write* (subpath \"/private/tmp\"))"))
+        #expect(!profileText.contains("(allow file-write* (subpath \"/tmp\"))"))
+        #expect(!profileText.contains("(param \"TMPDIR\")"))
+
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: try #require(profile.sandbox),
+            executablePath: "/usr/local/bin/claude",
+            arguments: ["--acp"],
+            environment: ["PATH": "/usr/bin:/bin"],
+            scratchDirectory: profile.scratchDirectory)
+
+        #expect(plan.executablePath == SandboxProfile.sandboxExecutablePath)
+        if let separator = plan.arguments.firstIndex(of: "--") {
+            #expect(Array(plan.arguments[(separator + 1)...]) == ["/usr/local/bin/claude", "--acp"])
+        } else {
+            Issue.record("extraction plan lost the -- separator")
+        }
+        // Exact scratch + relocated temp root.
+        #expect(plan.environment["TMPDIR"] == staging.appendingPathComponent(".tmp").path)
+        let scratchDefine = plan.defines.first { $0.0 == "SCRATCH_DIR" }
+        #expect(scratchDefine?.1 == SandboxProfile.canonical(staging.path))
+        // Only the documented provider-home additions (claude: none beyond
+        // the base profile's `~/.claude` allowance).
+        let appended = plan.arguments.first { $0.contains("file-write*") } ?? ""
+        #expect(!appended.contains("\"/.npm\""))
+        #expect(!appended.contains("\"/.codex\""))
+    }
+
     /// The derived spawn plan wraps the real agent behind `sandbox-exec`,
     /// layers the provider's config home into the effective profile, and
     /// relocates TMPDIR into the scratch `.tmp` leaf — while preserving the

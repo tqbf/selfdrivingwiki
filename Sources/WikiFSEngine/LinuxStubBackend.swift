@@ -37,6 +37,8 @@ struct LinuxStubBackend: AgentBackend {
     }
 
     func cancel(_ session: SessionHandle) async {}
+
+    func shutdown() async {}
 }
 
 enum LinuxStubError: Error, LocalizedError {

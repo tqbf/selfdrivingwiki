@@ -2,6 +2,7 @@
 import Testing
 import Foundation
 import ACPModel
+import Synchronization
 import WikiFSCore
 import WikiFSEngine
 import ACP
@@ -540,6 +541,116 @@ struct ACPProviderModelProbeTests {
         // the agent's *advertised* list, not a chosen model.
         #expect(hints[HintKey.acpSelectedModelId.rawValue] == nil)
     }
+
+    // MARK: - Sandbox fencing (issue #1276, AC.4)
+
+    /// A thread-safe capture box for the launch seam.
+    private final class LaunchCapture: Sendable {
+        private let storage = Mutex<(ACPBackend.SandboxedSpawnPlan, String)?>(nil)
+        var value: (ACPBackend.SandboxedSpawnPlan, String)? { storage.withLock { $0 } }
+        func set(_ newValue: (ACPBackend.SandboxedSpawnPlan, String)) { storage.withLock { $0 = newValue } }
+    }
+
+    private func sandboxTestProbe(
+        sandboxUsability: @escaping @Sendable (String) -> Bool,
+        bunCalls: Counter? = nil,
+        clientCreations: Counter? = nil,
+        launchCapture: LaunchCapture? = nil
+    ) -> ACPProviderModelProbe {
+        ACPProviderModelProbe(
+            provider: AgentProvider(
+                id: ProviderID(rawValue: "claude"),
+                label: "Claude",
+                command: ["/usr/local/bin/claude"]),
+            resolvedCommand: ["/usr/local/bin/claude"],
+            apiKey: nil,
+            sandboxUsability: sandboxUsability,
+            resolveBunRuntime: {
+                bunCalls?.increment()
+                return nil
+            },
+            makeClient: {
+                clientCreations?.increment()
+                return Client()
+            },
+            performLaunch: { _, plan, cwd in
+                launchCapture?.set((plan, cwd))
+                // Stop the flow deterministically before any initialize runs;
+                // `timedOut` passes through mapProbeError untouched.
+                throw ACPProviderModelProbeError.timedOut
+            })
+    }
+
+    /// Defense at the DIRECT probe seam: an unusable sandbox front-end throws
+    /// the typed error with ZERO bun resolutions and ZERO client creations —
+    /// nothing is resolved, created, or launched.
+    @Test func directProbeSandboxFailurePrecedesBunAndLaunch() async throws {
+        let bunCalls = Counter()
+        let clientCreations = Counter()
+        let probe = sandboxTestProbe(
+            sandboxUsability: { _ in false },
+            bunCalls: bunCalls,
+            clientCreations: clientCreations)
+
+        do {
+            _ = try await probe.discoverObservation()
+            Issue.record("expected sandboxUnavailable")
+        } catch let error as ACPProviderModelProbeError {
+            #expect(error == .sandboxUnavailable)
+        }
+        #expect(bunCalls.count == 0, "the bun locate (a login-shell hop) must not run")
+        #expect(clientCreations.count == 0, "no SDK client may be created")
+    }
+
+    /// The probe's launch consumes the TYPED sandboxed plan: executable is
+    /// `/usr/bin/sandbox-exec`, the adapter argv sits behind `--`, the working
+    /// directory is the exact probe scratch, and TMPDIR is relocated into the
+    /// scratch `.tmp` leaf.
+    @Test func probeUsesTypedSandboxedLaunchPlan() async throws {
+        let bunCalls = Counter()
+        let launchCapture = LaunchCapture()
+        let probe = sandboxTestProbe(
+            sandboxUsability: { _ in true },
+            bunCalls: bunCalls,
+            launchCapture: launchCapture)
+
+        // performLaunch throws `.timedOut` by design; `runProbe`'s launch
+        // failure wrapper maps whatever it throws to `.launchFailed` (the
+        // production error seam). The assertion is on the CAPTURED plan, not
+        // the probe outcome.
+        do {
+            _ = try await probe.discoverObservation()
+            Issue.record("expected the stubbed launch failure to surface")
+        } catch {
+            // Any mapped ACPProviderModelProbeError is fine here.
+        }
+        #expect(bunCalls.count == 0,
+                "a plain provider binary (claude) is not an adapter shape — no bun locate runs")
+
+        let captured = try #require(launchCapture.value, "the launch seam must receive the typed plan")
+        let plan = captured.0
+        let workingDirectory = captured.1
+        #expect(plan.executablePath == "/usr/bin/sandbox-exec")
+        if let separator = plan.arguments.firstIndex(of: "--") {
+            #expect(Array(plan.arguments[(separator + 1)...]) == ["/usr/local/bin/claude"],
+                    "the adapter executable sits after the -- separator")
+        } else {
+            Issue.record("the wrapped argv lost the -- separator")
+        }
+        #expect(plan.arguments.contains("-p"), "the seatbelt profile travels as -p")
+        // The working directory IS the probe scratch and TMPDIR points into
+        // its pre-created `.tmp` leaf.
+        #expect(workingDirectory.hasSuffix("/.tmp") == false)
+        #expect(plan.environment["TMPDIR"] == workingDirectory + "/.tmp")
+        // No wiki database reaches the probe plan.
+        #expect(plan.defines.contains { $0.0 == "WIKI_DB" } == false)
+    }
+}
+
+private final class Counter: Sendable {
+    private let storage = Mutex(0)
+    var count: Int { storage.withLock { $0 } }
+    func increment() { storage.withLock { $0 += 1 } }
 }
 
 /// Opt-in LIVE probe test. Drives the real `ACPProviderModelProbe.discoverModels`

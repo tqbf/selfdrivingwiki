@@ -97,7 +97,11 @@ struct ProcessSignalSafetyAuditTests {
                 (3, "owns the Process object it terminates and rejects invalid process IDs"),
             .init(path: "Sources/WikiFSEngine/ACPBackend.swift",
                   primitive: .processTermination):
-                (3, "terminates a held ACP client object, not a PID"),
+                (4, "terminates a held ACP client object, not a PID. The fourth site "
+                    + "is shutdown() (issue #1276): the process-level contract cached-"
+                    + "backend owners call when retiring a summarizer snapshot — same "
+                    + "object-identity authority as cancel(), reached after the lease "
+                    + "gate proves no turn is in flight"),
             .init(path: "Sources/WikiFSEngine/ACPProviderModelProbe.swift",
                   primitive: .processTermination):
                 (1, "terminates a held ACP client object, not a PID"),

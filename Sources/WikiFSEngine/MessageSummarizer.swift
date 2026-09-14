@@ -22,9 +22,10 @@ import WikiFSCore
 ///
 /// **Test seam:** the model path's `AgentBackend` is INJECTED so the logic is
 /// unit-testable end-to-end with `FakeAgentBackend` (chat-summary plan §4.3 +
-/// AC.4). The production caller constructs the backend via
-/// `AgentBackendFactory.makeBackend(policy: .bypass)` and the profile via
-/// `resolveProfile`; tests pass a `FakeAgentBackend` + a simple `BackendProfile`.
+/// AC.4). The production caller is `AgentProviderRuntime.modelSummary` /
+/// `modelTitle`, which builds the read-only sandboxed profile from the
+/// snapshot's own scratch (`LLMSandboxScratch`, issue #1276); tests pass a
+/// `FakeAgentBackend` + a simple `BackendProfile`.
 public enum MessageSummarizer {
 
     /// The configured summarizer mode for a given provider config. Derived
@@ -321,60 +322,12 @@ public enum MessageSummarizer {
         return summary
     }
 
-    /// Build the `BackendProfile` for the summarizer stage from the user's
-    /// `AgentProvidersConfig` (chat-summary plan §4.3, mirroring
-    /// `ACPExtractionClient.resolveProvider`). Resolves the pinned summarizer
-    /// provider + its PATH-resolved command + Keychain API key + the stage's
-    /// model id, then builds the provider hints via
-    /// `AgentBackendFactory.providerHints`.
-    ///
-    /// Returns nil when:
-    /// - the stage pin is empty/absent (caller should not enter model mode),
-    /// - the pinned provider is missing/disabled,
-    /// - the command can't be PATH-resolved.
-    ///
-    /// PURE w.r.t. config + credential state (the `resolveCommand` closure is
-    /// injectable for tests; the default mirrors `ACPExtractionClient`).
-    public static func resolveProfile(
-        config: AgentProvidersConfig,
-        credentialStore: any ACPCredentialStore,
-        searchPath: String? = nil,
-        resolveCommand: ((AgentProvider) -> [String]?)? = nil
-    ) -> BackendProfile? {
-        let commandResolver = resolveCommand ?? { provider in
-            AgentLauncher.resolveCommand(for: provider, searchPath: searchPath)
-        }
-        // Read the pin DIRECTLY — never `provider(forStage:)` (chat-summary
-        // plan §5.1 invariant). This method is only called after the caller has
-        // confirmed model mode, but the guard is here too for defense in depth.
-        guard let pinnedId = config.stageProviderIds["summarizer"],
-              !pinnedId.rawValue.isEmpty,
-              let provider = config.provider(id: pinnedId),
-              provider.enabled else {
-            return nil
-        }
-
-        guard let resolvedCommand = commandResolver(provider) else {
-            DebugLog.agent("MessageSummarizer.resolveProfile: command not resolved for provider=\(provider.id)")
-            return nil
-        }
-
-        let apiKey = credentialStore.apiKey(forProvider: provider.id.rawValue)
-        // Read the stage's model id via modelId(forStage:) — this is safe now
-        // because we already confirmed the pin is non-empty above. The fallback
-        // is the provider's selectedModelId.
-        let selectedModelId = config.modelId(forStage: "summarizer")
-
-        let hints = AgentBackendFactory.providerHints(
-            provider: provider,
-            resolvedCommand: resolvedCommand,
-            apiKey: apiKey,
-            selectedModelId: selectedModelId?.rawValue)
-
-        return BackendProfile(
-            providerHints: hints,
-            scratchDirectory: FileManager.default.temporaryDirectory,
-            isReadOnly: true)
-    }
+    // NOTE (issue #1276): the former `resolveProfile` helper is REMOVED. It had
+    // no production caller (the active path is
+    // `AgentProviderRuntime.prepareSummarization` → `backend(from:stage:)`,
+    // which builds the read-only sandboxed profile from the snapshot's own
+    // `LLMSandboxScratch`), and its shared-tempDirectory, unsandboxed profile
+    // is exactly the shape the source audit now rejects. Tests drive the model
+    // path through the runtime boundary or a fake backend + explicit profile.
 }
 #endif

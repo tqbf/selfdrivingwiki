@@ -137,10 +137,11 @@ public enum SandboxProfile {
     ///   See `generate(...)` / `pdf2mdDenyRules()` for details. Nil (default) emits
     ///   nothing.
     ///
-    /// NOTE: `generateReadOnly` and `readOnlyInvocation` are retained in-tree
-    /// deliberately but are CURRENTLY UNWIRED. The read-only Ask chat mode was
-    /// removed — chats are always write-capable and use the write sandbox
-    /// (`generate`/`invocation`). Kept for reference; not marked deprecated.
+    /// Wired since issue #1276: `LLMSandboxScratch` builds this invocation for
+    /// every read-only LLM spawn that has no wiki database — ACP extraction,
+    /// model summarization/title generation, and provider-model probes.
+    /// (`AgentLauncher` no longer wires a read-only chat mode; chats are always
+    /// write-capable and use `generate`/`invocation`.)
     public static func generateReadOnly(
         scratchDir: String,
         pdf2mdScriptPath: String? = nil

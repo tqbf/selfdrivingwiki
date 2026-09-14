@@ -456,12 +456,15 @@ public actor ACPBackend: AgentBackend {
         // is requested, the front-end is verified before anything else —
         // including bun canonicalization, which shells out to a login shell.
         // "Sandbox unavailable" must mean nothing ran at all, not merely that
-        // no agent was exec'd.
+        // no agent was exec'd. The verdict itself is the pure
+        // `launchPolicyViolation` check so tests can pin the decision without
+        // driving a launch.
         #if os(macOS)
-        if profile.sandbox != nil,
-           !Self.sandboxExecutableIsUsable(at: SandboxProfile.sandboxExecutablePath) {
+        if let violation = Self.launchPolicyViolation(
+            profile: profile,
+            sandboxUsable: Self.sandboxExecutableIsUsable(at: SandboxProfile.sandboxExecutablePath)) {
             DebugLog.agent("ACPBackend.startProcess: sandbox front-end unusable — refusing to spawn (fail closed)")
-            throw ACPBackendError.sandboxUnavailable
+            throw violation
         }
         #endif
 
@@ -1625,6 +1628,36 @@ public actor ACPBackend: AgentBackend {
         debugLogger = nil
     }
 
+    /// Process-level shutdown (issue #1276): tear down the warm subprocess
+    /// (and every open session's records) WITHOUT a session handle. The
+    /// process-level contract cached-backend owners call — dropping the
+    /// backend reference terminates nothing, and `cancel(_:)` is
+    /// session-scoped. Idempotent: with no warm process and no sessions this
+    /// is a no-op.
+    public func shutdown() async {
+        // Drain any in-flight always-ask continuations for every open session
+        // BEFORE tearing down, so a pending `request_permission` never leaks
+        // its `CheckedContinuation`.
+        for record in sessions.values {
+            record.permissionDelegate.cancelAllPending()
+        }
+        sessions.removeAll()
+        usageStates.removeAll()
+        resumableSessionId = nil
+        savedOnExit = nil
+        liveUsageCallback = nil
+        if let warm = warmProcess {
+            DebugLog.agent("ACPBackend.shutdown: terminating warm process")
+            warm.drainTask.cancel()
+            warm.stderrTask?.cancel()
+            warm.notificationFanout.finish()
+            await warm.client.terminate()
+            warm.permissionDelegate.fireOnExit(status: 0)
+            warmProcess = nil
+        }
+        debugLogger = nil
+    }
+
     /// Close a session WITHOUT terminating the subprocess. Frees the session's
     /// context and resources but keeps the agent process alive for the next
     /// `start()` / `createSession()` to create a new session on the same
@@ -2070,17 +2103,21 @@ public actor ACPBackend: AgentBackend {
     static let tmpRelocationLeaf = ".tmp"
     static let tmpRelocationKey = "TMPDIR"
 
-    /// The derived plan for a sandbox-confined agent spawn. Pure data —
+    /// The derived plan for a sandbox-confined agent launch. Pure data —
     /// `startProcess` applies it to `client.launch`; tests pin the shape
     /// without spawning. (Not `Equatable`: the defines tuple array has no
     /// synthesized conformance, and no test compares whole plans.)
-    struct SandboxedSpawnPlan: Sendable {
-        let executablePath: String
-        let arguments: [String]
-        let environment: [String: String]
+    ///
+    /// Public because it is the typed currency of the shared launch boundary
+    /// (issue #1276): `ACPProviderModelProbe`'s public launch seam accepts
+    /// ONLY this plan, so a direct SDK launch cannot receive raw values.
+    public struct SandboxedSpawnPlan: Sendable {
+        public let executablePath: String
+        public let arguments: [String]
+        public let environment: [String: String]
         /// The profile parameters the effective invocation references (the
         /// base invocation's defines, unchanged by the provider-home extras).
-        let defines: [(String, String)]
+        public let defines: [(String, String)]
     }
 
     /// Builds the wrapped spawn plan for one agent launch: the executable
@@ -2231,6 +2268,31 @@ public actor ACPBackend: AgentBackend {
             return false
         }
         return true
+    }
+
+    /// The pure launch-policy check (issue #1276): a profile that REQUESTS a
+    /// sandbox requires a usable seatbelt front-end, and the verdict is
+    /// returned instead of thrown so tests can prove the fail-closed decision
+    /// BEFORE any launch preparation (bun locate, env build, client setup).
+    /// Profiles WITHOUT a sandbox pass — `BackendProfile` is also the type fake
+    /// backends and low-level tests use, so an unfenced profile is a policy
+    /// decision of the CONSTRUCTOR (audited by
+    /// `LLMSpawnSandboxExhaustivenessTests`), not a global rejection here.
+    /// `nil` = the launch may proceed.
+    static func launchPolicyViolation(
+        profile: BackendProfile,
+        sandboxUsable: Bool
+    ) -> ACPBackendError? {
+        #if os(macOS)
+        if profile.sandbox != nil && !sandboxUsable {
+            return .sandboxUnavailable
+        }
+        #else
+        // Diagnostic-only Linux builds have no seatbelt to verify; the gap is
+        // loud (startProcess logs it) and the supported product gate is macOS.
+        _ = sandboxUsable
+        #endif
+        return nil
     }
 
     /// `~`-relative config-home subpaths the base agent profile does not

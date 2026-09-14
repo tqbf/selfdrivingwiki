@@ -2,6 +2,8 @@
 import Foundation
 import Testing
 import WikiFSCore
+import WikiFSEngine
+@testable import WikiFSEngine
 
 /// Live macOS Seatbelt suite (`plans/sandbox-agent.md` §live-sandbox): runs the
 /// REAL `/usr/bin/sandbox-exec` profile against scratch/temp/heredoc/runtime
@@ -486,6 +488,77 @@ struct AgentSandboxProcessTests {
         #expect(headBAfter.id == headBBefore.id, "wiki B's head must be unchanged")
         let historyB = try fixture.storeB.processedMarkdownHistory(sourceID: sourceB.id)
         #expect(historyB.count == 1, "no version may be appended to wiki B")
+    }
+
+    // MARK: - AC.7 (issue #1276): the extraction-shaped fence, live
+
+    /// The REAL extraction-shaped spawn: a read-only `LLMSandboxScratch` (temp
+    /// HOME, staged PDF-like input) wrapped through the SAME production
+    /// sandboxed launch-plan helper `ACPExtractionClient.convert` feeds its
+    /// backend. The child reads + writes INSIDE the scratch and is DENIED a
+    /// write to a sibling path outside it.
+    @Test func extractionShapedProcessWritesOnlyInsideScratch() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("extraction-shape-\(UUID().uuidString)", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { Issue.record("extraction-shape cleanup failed: \(error)") }
+        }
+
+        // The scratch world via the production constructor (temp HOME so no
+        // rule ever references the developer's real home).
+        let scratch = try LLMSandboxScratch.make(
+            under: root,
+            namePrefix: "wiki-extraction",
+            homePath: home.path)
+
+        // Stage a PDF-like input under the scratch (extraction shape: the
+        // staged file the prompt hands to the agent).
+        let stagedInput = scratch.directoryURL.appendingPathComponent("document.pdf")
+        try Data("alpha heading\nalpha body\n".utf8).write(to: stagedInput)
+
+        // The wrapped argv comes from the SHARED production plan helper — this
+        // test never wraps a base invocation independently.
+        func makePlan(_ script: String) -> ACPBackend.SandboxedSpawnPlan {
+            ACPBackend.sandboxedSpawnPlan(
+                invocation: scratch.sandbox,
+                executablePath: "/bin/sh",
+                arguments: ["-c", script],
+                environment: ["PATH": "/usr/bin:/bin"],
+                scratchDirectory: scratch.directoryURL)
+        }
+        func runPlan(_ plan: ACPBackend.SandboxedSpawnPlan) async throws -> ProcessResult {
+            var environment = ProcessInfo.processInfo.environment
+            environment["HOME"] = home.path
+            environment["PATH"] = "/usr/bin:/bin"
+            for (key, value) in plan.environment { environment[key] = value }
+            return try await run(
+                executablePath: plan.executablePath,
+                arguments: plan.arguments,
+                environment: environment)
+        }
+
+        // IN-SIDE: read the staged input, write the extraction output under
+        // the scratch (its relocated TMPDIR is in the effective environment).
+        let scratchPath = scratch.directoryURL.path
+        let insideScript = """
+        sed 's/alpha/beta/' '\(scratchPath)/document.pdf' > '\(scratchPath)/extracted.md'
+        cat '\(scratchPath)/extracted.md'
+        """
+        let inside = try await runPlan(makePlan(insideScript))
+        #expect(inside.status == 0, "subprocess failed — stderr: \(inside.errorText)")
+        #expect(inside.outputText.contains("beta heading"), "the transform wrote inside the scratch")
+
+        // OUT-SIDE: a write to a SIBLING of the scratch (matching no allow
+        // rule) must be denied and leave no artifact.
+        let outside = root.appendingPathComponent("outside-denied.md")
+        let outsideScript = "echo nope > '\(outside.path)'"
+        let denied = try await runPlan(makePlan(outsideScript))
+        #expect(denied.status != 0, "the outside write must be denied, not silently allowed")
+        #expect(!FileManager.default.fileExists(atPath: outside.path),
+                "a denied write must not leave an artifact")
     }
 }
 #endif

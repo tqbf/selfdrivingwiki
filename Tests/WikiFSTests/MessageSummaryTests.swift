@@ -327,65 +327,17 @@ struct MessageSummaryTests {
         #expect(result == "Full delta chunks.")
     }
 
-    // MARK: - resolveProfile (production backend wiring, §4.3)
+    // MARK: - Production backend wiring (issue #1276)
 
-    @Test func resolveProfile_emptyPin_returnsNil() {
-        // Defense in depth: resolveProfile reads the pin directly and bails
-        // when it's empty — even though the caller should have confirmed model
-        // mode before calling.
-        let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
-        ])
-        let creds = InMemoryACPCredentialStore()
-        let profile = MessageSummarizer.resolveProfile(
-            config: config,
-            credentialStore: creds,
-            resolveCommand: { _ in ["/usr/bin/true"] })
-        #expect(profile == nil)
-    }
-
-    @Test func resolveProfile_pinnedProvider_buildsHints() throws {
-        let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
-        ]).settingStageProvider(ProviderID(rawValue: "claude"), forStage: "summarizer")
-        let creds = InMemoryACPCredentialStore()
-        try creds.setAPIKey("secret-key", forProvider: "claude")
-        let profile = MessageSummarizer.resolveProfile(
-            config: config,
-            credentialStore: creds,
-            resolveCommand: { _ in ["/usr/bin/claude"] })
-        #expect(profile != nil)
-        // The provider hint carries the resolved executable.
-        #expect(profile?.providerHints[HintKey.acpAgentPath.rawValue] == "/usr/bin/claude")
-        // The API key is threaded into hints.
-        #expect(profile?.providerHints[HintKey.acpAgentApiKey.rawValue] == "secret-key")
-    }
-
-    @Test func resolveProfile_unresolvableCommand_returnsNil() {
-        let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
-        ]).settingStageProvider(ProviderID(rawValue: "claude"), forStage: "summarizer")
-        let profile = MessageSummarizer.resolveProfile(
-            config: config,
-            credentialStore: InMemoryACPCredentialStore(),
-            resolveCommand: { _ in nil })  // command not resolved
-        #expect(profile == nil)
-    }
-
-    @Test func resolveProfile_disabledPinnedProviderReturnsNilWithoutRewritingPin() {
-        let config = AgentProvidersConfig(providers: [
-            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
-            AgentProvider(id: ProviderID(rawValue: "gemini"), label: "Gemini", command: ["gemini", "--acp"], enabled: false, isDefault: false),
-        ]).settingStageProvider(ProviderID(rawValue: "gemini"), forStage: "summarizer")
-
-        let profile = MessageSummarizer.resolveProfile(
-            config: config,
-            credentialStore: InMemoryACPCredentialStore(),
-            resolveCommand: { _ in ["/usr/bin/true"] })
-
-        #expect(config.stageProviderIds["summarizer"] == ProviderID(rawValue: "gemini"))
-        #expect(profile == nil)
-    }
+    // NOTE: `MessageSummarizer.resolveProfile` was REMOVED in issue #1276 —
+    // it had no production caller and built a shared-tempDirectory, unsandboxed
+    // profile. The production wiring is `AgentProviderRuntime.
+    // prepareSummarization` → `backend(from:stage:)`, which builds the
+    // read-only sandboxed profile from the snapshot's own `LLMSandboxScratch`.
+    // Its coverage lives in `AgentProviderRuntimeTests.
+    // summarizerBackendOwnsReadOnlySandboxScratch`; the mode-decision and
+    // redaction behavior is covered by the tests above and
+    // `AgentProviderRuntimeTests.modelSummaryAndRedaction`.
 
     // MARK: - Store round-trip (AC.1 + AC.6, integration)
 
@@ -680,6 +632,25 @@ struct MessageSummaryTests {
             backend: backend,
             profile: BackendProfile())
         #expect(title == nil)
+    }
+
+    @Test func modelTitle_startFailurePreservesExistingTitleSignal() async {
+        // A backend that fails to start (issue #1276: e.g. the sandbox
+        // front-end is unusable) yields nil — the caller keeps the existing
+        // title signal in place instead of writing an empty/garbage title.
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(shouldFailOnStart: true)
+        ])
+        let title = await MessageSummarizer.modelTitle(
+            question: "How does a venturi mask work?",
+            answer: "A venturi mask uses a jet entrainment system...",
+            backend: backend,
+            profile: BackendProfile())
+        #expect(title == nil)
+        let counts = await (backend.startCount, backend.sendCount, backend.cancelCount)
+        #expect(counts.0 == 1, "the start was attempted exactly once")
+        #expect(counts.1 == 0, "no turn is sent after a failed start")
+        #expect(counts.2 == 0, "no session exists to cancel")
     }
 }
 #endif // os(macOS)

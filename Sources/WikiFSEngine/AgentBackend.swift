@@ -52,6 +52,20 @@ public protocol AgentBackend: Sendable {
     /// cancellation path (cancelling the `for await` consumer) also bridges
     /// here via the stream's `onTermination`.
     func cancel(_ session: SessionHandle) async
+
+    /// Process-level shutdown for owners that CACHE a backend across
+    /// operations (issue #1276): terminate the underlying subprocess without
+    /// needing a session handle. Idempotent, and safe on a backend that never
+    /// started. Backend owners MUST call this when retiring a cached backend —
+    /// dropping the last reference does NOT terminate any process, and
+    /// `cancel(_:)` is session-scoped. `AgentProviderRuntime` calls it during
+    /// summarizer snapshot release, AFTER active summary/title leases drain
+    /// and BEFORE the backend's scratch directory is removed.
+    ///
+    /// A protocol REQUIREMENT (not an extension default) on purpose: a new
+    /// conformer that forgets the real termination path fails to compile
+    /// instead of silently leaking a child process.
+    func shutdown() async
 }
 
 /// Abstract per-mode/per-op configuration; each backend interprets it.
@@ -97,9 +111,18 @@ public struct BackendProfile: Sendable {
     public var debugLogURL: URL?
     /// The resolved seatbelt confinement for this run (issue #1251). When
     /// non-nil, `ACPBackend.startProcess` wraps the agent spawn with
-    /// `sandbox-exec` (writes fenced to the wiki DB + scratch + provider
-    /// config homes; the resolved `pdf2md` script exec/read-denied). nil =
-    /// spawn unsandboxed (fail-open on resolver misconfiguration, logged).
+    /// `sandbox-exec` (writes fenced to the allowed subtree set; the resolved
+    /// `pdf2md` script exec/read-denied) and FAILS CLOSED when
+    /// `/usr/bin/sandbox-exec` is unusable.
+    ///
+    /// Every production constructor that can start an LLM child process MUST
+    /// state its decision with an explicit non-nil `sandbox:` — a read-only
+    /// `LLMSandboxScratch.sandbox` for extraction, summarization, and
+    /// provider-model probes (issue #1276), or the launcher-resolved write
+    /// invocation for Ingest/Edit/chat. Explicit `sandbox: nil` is reserved
+    /// for profiles that never spawn a production LLM process (fake backends,
+    /// low-level tests); `LLMSpawnSandboxExhaustivenessTests` audits the
+    /// source and fails when a production constructor omits or nils it.
     public var sandbox: SandboxProfile.SandboxInvocation?
     /// The typed per-run capability context (`AgentRunContext`): canonical
     /// scratch, scratch-local temp roots, typed wiki id, trusted absolute

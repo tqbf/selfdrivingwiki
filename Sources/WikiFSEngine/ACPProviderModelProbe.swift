@@ -34,6 +34,16 @@ import WikiFSCore
 /// **No `defer` for `terminate`.** Swift `defer` is synchronous and CANNOT
 /// contain `await`; the SDK `Client.terminate()` is `async`. The teardown uses
 /// an explicit do/catch (house rule — never bare `try?`).
+///
+/// **Sandboxed (issue #1276):** the probe is an LLM adapter spawn covered by
+/// the same threat model as chat/ingest/extraction. It gets a dedicated
+/// `LLMSandboxScratch` and launches ONLY through the shared typed sandboxed
+/// launch plan (`ACPBackend.sandboxedSpawnPlan`) — `sandbox-exec` wrapping,
+/// provider-home layering, and scratch `TMPDIR` relocation included. The
+/// sandbox front-end is verified BEFORE the bun locate and again at this
+/// direct seam (defense in depth for independent callers); an unusable
+/// front-end throws `.sandboxUnavailable` and nothing resolves, creates, or
+/// launches.
 public struct ACPProviderModelProbe: Sendable {
 
     /// The provider whose agent subprocess the probe spawns. Captured by value
@@ -53,11 +63,67 @@ public struct ACPProviderModelProbe: Sendable {
     /// The Keychain-backed API key (nil when none is configured — many agents
     /// self-authenticate, e.g. Claude via OAuth, Hermes via ~/.hermes).
     public let apiKey: String?
+    /// #1276 injectable seam: the seatbelt front-end usability check
+    /// (production default pins `ACPBackend.sandboxExecutableIsUsable`).
+    let sandboxUsability: @Sendable (String) -> Bool
+    /// #1276 injectable seam: the bun resolver for adapter canonicalization
+    /// (production default mirrors `ACPBackend`'s memoized-free locate).
+    let resolveBunRuntime: @Sendable () async -> RuntimeCommandResolution?
+    /// #1276 injectable seam: the SDK client factory so tests can count (and
+    /// stub) client creation without spawning a subprocess.
+    let makeClient: @Sendable () -> Client
+    /// #1276 injectable seam: THE launch. It accepts ONLY the typed sandboxed
+    /// launch plan (plus the client and the scratch working directory) — raw
+    /// executable/argument values cannot pass through this seam. The
+    /// production default drives the SDK client with the plan's fields.
+    let performLaunch: @Sendable (Client, ACPBackend.SandboxedSpawnPlan, String) async throws -> Void
 
-    public init(provider: AgentProvider, resolvedCommand: [String], apiKey: String?) {
+    /// The production usability check (public because it is this public
+    /// initializer's default argument).
+    public static let defaultSandboxUsability: @Sendable (String) -> Bool = { path in
+        #if os(macOS)
+        ACPBackend.sandboxExecutableIsUsable(at: path)
+        #else
+        true
+        #endif
+    }
+
+    /// The production bun resolver (public because it is this public
+    /// initializer's default argument).
+    public static let defaultBunResolver: @Sendable () async -> RuntimeCommandResolution? = {
+        await ACPBackend.defaultResolveBunRuntime()
+    }
+
+    /// The production launch (public because it is this public initializer's
+    /// default argument): the SDK client is driven ONLY by the plan's fields.
+    public static let defaultLaunch: @Sendable (
+        Client,
+        ACPBackend.SandboxedSpawnPlan,
+        String
+    ) async throws -> Void = { client, plan, workingDirectory in
+        try await client.launch(
+            agentPath: plan.executablePath,
+            arguments: plan.arguments,
+            workingDirectory: workingDirectory,
+            environment: plan.environment)
+    }
+
+    public init(
+        provider: AgentProvider,
+        resolvedCommand: [String],
+        apiKey: String?,
+        sandboxUsability: @escaping @Sendable (String) -> Bool = ACPProviderModelProbe.defaultSandboxUsability,
+        resolveBunRuntime: @escaping @Sendable () async -> RuntimeCommandResolution? = ACPProviderModelProbe.defaultBunResolver,
+        makeClient: @escaping @Sendable () -> Client = { Client() },
+        performLaunch: @escaping @Sendable (Client, ACPBackend.SandboxedSpawnPlan, String) async throws -> Void = ACPProviderModelProbe.defaultLaunch
+    ) {
         self.provider = provider
         self.resolvedCommand = resolvedCommand
         self.apiKey = apiKey
+        self.sandboxUsability = sandboxUsability
+        self.resolveBunRuntime = resolveBunRuntime
+        self.makeClient = makeClient
+        self.performLaunch = performLaunch
     }
 
     /// Discover the models the provider's agent advertises, WITHOUT a
@@ -104,6 +170,34 @@ public struct ACPProviderModelProbe: Sendable {
             DebugLog.agent("ACPProviderModelProbe: FAIL resolveSpawnConfig nil provider=\(provider.id)")
             throw ACPProviderModelProbeError.notConfigured
         }
+
+        // Issue #1276: the probe scratch is created BEFORE launch
+        // configuration. It is both the child's working directory and the only
+        // writable subtree of its read-only sandbox — the probe has no wiki
+        // database, so nothing else is allowed.
+        let scratch: LLMSandboxScratch
+        do {
+            scratch = try LLMSandboxScratch.make(namePrefix: "acp-probe")
+        } catch {
+            DebugLog.agent("ACPProviderModelProbe: FAIL could not create probe scratch: \(error.localizedDescription)")
+            throw ACPProviderModelProbeError.launchFailed(
+                "Could not create the probe scratch directory: \(error.localizedDescription)",
+                stderr: nil, hint: nil)
+        }
+        // Sweep the scratch on every exit path (success / failure / timeout /
+        // cancellation). `defer` is fine here — synchronous file I/O, and the
+        // client terminate below has already run when this fires.
+        defer { scratch.remove() }
+
+        // Fail-closed gate at the DIRECT launch seam (issue #1276): the
+        // runtime boundary checks before command resolution; this second check
+        // protects independent probe callers. Nothing is resolved, created, or
+        // launched when the seatbelt front-end is unusable.
+        guard sandboxUsability(SandboxProfile.sandboxExecutablePath) else {
+            DebugLog.agent("ACPProviderModelProbe: sandbox front-end unusable — refusing to launch (fail closed)")
+            throw ACPProviderModelProbeError.sandboxUnavailable
+        }
+
         // #1257 Level 1: canonicalize adapter shapes exactly like
         // `ACPBackend.startProcess`, so the probe exercises the same runtime
         // an actual chat launch will use (and the cached model list matches).
@@ -113,26 +207,10 @@ public struct ACPProviderModelProbe: Sendable {
         let bunPath = ACPBackend.isJSAdapterLaunch(
             executablePath: configuredSpawn.executablePath,
             arguments: configuredSpawn.arguments)
-            ? await ACPBackend.defaultResolveBunRuntime()?.executableURL.path
+            ? await resolveBunRuntime()?.executableURL.path
             : nil
         let spawn = ACPBackend.canonicalizedSpawn(configuredSpawn, resolvedBunPath: bunPath)
             ?? configuredSpawn
-
-        // The probe CWD is a throwaway temp dir — the probe must NOT call
-        // `ACPBackend.deliverSystemPrompt` (that writes CLAUDE.md/AGENTS.md
-        // into the cwd and would let a probe read an unrelated project's
-        // context). A temp dir guarantees a clean cwd. Paseo parity: PROBE_ENV.
-        let probeCWD = FileManager.default.temporaryDirectory
-            .appendingPathComponent("acp-probe-\(UUID().uuidString)", isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: probeCWD, withIntermediateDirectories: true)
-        } catch {
-            DebugLog.agent("ACPProviderModelProbe: FAIL could not create probe CWD: \(error.localizedDescription)")
-            throw ACPProviderModelProbeError.launchFailed(error.localizedDescription, stderr: nil, hint: nil)
-        }
-        // Sweep the probe CWD on every exit path (success / failure / cancel).
-        // `defer` is fine here — synchronous file I/O.
-        defer { DebugLog.trying("remove probeCWD", operation: { try FileManager.default.removeItem(at: probeCWD) }) }
 
         // Minimal env: process env merged with the provider's spawn env (the
         // `env.`-prefixed hints `resolveSpawnConfig` extracts). NO WIKI_DB /
@@ -140,9 +218,20 @@ public struct ACPProviderModelProbe: Sendable {
         // Paseo's PROBE_ENV, `acp-agent.ts:255`).
         let env = ProcessInfo.processInfo.environment.merging(spawn.environment) { _, new in new }
 
+        // The typed sandboxed launch plan (issue #1276) — the ONLY description
+        // of the launch that reaches the SDK client: `sandbox-exec` as the
+        // executable, the adapter argv behind `--`, the provider-home-layered
+        // read-only profile, and the scratch-relocated environment.
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: scratch.sandbox,
+            executablePath: spawn.executablePath,
+            arguments: spawn.arguments,
+            environment: env,
+            scratchDirectory: scratch.directoryURL)
+
         // The SDK Client is the concurrency boundary. Local to this call —
         // there is no shared transport (Paseo parity: spawnProcess(PROBE_ENV)).
-        let client = Client()
+        let client = makeClient()
 
         do {
             let result: ACPProviderCatalogObservation = try await withThrowingTaskGroup(
@@ -154,9 +243,9 @@ public struct ACPProviderModelProbe: Sendable {
                 group.addTask {
                     try await self.runProbe(
                         on: client,
-                        spawn: spawn,
-                        probeCWD: probeCWD.path,
-                        env: env)
+                        plan: plan,
+                        configuredSpawn: spawn,
+                        probeCWD: scratch.directoryURL.path)
                 }
                 // The timeout child: wins the race if the probe takes too long.
                 group.addTask {
@@ -194,11 +283,16 @@ public struct ACPProviderModelProbe: Sendable {
     /// `finally { closeProbe }` at acp-agent.ts:881-884). If this throws, the
     /// outer `withThrowingTaskGroup` cancels the timeout child; if the timeout
     /// wins, the group cancels this child.
+    ///
+    /// The launch consumes ONLY the typed sandboxed launch plan (issue #1276):
+    /// the executable is `/usr/bin/sandbox-exec`, the argv is the wrapped
+    /// `-p <profile> -D … -- <adapter>` form, and the environment carries the
+    /// scratch-relocated `TMPDIR`. There is no unsandboxed launch path here.
     private func runProbe(
         on client: Client,
-        spawn: ACPBackend.AgentSpawnConfig,
-        probeCWD: String,
-        env: [String: String]
+        plan: ACPBackend.SandboxedSpawnPlan,
+        configuredSpawn: ACPBackend.AgentSpawnConfig,
+        probeCWD: String
     ) async throws -> ACPProviderCatalogObservation {
         // A minimal delegate so the SDK has someone to ask (the probe never
         // sends a prompt, so no permission will actually arrive — but the
@@ -209,7 +303,7 @@ public struct ACPProviderModelProbe: Sendable {
         let delegate = ACPPermissionDelegate(policy: .bypass)
         await client.setDelegate(delegate)
 
-        DebugLog.agent("ACPProviderModelProbe.runProbe: launching \(spawn.executablePath) \(spawn.arguments.joined(separator: " "))")
+        DebugLog.agent("ACPProviderModelProbe.runProbe: launching sandboxed \(configuredSpawn.executablePath) \(configuredSpawn.arguments.joined(separator: " "))")
 
         // #733 + #737: buffer stderr during launch/initialize so that a
         // launch-failure (bun starts but claude/codex not on PATH) surfaces
@@ -219,11 +313,8 @@ public struct ACPProviderModelProbe: Sendable {
         let earlyStderrBuffer = EarlyStderrBuffer()
         let initResponse: InitializeResponse
         do {
-            try await client.launch(
-                agentPath: spawn.executablePath,
-                arguments: spawn.arguments,
-                workingDirectory: probeCWD,
-                environment: env)
+            // THE launch consumes ONLY the typed plan (issue #1276).
+            try await performLaunch(client, plan, probeCWD)
 
             // Start buffering stderr (stream exists post-launch, pre-init).
             let stderrTask = Task { [client] in
@@ -248,7 +339,7 @@ public struct ACPProviderModelProbe: Sendable {
         } catch {
             DebugLog.agent("ACPProviderModelProbe.runProbe: launch/initialize failed: \(error.localizedDescription)")
             let stderr = earlyStderrBuffer.flush()
-            let hint = ACPBackend.launchHint(for: spawn)
+            let hint = ACPBackend.launchHint(for: configuredSpawn)
             throw ACPProviderModelProbeError.launchFailed(
                 error.localizedDescription,
                 stderr: stderr,
@@ -259,7 +350,7 @@ public struct ACPProviderModelProbe: Sendable {
         // Auth decision is PURE (ACPAuthResolver.resolve) — mirrors the live
         // path at ACPBackend.swift:382-403. .missingCredentials does NOT block
         // (many agents self-auth); only a REJECTED authenticate is an error.
-        switch ACPAuthResolver.resolve(authMethods: initResponse.authMethods, apiKey: spawn.apiKey) {
+        switch ACPAuthResolver.resolve(authMethods: initResponse.authMethods, apiKey: configuredSpawn.apiKey) {
         case .skip:
             DebugLog.agent("ACPProviderModelProbe.runProbe: skipping authenticate (no authMethods advertised)")
         case .missingCredentials:
@@ -453,6 +544,10 @@ public enum ACPProviderModelProbeError: Error, LocalizedError, Equatable {
     /// against `Task.sleep`). The subprocess is still terminated (the outer
     /// do/catch guarantees it).
     case timedOut
+    /// Issue #1276: `/usr/bin/sandbox-exec` is missing or not executable. The
+    /// probe REFUSES to spawn (fail closed) — nothing was resolved, created,
+    /// or launched.
+    case sandboxUnavailable
     /// `Client.authenticate` returned `success == false`. Only a REJECTED
     /// authenticate surfaces this — a missing API key is NOT an error (many
     /// agents self-auth).
@@ -479,6 +574,12 @@ public enum ACPProviderModelProbeError: Error, LocalizedError, Equatable {
             return "No agent executable configured. Set a command for this provider."
         case .timedOut:
             return "Model discovery timed out after 60s."
+        case .sandboxUnavailable:
+            return """
+            Model discovery is unavailable: the macOS sandbox front-end \
+            (/usr/bin/sandbox-exec) is missing or not executable, so the \
+            provider process cannot be started safely.
+            """
         case .authenticationFailed(let detail):
             let suffix = detail.map { " (\($0))" } ?? ""
             return "Authentication failed.\(suffix)"
@@ -505,6 +606,7 @@ public enum ACPProviderModelProbeError: Error, LocalizedError, Equatable {
         switch (lhs, rhs) {
         case (.notConfigured, .notConfigured),
              (.timedOut, .timedOut),
+             (.sandboxUnavailable, .sandboxUnavailable),
              (.noModelsAdvertised, .noModelsAdvertised):
             return true
         case (.authenticationFailed(let l), .authenticationFailed(let r)):

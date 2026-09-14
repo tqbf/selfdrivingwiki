@@ -1,14 +1,31 @@
 # Agent seatbelt sandbox (write whitelist)
 
-**Status:** Implemented on `main` and APPLIED to every AgentLauncher
-Ingest/Edit/chat ACP process spawn (issue #1251). Confines the spawned agent
-process's filesystem **writes** to a strict allowlist via the macOS seatbelt
-(`/usr/bin/sandbox-exec`). Provider-agnostic, macOS 15+, always on for those
-spawns — `AgentLauncher` resolves the invocation into `BackendProfile.sandbox`,
-and `ACPBackend.startProcess` wraps the spawn argv (`-p <profile> -D … -- <agent>`)
-and relocates `TMPDIR` into the scratch dir, fail-closed when the front-end is
-unusable. Other LLM-agent consumers (ACP extraction client, message summarizer,
-the capability probe) do not thread a sandbox yet; see the PR for #1251.
+**Status:** Implemented on `main` and APPLIED to every LLM-driven child
+process (issues #1251 and #1276). Confines each spawned agent process's
+filesystem **writes** to a strict allowlist via the macOS seatbelt
+(`/usr/bin/sandbox-exec`). Provider-agnostic, macOS 15+, always on:
+
+- **Ingest / Edit / chat** (`AgentLauncher`): the write invocation — writes
+  fenced to the wiki DB + scratch + provider config homes; `TMPDIR` relocated
+  into the scratch; fail-closed when the front-end is unusable.
+- **ACP extraction** (`ACPExtractionClient`): read-only — the staging
+  directory doubles as the scratch (`LLMSandboxScratch`); NO wiki DB define;
+  no global temp allowance; fail-closed.
+- **Model summaries + chat titles** (`AgentProviderRuntime` /
+  `MessageSummarizer`): read-only — one owned scratch per
+  `prepareSummarization` snapshot, kept for the cached backend's full
+  lifetime; release/dispose drains active leases, terminates the backend via
+  the process-level `AgentBackend.shutdown()` contract, and only then removes
+  the scratch.
+- **Provider-model probes** (`ACPProviderModelProbe`): read-only — dedicated
+  probe scratch; launch consumed ONLY through the shared typed sandboxed
+  launch plan (`ACPBackend.sandboxedSpawnPlan`); the sandbox gate runs at the
+  runtime boundary (before command resolution) AND at the direct launch seam.
+
+Every spawn site states its sandbox decision with an explicit `sandbox:`
+argument on `BackendProfile`; `LLMSpawnSandboxExhaustivenessTests` audits the
+source (closed inventory + named exemptions) and fails on `sandbox: nil`, an
+omitted decision, or a new direct `client.launch` outside the shared plan path.
 See also `plans/extractor-sandbox.md` for the managed-extractor twin of this
 fence.
 
@@ -247,15 +264,33 @@ half lives in `AgentRunContextTests` and `AgentRuntimePathTests`.
 ## Files
 
 - `Sources/WikiFSCore/Core/SandboxProfile.swift` — `SandboxInvocation` + pure
-  `generate(...)` / `invocation(...)` / `wrappedArguments(...)` /
+  `generate(...)` / `invocation(...)` / `generateReadOnly(...)` /
+  `readOnlyInvocation(...)` / `wrappedArguments(...)` /
   `invocation(_:addingHomeSubpaths:)`.
-- `Sources/WikiFSEngine/ACPBackend.swift` — `BackendProfile.sandbox` application:
-  `sandboxedSpawnPlan`, `sandboxExecutableIsUsable` (fail closed),
-  `providerHomeSubpaths(forCommand:)`.
+- `Sources/WikiFSEngine/LLMSandboxScratch.swift` — the read-only LLM scratch
+  contract (issue #1276): unique directory + pre-created `.tmp` leaf + the
+  matching read-only invocation, owned as one typed value with explicit
+  `remove()` cleanup.
+- `Sources/WikiFSEngine/ACPBackend.swift` — `BackendProfile.sandbox`
+  application: `sandboxedSpawnPlan` (the shared typed launch plan),
+  `launchPolicyViolation` (pure fail-closed check), `sandboxExecutableIsUsable`,
+  `providerHomeSubpaths(forCommand:)`, and the process-level `shutdown()`
+  contract for cached backends.
 - `Sources/WikiFSEngine/AgentLauncher.swift` — `resolveSandboxInvocation` +
   `createSandboxTmpDir` + threading into every `BackendProfile` spawn site.
-- Tests: `SandboxProfileTests` (pure profiles + argv), `ACPWiringTests`
-  seatbelt section (mapping, gate, plan builder, threading), and the live
-  probes recorded in `progress/2026-09-12T160100Z-agent-sandbox-apply-acp.md`.
+- `Sources/WikiFSEngine/ACPExtractionClient.swift` — extraction fence
+  (staging directory = scratch, issue #1276).
+- `Sources/WikiFSEngine/AgentProviderRuntime.swift` — summarizer fence:
+  snapshot-owned scratch, per-snapshot lease gate, retire → quiesce →
+  terminate → remove teardown (issue #1276).
+- `Sources/WikiFSEngine/ACPProviderModelProbe.swift` — probe fence: dedicated
+  scratch + typed launch plan consumption (issue #1276).
+- Tests: `SandboxProfileTests` (pure profiles + argv),
+  `LLMSpawnSandboxExhaustivenessTests` (source audit: constructor inventory +
+  direct-launch inventory + mutation fixtures), `ACPExtractionClientTests` /
+  `AgentProviderRuntimeTests` / `MessageSummaryTests` (profile ownership,
+  teardown ordering, catalog ordering), `ACPWiringTests` seatbelt section
+  (mapping, gate, plan builder, threading, extraction effective plan), and the
+  live probes recorded in `progress/2026-09-12T160100Z-agent-sandbox-apply-acp.md`.
 - `plans/extractor-sandbox.md` — the managed-extractor twin of this fence
   (shared `wrappedArguments`).

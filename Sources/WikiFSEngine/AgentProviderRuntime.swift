@@ -35,6 +35,62 @@ public struct AgentProviderAttemptToken: Sendable, Equatable, Hashable, CustomSt
     public var description: String { "AgentProviderAttemptToken()" }
 }
 
+/// Per-snapshot summarizer lease state (issue #1276). Tracks the ACTIVE
+/// summary and title operations on one `prepareSummarization` snapshot so
+/// release/dispose can retire the snapshot, drain the active work, terminate
+/// the cached backends, and ONLY THEN remove the scratch directory. After
+/// `retire()` starts, `acquire()` returns false — no new work enters a
+/// snapshot that is going away.
+///
+/// Actor isolation makes the count/flag/waiter transitions atomic; the
+/// checked-continuation queue is how `awaitQuiesce` suspends without blocking
+/// a cooperative thread.
+actor SummarizerLeaseGate {
+    private var activeCount = 0
+    private var retired = false
+    private var quiesceWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Enter one summary/title operation. `false` = the snapshot is retired;
+    /// the caller must abandon the work (the token is invalid anyway).
+    func acquire() -> Bool {
+        guard !retired else { return false }
+        activeCount += 1
+        return true
+    }
+
+    /// Leave one summary/title operation. Resumes quiesce waiters when this
+    /// was the last active lease on a retired snapshot.
+    func release() {
+        activeCount = max(0, activeCount - 1)
+        drainIfQuiesced()
+    }
+
+    /// Reject new leases. Idempotent.
+    func retire() {
+        retired = true
+        drainIfQuiesced()
+    }
+
+    /// Suspend until every lease acquired BEFORE retirement finished. Callers
+    /// that arrive after full quiesce return immediately.
+    func awaitQuiesce() async {
+        if retired && activeCount == 0 { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            quiesceWaiters.append(continuation)
+        }
+    }
+
+    /// The check-and-resume must be one actor-isolated step: both `release()`
+    /// and `retire()` funnel through here so a waiter cannot be missed between
+    /// the count hitting zero and the resume.
+    private func drainIfQuiesced() {
+        guard retired, activeCount == 0, !quiesceWaiters.isEmpty else { return }
+        let waiters = quiesceWaiters
+        quiesceWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+}
+
 public struct AgentProviderSelection: Sendable, Equatable {
     public let stage: AgentProviderStage
     public let descriptor: AgentProviderDescriptor
@@ -324,6 +380,10 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     public typealias SpawnSecretReader = @Sendable (ProviderID) -> [String: String]
     public typealias PermissionPolicyResolver = @Sendable (PermissionOperationKind) -> PermissionPolicy
     public typealias BackendFactory = @Sendable (PermissionPolicy, Duration?, TimeInterval) -> any AgentBackend
+    /// #1276: the seatbelt front-end usability check. Injected so the catalog
+    /// path's fail-closed ORDERING (sandbox gate BEFORE command resolution) is
+    /// testable without touching `/usr/bin/sandbox-exec`.
+    public typealias SandboxUsabilityCheck = @Sendable (String) -> Bool
     public typealias CatalogProbe = @Sendable (
         AgentProvider,
         [String],
@@ -331,7 +391,24 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     ) async throws -> ACPProviderCatalogObservation
 
     private struct SpawnRecord: Sendable { let provider: AgentProvider; let model: ModelID?; let hints: [String: String] }
-    private struct Snapshot: Sendable { let policy: AgentOperationPolicy; let thinking: String?; let models: AgentOperationModelSelection; let chains: [AgentProviderStage: [SpawnRecord]] }
+
+    /// One preparation's frozen state. For the summarizer stage it also owns
+    /// the scratch world (issue #1276): a unique read-only sandboxed scratch
+    /// directory that lives exactly as long as the snapshot's cached backends,
+    /// plus the lease gate that serializes teardown against active
+    /// summary/title operations.
+    private struct Snapshot: Sendable {
+        let policy: AgentOperationPolicy
+        let thinking: String?
+        let models: AgentOperationModelSelection
+        let chains: [AgentProviderStage: [SpawnRecord]]
+        /// The summarizer scratch world. Non-nil ONLY for summarizer-stage
+        /// snapshots (`prepareSummarization`); other stages get the launcher's
+        /// wiki-aware run context instead.
+        let summarizerScratch: LLMSandboxScratch?
+        /// The summarizer lease gate. Non-nil together with `summarizerScratch`.
+        let summarizerLease: SummarizerLeaseGate?
+    }
     private struct TokenRecord: Sendable { let snapshotID: UUID; let stage: AgentProviderStage; let providerID: ProviderID; let isOriginal: Bool }
 
     private let readConfiguration: ConfigurationReader
@@ -341,10 +418,23 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     private let resolvePermissionPolicy: PermissionPolicyResolver
     private let makeBackend: BackendFactory
     private let probeCatalog: CatalogProbe
+    private let sandboxUsable: SandboxUsabilityCheck
     private var snapshots: [UUID: Snapshot] = [:]
     private var tokens: [UUID: TokenRecord] = [:]
     private var cachedBackends: [String: any AgentBackend] = [:]
     private var disposed = false
+
+    /// The production sandbox-usability check: the same fail-closed gate
+    /// `ACPBackend.startProcess` applies (issue #1276). Public because it is
+    /// this public initializer's default argument.
+    public static let defaultSandboxUsability: SandboxUsabilityCheck = { path in
+        #if os(macOS)
+        ACPBackend.sandboxExecutableIsUsable(at: path)
+        #else
+        // Linux diagnostic builds have no seatbelt; never blocks there.
+        true
+        #endif
+    }
 
     public init(
         readConfiguration: @escaping ConfigurationReader,
@@ -364,7 +454,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 resolvedCommand: resolvedCommand,
                 apiKey: apiKey)
                 .discoverObservation()
-        }
+        },
+        sandboxUsability: @escaping SandboxUsabilityCheck = AgentProviderRuntime.defaultSandboxUsability
     ) {
         self.readConfiguration = readConfiguration
         self.resolveCommand = resolveCommand
@@ -373,6 +464,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         self.resolvePermissionPolicy = resolvePermissionPolicy
         self.makeBackend = makeBackend
         self.probeCatalog = probeCatalog
+        self.sandboxUsable = sandboxUsability
     }
 
     public func prepareInteractive(
@@ -446,6 +538,12 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     public func prepareSummarization() async throws -> AgentProviderSummaryPreparation {
         try requireAvailable(); let configuration = try readConfiguration()
         guard MessageSummarizer.mode(for: configuration) == .model else { return .defaultTruncation }
+        // Issue #1276: allocate ONE dedicated scratch world for this snapshot.
+        // Cached summarizer backends keep this directory (and its read-only
+        // sandbox) for their full lifetime; `release`/`dispose` remove it only
+        // after the leases drain and the backends terminate. A scratch
+        // allocation failure throws — summarization never runs unsandboxed.
+        let scratch = try LLMSandboxScratch.make(namePrefix: "summarizer")
         let snapshotID = UUID()
         let policy = AgentOperationPolicy(
             kind: .interactive,
@@ -459,7 +557,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             modelOverride: nil,
             thinkingOverride: nil,
             stages: [.summarizer],
-            policyOverride: policy)
+            policyOverride: policy,
+            summarizerScratch: scratch)
         snapshots[snapshotID] = snapshot
         return .model(try makePreparation(snapshotID: snapshotID, stage: .summarizer, providerID: nil))
     }
@@ -468,6 +567,14 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         for provider: AgentProvider
     ) async throws -> ACPProviderCatalogObservation {
         try requireAvailable()
+        // Issue #1276 fail-closed ORDERING: the sandbox gate runs BEFORE
+        // command resolution (and before the probe spawn). An unusable
+        // seatbelt front-end means no probe subprocess at all — nothing is
+        // resolved, configured, or launched.
+        guard sandboxUsable(SandboxProfile.sandboxExecutablePath) else {
+            DebugLog.agent("AgentProviderRuntime.discoverCatalog: sandbox front-end unusable — refusing to probe (fail closed)")
+            throw ACPProviderModelProbeError.sandboxUnavailable
+        }
         let commands = await resolveCommand([provider])
         try requireAvailable()
         guard let resolvedCommand = commands[provider.id], !resolvedCommand.isEmpty else {
@@ -486,14 +593,28 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         guard preparation.selection.stage == .summarizer else {
             throw AgentProviderRuntimeError.stageMismatch
         }
-        let prepared = try backend(
-            from: preparation.selection.token,
-            stage: .summarizer,
-            cache: true)
-        return await MessageSummarizer.modelSummary(
-            text: text,
-            backend: prepared.backend,
-            profile: prepared.profile)
+        // Issue #1276 lease protocol: acquire BEFORE the backend is obtained
+        // so release cannot retire + terminate + remove scratch underneath an
+        // operation that is about to start.
+        let gate = try summarizerLease(for: preparation.selection.token)
+        guard await gate.acquire() else {
+            throw AgentProviderRuntimeError.invalidToken
+        }
+        do {
+            let prepared = try backend(
+                from: preparation.selection.token,
+                stage: .summarizer,
+                cache: true)
+            let summary = await MessageSummarizer.modelSummary(
+                text: text,
+                backend: prepared.backend,
+                profile: prepared.profile)
+            await gate.release()
+            return summary
+        } catch {
+            await gate.release()
+            throw error
+        }
     }
 
     public func modelTitle(
@@ -504,24 +625,70 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         guard preparation.selection.stage == .summarizer else {
             throw AgentProviderRuntimeError.stageMismatch
         }
-        let prepared = try backend(
-            from: preparation.selection.token,
-            stage: .summarizer,
-            cache: true)
-        return await MessageSummarizer.modelTitle(
-            question: question,
-            answer: answer,
-            backend: prepared.backend,
-            profile: prepared.profile)
+        // Same lease protocol as `modelSummary` — titles and summaries share
+        // one snapshot scratch + one cached backend, and release drains BOTH
+        // before teardown.
+        let gate = try summarizerLease(for: preparation.selection.token)
+        guard await gate.acquire() else {
+            throw AgentProviderRuntimeError.invalidToken
+        }
+        do {
+            let prepared = try backend(
+                from: preparation.selection.token,
+                stage: .summarizer,
+                cache: true)
+            let title = await MessageSummarizer.modelTitle(
+                question: question,
+                answer: answer,
+                backend: prepared.backend,
+                profile: prepared.profile)
+            await gate.release()
+            return title
+        } catch {
+            await gate.release()
+            throw error
+        }
+    }
+
+    /// The summarizer snapshot's lease gate, resolved from a preparation
+    /// token. Throws when the token is invalid/retired (`invalidToken`) or the
+    /// snapshot has no gate (a non-summarizer token — `stageMismatch`).
+    private func summarizerLease(
+        for token: AgentProviderAttemptToken
+    ) throws -> SummarizerLeaseGate {
+        let record = try record(for: token)
+        guard let snapshot = snapshots[record.snapshotID] else {
+            throw AgentProviderRuntimeError.invalidToken
+        }
+        guard let gate = snapshot.summarizerLease else {
+            throw AgentProviderRuntimeError.stageMismatch
+        }
+        return gate
     }
 
     public func release(_ token: AgentProviderAttemptToken) async {
         guard !disposed, let record = tokens[token.value] else { return }
         let snapshotID = record.snapshotID
-        snapshots.removeValue(forKey: snapshotID)
+        let snapshot = snapshots.removeValue(forKey: snapshotID)
         tokens = tokens.filter { $0.value.snapshotID != snapshotID }
+        // Issue #1276 teardown order — retire, quiesce, terminate, remove:
+        // 1. RETIRE: new summary/title work is rejected from here on.
+        // 2. QUIESCE: every lease acquired before retirement finishes (the
+        //    in-flight operation still uses the cached backend).
+        if let gate = snapshot?.summarizerLease {
+            await gate.retire()
+            await gate.awaitQuiesce()
+        }
+        // 3. TERMINATE each cached backend at the process level — a cached
+        //    backend is NOT terminated by dropping it, and `cancel(_:)` is
+        //    session-scoped.
         let cachePrefix = snapshotID.uuidString + ":"
+        for (key, backend) in cachedBackends where key.hasPrefix(cachePrefix) {
+            await backend.shutdown()
+        }
         cachedBackends = cachedBackends.filter { !$0.key.hasPrefix(cachePrefix) }
+        // 4. ONLY NOW remove the scratch — no process can still use it.
+        snapshot?.summarizerScratch?.remove()
     }
 
     public func readiness() async -> Bool {
@@ -535,7 +702,30 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         }
     }
 
-    public func dispose() { disposed = true; snapshots.removeAll(); tokens.removeAll(); cachedBackends.removeAll() }
+    /// Full runtime shutdown (issue #1276): same retire → quiesce → terminate
+    /// → remove ordering as `release`, applied to every live snapshot. Async
+    /// because it drains leases and terminates processes; owners already await
+    /// it (actor method).
+    public func dispose() async {
+        disposed = true
+        let retiring = snapshots
+        snapshots.removeAll()
+        tokens.removeAll()
+        for snapshot in retiring.values {
+            if let gate = snapshot.summarizerLease {
+                await gate.retire()
+                await gate.awaitQuiesce()
+            }
+        }
+        let backends = cachedBackends
+        cachedBackends.removeAll()
+        for (_, backend) in backends {
+            await backend.shutdown()
+        }
+        for snapshot in retiring.values {
+            snapshot.summarizerScratch?.remove()
+        }
+    }
 
     func frozenProviderDescriptors(from token: AgentProviderAttemptToken, stage: AgentProviderStage) async throws -> [AgentProviderDescriptor] {
         try requireAvailable()
@@ -557,7 +747,27 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         let key = "\(record.snapshotID.uuidString):\(spawn.provider.id.rawValue)"
         let backend = cache ? (cachedBackends[key] ?? makeBackend(snapshot.policy.permissionPolicy, snapshot.policy.permissionBudget, snapshot.policy.turnCeiling)) : makeBackend(snapshot.policy.permissionPolicy, snapshot.policy.permissionBudget, snapshot.policy.turnCeiling)
         if cache { cachedBackends[key] = backend }
-        return AgentProviderPreparedBackend(backend: backend, profile: BackendProfile(model: spawn.model?.rawValue, providerHints: spawn.hints), policy: snapshot.policy, provider: spawn.provider)
+        // Issue #1276: the summarizer stage is a read-only LLM spawn with no
+        // wiki — its profile MUST carry the snapshot's scratch directory and
+        // the matching read-only sandbox invocation. A snapshot without a
+        // scratch world fails closed here (`unavailable`) instead of spawning
+        // unfenced. Other stages stay plain: the launcher layers its wiki-aware
+        // run context + write sandbox onto those spawns itself.
+        let profile: BackendProfile
+        if stage == .summarizer {
+            guard let scratch = snapshot.summarizerScratch else {
+                throw AgentProviderRuntimeError.unavailable
+            }
+            profile = BackendProfile(
+                model: spawn.model?.rawValue,
+                providerHints: spawn.hints,
+                scratchDirectory: scratch.directoryURL,
+                isReadOnly: true,
+                sandbox: scratch.sandbox)
+        } else {
+            profile = BackendProfile(model: spawn.model?.rawValue, providerHints: spawn.hints)
+        }
+        return AgentProviderPreparedBackend(backend: backend, profile: profile, policy: snapshot.policy, provider: spawn.provider)
     }
 
     private func makeSnapshot(
@@ -567,7 +777,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         modelOverride: ModelID?,
         thinkingOverride: String?,
         stages: [AgentProviderStage],
-        policyOverride: AgentOperationPolicy? = nil
+        policyOverride: AgentOperationPolicy? = nil,
+        summarizerScratch: LLMSandboxScratch? = nil
     ) async throws -> Snapshot {
         let policy = policyOverride ?? AgentOperationPolicy(
             kind: operation,
@@ -642,7 +853,9 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             policy: policy,
             thinking: thinkingOverride,
             models: selection,
-            chains: chains)
+            chains: chains,
+            summarizerScratch: summarizerScratch,
+            summarizerLease: summarizerScratch == nil ? nil : SummarizerLeaseGate())
     }
 
     private func makePreparation(

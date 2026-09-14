@@ -13,13 +13,19 @@ import WikiFSCore
 /// Keychain entry and config. This backend replaces those with a single path
 /// that delegates to whichever ACP provider the user already configured.
 ///
-/// **How it works:** The PDF is written to a temp file, then an `ACPBackend`
-/// session is started with the selected provider's spawn config + Keychain API
-/// key (reused from `ACPCredentialStore`). The extraction prompt references the
-/// temp file path; the ACP agent reads it using its native file-reading
-/// capability and returns markdown. The text response is collected from the
-/// `AgentEvent` stream. This works with ANY ACP provider — Claude, Gemini,
-/// Hermes, Copilot, etc. — with zero new HTTP client code.
+/// **How it works:** The PDF is written to a unique staging directory, then an
+/// `ACPBackend` session is started with the selected provider's spawn config +
+/// Keychain API key (reused from `ACPCredentialStore`). The extraction prompt
+/// references the staged file path; the ACP agent reads it using its native
+/// file-reading capability and returns markdown. The text response is
+/// collected from the `AgentEvent` stream. This works with ANY ACP provider —
+/// Claude, Gemini, Hermes, Copilot, etc. — with zero new HTTP client code.
+///
+/// **Sandboxed (issue #1276):** the staging directory doubles as the seatbelt
+/// scratch (`LLMSandboxScratch`), and the spawn runs read-only behind
+/// `/usr/bin/sandbox-exec` — writes confined to the staging subtree, no wiki
+/// database allowance. An unusable sandbox front-end fails closed: the start
+/// error surfaces as `Error.spawnFailed` and nothing runs.
 ///
 /// **No second secret:** the provider's API key is read from
 /// `ACPCredentialStore`, the same Keychain store the chat/ingest path uses.
@@ -78,6 +84,11 @@ public struct ACPExtractionClient: MarkdownExtractor {
     /// The container directory (for config loads — unused here but kept for
     /// future use, e.g. per-wiki extraction config).
     public let containerDirectory: URL
+    /// The backend factory for the one-shot extraction session. Injectable so
+    /// tests can drive `convert` end-to-end with a fake backend or a failing
+    /// start (issue #1276 error-mapping coverage); production uses
+    /// `AgentBackendFactory`. Throws surface as `Error.spawnFailed`.
+    public let backendFactory: @Sendable (PermissionPolicy) throws -> any AgentBackend
 
     public init(
         provider: AgentProvider,
@@ -85,7 +96,9 @@ public struct ACPExtractionClient: MarkdownExtractor {
         apiKey: String?,
         selectedModelId: String? = nil,
         permissionPolicy: PermissionPolicy = .bypass,
-        containerDirectory: URL
+        containerDirectory: URL,
+        backendFactory: @escaping @Sendable (PermissionPolicy) throws -> any AgentBackend =
+            { AgentBackendFactory.makeBackend(policy: $0) }
     ) {
         self.provider = provider
         self.resolvedCommand = resolvedCommand
@@ -93,6 +106,7 @@ public struct ACPExtractionClient: MarkdownExtractor {
         self.selectedModelId = selectedModelId
         self.permissionPolicy = permissionPolicy
         self.containerDirectory = containerDirectory
+        self.backendFactory = backendFactory
     }
 
     public var displayName: String {
@@ -121,12 +135,19 @@ public struct ACPExtractionClient: MarkdownExtractor {
             throw Error.tooLarge(byteCount: pdfData.count)
         }
 
-        // Write the PDF to a temp file the ACP agent can read from disk.
-        let tempDir = FileManager.default.temporaryDirectory
+        // Write the PDF to a staging file the ACP agent can read from disk.
+        let staging = FileManager.default.temporaryDirectory
             .appendingPathComponent("wiki-extraction-\(UUID().uuidString)", isDirectory: true)
-        DebugLog.trying("create tempDir", operation: { try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true) })
-        let pdfPath = tempDir.appendingPathComponent(filename)
-        defer { DebugLog.trying("remove tempDir", operation: { try FileManager.default.removeItem(at: tempDir) }) }
+        // Issue #1276: the staging directory IS the sandbox scratch. The child
+        // may write ONLY inside it (its `.tmp` temp root included); adoption
+        // creates the `.tmp` leaf BEFORE the child starts and builds the
+        // read-only invocation — no `WIKI_DB` define, no global temp allow.
+        let scratch = try LLMSandboxScratch.adopt(directory: staging)
+        let pdfPath = scratch.directoryURL.appendingPathComponent(filename)
+        // Deferred cleanup after backend cancellation: `convert` returns only
+        // after `backend.cancel(session)` has terminated the one-shot session,
+        // so removing the tree here cannot race a live child.
+        defer { scratch.remove() }
 
         do {
             try pdfData.write(to: pdfPath, options: .atomic)
@@ -143,15 +164,15 @@ public struct ACPExtractionClient: MarkdownExtractor {
             resolvedCommand: resolvedCommand,
             apiKey: apiKey,
             selectedModelId: selectedModelId)
-        let profile = BackendProfile(
-            providerHints: hints,
-            scratchDirectory: tempDir,
-            isReadOnly: true)
+        let profile = Self.makeProfile(providerHints: hints, scratch: scratch)
 
-        // Start a one-shot ACP session with the extraction system prompt.
-        let backend = AgentBackendFactory.makeBackend(policy: permissionPolicy)
+        // Start a one-shot ACP session with the extraction system prompt. A
+        // factory or start failure — including the fail-closed
+        // `ACPBackendError.sandboxUnavailable` — surfaces as `.spawnFailed`.
+        let backend: any AgentBackend
         let session: SessionHandle
         do {
+            backend = try backendFactory(permissionPolicy)
             session = try await backend.start(
                 profile: profile,
                 systemPrompt: ExtractionPrompts.system,
@@ -216,6 +237,22 @@ public struct ACPExtractionClient: MarkdownExtractor {
     }
 
     // MARK: - Provider resolution (pure, no side effects)
+
+    /// The extraction spawn profile (issue #1276): read-only, sandboxed to the
+    /// staging scratch, and NO wiki database — the extraction agent reads the
+    /// staged PDF and returns Markdown; it never writes the wiki. Internal +
+    /// pure so tests can pin the exact scratch/sandbox pairing without
+    /// spawning a child.
+    static func makeProfile(
+        providerHints: [String: String],
+        scratch: LLMSandboxScratch
+    ) -> BackendProfile {
+        BackendProfile(
+            providerHints: providerHints,
+            scratchDirectory: scratch.directoryURL,
+            isReadOnly: true,
+            sandbox: scratch.sandbox)
+    }
 
     /// Resolve the ACP provider + spawn config for extraction from the user's
     /// `AgentProvidersConfig` + `ExtractionConfig`. If `extractionConfig.

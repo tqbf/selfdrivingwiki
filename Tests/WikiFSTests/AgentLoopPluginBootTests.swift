@@ -189,6 +189,7 @@ private actor ControlledAgentBackend: AgentBackend {
 
     func resume(sessionID: String, profile: BackendProfile) async throws -> SessionHandle? { nil }
     func cancel(_ session: SessionHandle) async { pair.continuation.finish() }
+    func shutdown() async {}
     func yield(_ event: AgentEvent) { pair.continuation.yield(event) }
     func finish() { pair.continuation.finish() }
 }
