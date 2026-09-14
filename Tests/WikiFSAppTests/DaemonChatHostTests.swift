@@ -1019,8 +1019,7 @@ struct DaemonChatHostTests {
 
         let chats = try store.listChats()
         #expect(chats.map(\.id) == [empty.id], "the failed send keeps the row")
-        #expect(try store.getChat(id: empty.id).title
-            == ChatSummary.title(fromFirstMessage: "What does this page say?"))
+        #expect(try store.getChat(id: empty.id).title == "What does this page say?")
     }
 
     /// AC.6: a failed send against an EXISTING titled chat keeps the row (the
@@ -1125,7 +1124,7 @@ struct DaemonChatHostTests {
         #expect(chats.count == 1)
         let created = chats[0]
         #expect(created.id == returnedID)
-        #expect(created.title == ChatSummary.title(fromFirstMessage: "Explain the venturi effect"))
+        #expect(created.title == "Explain the venturi effect")
         #expect(created.modelProviderId == provider.id)
         #expect(created.modelId == ModelID(rawValue: "nilid-model"))
         // The injected runtime actually started the turn.
@@ -1212,8 +1211,7 @@ struct DaemonChatHostTests {
 
         // The provisional first-line title is in place immediately, in every
         // summarizer mode — the row never renders untitled after a send.
-        #expect(try store.getChat(id: empty.id).title
-            == ChatSummary.title(fromFirstMessage: question))
+        #expect(try store.getChat(id: empty.id).title == question)
 
         // Deterministic post-turn state: the opening question and the first
         // reply are in the durable transcript (v54 #1266 — the rows the

@@ -161,8 +161,8 @@ import SQLite3
 
         // Titles: the content-bearing tainted title is stripped, the
         // warning-only titles are rewritten (provisional question title when
-        // a question is recoverable, "New Chat" otherwise), and the clean
-        // title is untouched.
+        // a question is recoverable, genuinely untitled otherwise — #1265),
+        // and the clean title is untouched.
         #expect(migrated.scalarText(
             "SELECT title FROM chats WHERE id = 'chat-a';") == "Tidal pools form twice daily.")
         #expect(migrated.scalarText(
@@ -170,7 +170,7 @@ import SQLite3
         #expect(migrated.scalarText(
             "SELECT title FROM chats WHERE id = 'chat-c';") == "Clean title")
         #expect(migrated.scalarText(
-            "SELECT title FROM chats WHERE id = 'chat-d';") == "New Chat")
+            "SELECT title FROM chats WHERE id = 'chat-d';") == "")
 
         // The sidecar title copy was rewritten in the same pass.
         #expect(migrated.scalarText(

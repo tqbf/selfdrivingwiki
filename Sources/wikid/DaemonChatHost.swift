@@ -76,11 +76,13 @@ final class DaemonChatHost: @unchecked Sendable {
             // summarizer mode, so the row never renders untitled after a send.
             // In Model mode the post-turn pass upgrades this exact text to the
             // model-generated title via setChatTitleIf — a manual rename (any
-            // other current title) makes that upgrade miss and wins.
+            // other current title) makes that upgrade miss and wins. A message
+            // that derives no usable title (#1265) skips the write, leaving the
+            // row untitled and retriable on the next send.
             do {
-                try store.setChatTitleIfEmpty(
-                    chatID: resolvedChatID,
-                    title: ChatSummary.title(fromFirstMessage: request.submission.userText))
+                if let title = ChatSummary.title(fromFirstMessage: request.submission.userText) {
+                    try store.setChatTitleIfEmpty(chatID: resolvedChatID, title: title)
+                }
             } catch WikiStoreError.chatNotFound {
                 // The row is gone (deleted while the daemon held no session).
                 // Fail the send now with the truthful error instead of running
@@ -95,7 +97,9 @@ final class DaemonChatHost: @unchecked Sendable {
             guard let store = storeResolver(request.wikiID) else {
                 throw DaemonChatError.noStore(request.wikiID)
             }
-            let title = ChatSummary.title(fromFirstMessage: request.submission.userText)
+            // Issue #1265: a message that derives no usable title creates the
+            // row genuinely untitled — first-send titling can still name it.
+            let title = ChatSummary.title(fromFirstMessage: request.submission.userText) ?? ""
             let config = AgentProvidersConfig.loadOrSeed(from: containerDirectory)
             let thinking = config.resolveThinkingCapability(
                 chatOverrideProviderID: request.providerId,
@@ -557,9 +561,10 @@ final class DaemonChatHost: @unchecked Sendable {
         })?.event else { return }
         let answer = messages.lazy.compactMap { MessageSummarizer.textToSummarize(from: $0.event) }.first
 
-        // The provisional text the first send wrote. A current title that is
-        // neither empty nor this text is a manual rename — never touched, and
-        // the model call is skipped entirely.
+        // The provisional text the first send wrote, if derivation produced
+        // one (#1265 — a warning-only question leaves the row untitled). A
+        // current title that is neither empty nor this text is a manual
+        // rename — never touched, and the model call is skipped entirely.
         let provisional = ChatSummary.title(fromFirstMessage: questionText)
         let currentTitle = chat.title.trimmingCharacters(in: .whitespaces)
         guard currentTitle.isEmpty || currentTitle == provisional else { return }
@@ -573,13 +578,13 @@ final class DaemonChatHost: @unchecked Sendable {
                     preparation: prep) {
                     if currentTitle.isEmpty {
                         try store.setChatTitleIfEmpty(chatID: chatID, title: title)
-                    } else {
+                    } else if let provisional {
                         // Upgrade the untouched provisional text; a rename in
                         // flight makes this miss and keeps the rename.
                         try store.setChatTitleIf(
                             chatID: chatID, expectedTitle: provisional, title: title)
                     }
-                } else if currentTitle.isEmpty {
+                } else if currentTitle.isEmpty, let provisional {
                     // The model produced nothing usable — fall back to the
                     // provisional text rather than leaving the row untitled.
                     try store.setChatTitleIfEmpty(chatID: chatID, title: provisional)
@@ -588,7 +593,7 @@ final class DaemonChatHost: @unchecked Sendable {
                 DebugLog.store("DaemonChatHost.refreshChatTitle: model title failed: \(error)")
             }
         case .defaultTruncation:
-            guard currentTitle.isEmpty else { return }
+            guard currentTitle.isEmpty, let provisional else { return }
             do {
                 try store.setChatTitleIfEmpty(chatID: chatID, title: provisional)
             } catch {

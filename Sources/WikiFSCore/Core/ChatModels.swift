@@ -79,16 +79,23 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     /// Also strips the known agent skills-budget preamble (`AgentPresentationPreamble`)
     /// — some backends prepend "Warning: Skill descriptions were shortened…"
     /// to the message text, and without this the warning became the chat's
-    /// title while the transcript kept the real question. A message that is
-    /// only the warning derives to "New Chat".
-    public static func title(fromFirstMessage message: String, maxLength: Int = 60) -> String {
+    /// title while the transcript kept the real question.
+    ///
+    /// Returns `nil` when nothing usable remains (whitespace-only,
+    /// warning-only, or preamble-only input) — issue #1265. Writers skip the
+    /// title write on `nil`, leaving the row genuinely untitled (rendered as
+    /// "New Chat" by the display fallback) and retriable on the next send.
+    /// The derivation never returns the display fallback itself: a stored
+    /// "New Chat" would be a sentinel indistinguishable from a real title,
+    /// permanently blocking later automatic title writes.
+    public static func title(fromFirstMessage message: String, maxLength: Int = 60) -> String? {
         let withoutPreamble = AgentPresentationPreamble.visibleText(message, policy: .completeOnly) ?? ""
         let stripped = Self.stripAttachmentRefs(from: withoutPreamble)
         let firstLine = stripped
             .components(separatedBy: .newlines)
             .first ?? ""
         let trimmed = firstLine.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return "New Chat" }
+        guard !trimmed.isEmpty else { return nil }
         guard trimmed.count > maxLength else { return trimmed }
         return trimmed.prefix(maxLength - 1) + "…"
     }

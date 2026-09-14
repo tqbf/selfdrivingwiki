@@ -273,6 +273,26 @@ struct NewChatSidebarProjectionTests {
         #expect(try store.getChat(id: chatID).title == "Renamed")
     }
 
+    @Test("a derivation-failing send leaves the row untitled and retriable (#1265)")
+    func derivationFailureLeavesRowUntitledAndRetriable() throws {
+        let (model, store) = try makeModel()
+        model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
+
+        // A whitespace-only first send derives nothing usable: no title write,
+        // the row stays genuinely untitled (rendered as "New Chat" by the
+        // display fallback) — not stuck as a persisted "New Chat" sentinel.
+        model.applyProvisionalChatTitle(chatID: chatID, userText: "   \n\t  ")
+        #expect(model.chats.first?.title.isEmpty == true)
+        #expect(try store.getChat(id: chatID).title.isEmpty)
+
+        // The next send with a usable question titles the row — the failure
+        // didn't permanently block automatic titling.
+        model.applyProvisionalChatTitle(chatID: chatID, userText: "What is a tide pool?")
+        #expect(model.chats.first?.title == "What is a tide pool?")
+        #expect(try store.getChat(id: chatID).title == "What is a tide pool?")
+    }
+
     @Test("an open chat tab's title re-syncs when the row changes")
     func chatTabTitleResyncsOnReload() throws {
         let (model, store) = try makeModel()
@@ -319,7 +339,7 @@ struct NewChatSidebarProjectionTests {
         // The daemon's first-send title write (one conditional UPDATE).
         let titled = try store.setChatTitleIfEmpty(
             chatID: chatID,
-            title: ChatSummary.title(fromFirstMessage: "What is a wiki link?\nSecond line"))
+            title: "What is a wiki link?")
         #expect(titled)
         model.reloadFromStore()
 
@@ -339,7 +359,7 @@ struct NewChatSidebarProjectionTests {
         model.renameChat(id: chatID, to: "My rename")
         let titled = try store.setChatTitleIfEmpty(
             chatID: chatID,
-            title: ChatSummary.title(fromFirstMessage: "first message"))
+            title: "first message")
         #expect(titled == false, "the conditional update matches no row")
 
         #expect(try store.getChat(id: chatID).title == "My rename")

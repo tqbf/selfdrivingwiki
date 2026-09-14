@@ -462,9 +462,12 @@ final class ChatsCellView: NSTableCellView {
 
     /// The row's title line: the chat's stored title — the user's question,
     /// or the model-generated title when the summarizer stage is configured —
-    /// with an empty title falling back to "New Chat". v54 (#1266): the
-    /// skills-budget preamble strip is gone — the v54 migration rewrote
-    /// warning-tainted titles in place, so stored titles are clean.
+    /// with an empty title falling back to "New Chat". Since #1265 that
+    /// fallback is the only source of that string: the derivation returns
+    /// `nil` on failure instead of persisting it, so "New Chat" on screen
+    /// always means "no title yet". v54 (#1266): the skills-budget preamble
+    /// strip is gone — the v54 migration rewrote warning-tainted titles in
+    /// place, so stored titles are clean.
     /// Mirrors the tab title and chat header so every surface names the chat
     /// identically. The per-message summary deliberately does NOT appear: it
     /// summarizes the answer, not the chat, and previously shadowed the title

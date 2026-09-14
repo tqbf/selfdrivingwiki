@@ -3068,9 +3068,11 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         // 3b. Sanitize stored titles. Rows written before 7937b383 store the
         //    warning as (part of) the title. Warning-only titles rewrite to
         //    the provisional question title (exactly what first-send titling
-        //    would have written); when no question is recoverable, "New Chat"
-        //    — today's display fallback. The `chat_search` sidecar carries a
-        //    title copy, so it is rewritten in the same pass.
+        //    would have written); when no question is recoverable the row
+        //    rewrites to genuinely untitled (issue #1265) — displayed as
+        //    "New Chat" by the fallback, but retriable by later automatic
+        //    title writes. The `chat_search` sidecar carries a title copy,
+        //    so it is rewritten in the same pass.
         let chatTitles = try Row.fetchAll(db, sql: "SELECT id, title FROM chats;")
         for row in chatTitles {
             let chatID: String = row["id"]
@@ -3089,16 +3091,17 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 // Warning-only title (visibleText yields nil when nothing
                 // substantive remains): recover the provisional question
                 // title — exactly what first-send titling would have
-                // written; when no question is recoverable, "New Chat"
-                // (the display fallback these rows rendered as before).
+                // written; when no question is recoverable, rewrite to
+                // genuinely untitled (issue #1265): the display fallback
+                // renders "New Chat", and later automatic title writes can
+                // still name the row.
                 let firstUserText = try String.fetchOne(db, sql: """
                 SELECT text FROM chat_messages
                 WHERE chat_id = ? AND role = 'user'
                 ORDER BY seq ASC LIMIT 1;
                 """, arguments: [chatID])
-                let provisional = firstUserText
-                    .map { ChatSummary.title(fromFirstMessage: $0) } ?? ""
-                replacement = provisional.isEmpty ? "New Chat" : provisional
+                replacement = firstUserText
+                    .flatMap { ChatSummary.title(fromFirstMessage: $0) } ?? ""
             }
             guard let replacement else { continue }
             try db.execute(sql: "UPDATE chats SET title = ? WHERE id = ?;",

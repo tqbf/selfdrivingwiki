@@ -369,14 +369,15 @@ public final class WikiStoreModel {
     /// text at submit, so the two writes converge; this one makes the title
     /// visible the moment the user sends, without waiting on cross-process
     /// change delivery. No-op when the row already has a title (a rename or a
-    /// prior send) or the write fails.
+    /// prior send), the derivation yields nothing usable (#1265 — the row
+    /// stays genuinely untitled and the next send retries), or the write
+    /// fails.
     public func applyProvisionalChatTitle(chatID: ChatID, userText: String) {
         guard let row = chats.first(where: { $0.id == chatID }),
-              row.title.isEmpty else { return }
+              row.title.isEmpty,
+              let title = ChatSummary.title(fromFirstMessage: userText) else { return }
         do {
-            try internalStore.setChatTitleIfEmpty(
-                chatID: chatID,
-                title: ChatSummary.title(fromFirstMessage: userText))
+            try internalStore.setChatTitleIfEmpty(chatID: chatID, title: title)
             reloadChats()
         } catch {
             DebugLog.store("WikiStoreModel.applyProvisionalChatTitle failed: \(error)")
@@ -4401,11 +4402,13 @@ public final class WikiStoreModel {
 
     /// Create a persisted chat, titled from the first user message. Returns nil
     /// (logging via DebugLog.store) on store failure — persistence must never
-    /// block a chat from starting.
+    /// block a chat from starting. A message that derives no usable title
+    /// (#1265) creates the row genuinely untitled; first-send titling and the
+    /// post-turn title upgrade can still name it later.
     @discardableResult
     public func startChat(kind: ChatKind, firstMessage: String) -> ChatSummary? {
         do {
-            let title = ChatSummary.title(fromFirstMessage: firstMessage)
+            let title = ChatSummary.title(fromFirstMessage: firstMessage) ?? ""
             let chat = try store.createChat(kind: kind, title: title)
             // Seed the first user message immediately (seq 0) so a chat is never
             // titled-but-empty — even if the agent session dies before its first

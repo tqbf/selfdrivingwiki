@@ -3,8 +3,10 @@ import Foundation
 @testable import WikiFSCore
 
 /// `ChatSummary.title(fromFirstMessage:)` derives a chat's display title from
-/// the first user message: first line, trimmed, elided at 60 chars. Pure
-/// function, so it's tested in isolation from the store.
+/// the first user message: first line, trimmed, elided at 60 chars; `nil`
+/// when nothing usable remains (#1265 — writers skip the title write, leaving
+/// the row genuinely untitled). Pure function, so it's tested in isolation
+/// from the store.
 @Suite struct ChatTitleTests {
 
     @Test func plainShortMessagePassesThrough() {
@@ -19,18 +21,18 @@ import Foundation
 
     @Test func longMessageElidesAtSixtyCharsWithTrailingEllipsis() {
         let message = String(repeating: "a", count: 100)
-        let title = ChatSummary.title(fromFirstMessage: message)
-        #expect(title.count == 60)
-        #expect(title.hasSuffix("…"))
-        #expect(title == String(repeating: "a", count: 59) + "…")
+        #expect(ChatSummary.title(fromFirstMessage: message)
+                == String(repeating: "a", count: 59) + "…")
     }
 
-    @Test func whitespaceOnlyMessageFallsBackToNewChat() {
-        #expect(ChatSummary.title(fromFirstMessage: "   \n\t  ") == "New Chat")
+    @Test("a whitespace-only message derives nothing usable")
+    func whitespaceOnlyMessageDerivesNil() {
+        #expect(ChatSummary.title(fromFirstMessage: "   \n\t  ") == nil)
     }
 
-    @Test func emptyMessageFallsBackToNewChat() {
-        #expect(ChatSummary.title(fromFirstMessage: "") == "New Chat")
+    @Test("an empty message derives nothing usable")
+    func emptyMessageDerivesNil() {
+        #expect(ChatSummary.title(fromFirstMessage: "") == nil)
     }
 
     // MARK: - Injected skills-budget preamble
@@ -45,10 +47,10 @@ import Foundation
                 == "What is a tide pool?")
     }
 
-    @Test("a warning-only message derives to New Chat")
-    func warningOnlyMessageFallsBackToNewChat() {
-        #expect(ChatSummary.title(fromFirstMessage: Self.warning) == "New Chat")
-        #expect(ChatSummary.title(fromFirstMessage: "\(Self.warning)\n\n") == "New Chat")
+    @Test("a warning-only message derives nothing usable")
+    func warningOnlyMessageDerivesNil() {
+        #expect(ChatSummary.title(fromFirstMessage: Self.warning) == nil)
+        #expect(ChatSummary.title(fromFirstMessage: "\(Self.warning)\n\n") == nil)
     }
 
     @Test("an unrelated Warning: line is preserved — only the known family is stripped")
