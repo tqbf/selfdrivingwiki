@@ -1553,6 +1553,9 @@ struct ActivityWindowView: View {
     /// provider/model while a run is in flight (the report header is only
     /// written at completion, so a running job would otherwise show "Not
     /// Reported" next to a navigator that already shows the live model).
+    /// Extraction items contribute NO provider/model rows (#1253): the
+    /// extraction queue runs managed extractor packages — no LLM provider,
+    /// no model — so there is nothing to resolve for them.
     /// Usage is the state-aware resolution from `runDetailsUsage` — the
     /// durable report-header totals for terminal states, the tracker's
     /// recorded-or-live snapshot mid-run (running prefers live) — so a
@@ -1570,10 +1573,6 @@ struct ActivityWindowView: View {
             report: report?.usage,
             recorded: activityTracker.usage(for: item.id),
             live: activityTracker.liveUsage(for: item.id))
-        let providerModel = Self.runDetailsProviderModel(
-            reportProvider: report?.provider.map { $0.rawValue },
-            reportModel: report?.model.map { $0.rawValue },
-            usage: usage)
         return QueueRunDetailsFacts(
             jobID: item.id,
             enqueuedAt: date(fromMillis: item.createdAt),
@@ -1581,8 +1580,11 @@ struct ActivityWindowView: View {
             finishedAt: finishedAt,
             durationText: QueueWorkspaceFormat.duration(from: startedAt, to: finishedAt),
             attempt: report?.attemptID.attempt ?? item.attempt,
-            providerText: providerModel.provider,
-            modelText: providerModel.model,
+            providerModel: Self.runDetailsProviderModel(
+                queue: item.queue,
+                reportProvider: report?.provider.map { $0.rawValue },
+                reportModel: report?.model.map { $0.rawValue },
+                usage: usage),
             usage: usage)
     }
 
@@ -1617,26 +1619,36 @@ struct ActivityWindowView: View {
         }
     }
 
-    /// The Run Details provider/model resolution. Report header values
-    /// always win when present — non-nil AND non-blank, matching
-    /// `entries`' blank-means-absent rule. Otherwise the usage snapshot's
-    /// point-in-time provider label and model stand in: the human-readable
-    /// model name when the agent advertised one, else the raw model id —
-    /// the same vocabulary `fullSummary` renders for completed rows. The
-    /// fallback is the live session's OWN snapshot, so a running job shows
-    /// what is actually running; nothing is invented. Pure + `nonisolated`
-    /// static so the value suite pins it without hosting the window.
+    /// The Run Details provider/model resolution, keyed by the item's queue
+    /// kind (#1253). Extraction items resolve to `.extraction` WITHOUT
+    /// consulting the report header or any usage snapshot: the extraction
+    /// queue runs managed extractor packages — there is no LLM provider and
+    /// no model — so the panel renders no Provider/Model rows at all instead
+    /// of "Not Reported" placeholders (or agent vocabulary leaking in from a
+    /// tracker snapshot). The legacy `.transcription` raw value
+    /// canonicalizes to extraction. Agent runs (`.ingestion`, including
+    /// lint) resolve report header values first — non-nil AND non-blank,
+    /// matching `entries`' blank-means-absent rule. Otherwise the usage
+    /// snapshot's point-in-time provider label and model stand in: the
+    /// human-readable model name when the agent advertised one, else the raw
+    /// model id — the same vocabulary `fullSummary` renders for completed
+    /// rows. The fallback is the live session's OWN snapshot, so a running
+    /// job shows what is actually running; nothing is invented. Pure +
+    /// `nonisolated` static so the value suite pins it without hosting the
+    /// window.
     nonisolated static func runDetailsProviderModel(
+        queue: QueueKind,
         reportProvider: String?,
         reportModel: String?,
         usage: SessionUsage?
-    ) -> (provider: String?, model: String?) {
+    ) -> QueueRunProviderModel {
+        guard queue.canonical != .extraction else { return .extraction }
         func present(_ value: String?) -> String? {
             guard let trimmed = value?.trimmingCharacters(in: .whitespaces),
                   !trimmed.isEmpty else { return nil }
             return trimmed
         }
-        return (
+        return .agent(
             provider: present(reportProvider) ?? present(usage?.providerLabel),
             model: present(reportModel)
                 ?? (present(usage?.modelName) ?? present(usage?.modelId)))

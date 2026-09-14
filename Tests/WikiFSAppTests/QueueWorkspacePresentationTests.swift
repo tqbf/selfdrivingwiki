@@ -262,8 +262,7 @@ import WikiFSEngine
             finishedAt: start.addingTimeInterval(90),
             durationText: QueueWorkspaceFormat.duration(from: start, to: start.addingTimeInterval(90)),
             attempt: 2,
-            providerText: "claude-code",
-            modelText: "claude-sonnet-4",
+            providerModel: .agent(provider: "claude-code", model: "claude-sonnet-4"),
             usage: SessionUsage(
                 inputTokens: 4_178, outputTokens: 537, totalTokens: 4_715,
                 cachedReadTokens: 133_376, thoughtTokens: 395,
@@ -330,6 +329,7 @@ import WikiFSEngine
         // Report header values always win when present — even against a
         // live usage snapshot carrying its own labels.
         let resolved = ActivityWindowView.runDetailsProviderModel(
+            queue: .ingestion,
             reportProvider: "claude-code",
             reportModel: "claude-sonnet-4",
             usage: SessionUsage(
@@ -338,8 +338,7 @@ import WikiFSEngine
                 cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
                 providerLabel: "Live Provider", modelId: "live-model",
                 modelName: "Live Model"))
-        #expect(resolved.provider == "claude-code")
-        #expect(resolved.model == "claude-sonnet-4")
+        #expect(resolved == .agent(provider: "claude-code", model: "claude-sonnet-4"))
     }
 
     @Test func runDetailsProviderModelFallsBackToLiveUsageMidRun() {
@@ -348,6 +347,7 @@ import WikiFSEngine
         // labels, never invented. The human-readable model name wins over
         // the raw id (the `fullSummary` vocabulary).
         let resolved = ActivityWindowView.runDetailsProviderModel(
+            queue: .ingestion,
             reportProvider: nil,
             reportModel: nil,
             usage: SessionUsage(
@@ -356,11 +356,11 @@ import WikiFSEngine
                 cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
                 providerLabel: "Claude", modelId: "sonnet-4-5",
                 modelName: "Claude Sonnet 4.5"))
-        #expect(resolved.provider == "Claude")
-        #expect(resolved.model == "Claude Sonnet 4.5")
+        #expect(resolved == .agent(provider: "Claude", model: "Claude Sonnet 4.5"))
 
         // Without an advertised model name, the raw model id shows.
         let idOnly = ActivityWindowView.runDetailsProviderModel(
+            queue: .ingestion,
             reportProvider: nil,
             reportModel: nil,
             usage: SessionUsage(
@@ -368,8 +368,7 @@ import WikiFSEngine
                 cachedReadTokens: nil, thoughtTokens: nil,
                 cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
                 providerLabel: "Claude", modelId: "sonnet-4-5"))
-        #expect(idOnly.provider == "Claude")
-        #expect(idOnly.model == "sonnet-4-5")
+        #expect(idOnly == .agent(provider: "Claude", model: "sonnet-4-5"))
     }
 
     @Test func runDetailsProviderModelMixedPresenceAndBlanks() {
@@ -381,23 +380,61 @@ import WikiFSEngine
             cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
             providerLabel: "Live Provider", modelId: "live-model")
         let mixed = ActivityWindowView.runDetailsProviderModel(
-            reportProvider: nil, reportModel: "reported-model", usage: usage)
-        #expect(mixed.provider == "Live Provider")
-        #expect(mixed.model == "reported-model")
+            queue: .ingestion, reportProvider: nil, reportModel: "reported-model",
+            usage: usage)
+        #expect(mixed == .agent(provider: "Live Provider", model: "reported-model"))
 
         // Blank report text counts as absent (same rule as `entries`), so
         // the usage fallback fills in rather than rendering "Not Reported".
         let blank = ActivityWindowView.runDetailsProviderModel(
-            reportProvider: "  ", reportModel: "", usage: usage)
-        #expect(blank.provider == "Live Provider")
-        #expect(blank.model == "live-model")
+            queue: .ingestion, reportProvider: "  ", reportModel: "", usage: usage)
+        #expect(blank == .agent(provider: "Live Provider", model: "live-model"))
 
         // Nothing anywhere → both nil; `entries` renders the "Not Reported"
         // placeholders as before.
         let nothing = ActivityWindowView.runDetailsProviderModel(
-            reportProvider: nil, reportModel: nil, usage: nil)
-        #expect(nothing.provider == nil)
-        #expect(nothing.model == nil)
+            queue: .ingestion, reportProvider: nil, reportModel: nil, usage: nil)
+        #expect(nothing == .agent(provider: nil, model: nil))
+    }
+
+    @Test func runDetailsProviderModelExtractionQueueHasNoIdentity() {
+        // Issue #1253: extraction runs execute managed extractor packages —
+        // there is no LLM provider and no model — so the resolution is
+        // `.extraction` without consulting the report header or any usage
+        // snapshot. A report header or a tracker snapshot must never dress
+        // an extraction job in agent vocabulary. The legacy `.transcription`
+        // raw value canonicalizes to extraction.
+        let usage = SessionUsage(
+            inputTokens: 100, outputTokens: 50, totalTokens: 150,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
+            providerLabel: "Live Provider", modelId: "live-model",
+            modelName: "Live Model")
+        for queue in [QueueKind.extraction, .transcription] {
+            #expect(ActivityWindowView.runDetailsProviderModel(
+                queue: queue,
+                reportProvider: "claude-code",
+                reportModel: "claude-sonnet-4",
+                usage: usage) == .extraction)
+            #expect(ActivityWindowView.runDetailsProviderModel(
+                queue: queue,
+                reportProvider: nil, reportModel: nil, usage: nil) == .extraction)
+        }
+    }
+
+    @Test func runDetailsExtractionFactsOmitProviderAndModelRows() {
+        // The panel-level contract of #1253: an extraction job's entries
+        // carry NO Provider/Model rows — not even "Not Reported" placeholders
+        // — while an agent run with the same missing values still renders
+        // both placeholders.
+        let extraction = QueueRunDetailsFacts(
+            jobID: QueueItem.ID(rawValue: "01J8ZQ4T7KWM3N5P6A9B2C4D5E"),
+            providerModel: .extraction)
+        #expect(extraction.entries.map(\.label) == ["Job ID"])
+
+        let agent = QueueRunDetailsFacts(
+            jobID: QueueItem.ID(rawValue: "01J8ZQ4T7KWM3N5P6A9B2C4D5E"))
+        #expect(agent.entries.map(\.label) == ["Job ID", "Provider", "Model"])
     }
 
     // MARK: - Run details retry usage precedence
@@ -573,8 +610,8 @@ import WikiFSEngine
         let facts = QueueRunDetailsFacts(
             enqueuedAt: Date(timeIntervalSince1970: 0),
             attempt: 0,           // first run: no "Attempt" row
-            providerText: "  ",   // blank text is absence, not a provider
-            modelText: nil)
+            // Blank text is absence, not a provider.
+            providerModel: .agent(provider: "  ", model: nil))
         let labels = facts.entries.map(\.label)
         #expect(!labels.contains("Attempt"))
         let provider = facts.entries.first { $0.label == "Provider" }

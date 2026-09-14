@@ -390,6 +390,21 @@ struct QueueRunDetailEntry: Equatable, Sendable {
     }
 }
 
+/// The Run Details panel's Provider/Model rows, keyed by the kind of run
+/// the job is. Agent runs are served by an LLM provider and a model, so both
+/// rows always render — a missing value there is a reporting gap and shows
+/// the "Not Reported" placeholder. Extraction runs execute managed extractor
+/// packages (bun/uv runtimes under the seatbelt): there is no provider and
+/// no model, so neither row exists for them — "Not Reported" would
+/// misrepresent a reporting gap where nothing is reportable (#1253).
+enum QueueRunProviderModel: Equatable, Sendable {
+    /// An agent run's LLM identity. A `nil` (or blank — blank is absence)
+    /// value renders the "Not Reported" placeholder for that row.
+    case agent(provider: String?, model: String?)
+    /// An extraction run: no Provider/Model rows render at all.
+    case extraction
+}
+
 /// Run facts for the Run Details inspector panel, mapped by the caller from
 /// `QueueItem` timestamps plus the §2 report header. Pure data — formatting and
 /// the omit-vs-placeholder rules live in `entries` so tests cover them without
@@ -400,9 +415,10 @@ struct QueueRunDetailEntry: Equatable, Sendable {
 ///   uses it to correlate logs and CLI output with the panel. Synthetic facts
 ///   can omit the ID. It never uses a "Not Reported" placeholder.
 /// - Unavailable optional metadata is *omitted*…
-/// - …except provider/model, whose absence matters: they render a "Not
-///   Reported" placeholder. Never pass a capacity bucket (`default-ingest`) as
-///   the provider.
+/// - …except agent runs' provider/model, whose absence matters: they render
+///   a "Not Reported" placeholder. Never pass a capacity bucket
+///   (`default-ingest`) as the provider. Extraction runs carry NO provider
+///   or model (#1253), so neither row renders for them at all.
 /// - An attempt of `0`/`nil` (first run) is omitted; retried attempts show.
 struct QueueRunDetailsFacts: Sendable {
     /// The job's queue item ID. The inspector renders its raw value as the
@@ -416,10 +432,10 @@ struct QueueRunDetailsFacts: Sendable {
     /// header instead of here.
     var durationText: String?
     var attempt: Int?
-    /// Actual provider when reported. `nil` → "Not Reported" placeholder.
-    var providerText: String?
-    /// Actual model when reported (usage). `nil` → "Not Reported" placeholder.
-    var modelText: String?
+    /// The run's provider/model identity. Agent runs render both rows — a
+    /// missing value renders the "Not Reported" placeholder; extraction runs
+    /// render neither (#1253).
+    var providerModel: QueueRunProviderModel = .agent(provider: nil, model: nil)
     /// The job's usage/cost snapshot — the tracker's recorded totals, or
     /// while a run is in flight the live session's snapshot. `entries` maps
     /// it to one labeled row per PRESENT field (Input / Output / Cached /
@@ -434,8 +450,7 @@ struct QueueRunDetailsFacts: Sendable {
         finishedAt: Date? = nil,
         durationText: String? = nil,
         attempt: Int? = nil,
-        providerText: String? = nil,
-        modelText: String? = nil,
+        providerModel: QueueRunProviderModel = .agent(provider: nil, model: nil),
         usage: SessionUsage? = nil
     ) {
         self.jobID = jobID
@@ -444,8 +459,7 @@ struct QueueRunDetailsFacts: Sendable {
         self.finishedAt = finishedAt
         self.durationText = durationText
         self.attempt = attempt
-        self.providerText = providerText
-        self.modelText = modelText
+        self.providerModel = providerModel
         self.usage = usage
     }
 
@@ -472,19 +486,27 @@ struct QueueRunDetailsFacts: Sendable {
         if let attempt, attempt > 0 {
             result.append(QueueRunDetailEntry(label: "Attempt", value: String(attempt)))
         }
-        // Provider/model absence matters (plan): explicit placeholder, never a
-        // capacity bucket masquerading as a provider.
-        let provider = providerText?.trimmingCharacters(in: .whitespaces)
-        if let provider, !provider.isEmpty {
-            result.append(QueueRunDetailEntry(label: "Provider", value: provider))
-        } else {
-            result.append(.notReported("Provider"))
-        }
-        let model = modelText?.trimmingCharacters(in: .whitespaces)
-        if let model, !model.isEmpty {
-            result.append(QueueRunDetailEntry(label: "Model", value: model))
-        } else {
-            result.append(.notReported("Model"))
+        switch providerModel {
+        case .agent(let providerText, let modelText):
+            // Provider/model absence matters (plan): explicit placeholder,
+            // never a capacity bucket masquerading as a provider.
+            let provider = providerText?.trimmingCharacters(in: .whitespaces)
+            if let provider, !provider.isEmpty {
+                result.append(QueueRunDetailEntry(label: "Provider", value: provider))
+            } else {
+                result.append(.notReported("Provider"))
+            }
+            let model = modelText?.trimmingCharacters(in: .whitespaces)
+            if let model, !model.isEmpty {
+                result.append(QueueRunDetailEntry(label: "Model", value: model))
+            } else {
+                result.append(.notReported("Model"))
+            }
+        case .extraction:
+            // An extraction run executes managed extractor packages — no LLM
+            // provider, no model (#1253) — so neither row renders, not even a
+            // placeholder.
+            break
         }
         // Usage maps to one labeled row per PRESENT field, in this order:
         // Input, Output, Cached, Thought, Cost. Zero or absent fields are

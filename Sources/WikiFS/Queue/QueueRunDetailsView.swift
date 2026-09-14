@@ -9,8 +9,9 @@ import SwiftUI
 ///
 /// Values come pre-mapped in `QueueRunDetailsFacts`; the omit-vs-"Not
 /// Reported" rules live in `QueueRunDetailsFacts.entries` and are covered by
-/// pure tests. The capacity bucket must never arrive as `providerText` — that
-/// is the caller's mapping responsibility, documented on the field.
+/// pure tests. The capacity bucket must never arrive as the agent identity's
+/// provider — that is the caller's mapping responsibility, documented on the
+/// field.
 ///
 /// Facts render as a native List of labeled rows (not a bare Grid) so the
 /// panel scrolls, rows stay a stable height, and hosted layout tests can

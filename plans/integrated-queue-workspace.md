@@ -231,6 +231,19 @@ this section is current.
     is removed. Run Details remains the only queue-specific toolbar control.
     This supersedes design changes 2 and 7. Affected sections: "Layout
     contract", "Job navigator (left)", and "Queue controls: Pause and Stop All".
+20. **Extraction Run Details omit Provider and Model (2026-09-13).** The
+    Run Details inspector renders its Provider and Model rows only for agent
+    runs (ingestion and lint). Extraction jobs run managed extractor
+    packages — there is no LLM provider and no model — so an extraction
+    job's panel renders NEITHER row, not even the "Not Reported" placeholder
+    an unreported agent run shows: the placeholder would misrepresent a
+    reporting gap where nothing is reportable, and the report header or a
+    tracker snapshot must never dress an extraction job in agent vocabulary.
+    `QueueRunDetailsFacts` carries the identity as a
+    `QueueRunProviderModel` value (`.agent(provider:model:)` or
+    `.extraction`), and `entries` maps it to rows. The extractor package
+    name and version row suggested in the issue was considered and
+    deliberately deferred as a follow-up. Affected section: "Run details".
 
 ## Goal
 
