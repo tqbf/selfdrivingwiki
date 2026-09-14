@@ -419,6 +419,10 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     private let makeBackend: BackendFactory
     private let probeCatalog: CatalogProbe
     private let sandboxUsable: SandboxUsabilityCheck
+    /// Test seam (issue #1276): when non-nil, summarizer scratch worlds are
+    /// created under this root instead of the shared temporary directory, so
+    /// a test can assert scratch cleanup on a root it owns exclusively.
+    private let summarizerScratchParent: URL?
     private var snapshots: [UUID: Snapshot] = [:]
     private var tokens: [UUID: TokenRecord] = [:]
     private var cachedBackends: [String: any AgentBackend] = [:]
@@ -464,7 +468,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 apiKey: apiKey)
                 .discoverObservation()
         },
-        sandboxUsability: @escaping SandboxUsabilityCheck = AgentProviderRuntime.defaultSandboxUsability
+        sandboxUsability: @escaping SandboxUsabilityCheck = AgentProviderRuntime.defaultSandboxUsability,
+        summarizerScratchParent: URL? = nil
     ) {
         self.readConfiguration = readConfiguration
         self.resolveCommand = resolveCommand
@@ -474,6 +479,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         self.makeBackend = makeBackend
         self.probeCatalog = probeCatalog
         self.sandboxUsable = sandboxUsability
+        self.summarizerScratchParent = summarizerScratchParent
     }
 
     public func prepareInteractive(
@@ -556,6 +562,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         // pivot exec denies, credential read denies): a one-shot LLM call with
         // no file-tool needs is the most fenceable spawn in the app.
         let scratch = try LLMSandboxScratch.make(
+            under: summarizerScratchParent,
             namePrefix: "summarizer",
             strict: Self.strictSummarizerEnabled)
         let snapshotID = UUID()

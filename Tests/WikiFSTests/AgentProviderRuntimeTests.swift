@@ -525,6 +525,16 @@ struct AgentProviderRuntimeTests {
         let config = LockedBox(configuration(summarizer: true))
         let commandGate = GateBox()
         let signals = TeardownOrder()
+        // An ISOLATED scratch root: only this runtime instance writes here, so
+        // the cleanup assertion is deterministic even with sibling suites
+        // running concurrently (the shared-temp-root version flaked on CI).
+        let isolatedRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("disposal-race-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: isolatedRoot, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: isolatedRoot) }
+            catch { Issue.record("isolated root cleanup failed: \(error)") }
+        }
         let service = AgentProviderRuntime(
             readConfiguration: { config.read() },
             resolveCommand: { _ in
@@ -533,18 +543,17 @@ struct AgentProviderRuntimeTests {
                 return [:]
             },
             readCredential: { _ in nil },
-            resolvePermissionPolicy: { _ in .bypass })
+            resolvePermissionPolicy: { _ in .bypass },
+            summarizerScratchParent: isolatedRoot)
 
         // Park preparation inside command resolution, dispose underneath it.
-        let startedAt = Date()
         let prepareTask = Task {
             _ = try? await service.prepareSummarization()
         }
         try await waitFor { await signals.values.contains("resolve-entered") }
-        // Only dirs CREATED after we started can be ours — the temp root is
-        // shared with concurrently-running suites.
-        let scratchBefore = Self.summarizerScratchPaths(createdAfter: startedAt)
-        #expect(!scratchBefore.isEmpty, "the parked preparation already owns its scratch")
+        // The parked preparation owns exactly one scratch in the isolated root.
+        let parked = Self.summarizerScratchPaths(under: isolatedRoot)
+        #expect(parked.count == 1, "the parked preparation already owns its scratch")
 
         await service.dispose()
         await commandGate.open()
@@ -556,27 +565,19 @@ struct AgentProviderRuntimeTests {
         #expect(activeAfter == 0)
         // Bounded poll: the parked scratch must disappear.
         try await waitFor(
-            { Self.summarizerScratchPaths(createdAfter: startedAt).isEmpty },
+            { Self.summarizerScratchPaths(under: isolatedRoot).isEmpty },
             timeout: .seconds(2),
             pollInterval: .milliseconds(20))
     }
 
-    /// Parked-preparation scratch dirs are visible under the temp root by the
-    /// production name prefix, optionally scoped to dirs created after a
-    /// timestamp so concurrently-running suites do not pollute the check.
-    private static func summarizerScratchPaths(createdAfter date: Date? = nil) -> [String] {
+    /// Scratch dirs under `root` with the production `summarizer-` prefix.
+    private static func summarizerScratchPaths(under root: URL) -> [String] {
         let contents = (try? FileManager.default.contentsOfDirectory(
-            at: FileManager.default.temporaryDirectory,
-            includingPropertiesForKeys: [URLResourceKey.creationDateKey])) ?? []
-        return contents.filter { url in
-            guard url.lastPathComponent.hasPrefix("summarizer-") else { return false }
-            if let date,
-               let created = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate,
-               created < date {
-                return false
-            }
-            return true
-        }.map { $0.path }
+            at: root,
+            includingPropertiesForKeys: nil)) ?? []
+        return contents
+            .filter { $0.lastPathComponent.hasPrefix("summarizer-") }
+            .map { $0.path }
     }
 
     // MARK: - Catalog sandbox ordering (issue #1276, AC.4)
