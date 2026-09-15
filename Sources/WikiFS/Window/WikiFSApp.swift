@@ -612,7 +612,7 @@ struct WikiFSApp: App {
             .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(
                 tracker: activityTracker,
-                openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
+                openActivityWindow: { queue in openWindowBridge.openActivityWindow?(queue) },
                 chatDaemon: chatDaemonHolder.coordinator,
                 healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
@@ -708,7 +708,7 @@ struct WikiFSApp: App {
             .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(
                 tracker: activityTracker,
-                openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
+                openActivityWindow: { queue in openWindowBridge.openActivityWindow?(queue) },
                 chatDaemon: chatDaemonHolder.coordinator,
                 healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
@@ -792,8 +792,8 @@ struct WikiFSApp: App {
             )
             .appEnvironment(
                 tracker: activityTracker,
-                openActivityWindow: { [weak openWindowBridge] queue in
-                    openWindowBridge?.openQueueWindow?(queue)
+                openActivityWindow: { queue in
+                    openWindowBridge.openQueueWindow?(queue)
                 },
                 healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
