@@ -53,6 +53,17 @@ struct GracefulShutdownPolicyTests {
         }
 
         #expect(outcome == .timedOut)
+        // `run` returns the moment the deadline fires, and cancels the body
+        // task afterwards. On a loaded runner the body task may not have
+        // STARTED by then — a pre-cancelled task fires its cancellation
+        // handler only at registration time, i.e. after `run` returned — so
+        // asserting the flag synchronously races the scheduler. Poll for the
+        // flag with a load-scaled deadline instead (see `TestTimingScale`).
+        let deadline = ContinuousClock.now
+            .advanced(by: .milliseconds(TestTimingScale.milliseconds(2000)))
+        while ContinuousClock.now < deadline, cancelled.withLock({ $0 }) == false {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
         #expect(cancelled.withLock { $0 })
     }
 }

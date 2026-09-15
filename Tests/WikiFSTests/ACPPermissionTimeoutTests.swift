@@ -47,7 +47,7 @@ struct ACPPermissionTimeoutTests {
     /// never resolved returns `cancelled` within `budget + ε`. The 1800s
     /// ceiling backstop is no longer the only release.
     @Test func deferPermissionAutoRejectsAfterBudget() async throws {
-        let delegate = ACPPermissionDelegate(policy: .alwaysAsk, budget: .milliseconds(200))
+        let delegate = ACPPermissionDelegate(policy: .alwaysAsk, budget: .milliseconds(TestTimingScale.milliseconds(200)))
         let request = makeRequest(toolCallId: "tc-timeout")
 
         let response = try await delegate.handlePermissionRequest(request: request)
@@ -64,7 +64,7 @@ struct ACPPermissionTimeoutTests {
     /// race. The timer is cancelled by `resolve`; the response is the ALLOW
     /// outcome, not `cancelled`.
     @Test func deferPermissionUserResolveBeatsBudget() async throws {
-        let delegate = ACPPermissionDelegate(policy: .alwaysAsk, budget: .milliseconds(500))
+        let delegate = ACPPermissionDelegate(policy: .alwaysAsk, budget: .milliseconds(TestTimingScale.milliseconds(500)))
         let request = makeRequest(toolCallId: "tc-race-user")
 
         let requestTask = Task<RequestPermissionResponse, Error> {
@@ -87,7 +87,7 @@ struct ACPPermissionTimeoutTests {
     /// first AND the timer would have fired (waited past the budget), no
     /// second resume / no crash. This is the §4.1 note #1 invariant.
     @Test func deferPermissionUserResolveThenBudgetDoesNotDoubleFire() async throws {
-        let delegate = ACPPermissionDelegate(policy: .alwaysAsk, budget: .milliseconds(150))
+        let delegate = ACPPermissionDelegate(policy: .alwaysAsk, budget: .milliseconds(TestTimingScale.milliseconds(150)))
         let request = makeRequest(toolCallId: "tc-no-double")
 
         let requestTask = Task<RequestPermissionResponse, Error> {
@@ -105,7 +105,7 @@ struct ACPPermissionTimeoutTests {
 
         // Wait past the budget + a generous margin so the detached timer task
         // has had time to wake + execute its `timeOut` (which must no-op).
-        try await Task.sleep(nanoseconds: 400_000_000)
+        try await Task.sleep(nanoseconds: UInt64(TestTimingScale.milliseconds(400)) * 1_000_000)
 
         // Still empty — no double-resume, no trap. The fact that this test
         // doesn't crash the process IS the assertion.
@@ -123,11 +123,11 @@ struct ACPPermissionTimeoutTests {
             try await delegate.handlePermissionRequest(request: request)
         }
 
-        // Give a "budget" long enough that a 200ms-equivalent budget (test #1)
-        // would have fired by now. With nil budget, no timer is armed → the
+        // Give a "budget" long enough that a scaled test #1 budget (200ms at
+        // 1×) would have fired by now. With nil budget, no timer is armed → the
         // request must still be pending (the only release is an explicit resolve
         // or cancelAllPending).
-        try await Task.sleep(nanoseconds: 250_000_000)
+        try await Task.sleep(nanoseconds: UInt64(TestTimingScale.milliseconds(250)) * 1_000_000)
         #expect(delegate.pendingSnapshot().count == 1)
         #expect(requestTask.isCancelled == false)
 
@@ -140,7 +140,7 @@ struct ACPPermissionTimeoutTests {
     /// #5 — `acceptEdits` on a non-edit tool defers (the second deferring
     /// callsite). A short budget auto-rejects it the same way `alwaysAsk` does.
     @Test func acceptEditsNonEditToolAlsoAutoRejects() async throws {
-        let delegate = ACPPermissionDelegate(policy: .acceptEdits, budget: .milliseconds(150))
+        let delegate = ACPPermissionDelegate(policy: .acceptEdits, budget: .milliseconds(TestTimingScale.milliseconds(150)))
         // `.execute` (Bash) is NOT an edit tool per `isEditTool` — it defers.
         let request = RequestPermissionRequest(
             options: [
@@ -161,7 +161,7 @@ struct ACPPermissionTimeoutTests {
     /// SURVIVOR without double-resuming the already-timed-out entry. The race
     /// between `timeOut` and `cancelAllPending` is safe.
     @Test func cancelAllPendingStillDrainsAfterTimeout() async throws {
-        let delegate = ACPPermissionDelegate(policy: .alwaysAsk, budget: .milliseconds(150))
+        let delegate = ACPPermissionDelegate(policy: .alwaysAsk, budget: .milliseconds(TestTimingScale.milliseconds(150)))
 
         // Request #1 — will time out.
         let r1 = makeRequest(toolCallId: "tc-timeout-1")
@@ -197,7 +197,14 @@ struct ACPPermissionTimeoutTests {
     /// Poll until the pending permission count reaches at least `count`, or time
     /// out after `timeoutMillis`. This prevents flaky tests where a resolve call
     /// runs before the pending entry is registered under thread pool pressure.
-    private func awaitPendingCount(_ delegate: ACPPermissionDelegate, atLeast count: Int, timeoutMillis: Int = 2000) async throws {
+    /// The default timeout is load-scaled (see `TestTimingScale`): on CI's
+    /// 3-vCPU runner, registering the pending entry has been observed to take
+    /// multiple seconds, so the 1× 2000 ms window is not enough there.
+    private func awaitPendingCount(
+        _ delegate: ACPPermissionDelegate,
+        atLeast count: Int,
+        timeoutMillis: Int = TestTimingScale.milliseconds(2000)
+    ) async throws {
         let deadline = ContinuousClock.now.advanced(by: .milliseconds(timeoutMillis))
         while ContinuousClock.now < deadline {
             if delegate.pendingSnapshot().count >= count { return }

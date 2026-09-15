@@ -112,12 +112,13 @@ struct ProcessExtractorProviderTests {
 
     /// Regression (#1286): a decoded terminal frame must conclude the
     /// operation promptly. Each conversion through one prepared operation
-    /// finishes well inside the manifest's 10 s duration limit; a regression
-    /// back to waiting for wrapper-process exit (or for pool-scheduled
-    /// cleanup tasks) surfaces here as a per-conversion timeout long before
-    /// the suite's 3-minute limit can mask it. The bound is deliberately
-    /// coarse — healthy conversions finish in ~2 s — so it only trips on the
-    /// hang it guards against, not on load jitter.
+    /// finishes well inside the manifest's (load-scaled) duration limit; a
+    /// regression back to waiting for wrapper-process exit (or for
+    /// pool-scheduled cleanup tasks) surfaces here as a per-conversion timeout
+    /// long before the suite's 3-minute limit can mask it. The bound is
+    /// deliberately coarse at 1× — healthy conversions finish in ~2 s — so it
+    /// only trips on the hang it guards against, not on load jitter; on
+    /// small-core CI runners it scales via `TestTimingScale`.
     @Test func repeatedConversionsConcludePromptlyAfterTerminalFrame() async throws {
         let environment = try await InstalledFixtureEnvironment.install()
         defer { environment.cleanup() }
@@ -125,6 +126,7 @@ struct ProcessExtractorProviderTests {
             revision: environment.revision,
             manifest: environment.manifest)
         let clock = ContinuousClock()
+        let perConversionLimit = Duration.milliseconds(TestTimingScale.milliseconds(8_000))
 
         for index in 0..<10 {
             let start = clock.now
@@ -133,7 +135,7 @@ struct ProcessExtractorProviderTests {
                 filename: "repeat-\(index).pdf",
                 onProgress: nil)
             #expect(markdown == "# Fixture\n")
-            #expect(clock.now - start < .seconds(8))
+            #expect(clock.now - start < perConversionLimit)
         }
     }
 
@@ -317,7 +319,12 @@ struct ProcessExtractorProviderTests {
             limits: ExtractorOperationLimits(
                 maximumInputByteCount: 65_536,
                 maximumMarkdownOutputByteCount: 65_536,
-                maximumDurationMilliseconds: 10_000,
+                // Fixture subprocesses are healthy in ~2 s, but CI's 3-vCPU
+                // runner has starved fixture startup past the 10 s 1× window
+                // ("ran 18.3 s of the 10.0 s limit"). Scale the limit with the
+                // machine (see `TestTimingScale`) so the bound still catches
+                // real hangs without tripping on scheduler noise.
+                maximumDurationMilliseconds: TestTimingScale.milliseconds(10_000),
                 maximumProgressEventCount: 8))
     }
 }
