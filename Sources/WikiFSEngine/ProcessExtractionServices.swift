@@ -201,6 +201,10 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         await registry.registeredExtractionInputs()
     }
 
+    public func activeRegistrationSnapshots() async -> [ExtractorRouteRegistrationSnapshot] {
+        await registry.installedRegistrationSnapshots()
+    }
+
     /// Stops host-owned built-in registrations, then disposes the package
     /// context. Prepared operations retain their own snapshots.
     public func shutdown() async {

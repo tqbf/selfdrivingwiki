@@ -60,6 +60,34 @@ public enum ExtractorRouteTableBuilder {
         }
     }
 
+    /// Returns the deterministic primary active registration for a source
+    /// input. This uses the same manifest-declared MIME/extension surface as
+    /// the Settings route table, but excludes unavailable catalog entries by
+    /// accepting only the active `registrations` collection.
+    public static func activeRegistration(
+        mimeType: String?,
+        filenameExtension: String?,
+        registrations: [ExtractorRouteRegistrationSnapshot]
+    ) -> ExtractorRouteRegistrationSnapshot? {
+        let normalizedMIME = mimeType?.lowercased()
+        let normalizedExtension = filenameExtension?.lowercased()
+        return registrations
+            .filter { registration in
+                let matchesMIME = normalizedMIME.map { value in
+                    registration.mimeTypes.contains { mime in mime.rawValue == value }
+                } ?? false
+                let matchesExtension = normalizedExtension.map { value in
+                    registration.filenameExtensions.contains { ext in ext.rawValue == value }
+                } ?? false
+                return matchesMIME || matchesExtension
+            }
+            .sorted {
+                ($0.packageName, $0.displayName, $0.reference) <
+                ($1.packageName, $1.displayName, $1.reference)
+            }
+            .first
+    }
+
     // MARK: - Route collection
 
     private static func descriptors(for input: Input) -> [ExtractorRouteDescriptor] {
