@@ -47,11 +47,10 @@ PLUGINKIT    := pluginkit
 MIN_MACOS    := 26.0
 MIN_SWIFT    := 6.0
 
-# Fast test tier — skips the slow SQLite integration suites (tagged
-# .integration) for quick PR feedback. This is the same skip list the CI
-# `swift` job uses (issue #292); the `swift-integration` job runs the full
-# suite with no skip. Shared by `test-fast` (debug) and `test-fast-release`.
-FAST_TEST_SKIP := 'EnumeratorDeletionTests|SQLiteWikiStoreTests|StoreEmissionTests|FreshSchemaParityTests|SQLiteStatementLifecycleIntegrationTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|ChatSummaryTests|ProjectionTreeTests|ACPRegistryTests/loadAgentsReturnsNonEmpty'
+# Fast test tier — skips selected slow integration suites for quick local
+# feedback. Shared by `test-fast` (debug) and `test-fast-release`. The default
+# SwiftPM graph excludes WikiFSAppTests; opt in with WIKIFS_APP_TESTS=1.
+FAST_TEST_SKIP := 'EnumeratorDeletionTests|StoreEmissionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|ChatSummaryTests|ProjectionTreeTests|ACPRegistryTests/loadAgentsReturnsNonEmpty'
 
 # Swift Testing otherwise schedules as many simultaneous tests as it can. The
 # core suite has blocking and resource-intensive cases; one worker keeps local
@@ -144,9 +143,9 @@ help:
 	@echo "  check             Compile only (swift build) — no bundle/sign; CI/agent gate"
 	@echo "  check-cordis      Verify the current Cordis composition boundary baseline"
 	@echo "  check-release     Compile only in release mode (swift build -c release)"
-	@echo "  test              Run the SwiftPM test suite"
-	@echo "  test-watchdog     Same as test, but with a wall-clock timeout + hang/slow-test report"
-	@echo "  test-fast         Fast test tier (debug) — skips slow SQLite integration suites"
+	@echo "  test              Run the default SwiftPM test graph (WikiFSAppTests require WIKIFS_APP_TESTS=1)"
+	@echo "  test-watchdog     Same default graph as test, with a wall-clock timeout + hang/slow-test report"
+	@echo "  test-fast         Fast default-graph tier (debug) — skips selected integration suites"
 	@echo "  test-fast-release Fast test tier in release mode (faster runtime, slower compile)"
 	@echo "  test-linux        Run the optional, nonblocking Linux Swift diagnostic"
 	@echo "  test-linux-focus  Run one optional Linux diagnostic suite (TEST_FILTER=WikiFSCoreTests...)"
@@ -286,7 +285,7 @@ check-release: deps prompts version keychain extractor-packages
 	swift build -c release
 	@echo "✓ compiles (release)"
 
-# Run the test suite.
+# Run the default SwiftPM test graph. WikiFSAppTests require WIKIFS_APP_TESTS=1.
 #
 # No orphan sweep here, deliberately (#1051).
 #
@@ -306,7 +305,7 @@ test: deps prompts version keychain extractor-packages
 	swift test --parallel --num-workers $(SWIFT_TEST_NUM_WORKERS)
 	@echo "✓ tests pass"
 
-# Same full suite as `test`, but with a hard wall-clock timeout and a
+# Same default SwiftPM test graph as `test`, but with a hard wall-clock timeout and a
 # post-run summary of the slowest tests + whichever test started but never
 # finished. Use this instead of bare `swift test`/`make test` when a hang is
 # suspected: `.timeLimit` traits can't interrupt a stuck `evaluateJavaScript`/
@@ -317,8 +316,9 @@ test: deps prompts version keychain extractor-packages
 test-watchdog: deps prompts version keychain
 	@SWIFT_TEST_NUM_WORKERS=$(SWIFT_TEST_NUM_WORKERS) scripts/test-with-watchdog.sh
 
-# Fast test tier (debug) — skips the slow SQLite integration suites for quick
-# PR feedback. Run `make test` for the full suite. (issue #520)
+# Fast test tier (debug) — skips selected integration suites from the default
+# SwiftPM test graph. Run `make test` for that graph without skips; opt in to
+# WikiFSAppTests with WIKIFS_APP_TESTS=1. (issue #520)
 test-fast: deps prompts version keychain
 	swift test --parallel --num-workers $(SWIFT_TEST_NUM_WORKERS) --skip $(FAST_TEST_SKIP)
 	@echo "✓ fast tests pass (debug)"

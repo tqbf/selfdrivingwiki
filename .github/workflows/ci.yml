@@ -39,9 +39,9 @@ jobs:
         run: uv run tools/validate_skills.py
 
   swift:
-    # Full `swift test` — no skip, no tier split. The in-memory SQLite
-    # fixtures (#658) reduced the full suite from 30+ min to ~1.5 min, so the
-    # fast/integration tier split and `.integration` tags are no longer needed.
+    # The broad required step runs WikiFSCoreTests with selected blocking suites
+    # skipped. Separate opt-in steps set WIKIFS_APP_TESTS=1 and run targeted
+    # WikiFSAppTests suites; CI does not yet run that app-test target in full.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,21 +83,22 @@ jobs:
         # 2>/dev/null; else swift build` probe swallowed failure reasons and
         # the `else` branch could trigger a second full recompile.
         run: xcrun swift build
-      - name: Test (full suite minus blocking suites — in-memory fixtures, #658)
-        # The full suite runs in ~1.5 min via in-memory SQLite fixtures (#658).
+      - name: Test WikiFSCoreTests minus blocking suites
+        # The selected core tests run quickly via in-memory SQLite fixtures (#658).
         # HOWEVER: a set of suites block the cooperative thread pool on CI's
         # 3-vCPU runner, causing a deadlock that .timeLimit cannot interrupt
         # (DispatchSemaphore.wait in production code, Process.waitUntilExit,
         # WKWebView/NSWindow on @MainActor). These suites pass locally (8+ vCPU)
-        # and are covered by `make test` before every PR — CI skips them to
-        # avoid the 30-min timeout. See plans/ci-speedup.md, #732, #448.
+        # and require local coverage before every PR (`make test` for the default
+        # graph; WIKIFS_APP_TESTS=1 for app suites). CI skips them here to avoid
+        # the 30-min timeout. See plans/ci-speedup.md, #732, #448.
         #
         # Keep SwiftPM's worker count at one (#1003, #1021): the core suite
         # otherwise intermittently crashes its shared test helper under load.
         # timeout-minutes: 30 is a safety net for a cache-miss full rebuild.
         timeout-minutes: 30
         env:
-          SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteboardBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
+          SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteboardBridgeTests|SidebarSelectAllShortcutTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
         run: xcrun swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip "$SKIP"
       - name: Test serialized Cordis search suites
         # Real Tantivy and CLI search can starve a small cooperative pool when
@@ -105,7 +106,7 @@ jobs:
         timeout-minutes: 15
         env:
           WIKIFS_APP_TESTS: "1"
-        run: xcrun swift test --parallel --num-workers 1 --filter 'SearchRuntimeAssemblyTests|SearchCordisBoundaryPolicyTests|SessionManagerTests|CLITantivyLegResolverTests|TantivyAutocompleteTests|TantivyBM25LegCutoverTests'
+        run: xcrun swift test --parallel --num-workers 1 --filter 'SearchCordisBoundaryPolicyTests|SessionManagerTests|CLITantivyLegResolverTests|TantivyAutocompleteTests|TantivyBM25LegCutoverTests'
       - name: Test opt-in chat lifecycle suites
         # This opt-in app target contains source-contract and daemon lifecycle
         # tests only. It does not host AppKit or WebKit views, so it avoids the
@@ -178,5 +179,5 @@ jobs:
         run: uv run ruff check pdf2md tests/
       - name: Type check
         run: uv run pyright pdf2md tests/
-      - name: Unit tests
-        run: uv run pytest tests/test_pdf2md.py -v
+      - name: Fast tests (exclude VLM suite)
+        run: uv run pytest tests/ -v --ignore=tests/test_vlm.py
