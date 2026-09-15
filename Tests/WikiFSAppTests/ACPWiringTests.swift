@@ -811,6 +811,199 @@ import ACPModel
         }
         #expect(counter.value == 1)
     }
+
+    // MARK: - #1257 Level 2: vendored adapter rewrite
+
+    /// A login-shell-shaped bun resolution matching what
+    /// `RuntimeCommandLocator` produces (the same fixture the memoization
+    /// tests above use).
+    private static func bunResolution(
+        executablePath: String = "/synthetic/bun"
+    ) throws -> RuntimeCommandResolution {
+        RuntimeCommandResolution(
+            command: try #require(ExtractorRuntimeName(rawValue: "bun")),
+            source: .loginShell,
+            executableURL: URL(fileURLWithPath: executablePath),
+            identity: RuntimeExecutableIdentity(device: 1, inode: 300, mode: 0o100755, size: 10),
+            description: RuntimePathDescription(
+                redactedPath: "bun", basename: "bun", fingerprint: "test"))
+    }
+
+    /// AC.2: the whole Level 1 → Level 2 composition. npx, `npm exec`,
+    /// bunx, and `bun x` configured shapes — with a resolved bun and the
+    /// adapter bundle present — all compose to
+    /// `<resolved bun> run <bundle> [adapter args]` with the
+    /// canonicalization state intact (`usedCanonicalBun` +
+    /// `bunResolutionUsed` carried through, so the pinned-identity staleness
+    /// re-probe in `startProcess` still governs the launch).
+    @Test func effectiveAdapterSpawnComposesCanonicalThenVendored() throws {
+        let bunPath = "/synthetic/bun"
+        let resolution = try Self.bunResolution(executablePath: bunPath)
+        let bundle = "/App.app/Contents/Helpers/claude-acp-adapter.js"
+        let spec = "@agentclientprotocol/claude-agent-acp"
+        let configuredShapes: [(
+            executable: String,
+            arguments: [String],
+            expectedRewritten: [String]
+        )] = [
+            ("/Users/me/.local/bin/npx", [spec, "--foo"], ["run", bundle, "--foo"]),
+            ("/usr/local/bin/npm", ["exec", "--", spec, "--bar"], ["run", bundle, "--bar"]),
+            ("/usr/local/bin/bunx", [spec, "--baz"], ["run", bundle, "--baz"]),
+            ("/some/user/bun", ["x", spec, "--qux"], ["run", bundle, "--qux"]),
+        ]
+        for shape in configuredShapes {
+            let composed = ACPBackend.effectiveAdapterSpawn(
+                configuredSpawn: ACPBackend.AgentSpawnConfig(
+                    executablePath: shape.executable,
+                    arguments: shape.arguments),
+                resolvedBun: resolution,
+                bundlePath: bundle)
+            #expect(composed.spawn.executablePath == bunPath)
+            #expect(composed.spawn.arguments == shape.expectedRewritten)
+            #expect(composed.usedCanonicalBun == true)
+            #expect(composed.bunResolutionUsed?.executableURL.path == bunPath)
+        }
+    }
+
+    /// AC.2 + AC.4: bun unresolved → the configured spawn runs unchanged at
+    /// every level (the Level 1 negative-cached fallback; Level 2 never
+    /// applies).
+    @Test func effectiveAdapterSpawnFallsBackWhenBunUnresolved() {
+        let configured = ACPBackend.AgentSpawnConfig(
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["@agentclientprotocol/claude-agent-acp"])
+        let composed = ACPBackend.effectiveAdapterSpawn(
+            configuredSpawn: configured,
+            resolvedBun: nil,
+            bundlePath: "/App.app/Contents/Helpers/claude-acp-adapter.js")
+        #expect(composed.spawn.executablePath == configured.executablePath)
+        #expect(composed.spawn.arguments == configured.arguments)
+        #expect(composed.usedCanonicalBun == false)
+        #expect(composed.bunResolutionUsed == nil)
+    }
+
+    /// AC.2: the Level 2 rewrite itself — the canonical
+    /// `bun x <spec> --foo` becomes `(resolvedBun, ["run", bundle, "--foo"])`
+    /// and every other spawn field is preserved verbatim.
+    @Test func vendoredAdapterRewriteRewritesMatchingSpec() {
+        let bundle = "/App.app/Contents/Helpers/claude-acp-adapter.js"
+        let spawn = ACPBackend.AgentSpawnConfig(
+            executablePath: "/synthetic/bun",
+            arguments: ["x", "@agentclientprotocol/claude-agent-acp", "--foo"],
+            workingDirectory: "/tmp/scratch",
+            apiKey: "secret",
+            environment: ["WIKI_DB": "01WIKI"])
+        let rewritten = ACPBackend.vendoredAdapterRewrite(spawn, bundlePath: bundle)
+        #expect(rewritten?.executablePath == "/synthetic/bun")
+        #expect(rewritten?.arguments == ["run", bundle, "--foo"])
+        #expect(rewritten?.workingDirectory == "/tmp/scratch")
+        #expect(rewritten?.apiKey == "secret")
+        #expect(rewritten?.environment == ["WIKI_DB": "01WIKI"])
+    }
+
+    /// AC.2: the vendored version pin is accepted EXACTLY — bare spec and
+    /// `spec@<pinnedVersion>` rewrite; any other version pin and any other
+    /// package keep the Level 1 launch (the user asked for a version the
+    /// vendored bundle is not).
+    @Test func vendoredAdapterRewriteAcceptsMatchingPinnedVersionOnly() {
+        let bundle = "/bundled/claude-acp-adapter.js"
+        let bare = ACPBackend.AgentSpawnConfig(
+            executablePath: "/synthetic/bun",
+            arguments: ["x", VendoredAdapterPin.vendoredAdapterPackageSpec])
+        #expect(
+            ACPBackend.vendoredAdapterRewrite(bare, bundlePath: bundle)?.arguments
+                == ["run", bundle])
+        let pinned = ACPBackend.AgentSpawnConfig(
+            executablePath: "/synthetic/bun",
+            arguments: [
+                "x",
+                "\(VendoredAdapterPin.vendoredAdapterPackageSpec)@\(VendoredAdapterPin.vendoredAdapterPinnedVersion)",
+                "--foo",
+            ])
+        #expect(
+            ACPBackend.vendoredAdapterRewrite(pinned, bundlePath: bundle)?.arguments
+                == ["run", bundle, "--foo"])
+        let olderPin = ACPBackend.AgentSpawnConfig(
+            executablePath: "/synthetic/bun",
+            arguments: ["x", "\(VendoredAdapterPin.vendoredAdapterPackageSpec)@0.76.0", "--foo"])
+        #expect(ACPBackend.vendoredAdapterRewrite(olderPin, bundlePath: bundle) == nil)
+        let otherPackage = ACPBackend.AgentSpawnConfig(
+            executablePath: "/synthetic/bun",
+            arguments: ["x", "@agentclientprotocol/codex-acp"])
+        #expect(ACPBackend.vendoredAdapterRewrite(otherPackage, bundlePath: bundle) == nil)
+    }
+
+    /// AC.2: a nil (or empty) bundle path keeps the Level 1 result — the
+    /// bundle is simply not bundled, and the canonical package-runner launch
+    /// still works.
+    @Test func vendoredAdapterRewriteNilBundleKeepsCanonical() throws {
+        let canonical = ACPBackend.AgentSpawnConfig(
+            executablePath: "/synthetic/bun",
+            arguments: ["x", "@agentclientprotocol/claude-agent-acp", "--foo"])
+        #expect(ACPBackend.vendoredAdapterRewrite(canonical, bundlePath: nil) == nil)
+        #expect(ACPBackend.vendoredAdapterRewrite(canonical, bundlePath: "") == nil)
+        // Through the composition: nil bundle → exactly the canonical Level 1
+        // spawn, still marked canonical (the staleness re-probe keeps
+        // governing it).
+        let resolution = try Self.bunResolution(executablePath: "/synthetic/bun")
+        let composed = ACPBackend.effectiveAdapterSpawn(
+            configuredSpawn: canonical,
+            resolvedBun: resolution,
+            bundlePath: nil)
+        #expect(composed.spawn.executablePath == "/synthetic/bun")
+        #expect(
+            composed.spawn.arguments == ["x", "@agentclientprotocol/claude-agent-acp", "--foo"])
+        #expect(composed.usedCanonicalBun == true)
+        #expect(composed.bunResolutionUsed?.executableURL.path == "/synthetic/bun")
+    }
+
+    /// AC.4: the negative-cached nil resolution from a real backend instance
+    /// composes to the configured spawn — the vendored rewrite never applies
+    /// without a resolved bun (behavior unchanged from merged main).
+    @Test func unresolvedBunSkipsVendoredRewrite() async {
+        let backend = ACPBackend(
+            resolveBunRuntime: { nil },
+            vendoredBundlePath: { "/App.app/Contents/Helpers/claude-acp-adapter.js" })
+        let resolution = await backend.resolvedBunResolution()
+        #expect(resolution == nil)
+        let composed = ACPBackend.effectiveAdapterSpawn(
+            configuredSpawn: ACPBackend.AgentSpawnConfig(
+                executablePath: "/Users/me/.local/bin/npx",
+                arguments: ["@agentclientprotocol/claude-agent-acp"]),
+            resolvedBun: resolution,
+            bundlePath: "/App.app/Contents/Helpers/claude-acp-adapter.js")
+        #expect(composed.spawn.executablePath == "/Users/me/.local/bin/npx")
+        #expect(composed.spawn.arguments.first != "run")
+        #expect(composed.usedCanonicalBun == false)
+    }
+
+    /// AC.3 — the sandbox consequence that IS the point of the issue: the
+    /// vendored launch command (`<bun> run <Helpers>/claude-acp-adapter.js`)
+    /// matches no package-runner token, so `providerHomeSubpaths` layers NO
+    /// npm/bun home allowance, and the full wrapped seatbelt plan for that
+    /// command contains no `/.npm` or `/.bun` write allow. (`~/.claude` stays
+    /// allowed by the base profile — that is Claude Code's own state, not the
+    /// adapter's cache.)
+    @Test func vendoredCommandLayersNoHomeSubpaths() throws {
+        let bundle = "/App.app/Contents/Helpers/claude-acp-adapter.js"
+        let command = "/synthetic/bun run \(bundle)"
+        #expect(ACPBackend.providerHomeSubpaths(forCommand: command) == [])
+
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/synthetic/bun",
+            arguments: ["run", bundle],
+            environment: [:],
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch"))
+        let profilePayload = try #require(plan.arguments.first { $0.contains("(version 1)") })
+        #expect(profilePayload.contains("/.npm") == false)
+        #expect(profilePayload.contains("/.bun") == false)
+        #expect(plan.executablePath == SandboxProfile.sandboxExecutablePath)
+    }
 }
 #endif
 

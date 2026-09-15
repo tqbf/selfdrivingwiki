@@ -2,45 +2,111 @@ import Foundation
 import Testing
 @testable import WikiFSCore
 
-/// Regression tests for `HelpersLocation` bundle resolution.
-///
-/// The `wikid` daemon shipped as a bundled XPC service (#887), which changed
-/// its `Bundle.main` from the app bundle to `…/App.app/Contents/XPCServices/
-/// wikid.xpc`. A naive `Bundle.main.bundleURL/Contents/Helpers` then resolved
-/// to `wikid.xpc/Contents/Helpers` — where `build.sh` copies NO helpers — so
-/// bun/wikictl were unresolvable in the daemon and ACP ingestion failed with
-/// "‘bun’ was not found on your PATH". `enclosingAppBundleURL(from:)` walks up
-/// to the enclosing `.app` so nested bundles share the app-level Helpers dir.
-struct HelpersLocationTests {
+/// AC.5 (`plans/acp-adapter-vendoring.md`): the seam-injected core of
+/// `HelpersLocation.bundledHelperPath`. The production candidate directories
+/// derive from `Bundle.main` at call time and cannot be fixture-built inside
+/// a test process, so the internal overload takes the candidate directories
+/// and the FileManager explicitly; these tests pin the contract the public
+/// method must preserve — candidate priority, executability filtering, and
+/// nil when nothing resolves (the shape `WikiFSApp`'s vendored-adapter launch
+/// check and `AgentLauncher.bundledHelperPath` depend on).
+@Suite struct HelpersLocationTests {
+    private let fileManager = FileManager.default
 
-    @Test func enclosingApp_fromXPCService_walksUpToApp() {
-        // The exact nesting the XPC-service migration introduced.
-        let xpc = URL(fileURLWithPath:
-            "/Applications/Self Driving Wiki.app/Contents/XPCServices/wikid.xpc")
-        let app = HelpersLocation.enclosingAppBundleURL(from: xpc)
-        #expect(app?.path == "/Applications/Self Driving Wiki.app")
+    /// Build a fixture directory holding the named files, each marked
+    /// executable (`0o755`) or read-only (`0o644`). Cleanup is the caller's
+    /// job — `removeFixture` in a `defer` at test scope (a defer inside this
+    /// helper would fire before the test body runs).
+    private func makeFixtureDirectory(
+        _ files: [String: Bool]
+    ) throws -> URL {
+        let directory = fileManager.temporaryDirectory
+            .appending(path: "HelpersLocationTests-\(UUID().uuidString)")
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (name, executable) in files {
+            let fileURL = directory.appending(path: name)
+            try Data("#!/bin/sh\n".utf8).write(to: fileURL)
+            try fileManager.setAttributes(
+                [.posixPermissions: executable ? 0o755 : 0o644],
+                ofItemAtPath: fileURL.path)
+        }
+        return directory
     }
 
-    @Test func enclosingApp_fromAppBundle_returnsItself() {
-        // The main app process: Bundle.main IS the .app — behavior unchanged.
-        let app = URL(fileURLWithPath: "/Applications/Self Driving Wiki.app")
-        #expect(HelpersLocation.enclosingAppBundleURL(from: app)?.path
-                == "/Applications/Self Driving Wiki.app")
+    private func removeFixture(_ directory: URL) {
+        do {
+            try fileManager.removeItem(at: directory)
+        } catch {
+            Issue.record("fixture cleanup failed for \(directory.path): \(error)")
+        }
     }
 
-    @Test func enclosingApp_fromAppExtension_walksUpToApp() {
-        // The File Provider extension nests one level deeper under PlugIns.
-        let appex = URL(fileURLWithPath:
-            "/Applications/Self Driving Wiki.app/Contents/PlugIns/WikiFSFileProvider.appex")
-        #expect(HelpersLocation.enclosingAppBundleURL(from: appex)?.path
-                == "/Applications/Self Driving Wiki.app")
+    /// A non-executable candidate file is skipped: a helper the OS cannot
+    /// exec must not resolve (the production walk filters on
+    /// `isExecutableFile` for exactly this).
+    @Test func executabilityFilteringSkipsNonExecutableFiles() throws {
+        let appHelpers = try makeFixtureDirectory(["claude-acp-adapter.js": false])
+        defer { removeFixture(appHelpers) }
+        let resolved = HelpersLocation.bundledHelperPath(
+            "claude-acp-adapter.js",
+            candidateDirectories: [appHelpers],
+            fileManager: fileManager)
+        #expect(resolved == nil)
     }
 
-    @Test func enclosingApp_fromDevBuildDir_returnsNil() {
-        // `swift run` from `.build/debug/` has no `.app` ancestor — the caller
-        // falls back to Bundle.main / the executable-dir candidate.
-        let dev = URL(fileURLWithPath:
-            "/Users/dev/project/.build/debug")
-        #expect(HelpersLocation.enclosingAppBundleURL(from: dev) == nil)
+    /// The first candidate holding an EXECUTABLE copy wins — the app bundle's
+    /// Contents/Helpers shadows the dev `build/` copy.
+    @Test func candidatePriorityFirstExecutableWins() throws {
+        let appHelpers = try makeFixtureDirectory(["claude-acp-adapter.js": true])
+        let devBuild = try makeFixtureDirectory(["claude-acp-adapter.js": true])
+        let exeDirectory = try makeFixtureDirectory([:])
+        defer {
+            removeFixture(appHelpers)
+            removeFixture(devBuild)
+            removeFixture(exeDirectory)
+        }
+
+        let resolved = HelpersLocation.bundledHelperPath(
+            "claude-acp-adapter.js",
+            candidateDirectories: [appHelpers, devBuild, exeDirectory],
+            fileManager: fileManager)
+        #expect(resolved == appHelpers.appending(path: "claude-acp-adapter.js").path)
+
+        // A gap in the first candidate falls through to the next: the dev
+        // build/ copy resolves when the app bundle lacks the helper.
+        let resolvedFromDev = HelpersLocation.bundledHelperPath(
+            "claude-acp-adapter.js",
+            candidateDirectories: [exeDirectory, devBuild, appHelpers],
+            fileManager: fileManager)
+        #expect(resolvedFromDev == devBuild.appending(path: "claude-acp-adapter.js").path)
+    }
+
+    /// AC.5: the dev-build shape — a `build/` candidate holding the vendored
+    /// adapter (what `./build.sh` drops next to the dev binaries) resolves
+    /// for a `swift run` launch where no app bundle exists.
+    @Test func devBuildCandidateResolvesVendoredAdapter() throws {
+        let devBuild = try makeFixtureDirectory(["claude-acp-adapter.js": true])
+        defer { removeFixture(devBuild) }
+        let resolved = HelpersLocation.bundledHelperPath(
+            "claude-acp-adapter.js",
+            candidateDirectories: [devBuild],
+            fileManager: fileManager)
+        #expect(resolved == devBuild.appending(path: "claude-acp-adapter.js").path)
+    }
+
+    /// No candidate holds the helper → nil. `WikiFSApp`'s launch check warns
+    /// on exactly this outcome.
+    @Test func nilWhenNoCandidateHoldsTheHelper() throws {
+        let empty = try makeFixtureDirectory([:])
+        let wrongName = try makeFixtureDirectory(["wikictl": true])
+        defer {
+            removeFixture(empty)
+            removeFixture(wrongName)
+        }
+        let resolved = HelpersLocation.bundledHelperPath(
+            "claude-acp-adapter.js",
+            candidateDirectories: [empty, wrongName],
+            fileManager: fileManager)
+        #expect(resolved == nil)
     }
 }
