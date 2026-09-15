@@ -113,6 +113,11 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
     private let stdoutObserverQueue = DispatchQueue(label: "RaceFreeProcessGroupRunner.stdout-observer")
     private let exitState = ProcessGroupExitState()
     private let processSource: DispatchSourceProcess
+    /// Serial queue for pool-independent SIGKILL escalation: reaping a
+    /// completed protocol exchange must not wait for cooperative-pool
+    /// scheduling (#1286).
+    private let terminationEscalationQueue = DispatchQueue(
+        label: "RaceFreeProcessGroupRunner.termination-escalation")
 
     #if os(macOS)
     fileprivate init(request: RaceFreeProcessGroupRunner.Request) throws {
@@ -262,21 +267,87 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
     }
 
     public func terminateVerifiedGroup(gracePeriod: Duration = .milliseconds(250)) async throws {
-        try signalVerifiedGroup(SIGTERM)
+        signalVerifiedGroupIfAlive(SIGTERM)
         do {
             try await Task.sleep(for: gracePeriod)
         } catch is CancellationError {
-            try signalRemainingVerifiedGroup(SIGKILL)
+            signalRemainingVerifiedGroupIfAlive(SIGKILL)
             throw CancellationError()
         }
-        try signalRemainingVerifiedGroup(SIGKILL)
+        signalRemainingVerifiedGroupIfAlive(SIGKILL)
     }
 
     public func result(timeout: Duration) async throws -> ProcessGroupExecutionResult {
+        try await result(timeout: timeout, completion: nil)
+    }
+
+    /// Post-terminal-frame exit bound: the verified SIGKILL escalation makes
+    /// exit certain, so the bound only covers signal delivery.
+    private static let postCompletionExitGrace: Duration = .seconds(2)
+
+    /// Concludes the operation once the protocol's terminal frame has been
+    /// decoded: terminate through the verified path, then wait for exit
+    /// within a short bound. A natural exit that already happened wins
+    /// immediately.
+    private func concludeAfterProtocolCompletion(gracePeriod: Duration) async throws -> ProcessTerminationCause {
+        if let cause = exitState.cause { return cause }
+        try await terminateVerifiedGroup(gracePeriod: gracePeriod)
+        return try await exitState.wait(timeout: Self.postCompletionExitGrace)
+    }
+
+    /// Begins verified group termination on the calling thread — typically
+    /// the stdout observer queue, the instant a terminal frame is decoded.
+    /// The SIGTERM goes out synchronously, so no cooperative-pool scheduling
+    /// stands between a decoded terminal frame and the group's death, and
+    /// the verified SIGKILL escalation is scheduled on a dispatch queue so a
+    /// starved pool cannot delay reaping a completed exchange (#1286). Safe
+    /// to call after exit: identity verification and the escalation's exit
+    /// check make repeat calls no-ops.
+    public func beginVerifiedTermination(gracePeriod: Duration) {
+        signalVerifiedGroupIfAlive(SIGTERM)
+        let components = gracePeriod.components
+        let nanoseconds = Int(max(components.seconds, 0)) * 1_000_000_000
+            + Int(max(components.attoseconds / 1_000_000_000, 0))
+        terminationEscalationQueue.asyncAfter(deadline: .now() + .nanoseconds(nanoseconds)) { [weak self] in
+            self?.signalRemainingVerifiedGroupIfAlive(SIGKILL)
+        }
+    }
+
+    /// Waits for process exit and pipe drains. When `completion` is supplied
+    /// — signalled when the protocol's terminal frame is decoded — a
+    /// completion win concludes the operation through
+    /// `concludeAfterProtocolCompletion`, so a wrapper process that outlives
+    /// its terminal frame can never surface as a full-duration timeout.
+    /// Natural exit still wins when it happens first.
+    public func result(
+        timeout: Duration,
+        completion: AsyncStream<Void>?,
+        completionGracePeriod: Duration = .milliseconds(250)
+    ) async throws -> ProcessGroupExecutionResult {
         do {
             let clock = ContinuousClock()
             let deadline = clock.now.advanced(by: timeout)
-            let terminationCause = try await exitState.wait(timeout: timeout)
+            let terminationCause: ProcessTerminationCause
+            if let completion {
+                terminationCause = try await withThrowingTaskGroup(of: ProcessTerminationCause.self) { group in
+                    group.addTask { try await self.exitState.wait(timeout: timeout) }
+                    group.addTask {
+                        var iterator = completion.makeAsyncIterator()
+                        guard await iterator.next() != nil, !Task.isCancelled else {
+                            throw CancellationError()
+                        }
+                        return try await self.concludeAfterProtocolCompletion(
+                            gracePeriod: completionGracePeriod)
+                    }
+                    guard let first = try await group.next() else {
+                        throw RaceFreeProcessGroupError.timedOut
+                    }
+                    group.cancelAll()
+                    return first
+                }
+            } else {
+                terminationCause = try await exitState.wait(timeout: timeout)
+            }
             let remaining = clock.now.duration(to: deadline)
             guard remaining > .zero else { throw RaceFreeProcessGroupError.timedOut }
             try await withThrowingTaskGroup(of: Void.self) { group in
@@ -335,6 +406,25 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
         }
         guard kill(-processID, signal) == 0 || errno == ESRCH else {
             throw RaceFreeProcessGroupError.identityMismatch
+        }
+    }
+
+    /// Termination-path signaling: verified, but tolerant of a group that has
+    /// already ended. A verification failure here means there is nothing left
+    /// to signal — the child exited before the signal was sent, or its PID
+    /// was recycled — and skipping is always safe. Only a live, verified
+    /// group is signaled (#1286).
+    private func signalVerifiedGroupIfAlive(_ signal: Int32) {
+        do { try signalVerifiedGroup(signal) } catch {
+            DebugLog.extraction("RaceFreeProcessGroupRunner skipped signal \(signal) for PID \(processID): group already ended")
+        }
+    }
+
+    /// Escalation counterpart of `signalVerifiedGroupIfAlive`: no-ops when an
+    /// exit cause is recorded or the group can no longer be verified.
+    private func signalRemainingVerifiedGroupIfAlive(_ signal: Int32) {
+        do { try signalRemainingVerifiedGroup(signal) } catch {
+            DebugLog.extraction("RaceFreeProcessGroupRunner skipped escalation signal \(signal) for PID \(processID): group already ended")
         }
     }
 

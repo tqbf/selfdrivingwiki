@@ -170,7 +170,7 @@ do {
 }
 
 switch mode {
-case "success", "environment", "linger":
+case "success", "environment", "linger", "linger-stubborn":
     let markdown: String
     if mode == "environment" {
         let environment = ProcessInfo.processInfo.environment
@@ -213,6 +213,14 @@ case "success", "environment", "linger":
     // must treat the terminal frame as completion and reap the group.
     // alarm(2) is the failsafe when no supervisor ever reaps it (#1259).
     if mode == "linger" {
+        alarm(600)
+        while true { _ = Darwin.pause() }
+    }
+    if mode == "linger-stubborn" {
+        // Ignores SIGTERM so only the host's verified SIGKILL escalation
+        // can reap the group — proves the post-terminal-frame escalation
+        // path (#1286).
+        signal(SIGTERM, SIG_IGN)
         alarm(600)
         while true { _ = Darwin.pause() }
     }

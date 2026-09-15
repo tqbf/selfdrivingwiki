@@ -582,22 +582,9 @@ enum GeneratedPluginFixtures {
         }
 
         private static func findFixtureExecutable() throws -> URL {
-            let repositoryRoot = URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-            let buildRoot = repositoryRoot.appendingPathComponent(".build", isDirectory: true)
-            let enumerator = FileManager.default.enumerator(
-                at: buildRoot,
-                includingPropertiesForKeys: [.isExecutableKey],
-                options: [.skipsHiddenFiles, .skipsPackageDescendants])
-            while let candidate = enumerator?.nextObject() as? URL {
-                if candidate.lastPathComponent == "ManagedExtractorFixture",
-                   FileManager.default.isExecutableFile(atPath: candidate.path) {
-                    return candidate
-                }
-            }
-            throw EnvironmentError.missingFixtureExecutable
+            try ManagedExtractorFixtureLocator.locate(
+                name: "ManagedExtractorFixture",
+                repositoryRootFilePath: #filePath)
         }
     }
 }

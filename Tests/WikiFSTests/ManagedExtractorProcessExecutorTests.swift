@@ -193,6 +193,28 @@ struct ManagedExtractorProcessExecutorTests {
         }
     }
 
+    /// A wrapper that ignores SIGTERM after its terminal frame must still be
+    /// reaped by the verified SIGKILL escalation, well inside the operation
+    /// limit — the terminal frame remains the operation's completion (#1286).
+    @Test func terminalFrameEscalatesToSIGKILLWhenSIGTERMIsIgnored() async throws {
+        let fixture = try Fixture(mode: "linger-stubborn", maximumDurationMilliseconds: 30_000)
+        defer { fixture.cleanup() }
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        let result = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+        let elapsed = clock.now - start
+
+        #expect(try String(contentsOf: fixture.outputURL, encoding: .utf8) == "# Fixture\n")
+        // SIGTERM is ignored, so the run ends at the SIGKILL escalation —
+        // grace period plus delivery, well under the 30 s deadline.
+        #expect(elapsed < .seconds(10))
+        guard case .signaled = result.terminationCause else {
+            Issue.record("expected .signaled, got \(result.terminationCause)")
+            return
+        }
+    }
+
     /// Issue #1217: the production login-shell resolution and real bun runtime
     /// preserve terminal-frame completion and process-group cleanup.
     @Test func bunRuntimeCompletesTerminalFrameAndReapsChild() async throws {
@@ -903,22 +925,9 @@ private final class Fixture: @unchecked Sendable {
     }
 
     private static func fixtureExecutable() throws -> URL {
-        let repositoryRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let buildRoot = repositoryRoot.appendingPathComponent(".build", isDirectory: true)
-        let enumerator = FileManager.default.enumerator(
-            at: buildRoot,
-            includingPropertiesForKeys: [.isExecutableKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants])
-        while let candidate = enumerator?.nextObject() as? URL {
-            if candidate.lastPathComponent == "ManagedExtractorFixture",
-               FileManager.default.isExecutableFile(atPath: candidate.path) {
-                return candidate
-            }
-        }
-        throw TestFailure("ManagedExtractorFixture is missing")
+        try ManagedExtractorFixtureLocator.locate(
+            name: "ManagedExtractorFixture",
+            repositoryRootFilePath: #filePath)
     }
 }
 

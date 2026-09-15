@@ -200,6 +200,12 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         let input = try encodeRequest(operation.protocolRequest)
         let cancellationSlot = ManagedProcessCancellationSlot(
             gracePeriod: operation.cancellationGracePeriod)
+        // Terminal-frame completion latch: `onCompletion`/`onFailure` begin
+        // verified group termination synchronously and unblock
+        // `handle.result`, so a completed protocol exchange concludes the
+        // operation even when the wrapper process outlives it (#1286).
+        let (completionStream, completionContinuation) = AsyncStream<Void>.makeStream(
+            bufferingPolicy: .bufferingNewest(1))
         // Progress tracking for timeout diagnostics: the last progress line
         // and when it arrived tell a user which phase hung without a debugger.
         let progressClock = ContinuousClock()
@@ -289,7 +295,7 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             diagnostics.send(ManagedExtractorDiagnostics.Event.sandboxApplied(
                 networkDenied: networkDenied).consoleLine)
             #endif
-            cancellationSlot.install(handle)
+            cancellationSlot.install(handle, completion: completionContinuation)
         } catch let error as RaceFreeProcessGroupError {
             diagnostics.send(ManagedExtractorDiagnostics.Event.spawnFailure(
                 command: launch.commandDescription,
@@ -302,7 +308,10 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         let timeout = effectiveTimeout(operation)
         let execution: ProcessGroupExecutionResult
         do {
-            execution = try await handle.result(timeout: timeout)
+            execution = try await handle.result(
+                timeout: timeout,
+                completion: completionStream,
+                completionGracePeriod: operation.cancellationGracePeriod)
         } catch is CancellationError {
             throw ManagedExtractorProcessError.cancellation
         } catch RaceFreeProcessGroupError.timedOut {
@@ -622,23 +631,30 @@ private struct ManagedLaunch: Sendable {
     let launchesHostExecutable: Bool
 }
 
-// NSLock protects all mutable state (`handle`, `terminationRequested`,
-// `terminationTask`); every read and write holds the lock, and the termination
-// task body never re-enters the slot's state.
+// NSLock protects all mutable state (`handle`, `completion`,
+// `terminationRequested`, `terminationStarted`); every read and write holds
+// the lock, and the termination actions run outside it.
 // swiftlint:disable:next unchecked_sendable
 private final class ManagedProcessCancellationSlot: @unchecked Sendable {
     private let lock = NSLock()
     private let gracePeriod: Duration
     private var handle: RaceFreeProcessGroupHandle?
+    private var completion: AsyncStream<Void>.Continuation?
     private var terminationRequested = false
-    private var terminationTask: Task<Void, Never>?
+    private var terminationStarted = false
 
     init(gracePeriod: Duration) {
         self.gracePeriod = gracePeriod
     }
 
-    func install(_ handle: RaceFreeProcessGroupHandle) {
-        lock.withLock { self.handle = handle }
+    func install(
+        _ handle: RaceFreeProcessGroupHandle,
+        completion: AsyncStream<Void>.Continuation
+    ) {
+        lock.withLock {
+            self.handle = handle
+            self.completion = completion
+        }
         startTerminationIfReady()
     }
 
@@ -648,22 +664,25 @@ private final class ManagedProcessCancellationSlot: @unchecked Sendable {
     }
 
     private func startTerminationIfReady() {
-        lock.withLock {
+        let prepared = lock.withLock { () -> (RaceFreeProcessGroupHandle, AsyncStream<Void>.Continuation)? in
             guard terminationRequested,
-                  terminationTask == nil,
-                  let handle else { return }
-            terminationTask = Task {
-                do {
-                    try await handle.terminateVerifiedGroup(gracePeriod: gracePeriod)
-                } catch {
-                    DebugLog.extraction("Managed extractor protocol failure cleanup was refused")
-                }
-            }
+                  !terminationStarted,
+                  let handle,
+                  let completion else { return nil }
+            terminationStarted = true
+            return (handle, completion)
         }
+        guard let prepared else { return }
+        // Synchronous verified SIGTERM plus dispatch-scheduled SIGKILL
+        // escalation, and the completion latch that unblocks
+        // `handle.result`: no cooperative-pool Task stands between a decoded
+        // terminal frame and the operation's conclusion (#1286).
+        prepared.0.beginVerifiedTermination(gracePeriod: gracePeriod)
+        prepared.1.yield(())
     }
 
     deinit {
-        terminationTask?.cancel()
+        completion?.finish()
     }
 }
 
