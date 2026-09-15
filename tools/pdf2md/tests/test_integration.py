@@ -12,6 +12,7 @@ tests/test_vlm.py.  Those tests are slow and require a real PDF on disk.
 from __future__ import annotations
 
 import json
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -23,12 +24,22 @@ _SCRIPT_PATH = Path(__file__).resolve().parent.parent / "pdf2md"
 assert _SCRIPT_PATH.exists(), f"pdf2md script not found at {_SCRIPT_PATH}"
 _pdf2md = SourceFileLoader("pdf2md", str(_SCRIPT_PATH)).load_module()
 
+# The default pipeline is `vlm`, which docling services through mlx-vlm — an
+# Apple-Silicon-only dependency (MLX has no Linux build). Tests that exercise
+# the default pipeline therefore can only run on macOS; on Linux CI they are
+# skipped here and covered by the laptop run required by tools/pdf2md/AGENTS.md.
+_requires_default_vlm = pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="default VLM pipeline requires mlx-vlm (Apple Silicon/macOS only)",
+)
+
 
 # ── CLI: stdout path ──────────────────────────────────────────────────────
 # The code path PdfExtractionService.run() exercises — pdf2md writes
 # markdown to stdout, which the Swift side reads through a pipe.
 
 
+@_requires_default_vlm
 class TestCLIStdout:
     """Test that main() writes markdown to stdout."""
 
@@ -81,6 +92,7 @@ class TestCLIJSONMode:
     --json always writes to stdout (the -o flag is ignored for JSON), so these
     capture stdout."""
 
+    @_requires_default_vlm
     def test_json_output_is_valid(self, minimal_pdf, capsys):
         _pdf2md.main(argv=["--json", str(minimal_pdf)])
         data = json.loads(capsys.readouterr().out.strip())
@@ -91,6 +103,7 @@ class TestCLIJSONMode:
         assert data["char_count"] > 0
         assert data["line_count"] > 0
 
+    @_requires_default_vlm
     def test_json_output_default_pipeline(self, minimal_pdf, capsys):
         _pdf2md.main(argv=["--json", str(minimal_pdf)])
         data = json.loads(capsys.readouterr().out.strip())
@@ -105,6 +118,7 @@ class TestCLIJSONMode:
 # ── CLI: file output ──────────────────────────────────────────────────────
 
 
+@_requires_default_vlm
 class TestCLIOutputFile:
     """Test --output writes markdown to a file."""
 
