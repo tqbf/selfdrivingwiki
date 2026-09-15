@@ -41,7 +41,7 @@ Three properties follow from shipping the bundle:
 
 | Path | Role | Hand-edited? |
 | --- | --- | --- |
-| `scripts/sync-acp-adapter.sh` | The generator + gate. Holds `ADAPTER_VERSION` — **the only hand-edited version anywhere.** | version variable only |
+| `scripts/sync-acp-adapter.sh` | The generator + gate. Holds `ADAPTER_VERSION` + the dist identity constants — the only hand-edited version source anywhere. | version variables only |
 | `tools/claude-acp-adapter/package.json` | Vendor pin; dependency written by the sync script. | never (generated) |
 | `tools/claude-acp-adapter/bun.lock` | The installed-bytes contract (`bun install --frozen-lockfile`). | never |
 | `tools/claude-acp-adapter/build.mjs` | `bun install` + `bun build --target=bun` → the bundle. | build logic only |
@@ -65,8 +65,10 @@ Three properties follow from shipping the bundle:
 - Bundle: single-file `bun build --target=bun`, 146 modules, byte-identical
   when rebuilt from the same repo-relative directory (bun embeds input paths
   as comments — same fixed-dir discipline as `scripts/sync-extractor-packages.sh`).
-  The bundle is **not** minified: it is a reviewed artifact, like
-  `markdownlint.bundle.js` and the extractor bundles.
+  The bundle is **not** minified, and its bytes are committed exactly as bun
+  emitted them (a few whitespace-only blank lines and all — deliberate: the
+  digest pins the bundler's canonical output, and no repo gate runs
+  `git diff --check`).
 
 ## Reproduction recipe
 
@@ -84,19 +86,28 @@ metadata above.
 ## Gate and bump procedure
 
 `make acp-adapter` runs `scripts/sync-acp-adapter.sh --check` (no network, no
-bun): it re-derives every generated value from the script's version variables
-and fails on a hand-edited bundle, a changed version variable, or records that
-disagree. It is a prerequisite of `check`, `build`, `release`,
-`check-release`, and `test` — the same targets `extractor-packages` gates.
-The gate deliberately does NOT regenerate; a stale tree must be re-synced and
-reviewed, not silently rebuilt.
+bun) in two layers. First it re-derives every generated value from the
+script's constants and compares against the tree — including the dist
+identity, compared EXACTLY against the `ADAPTER_DIST_INTEGRITY` /
+`ADAPTER_DIST_SHASUM` constants. Then it re-renders all three generated
+records with the same writer code and byte-compares them with the committed
+files, so ANY hand edit (an extra key, a changed comment, formatting drift)
+fails even where a value check would pass. It is a prerequisite of `check`,
+`build`, `release`, `check-release`, and `test` — the same targets
+`extractor-packages` gates. The gate deliberately does NOT regenerate; a
+stale tree must be re-synced and reviewed, not silently rebuilt.
 
 Adapter bump:
 
-1. Change `ADAPTER_VERSION` in `scripts/sync-acp-adapter.sh`.
+1. Change `ADAPTER_VERSION` and fill `ADAPTER_DIST_INTEGRITY` /
+   `ADAPTER_DIST_SHASUM` (`npm view <pkg>@<version> dist.integrity
+   dist.shasum`) in `scripts/sync-acp-adapter.sh`.
 2. `make acp-adapter-sync` — rewrites `package.json`, the Swift pin,
    `bun.lock` (plain `bun install`, since the pin changed), the bundle, and
-   `adapter.lock.json`; fetches the new dist metadata from the registry.
+   `adapter.lock.json`. When the registry is reachable, sync cross-checks
+   the constants against the live packument and hard-errors on a mismatch
+   (a mis-copied constant, or a registry-side surprise for the same
+   version); a bump with an unreachable registry is a hard error.
 3. Review the generated diff (lock JSON, package.json, Swift pin, bundle).
 4. Run the gates; `tools/claude-acp-adapter/verify.mjs` re-proves the
    handshake.
@@ -104,7 +115,8 @@ Adapter bump:
    compatibility contract.
 
 Never hand-edit a generated record — the gate fails by design, and
-`AdapterVendoringLockTests` re-checks the records from Swift.
+`AdapterVendoringLockTests` re-checks the records from Swift (including the
+dist fields against the script's constants).
 
 ## Launch rewrite (ACPBackend)
 

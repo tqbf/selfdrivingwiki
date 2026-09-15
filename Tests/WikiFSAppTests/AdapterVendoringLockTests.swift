@@ -71,17 +71,36 @@ import Testing
     }
 
     /// The provenance metadata is complete and internally consistent: the
-    /// canonical npm tarball URL for the pinned version, a SHA-512 dist
-    /// integrity, the legacy hex SHA-1 shasum, the adapter's bin entry point,
-    /// and the committed bundle path it names.
+    /// canonical npm tarball URL for the pinned version, the dist identity
+    /// AUTHORED in the sync script's constants (exact comparison — a
+    /// format-valid but wrong hand edit of the committed record fails here
+    /// too), the adapter's bin entry point, and the committed bundle path it
+    /// names.
     @Test func provenanceMetadataIsCompleteAndConsistent() throws {
         let lock = try loadLock()
         #expect(lock.entryPoint == "dist/index.js")
         #expect(
             lock.tarballURL
                 == "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-\(lock.version).tgz")
-        #expect(lock.distIntegrity.hasPrefix("sha512-"))
-        #expect(lock.distShasum.count == 40)
+        let script = try String(
+            contentsOf: repositoryRoot.appending(
+                path: "scripts/sync-acp-adapter.sh"), encoding: .utf8)
+        let scriptLines = script.components(separatedBy: .newlines)
+        let distFields: [(KeyPath<AdapterLock, String>, String)] = [
+            (\AdapterLock.distIntegrity, "ADAPTER_DIST_INTEGRITY"),
+            (\AdapterLock.distShasum, "ADAPTER_DIST_SHASUM"),
+        ]
+        for (keyPath, constantName) in distFields {
+            let constantLine = try #require(
+                scriptLines.first { $0.hasPrefix("\(constantName)=") },
+                "sync script must define \(constantName)")
+            let pieces = constantLine.split(
+                separator: "\"", omittingEmptySubsequences: true)
+            let expected = String(try #require(pieces.last))
+            #expect(
+                lock[keyPath: keyPath] == expected,
+                "lock \(constantName) must equal the constant in the sync script")
+        }
         #expect(lock.bundle == "Resources/claude-acp-adapter.bundle.js")
         #expect(
             FileManager.default.fileExists(

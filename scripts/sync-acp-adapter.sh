@@ -16,10 +16,12 @@
 #                     Sources/WikiFSEngine/VendoredAdapterPin.swift (compile-time pin)
 #                     tools/claude-acp-adapter/adapter.lock.json   (provenance record)
 #
-# To bump the adapter: change ADAPTER_VERSION, run `make acp-adapter-sync`,
-# review the generated diff (lock JSON, package.json, Swift pin, bundle),
-# then run the gates. Never hand-edit the generated records — a hand edit
-# makes `--check` fail by design.
+# To bump the adapter: change ADAPTER_VERSION, fill ADAPTER_DIST_INTEGRITY /
+# ADAPTER_DIST_SHASUM from `npm view <pkg>@<version> dist.integrity
+# dist.shasum`, run `make acp-adapter-sync`, review the generated diff (lock
+# JSON, package.json, Swift pin, bundle), then run the gates. Never
+# hand-edit the generated records — a hand edit makes `--check` fail by
+# design.
 #
 # How the gate works
 # ------------------
@@ -59,6 +61,13 @@ fi
 
 ADAPTER_PACKAGE="@agentclientprotocol/claude-agent-acp"
 ADAPTER_VERSION="0.77.0"
+# The npm dist identity for ADAPTER_VERSION, part of the same source of
+# truth: on a bump, fill both from `npm view <pkg>@<version> dist.integrity
+# dist.shasum`. sync cross-checks them against the live registry whenever it
+# can reach it; --check compares the committed record against these constants
+# EXACTLY (a format-valid but wrong hand edit of the lock's dist fields fails).
+ADAPTER_DIST_INTEGRITY="sha512-m8mhsAOc5+m/QZNsKCrfyIRv4KQrCLqSYHZP/aUvL3X0Xn0f9n4wKKNpOpOv0Kblh/2Mkpd4SW0KypN1dZkJfg=="
+ADAPTER_DIST_SHASUM="ca57cfccd59a0057c6f81f4bde5dfbd90479950d"
 ADAPTER_ENTRY_POINT="dist/index.js"
 BUNDLE_NAME="claude-acp-adapter.js"
 
@@ -85,11 +94,16 @@ bun_available() {
   run_bun --version >/dev/null 2>&1
 }
 
-# ── Generated-record writers (compare-then-write: a no-op sync changes
-#    nothing on disk) ──────────────────────────────────────────────────────
+# ── Generated-record writers ─────────────────────────────────────────────
+#
+# Each writer takes its OUTPUT path as $1 (compare-then-write: a no-op sync
+# changes nothing on disk). sync calls them with the real tree paths; --check
+# calls them with temp paths and byte-compares, so the committed records must
+# match their generated form EXACTLY (an extra key, a changed comment, any
+# hand edit at all fails).
 
 write_package_json() {
-  python3 - "$PACKAGE_JSON" "$ADAPTER_PACKAGE" "$ADAPTER_VERSION" <<'PY'
+  python3 - "$1" "$ADAPTER_PACKAGE" "$ADAPTER_VERSION" <<'PY'
 import json, sys
 
 path, spec, version = sys.argv[1:4]
@@ -120,7 +134,7 @@ PY
 }
 
 write_pin_swift() {
-  python3 - "$PIN_SWIFT" "$ADAPTER_PACKAGE" "$ADAPTER_VERSION" "$BUNDLE_NAME" <<'PY'
+  python3 - "$1" "$ADAPTER_PACKAGE" "$ADAPTER_VERSION" "$BUNDLE_NAME" <<'PY'
 import os, sys
 
 path, spec, version, bundle_name = sys.argv[1:5]
@@ -161,9 +175,10 @@ if content != current:
 PY
 }
 
-# $1 = dist.integrity (SHA-512, "sha512-…" form), $2 = legacy dist.shasum.
+# $1 = output path; $2 = dist.integrity; $3 = dist.shasum. The digest inputs
+# are always the REAL tree files (the record describes the committed bytes).
 write_lock_json() {
-  python3 - "$LOCK_JSON" "$ADAPTER_PACKAGE" "$ADAPTER_VERSION" "$ADAPTER_ENTRY_POINT" "$TARBALL_URL" "$BUNDLE" "$PACKAGE_JSON" "$LOCKFILE" "$1" "$2" <<'PY'
+  python3 - "$1" "$ADAPTER_PACKAGE" "$ADAPTER_VERSION" "$ADAPTER_ENTRY_POINT" "$TARBALL_URL" "$BUNDLE" "$PACKAGE_JSON" "$LOCKFILE" "$2" "$3" <<'PY'
 import hashlib, json, os, sys
 
 path, package, version, entry, tarball, bundle, package_json, lockfile, integrity, shasum = sys.argv[1:11]
@@ -216,32 +231,31 @@ if [[ "$MODE" == "sync" ]]; then
     version_changed=true
   fi
 
-  write_package_json
-  write_pin_swift
+  write_package_json "$PACKAGE_JSON"
+  write_pin_swift "$PIN_SWIFT"
 
-  # The two dist fields --check cannot re-derive locally. Fetched from the
-  # npm packument; reused from the committed record only when the pinned
-  # version is unchanged (the metadata stays valid for the same tarball).
+  # The dist identity is AUTHORED here (constants above) and cross-checked
+  # against the live registry whenever it is reachable — so a mistyped
+  # constant (or a registry-side surprise for the same version) is caught at
+  # sync time, and --check can verify the committed record against the
+  # constants EXACTLY with no network.
   encoded_spec="${ADAPTER_PACKAGE//\//%2F}"
-  dist_integrity=""
-  dist_shasum=""
   packument="$(curl -fsSL --max-time 30 "${REGISTRY_URL}/${encoded_spec}/${ADAPTER_VERSION}" 2>/dev/null || true)"
   if [[ -n "$packument" ]]; then
-    dist_integrity="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["dist"]["integrity"])' <<<"$packument")"
-    dist_shasum="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["dist"]["shasum"])' <<<"$packument")"
-  elif [[ "$version_changed" == false && -f "$LOCK_JSON" ]]; then
-    dist_integrity="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("distIntegrity",""))' "$LOCK_JSON" 2>/dev/null || true)"
-    dist_shasum="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("distShasum",""))' "$LOCK_JSON" 2>/dev/null || true)"
-    if [[ -n "$dist_integrity" && -n "$dist_shasum" ]]; then
-      echo "note: npm registry unreachable — reusing the committed dist metadata for ${ADAPTER_VERSION}" >&2
+    registry_integrity="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["dist"]["integrity"])' <<<"$packument" 2>/dev/null || true)"
+    registry_shasum="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["dist"]["shasum"])' <<<"$packument" 2>/dev/null || true)"
+    if [[ "$registry_integrity" != "$ADAPTER_DIST_INTEGRITY" || "$registry_shasum" != "$ADAPTER_DIST_SHASUM" ]]; then
+      echo "error: registry metadata for ${ADAPTER_PACKAGE}@${ADAPTER_VERSION} disagrees with the constants in this script" >&2
+      echo "       constants : integrity=${ADAPTER_DIST_INTEGRITY:0:20}… shasum=${ADAPTER_DIST_SHASUM:0:12}…" >&2
+      echo "       registry  : integrity=${registry_integrity:0:20}… shasum=${registry_shasum:0:12}…" >&2
+      echo "       fix ADAPTER_DIST_INTEGRITY / ADAPTER_DIST_SHASUM (npm view), then re-run" >&2
+      exit 1
     fi
-  fi
-  if [[ -z "$dist_integrity" || -z "$dist_shasum" ]]; then
-    echo "error: could not obtain npm dist metadata for ${ADAPTER_PACKAGE}@${ADAPTER_VERSION}" >&2
-    if [[ "$version_changed" == true ]]; then
-      echo "       the version changed (${committed_version:-<none>} → ${ADAPTER_VERSION}); a bump needs the network" >&2
-    fi
+  elif [[ "$version_changed" == true ]]; then
+    echo "error: the version changed (${committed_version:-<none>} → ${ADAPTER_VERSION}) and the registry is unreachable — a bump needs the network to confirm the new dist identity" >&2
     exit 1
+  else
+    echo "note: npm registry unreachable — using the script's dist constants for the unchanged pin ${ADAPTER_VERSION}" >&2
   fi
 
   bundle_state="rebuilt"
@@ -268,20 +282,34 @@ if [[ "$MODE" == "sync" ]]; then
     fi
   fi
 
-  write_lock_json "$dist_integrity" "$dist_shasum"
+  write_lock_json "$LOCK_JSON" "$ADAPTER_DIST_INTEGRITY" "$ADAPTER_DIST_SHASUM"
   echo "✓ acp adapter synced (${ADAPTER_PACKAGE}@${ADAPTER_VERSION}, bundle ${bundle_state})"
   exit 0
 fi
 
 # ── check (no network, no bun) ───────────────────────────────────────────
+#
+# Two layers:
+# 1. A python pass re-derives every generated VALUE from the constants and
+#    compares against the tree — precise per-field error messages.
+# 2. The writers then re-render all three generated records into a temp dir
+#    and BYTE-compare them with the committed files — the exhaustive
+#    backstop that catches any hand edit the value checks would miss
+#    (extra keys, changed comments, formatting drift).
 
-# One python pass re-derives every generated value from the version
-# variables and compares against the tree; each mismatch prints and counts.
+status=0
+render_fail() {
+  echo "error: $1" >&2
+  echo "       run: scripts/sync-acp-adapter.sh" >&2
+  status=1
+}
+
 python3 - "$LOCK_JSON" "$PACKAGE_JSON" "$LOCKFILE" "$BUNDLE" "$PIN_SWIFT" \
-  "$ADAPTER_PACKAGE" "$ADAPTER_VERSION" "$ADAPTER_ENTRY_POINT" "$TARBALL_URL" "$BUNDLE_NAME" <<'PY'
-import hashlib, json, re, sys
+  "$ADAPTER_PACKAGE" "$ADAPTER_VERSION" "$ADAPTER_ENTRY_POINT" "$TARBALL_URL" "$BUNDLE_NAME" \
+  "$ADAPTER_DIST_INTEGRITY" "$ADAPTER_DIST_SHASUM" <<'PY'
+import hashlib, json, sys
 
-lock_json, package_json, lockfile, bundle, pin_swift, spec, version, entry, tarball, bundle_name = sys.argv[1:11]
+lock_json, package_json, lockfile, bundle, pin_swift, spec, version, entry, tarball, bundle_name, integrity, shasum = sys.argv[1:13]
 failures = []
 
 def fail(message, hint="scripts/sync-acp-adapter.sh"):
@@ -317,12 +345,12 @@ if lock is not None:
         fail(f"{lock_json} entryPoint is {lock.get('entryPoint')!r}, expected {entry!r}")
     if lock.get("tarballURL") != tarball:
         fail(f"{lock_json} tarballURL does not match the canonical registry URL for {version}")
-    integrity = lock.get("distIntegrity", "")
-    if not re.fullmatch(r"sha512-[A-Za-z0-9+/=]{86,88}", integrity):
-        fail(f"{lock_json} distIntegrity is not a base64 SHA-512 (got {integrity[:20]!r}…)")
-    shasum = lock.get("distShasum", "")
-    if not re.fullmatch(r"[0-9a-f]{40}", shasum):
-        fail(f"{lock_json} distShasum is not a hex SHA-1")
+    # Exact comparison against the authored constants: a format-valid but
+    # wrong dist identity in the committed record fails here.
+    if lock.get("distIntegrity") != integrity:
+        fail(f"{lock_json} distIntegrity does not match ADAPTER_DIST_INTEGRITY")
+    if lock.get("distShasum") != shasum:
+        fail(f"{lock_json} distShasum does not match ADAPTER_DIST_SHASUM")
 
     digests = lock.get("fileDigests")
     if not isinstance(digests, dict) or not digests:
@@ -374,5 +402,28 @@ if failures:
         file=sys.stderr,
     )
     sys.exit(1)
-print("✓ acp adapter records are current")
+print("✓ acp adapter record values are current")
 PY
+
+# Layer 2 — byte-exact render comparison. The writers run with temp output
+# paths; every generated record must equal its generated form.
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+
+write_package_json "${STAGE}/package.json"
+write_pin_swift "${STAGE}/VendoredAdapterPin.swift"
+write_lock_json "${STAGE}/adapter.lock.json" "$ADAPTER_DIST_INTEGRITY" "$ADAPTER_DIST_SHASUM"
+
+for record in "package.json:$PACKAGE_JSON" "VendoredAdapterPin.swift:$PIN_SWIFT" "adapter.lock.json:$LOCK_JSON"; do
+  rendered="${record%%:*}"
+  committed="${record#*:}"
+  if ! cmp -s "${STAGE}/${rendered}" "$committed"; then
+    render_fail "$committed does not match its generated form (hand-edited, or stale generation)"
+  fi
+done
+
+if [[ $status -ne 0 ]]; then
+  echo "✗ acp adapter records are stale or disagreeing" >&2
+  exit 1
+fi
+echo "✓ acp adapter records are current"

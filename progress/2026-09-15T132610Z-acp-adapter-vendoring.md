@@ -111,3 +111,37 @@ Decisions:
 - Remaining for the PR: `make build` + `codesign -dv` on the staged helper
   (AC.5's packaged-app observable), manual
   `FreshMachineVendoredClaudeACPScenario` (flagged operator validation).
+
+## Implementation review
+
+Dispatched per the plan: `general-purpose` subagent, read-only diff review,
+reported its family as **GPT/OpenAI** (review-model-diversity: GLM authored,
+GPT-family reviewed — cross-family holds). Verdict: request-changes; all
+four findings addressed:
+
+- **MEDIUM (fixed):** offline sync previously reused the committed lock's
+  dist fields when the registry was unreachable, so a format-valid but wrong
+  hand edit could be blessed. `ADAPTER_DIST_INTEGRITY` /
+  `ADAPTER_DIST_SHASUM` are now authored constants in the sync script (same
+  single source of truth); sync cross-checks them against the live registry
+  when reachable (hard error on mismatch; a bump with an unreachable
+  registry is a hard error); `--check` compares the committed lock's dist
+  fields against the constants EXACTLY. Verified: a hand-edited
+  format-valid `distIntegrity` now fails `--check`.
+- **LOW (fixed):** `--check` gained a second layer — the writers re-render
+  all three generated records into a temp dir and byte-compare with the
+  committed files, so extra keys / changed comments / formatting drift fail
+  (verified with an injected `sneakyExtra` key and an edited pin comment).
+- **LOW (fixed):** added `vendoredAdapterRewriteRejectsNonCanonicalShapes`
+  (no argv, `x` without spec, already-`run` argv, non-`bun` executable,
+  empty spec) and hardened `AdapterVendoringLockTests.provenanceMetadata…`
+  to compare the lock's dist fields against the script's constants.
+- **NIT (rebutted):** trailing whitespace on 4 whitespace-only blank lines
+  of the generated bundle. Left as bun emitted them: the digest pins the
+  bundler's canonical output, normalizing would add a post-processing step
+  between bun and the reviewed bytes for zero functional gain, and no repo
+  gate runs `git diff --check`. Documented in the plan doc.
+
+Post-fix verification: `--check` fresh → 0; tampered dist field / extra key /
+edited pin comment → 1; restored → 0. `AdapterVendoringLockTests` +
+`ACPWiringTests` (now 8 Level 2 tests) pass. `make lint` clean.

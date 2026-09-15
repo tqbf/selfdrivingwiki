@@ -933,6 +933,30 @@ import ACPModel
         #expect(ACPBackend.vendoredAdapterRewrite(otherPackage, bundlePath: bundle) == nil)
     }
 
+    /// AC.2: shapes the rewrite must reject even with the vendored spec
+    /// present — no argv, head without a spec, an already-`run` argv, a
+    /// non-`bun` executable (bunx basename), and an empty spec — each keeps
+    /// the Level 1 result rather than being rewritten.
+    @Test func vendoredAdapterRewriteRejectsNonCanonicalShapes() {
+        let bundle = "/bundled/claude-acp-adapter.js"
+        let spec = VendoredAdapterPin.vendoredAdapterPackageSpec
+        let shapes: [(String, [String])] = [
+            ("/synthetic/bun", []),
+            ("/synthetic/bun", ["x"]),
+            ("/synthetic/bun", ["run", spec]),
+            ("/usr/local/bin/bunx", ["x", spec]),
+            ("/synthetic/bun", ["x", ""]),
+        ]
+        for shape in shapes {
+            let spawn = ACPBackend.AgentSpawnConfig(
+                executablePath: shape.0,
+                arguments: shape.1)
+            #expect(
+                ACPBackend.vendoredAdapterRewrite(spawn, bundlePath: bundle) == nil,
+                "\(shape.0) \(shape.1.joined(separator: " ")) must not be rewritten")
+        }
+    }
+
     /// AC.2: a nil (or empty) bundle path keeps the Level 1 result — the
     /// bundle is simply not bundled, and the canonical package-runner launch
     /// still works.
