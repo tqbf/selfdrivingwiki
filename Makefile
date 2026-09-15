@@ -133,7 +133,8 @@ NOTES_FILE       ?=
         signing-preflight signing-status signing-repair signing-repair-dry-run \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts \
-        version keychain mutate mutate-scope check-mutate-tool lint lint-baseline lint-analyze hooks
+        version keychain mutate mutate-scope check-mutate-tool lint lint-baseline lint-analyze hooks \
+        acp-adapter acp-adapter-sync
 
 all: build
 
@@ -247,7 +248,7 @@ icon: $(APP_ICON)
 # signing/local.config (a new laptop infers all of it from the Apple account),
 # and GeneratedKeychain.swift is derived from that file. Prerequisites run left
 # to right in a serial make, so the generator sees the repaired config.
-build: signing-preflight deps $(APP_ICON) prompts version keychain extractor-packages
+build: signing-preflight deps $(APP_ICON) prompts version keychain extractor-packages acp-adapter
 	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
 
 # Release signs with DIST_IDENTITY (Developer ID Application) so every nested
@@ -256,11 +257,11 @@ build: signing-preflight deps $(APP_ICON) prompts version keychain extractor-pac
 # hardened runtime + timestamp for notarization. The old code passed
 # DEV_IDENTITY here, which signed release builds with the Apple Development
 # cert → notarytool rejected it and Gatekeeper rejected it on other machines.
-release: deps $(APP_ICON) prompts version keychain extractor-packages
+release: deps $(APP_ICON) prompts version keychain extractor-packages acp-adapter
 	SIGN_IDENTITY="$(DIST_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
 
 # Compile-only gate — no .app, no signing. CI / agent verification.
-check: deps prompts version keychain extractor-packages
+check: deps prompts version keychain extractor-packages acp-adapter
 	swift build -c $(CONFIG)
 	@echo "✓ compiles ($(CONFIG))"
 
@@ -279,10 +280,23 @@ extractor-packages:
 extractor-packages-sync:
 	@./scripts/sync-extractor-packages.sh
 
+# The vendored Claude ACP adapter is a build input: Contents/Helpers receives
+# Resources/claude-acp-adapter.bundle.js, and ACPBackend's rewrite is pinned
+# to the version compiled into VendoredAdapterPin.swift (#1257 Level 2). The
+# gate fails when the version variable, the committed bundle, or the
+# generated records (adapter.lock.json / package.json / Swift pin) disagree.
+# Like extractor-packages, it deliberately does NOT regenerate — a stale tree
+# must be re-synced and reviewed, not silently rebuilt.
+acp-adapter:
+	@./scripts/sync-acp-adapter.sh --check
+
+acp-adapter-sync:
+	@./scripts/sync-acp-adapter.sh
+
 # Compile-only gate in RELEASE mode — no .app, no signing. Faster runtime
 # than `check` at the cost of slower compile; use for performance testing or
 # when you want the code path optimized. (issue #520)
-check-release: deps prompts version keychain extractor-packages
+check-release: deps prompts version keychain extractor-packages acp-adapter
 	swift build -c release
 	@echo "✓ compiles (release)"
 
@@ -302,7 +316,7 @@ check-release: deps prompts version keychain extractor-packages
 # `ProcessSignalSafety` for the product-side rule and
 # `scripts/test-with-watchdog.sh` for the timeout path. If a helper is orphaned,
 # reap it by hand; a broad matcher must fail closed rather than pick a stranger.
-test: deps prompts version keychain extractor-packages
+test: deps prompts version keychain extractor-packages acp-adapter
 	swift test --parallel --num-workers $(SWIFT_TEST_NUM_WORKERS)
 	@echo "✓ tests pass"
 
@@ -546,7 +560,7 @@ hooks:
 # loaded at runtime via Bundle.module (see PromptLoader.swift). The resource
 # copies ARE committed (they are build inputs), unlike the former
 # code-generated GeneratedPrompts.swift.
-.PHONY: extractor-packages extractor-packages-sync
+.PHONY: extractor-packages extractor-packages-sync acp-adapter acp-adapter-sync
 
 .PHONY: prompts
 prompts:

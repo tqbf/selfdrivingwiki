@@ -332,11 +332,14 @@ struct WikiFSApp: App {
         _settingsLauncher = State(initialValue: processComposition.makeSettingsLauncher(
             extractionCoordinator: coordinator))
 
-        // Assert bun is bundled — ACP providers (claude-acp via bunx) are broken
-        // without it. If this fires, run `./build.sh` (which now hard-fails when
-        // bun is absent) and reinstall to /Applications.
-        if AgentLauncher.bundledHelperPath("bun") == nil {
-            DebugLog.agent("⚠️ LAUNCH CHECK: bun NOT found in Contents/Helpers — ACP ingestion will fail. Run ./build.sh and reinstall.")
+        // Assert the vendored Claude ACP adapter is bundled (#1257 Level 2) —
+        // the default provider launches Contents/Helpers/claude-acp-adapter.js
+        // through the resolved bun. (The old check looked for `bun`, but
+        // toolchain runtimes are mise-managed and never packaged — it warned
+        // on every healthy install.) If this fires, run `./build.sh` and
+        // reinstall to /Applications.
+        if AgentLauncher.bundledHelperPath(VendoredAdapterPin.vendoredAdapterBundleName) == nil {
+            DebugLog.agent("⚠️ LAUNCH CHECK: \(VendoredAdapterPin.vendoredAdapterBundleName) NOT found in Contents/Helpers — ACP launches will fall back to the configured package runner. Run ./build.sh and reinstall.")
         }
 
         // The wikid daemon is now a bundled XPC service

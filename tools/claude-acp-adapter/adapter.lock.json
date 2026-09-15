@@ -1,0 +1,15 @@
+{
+  "comment": "Generated provenance record for the vendored Claude ACP adapter (issue #1257 Level 2). Regenerate with scripts/sync-acp-adapter.sh; `--check` (no network, no bun) fails when this record, the committed bundle, or the version pins disagree.",
+  "package": "@agentclientprotocol/claude-agent-acp",
+  "version": "0.77.0",
+  "entryPoint": "dist/index.js",
+  "tarballURL": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.77.0.tgz",
+  "distIntegrity": "sha512-m8mhsAOc5+m/QZNsKCrfyIRv4KQrCLqSYHZP/aUvL3X0Xn0f9n4wKKNpOpOv0Kblh/2Mkpd4SW0KypN1dZkJfg==",
+  "distShasum": "ca57cfccd59a0057c6f81f4bde5dfbd90479950d",
+  "bundle": "Resources/claude-acp-adapter.bundle.js",
+  "fileDigests": {
+    "Resources/claude-acp-adapter.bundle.js": "5bdfb230df28f7dba484f41ea916067386fac27db9276aa2bf5e4532896a6668",
+    "tools/claude-acp-adapter/package.json": "3e5645d9157d408227c3476ad8f1ac15c98f142a177535030cbe1c804c2005ab",
+    "tools/claude-acp-adapter/bun.lock": "d93702729588e6d07bc428465dc762a7c9ef48ec76df2bdd5b54bd118f0933f6"
+  }
+}

@@ -36,9 +36,24 @@ public enum HelpersLocation {
     /// XPC-service-aware (see ``bundleHelpersDirectory()``), so both the app and
     /// the `wikid.xpc` daemon resolve to the SAME `App.app/Contents/Helpers`.
     public static func bundledHelperPath(_ name: String) -> String? {
-        for candidate in candidateDirectories() {
+        bundledHelperPath(name, candidateDirectories: candidateDirectories())
+    }
+
+    /// The testable core of `bundledHelperPath(_:)`. The production candidate
+    /// directories derive from `Bundle.main` at call time (fixture-hostile:
+    /// they cannot be constructed in a test process), so they are injectable
+    /// here along with the FileManager; the public method delegates with the
+    /// real candidates. No behavior change — same priority walk (first
+    /// candidate holding an EXECUTABLE file wins) and same nil when no
+    /// candidate holds it.
+    static func bundledHelperPath(
+        _ name: String,
+        candidateDirectories: [URL],
+        fileManager: FileManager = .default
+    ) -> String? {
+        for candidate in candidateDirectories {
             let binary = candidate.appendingPathComponent(name, isDirectory: false)
-            if FileManager.default.isExecutableFile(atPath: binary.path) {
+            if fileManager.isExecutableFile(atPath: binary.path) {
                 return binary.path
             }
         }

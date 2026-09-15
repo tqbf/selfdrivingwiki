@@ -1,0 +1,14 @@
+{
+  "name": "claude-acp-adapter-vendor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vendor pin for @agentclientprotocol/claude-agent-acp, bundled to a single file executed by the resolved bun (`bun run <bundle>`). The dependency version is written by scripts/sync-acp-adapter.sh \u2014 never hand-edit it; change the version variable in the sync script and run `make acp-adapter-sync`. See plans/acp-adapter-vendoring.md.",
+  "type": "module",
+  "scripts": {
+    "build": "bun build.mjs",
+    "verify": "bun verify.mjs"
+  },
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.77.0"
+  }
+}

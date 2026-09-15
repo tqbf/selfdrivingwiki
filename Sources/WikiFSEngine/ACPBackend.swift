@@ -295,7 +295,10 @@ public actor ACPBackend: AgentBackend {
         drainGraceTimeout: Duration = .seconds(3),
         maxConcurrentExecutors: Int = 1,
         resolveBunRuntime: @escaping @Sendable () async -> RuntimeCommandResolution? = ACPBackend.defaultResolveBunRuntime,
-        probeExecutable: @escaping @Sendable (URL) -> RuntimeExecutableProbeOutcome = RuntimeFileProbe.probe
+        probeExecutable: @escaping @Sendable (URL) -> RuntimeExecutableProbeOutcome = RuntimeFileProbe.probe,
+        vendoredBundlePath: @escaping @Sendable () -> String? = {
+            HelpersLocation.bundledHelperPath(VendoredAdapterPin.vendoredAdapterBundleName)
+        }
     ) {
         self.permissionPolicy = permissionPolicy
         self.permissionBudget = budget
@@ -306,6 +309,7 @@ public actor ACPBackend: AgentBackend {
         self.maxConcurrentExecutors = max(1, maxConcurrentExecutors)
         self.resolveBunRuntime = resolveBunRuntime
         self.probeExecutable = probeExecutable
+        self.vendoredBundlePath = vendoredBundlePath
     }
 
     /// Resolves the bun runtime used to canonicalize JS-adapter launches
@@ -328,6 +332,13 @@ public actor ACPBackend: AgentBackend {
     /// (injectable so the memoization contract is testable without a real
     /// file on disk).
     private let probeExecutable: @Sendable (URL) -> RuntimeExecutableProbeOutcome
+    /// Resolves the vendored Claude ACP adapter bundle path at launch time
+    /// (#1257 Level 2). The default looks up `claude-acp-adapter.js` through
+    /// `HelpersLocation` (Contents/Helpers in the signed app, `build/` for dev
+    /// runs); nil keeps the Level 1 canonicalized launch (bundle absent).
+    /// Injectable for tests, mirroring the `resolveBunRuntime` /
+    /// `probeExecutable` seams.
+    private let vendoredBundlePath: @Sendable () -> String?
 
     /// Memoized bun resolution lifecycle. `notAttempted` defers the
     /// (potentially slow, login-shell) locate until an adapter-shaped launch
@@ -471,12 +482,15 @@ public actor ACPBackend: AgentBackend {
         // #1257 Level 1: JS-adapter shapes (npx / npm exec|x / bunx, and bun x
         // launches) are canonicalized to run through the resolved absolute bun
         // as the package runner — moving the package cache off ~/.npm (the
-        // first-chat EPERM). Scope note (committee round 2): this
-        // canonicalizes the RUNNER and the cache; the adapter process itself
-        // may still exec Node via its own shebang unless `--bun` is adopted
-        // (follow-up). The shape gate runs first: non-adapter launches never
-        // pay for the locate. An unresolvable bun — or adapter flags/spec
-        // forms the rewrite cannot translate — keeps the configured command
+        // first-chat EPERM). #1257 Level 2: the canonical `bun x` launch of
+        // the vendored adapter spec (bare, or pinned at exactly the compiled
+        // `VendoredAdapterPin` version) is rewritten once more to run the
+        // committed single-file bundle through the resolved bun — the package
+        // runner disappears from the launch entirely, so the adapter itself
+        // runs under bun and no npm/bun cache path is ever consulted. The
+        // shape gate runs first: non-adapter launches never pay for the
+        // locate. An unresolvable bun — or adapter flags/spec forms the
+        // rewrite cannot translate — keeps the configured command
         // (negative-cached per backend, logged here) — the npx path still
         // works.
         let configuredSpawn = spawn
@@ -487,17 +501,28 @@ public actor ACPBackend: AgentBackend {
         if Self.isJSAdapterLaunch(
             executablePath: spawn.executablePath,
             arguments: spawn.arguments) {
-            if let resolution = await resolvedBunResolution(),
-               let canonical = Self.canonicalizedSpawn(
-                    spawn,
-                    resolvedBunPath: resolution.executableURL.path) {
+            let resolution = await resolvedBunResolution()
+            let vendoredBundle = vendoredBundlePath()
+            let composed = Self.effectiveAdapterSpawn(
+                configuredSpawn: spawn,
+                resolvedBun: resolution,
+                bundlePath: vendoredBundle)
+            spawn = composed.spawn
+            usedCanonicalBun = composed.usedCanonicalBun
+            bunResolutionUsed = composed.bunResolutionUsed
+            if spawn.arguments.first == "run", spawn.arguments.count >= 2 {
+                // Level 2 applied. Every canonical (Level 1) output carries
+                // "x" as its argv head, so a "run" head uniquely identifies
+                // the vendored-bundle rewrite.
+                DebugLog.agent(
+                    "ACPBackend.startProcess: vendored adapter launch " +
+                    "\(configuredDescription) → " +
+                    "\(spawn.executablePath) \(spawn.arguments.joined(separator: " "))")
+            } else if usedCanonicalBun {
                 DebugLog.agent(
                     "ACPBackend.startProcess: adapter canonicalized " +
                     "\(configuredDescription) → " +
-                    "\(canonical.executablePath) \(canonical.arguments.joined(separator: " "))")
-                spawn = canonical
-                usedCanonicalBun = true
-                bunResolutionUsed = resolution
+                    "\(spawn.executablePath) \(spawn.arguments.joined(separator: " "))")
             } else {
                 DebugLog.agent(
                     "ACPBackend.startProcess: launching configured " +
@@ -2255,6 +2280,86 @@ public actor ACPBackend: AgentBackend {
             result = Array(result.dropFirst())
         }
         return result
+    }
+
+    /// #1257 Level 2: rewrites the canonical `bun x <spec> [adapterArgs…]`
+    /// spawn (the Level 1 output) to run the VENDORED adapter bundle through
+    /// the resolved bun: `<resolved bun> run <bundle> [adapterArgs…]`
+    /// (`bun run <file>` executes the script file, shebang ignored). The
+    /// committed single-file bundle replaces the package runner entirely —
+    /// zero npm/bun cache writes into `$HOME` (the point of the issue), the
+    /// adapter itself runs under bun (closing the Level 1 "adapter execs Node
+    /// via shebang" follow-up for this path), and the shipped bytes are the
+    /// reviewed, digest-pinned provenance in
+    /// `tools/claude-acp-adapter/adapter.lock.json`.
+    ///
+    /// Match rules: the executable must be a `bun` binary and `arguments`
+    /// must be `["x", spec, adapterArgs…]` where `spec` is exactly the
+    /// vendored package — bare, or `@`-pinned at EXACTLY the compiled-in
+    /// `VendoredAdapterPin.vendoredAdapterPinnedVersion`. A user pinning any
+    /// other version gets what they asked for (the Level 1
+    /// `bun x pkg@version` launch, unchanged).
+    ///
+    /// Returns `nil` — keep the Level 1 result — when the bundle path is nil
+    /// (not bundled / dev tree without a build) or the spec does not match.
+    static func vendoredAdapterRewrite(
+        _ spawn: AgentSpawnConfig,
+        bundlePath: String?
+    ) -> AgentSpawnConfig? {
+        guard let bundlePath, !bundlePath.isEmpty else { return nil }
+        guard (spawn.executablePath as NSString).lastPathComponent.lowercased() == "bun",
+              spawn.arguments.first == "x",
+              spawn.arguments.count >= 2
+        else {
+            return nil
+        }
+        let spec = spawn.arguments[1]
+        let expectedPinned = VendoredAdapterPin.vendoredAdapterPackageSpec
+            + "@" + VendoredAdapterPin.vendoredAdapterPinnedVersion
+        guard spec == VendoredAdapterPin.vendoredAdapterPackageSpec || spec == expectedPinned else {
+            return nil
+        }
+        return AgentSpawnConfig(
+            executablePath: spawn.executablePath,
+            arguments: ["run", bundlePath] + spawn.arguments.dropFirst(2),
+            workingDirectory: spawn.workingDirectory,
+            apiKey: spawn.apiKey,
+            environment: spawn.environment)
+    }
+
+    /// The full launch composition for an adapter-shaped spawn (#1257):
+    /// Level 1 canonicalization (`<resolved bun> x <spec> …`) → Level 2
+    /// vendored-bundle rewrite (`<resolved bun> run <bundle> …`) → fallback
+    /// (the configured command unchanged). Pure — `startProcess` consumes the
+    /// result and every fallback branch is observable here, so the whole
+    /// Level 1→Level 2 chain is unit-testable without a subprocess.
+    ///
+    /// `usedCanonicalBun` + `bunResolutionUsed` describe the resolved bun the
+    /// effective spawn runs through, and are carried through the vendored
+    /// rewrite too (it still launches the resolved bun): the pinned-identity
+    /// staleness check in `startProcess` re-probes that same resolution
+    /// before exec and falls back to the configured command, so a bun swapped
+    /// between locate and launch cannot be exec'd through either level.
+    static func effectiveAdapterSpawn(
+        configuredSpawn: AgentSpawnConfig,
+        resolvedBun: RuntimeCommandResolution?,
+        bundlePath: String?
+    ) -> (
+        spawn: AgentSpawnConfig,
+        usedCanonicalBun: Bool,
+        bunResolutionUsed: RuntimeCommandResolution?
+    ) {
+        guard let resolvedBun,
+              let canonical = canonicalizedSpawn(
+                configuredSpawn,
+                resolvedBunPath: resolvedBun.executableURL.path)
+        else {
+            return (configuredSpawn, false, nil)
+        }
+        if let vendored = vendoredAdapterRewrite(canonical, bundlePath: bundlePath) {
+            return (vendored, true, resolvedBun)
+        }
+        return (canonical, true, resolvedBun)
     }
 
     /// Fail-closed usability gate for the seatbelt front-end: it must exist as

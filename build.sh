@@ -62,6 +62,12 @@ YT_TRANSCRIPT_NAME="youtube-transcript"
 YT_TRANSCRIPT_SRC="tools/youtube-transcript/youtube-transcript"
 POD_TRANSCRIPT_NAME="podcast-transcript"
 POD_TRANSCRIPT_SRC="tools/podcast-transcript/podcast-transcript"
+# Vendored Claude ACP adapter (#1257 Level 2) — the committed single-file
+# bundle built from tools/claude-acp-adapter/ by scripts/sync-acp-adapter.sh.
+# Launched by ACPBackend as `<resolved bun> run <helpers>/claude-acp-adapter.js`,
+# so adapter-shaped launches stop writing npm/bun caches into $HOME.
+CLAUDE_ACP_ADAPTER_NAME="claude-acp-adapter.js"
+CLAUDE_ACP_ADAPTER_SRC="Resources/claude-acp-adapter.bundle.js"
 BUNDLE_ID="${BUNDLE_ID:-org.sockpuppet.WikiFS}"
 EXT_BUNDLE_ID="${EXT_BUNDLE_ID:-org.sockpuppet.WikiFS.FileProvider}"
 APP_GROUP="${APP_GROUP:-group.org.sockpuppet.wiki}"
@@ -279,6 +285,18 @@ if [ -f "${MARKDOWNLINT_JS}" ]; then
   cp "${MARKDOWNLINT_JS}" "${RESOURCES_DIR}/markdownlint.js"
 else
   echo "  (markdownlint.bundle.js not found at ${MARKDOWNLINT_JS} — markdown save-time auto-fix will be skipped)"
+fi
+# Vendored Claude ACP adapter (#1257 Level 2) — copied into Contents/Helpers
+# (a code location: it is exec'd by the resolved bun and must be signed with
+# the app, like pdf2md/defuddle below) and dropped in build/ for dev runs
+# (HelpersLocation candidate 2). The committed bundle is generated + gated by
+# scripts/sync-acp-adapter.sh (the `acp-adapter` make prerequisite).
+if [ -f "${CLAUDE_ACP_ADAPTER_SRC}" ]; then
+  cp "${CLAUDE_ACP_ADAPTER_SRC}" "${HELPERS_DIR}/${CLAUDE_ACP_ADAPTER_NAME}"
+  cp "${CLAUDE_ACP_ADAPTER_SRC}" "${BUILD_DIR}/${CLAUDE_ACP_ADAPTER_NAME}"
+  chmod +x "${HELPERS_DIR}/${CLAUDE_ACP_ADAPTER_NAME}" "${BUILD_DIR}/${CLAUDE_ACP_ADAPTER_NAME}"
+else
+  echo "  (claude-acp-adapter.bundle.js not found at ${CLAUDE_ACP_ADAPTER_SRC} — ACP launches will use the configured package runner)"
 fi
 # Bundled snapshot of the official ACP agent registry (#665) — the offline
 # fallback for `ACPRegistryClient.loadAgents()` (served when both the cache
@@ -725,6 +743,13 @@ PLIST
     codesign --force --timestamp=none --sign "${IDENTITY}" \
       "${HELPERS_DIR}/${DEFUDDLE_NAME}"
   fi
+  # claude-acp-adapter.js — vendored ACP adapter bundle in Helpers/ (a code
+  # location). Same plain-file signing as pdf2md/defuddle: bun reads the file;
+  # the signature seals it into the app.
+  if [ -f "${HELPERS_DIR}/${CLAUDE_ACP_ADAPTER_NAME}" ]; then
+    codesign --force --timestamp=none --sign "${IDENTITY}" \
+      "${HELPERS_DIR}/${CLAUDE_ACP_ADAPTER_NAME}"
+  fi
   # youtube-transcript — same plain-script signing as pdf2md/defuddle.
   if [ -f "${HELPERS_DIR}/${YT_TRANSCRIPT_NAME}" ]; then
     codesign --force --timestamp=none --sign "${IDENTITY}" \
@@ -759,6 +784,9 @@ else
   fi
   if [ -f "${HELPERS_DIR}/${DEFUDDLE_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${DEFUDDLE_NAME}"
+  fi
+  if [ -f "${HELPERS_DIR}/${CLAUDE_ACP_ADAPTER_NAME}" ]; then
+    codesign --force --sign - "${HELPERS_DIR}/${CLAUDE_ACP_ADAPTER_NAME}"
   fi
   if [ -f "${HELPERS_DIR}/${YT_TRANSCRIPT_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${YT_TRANSCRIPT_NAME}"
