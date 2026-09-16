@@ -334,27 +334,65 @@ fi
 # Contents/Resources/ in .app/.appex) before falling back to Bundle.module
 # (which works in the SwiftPM .build context).
 SPM_RESOURCE_BUNDLE="${BIN_DIR}/WikiFS_WikiFSCore.bundle"
-if [ -d "${SPM_RESOURCE_BUNDLE}/Prompts" ]; then
+# SwiftPM's bundle layout is toolchain-dependent: older toolchains emit
+# resources directly inside the bundle (…/WikiFS_WikiFSCore.bundle/Prompts);
+# Swift 6.4 emits macOS-style bundles (…/Contents/Resources/Prompts). Resolve
+# whichever exists so the staging below works under both.
+SPM_BUNDLE_RESOURCES="${SPM_RESOURCE_BUNDLE}"
+if [ ! -d "${SPM_BUNDLE_RESOURCES}/Prompts" ] && [ -d "${SPM_RESOURCE_BUNDLE}/Contents/Resources" ]; then
+  SPM_BUNDLE_RESOURCES="${SPM_RESOURCE_BUNDLE}/Contents/Resources"
+fi
+if [ -d "${SPM_BUNDLE_RESOURCES}/Prompts" ]; then
   mkdir -p "${APPEX_CONTENTS}/Resources" "${DAEMON_XPC_CONTENTS}/Resources"
-  cp -R "${SPM_RESOURCE_BUNDLE}/Prompts" "${RESOURCES_DIR}/"
-  cp -R "${SPM_RESOURCE_BUNDLE}/Prompts" "${APPEX_CONTENTS}/Resources/"
-  cp -R "${SPM_RESOURCE_BUNDLE}/Prompts" "${DAEMON_XPC_CONTENTS}/Resources/"
+  cp -R "${SPM_BUNDLE_RESOURCES}/Prompts" "${RESOURCES_DIR}/"
+  cp -R "${SPM_BUNDLE_RESOURCES}/Prompts" "${APPEX_CONTENTS}/Resources/"
+  cp -R "${SPM_BUNDLE_RESOURCES}/Prompts" "${DAEMON_XPC_CONTENTS}/Resources/"
   echo "  ✓ bundled prompt resources into app + extension + wikid XPC service"
 else
   echo "  ⚠ SwiftPM resource bundle not found at ${SPM_RESOURCE_BUNDLE}" >&2
   echo "    Run 'make prompts' then rebuild. Prompt loading will crash at runtime." >&2
 fi
 
+# SwiftPM module bundles — every `Bundle.module` consumer in a packaged binary
+# needs its `<Owner>_<Module>.bundle` inside the packaged bundle's Resources
+# (the generated accessor looks in Bundle.main first). CordisLoader's
+# ProductionProfileResolver resolves shipped profile bundles at app/daemon
+# boot, so a missing WikiFS_CordisLoader.bundle trap-crashes the app at
+# launch (EXC_BREAKPOINT in resource_bundle_accessor.swift). Copy every
+# non-test module bundle from the SwiftPM products directory (same
+# flat-vs-Contents/Resources layouts as above) into the app, the File
+# Provider extension, and the wikid XPC service; codesign seals them as
+# nested bundles.
+stage_spm_bundles() {
+  local dest="$1"
+  local staged=0
+  for bundle in "${BIN_DIR}"/*.bundle; do
+    [ -d "${bundle}" ] || continue
+    local name
+    name="$(basename "${bundle}")"
+    case "${name}" in
+      *Tests*|*FuzzHarness*) continue ;;  # test-only targets
+    esac
+    cp -R "${bundle}" "${dest}/" 2>/dev/null || continue
+    staged=$((staged + 1))
+  done
+  echo "  ✓ staged ${staged} SwiftPM resource bundle(s) into ${dest}"
+}
+mkdir -p "${APPEX_CONTENTS}/Resources" "${DAEMON_XPC_CONTENTS}/Resources"
+stage_spm_bundles "${RESOURCES_DIR}"
+stage_spm_bundles "${APPEX_CONTENTS}/Resources"
+stage_spm_bundles "${DAEMON_XPC_CONTENTS}/Resources"
+
 # RendererPackageGuide is a bounded WIKI_STATE.md reference, not a prompt.
 # Copy it beside the prompts so app, extension, and wikid XPC Bundle.main
 # lookups work after the built app is moved away from the originating .build
 # directory. RendererPackageGuide retains Bundle.module as the SwiftPM/test
 # fallback.
-if [ -f "${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md" ]; then
+if [ -f "${SPM_BUNDLE_RESOURCES}/wiki-state-chat-reference.md" ]; then
   mkdir -p "${APPEX_CONTENTS}/Resources" "${DAEMON_XPC_CONTENTS}/Resources"
-  cp "${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md" "${RESOURCES_DIR}/"
-  cp "${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md" "${APPEX_CONTENTS}/Resources/"
-  cp "${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md" "${DAEMON_XPC_CONTENTS}/Resources/"
+  cp "${SPM_BUNDLE_RESOURCES}/wiki-state-chat-reference.md" "${RESOURCES_DIR}/"
+  cp "${SPM_BUNDLE_RESOURCES}/wiki-state-chat-reference.md" "${APPEX_CONTENTS}/Resources/"
+  cp "${SPM_BUNDLE_RESOURCES}/wiki-state-chat-reference.md" "${DAEMON_XPC_CONTENTS}/Resources/"
   echo "  ✓ bundled renderer package guide into app + extension + wikid XPC service"
 else
   echo "  ⚠ WIKI_STATE renderer reference not found at ${SPM_RESOURCE_BUNDLE}" >&2
