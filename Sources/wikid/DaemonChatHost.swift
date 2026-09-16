@@ -645,7 +645,17 @@ final class DaemonChatHost: @unchecked Sendable {
             do {
                 guard let value = try await services.modelSummary(
                     text: target.text,
-                    preparation: preparation) else { continue }
+                    preparation: preparation) else {
+                    // Issue #1276 strict tier: nil is a FAILED summarization
+                    // (launch failure, empty reply, preamble-only reply) —
+                    // `MessageSummarizer.oneShotReply` swallows the error and
+                    // returns nil. Degrade to the truncation summary exactly
+                    // like the thrown path; never a silent unsummarized row
+                    // (#1279 found this branch skipping the fallback).
+                    DebugLog.agent("DaemonChatHost: model summary returned nil — degrading to truncation")
+                    Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
+                    continue
+                }
                 summary = value
             } catch {
                 // Issue #1276 strict tier: a launch failure must DEGRADE to
