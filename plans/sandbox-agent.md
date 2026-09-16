@@ -296,11 +296,19 @@ be re-opened by later layering is impossible by construction.
 **Failure contract:** a strict-mode launch failure degrades — model summaries
 fall back to `defaultSummary` truncation per target, and chat titles fall back
 to the provisional text. It never leaves a silent unsummarized row, and never
-retries unfenced. Escape hatch: `WIKIFS_SUMMARIZER_STRICT=0` (no rebuild).
-Before relying on strict with a new adapter, smoke it: start a chat, confirm a
-model title + summary appear, and check
-`log show --predicate 'process == "sandboxd"' --last 5m --info --debug` for
-denials naming the adapter.
+retries unfenced. **Default-off since #1279** (opt back in with
+`WIKIFS_SUMMARIZER_STRICT=1`): the adapter smoke matrix failed on every
+configured adapter — `bun x` (and every `npx` command via bun canonicalization)
+stages and execs the adapter under the child's relocated `TMPDIR` inside the
+summarizer scratch, which the W^X `process-exec*` scratch deny kills (warm
+cache as well as cold); `uvx` adapters die on denied `~/.cache/uv` writes
+(`providerHomeSubpaths` has no `uv` entry). Before re-defaulting strict on,
+reopen the design (relocate the package-runner temp to exec-allowed
+provider-home land) and re-run the matrix: start a chat, confirm a model
+title + summary appear, and check
+`log show --predicate 'process == "sandboxd"'` over a window extending
+several minutes past the run — violation records reach `log show` LATE on
+macOS 26.6, so the old `--last 5m` recipe can miss denials that occurred.
 
 Extraction and provider-model probes stay on the plain read-only profile until
 they get their own smoke pass (see the issues filed from this work). Residual

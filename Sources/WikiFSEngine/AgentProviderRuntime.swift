@@ -440,14 +440,21 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         #endif
     }
 
-    /// The strict summarizer sandbox tier is default-on; setting
-    /// `WIKIFS_SUMMARIZER_STRICT=0` disables it without a rebuild. The
-    /// escape hatch exists because an unknown adapter could fail to launch
-    /// under the strict denies — and when it does, summarization degrades to
-    /// default truncation (never silently disappears; see the model-summary
-    /// call sites).
+    /// The strict summarizer sandbox tier is default-OFF; setting
+    /// `WIKIFS_SUMMARIZER_STRICT=1` opts back in without a rebuild. The
+    /// #1279 adapter smoke matrix failed on every configured adapter:
+    /// `bun x` (including every `npx` command via bun canonicalization)
+    /// stages and execs the adapter under the child's relocated `TMPDIR`
+    /// inside the summarizer scratch, and the strict trailer's W^X
+    /// `process-exec*` deny on the scratch kills the spawn — warm cache as
+    /// well as cold; `uvx` adapters die on denied `~/.cache/uv` writes
+    /// (no `uv` entry in `providerHomeSubpaths`). Re-default-on requires
+    /// the design reopen (TMPDIR relocation for package-runner spawns) and
+    /// a re-run of the matrix. When strict is on and an adapter fails to
+    /// launch, summarization degrades to default truncation (never silently
+    /// disappears; see the model-summary call sites).
     public static let strictSummarizerEnabled: Bool =
-        ProcessInfo.processInfo.environment["WIKIFS_SUMMARIZER_STRICT"] != "0"
+        ProcessInfo.processInfo.environment["WIKIFS_SUMMARIZER_STRICT"] == "1"
 
     public init(
         readConfiguration: @escaping ConfigurationReader,
