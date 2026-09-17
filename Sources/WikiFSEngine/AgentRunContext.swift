@@ -292,7 +292,7 @@ public struct AgentRunContext: Sendable, Equatable {
         lines.append("""
         - Wiki tool (PREFERRED FORM — bare `wikictl` is FIRST on your PATH): \
         `wikictl --wiki \(wikiID.rawValue) <subcommand> …`. `--wiki <id>` goes \
-        BEFORE the subcommand; there is no `--wiki=<id>` form.
+        BEFORE the subcommand. The alternate `--wiki=<id>` spelling is also accepted.
         """)
         lines.append("""
         - Wiki tool (GUARANTEED FALLBACK — TRUSTED ABSOLUTE INVOCATION; use it \

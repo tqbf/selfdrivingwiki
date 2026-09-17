@@ -36,6 +36,18 @@ struct WikiCtlCommandTests {
         #expect(invocation.command == .page(.list(json: false)))
     }
 
+    @Test func parsesWikiFromEqualsFlag() throws {
+        let invocation = try ArgumentParser.parse(["--wiki=WIKI1", "page", "list"], env: noEnv)
+        #expect(invocation.wikiSelector == "WIKI1")
+        #expect(invocation.command == .page(.list(json: false)))
+    }
+
+    @Test func rejectsEmptyWikiEqualsFlag() {
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(["--wiki=", "page", "list"], env: noEnv)
+        }
+    }
+
     @Test func parsesWikiFromEnvWhenFlagAbsent() throws {
         let invocation = try ArgumentParser.parse(
             ["page", "list", "--json"],

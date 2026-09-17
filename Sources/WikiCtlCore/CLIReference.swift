@@ -818,7 +818,7 @@ public enum CLIReference {
         lines.append("usage: \(programName) [--wiki <id>] <command>")
         lines.append("       \(programName) <command> <subcommand> --help")
         lines.append("")
-        lines.append("Selects the wiki by --wiki <id-or-name> or the WIKI_DB env var.")
+        lines.append("Selects the wiki by --wiki <id-or-name> (or --wiki=<id-or-name>) or the WIKI_DB env var.")
         lines.append("`version` / `--version` / `-v` prints build info. Help never needs a wiki.")
         lines.append("")
         lines.append("commands:")

@@ -203,7 +203,7 @@ struct AgentRunContextTests {
         // invocations fail with zsh exit 127).
         #expect(section.contains("PREFERRED FORM"))
         #expect(section.contains("`wikictl --wiki 01WIKI <subcommand> …`"))
-        #expect(section.contains("no `--wiki=<id>` form"))
+        #expect(section.contains("alternate `--wiki=<id>` spelling is also accepted"))
         // The trusted absolute invocation remains the guaranteed fallback,
         // rendered shell-safe, with the space-in-path warning.
         #expect(section.contains("GUARANTEED FALLBACK"))

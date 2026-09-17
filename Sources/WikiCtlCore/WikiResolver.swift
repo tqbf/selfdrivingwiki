@@ -1,7 +1,7 @@
 import Foundation
 import WikiFSCore
 
-/// Resolves the `--wiki <id>` / `WIKI_DB` selector to a concrete wiki's
+/// Resolves the `--wiki <id>` / `--wiki=<id>` / `WIKI_DB` selector to a concrete wiki's
 /// `<ulid>.sqlite` path, through the SAME registry the app uses
 /// (`plans/llm-wiki.md` — "Takes `--wiki <id>` … resolved through the same
 /// registry the app uses").

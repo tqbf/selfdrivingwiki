@@ -7,7 +7,7 @@ import WikiFSCore
 /// with no filesystem touched.
 ///
 /// Grammar (`plans/llm-wiki.md` Phase A + B surface):
-///   wikictl [--wiki <id>] page list [--json]
+///   wikictl [--wiki <id> | --wiki=<id>] page list [--json]
 ///   wikictl [--wiki <id>] page get (--title X | --id Y)
 ///   wikictl [--wiki <id>] page add --title X [--id Y] --body-file <path|->
 ///   wikictl [--wiki <id>] page delete --id Y
@@ -137,17 +137,22 @@ public enum ArgumentParser {
             }
         }
 
-        // A leading `--wiki <id>` is optional; otherwise fall back to WIKI_DB.
+        // A leading `--wiki <id>` or `--wiki=<id>` is optional; otherwise fall back to WIKI_DB.
         var wikiSelector: String?
         if args.first == "--wiki" {
             guard args.count >= 2 else { throw Failure.usage("--wiki requires a value") }
             wikiSelector = args[1]
             args.removeFirst(2)
+        } else if let first = args.first, first.hasPrefix("--wiki=") {
+            let value = String(first.dropFirst("--wiki=".count))
+            guard !value.isEmpty else { throw Failure.usage("--wiki requires a value") }
+            wikiSelector = value
+            args.removeFirst()
         } else if let envValue = env("WIKI_DB"), !envValue.isEmpty {
             wikiSelector = envValue
         }
         guard let selector = wikiSelector else {
-            throw Failure.usage("no wiki selected — pass --wiki <id> or set WIKI_DB")
+            throw Failure.usage("no wiki selected — pass --wiki <id> (or --wiki=<id>) or set WIKI_DB")
         }
 
         let command: Command
