@@ -33,7 +33,7 @@ struct GracefulShutdownPolicyTests {
         #expect(outcome == .completed)
     }
 
-    @Test("deadline cancels cleanup and returns timeout")
+    @Test("deadline cancels cleanup and returns timeout", .disabled("Load-flaky on CI runners: the cancellation flag can miss even the load-scaled 2s poll (Actions runs 35271670359, 35278627827); re-enable with a deterministic signal"))
     func timeoutReturns() async {
         let cancelled = Mutex(false)
         let policy = GracefulShutdownPolicy(
