@@ -122,14 +122,38 @@ struct AgentProviderRuntimeLeaseTests {
             do { try FileManager.default.removeItem(at: leaseRoot) }
             catch { Issue.record("lease root cleanup failed: \(error)") }
         }
-        let gated = GatedSummarizerBackend(gate: GateBox(), order: TeardownOrder(), replyText: "s")
+        // A backend parked mid-turn: dispose must drain the lease BEFORE the
+        // backend shuts down, and remove the lease directory only after that.
+        let order = TeardownOrder()
+        let gate = GateBox()
+        let gated = GatedSummarizerBackend(gate: gate, order: order, replyText: "s")
         let service = makeRuntime(config: config, leaseParent: leaseRoot, backendFactory: { _, _, _ in gated })
 
         let preparation = try await summarizerPreparation(service)
         let prepared = try await service.preparedBackend(from: preparation.selection.token, stage: .summarizer)
         let lease = try #require(prepared.profile.packageRunnerTempURL)
 
-        await service.dispose()
+        // An ACTIVE title parks on the gate; dispose races it.
+        let titleTask = Task {
+            _ = try? await service.modelTitle(question: "q", answer: "a", preparation: preparation)
+        }
+        try await waitFor { await order.values.contains("send-start") }
+        let disposeTask = Task {
+            await service.dispose()
+            await order.record("dispose-done")
+        }
+        // While the lease is active the staging dir must survive.
+        #expect(FileManager.default.fileExists(atPath: lease.path))
+
+        await gate.open()
+        try await waitForTask(disposeTask)
+        await titleTask.value
+        let values = await order.values
+        let sendEnd = try #require(values.firstIndex(of: "send-end"))
+        let shutdownIndex = try #require(values.firstIndex(of: "shutdown"))
+        let doneIndex = try #require(values.firstIndex(of: "dispose-done"))
+        #expect(shutdownIndex > sendEnd, "dispose drains the active lease before shutdown")
+        #expect(doneIndex > shutdownIndex, "removal follows backend shutdown")
         #expect(!FileManager.default.fileExists(atPath: lease.path))
         // The parent leaf (this suite's isolated root) survives; only owned
         // children were removed.

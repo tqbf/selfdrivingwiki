@@ -297,18 +297,64 @@ be re-opened by later layering is impossible by construction.
 fall back to `defaultSummary` truncation per target, and chat titles fall back
 to the provisional text. It never leaves a silent unsummarized row, and never
 retries unfenced. **Default-off since #1279** (opt back in with
-`WIKIFS_SUMMARIZER_STRICT=1`): the adapter smoke matrix failed on every
-configured adapter — `bun x` (and every `npx` command via bun canonicalization)
-stages and execs the adapter under the child's relocated `TMPDIR` inside the
-summarizer scratch, which the W^X `process-exec*` scratch deny kills (warm
-cache as well as cold); `uvx` adapters die on denied `~/.cache/uv` writes
-(`providerHomeSubpaths` has no `uv` entry). Before re-defaulting strict on,
-reopen the design (relocate the package-runner temp to exec-allowed
-provider-home land) and re-run the matrix: start a chat, confirm a model
-title + summary appear, and check
-`log show --predicate 'process == "sandboxd"'` over a window extending
-several minutes past the run — violation records reach `log show` LATE on
-macOS 26.6, so the old `--last 5m` recipe can miss denials that occurred.
+`WIKIFS_SUMMARIZER_STRICT=1`); re-default-on is gated on the full
+production-shaped matrix (see the #1279 progress record).
+
+### Package-runner temp policy (issue #1279 fix)
+
+The #1279 matrix found the kill chain: `bun x` (and every `npx` command via
+bun canonicalization) stages and EXECUTES the adapter under the child's
+relocated `TMPDIR` — inside the summarizer scratch, where the W^X
+`process-exec*` deny kills the spawn, warm or cold. The fix is a typed
+package-runner policy at the ACP launch boundary; the strict trailer itself
+is unchanged:
+
+- **Model scratch stays W^X.** `SandboxProfile.strictDenyTrailer()` is
+  untouched: the scratch, `scratch/.tmp`, `CLAUDE_TMP`, `/private/tmp`, and
+  `/private/var/tmp` remain writable and NON-executable under strict.
+  `scratch/.tmp` is never made executable and never gains a global `/tmp`
+  allowance.
+- **The one writable + executable exception** is the runner home. Each
+  strict summarizer snapshot whose configured command is JS-adapter-shaped
+  owns a `PackageRunnerTempLease`: one unique pre-created
+  `~/.bun/wikifs-tmp/<UUID>` directory, threaded to the spawn as trusted
+  `BackendProfile.packageRunnerTempURL` launch data (never a provider hint).
+  When the EFFECTIVE (post-canonicalization) runner is Bun, the launch plan
+  exports the lease as the child's `TMPDIR` — bun stages and execs the
+  adapter there, inside the already-allowed `~/.bun` home. A provider
+  hint cannot select or replace it, and a canonicalization that declines
+  leaves the lease unused (the child keeps the scratch temp). The lease is
+  removed by snapshot teardown after the cached backends shut down and
+  before the scratch is removed.
+- **Bounded uv allowances.** Effective `uvx` / `uv tool run` launches layer
+  exactly `.cache/uv` + `.local/share/uv` (`ACPBackend.uvHomeSubpaths`) —
+  no `.local`, no `$HOME`, no `.local/bin`. uv keeps the scratch temp: the
+  #1279 evidence identified cache-initialization writes only.
+- **Effective-spawn classification.** `PackageRunnerKind.classify` runs on
+  executable + argument ARRAYS (never a joined string) after
+  `canonicalizedSpawn`: a canonicalized `npx` launch gets Bun policy; a
+  declined canonicalization keeps npm policy. Plain binaries (claude, codex,
+  gemini), extraction, probes, and interactive chat keep the scratch temp.
+- **Strict-tier gate.** The lease is allocated only when
+  `WIKIFS_SUMMARIZER_STRICT` enables strict mode for the run; non-strict
+  runs never allocate one.
+
+Live `sandbox-exec` coverage:
+`AgentSandboxProcessTests.strictBunRunnerCanExecuteFromOwnedTemp` proves a
+staged executable runs from the lease while
+`strictPackageRunnerTempDoesNotOpenScratchExecution` proves the scratch, the
+scratch `.tmp` leaf, and global temp stay exec-denied with a lease in play,
+and writes outside the scratch and the runner homes stay denied.
+
+**Re-default-on gate:** run the eight-cell production matrix (4 adapters ×
+cold/warm) from the shipped provider commands, require a model title +
+`summary_kind='model'` output per authenticated cell, and capture
+`sandboxd` over the run window PLUS a delay margin — violation records reach
+`log show` minutes late on macOS 26.6, so a short `--last 5m` check can
+report a false clean. Note: sandboxd violation records are attributed to the
+RESPONSIBLE app process; spawns from an arbitrary terminal context may not
+be reported at all, so validate captures against the app/daemon, not ad-hoc
+`sandbox-exec` probes.
 
 Extraction and provider-model probes stay on the plain read-only profile until
 they get their own smoke pass (see the issues filed from this work). Residual
@@ -329,8 +375,18 @@ and the write+exec overlap in `~/.bun`/`~/.npm` (that overlap is what makes
 - `Sources/WikiFSEngine/ACPBackend.swift` — `BackendProfile.sandbox`
   application: `sandboxedSpawnPlan` (the shared typed launch plan),
   `launchPolicyViolation` (pure fail-closed check), `sandboxExecutableIsUsable`,
-  `providerHomeSubpaths(forCommand:)`, and the process-level `shutdown()`
-  contract for cached backends.
+  `providerHomeSubpaths(executablePath:arguments:)` (typed runner
+  classification), `effectiveTempDirectoryURL` (the pure temp policy), and the
+  process-level `shutdown()` contract for cached backends.
+- `Sources/WikiFSEngine/PackageRunnerTempLease.swift` — the strict-tier
+  package-runner staging lease + `PackageRunnerKind` (issue #1279).
+- `Sources/WikiFSEngine/ProviderCommandResolver.swift` — the ONE production
+  provider-command resolution: login-shell PATH first, the validated
+  `RuntimeCommandLocator` Bun lookup as the only bare-`bun` fallback; both
+  production `AgentProviderProcessInput` compositions (daemon +
+  renderer) and `resolveACPProviderSpawn`/readiness resolve through it, so
+  the shipped bare `bun x …` command resolves from the GUI daemon
+  (issue #1279 AC.9).
 - `Sources/WikiFSEngine/AgentLauncher.swift` — `resolveSandboxInvocation` +
   `createSandboxTmpDir` + threading into every `BackendProfile` spawn site.
 - `Sources/WikiFSEngine/ACPExtractionClient.swift` — extraction fence

@@ -500,12 +500,18 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         strictSummarizerOverrideBox.withLock { $0 = value }
     }
 
-    /// The pure strict-tier decision (issue #1279): the static production
-    /// value delegates to this parser so the semantics are injectable and
-    /// unit-testable. Default-ON semantics: an UNSET value enables strict
-    /// mode (the promotion target after the #1279 matrix), as does `"1"`.
-    /// `"0"` and case-insensitive `"false"` disable it — the documented
-    /// rollback switch. EVERY other value enables strict mode so malformed
+    /// The pure strict-tier decision (issue #1279): the parser the promotion
+    /// commit delegates the production gate to. PRE-promotion (this commit)
+    /// the production static below is the conservative opt-in form
+    /// (`WIKIFS_SUMMARIZER_STRICT == "1"`, default OFF) — the parser's
+    /// default-ON semantics are NOT yet wired into production. The
+    /// promotion commit MUST make the static delegate to
+    /// `strictSummarizerEnabled(environment: ProcessInfo.processInfo.environment)`
+    /// — that wiring is the whole point of the flip. Default-ON semantics
+    /// then apply: an UNSET value enables strict mode (the promotion
+    /// target after the #1279 matrix), as does `"1"`. `"0"` and
+    /// case-insensitive `"false"` disable it — the documented rollback
+    /// switch. EVERY other value enables strict mode so malformed
     /// configuration fails SECURE (strict is the tighter fence; a typo must
     /// not silently downgrade the summarizer tier).
     public static func strictSummarizerEnabled(environment: [String: String]) -> Bool {

@@ -103,11 +103,14 @@ public struct PackageRunnerTempLease: Sendable {
     /// the root to exist.
     ///
     /// Allocation is transactional: only the `wikifs-tmp` leaf parent may be
-    /// created (and therefore rolled back) by an attempt — `~/.bun` itself is
-    /// user data and is never created or removed here. If the child directory
-    /// cannot be created, a parent this attempt created is removed again and
+    /// created and rolled back by an attempt. `~/.bun` itself is user data —
+    /// the rollback NEVER removes it (an empty `~/.bun` left behind by a
+    /// first-ever allocation is harmless and stays). If the child directory
+    /// cannot be created, a parent this attempt created is removed ONLY when
+    /// still EMPTY — the daemon and the renderer share the production
+    /// parent, so a concurrent allocator may hold live leases there — and
     /// the error rethrows; a failed preparation therefore leaves nothing
-    /// behind (issue #1279 AC.8).
+    /// owned behind (issue #1279 AC.8).
     public static func make(parent: URL? = nil) throws -> PackageRunnerTempLease {
         let parentURL = parent ?? defaultParent()
         let fileManager = FileManager.default
@@ -121,10 +124,19 @@ public struct PackageRunnerTempLease: Sendable {
             try fileManager.createDirectory(at: child, withIntermediateDirectories: false)
         } catch {
             if createdParent {
-                // Roll back ONLY what this attempt created — never `~/.bun`.
-                DebugLog.trying(
-                    "remove package-runner temp parent after failed allocation",
-                    operation: { try fileManager.removeItem(at: parentURL) })
+                // Roll back ONLY what this attempt created and still owns —
+                // never `~/.bun`, and never a parent another allocator shares.
+                // The emptiness probe is a best-effort guard: a raced or
+                // failing probe just skips the rollback (the parent stays for
+                // the other allocator), which is the correct outcome.
+                // swiftlint:disable:next silent_try_optional
+                let existing: [String]? = try? fileManager.contentsOfDirectory(atPath: parentURL.path)
+                let isEmpty = existing?.isEmpty ?? false
+                if isEmpty {
+                    DebugLog.trying(
+                        "remove empty package-runner temp parent after failed allocation",
+                        operation: { try fileManager.removeItem(at: parentURL) })
+                }
             }
             throw error
         }
