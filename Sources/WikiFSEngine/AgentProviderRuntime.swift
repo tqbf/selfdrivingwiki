@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import WikiFSCore
 
 /// The public identity of a configured provider. Spawn configuration stays private.
@@ -390,13 +391,23 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         String?
     ) async throws -> ACPProviderCatalogObservation
 
-    private struct SpawnRecord: Sendable { let provider: AgentProvider; let model: ModelID?; let hints: [String: String] }
+    private struct SpawnRecord: Sendable {
+        let provider: AgentProvider
+        let model: ModelID?
+        let hints: [String: String]
+        /// The frozen, PATH-resolved spawn command for this provider
+        /// (issue #1279): the lease-allocation decision and the strict-tier
+        /// adapter-shape gate run on THIS array — the same tokens
+        /// `ACPBackend.resolveSpawnConfig` reads back out of `hints`.
+        let command: [String]
+    }
 
     /// One preparation's frozen state. For the summarizer stage it also owns
     /// the scratch world (issue #1276): a unique read-only sandboxed scratch
     /// directory that lives exactly as long as the snapshot's cached backends,
     /// plus the lease gate that serializes teardown against active
-    /// summary/title operations.
+    /// summary/title operations. Under the strict tier it may also own a
+    /// package-runner staging lease (issue #1279).
     private struct Snapshot: Sendable {
         let policy: AgentOperationPolicy
         let thinking: String?
@@ -408,6 +419,13 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         let summarizerScratch: LLMSandboxScratch?
         /// The summarizer lease gate. Non-nil together with `summarizerScratch`.
         let summarizerLease: SummarizerLeaseGate?
+        /// The package-runner execution-staging lease (issue #1279). Non-nil
+        /// only for strict summarizer snapshots whose configured summarizer
+        /// command is JS-adapter-shaped; consumed by `ACPBackend` only when
+        /// the post-canonicalization classification returns `.bun`, and
+        /// removed by teardown regardless (an unused lease is cleaned up
+        /// like a used one — AC.8).
+        var summarizerPackageRunnerTemp: PackageRunnerTempLease?
     }
     private struct TokenRecord: Sendable { let snapshotID: UUID; let stage: AgentProviderStage; let providerID: ProviderID; let isOriginal: Bool }
 
@@ -423,6 +441,12 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     /// created under this root instead of the shared temporary directory, so
     /// a test can assert scratch cleanup on a root it owns exclusively.
     private let summarizerScratchParent: URL?
+    /// Test seam (issue #1279): when non-nil, package-runner staging leases
+    /// are created under this root instead of the production
+    /// `~/.bun/wikifs-tmp`, so a live test can assert lease cleanup on a
+    /// root it owns exclusively and never touches the developer's real
+    /// `.bun` (mirrors `summarizerScratchParent`).
+    private let packageRunnerTempParent: URL?
     private var snapshots: [UUID: Snapshot] = [:]
     private var tokens: [UUID: TokenRecord] = [:]
     private var cachedBackends: [String: any AgentBackend] = [:]
@@ -456,6 +480,48 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     public static let strictSummarizerEnabled: Bool =
         ProcessInfo.processInfo.environment["WIKIFS_SUMMARIZER_STRICT"] == "1"
 
+    /// Test seam: when non-nil, THIS process's strict gate is pinned to the
+    /// given value so lease/scratch behavior is deterministic under any test
+    /// launch environment. Always nil in production. Lock-guarded (Mutex) so
+    /// the mutable global stays data-race-free without opting out of
+    /// concurrency checking.
+    private static let strictSummarizerOverrideBox = Mutex<Bool?>(nil)
+
+    /// The strict gate in force for this process: the production parser
+    /// value unless a test pinned an override. Every runtime decision
+    /// (scratch tier + lease allocation) consults THIS so a pinned test
+    /// exercises the whole strict world coherently.
+    static var strictSummarizerActive: Bool {
+        strictSummarizerOverrideBox.withLock { $0 } ?? strictSummarizerEnabled
+    }
+
+    /// Test-only pin (see `strictSummarizerOverrideBox`).
+    static func pinStrictSummarizerOverride(_ value: Bool?) {
+        strictSummarizerOverrideBox.withLock { $0 = value }
+    }
+
+    /// The pure strict-tier decision (issue #1279): the static production
+    /// value delegates to this parser so the semantics are injectable and
+    /// unit-testable. Default-ON semantics: an UNSET value enables strict
+    /// mode (the promotion target after the #1279 matrix), as does `"1"`.
+    /// `"0"` and case-insensitive `"false"` disable it — the documented
+    /// rollback switch. EVERY other value enables strict mode so malformed
+    /// configuration fails SECURE (strict is the tighter fence; a typo must
+    /// not silently downgrade the summarizer tier).
+    public static func strictSummarizerEnabled(environment: [String: String]) -> Bool {
+        guard let raw = environment[EnvironmentKey.summarizerStrict] else {
+            return true
+        }
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !(normalized == "0" || normalized == "false")
+    }
+
+    /// Named constants for the environment keys this runtime reads. Same
+    /// pattern as `HintKey` — the raw literals live in exactly one place.
+    private enum EnvironmentKey {
+        static let summarizerStrict = "WIKIFS_SUMMARIZER_STRICT"
+    }
+
     public init(
         readConfiguration: @escaping ConfigurationReader,
         resolveCommand: @escaping CommandResolver,
@@ -476,7 +542,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 .discoverObservation()
         },
         sandboxUsability: @escaping SandboxUsabilityCheck = AgentProviderRuntime.defaultSandboxUsability,
-        summarizerScratchParent: URL? = nil
+        summarizerScratchParent: URL? = nil,
+        packageRunnerTempParent: URL? = nil
     ) {
         self.readConfiguration = readConfiguration
         self.resolveCommand = resolveCommand
@@ -487,6 +554,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         self.probeCatalog = probeCatalog
         self.sandboxUsable = sandboxUsability
         self.summarizerScratchParent = summarizerScratchParent
+        self.packageRunnerTempParent = packageRunnerTempParent
     }
 
     public func prepareInteractive(
@@ -571,7 +639,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         let scratch = try LLMSandboxScratch.make(
             under: summarizerScratchParent,
             namePrefix: "summarizer",
-            strict: Self.strictSummarizerEnabled)
+            strict: Self.strictSummarizerActive)
         let snapshotID = UUID()
         let policy = AgentOperationPolicy(
             kind: .interactive,
@@ -598,8 +666,10 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         }
         // Review HIGH: disposal may have raced the suspension above. A
         // disposed runtime never regains an LLM spawn path — remove the
-        // scratch and refuse instead of resurrecting a snapshot.
+        // scratch AND any package-runner lease the snapshot owns and refuse
+        // instead of resurrecting a snapshot.
         guard !disposed else {
+            snapshot.summarizerPackageRunnerTemp?.remove()
             scratch.remove()
             throw AgentProviderRuntimeError.unavailable
         }
@@ -738,7 +808,10 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         for backend in detached {
             await backend.shutdown()
         }
-        // 4. ONLY NOW remove the scratch — no process can still use it.
+        // 4. ONLY NOW remove the owned temp roots — no process can still use
+        //    them. The package-runner lease goes first, then the scratch
+        //    (issue #1279 teardown transaction, steps 6–7).
+        snapshot?.summarizerPackageRunnerTemp?.remove()
         snapshot?.summarizerScratch?.remove()
     }
 
@@ -777,6 +850,9 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             await backend.shutdown()
         }
         for snapshot in retiring.values {
+            // Issue #1279: lease first, then scratch — the same owned-roots
+            // ordering as `release`, after every backend has terminated.
+            snapshot.summarizerPackageRunnerTemp?.remove()
             snapshot.summarizerScratch?.remove()
         }
     }
@@ -817,7 +893,12 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 providerHints: spawn.hints,
                 scratchDirectory: scratch.directoryURL,
                 isReadOnly: true,
-                sandbox: scratch.sandbox)
+                sandbox: scratch.sandbox,
+                // Issue #1279: the snapshot-owned package-runner staging
+                // lease rides the profile as TRUSTED launch data — never a
+                // provider hint. `ACPBackend` consumes it only when the
+                // effective (post-canonicalization) runner is `.bun`.
+                packageRunnerTempURL: snapshot.summarizerPackageRunnerTemp?.directoryURL)
         } else {
             profile = BackendProfile(model: spawn.model?.rawValue, providerHints: spawn.hints)
         }
@@ -895,7 +976,11 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 for (key, value) in spawnSecrets[provider.id] ?? [:] {
                     hints[HintKey.env(key)] = value
                 }
-                records.append(SpawnRecord(provider: provider, model: model, hints: hints))
+                records.append(SpawnRecord(
+                    provider: provider,
+                    model: model,
+                    hints: hints,
+                    command: commands[provider.id] ?? []))
             }
             chains[stage] = records
             models[stage] = records.first?.model
@@ -903,13 +988,44 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         let selection = AgentOperationModelSelection(
             interactiveModel: models[.chat] ?? nil,
             stageModels: models)
-        return Snapshot(
+        var snapshot = Snapshot(
             policy: policy,
             thinking: thinkingOverride,
             models: selection,
             chains: chains,
             summarizerScratch: summarizerScratch,
-            summarizerLease: summarizerScratch == nil ? nil : SummarizerLeaseGate())
+            summarizerLease: summarizerScratch == nil ? nil : SummarizerLeaseGate(),
+            summarizerPackageRunnerTemp: nil)
+        // Issue #1279: a strict summarizer snapshot whose configured command
+        // is JS-adapter-shaped owns ONE package-runner staging lease for the
+        // snapshot's lifetime. The decision runs on the FROZEN configured
+        // commands via the pure `ACPBackend.isJSAdapterLaunch` predicate —
+        // no Bun resolution happens here (canonicalization stays
+        // `ACPBackend`'s job); an npx form that later canonicalizes to bun
+        // consumes the lease, and one that declines leaves it unused-but-
+        // owned so teardown cleans it up. The transactional rule: this is
+        // the LAST fallible step of `makeSnapshot`, so a lease allocated
+        // here is always attached to the returned snapshot and every
+        // failure path above it has created nothing.
+        if summarizerScratch != nil,
+           Self.strictSummarizerActive,
+           let summarizerCommands = chains[.summarizer],
+           summarizerCommands.contains(where: { Self.commandIsJSAdapterShape($0.command) }) {
+            snapshot.summarizerPackageRunnerTemp = try PackageRunnerTempLease.make(
+                parent: packageRunnerTempParent)
+        }
+        return snapshot
+    }
+
+    /// The pure adapter-shape gate for one frozen command array (issue
+    /// #1279): the same predicate `ACPBackend` applies to its configured
+    /// spawn, applied to the resolved tokens (`command[0]` = executable,
+    /// remainder = arguments). An empty command matches nothing.
+    private static func commandIsJSAdapterShape(_ command: [String]) -> Bool {
+        guard let executable = command.first else { return false }
+        return ACPBackend.isJSAdapterLaunch(
+            executablePath: executable,
+            arguments: Array(command.dropFirst()))
     }
 
     private func makePreparation(

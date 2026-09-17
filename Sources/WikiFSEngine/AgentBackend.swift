@@ -132,6 +132,17 @@ public struct BackendProfile: Sendable {
     /// scratch. nil only on legacy/internal profiles that never spawn an
     /// operation agent (e.g. the message summarizer, extraction clients).
     public var runContext: AgentRunContext?
+    /// The snapshot-owned package-runner execution-staging directory
+    /// (issue #1279) — TRUSTED launch data, deliberately NOT a `providerHints`
+    /// entry, so untrusted provider configuration can never select or replace
+    /// it. Present ONLY on strict summarizer profiles whose configured command
+    /// is JS-adapter-shaped: for an EFFECTIVE `bun x` launch the plan exports
+    /// this directory as the child's `TMPDIR` (bun stages + execs adapters
+    /// under its temp root; the strict scratch stays W^X). A canonicalization
+    /// that declines leaves the lease unused — the plan keeps the scratch
+    /// temp — and snapshot teardown removes it. nil everywhere else
+    /// (extraction, probes, chat: `<scratch>/.tmp` behavior unchanged).
+    public var packageRunnerTempURL: URL?
 
     public init(
         model: String? = nil,
@@ -142,7 +153,8 @@ public struct BackendProfile: Sendable {
         cli: CLIProfile? = nil,
         debugLogURL: URL? = nil,
         sandbox: SandboxProfile.SandboxInvocation? = nil,
-        runContext: AgentRunContext? = nil
+        runContext: AgentRunContext? = nil,
+        packageRunnerTempURL: URL? = nil
     ) {
         self.model = model
         self.providerHints = providerHints
@@ -153,6 +165,7 @@ public struct BackendProfile: Sendable {
         self.debugLogURL = debugLogURL
         self.sandbox = sandbox
         self.runContext = runContext
+        self.packageRunnerTempURL = packageRunnerTempURL
     }
 }
 

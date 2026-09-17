@@ -45,9 +45,12 @@ struct RendererPackageDocumentationTests {
         let root = repositoryRoot()
         let buildScript = try String(contentsOf: root.appending(path: "build.sh"), encoding: .utf8)
 
-        #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md\" \"${RESOURCES_DIR}/\""))
-        #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md\" \"${APPEX_CONTENTS}/Resources/\""))
-        #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md\" \"${DAEMON_XPC_CONTENTS}/Resources/\""))
+        // #1291: the cp lines stage through SPM_BUNDLE_RESOURCES, which
+        // resolves the resource leaf under BOTH SwiftPM bundle layouts (flat
+        // and macOS-style Contents/Resources).
+        #expect(buildScript.contains("cp \"${SPM_BUNDLE_RESOURCES}/wiki-state-chat-reference.md\" \"${RESOURCES_DIR}/\""))
+        #expect(buildScript.contains("cp \"${SPM_BUNDLE_RESOURCES}/wiki-state-chat-reference.md\" \"${APPEX_CONTENTS}/Resources/\""))
+        #expect(buildScript.contains("cp \"${SPM_BUNDLE_RESOURCES}/wiki-state-chat-reference.md\" \"${DAEMON_XPC_CONTENTS}/Resources/\""))
         #expect(buildScript.contains("${BIN_DIR}/WikiFS_WikiFSCore.bundle"))
         #expect(!buildScript.contains("Excalidraw"))
         #expect(!buildScript.contains("SPM_APP_RESOURCE_BUNDLE"))

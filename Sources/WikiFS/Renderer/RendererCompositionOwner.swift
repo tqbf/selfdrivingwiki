@@ -246,11 +246,14 @@ final class AppProcessPluginCatalog {
                         services: providerServices,
                         readConfiguration: { AgentProvidersConfig.loadOrSeed(from: containerDirectory) },
                         resolveCommand: { providers in
-                            let searchPath = await PathPreflight.loginShellPATH()
-                            return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
-                                AgentLauncher.resolveCommand(for: provider, searchPath: searchPath)
-                                    .map { (provider.id, $0) }
-                            })
+                            // Issue #1279: the shared production resolution —
+                            // login-shell PATH first, the validated Bun
+                            // locator as the only bare-`bun` fallback. The
+                            // app and the daemon MUST NOT drift (pinned by
+                            // `ProviderCommandResolverWiringTests`).
+                            await ProviderCommandResolver.resolveCommands(
+                                for: providers,
+                                searchPath: await PathPreflight.loginShellPATH())
                         },
                         readCredential: { providerID in
                             KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)

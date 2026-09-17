@@ -709,5 +709,162 @@ struct AgentSandboxProcessTests {
                     "the system interpreter must keep working under strict (stderr: \(python.errorText))")
         }
     }
+
+    // MARK: - Issue #1279: the package-runner temp exception under the REAL sandbox
+
+    /// AC.2 (live): an effective `bun x` summarizer launch stages + executes
+    /// the adapter under its OWNED temp root (`~/.bun/wikifs-tmp/<uuid>`).
+    /// The strict profile keeps that root writable (the `.bun` runner-home
+    /// exception) and NOT exec-denied, so bun's exact pattern — write a
+    /// launcher file into `$TMPDIR`, chmod +x, exec it — works. The lease is
+    /// allocated through the production `PackageRunnerTempLease`.
+    @Test func strictBunRunnerCanExecuteFromOwnedTemp() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("strict-bun-runner-\(UUID().uuidString)", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { Issue.record("strict-bun-runner cleanup failed: \(error)") }
+        }
+
+        let scratch = try LLMSandboxScratch.make(
+            under: root,
+            namePrefix: "summarizer",
+            homePath: home.path,
+            strict: true)
+        // The PRODUCTION home mapping for a bun x launch — the live test
+        // consumes the same derivation `ACPBackend.sandboxedSpawnPlan` uses.
+        let subpaths = ACPBackend.providerHomeSubpaths(
+            executablePath: "/resolved/bun",
+            arguments: ["x", "@agentclientprotocol/claude-agent-acp"])
+        #expect(subpaths == [".bun"])
+        let invocation = SandboxProfile.invocation(scratch.sandbox, addingHomeSubpaths: subpaths)
+
+        // The production lease allocation, anchored at the fixture home so
+        // the developer's real `.bun` is never touched.
+        let lease = try PackageRunnerTempLease.make(
+            parent: home.appendingPathComponent(".bun/wikifs-tmp", isDirectory: true))
+        defer { lease.remove() }
+
+        let script = """
+        printf '#!/bin/sh\\necho staged-exec-ok\\n' > "$TMPDIR/staged-launcher.sh"
+        chmod +x "$TMPDIR/staged-launcher.sh"
+        "$TMPDIR/staged-launcher.sh"
+        """
+        let wrapped = SandboxProfile.wrappedArguments(
+            executablePath: "/bin/sh",
+            arguments: ["-c", script],
+            invocation: invocation)
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.path
+        environment["PATH"] = "/usr/bin:/bin"
+        environment["TMPDIR"] = lease.directoryURL.path
+        let result = try await run(
+            executablePath: SandboxProfile.sandboxExecutablePath,
+            arguments: wrapped,
+            environment: environment)
+        #expect(result.status == 0 && result.outputText.contains("staged-exec-ok"),
+                "an effective bun x launch must execute from its owned staging lease (status \(result.status), stderr: \(result.errorText))")
+    }
+
+    /// AC.1 (live): the package-runner lease does NOT open scratch
+    /// execution. Even with `TMPDIR` pointed at the owned lease, a freshly
+    /// written executable under the scratch, under `scratch/.tmp`, or under
+    /// global temp stays DENIED, and writes outside the scratch and the
+    /// allowed runner homes stay denied. The strict trailer is unchanged.
+    @Test func strictPackageRunnerTempDoesNotOpenScratchExecution() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("strict-lease-fence-\(UUID().uuidString)", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { Issue.record("strict-lease-fence cleanup failed: \(error)") }
+        }
+
+        let scratch = try LLMSandboxScratch.make(
+            under: root,
+            namePrefix: "summarizer",
+            homePath: home.path,
+            strict: true)
+        let invocation = SandboxProfile.invocation(
+            scratch.sandbox,
+            addingHomeSubpaths: ACPBackend.providerHomeSubpaths(
+                executablePath: "/resolved/bun",
+                arguments: ["x", "@agentclientprotocol/claude-agent-acp"]))
+        let lease = try PackageRunnerTempLease.make(
+            parent: home.appendingPathComponent(".bun/wikifs-tmp", isDirectory: true))
+        defer { lease.remove() }
+
+        func runSandboxed(_ script: String) async throws -> ProcessResult {
+            let wrapped = SandboxProfile.wrappedArguments(
+                executablePath: "/bin/sh",
+                arguments: ["-c", script],
+                invocation: invocation)
+            var environment = ProcessInfo.processInfo.environment
+            environment["HOME"] = home.path
+            environment["PATH"] = "/usr/bin:/bin"
+            environment["TMPDIR"] = lease.directoryURL.path
+            return try await run(
+                executablePath: SandboxProfile.sandboxExecutablePath,
+                arguments: wrapped,
+                environment: environment)
+        }
+        // Freshly-written shebang scripts (never copies of trust-cache
+        // binaries — AMFI kills those regardless of any sandbox).
+        func plantScript(at path: String, marker: String) -> String {
+            """
+            printf '#!/bin/sh\\necho \(marker)\\n' > '\(path)'
+            chmod +x '\(path)'
+            '\(path)'
+            """
+        }
+
+        let scratchPath = scratch.directoryURL.path
+
+        // (a) A planted executable under the scratch stays denied.
+        let scratchPlant = try await runSandboxed(
+            plantScript(at: scratchPath + "/implant.sh", marker: "pwned"))
+        #expect(scratchPlant.status != 0, "scratch execution must stay denied with a lease in play")
+        #expect(!scratchPlant.outputText.contains("pwned"))
+
+        // (b) The scratch `.tmp` leaf — no longer the child's TMPDIR — stays
+        // an exec hole closed.
+        let tmpLeafPlant = try await runSandboxed(
+            plantScript(at: scratchPath + "/.tmp/implant.sh", marker: "pwned"))
+        #expect(tmpLeafPlant.status != 0, "scratch/.tmp execution must stay denied")
+        #expect(!tmpLeafPlant.outputText.contains("pwned"))
+
+        // (c) An executable under GLOBAL temp (planted unsandboxed under the
+        // canonical /private/tmp) stays denied — the strict trailer's
+        // /private/tmp exec deny is unchanged by the lease.
+        let globalPlant = URL(fileURLWithPath: "/private/tmp")
+            .appendingPathComponent("strict-lease-1279-\(UUID().uuidString).sh")
+        try Data("#!/bin/sh\necho pwned\n".utf8).write(to: globalPlant)
+        #expect(chmod(globalPlant.path, 0o755) == 0)
+        defer {
+            do { try FileManager.default.removeItem(at: globalPlant) }
+            catch { Issue.record("global-temp plant cleanup failed: \(error)") }
+        }
+        let globalExec = try await runSandboxed("'\(globalPlant.path)'")
+        #expect(globalExec.status != 0, "global-temp execution must stay denied")
+        #expect(!globalExec.outputText.contains("pwned"))
+
+        // (d) Writes outside the scratch and the allowed runner homes stay
+        // denied — the HOME root gains nothing from the lease.
+        let outsideWrite = try await runSandboxed("echo x > '\(home.path)/escape.txt'")
+        #expect(outsideWrite.status != 0, "a HOME-root write must stay denied")
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent("escape.txt").path))
+
+        // (e) The exception is real but bounded: the Bun staging home stays
+        // writable (that is what makes bun x work), and the lease itself can
+        // hold written files.
+        let leaseWrite = try await runSandboxed(
+            "echo staged > '\(lease.directoryURL.path)/staged.txt'")
+        #expect(leaseWrite.status == 0,
+                "the owned staging lease stays writable (stderr: \(leaseWrite.errorText))")
+        #expect(FileManager.default.fileExists(atPath: lease.directoryURL.appendingPathComponent("staged.txt").path))
+    }
 }
 #endif

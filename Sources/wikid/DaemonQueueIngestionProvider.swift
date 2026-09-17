@@ -57,9 +57,17 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
         let provider = resolveSelectedProvider()
         let loginShellPath = await PathPreflight.loginShellPATH()
-        let message = AgentLauncher.readinessMessage(
+        // Issue #1279 AC.9: resolve FIRST through the shared production
+        // resolver (login-shell PATH + the validated Bun locator fallback),
+        // then hand the result to the pure message builder through its
+        // injected seam.
+        let resolved = await ProviderCommandResolver.resolveCommand(
             for: provider,
             searchPath: loginShellPath)
+        let message = AgentLauncher.readinessMessage(
+            for: provider,
+            searchPath: loginShellPath,
+            resolveCommand: { _ in resolved })
         if message != nil {
             DebugLog.ingest("DaemonQueueIngestionProvider.readiness: NOT READY provider=\(provider.id) label=\(provider.label)")
         }

@@ -1544,7 +1544,7 @@ public final class AgentLauncher {
             resolvedPath = nil
         } else {
             let loginShellPath = await PathPreflight.loginShellPATH()
-            guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
+            guard let spawn = await resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
                 isRunning = false
                 releaseGenerationSlot()
                 return
@@ -2010,7 +2010,7 @@ public final class AgentLauncher {
             plannerModel = config.modelId(forStage: ACPIngestStage.planner.rawValue)
             executorModel = config.modelId(forStage: ACPIngestStage.executor.rawValue)
             finalizerModel = config.modelId(forStage: ACPIngestStage.finalizer.rawValue)
-            guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
+            guard let spawn = await resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
                 DebugLog.agent("runACPIngest: ACP exe missing for provider=\(provider.id) — aborting")
                 preflightError = "The agent executable for ‘\(provider.label)’ was not found on your PATH."
                 finish(status: -1)
@@ -2705,7 +2705,7 @@ public final class AgentLauncher {
             } else {
                 let config = providersConfig()
                 guard let legacyProvider = config.provider(id: descriptor.id),
-                      let spawn = resolveACPProviderSpawn(legacyProvider, searchPath: searchPath) else {
+                      let spawn = await resolveACPProviderSpawn(legacyProvider, searchPath: searchPath) else {
                     DebugLog.agent("runPhaseWithFallback[\(phaseName)]: no spawn for \(descriptor.id) — skipping")
                     attemptChain.removeAll { $0.id == descriptor.id }
                     continue
@@ -3242,20 +3242,27 @@ public final class AgentLauncher {
 
     /// Resolve a `.acp` provider's spawn command (PATH-resolved, since the
     /// swift-acp SDK's `launch()` does no PATH lookup itself) + its
-    /// Keychain-backed API key. `bun` is resolved from the login-shell PATH,
-    /// where mise activates the repository-pinned version. Sets `preflightError`
-    /// and returns `nil` on
+    /// Keychain-backed API key. Resolution goes through the shared
+    /// `ProviderCommandResolver` (issue #1279 AC.9): login-shell PATH first,
+    /// the validated `RuntimeCommandLocator` Bun lookup as the only bare-`bun`
+    /// fallback — so the shipped `bun x …` command resolves from the GUI
+    /// daemon without an absolute-path workaround, and this path cannot drift
+    /// from the catalog compositions. `bun` is resolved from the login-shell
+    /// PATH, where mise activates the repository-pinned version. Sets
+    /// `preflightError` and returns `nil` on
     /// failure — callers must bail out (`isRunning = false` +
     /// `releaseGenerationSlot()`) when this returns `nil`.
     func resolveACPProviderSpawn(
         _ provider: AgentProvider,
         searchPath: String?
-    ) -> (command: [String], apiKey: String?)? {
+    ) async -> (command: [String], apiKey: String?)? {
         guard let command = provider.command, let exe = command.first else {
             preflightError = "Provider ‘\(provider.label)’ has no command configured."
             return nil
         }
-        guard let resolvedCommand = Self.resolveCommand(for: provider, searchPath: searchPath) else {
+        guard let resolvedCommand = await ProviderCommandResolver.resolveCommand(
+            for: provider,
+            searchPath: searchPath) else {
             let resolution = PathPreflight.resolve(
                 executable: ShellArgv.expandTilde(exe),
                 usingSearchPath: searchPath ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
@@ -3573,7 +3580,7 @@ public final class AgentLauncher {
             resolvedPath = "provider runtime"
         } else {
             let loginShellPath = await PathPreflight.loginShellPATH()
-            guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
+            guard let spawn = await resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
                 DebugLog.agent("startInteractiveQuery: ACP exe missing — \(preflightError ?? "?")")
                 return
             }

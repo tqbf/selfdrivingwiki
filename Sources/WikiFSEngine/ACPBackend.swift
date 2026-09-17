@@ -575,6 +575,17 @@ public actor ACPBackend: AgentBackend {
             effectiveSpawn = configuredSpawn
         }
 
+        // Issue #1279: the package-runner policy (home allowances + trusted
+        // temp root) runs on the EFFECTIVE spawn — post-canonicalization, and
+        // post-staleness-fallback — so a canonicalized npx launch receives
+        // Bun policy while a declined or reverted one keeps npm policy. The
+        // lease URL comes from the profile's typed launch data (never a
+        // provider hint), and is present only for strict summarizer
+        // snapshots that own one.
+        let effectiveRunner = PackageRunnerKind.classify(
+            executablePath: effectiveSpawn.executablePath,
+            arguments: effectiveSpawn.arguments)
+
         var spawnExecutablePath = effectiveSpawn.executablePath
         var spawnArguments = effectiveSpawn.arguments
         var spawnEnvironment = env
@@ -585,11 +596,16 @@ public actor ACPBackend: AgentBackend {
                 executablePath: effectiveSpawn.executablePath,
                 arguments: effectiveSpawn.arguments,
                 environment: env,
-                scratchDirectory: profile.scratchDirectory)
+                scratchDirectory: profile.scratchDirectory,
+                packageRunnerTempURL: profile.packageRunnerTempURL)
             spawnExecutablePath = plan.executablePath
             spawnArguments = plan.arguments
             spawnEnvironment = plan.environment
-            DebugLog.agent("sandbox: applied — confining agent writes; network + reads open; defines=\(plan.defines.map { $0.0 })")
+            DebugLog.agent(
+                "sandbox: applied — confining agent writes; network + reads open; " +
+                "runner=\(String(describing: effectiveRunner)) " +
+                "temp=\(spawnEnvironment[Self.tmpRelocationKey] ?? "<unset>"); " +
+                "defines=\(plan.defines.map { $0.0 })")
         }
         #else
         if profile.sandbox != nil {
@@ -2125,24 +2141,43 @@ public actor ACPBackend: AgentBackend {
     /// becomes `sandbox-exec`, the argv becomes
     /// `-p <profile> -D k=v ... -- <agent> <args...>` with provider config
     /// homes layered into the effective profile, and `TMPDIR` is relocated to
-    /// `<scratchDirectory>/.tmp` — the leaf the launcher pre-creates via
-    /// `createSandboxTmpDir` (same relocation the deleted `applySandbox`
-    /// performed). Pure; the fail-closed front-end usability gate runs in
-    /// `startProcess` before this is consulted.
+    /// the launch's TRUSTED temp root — `<scratchDirectory>/.tmp` (the leaf
+    /// the launcher pre-creates via `createSandboxTmpDir`), except for an
+    /// effective Bun launch that carries an allocated
+    /// `PackageRunnerTempLease` (issue #1279; see
+    /// `effectiveTempDirectoryURL`). Pure; the fail-closed front-end
+    /// usability gate runs in `startProcess` before this is consulted.
+    ///
+    /// The runner classification (and therefore the temp policy and the
+    /// package-runner home allowances) runs on the spawn THIS function
+    /// receives — `startProcess` passes the post-canonicalization effective
+    /// spawn, so a canonicalized `npx` launch gets Bun policy while a
+    /// declined one keeps npm policy (issue #1279 AC.5).
     static func sandboxedSpawnPlan(
         invocation: SandboxProfile.SandboxInvocation,
         executablePath: String,
         arguments: [String],
         environment: [String: String],
-        scratchDirectory: URL?
+        scratchDirectory: URL?,
+        packageRunnerTempURL: URL? = nil
     ) -> SandboxedSpawnPlan {
+        let runner = PackageRunnerKind.classify(
+            executablePath: executablePath,
+            arguments: arguments)
         let effective = SandboxProfile.invocation(
             invocation,
             addingHomeSubpaths: providerHomeSubpaths(
-                forCommand: executablePath + " " + arguments.joined(separator: " ")))
+                executablePath: executablePath,
+                arguments: arguments))
         var environment = environment
-        if let scratchPath = scratchDirectory?.path {
-            environment[tmpRelocationKey] = scratchPath + "/" + tmpRelocationLeaf
+        // The launch plan's LAST word on temp wins over anything a provider
+        // hint merged into `environment` earlier (issue #1279 AC.6): the
+        // trusted selection always overwrites a provider-supplied `TMPDIR`.
+        if let tempURL = effectiveTempDirectoryURL(
+            runner: runner,
+            scratchDirectory: scratchDirectory,
+            packageRunnerTempURL: packageRunnerTempURL) {
+            environment[tmpRelocationKey] = tempURL.path
         }
         return SandboxedSpawnPlan(
             executablePath: SandboxProfile.sandboxExecutablePath,
@@ -2152,6 +2187,30 @@ public actor ACPBackend: AgentBackend {
                 invocation: effective),
             environment: environment,
             defines: effective.defines)
+    }
+
+    /// The pure temp-root policy for one launch (issue #1279): an effective
+    /// Bun launch with an allocated package-runner lease uses the lease (bun
+    /// stages + execs the adapter under its temp root, and the strict W^X
+    /// scratch denies forbid executing from scratch); EVERY other launch
+    /// keeps the pre-created `<scratch>/.tmp` leaf. A nil scratch (and no
+    /// lease) exports no `TMPDIR` at all — the pre-existing behavior.
+    ///
+    /// The lease reaches this decision only through
+    /// `BackendProfile.packageRunnerTempURL`, and that field is set only by
+    /// the strict summarizer runtime for JS-adapter-shaped summarizer
+    /// commands — its presence IS the strict-tier gate. Extraction, probes,
+    /// chat, and non-strict runs never carry a lease, so their temp policy
+    /// is unchanged (issue #1279 AC.3).
+    static func effectiveTempDirectoryURL(
+        runner: PackageRunnerKind,
+        scratchDirectory: URL?,
+        packageRunnerTempURL: URL?
+    ) -> URL? {
+        if runner == .bun, let packageRunnerTempURL {
+            return packageRunnerTempURL
+        }
+        return scratchDirectory?.appendingPathComponent(tmpRelocationLeaf)
     }
 
     /// True when the configured launch is a JS-adapter shape this backend
@@ -2297,25 +2356,40 @@ public actor ACPBackend: AgentBackend {
     }
 
     /// `~`-relative config-home subpaths the base agent profile does not
-    /// already allow, derived from the spawn's full command with the same
-    /// substring convention as `launchHint` (a user could rename a provider id
-    /// without changing the command, so the command tokens are the truth).
-    /// Package runners write their install caches under `~` at startup —
-    /// npx/npm into `~/.npm`, `bun x`/bunx into `~/.bun` — and the ACP
-    /// adapters launch through them, so without these the very first wrapped
-    /// spawn dies on EPERM. Provider config homes follow: codex writes
+    /// already allow, classified from the spawn's executable + argument
+    /// arrays. The package-runner caches come from the TYPED
+    /// `PackageRunnerKind` (issue #1279) — never a substring scan, so a
+    /// package spec that merely contains "npx"/"bun" cannot widen the
+    /// allowances: npx/npm → `~/.npm`, `bun x`/`bunx` → `~/.bun`, and
+    /// uv launches → the bounded uv pair `.cache/uv` + `.local/share/uv`
+    /// (the cache/data trees uv's own env contract names; deliberately NOT
+    /// `.local` or `$HOME` as a whole, and no `.local/bin` without a
+    /// captured Seatbelt denial from a production-shaped cold run).
+    /// Provider config homes stay command-token derived: codex writes
     /// `~/.codex`, gemini `~/.gemini`. Unknown commands get no extras — a
     /// denied config-home write surfaces as a visible failure and lands here
     /// as a new mapping entry.
-    static func providerHomeSubpaths(forCommand command: String) -> [String] {
-        let fullCommand = command.lowercased()
+    ///
+    /// The security boundary this expresses (issue #1279 AC.13): these homes
+    /// are an EXPLICIT writable-and-executable package-runner exception.
+    /// Model scratch stays W^X (`SandboxProfile.strictDenyTrailer` is
+    /// unchanged); the exception exists because `bun x` legitimately stages
+    /// and executes packages from its cache.
+    static func providerHomeSubpaths(executablePath: String, arguments: [String]) -> [String] {
         var subpaths: [String] = []
-        if fullCommand.contains("npx") || fullCommand.contains("npm") {
+        switch PackageRunnerKind.classify(
+            executablePath: executablePath,
+            arguments: arguments) {
+        case .npm:
             subpaths.append(".npm")
-        }
-        if fullCommand.contains("bunx") || fullCommand.contains("bun x") {
+        case .bun:
             subpaths.append(".bun")
+        case .uv:
+            subpaths.append(contentsOf: uvHomeSubpaths)
+        case .none:
+            break
         }
+        let fullCommand = ([executablePath] + arguments).joined(separator: " ").lowercased()
         if fullCommand.contains("codex") {
             subpaths.append(".codex")
         }
@@ -2324,6 +2398,13 @@ public actor ACPBackend: AgentBackend {
         }
         return subpaths
     }
+
+    /// The bounded uv write paths (issue #1279 Phase 3): uv initializes its
+    /// package cache under `~/.cache/uv` and its tool data under
+    /// `~/.local/share/uv`. Kept as one named constant so the allowance set
+    /// is auditable in one place; both subtrees must exist in the effective
+    /// profile ONLY for launches `PackageRunnerKind.classify` maps to `.uv`.
+    static let uvHomeSubpaths = [".cache/uv", ".local/share/uv"]
 
     // MARK: - Launch failure diagnostics (#733 + #737)
 

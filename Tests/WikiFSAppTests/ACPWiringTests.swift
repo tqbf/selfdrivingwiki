@@ -307,26 +307,57 @@ import ACPModel
 
     // MARK: - Seatbelt application (issue #1251)
 
-    /// The provider config-home derivation mirrors `launchHint`'s substring
-    /// convention: the command tokens are the truth, not a provider id.
-    /// Package runners layer their own caches (npx → `~/.npm`, `bun x` →
-    /// `~/.bun`) and providers layer their config homes (codex → `~/.codex`,
-    /// gemini → `~/.gemini`); a plain claude binary needs nothing (the base
-    /// profile already allows `~/.claude`). Unknown commands get no extras —
-    /// a denied config-home write is the visible signal to add a mapping.
+    /// The provider config-home derivation: package-runner caches come from
+    /// the TYPED runner classification on the executable + argument arrays
+    /// (issue #1279), and provider config homes stay command-token derived.
+    /// npx → `~/.npm`, `bun x` → `~/.bun`, uv → the bounded uv pair;
+    /// codex → `~/.codex`, gemini → `~/.gemini`; a plain claude binary needs
+    /// nothing (the base profile already allows `~/.claude`). A package spec
+    /// that merely CONTAINS a runner name must not widen the allowances.
     @Test func providerHomeSubpathsDeriveFromCommandTokens() {
         // The exact launch shape that failed on the first wrapped chat:
         // npx writes ~/.npm/_cacache before the adapter even starts.
         #expect(ACPBackend.providerHomeSubpaths(
-            forCommand: "/Users/me/.local/bin/npx @agentclientprotocol/claude-agent-acp") == [".npm"])
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["@agentclientprotocol/claude-agent-acp"]) == [".npm"])
         // bun x adapters get the bun install cache instead.
         #expect(ACPBackend.providerHomeSubpaths(
-            forCommand: "/opt/homebrew/bin/bun x @agentclientprotocol/claude-agent-acp") == [".bun"])
+            executablePath: "/opt/homebrew/bin/bun",
+            arguments: ["x", "@agentclientprotocol/claude-agent-acp"]) == [".bun"])
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/opt/homebrew/bin/bunx",
+            arguments: ["@agentclientprotocol/claude-agent-acp"]) == [".bun"])
+        // uv launches (issue #1279 Phase 3): ONLY the bounded cache/data
+        // pair — no `.local`, no `$HOME`, no `.local/bin`.
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/Users/me/.local/bin/uvx",
+            arguments: ["fast-agent-acp@latest", "--model", "sonnet"])
+            == ACPBackend.uvHomeSubpaths)
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/Users/me/.local/bin/uv",
+            arguments: ["tool", "run", "fast-agent-acp@latest"])
+            == ACPBackend.uvHomeSubpaths)
+        #expect(ACPBackend.uvHomeSubpaths == [".cache/uv", ".local/share/uv"])
         // A plain claude binary needs no runner cache and no extra home.
-        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/claude") == [])
-        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/codex acp") == [".codex"])
-        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/gemini --experimental-acp") == [".gemini"])
-        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/hermes acp") == [])
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/usr/local/bin/claude", arguments: []) == [])
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/usr/local/bin/codex", arguments: ["acp"]) == [".codex"])
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/usr/local/bin/gemini", arguments: ["--experimental-acp"]) == [".gemini"])
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/usr/local/bin/hermes", arguments: ["acp"]) == [])
+        // A bare `bun`/`npm` with a NON-runner subcommand is not a
+        // package-runner launch — no cache allowance.
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/usr/local/bin/npm", arguments: ["run", "build"]) == [])
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/usr/local/bin/bun", arguments: ["run", "dev"]) == [])
+        // Argument-substring trap: the package SPEC may name another runner;
+        // only the executable + runner-argument shape selects the cache.
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/usr/local/bin/claude",
+            arguments: ["-p", "run npx and bun x please"]) == [])
     }
 
     /// Fail-closed usability gate: the real system front-end passes; a
@@ -593,8 +624,8 @@ import ACPModel
         #expect(ACPBackend.canonicalizedSpawn(spawn, resolvedBunPath: nil) == nil)
         // Its provider-home layering is therefore ~/.npm, not ~/.bun.
         #expect(ACPBackend.providerHomeSubpaths(
-            forCommand: spawn.executablePath + " "
-                + spawn.arguments.joined(separator: " ")) == [".npm"])
+            executablePath: spawn.executablePath,
+            arguments: spawn.arguments) == [".npm"])
     }
 
     /// An npx-launched adapter rewrites to `<resolved bun> x <spec>` — the
@@ -617,8 +648,8 @@ import ACPModel
         // The rewritten command is a `bun x` shape, so the provider-home
         // layering drops ~/.npm and layers ~/.bun instead.
         #expect(ACPBackend.providerHomeSubpaths(
-            forCommand: canonical.executablePath + " "
-                + canonical.arguments.joined(separator: " ")) == [".bun"])
+            executablePath: canonical.executablePath,
+            arguments: canonical.arguments) == [".bun"])
     }
 
     /// `npm exec` in both flag orders and the `npm x` alias rewrite; npx-only
@@ -780,6 +811,278 @@ import ACPModel
         #expect(profilePayload?.contains("\"/.npm\"") == false)
         #expect(plan.executablePath == SandboxProfile.sandboxExecutablePath)
     }
+
+    // MARK: - Package-runner policy on the EFFECTIVE spawn (issue #1279)
+
+    /// AC.5: the typed runner policy follows the POST-canonicalization
+    /// spawn. A canonicalized npx launch classifies as Bun; a canonicalization
+    /// that declines (or a bun resolution that missed) keeps the npm
+    /// classification of the configured command.
+    @Test func packageRunnerPolicyUsesEffectiveSpawn() throws {
+        let bun = "/Users/me/.local/share/mise/installs/bun/1.4.0/bin/bun"
+        // Successful npx → bun rewrite: the effective spawn is Bun.
+        let canonical = try #require(ACPBackend.canonicalizedSpawn(
+            ACPBackend.AgentSpawnConfig(
+                executablePath: "/Users/me/.local/bin/npx",
+                arguments: ["@agentclientprotocol/codex-acp@1.1.7"]),
+            resolvedBunPath: bun))
+        #expect(PackageRunnerKind.classify(
+            executablePath: canonical.executablePath,
+            arguments: canonical.arguments) == .bun)
+        // Bun cache PLUS the codex config home — the codex-acp package spec
+        // contains "codex", and that adapter writes ~/.codex (unchanged
+        // behavior from the substring era, now with the runner half typed).
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: canonical.executablePath,
+            arguments: canonical.arguments) == [".bun", ".codex"])
+
+        // A declined rewrite (untranslatable runner flags) keeps the
+        // configured npx command → npm policy, and the staged bun path does
+        // not leak npm policy onto itself.
+        let declined = ACPBackend.AgentSpawnConfig(
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["-p", "@scope/adapter", "bin"])
+        #expect(ACPBackend.canonicalizedSpawn(declined, resolvedBunPath: bun) == nil)
+        #expect(PackageRunnerKind.classify(
+            executablePath: declined.executablePath,
+            arguments: declined.arguments) == .npm)
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: declined.executablePath,
+            arguments: declined.arguments) == [".npm"])
+
+        // Plain provider binaries and uv shapes classify as expected.
+        #expect(PackageRunnerKind.classify(
+            executablePath: "/usr/local/bin/codex", arguments: ["acp"]) == .none)
+        #expect(PackageRunnerKind.classify(
+            executablePath: "/usr/local/bin/uvx",
+            arguments: ["fast-agent-acp@latest", "--model", "sonnet"]) == .uv)
+        #expect(PackageRunnerKind.classify(
+            executablePath: "/usr/local/bin/uv",
+            arguments: ["tool", "run", "fast-agent-acp@latest"]) == .uv)
+        // `uv` without `tool run` is not a uv-runner launch.
+        #expect(PackageRunnerKind.classify(
+            executablePath: "/usr/local/bin/uv", arguments: ["run", "x"]) == .none)
+    }
+
+    /// AC.2: an effective `bun x` launch whose profile carries the snapshot
+    /// lease gets the LEASE as `TMPDIR`; the same shape without a lease keeps
+    /// the scratch `.tmp`. This is the pure-decision half of the Bun temp
+    /// contract (the live exec proof is `strictBunRunnerCanExecuteFromOwnedTemp`).
+    @Test func effectiveBunRunnerUsesOwnedExecutionTemp() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let leaseURL = URL(fileURLWithPath: "/Users/me/.bun/wikifs-tmp/DEADBEEF")
+        let scratch = URL(fileURLWithPath: "/tmp/scratch")
+
+        // Effective bun + lease → the lease wins.
+        let bunPlan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/resolved/bun",
+            arguments: ["x", "@agentclientprotocol/claude-agent-acp"],
+            environment: [:],
+            scratchDirectory: scratch,
+            packageRunnerTempURL: leaseURL)
+        #expect(bunPlan.environment["TMPDIR"] == leaseURL.path)
+
+        // The pure policy mirrors the plan: bun + lease → lease.
+        #expect(ACPBackend.effectiveTempDirectoryURL(
+            runner: .bun,
+            scratchDirectory: scratch,
+            packageRunnerTempURL: leaseURL) == leaseURL)
+
+        // A canonicalization that DECLINED leaves the launch npm-shaped: the
+        // allocated lease is NOT consumed even though the profile carries it.
+        let declinedPlan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["@agentclientprotocol/codex-acp@1.1.7"],
+            environment: [:],
+            scratchDirectory: scratch,
+            packageRunnerTempURL: leaseURL)
+        #expect(declinedPlan.environment["TMPDIR"] == scratch.appendingPathComponent(".tmp").path)
+
+        // And the pure policy keeps uv and plain binaries on the scratch
+        // temp even with a lease present.
+        #expect(ACPBackend.effectiveTempDirectoryURL(
+            runner: .uv,
+            scratchDirectory: scratch,
+            packageRunnerTempURL: leaseURL) == scratch.appendingPathComponent(".tmp"))
+        #expect(ACPBackend.effectiveTempDirectoryURL(
+            runner: .none,
+            scratchDirectory: scratch,
+            packageRunnerTempURL: leaseURL) == scratch.appendingPathComponent(".tmp"))
+        // No scratch and no lease → no TMPDIR at all (pre-existing shape).
+        #expect(ACPBackend.effectiveTempDirectoryURL(
+            runner: .bun,
+            scratchDirectory: nil,
+            packageRunnerTempURL: nil) == nil)
+    }
+
+    /// AC.3: non-summarizer launches (no lease on the profile) keep the
+    /// scratch `.tmp` temp policy regardless of runner shape.
+    @Test func nonSummarizerLaunchesKeepScratchTempPolicy() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let scratch = URL(fileURLWithPath: "/tmp/scratch")
+        let cases: [(executable: String, arguments: [String])] = [
+            ("/usr/local/bin/claude", []),
+            ("/usr/local/bin/codex", ["acp"]),
+            ("/resolved/bun", ["x", "@agentclientprotocol/claude-agent-acp"]),
+            ("/Users/me/.local/bin/npx", ["@agentclientprotocol/codex-acp@1.1.7"]),
+            ("/Users/me/.local/bin/uvx", ["fast-agent-acp@latest"]),
+        ]
+        for launch in cases {
+            let plan = ACPBackend.sandboxedSpawnPlan(
+                invocation: invocation,
+                executablePath: launch.executable,
+                arguments: launch.arguments,
+                environment: [:],
+                scratchDirectory: scratch)
+            #expect(
+                plan.environment["TMPDIR"] == scratch.appendingPathComponent(".tmp").path,
+                "launch \(launch.executable) must keep the scratch temp policy")
+        }
+    }
+
+    /// AC.6: a provider-supplied `TMPDIR` hint never survives the plan —
+    /// the trusted temp selection overwrites it for BOTH temp roots.
+    @Test func sandboxedSpawnPlanOverwritesUntrustedTempHint() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let scratch = URL(fileURLWithPath: "/tmp/scratch")
+        let leaseURL = URL(fileURLWithPath: "/Users/me/.bun/wikifs-tmp/CAFEBABE")
+        let hostile = ["TMPDIR": "/attacker/controlled", "TMPPREFIX": "/attacker/prefix"]
+
+        let bunPlan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/resolved/bun",
+            arguments: ["x", "pkg"],
+            environment: hostile,
+            scratchDirectory: scratch,
+            packageRunnerTempURL: leaseURL)
+        #expect(bunPlan.environment["TMPDIR"] == leaseURL.path)
+
+        let plainPlan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/usr/local/bin/claude",
+            arguments: [],
+            environment: hostile,
+            scratchDirectory: scratch)
+        #expect(plainPlan.environment["TMPDIR"] == scratch.appendingPathComponent(".tmp").path)
+    }
+
+    /// AC.4 (profile half): a uv launch layers ONLY the bounded uv pair —
+    /// the emitted profile must not gain `.local`, `$HOME`, or `.local/bin`
+    /// write allowances, and the uv temp stays on the scratch `.tmp`.
+    @Test func providerHomePolicyForUVIsBounded() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/Users/me/.local/bin/uvx",
+            arguments: ["fast-agent-acp@latest", "--model", "sonnet"],
+            environment: [:],
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch"))
+        let profilePayload = plan.arguments.first { $0.contains("(version 1)") }
+        #expect(profilePayload?.contains("\"/.cache/uv\"") == true)
+        #expect(profilePayload?.contains("\"/.local/share/uv\"") == true)
+        // The bounded pair only: no broad home or .local allowance may ride along.
+        #expect(profilePayload?.contains("(allow file-write* (subpath (param \"HOME\")))") == false)
+        #expect(profilePayload?.contains("\"/.local\"") == false)
+        #expect(profilePayload?.contains("\"/.local/bin\"") == false)
+        // uv keeps the scratch temp (issue #1279 Phase 3: no evidence of
+        // uv executing from TMPDIR).
+        #expect(
+            plan.environment["TMPDIR"]
+                == URL(fileURLWithPath: "/tmp/scratch").appendingPathComponent(".tmp").path)
+    }
+
+    /// AC.9 (integration): the SHIPPED provider command — a bare
+    /// `bun x @agentclientprotocol/claude-agent-acp` with no absolute path —
+    /// reaches an EFFECTIVE absolute-bun spawn through the production seams
+    /// only: shared resolver (locator fallback; no PATH shortcut) →
+    /// `providerHints` → `resolveSpawnConfig` → `canonicalizedSpawn` →
+    /// `sandboxedSpawnPlan`. No test-only command rewrite anywhere.
+    @Test(.enabled(if: ACPWiringTests.bunLocatable))
+    func shippedBareBunCommandReachesAbsoluteBunSpawn() async throws {
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "claude-acp"),
+            label: "Claude",
+            command: ["bun", "x", "@agentclientprotocol/claude-agent-acp"])
+
+        // Step 1: the shared production resolution with a PATH that lacks
+        // bun — exactly the GUI-daemon situation — so ONLY the validated
+        // locator can save it.
+        let resolved = await ProviderCommandResolver.resolveCommands(
+            for: [provider],
+            searchPath: "/nonexistent/bin",
+            locateBun: ProviderCommandResolver.defaultLocateBun)
+        let command = try #require(resolved[provider.id], "the locator fallback must resolve the shipped bare bun command")
+        #expect(command.first.map { ($0 as NSString).lastPathComponent } == "bun")
+        #expect(command.first?.hasPrefix("/") == true, "the resolved bun is absolute")
+        #expect(Array(command.dropFirst()) == ["x", "@agentclientprotocol/claude-agent-acp"])
+
+        // Step 2: the same hints → spawn-config → canonicalization flow the
+        // launcher and ACPBackend run in production.
+        let hints = AgentBackendFactory.providerHints(
+            provider: provider,
+            resolvedCommand: command,
+            apiKey: nil)
+        let profile = BackendProfile(providerHints: hints)
+        let spawn = try #require(ACPBackend.resolveSpawnConfig(from: profile))
+        let bunResolution = await ACPBackend.defaultResolveBunRuntime()
+        let canonical = try #require(
+            ACPBackend.canonicalizedSpawn(spawn, resolvedBunPath: bunResolution?.executableURL.path))
+
+        // Step 3: the effective plan wraps the ABSOLUTE bun — not the bare
+        // token — and, with a snapshot lease, exports the lease as TMPDIR.
+        // The lease parent is an ISOLATED temp root (never the developer's
+        // real ~/.bun).
+        let isolatedParent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-wiring-lease-\(UUID().uuidString)", isDirectory: true)
+        let lease = try PackageRunnerTempLease.make(parent: isolatedParent)
+        defer {
+            lease.remove()
+            do { try FileManager.default.removeItem(at: isolatedParent) }
+            catch { Issue.record("isolated lease parent cleanup failed: \(error)") }
+        }
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: SandboxProfile.strictReadOnlyInvocation(
+                homePath: NSHomeDirectory(),
+                scratchDir: NSSearchPathForDirectoriesInDomains(.cachesDirectory, .userDomainMask, true).first!
+                    + "/acp-wiring-test-scratch"),
+            executablePath: canonical.executablePath,
+            arguments: canonical.arguments,
+            environment: [:],
+            scratchDirectory: nil,
+            packageRunnerTempURL: lease.directoryURL)
+        let separator = try #require(plan.arguments.firstIndex(of: "--"))
+        let effective = Array(plan.arguments[(separator + 1)...])
+        #expect(effective.first == command.first,
+                "the effective spawn begins with the resolved absolute bun")
+        #expect(Array(effective.dropFirst()) == ["x", "@agentclientprotocol/claude-agent-acp"])
+        #expect(plan.environment["TMPDIR"] == lease.directoryURL.path)
+    }
+
+    static let bunLocatable: Bool = {
+        let searchPath = ProcessInfo.processInfo.environment["PATH"]
+            ?? "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+        if case .found = PathPreflight.resolve(
+            executable: "bun",
+            onPath: searchPath,
+            fileExists: { FileManager.default.isExecutableFile(atPath: $0) }) {
+            return true
+        }
+        return false
+    }()
 
     /// Committee round 2 (Sol MAJOR-2 + Claude M3): concurrent first callers
     /// share ONE locate (the in-flight task), and the shared result is not
