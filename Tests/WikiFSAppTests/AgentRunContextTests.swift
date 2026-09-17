@@ -198,9 +198,18 @@ struct AgentRunContextTests {
         #expect(section.contains("/cache/runs/run-1/.tmp"))
         #expect(section.contains("/cache/runs/run-1/WIKI_STATE.md"))
         #expect(section.contains("report--01SRC.pdf"))
-        // The trusted invocation is rendered shell-safe with --wiki.
+        // The PREFERRED form is bare wikictl with --wiki before the subcommand
+        // (issue: the space in the absolute helper path made unquoted
+        // invocations fail with zsh exit 127).
+        #expect(section.contains("PREFERRED FORM"))
+        #expect(section.contains("`wikictl --wiki 01WIKI <subcommand> …`"))
+        #expect(section.contains("no `--wiki=<id>` form"))
+        // The trusted absolute invocation remains the guaranteed fallback,
+        // rendered shell-safe, with the space-in-path warning.
+        #expect(section.contains("GUARANTEED FALLBACK"))
         #expect(section.contains("--wiki 01WIKI"))
         #expect(section.contains(context.wikictlPath))
+        #expect(section.contains("contains a SPACE"))
         // Env vars are named as conveniences, not requirements.
         #expect(section.contains("WIKI_DB"))
     }

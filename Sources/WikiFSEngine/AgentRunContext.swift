@@ -290,8 +290,15 @@ public struct AgentRunContext: Sendable, Equatable {
             lines.append("- Staged source file(s): \(stagedSourcePaths.joined(separator: ", "))")
         }
         lines.append("""
-        - Wiki tool (TRUSTED ABSOLUTE INVOCATION — run wiki changes EXACTLY in this \
-        form, splicing your subcommand and flags after it): \(renderedWikiInvocation) …
+        - Wiki tool (PREFERRED FORM — bare `wikictl` is FIRST on your PATH): \
+        `wikictl --wiki \(wikiID.rawValue) <subcommand> …`. `--wiki <id>` goes \
+        BEFORE the subcommand; there is no `--wiki=<id>` form.
+        """)
+        lines.append("""
+        - Wiki tool (GUARANTEED FALLBACK — TRUSTED ABSOLUTE INVOCATION; use it \
+        verbatim, splicing your subcommand and flags after it, when bare \
+        `wikictl` is not found): \(renderedWikiInvocation) … The absolute path \
+        contains a SPACE — keep the single quotes exactly as rendered.
         """)
         lines.append("""
           Bare `wikictl`, `$WIKICTL`, `$WIKI_DB`, and your PATH are conveniences that \
