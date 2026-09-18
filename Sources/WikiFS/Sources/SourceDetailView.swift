@@ -376,9 +376,12 @@ struct SourceDetailView: View {
     /// predicate).
     private var needsExtraction: Bool { isExtractable && !hasMarkdown }
 
-    private var rawSourceExtractor: RawSourceExtractorMatch? {
-        guard !hasMarkdown, currentMarkdownContent == nil else { return nil }
-        return Self.rawSourceExtractorMatch(
+    /// All matching extractors for the current Raw Source (#1252). Empty when
+    /// a derivation exists or nothing matches — the UI then shows no
+    /// affordance (issue #1252: no dead ends, no disabled controls).
+    private var rawSourceExtractors: [RawSourceExtractorMatch] {
+        guard !hasMarkdown, currentMarkdownContent == nil else { return [] }
+        return Self.rawSourceExtractorMatches(
             mimeType: file.mimeType,
             ext: file.ext,
             registrations: activeExtractorRegistrations)
@@ -615,6 +618,21 @@ struct SourceDetailView: View {
             }
             // headVersion feeds `outlinePayload`; a real content change
             // re-registers through the payload observer.
+        }
+        // #1252: standalone extraction runs in the wikid daemon and can
+        // outlive this view's 30s XPC `waitForCompletion` (pdf2md and
+        // docling runs take minutes). Tracker membership in
+        // `extractingSourceIDs` ends on the daemon's terminal queue event,
+        // so the extracting→idle edge here is the reliable "finished"
+        // signal: refresh the derived head and presentation immediately,
+        // instead of waiting for a close/reopen to re-run the load task.
+        .onChange(of: tracker.extractingSourceIDs.contains(file.id)) { wasExtracting, isExtractingNow in
+            guard wasExtracting, !isExtractingNow, !isEditing else { return }
+            if let head = store.processedMarkdownHead(for: file),
+               head.id != headVersion?.id {
+                headVersion = head
+                refreshRendererPresentation()
+            }
         }
         .background { findShortcutButton }
         .overlay(alignment: .top) { findBarOverlay }
@@ -1494,16 +1512,17 @@ struct SourceDetailView: View {
     /// PDF/HTML/DOCX) and the Raw Source affordance (#1252) dispatch
     /// identically — inline package-only paths for HTML/DOCX (the queue
     /// engine is PDF-coupled via `ExtractionResolution.pdfData`), managed
-    /// queue otherwise. Kept as one method so both buttons can never drift.
-    private func runExtractForCurrentSource() {
-        DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.isHTMLSource(file)), docx=\(SourceRendererPresentationPlanner.isDOCXSource(file))")
+    /// queue otherwise. `backend` force-runs a package chosen from the Raw
+    /// Source dropdown. Kept as one method so all affordances share a path.
+    private func runExtractForCurrentSource(backend: ExtractionBackend? = nil) {
+        DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.isHTMLSource(file)), docx=\(SourceRendererPresentationPlanner.isDOCXSource(file)), backend=\(backend?.rawValue ?? "default")")
         Task {
             if SourceRendererPresentationPlanner.isHTMLSource(file) {
                 await runHtmlExtraction()
             } else if SourceRendererPresentationPlanner.isDOCXSource(file) {
                 await runDocxExtraction()
             } else {
-                await runExtraction()
+                await runExtraction(backend: backend)
             }
         }
     }
@@ -1592,7 +1611,7 @@ struct SourceDetailView: View {
     /// Extraction progress is shown in the transcript sidebar's PDF Conversion
     /// box — the detail view keeps only a minimal Extracting… spinner in the
     /// header. The queue engine's `.progress` events drive the tracker's log.
-    private func runExtraction() async {
+    private func runExtraction(backend: ExtractionBackend? = nil) async {
         isExtracting = true
         defer {
             isExtracting = false
@@ -1600,11 +1619,22 @@ struct SourceDetailView: View {
 
         // Route extraction through the queue engine instead of the old
         // inline slot machinery. The engine handles serialization (local
-        // pdf2md limit 1), readiness checks, and progress reporting.
+        // pdf2md limit 1), readiness checks, and progress reporting. A
+        // chosen-package run passes the backend override via stageRouting —
+        // the same channel re-extraction uses; the worker resolves it to the
+        // reviewed package lineage instead of the configured default.
         do {
+            let payload: QueueItemPayload
+            if let backend {
+                payload = QueueItemPayload(
+                    sourceIDs: [file.id],
+                    stageRouting: [StageRoutingKey.backend.rawValue: backend.rawValue])
+            } else {
+                payload = QueueItemPayload(sourceIDs: [file.id])
+            }
             let request = QueueItemRequest(
                 queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
-                payload: QueueItemPayload(sourceIDs: [file.id]))
+                payload: payload)
             let itemID = try await queueEngine.enqueue(request)
             let result = try await queueEngine.waitForCompletion(of: itemID)
 
@@ -1922,31 +1952,55 @@ struct SourceDetailView: View {
         ContentUnavailableView {
             Label("Raw Source", systemImage: symbol)
         } description: {
-            Text("This file is stored verbatim in the wiki. Ingesting asks the agent to read it, create or update wiki pages, refresh index.md, and append log.md.")
+            Text("This file is stored verbatim in the wiki — extract and ingest never change it. **Extract** runs the matching extractor package and adds a Markdown version beside the original. **Ingest** asks the agent to read it, create or update wiki pages, refresh index.md, and append log.md.")
         } actions: {
-            // Issue #1252: when a registered extractor matches this source's
-            // declared MIME type or extension, the next step lives right where
-            // the dead end is — the Raw Source reader — instead of behind the
-            // (collapsed-by-default) source header. The title names the
-            // package; the tap uses the same managed dispatch as the header's
-            // Extract button, so routing policy stays in the route table.
-            if let extractor = rawSourceExtractor {
-                Button(
-                    isExtracting || isThisFileExtracting
-                        ? "Extracting…"
-                        : "Extract with \(extractor.packageName)",
-                    systemImage: "doc.plaintext") {
-                    runExtractForCurrentSource()
+            // Issue #1252: when registered extractors match this source's
+            // declared MIME type or extension, the next step lives right
+            // where the dead end is — the Raw Source reader. One match gets a
+            // button; several (a PDF matches both pdf2md and docling-serve)
+            // get a dropdown that force-runs the chosen package.
+            let extractors = rawSourceExtractors
+            if extractors.count == 1 {
+                rawSourceExtractButton(match: extractors[0])
+            } else if extractors.count > 1 {
+                Menu {
+                    ForEach(extractors, id: \.registration) { match in
+                        Button("Extract with \(match.packageName)") {
+                            runExtractForCurrentSource(backend: match.backend)
+                        }
+                    }
+                } label: {
+                    Label(extractMenuTitle, systemImage: "doc.plaintext")
                 }
+                .menuStyle(.button)
                 .buttonStyle(.borderedProminent)
-                .disabled(isExtracting
-                          || isThisFileExtracting
+                .disabled(isExtracting || isThisFileExtracting
                           // Another file currently holds the extraction
                           // slot — mirror the header button's busy state.
                           || tracker.isSlotBusyForOtherSource(file.id))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Single-match Extract button for the Raw Source panel.
+    private func rawSourceExtractButton(match: RawSourceExtractorMatch) -> some View {
+        Button(
+            isExtracting || isThisFileExtracting
+                ? "Extracting…"
+                : "Extract with \(match.packageName)",
+            systemImage: "doc.plaintext") {
+            runExtractForCurrentSource(backend: match.backend)
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(isExtracting
+                  || isThisFileExtracting
+                  || tracker.isSlotBusyForOtherSource(file.id))
+    }
+
+    /// Title for the multi-match Extract dropdown.
+    private var extractMenuTitle: String {
+        isExtracting || isThisFileExtracting ? "Extracting…" : "Extract with…"
     }
 
     // MARK: - Edit helpers
@@ -2110,36 +2164,53 @@ private struct PDFTaskKey: Hashable {
     let anchorVersion: Int
 }
 
-/// Manifest-derived presentation for the one active package chosen to act on
-/// a Raw Source. Matching is deterministic so multiple compatible package
-/// registrations never produce multiple primary buttons.
+/// Manifest-derived presentation for the packages chosen to act on a Raw
+/// Source — one entry per matching registration, deterministic order.
+/// `backend` is the queue-execution override that force-runs this package
+/// (nil: run with the configured route default).
 struct RawSourceExtractorMatch: Equatable, Sendable {
     let packageName: String
     let registration: ExtractorReference
+    let backend: ExtractionBackend?
 }
 
 // MARK: - PR2 testable seam — Extract / Transcribe affordance (§5.4)
 
 extension SourceDetailView {
 
-    /// Pure input matching for the Raw Source affordance. Active registrations
-    /// are supplied by the extraction runtime; unavailable catalog entries are
-    /// never passed here. MIME and extension claims are both accepted because
-    /// malformed/binary sources may retain only one reliable input fact.
+    /// All input matches for the Raw Source affordance (#1252): every active
+    /// registration that claims the source's MIME type or extension, one per
+    /// package, deterministic order. Unavailable catalog entries are never
+    /// passed here. The UI offers a single button for one match and a
+    /// dropdown for several (PDFs match both pdf2md and docling-serve).
+    nonisolated static func rawSourceExtractorMatches(
+        mimeType: String?,
+        ext: String?,
+        registrations: [ExtractorRouteRegistrationSnapshot]
+    ) -> [RawSourceExtractorMatch] {
+        return ExtractorRouteTableBuilder.activeRegistrations(
+            mimeType: mimeType,
+            filenameExtension: ext,
+            registrations: registrations)
+            .map { registration in
+                RawSourceExtractorMatch(
+                    packageName: registration.packageName.isEmpty ? registration.displayName : registration.packageName,
+                    registration: registration.reference,
+                    backend: ExtractorRouteTableBuilder.executionBackend(for: registration))
+            }
+    }
+
+    /// The deterministic primary match (`rawSourceExtractorMatches.first`).
     nonisolated static func rawSourceExtractorMatch(
         mimeType: String?,
         ext: String?,
         registrations: [ExtractorRouteRegistrationSnapshot]
     ) -> RawSourceExtractorMatch? {
-        return ExtractorRouteTableBuilder.activeRegistration(
+        rawSourceExtractorMatches(
             mimeType: mimeType,
-            filenameExtension: ext,
+            ext: ext,
             registrations: registrations)
-            .map {
-                RawSourceExtractorMatch(
-                    packageName: $0.packageName.isEmpty ? $0.displayName : $0.packageName,
-                    registration: $0.reference)
-            }
+            .first
     }
 
     /// The single-affordance decision for a source's content type, computed

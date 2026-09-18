@@ -1,5 +1,6 @@
 import Foundation
 import WikiFSCore
+import WikiFSMarkdown
 
 // pattern: Functional Core
 
@@ -60,15 +61,15 @@ public enum ExtractorRouteTableBuilder {
         }
     }
 
-    /// Returns the deterministic primary active registration for a source
-    /// input. This uses the same manifest-declared MIME/extension surface as
-    /// the Settings route table, but excludes unavailable catalog entries by
-    /// accepting only the active `registrations` collection.
-    public static func activeRegistration(
+    /// All matching active registrations for a source input, in the same
+    /// deterministic order `activeRegistration` uses for its primary pick.
+    /// The Raw Source affordance uses this to offer every matching
+    /// extractor, not just the primary.
+    public static func activeRegistrations(
         mimeType: String?,
         filenameExtension: String?,
         registrations: [ExtractorRouteRegistrationSnapshot]
-    ) -> ExtractorRouteRegistrationSnapshot? {
+    ) -> [ExtractorRouteRegistrationSnapshot] {
         let normalizedMIME = mimeType?.lowercased()
         let normalizedExtension = filenameExtension?.lowercased()
         return registrations
@@ -85,7 +86,40 @@ public enum ExtractorRouteTableBuilder {
                 ($0.packageName, $0.displayName, $0.reference) <
                 ($1.packageName, $1.displayName, $1.reference)
             }
+    }
+
+    /// Returns the deterministic primary active registration for a source
+    /// input. This uses the same manifest-declared MIME/extension surface as
+    /// the Settings route table, but excludes unavailable catalog entries by
+    /// accepting only the active `registrations` collection.
+    public static func activeRegistration(
+        mimeType: String?,
+        filenameExtension: String?,
+        registrations: [ExtractorRouteRegistrationSnapshot]
+    ) -> ExtractorRouteRegistrationSnapshot? {
+        activeRegistrations(
+            mimeType: mimeType,
+            filenameExtension: filenameExtension,
+            registrations: registrations)
             .first
+    }
+
+    /// Queue-execution backend that force-runs one reviewed package. This is
+    /// invocation data — the same (kind, package) pairs
+    /// `ProcessExtractionServices.executionKey` resolves to reviewed package
+    /// lineages — not extractor policy: WHICH extractors are offered still
+    /// comes from the registration snapshots. A package without a legacy
+    /// execution backend returns nil and runs with the configured route
+    /// default.
+    public static func executionBackend(
+        for registration: ExtractorRouteRegistrationSnapshot
+    ) -> ExtractionBackend? {
+        guard registration.kinds.contains(.pdf) else { return nil }
+        switch registration.reference.revision.packageID.rawValue {
+        case "org.selfdrivingwiki.pdf2md": return .localPdf2md
+        case "org.selfdrivingwiki.docling-serve": return .doclingServe
+        default: return nil
+        }
     }
 
     // MARK: - Route collection

@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import WikiFSTypes
 import WikiFSEngine
+import WikiFSMarkdown
 @testable import WikiFS
 
 /// Tests for the PR2 §5.4 migration of `SourceDetailView`'s Extract /
@@ -194,6 +195,51 @@ import WikiFSEngine
             registrations: [])
 
         #expect(match == nil)
+    }
+
+    @Test("Raw Source offers every matching extractor, each with its run backend")
+    func rawSourceOffersAllMatchingExtractors() throws {
+        let pdf2md = ExtractorRouteRegistrationSnapshot(
+            reference: try reference(packageID: "org.selfdrivingwiki.pdf2md"),
+            displayName: "Local pdf2md",
+            packageName: "pdf2md",
+            kinds: [.pdf],
+            mimeTypes: [try ExtractorMIMEType(validating: "application/pdf")],
+            filenameExtensions: [try ExtractorFileExtension(validating: "pdf")])
+        let docling = ExtractorRouteRegistrationSnapshot(
+            reference: try reference(packageID: "org.selfdrivingwiki.docling-serve"),
+            displayName: "Docling Serve",
+            packageName: "docling-serve",
+            kinds: [.pdf],
+            mimeTypes: [try ExtractorMIMEType(validating: "application/pdf")],
+            filenameExtensions: [])
+
+        let matches = SourceDetailView.rawSourceExtractorMatches(
+            mimeType: "application/pdf",
+            ext: "pdf",
+            registrations: [docling, pdf2md])
+
+        #expect(matches.map(\.packageName) == ["docling-serve", "pdf2md"])
+        #expect(matches.map(\.backend) == [.doclingServe, .localPdf2md])
+    }
+
+    @Test("A package with no execution backend still matches and runs the route default")
+    func unknownPackageMatchesWithoutBackend() throws {
+        let exotic = ExtractorRouteRegistrationSnapshot(
+            reference: try reference(packageID: "org.example.mystery"),
+            displayName: "Mystery Extractor",
+            packageName: "mystery",
+            kinds: [.pdf],
+            mimeTypes: [try ExtractorMIMEType(validating: "application/pdf")],
+            filenameExtensions: [])
+
+        let matches = SourceDetailView.rawSourceExtractorMatches(
+            mimeType: "application/pdf",
+            ext: nil,
+            registrations: [exotic])
+
+        #expect(matches.count == 1)
+        #expect(matches[0].backend == nil)
     }
 
     private func reference(packageID: String) throws -> ExtractorReference {

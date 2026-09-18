@@ -14,14 +14,26 @@ extraction runtime. A pure route-table matcher selects one deterministic
 package when a raw source matches a declared MIME type or file extension.
 
 The Raw Source reader panel (the `binaryFallback` ContentUnavailableView that
-says "This file is stored verbatim in the wiki") shows one primary action when
-a matching extractor is registered. The action names the package, such as
-`Extract with pdf2md`, and dispatches through the same managed path as the
-header's Extract button (`runExtractForCurrentSource`). Operator review moved
-the affordance here from the source header: the header starts collapsed, so a
-header-only button was undiscoverable exactly where the user needs a next step.
-The header keeps its pre-#1252 behavior (generic Extract for un-extracted
-PDF/HTML/DOCX sources only).
+says "This file is stored verbatim in the wiki") shows the affordance. One
+matching extractor gets a button; several (a PDF matches both pdf2md and
+docling-serve) get a dropdown menu, and the chosen package is force-run via
+the same `StageRoutingKey.backend` override channel re-extraction uses —
+`ExtractorRouteTableBuilder.executionBackend` maps the reviewed packages to
+their execution backends, and unmapped packages run with the configured route
+default. The panel text now states what each action does: extract adds a
+Markdown version beside the untouched original; ingest asks the agent to read
+it and update the wiki. Operator review moved the affordance here from the
+source header: the header starts collapsed, so a header-only button was
+undiscoverable exactly where the user needs a next step. The header keeps its
+pre-#1252 behavior (generic Extract for un-extracted PDF/HTML/DOCX sources
+only).
+
+Standalone extraction runs in the wikid daemon and can outlive the view's
+30-second XPC `waitForCompletion` (pdf2md and docling runs take minutes) —
+after that timeout the view used to keep showing Raw Source until a
+close/reopen. The tracker's `extractingSourceIDs` membership ends on the
+daemon's terminal queue event, so the view now refreshes the derived head and
+renderer presentation on that extracting→idle edge.
 
 The existing sourcesVersion observer remains the refresh path. The store event
 bus reloads the source state after extraction writes, and the observer reloads
