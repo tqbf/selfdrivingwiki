@@ -48,7 +48,7 @@ is involved. The deployment floor stays macOS 26.0.
    `StageProviderSelectionState.pinnedAppleIntelligence` state (not
    `pinnedMissing`, so no false "provider no longer exists" warning).
 
-## Evidence
+## Verification
 
 - `make build` passes with `-warnings-as-errors` (Swift 6.4, macOS 27 SDK,
   macOS 26 deployment floor).
