@@ -385,14 +385,10 @@ struct SourceDetailView: View {
     }
 
     /// Title for the Extract button, hoisted out of the `Button` call so the
-    /// initializer overload resolves directly (nested ternary + `map` + `??`
-    /// arguments are a known type-checker cost).
+    /// initializer overload resolves directly (nested ternary arguments are a
+    /// known type-checker cost).
     private var extractButtonTitle: String {
-        if isExtracting || isThisFileExtracting { return "Extracting…" }
-        if let extractor = rawSourceExtractor {
-            return "Extract with \(extractor.packageName)"
-        }
-        return "Extract"
+        isExtracting || isThisFileExtracting ? "Extracting…" : "Extract"
     }
 
     /// `true` when this source has ≥2 extraction alternatives — the gate for the
@@ -821,7 +817,7 @@ struct SourceDetailView: View {
                     if hasExtractionChip, let head = headVersion {
                         extractionProvenanceChip(head: head)
                     }
-                    if needsExtraction || rawSourceExtractor != nil {
+                    if needsExtraction {
                         // No derivation yet → Extract is the call-to-action:
                         // prominent and leftmost, with Ingest stepped down to
                         // secondary until there's markdown worth ingesting.
@@ -835,16 +831,7 @@ struct SourceDetailView: View {
                         Button(
                             extractButtonTitle,
                             systemImage: "doc.plaintext") {
-                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.isHTMLSource(file)), docx=\(SourceRendererPresentationPlanner.isDOCXSource(file))")
-                            Task {
-                                if SourceRendererPresentationPlanner.isHTMLSource(file) {
-                                    await runHtmlExtraction()
-                                } else if SourceRendererPresentationPlanner.isDOCXSource(file) {
-                                    await runDocxExtraction()
-                                } else {
-                                    await runExtraction()
-                                }
-                            }
+                            runExtractForCurrentSource()
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(isExtracting
@@ -1503,6 +1490,24 @@ struct SourceDetailView: View {
         activeExtractorRegistrations = await extractionCoordinator.activeRegistrationSnapshots()
     }
 
+    /// Shared Extract tap handling: the header affordance (un-extracted
+    /// PDF/HTML/DOCX) and the Raw Source affordance (#1252) dispatch
+    /// identically — inline package-only paths for HTML/DOCX (the queue
+    /// engine is PDF-coupled via `ExtractionResolution.pdfData`), managed
+    /// queue otherwise. Kept as one method so both buttons can never drift.
+    private func runExtractForCurrentSource() {
+        DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.isHTMLSource(file)), docx=\(SourceRendererPresentationPlanner.isDOCXSource(file))")
+        Task {
+            if SourceRendererPresentationPlanner.isHTMLSource(file) {
+                await runHtmlExtraction()
+            } else if SourceRendererPresentationPlanner.isDOCXSource(file) {
+                await runDocxExtraction()
+            } else {
+                await runExtraction()
+            }
+        }
+    }
+
     private func handleRendererFallback(_ reason: String) {
         DebugLog.tabs("SourceDetailView: renderer fallback (source=\(file.id.rawValue), reason=\(reason))")
         // The host owns the live Source fallback. Do not persist it: an
@@ -1918,6 +1923,28 @@ struct SourceDetailView: View {
             Label("Raw Source", systemImage: symbol)
         } description: {
             Text("This file is stored verbatim in the wiki. Ingesting asks the agent to read it, create or update wiki pages, refresh index.md, and append log.md.")
+        } actions: {
+            // Issue #1252: when a registered extractor matches this source's
+            // declared MIME type or extension, the next step lives right where
+            // the dead end is — the Raw Source reader — instead of behind the
+            // (collapsed-by-default) source header. The title names the
+            // package; the tap uses the same managed dispatch as the header's
+            // Extract button, so routing policy stays in the route table.
+            if let extractor = rawSourceExtractor {
+                Button(
+                    isExtracting || isThisFileExtracting
+                        ? "Extracting…"
+                        : "Extract with \(extractor.packageName)",
+                    systemImage: "doc.plaintext") {
+                    runExtractForCurrentSource()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isExtracting
+                          || isThisFileExtracting
+                          // Another file currently holds the extraction
+                          // slot — mirror the header button's busy state.
+                          || tracker.isSlotBusyForOtherSource(file.id))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

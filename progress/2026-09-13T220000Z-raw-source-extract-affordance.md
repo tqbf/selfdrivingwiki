@@ -2,7 +2,7 @@
 timestamp: 2026-09-13T220000Z
 title: Raw Source Extract affordance (#1252)
 branch: feature/show-extract-button-raw-source
-status: implemented; CI compiler fix pending verification
+status: implemented; placement moved to Raw Source reader panel per operator review
 ---
 
 # Raw Source Extract affordance (#1252)
@@ -13,9 +13,15 @@ SourceDetailView now loads active extractor registration snapshots from the
 extraction runtime. A pure route-table matcher selects one deterministic
 package when a raw source matches a declared MIME type or file extension.
 
-The source header shows one primary action only for Raw Source without a
-derived Markdown head. The action names the package, such as `Extract with
-pdf2md`, and uses the existing managed extraction queue.
+The Raw Source reader panel (the `binaryFallback` ContentUnavailableView that
+says "This file is stored verbatim in the wiki") shows one primary action when
+a matching extractor is registered. The action names the package, such as
+`Extract with pdf2md`, and dispatches through the same managed path as the
+header's Extract button (`runExtractForCurrentSource`). Operator review moved
+the affordance here from the source header: the header starts collapsed, so a
+header-only button was undiscoverable exactly where the user needs a next step.
+The header keeps its pre-#1252 behavior (generic Extract for un-extracted
+PDF/HTML/DOCX sources only).
 
 The existing sourcesVersion observer remains the refresh path. The store event
 bus reloads the source state after extraction writes, and the observer reloads
