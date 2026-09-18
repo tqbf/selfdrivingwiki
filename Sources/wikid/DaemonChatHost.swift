@@ -490,6 +490,13 @@ final class DaemonChatHost: @unchecked Sendable {
                         preparation: preparation,
                         store: store)
                     await services.release(preparation.selection.token)
+                case .appleIntelligence:
+                    // In process, no snapshot or lease — nothing to release.
+                    await Self.runAppleIntelligenceSummarization(
+                        chatID: chatID,
+                        pending: pending,
+                        services: services,
+                        store: store)
                 }
             } catch AgentProviderRuntimeError.unavailable {
                 Self.writeDefaultSummaries(
@@ -524,14 +531,14 @@ final class DaemonChatHost: @unchecked Sendable {
 
     /// Upgrade the provisional chat title (durable-chat identity, first-send
     /// titling). The first send writes the first line of the question as a
-    /// provisional title in every mode; this pass refines it. In Model
-    /// summarizer mode the summary provider generates the title from the
-    /// opening question and the assistant's first reply, through the
-    /// `chat-title-task` prompt, and replaces the UNTOUCHED provisional text
-    /// via `setChatTitleIf` — a manual rename makes the upgrade miss. In
-    /// Default mode the first-line title is already final; only a still-empty
-    /// legacy row gets the fallback write. Best-effort: every failure is
-    /// logged and leaves the title as-is.
+    /// provisional title in every mode; this pass refines it. In a model-capable
+    /// mode (Model via ACP, or Apple Intelligence on-device) the summarizer
+    /// generates the title from the opening question and the assistant's first
+    /// reply, through the `chat-title-task` prompt, and replaces the UNTOUCHED
+    /// provisional text via `setChatTitleIf` — a manual rename makes the
+    /// upgrade miss. In Default mode the first-line title is already final;
+    /// only a still-empty legacy row gets the fallback write. Best-effort:
+    /// every failure is logged and leaves the title as-is.
     @MainActor
     private static func refreshChatTitle(
         chatID: ChatID,
@@ -570,12 +577,27 @@ final class DaemonChatHost: @unchecked Sendable {
         guard currentTitle.isEmpty || currentTitle == provisional else { return }
 
         switch preparation {
-        case .model(let prep):
+        case .model, .appleIntelligence:
             do {
-                if let title = try await services.modelTitle(
-                    question: questionText,
-                    answer: answer,
-                    preparation: prep) {
+                // The model-capable modes differ only in how the title turn
+                // runs — ACP subprocess with a preparation, or the in-process
+                // Apple Intelligence engine. The write-back, the nil fallback,
+                // and the failure fallback are shared.
+                let title: String?
+                switch preparation {
+                case .model(let prep):
+                    title = try await services.modelTitle(
+                        question: questionText,
+                        answer: answer,
+                        preparation: prep)
+                case .appleIntelligence:
+                    title = await services.appleIntelligenceTitle(
+                        question: questionText,
+                        answer: answer)
+                case .defaultTruncation:
+                    title = nil // unreachable — the outer switch excluded it
+                }
+                if let title {
                     if currentTitle.isEmpty {
                         try store.setChatTitleIfEmpty(chatID: chatID, title: title)
                     } else if let provisional {
@@ -671,6 +693,35 @@ final class DaemonChatHost: @unchecked Sendable {
                     summary: summary, kind: .model)
             } catch {
                 DebugLog.store("DaemonChatHost.runModelSummarization: write failed: \(error)")
+            }
+        }
+    }
+
+    /// Drive Apple Intelligence summarization for the pending batch. Mirrors
+    /// `runModelSummarization` without the preparation and the release: the
+    /// AI turn runs in process, so there is no token to retire. The same
+    /// strict-tier degradation applies — a nil result (empty reply, error,
+    /// timeout) degrades to the truncation summary, never a silent
+    /// unsummarized row.
+    @MainActor
+    private static func runAppleIntelligenceSummarization(
+        chatID: ChatID,
+        pending: [(cursor: ChatTranscriptCursor, text: String)],
+        services: any AgentProviderServices,
+        store: GRDBWikiStore
+    ) async {
+        for target in pending {
+            guard let summary = await services.appleIntelligenceSummary(text: target.text) else {
+                DebugLog.agent("DaemonChatHost: Apple Intelligence summary returned nil — degrading to truncation")
+                Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
+                continue
+            }
+            do {
+                try store.updateMessageSummary(
+                    chatID: chatID, cursor: target.cursor,
+                    summary: summary, kind: .model)
+            } catch {
+                DebugLog.store("DaemonChatHost.runAppleIntelligenceSummarization: write failed: \(error)")
             }
         }
     }

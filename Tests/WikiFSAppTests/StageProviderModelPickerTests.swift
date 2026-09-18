@@ -49,5 +49,20 @@ struct StageProviderModelPickerTests {
 
         #expect(state == .pinnedMissing(id: "gemini"))
     }
+
+    @Test func selectionStateRecognizesTheReservedAppleIntelligencePin() {
+        // The reserved built-in is not a configured provider, so it must
+        // resolve to its own state — NOT `pinnedMissing`, which would show the
+        // orange "no longer exists" warning (plans/apple-intelligence-summarizer.md).
+        let config = AgentProvidersConfig(providers: [
+            AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", enabled: true, isDefault: true),
+        ])
+        .settingStageProvider(.appleIntelligence, forStage: "summarizer")
+
+        let state = StageProviderSelectionState.resolve(config: config, stageKey: "summarizer")
+
+        #expect(state == .pinnedAppleIntelligence)
+        #expect(!state.isUnavailable)
+    }
 }
 #endif

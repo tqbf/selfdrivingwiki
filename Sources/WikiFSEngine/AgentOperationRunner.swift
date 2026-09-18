@@ -670,6 +670,13 @@ public enum AgentOperationRunner {
                     preparation: preparation,
                     store: store)
                 await services.release(preparation.selection.token)
+            case .appleIntelligence:
+                // In process, no snapshot or lease — nothing to release.
+                await Self.runAppleIntelligenceSummarization(
+                    chatID: chatID,
+                    pending: pending,
+                    services: services,
+                    store: store)
             }
         } catch AgentProviderRuntimeError.unavailable {
             Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
@@ -725,6 +732,33 @@ public enum AgentOperationRunner {
                 DebugLog.agent("AgentOperationRunner: model summary failed — degrading to truncation: \(error.localizedDescription)")
                 Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
             }
+        }
+    }
+
+    /// Drive Apple Intelligence summarization for the pending batch. Mirrors
+    /// `runModelSummarization` without the preparation and the release: the
+    /// AI turn runs in process, so there is no token to retire. The same
+    /// strict-tier degradation applies — a nil result (empty reply, error,
+    /// timeout) degrades to the truncation summary, never a silent
+    /// unsummarized row.
+    @MainActor
+    private static func runAppleIntelligenceSummarization(
+        chatID: ChatID,
+        pending: [(cursor: ChatTranscriptCursor, text: String)],
+        services: any AgentProviderServices,
+        store: WikiStoreModel
+    ) async {
+        for target in pending {
+            guard let summary = await services.appleIntelligenceSummary(text: target.text) else {
+                DebugLog.agent("AgentOperationRunner: Apple Intelligence summary returned nil — degrading to truncation")
+                Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
+                continue
+            }
+            // Non-throwing: `WikiStoreModel.updateMessageSummary` logs write
+            // failures itself (same as `writeDefaultSummaries` above).
+            store.updateMessageSummary(
+                chatID: chatID, cursor: target.cursor,
+                summary: summary, kind: .model)
         }
     }
 }

@@ -63,6 +63,40 @@ import Foundation
         }
     }
 
+    /// The AI runners carry the same contract: a nil Apple Intelligence
+    /// result (empty reply, error, timeout — the engine swallows all three)
+    /// must degrade to the truncation fallback in both hosts. Source-audit for
+    /// the same reason as the ACP variant above (`plans/apple-intelligence-summarizer.md`).
+    @Test func nilAppleIntelligenceSummaryDegradesToTruncationInBothHosts() throws {
+        let hosts = [
+            "wikid/DaemonChatHost.swift",
+            "WikiFSEngine/AgentOperationRunner.swift",
+        ]
+        for host in hosts {
+            let file = Self.repositoryRoot()
+                .appendingPathComponent("Sources", isDirectory: true)
+                .appendingPathComponent(host)
+            let source = try String(contentsOf: file, encoding: .utf8)
+            guard let start = source.range(of: "func runAppleIntelligenceSummarization(") else {
+                Issue.record("\(host) must define runAppleIntelligenceSummarization")
+                continue
+            }
+            let body = String(source[start.lowerBound...])
+            guard let guardRange = body.range(of: "guard let summary") else {
+                Issue.record("\(host): expected a `guard let summary` nil branch in runAppleIntelligenceSummarization")
+                continue
+            }
+            let after = body[guardRange.upperBound...]
+            guard let continueRange = after.range(of: "continue") else {
+                Issue.record("\(host): expected the nil branch to `continue` after the fallback write")
+                continue
+            }
+            #expect(
+                after[..<continueRange.lowerBound].contains("writeDefaultSummaries"),
+                "\(host): the nil branch of runAppleIntelligenceSummarization must write the truncation fallback (never a silent skip)")
+        }
+    }
+
     /// The title path already handles nil correctly; pin it so the same gap
     /// cannot appear there.
     @Test func nilModelTitleFallsBackToProvisionalTitle() throws {

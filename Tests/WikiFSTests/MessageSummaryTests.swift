@@ -107,6 +107,28 @@ struct MessageSummaryTests {
         #expect(MessageSummarizer.mode(for: cleared) == .defaultTruncation)
     }
 
+    @Test func mode_appleIntelligencePin_returnsAppleIntelligence() {
+        // The reserved built-in pin ⇒ Apple Intelligence, NOT Model — even
+        // though no configured provider carries that id. A plain unknown pin
+        // (mode_nonEmptyPin_returnsModel's shape) stays Model; only the exact
+        // reserved constant switches modes (§5.1 invariant extended by
+        // plans/apple-intelligence-summarizer.md).
+        let config = AgentProvidersConfig(providers: [
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
+        ]).settingStageProvider(.appleIntelligence, forStage: "summarizer")
+        #expect(config.stageProviderIds["summarizer"] == .appleIntelligence)
+        #expect(MessageSummarizer.mode(for: config) == .appleIntelligence)
+    }
+
+    @Test func mode_similarButUnequalPin_staysModel() {
+        // A look-alike id must NOT trip the reserved constant (the enum case
+        // is the compiler-checked boundary, the raw string is not).
+        let config = AgentProvidersConfig(providers: [
+            AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", command: ["claude"], enabled: true, isDefault: true),
+        ]).settingStageProvider(ProviderID(rawValue: "apple-intelligence-2"), forStage: "summarizer")
+        #expect(MessageSummarizer.mode(for: config) == .model)
+    }
+
     // MARK: - Default backend (§4.2 — pure truncation, zero model compute)
 
     @Test func defaultSummary_reusesChatSummaryExtract() {

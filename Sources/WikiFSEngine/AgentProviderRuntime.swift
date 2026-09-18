@@ -126,6 +126,12 @@ public struct AgentInteractivePreparation: Sendable, Equatable {
 
 public enum AgentProviderSummaryPreparation: Sendable, Equatable {
     case defaultTruncation
+    /// On-device Apple Intelligence (`MessageSummarizer.Mode.appleIntelligence`).
+    /// Carries no `AgentOperationPreparation`: the AI turn runs in process via
+    /// `appleIntelligenceSummary`/`appleIntelligenceTitle`, so there is no
+    /// token, lease, scratch world, or backend to retire — and nothing for
+    /// `release(_:)` to drain.
+    case appleIntelligence
     case model(AgentOperationPreparation)
 }
 
@@ -165,6 +171,15 @@ public protocol AgentProviderServices: Sendable {
         answer: String?,
         preparation: AgentOperationPreparation
     ) async throws -> String?
+    /// One-shot on-device Apple Intelligence summary (AI summarizer mode;
+    /// `plans/apple-intelligence-summarizer.md`). No preparation token — the
+    /// call runs in process. Returns nil when the model produced nothing
+    /// usable; the caller degrades per the strict-tier contract.
+    func appleIntelligenceSummary(text: String) async -> String?
+    /// One-shot on-device Apple Intelligence chat title (AI summarizer mode).
+    /// Same nil contract as `modelTitle`: the caller falls back to the
+    /// provisional title.
+    func appleIntelligenceTitle(question: String, answer: String?) async -> String?
     func release(_ token: AgentProviderAttemptToken) async
     func readiness() async -> Bool
 }
@@ -179,6 +194,14 @@ public extension AgentProviderServices {
     ) async throws -> String? {
         throw AgentProviderRuntimeError.unavailable
     }
+}
+
+public extension AgentProviderServices {
+    /// Default for conformers that carry no Apple Intelligence path: nil, the
+    /// "nothing usable" result, so the caller's nil branch degrades per the
+    /// strict-tier contract instead of crashing or throwing past it.
+    func appleIntelligenceSummary(text: String) async -> String? { nil }
+    func appleIntelligenceTitle(question: String, answer: String?) async -> String? { nil }
 }
 
 public extension AgentProviderServices {
@@ -385,6 +408,10 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     /// path's fail-closed ORDERING (sandbox gate BEFORE command resolution) is
     /// testable without touching `/usr/bin/sandbox-exec`.
     public typealias SandboxUsabilityCheck = @Sendable (String) -> Bool
+    /// Test seam: how the runtime decides whether the on-device Apple
+    /// Intelligence model can run. The production default reads
+    /// `SystemLanguageModel.default.availability`; tests inject a constant.
+    public typealias AppleIntelligenceAvailabilityCheck = @Sendable () -> Bool
     public typealias CatalogProbe = @Sendable (
         AgentProvider,
         [String],
@@ -447,6 +474,15 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     /// root it owns exclusively and never touches the developer's real
     /// `.bun` (mirrors `summarizerScratchParent`).
     private let packageRunnerTempParent: URL?
+    /// Test seam (plans/apple-intelligence-summarizer.md): the engine the AI
+    /// summarizer path runs. Defaults to the production
+    /// `AppleIntelligenceSummarizer.Engine.system` (Foundation Models); tests
+    /// inject a scripted reply closure.
+    private let appleIntelligenceEngine: AppleIntelligenceSummarizer.Engine
+    /// Test seam: availability gate for the AI summarizer mode. Defaults to
+    /// the real `SystemLanguageModel` availability; tests inject a constant so
+    /// both branches are reachable without Apple Intelligence hardware.
+    private let isAppleIntelligenceAvailable: AppleIntelligenceAvailabilityCheck
     private var snapshots: [UUID: Snapshot] = [:]
     private var tokens: [UUID: TokenRecord] = [:]
     private var cachedBackends: [String: any AgentBackend] = [:]
@@ -549,7 +585,11 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         },
         sandboxUsability: @escaping SandboxUsabilityCheck = AgentProviderRuntime.defaultSandboxUsability,
         summarizerScratchParent: URL? = nil,
-        packageRunnerTempParent: URL? = nil
+        packageRunnerTempParent: URL? = nil,
+        appleIntelligenceEngine: AppleIntelligenceSummarizer.Engine = .system,
+        isAppleIntelligenceAvailable: @escaping AppleIntelligenceAvailabilityCheck = {
+            AppleIntelligenceSummarizer.unavailabilityReason() == nil
+        }
     ) {
         self.readConfiguration = readConfiguration
         self.resolveCommand = resolveCommand
@@ -561,6 +601,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         self.sandboxUsable = sandboxUsability
         self.summarizerScratchParent = summarizerScratchParent
         self.packageRunnerTempParent = packageRunnerTempParent
+        self.appleIntelligenceEngine = appleIntelligenceEngine
+        self.isAppleIntelligenceAvailable = isAppleIntelligenceAvailable
     }
 
     public func prepareInteractive(
@@ -633,7 +675,23 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
 
     public func prepareSummarization() async throws -> AgentProviderSummaryPreparation {
         try requireAvailable(); let configuration = try readConfiguration()
-        guard MessageSummarizer.mode(for: configuration) == .model else { return .defaultTruncation }
+        switch MessageSummarizer.mode(for: configuration) {
+        case .defaultTruncation:
+            return .defaultTruncation
+        case .appleIntelligence:
+            // No snapshot, scratch world, or lease exists in this mode. An
+            // unavailable system model degrades to the Default mode — the
+            // same output the user gets with no pin — with one log line that
+            // states the reason.
+            guard isAppleIntelligenceAvailable() else {
+                DebugLog.ingest(
+                    "AgentProviderRuntime.prepareSummarization: Apple Intelligence unavailable (\(AppleIntelligenceSummarizer.unavailabilityReason() ?? "unknown reason")) — using Default truncation mode")
+                return .defaultTruncation
+            }
+            return .appleIntelligence
+        case .model:
+            break
+        }
         // Issue #1276: allocate ONE dedicated scratch world for this snapshot.
         // Cached summarizer backends keep this directory (and its read-only
         // sandbox) for their full lifetime; `release`/`dispose` remove it only
@@ -768,6 +826,22 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             await gate.release()
             throw error
         }
+    }
+
+    /// The AI summarizer mode's summary entry point. No lease, token, or
+    /// backend: the turn runs in process through the injected engine.
+    public func appleIntelligenceSummary(text: String) async -> String? {
+        await AppleIntelligenceSummarizer.summary(
+            text: text,
+            engine: appleIntelligenceEngine)
+    }
+
+    /// The AI summarizer mode's title entry point.
+    public func appleIntelligenceTitle(question: String, answer: String?) async -> String? {
+        await AppleIntelligenceSummarizer.title(
+            question: question,
+            answer: answer,
+            engine: appleIntelligenceEngine)
     }
 
     /// The summarizer snapshot's lease gate, resolved from a preparation

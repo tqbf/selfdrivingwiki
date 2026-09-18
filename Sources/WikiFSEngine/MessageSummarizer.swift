@@ -4,21 +4,29 @@ import WikiFSCore
 
 /// The per-message summary service (chat-summary plan §4).
 ///
-/// Produces a one-line cached summary for a single assistant chat message. Two
+/// Produces a one-line cached summary for a single assistant chat message. Three
 /// modes, selected by the user via the `"summarizer"` stage pin in
 /// `AgentProvidersConfig`:
 ///
 /// - **Default** (empty/absent `stageProviderIds["summarizer"]`): pure first-
 ///   sentence truncation via `ChatSummary.summaryExtract`. Zero model compute.
-/// - **Model** (non-empty `stageProviderIds["summarizer"]`): a one-shot ACP
-///   session that asks the pinned provider+model for a one-sentence summary.
+/// - **Model** (non-empty pin other than the reserved Apple Intelligence id):
+///   a one-shot ACP session that asks the pinned provider+model for a
+///   one-sentence summary.
+/// - **Apple Intelligence** (pin == `ProviderID.appleIntelligence`): a one-shot
+///   in-process Foundation Models call (`AppleIntelligenceSummarizer`) with the
+///   same prompts and cleanup as the Model mode. No subprocess, scratch world,
+///   lease, or credential.
 ///
-/// **⚠ Mode encoding invariant (chat-summary plan §5.1):** the Default-vs-Model
-/// decision gates STRICTLY on `config.stageProviderIds["summarizer"]`. NEVER
+/// **⚠ Mode encoding invariant (chat-summary plan §5.1):** the mode decision
+/// gates STRICTLY on `config.stageProviderIds["summarizer"]`. NEVER
 /// call `config.provider(forStage: "summarizer")` for the mode decision — it is
 /// non-optional and falls back to the global default provider
 /// (`AgentProvidersConfig.swift:239-246`), so it ALWAYS reports a provider and
-/// would wrongly force every message through the model path.
+/// would wrongly force every message through the model path. The Apple
+/// Intelligence pin is worse than most there: it names no configured provider,
+/// so `provider(forStage:)` would silently return the global default and the
+/// mode would be misread as Model-with-wrong-backend.
 ///
 /// **Test seam:** the model path's `AgentBackend` is INJECTED so the logic is
 /// unit-testable end-to-end with `FakeAgentBackend` (chat-summary plan §4.3 +
@@ -35,17 +43,26 @@ public enum MessageSummarizer {
         /// call. Selected when `stageProviderIds["summarizer"]` is empty/absent.
         case defaultTruncation
         /// LLM summarization via a pinned provider+model. Selected when
-        /// `stageProviderIds["summarizer"]` is non-empty.
+        /// `stageProviderIds["summarizer"]` is non-empty and is not the
+        /// reserved Apple Intelligence id.
         case model
+        /// On-device Apple Intelligence (Foundation Models) via
+        /// `AppleIntelligenceSummarizer`. Selected when the pin equals
+        /// `ProviderID.appleIntelligence` — a reserved built-in that names no
+        /// configured provider.
+        case appleIntelligence
     }
 
     /// Derive the configured summarizer mode STRICTLY from the stage pin
     /// (chat-summary plan §5.1). This is the ONLY correct way to decide Default
-    /// vs Model — never use `provider(forStage: "summarizer")` for this
-    /// decision (see the invariant in this type's doc comment).
+    /// vs Model vs Apple Intelligence — never use
+    /// `provider(forStage: "summarizer")` for this decision (see the invariant
+    /// in this type's doc comment).
     public static func mode(for config: AgentProvidersConfig) -> Mode {
-        let pin = config.stageProviderIds["summarizer"]?.rawValue ?? ""
-        return pin.isEmpty ? .defaultTruncation : .model
+        guard let pin = config.stageProviderIds["summarizer"], !pin.rawValue.isEmpty else {
+            return .defaultTruncation
+        }
+        return pin == ProviderID.appleIntelligence ? .appleIntelligence : .model
     }
 
     /// The system prompt for the one-shot summarization session (model mode).
@@ -54,6 +71,31 @@ public enum MessageSummarizer {
     You are a concise summarizer. Summarize the user's content in a single clear sentence. \
     Output ONLY the summary sentence — no preamble, no quotes, no code fences.
     """
+
+    /// The user-turn prompt for a chat title. Shared by the ACP model path and
+    /// the Apple Intelligence path so both send byte-identical turns. PURE.
+    /// Returns nil when the question has no non-whitespace content — the
+    /// caller skips the model call entirely.
+    static func titlePrompt(question: String, answer: String?) -> String? {
+        let cleanQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanQuestion.isEmpty else { return nil }
+        let excerpt = String(
+            (answer ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                .prefix(1_200))
+        if excerpt.isEmpty {
+            return "Question:\n\(cleanQuestion)\n\nTitle:"
+        }
+        return "Question:\n\(cleanQuestion)\n\nAssistant reply (may be truncated):\n\(excerpt)\n\nTitle:"
+    }
+
+    /// The user-turn prompt for a one-sentence summary. Shared by the ACP
+    /// model path and the Apple Intelligence path. PURE. Returns nil for
+    /// empty/whitespace input.
+    static func summaryPrompt(text: String) -> String? {
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanText.isEmpty else { return nil }
+        return "Summarize this in one sentence:\n\n\(cleanText)"
+    }
 
     /// Produce a default-truncation summary (no model call). Reuses
     /// `ChatSummary.summaryExtract(from:maxLength:)` verbatim so the Default
@@ -120,18 +162,8 @@ public enum MessageSummarizer {
         backend: any AgentBackend,
         profile: BackendProfile
     ) async -> String? {
-        let cleanQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanQuestion.isEmpty else { return nil }
-        let excerpt = String(
-            (answer ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                .prefix(1_200))
-        let prompt: String
-        if excerpt.isEmpty {
-            prompt = "Question:\n\(cleanQuestion)\n\nTitle:"
-        } else {
-            prompt = "Question:\n\(cleanQuestion)\n\nAssistant reply (may be truncated):\n\(excerpt)\n\nTitle:"
-        }
-        DebugLog.ingest("MessageSummarizer: starting model title for q=\(cleanQuestion.prefix(40))...")
+        guard let prompt = titlePrompt(question: question, answer: answer) else { return nil }
+        DebugLog.ingest("MessageSummarizer: starting model title for q=\(question.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))...")
         guard let raw = await oneShotReply(
             systemPrompt: PublicPrompts.chatTitleTask,
             prompt: prompt,
@@ -139,10 +171,10 @@ public enum MessageSummarizer {
             profile: profile) else { return nil }
         let title = sanitizeTitle(raw)
         guard !title.isEmpty else {
-            DebugLog.ingest("MessageSummarizer: model title was unusable for q=\(cleanQuestion.prefix(40))...")
+            DebugLog.ingest("MessageSummarizer: model title was unusable for q=\(question.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))...")
             return nil
         }
-        DebugLog.ingest("MessageSummarizer: model title for q=\(cleanQuestion.prefix(40))... → \(title)")
+        DebugLog.ingest("MessageSummarizer: model title for q=\(question.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))... → \(title)")
         return title
     }
 
@@ -310,12 +342,12 @@ public enum MessageSummarizer {
         profile: BackendProfile
     ) async -> String? {
         let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanText.isEmpty else { return nil }
+        guard !cleanText.isEmpty, let prompt = summaryPrompt(text: text) else { return nil }
 
         DebugLog.ingest("MessageSummarizer: starting model mode for seq=\(cleanText.prefix(40))...")
         guard let summary = await oneShotReply(
             systemPrompt: modelSystemPrompt,
-            prompt: "Summarize this in one sentence:\n\n\(cleanText)",
+            prompt: prompt,
             backend: backend,
             profile: profile) else { return nil }
         DebugLog.ingest("MessageSummarizer: model summary for seq=\(cleanText.prefix(40))... length=\(summary.count)")

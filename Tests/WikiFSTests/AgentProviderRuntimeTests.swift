@@ -20,7 +20,13 @@ struct AgentProviderRuntimeTests {
             stageProviderIds: summarizer ? ["summarizer": alpha] : [:])
     }
 
-    private func runtime(config: LockedBox<AgentProvidersConfig>, counts: RuntimeCounts, factory: @escaping AgentProviderRuntime.BackendFactory = { _, _, _ in FakeAgentBackend() }) -> AgentProviderRuntime {
+    private func runtime(
+        config: LockedBox<AgentProvidersConfig>,
+        counts: RuntimeCounts,
+        factory: @escaping AgentProviderRuntime.BackendFactory = { _, _, _ in FakeAgentBackend() },
+        appleIntelligenceEngine: AppleIntelligenceSummarizer.Engine = .system,
+        isAppleIntelligenceAvailable: @escaping AgentProviderRuntime.AppleIntelligenceAvailabilityCheck = { true }
+    ) -> AgentProviderRuntime {
         AgentProviderRuntime(
             readConfiguration: { counts.incrementConfigurationReads(); return config.read() },
             resolveCommand: { providers in
@@ -31,7 +37,64 @@ struct AgentProviderRuntimeTests {
             },
             readCredential: { _ in counts.incrementCredentials(); return "key-not-public" },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: factory)
+            makeBackend: factory,
+            appleIntelligenceEngine: appleIntelligenceEngine,
+            isAppleIntelligenceAvailable: isAppleIntelligenceAvailable)
+    }
+
+    // MARK: - Apple Intelligence summarizer mode
+    // (plans/apple-intelligence-summarizer.md)
+
+    /// The AI-mode preparation: available → `.appleIntelligence`, unavailable →
+    /// degrade to `.defaultTruncation`. Availability is the injected seam, so
+    /// both branches run without Apple Intelligence hardware.
+    @Test func summarizerPreparation_appleIntelligencePin_gatesOnAvailability() async throws {
+        let config = LockedBox(
+            configuration().settingStageProvider(.appleIntelligence, forStage: "summarizer"))
+
+        let up = runtime(config: config, counts: RuntimeCounts(), isAppleIntelligenceAvailable: { true })
+        let prepared = try await up.prepareSummarization()
+        #expect(prepared == .appleIntelligence)
+
+        let down = runtime(config: config, counts: RuntimeCounts(), isAppleIntelligenceAvailable: { false })
+        let degraded = try await down.prepareSummarization()
+        #expect(degraded == .defaultTruncation)
+    }
+
+    /// The AI-mode service pair routes through the injected engine — the same
+    /// engine the runtime was constructed with.
+    @Test func appleIntelligenceServiceRoutesThroughTheInjectedEngine() async throws {
+        let config = LockedBox(
+            configuration().settingStageProvider(.appleIntelligence, forStage: "summarizer"))
+        let engine = AppleIntelligenceSummarizer.Engine { _, prompt in
+            // Echo the user turn so the test proves which call reached the
+            // engine with what shape.
+            "echo:\(prompt)"
+        }
+        let service = runtime(config: config, counts: RuntimeCounts(), appleIntelligenceEngine: engine)
+
+        let summary = await service.appleIntelligenceSummary(text: "Hello world. More.")
+        #expect(summary == "echo:Summarize this in one sentence:\n\nHello world. More.")
+
+        let title = await service.appleIntelligenceTitle(question: "What is origami?", answer: nil)
+        // The title path sanitizes like the ACP path: first line only
+        // (`MessageSummarizer.sanitizeTitle`), so the echoed multi-line
+        // prompt collapses to its first line.
+        #expect(title == "echo:Question:")
+    }
+
+    /// An AI pin with the availability seam down never builds a snapshot or a
+    /// lease — the degraded preparation is the plain truncation one.
+    @Test func summarizerPreparation_aiUnavailable_doesNotConsumeBackendResources() async throws {
+        let config = LockedBox(
+            configuration().settingStageProvider(.appleIntelligence, forStage: "summarizer"))
+        let counts = RuntimeCounts()
+        let service = runtime(config: config, counts: counts, isAppleIntelligenceAvailable: { false })
+        let degraded = try await service.prepareSummarization()
+        #expect(degraded == .defaultTruncation)
+        // No ACP snapshot path ran: zero command resolutions for the
+        // summarizer stage (the configuration read is the only touch).
+        #expect(counts.commandCalls == 0)
     }
 
     @Test("One configuration read freezes all stage models and chains")

@@ -6,10 +6,17 @@ enum StageProviderSelectionState: Equatable {
     case pinnedEnabled(id: String)
     case pinnedDisabled(id: String, label: String)
     case pinnedMissing(id: String)
+    /// The summarizer stage's reserved built-in pin: the on-device Apple
+    /// Intelligence backend (`ProviderID.appleIntelligence`). It names no
+    /// configured provider, so it resolves here instead of the provider table.
+    case pinnedAppleIntelligence
 
     static func resolve(config: AgentProvidersConfig, stageKey: String) -> StageProviderSelectionState {
         guard let providerID = config.stageProviderIds[stageKey], !providerID.rawValue.isEmpty else {
             return .inherited
+        }
+        if providerID == ProviderID.appleIntelligence {
+            return .pinnedAppleIntelligence
         }
         let pinnedID = providerID.rawValue
         guard let provider = config.provider(id: providerID) else {
@@ -25,7 +32,7 @@ enum StageProviderSelectionState: Equatable {
         switch self {
         case .pinnedDisabled, .pinnedMissing:
             return true
-        case .inherited, .pinnedEnabled:
+        case .inherited, .pinnedEnabled, .pinnedAppleIntelligence:
             return false
         }
     }
@@ -122,7 +129,7 @@ struct StageProviderModelPicker: View {
             return "\(providerLabel) (disabled)"
         case .pinnedMissing(let providerID):
             return "\(providerID) (missing)"
-        case .inherited, .pinnedEnabled:
+        case .inherited, .pinnedEnabled, .pinnedAppleIntelligence:
             return nil
         }
     }
@@ -131,7 +138,7 @@ struct StageProviderModelPicker: View {
         switch selectionState {
         case .pinnedDisabled(let providerID, _), .pinnedMissing(let providerID):
             return providerID
-        case .inherited, .pinnedEnabled:
+        case .inherited, .pinnedEnabled, .pinnedAppleIntelligence:
             return nil
         }
     }
@@ -148,7 +155,7 @@ struct StageProviderModelPicker: View {
                 return "Selected provider “\(providerID)” no longer exists. Summary generation will stay unavailable until you pick another provider or choose \(defaultOptionLabel)."
             }
             return "Selected provider “\(providerID)” no longer exists. This stage is currently falling back to the default provider until you pick another provider."
-        case .inherited, .pinnedEnabled:
+        case .inherited, .pinnedEnabled, .pinnedAppleIntelligence:
             return nil
         }
     }
@@ -157,6 +164,12 @@ struct StageProviderModelPicker: View {
         VStack(alignment: .leading, spacing: 6) {
             Picker("\(label) Provider", selection: providerBinding) {
                 Text(defaultOptionLabel).tag("")
+                if stageKey == "summarizer" {
+                    // Reserved built-in for the summarizer stage only: the
+                    // on-device Apple Intelligence backend. Tagged with the
+                    // reserved id so the pin round-trips like any provider id.
+                    Text("Apple Intelligence (on-device)").tag(ProviderID.appleIntelligence.rawValue)
+                }
                 if let unavailableOptionLabel, let unavailableOptionTag {
                     Text(unavailableOptionLabel).tag(unavailableOptionTag)
                 }
@@ -165,7 +178,10 @@ struct StageProviderModelPicker: View {
                 }
             }
 
-            if !isNoProviderSummary {
+            // The AI pin has no model choice — the system model is the model —
+            // so the model picker hides, exactly like the no-provider summary
+            // mode.
+            if !isNoProviderSummary && selectionState != .pinnedAppleIntelligence {
                 Picker("\(label) Model", selection: modelBinding) {
                     if shouldDisableModelPickerForUnavailablePin || resolvedModels.isEmpty {
                         Text(modelPickerPlaceholder).tag("")
@@ -178,6 +194,12 @@ struct StageProviderModelPicker: View {
                 }
                 .disabled(shouldDisableModelPickerForUnavailablePin || resolvedModels.isEmpty)
                 .help(modelPickerHelpText)
+            }
+
+            if selectionState == .pinnedAppleIntelligence {
+                Text("Titles and summaries run on-device with Apple Intelligence. No provider needed. Falls back to local truncation when Apple Intelligence is unavailable.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             if let unavailableProviderMessage {
@@ -205,7 +227,10 @@ struct StageProviderModelPicker: View {
     /// specific model OR left "Same as provider" and the provider's own
     /// `selectedModelId` is free-tier. PURE (reads only the config).
     private var freeTierNudge: String? {
-        FreeTierModelNudge.message(for: config.modelId(forStage: stageKey))
+        // The AI pin resolves no provider model, so the nudge would describe
+        // the global default's model — noise.
+        guard selectionState != .pinnedAppleIntelligence else { return nil }
+        return FreeTierModelNudge.message(for: config.modelId(forStage: stageKey))
     }
 
     /// Reads/writes `config.stageProviderIds[stageKey]`. On set, routes through
