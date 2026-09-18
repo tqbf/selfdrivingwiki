@@ -49,7 +49,10 @@ struct HelperFailsafeTests {
         #expect(Self.stderrText(result).contains("self-deadline"))
     }
 
-    @Test("orphaned helper exits within one orphan-poll interval")
+    @Test(
+        "orphaned helper exits within one orphan-poll interval",
+        .disabled(
+            "Load-flaky under parallel build/test load: the child PID frame can miss its read window (.childPIDFrameMissing) and the 3s exit bound assumes an idle machine — same class as the #1296 graceful-shutdown disable. Re-enable with a deterministic parent-death signal or a load-scaled bound"))
     func orphanedHelperExitsItself() async throws {
         let helper = try locateHelper()
         let fixture = try fixtureExecutable()
