@@ -384,6 +384,17 @@ struct SourceDetailView: View {
             registrations: activeExtractorRegistrations)
     }
 
+    /// Title for the Extract button, hoisted out of the `Button` call so the
+    /// initializer overload resolves directly (nested ternary + `map` + `??`
+    /// arguments are a known type-checker cost).
+    private var extractButtonTitle: String {
+        if isExtracting || isThisFileExtracting { return "Extracting…" }
+        if let extractor = rawSourceExtractor {
+            return "Extract with \(extractor.packageName)"
+        }
+        return "Extract"
+    }
+
     /// `true` when this source has ≥2 extraction alternatives — the gate for the
     /// "Compare Extractions…" button (compare is meaningless with one).
     private var hasMultipleExtractions: Bool {
@@ -537,7 +548,7 @@ struct SourceDetailView: View {
             origin = store.sourceOrigin(for: file.id)
             editHistory = store.sourceEditHistory(for: file.id)
             isRefreshable = store.isSourceRefreshable(for: file.id)
-            activeExtractorRegistrations = await extractionCoordinator.activeRegistrationSnapshots()
+            await loadActiveExtractorRegistrations()
             resolveRendererPresentation()
             updateRightSidebarRegistration()
         }
@@ -822,10 +833,8 @@ struct SourceDetailView: View {
                         // `runDocxExtraction` path for the same reason; PDF
                         // sources go through the queue as before.
                         Button(
-                            isExtracting || isThisFileExtracting
-                                ? "Extracting…"
-                                : (rawSourceExtractor.map { "Extract with \($0.packageName)" } ?? "Extract"),
-                               systemImage: "doc.plaintext") {
+                            extractButtonTitle,
+                            systemImage: "doc.plaintext") {
                             DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.isHTMLSource(file)), docx=\(SourceRendererPresentationPlanner.isDOCXSource(file))")
                             Task {
                                 if SourceRendererPresentationPlanner.isHTMLSource(file) {
@@ -1483,6 +1492,15 @@ struct SourceDetailView: View {
 
     private func refreshSourceBytesSnapshot() {
         sourceBytesSnapshot = store.sourceBytes(id: file.id)
+    }
+
+    /// Loads the active package registration snapshots that gate the Raw
+    /// Source extract affordance. Kept in its own method rather than inlined
+    /// in the `body` modifier chain: an inline `await` + protocol call there
+    /// pushed the whole single-expression `body` past the type-checker's time
+    /// budget ("unable to type-check this expression in reasonable time").
+    private func loadActiveExtractorRegistrations() async {
+        activeExtractorRegistrations = await extractionCoordinator.activeRegistrationSnapshots()
     }
 
     private func handleRendererFallback(_ reason: String) {

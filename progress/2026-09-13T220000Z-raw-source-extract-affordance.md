@@ -23,8 +23,16 @@ the derived Markdown head.
 
 ## Verification
 
-CI reported that the added view complexity caused SwiftUI type checking to fail
-at the existing active-tab lookup. The lookup now uses a local tab array and a
-separate closure expression. A local scratch build passed the modified
-`SourceDetailView` compilation point without that diagnostic; the full target
-was stopped during unrelated remaining compilation after no further output.
+`make build` and the full `make test` suite pass. The compile failure was not
+view complexity: `SourceDetailView` called
+`extractionCoordinator.activeRegistrationSnapshots()`, but that method existed
+only on the `ExtractionServices` protocol and its conformances — not on
+`ExtractionCoordinator`, the facade the view holds. Because the unresolvable
+call sat inside the single-expression `body` modifier chain, the compiler
+reported it as "unable to type-check this expression in reasonable time" at
+the nearby active-tab lookup, which misled the first two fix attempts. The
+forwarder now exists on `ExtractionCoordinator`, the registration load lives
+in `loadActiveExtractorRegistrations()` outside `body`, and the Extract
+button title is hoisted into `extractButtonTitle`. Focused check:
+`WIKIFS_APP_TESTS=1 swift test --filter SourceDetailViewContentKindTests`
+(21 tests, including the two Raw Source matching tests).

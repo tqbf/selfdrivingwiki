@@ -395,6 +395,13 @@ public final class ExtractionCoordinator {
         try await services.prepareDOCX()
     }
 
+    /// Active package registrations with manifest-derived presentation data.
+    /// Read-only snapshot for UI affordances (the Raw Source extract action);
+    /// execution still goes through the managed extraction queue.
+    public func activeRegistrationSnapshots() async -> [ExtractorRouteRegistrationSnapshot] {
+        await services.activeRegistrationSnapshots()
+    }
+
     /// Kind-neutral import-extraction preparation. WHICH kinds auto-extract
     /// at import is package data derived by the wiring; this resolves the
     /// typed extractor for whatever kind that data selects. The switch
