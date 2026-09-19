@@ -25,6 +25,9 @@ struct SourcesContainerView: View {
     var isZoteroConfigured: Bool = false
 
     @State private var sourceFilter: SourceFilter = .all
+    /// Display order backing the "Sort by" menu. `lastUpdated` is the
+    /// store's native order — today's default.
+    @State private var sourceSort: SourceSortOrder = .lastUpdated
     @State private var renameTarget: SourceSummary?
     @State private var renameText = ""
     @State private var showBatchReingestConfirmation = false
@@ -45,6 +48,43 @@ struct SourcesContainerView: View {
         case ingested = "Processed"
     }
 
+    /// Display order for the source list (follow-up to #241's Bookmarks
+    /// header). `lastUpdated` is the store's native `ORDER BY updated_at
+    /// DESC` — today's behavior — and the default. Raw value matches the
+    /// case name, mirroring `PageSortOrder`, should the choice persist later.
+    enum SourceSortOrder: String, CaseIterable {
+        /// Most recently updated first — the store's native order (default).
+        case lastUpdated
+        /// Most recently added first (`created_at DESC`).
+        case newestFirst
+        /// Display name, localized case-insensitive, A–Z.
+        case titleAZ
+
+        /// Sorts the source list for display. Pure; unit-tested without a
+        /// live store. Equal keys tie-break on `id.rawValue` (a ULID, so
+        /// monotonic by ingest time) for a deterministic order.
+        nonisolated func sorted(_ sources: [SourceSummary]) -> [SourceSummary] {
+            switch self {
+            case .lastUpdated:
+                return sources.sorted { a, b in
+                    if a.updatedAt != b.updatedAt { return a.updatedAt > b.updatedAt }
+                    return a.id.rawValue < b.id.rawValue
+                }
+            case .newestFirst:
+                return sources.sorted { a, b in
+                    if a.createdAt != b.createdAt { return a.createdAt > b.createdAt }
+                    return a.id.rawValue < b.id.rawValue
+                }
+            case .titleAZ:
+                return sources.sorted { a, b in
+                    let order = a.effectiveName.localizedCaseInsensitiveCompare(b.effectiveName)
+                    if order == .orderedSame { return a.id.rawValue < b.id.rawValue }
+                    return order == .orderedAscending
+                }
+            }
+        }
+    }
+
     private var filteredSources: [SourceSummary] {
         switch sourceFilter {
         case .all: return store.sources
@@ -58,9 +98,15 @@ struct SourcesContainerView: View {
     /// paths via `SourceSummary.isPrimary`, so they never appear in the main
     /// Sources view — they are presentation content surfaced via embeds, not the
     /// content list (graph-model §4.2).
+    ///
+    /// The display sort applies only when NOT searching: search results are
+    /// relevance-ranked by the engine, and re-ranking them would destroy
+    /// that (mirrors `PagesContainerView`, which never sorts search results).
     private var visibleSources: [SourceSummary] {
-        (store.sourceSearchQuery.isEmpty ? filteredSources : store.sourceSearchResults)
-            .filter { $0.isPrimary }
+        if store.sourceSearchQuery.isEmpty {
+            return sourceSort.sorted(filteredSources.filter { $0.isPrimary })
+        }
+        return store.sourceSearchResults.filter { $0.isPrimary }
     }
 
     var body: some View {
@@ -151,6 +197,7 @@ struct SourcesContainerView: View {
                     showingImportMarkdown = true
                 }
                 filterMenu
+                sortMenu
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -185,6 +232,31 @@ struct SourcesContainerView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Show")
+    }
+
+    /// The "Sort by" control — a sort icon whose dropdown lists the display
+    /// orders, the same `Menu { Picker … }` pattern as the filter icon.
+    /// The icon tints accent while a non-default (non-Last Updated) sort is
+    /// active. Last Updated is the store's native order — the default.
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort", selection: $sourceSort) {
+                Text("Last Updated").tag(SourceSortOrder.lastUpdated)
+                Text("Newest First").tag(SourceSortOrder.newestFirst)
+                Text("Title A–Z").tag(SourceSortOrder.titleAZ)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.body)
+                .frame(width: 24, height: 24)
+                .foregroundStyle(sourceSort == .lastUpdated ? Color.secondary : Color.accentColor)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Sort by")
     }
 
     private var sourceSearchBar: some View {
