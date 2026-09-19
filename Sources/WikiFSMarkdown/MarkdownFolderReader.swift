@@ -6,7 +6,6 @@ import Foundation
 ///
 /// Pure + injectable filesystem via the `FileOperations` protocol, so the entire
 /// walk is unit-testable without touching the real disk. Mirrors
-/// `ZoteroLocalStorage`'s injection shape (`fileExists` closure) and
 /// `URLFetchService`'s injectable-fetcher pattern.
 public enum MarkdownFolderReader {
 

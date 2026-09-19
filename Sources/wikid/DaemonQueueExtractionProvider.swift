@@ -22,15 +22,21 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
     /// relaunch may not have the store ready when a queued item is claimed;
     /// without this, the item starves between claim and resolution.
     private let openStore: @Sendable (WikiID) async -> Bool
+    /// The durable queue store for the attachment drain's follow-on
+    /// format-route enqueue (enqueue-only — never a queue engine). Nil
+    /// disables the follow-on (tests).
+    private let queueStore: QueueStore?
 
     init(
         extractionServices: any ExtractionServices,
         storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
-        openStore: @escaping @Sendable (WikiID) async -> Bool = { _ in false }
+        openStore: @escaping @Sendable (WikiID) async -> Bool = { _ in false },
+        queueStore: QueueStore? = nil
     ) {
         self.extractionServices = extractionServices
         self.storeResolver = storeResolver
         self.openStore = openStore
+        self.queueStore = queueStore
     }
 
     // MARK: - QueueExtractionProvider
@@ -126,6 +132,32 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                     },
                     filename: "transcript",
                     resultMode: .installedPackage(producer)))
+
+            case .zotero:
+                // Zotero attachment acquisition runs through the
+                // reviewed/selected extractor package. The sync command
+                // wrote the canonical Zotero file endpoint as the plan URL;
+                // it becomes the typed operation input only after host URL
+                // validation. The outcome is bytes-shaped: Markdown itself,
+                // or source bytes the host routes to its own format path.
+                guard let planURLString = origin.plan,
+                      let validatedURL = ExtractorRemoteSourceURL(rawValue: planURLString) else {
+                    return nil
+                }
+                let adapter = try await extractionServices.prepareZoteroAttachment()
+                let producer = adapter.packageProvenance
+                return .attachment(AttachmentExtractionResolution(
+                    fetch: { onProgress in
+                        let outcome = try await adapter.attachment(
+                            for: validatedURL.url, onProgress: onProgress)
+                        return AttachmentFetchOutcome(
+                            outputBytes: outcome.outputBytes,
+                            resultMIMEType: outcome.resultMIMEType,
+                            articleMetadata: outcome.articleMetadata,
+                            reportedMetadata: outcome.reportedMetadata)
+                    },
+                    filename: origin.externalIdentity ?? "attachment",
+                    producer: producer))
 
             default:
                 break
@@ -242,6 +274,85 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                 DebugLog.store("DaemonQueueExtractionProvider: package transcript write failed (source=\(sourceID.rawValue)): \(error)")
                 throw error
             }
+        }
+    }
+
+    @discardableResult
+    func persistAttachmentExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: AttachmentExtractionResolution,
+        outcome: AttachmentFetchOutcome
+    ) async throws -> QueueExtractionOutputReference? {
+        guard let store = storeResolver(wikiID) else {
+            // A finished acquisition whose store vanished mid-flight is data
+            // loss — fail the item loudly instead of silently completing.
+            DebugLog.extraction("DaemonQueueExtractionProvider: persistAttachmentExtraction — no store for wikiID=\(wikiID.rawValue)")
+            throw DaemonStoreUnavailableError(wikiID: wikiID)
+        }
+        // Provenance fields the package reported (identifier = the Zotero
+        // parent item key; title becomes the display name).
+        let itemKey = outcome.articleMetadata?.identifier
+        let itemTitle = outcome.articleMetadata?.title
+
+        if outcome.isMarkdownResult {
+            // Markdown result: podcast-shaped package provenance write, and
+            // the retained Zotero columns ride along.
+            guard let initialVersion = try store.initialContentVersion(sourceID: sourceID) else {
+                DebugLog.store("DaemonQueueExtractionProvider: attachment markdown has no initial source version (source=\(sourceID.rawValue))")
+                throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
+            }
+            guard let markdown = String(data: outcome.outputBytes, encoding: .utf8) else {
+                throw ProcessPackageRunError.invalidOutputEncoding
+            }
+            let producer = ExtractionInstalledPackageProducer(
+                revision: resolution.producer.revision,
+                registrationID: resolution.producer.registrationID,
+                protocolRevision: resolution.producer.protocolRevision,
+                reportedMetadata: outcome.reportedMetadata)
+            let version = try store.appendInstalledPackageMarkdown(
+                sourceID: sourceID, content: markdown, package: producer,
+                origin: .extraction, toolVersion: nil,
+                sourceVersionID: initialVersion.id, note: nil)
+            try store.setZoteroProvenance(
+                sourceID: sourceID,
+                zoteroItemKey: itemKey,
+                zoteroItemTitle: itemTitle,
+                displayName: itemTitle)
+            DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+            return QueueExtractionOutputReference(versionID: version.id.rawValue)
+        }
+
+        // Bytes result: the output-file bytes ARE the source content. The
+        // mutator stores the blob, sets the real MIME/ext/byte size, and
+        // populates the retained columns in one transaction.
+        guard let mimeType = outcome.resultMIMEType else {
+            throw ProcessPackageRunError.unexpectedBytesResult
+        }
+        let version = try store.attachZoteroAttachment(
+            sourceID: sourceID,
+            bytes: outcome.outputBytes,
+            mimeType: mimeType.rawValue,
+            zoteroItemKey: itemKey,
+            zoteroItemTitle: itemTitle,
+            displayName: itemTitle)
+        DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+        return QueueExtractionOutputReference(versionID: version.id.rawValue)
+    }
+
+    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws {
+        guard let queueStore else {
+            DebugLog.extraction("DaemonQueueExtractionProvider: no queue store; follow-on format route not enqueued (source=\(sourceID.rawValue))")
+            return
+        }
+        do {
+            _ = try queueStore.enqueue(QueueItemRequest(
+                queue: .extraction,
+                wikiID: wikiID,
+                payload: QueueItemPayload(sourceIDs: [sourceID])))
+        } catch {
+            DebugLog.store("DaemonQueueExtractionProvider: follow-on format-route enqueue failed (source=\(sourceID.rawValue)): \(error)")
+            throw error
         }
     }
 }

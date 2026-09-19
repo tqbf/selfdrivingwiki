@@ -190,7 +190,10 @@ final class AppProcessPluginCatalog {
     init(
         containerDirectory: URL,
         transportBridge: DaemonTransportAppBridge,
-        extractionProvider: @escaping @MainActor (any ExtractionServices) -> any QueueExtractionProvider,
+        extractionProvider: @escaping @MainActor (
+            any ExtractionServices,
+            URL
+        ) -> any QueueExtractionProvider,
         makeIngestionProvider: @escaping @MainActor (
             QueueStore,
             any AgentProviderServices
@@ -208,7 +211,9 @@ final class AppProcessPluginCatalog {
         let queueController = LocalQueueRuntimeController {
             try await QueueRuntimeFactory(
                 databaseURL: queueDBURL,
-                extractionProvider: await MainActor.run { extractionProvider(extractionServices) },
+                extractionProvider: await MainActor.run {
+                    extractionProvider(extractionServices, queueDBURL)
+                },
                 makeIngestionProvider: { store in
                     await MainActor.run { makeIngestionProvider(store, providerServices) }
                 })
@@ -327,14 +332,6 @@ final class AppProcessPluginCatalog {
                 makeURLFetchProvider: {
                     ProcessRuntimeLease(
                         service: URLFetchProvider(makeFetcher: { URLSessionFetcher() }),
-                        dispose: {})
-                },
-                makeZoteroClientProvider: {
-                    ProcessRuntimeLease(
-                        service: ZoteroClientProvider(
-                            readConfiguration: { ZoteroConfig.load(from: containerDirectory) },
-                            readCredential: { KeychainZoteroCredentialStore().apiKey() },
-                            makeFetcher: { URLSessionZoteroFetcher() }),
                         dispose: {})
                 }), homeDirectory: containerDirectory)
     }

@@ -68,8 +68,8 @@ public struct SourceProvenance: Sendable, Equatable {
 
 /// A materializer's output: the bytes to store + the provenance to record. Carries
 /// **no store handle** — the store owns the write (`storeMaterialized` →
-/// `addSource`). Also carries the retained Zotero legacy columns so the
-/// `ZoteroMaterializer` can populate both the PROV layer and the legacy columns in
+/// `addSource`). Also carries the retained Zotero legacy columns so an origin
+/// can populate both the PROV layer and the legacy columns in
 /// one call (§4.2: zotero columns are "legacy provenance, retained").
 ///
 /// `extractedMarkdown` (issue #599): non-nil when the source preserves its
@@ -440,71 +440,6 @@ public struct WebsiteSnapshot: Sendable {
 // package via the extraction queue, whose prepared adapter carries exact
 // installed-package provenance. The former built-in materializer could not
 // carry provenance and had no remaining production caller.
-
-// MARK: - ZoteroMaterializer
-
-/// Materializes a Zotero attachment: resolves its local file (off-main read),
-/// recording `agentName = "zotero"`, `activityKind = "import"`,
-/// `externalIdentity` = the parent item key. Also populates the retained legacy
-/// `zoteroItemKey`/`zoteroItemTitle` columns (§4.2).
-public struct ZoteroMaterializer: SourceMaterializer {
-    public let agentName = SourceProvider.zotero.rawValue
-    public let attachment: ZoteroAttachment
-    public let parentItem: ZoteroItem
-    public let zoteroDir: URL
-
-    public init(attachment: ZoteroAttachment, parentItem: ZoteroItem, zoteroDir: URL) {
-        self.attachment = attachment
-        self.parentItem = parentItem
-        self.zoteroDir = zoteroDir
-    }
-
-    public func materialize() async throws -> MaterializedSource {
-        switch ZoteroLocalStorage.resolve(attachment, zoteroDir: zoteroDir) {
-        case .local(let path):
-            let data = try await Task.detached(priority: .userInitiated) {
-                try Data(contentsOf: path)
-            }.value
-            // Derive (stem, extensionHint) from the attachment filename and route
-            // through format dispatch — the SAME pipeline as website/local-file
-            // sources. This fixes a latent bug: a Zotero HTML attachment is now
-            // converted to Markdown instead of stored as raw HTML.
-            let filename = path.lastPathComponent
-            let ns = filename as NSString
-            let stem = ns.deletingPathExtension
-            let extRaw = ns.pathExtension.lowercased()
-            let extHint = extRaw.isEmpty ? nil : extRaw
-            #if canImport(UniformTypeIdentifiers)
-            let utiMIME = extHint.flatMap { UTType(filenameExtension: $0)?.preferredMIMEType }
-            #else
-            let utiMIME: String? = nil
-            #endif
-            let hints = ContentTypeDetectionHints(
-                declaredMIME: attachment.contentType.map { .init($0, origin: .zoteroMetadata) },
-                filenameExtension: extHint,
-                utiMIME: utiMIME)
-            let plan = FormatMaterializer.dispatch(
-                data: data, hints: hints,
-                stem: stem, extensionHint: extHint)
-            return MaterializedSource(
-                filename: plan.filename,
-                data: plan.data,
-                detectionHints: hints,
-                detectionResult: plan.detectionResult,
-                ingestMetadata: .init(
-                    externalItemID: parentItem.key,
-                    externalItemTitle: parentItem.title),
-                provenance: SourceProvenance(
-                    agentName: agentName,
-                    activityKind: "import",
-                    externalIdentity: parentItem.key
-                ),
-                extractedMarkdown: plan.extractedMarkdown)
-        case .unavailable(let reason):
-            throw ZoteroFetchError.unavailable(reason)
-        }
-    }
-}
 
 // MARK: - MarkdownFolderMaterializer
 

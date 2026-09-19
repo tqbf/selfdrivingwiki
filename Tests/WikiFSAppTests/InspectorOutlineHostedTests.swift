@@ -1048,6 +1048,13 @@ private struct InspectorOutlineStubExtractionProvider: QueueExtractionProvider {
         resolution: TranscriptExtractionResolution,
         outcome: TranscriptFetchOutcome
     ) async throws -> QueueExtractionOutputReference? { nil }
+    func persistAttachmentExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: AttachmentExtractionResolution,
+        outcome: AttachmentFetchOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
+    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws {}
 }
 
 private func makeInspectorOutlineTestQueueEngine() throws -> QueueEngine {

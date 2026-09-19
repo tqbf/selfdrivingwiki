@@ -4,7 +4,8 @@ import Testing
 
 /// `DoclingServeClient` multipart-building, decoding, status mapping, and
 /// end-to-end `convert` — driven entirely by the `FakeHTTPFetcher`, no real
-/// network. Mirrors `ZoteroClientTests` / `AnthropicExtractionClientTests`.
+/// network. Mirrors `AnthropicExtractionClientTests` (fetcher-injected
+/// fake-fetcher pattern).
 struct DoclingServeClientTests {
 
     private let pdf = Data("%PDF-1.4 fake".utf8)

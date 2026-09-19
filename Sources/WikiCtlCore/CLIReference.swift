@@ -639,6 +639,21 @@ public enum CLIReference {
                         CLIOption("--name <new-name>", required: true, summary: "the new display name"),
                     ]),
             ]),
+        CLIFamily(
+            name: "zotero",
+            summary: "sync Zotero attachments into byteless sources via the reviewed package",
+            leaves: [
+                CLILeaf(
+                    "sync", summary: "create one byteless source per configured attachment key and enqueue its extraction",
+                    commandLine: "sync [--force]",
+                    options: [CLIOption("--force", summary: "re-enqueue extraction for already-synced attachments")],
+                    details: [
+                        "Reads zotero-config.json from the App Group container (library ID +",
+                        "attachment keys) and the API key from Keychain (presence check only).",
+                        "The enqueued extraction items drain when the app or the wikid daemon",
+                        "next runs its dispatch scan — this command only writes them.",
+                    ]),
+            ]),
     ]
 
     // MARK: - Lookup helpers

@@ -34,7 +34,6 @@ struct ContentView: View {
     /// the absolute URL for the right-click "Add as Source" item (set via the
     /// `\.addURLHandler` environment value).
     @State private var showingImportMarkdown = false
-    @State private var showingAddFromZotero = false
     @State private var showCloseTabAlert = false
     /// Drives address-bar focus from the Cmd-L shortcut. The bar observes this
     /// via a `@Binding` and mirrors it into its own `@FocusState`.
@@ -102,9 +101,6 @@ struct ContentView: View {
             pendingAddURL = PendingAddURL(url: url)
         }
         .sheet(isPresented: $showingImportMarkdown) { ImportMarkdownSheet(store: store) }
-        .sheet(isPresented: $showingAddFromZotero) {
-            AddFromZoteroSheet(store: store, containerDirectory: zoteroContainerDirectory)
-        }
         // Non-dismissible while the search-index upgrade runs — the upgrade is the
         // sole owner of the store during it, so SQLite is never touched off-main.
         // The binding's setter is a no-op: only the model nils `searchUpgrade` on
@@ -193,11 +189,9 @@ struct ContentView: View {
             SidebarView(store: store, registry: registry, session: session, fileProvider: fileProvider,
                         launcher: agentLauncher,
                         ingestingSourceIDs: tracker.ingestingSourceIDs,
-                        showingAddFromZotero: $showingAddFromZotero,
                         showingImportMarkdown: $showingImportMarkdown,
                         onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
-                        onNewPage: { store.newPageInNewTab() },
-                        isZoteroConfigured: isZoteroConfigured)
+                        onNewPage: { store.newPageInNewTab() })
         } detail: {
             detailColumn
         }
@@ -236,17 +230,6 @@ struct ContentView: View {
     /// The agent is doing work — running, or in a local pdf2md extraction / an
     /// agent-phase ingest (the extraction phase precedes the agent process).
     /// Drives the toolbar glow. Both phase flags are included so the glow stays
-    private var zoteroContainerDirectory: URL {
-        (DebugLog.trying("resolve app group container", operation: { try DatabaseLocation.appGroupContainerDirectory() })) ?? FileManager.default.temporaryDirectory
-    }
-
-    private var isZoteroConfigured: Bool {
-        ZoteroConfig.load(from: zoteroContainerDirectory).isConfigured
-            // #1159: presence check goes through the UI-safe describing
-            // authority — no value is read here.
-            && KeychainCredentialService().describe(.zoteroAPIKey()).isConfigured
-    }
-
     /// The active wiki's configured home page, if any (issue #280). `nil` hides
     /// the omnibox home button. Verifies the page still exists so a stale
     /// `homePageID` (e.g. the page was deleted) hides the button instead of
@@ -369,9 +352,7 @@ struct ContentView: View {
             installedRendererHost: installedRendererHost,
             onRendererActivation: onRendererActivation,
             runIngest: { id in runIngest(sourceID: id) },
-            showingImportMarkdown: $showingImportMarkdown,
-            showingAddFromZotero: $showingAddFromZotero,
-            isZoteroConfigured: isZoteroConfigured
+            showingImportMarkdown: $showingImportMarkdown
         )
         .frame(maxWidth: .infinity)
         .swipeNavigation(store: store)

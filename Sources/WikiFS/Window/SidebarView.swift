@@ -22,11 +22,9 @@ struct SidebarView: View {
     /// "Ingesting…" spinner on those rows.
     var ingestingSourceIDs: Set<SourceID> = []
 
-    @Binding var showingAddFromZotero: Bool
     @Binding var showingImportMarkdown: Bool
     var onAddFromURL: () -> Void
     var onNewPage: () -> Void
-    var isZoteroConfigured: Bool = false
 
     @State private var bookmarkPickerContext: PickerContext?
     @State private var editBookmarkNodeID: EditBookmarkContext?
@@ -163,10 +161,8 @@ struct SidebarView: View {
                                  queueEngine: session.queueEngine,
                                  extractionProvider: session.extractionProvider,
                                  ingestingSourceIDs: ingestingSourceIDs,
-                                 showingAddFromZotero: $showingAddFromZotero,
                                  showingImportMarkdown: $showingImportMarkdown,
-                                 onAddFromURL: onAddFromURL,
-                                 isZoteroConfigured: isZoteroConfigured)
+                                 onAddFromURL: onAddFromURL)
         case .bookmarks:
             BookmarksContainerView(store: store, fileProvider: fileProvider,
                 onShowPicker: { bookmarkPickerContext = $0 },

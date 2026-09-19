@@ -6,7 +6,7 @@ import FoundationNetworking
 
 /// The remote extraction backend: POSTs the PDF to a self-hosted Docling Serve
 /// instance's `/v1/convert/file` endpoint and returns its Markdown output. Raw
-/// HTTP (multipart/form-data), mirroring `ZoteroClient` and
+/// HTTP (multipart/form-data), mirroring
 /// `AnthropicExtractionClient`'s fetcher-injected, pure-helper shape.
 ///
 /// Docling Serve's v1 API: the file is uploaded as a multipart `files` part

@@ -48,7 +48,7 @@ struct SourceMaterializerTests {
 
     // MARK: - AC.1: WebsiteMaterializer + store provenance
 
-    @Test func localWebsiteZoteroAndMarkdownFolderShareDetectorPolicy() async throws {
+    @Test func localWebsiteAndMarkdownFolderShareDetectorPolicy() async throws {
         let pdfBytes = Data("%PDF-1.7".utf8)
         let localURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("detector-policy-\(UUID().uuidString).txt")
@@ -70,29 +70,6 @@ struct SourceMaterializerTests {
         #expect(website.detectionHints.declaredMIME?.origin == .httpResponse)
         #expect(website.detectionResult.conflicts.contains {
             $0.conflictingEvidence.origin == .httpResponse
-        })
-
-        let zoteroDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("detector-zotero-\(UUID().uuidString)", isDirectory: true)
-        let attachmentDirectory = zoteroDirectory
-            .appendingPathComponent("storage", isDirectory: true)
-            .appendingPathComponent("DETECTOR", isDirectory: true)
-        try FileManager.default.createDirectory(at: attachmentDirectory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: zoteroDirectory) }
-        try pdfBytes.write(to: attachmentDirectory.appendingPathComponent("report.txt"))
-        let zotero = try await ZoteroMaterializer(
-            attachment: .init(
-                key: "DETECTOR", parentItem: "PARENT", linkMode: "imported_file",
-                filename: "report.txt", contentType: "text/plain", title: nil),
-            parentItem: .init(
-                key: "PARENT", version: 1, itemType: "document",
-                title: "Report", creatorSummary: nil, date: nil),
-            zoteroDir: zoteroDirectory)
-            .materialize()
-        #expect(zotero.mimeType == MimeType.pdf)
-        #expect(zotero.detectionHints.declaredMIME?.origin == .zoteroMetadata)
-        #expect(zotero.detectionResult.conflicts.contains {
-            $0.conflictingEvidence.origin == .zoteroMetadata
         })
 
         let folder = try await MarkdownFolderMaterializer(
@@ -249,84 +226,7 @@ struct SourceMaterializerTests {
         #expect(try store.sourceOrigin(sourceID: s2.id)?.agentName == "markdown-folder")
     }
 
-    // MARK: - AC.2: ZoteroMaterializer
-
-    @Test func zoteroProviderSetsItemKeyProvenance() async throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prov-zotero-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        // Zotero stores attachments at <storageDir>/storage/<key>/<filename>.
-        let attachmentDir = dir.appendingPathComponent("storage", isDirectory: true)
-            .appendingPathComponent("ABCD1234", isDirectory: true)
-        try FileManager.default.createDirectory(at: attachmentDir, withIntermediateDirectories: true)
-        let pdf = attachmentDir.appendingPathComponent("paper.pdf")
-        try Data("%PDF".utf8).write(to: pdf)
-
-        let attachment = ZoteroAttachment(
-            key: "ABCD1234", parentItem: "PARENT1", linkMode: "imported_file",
-            filename: "paper.pdf", contentType: "application/pdf", title: nil)
-        let parent = ZoteroItem(
-            key: "PARENT1", version: 1, itemType: "journalArticle",
-            title: "My Paper", creatorSummary: "Doe", date: "2024")
-        let provider = ZoteroMaterializer(
-            attachment: attachment, parentItem: parent, zoteroDir: dir)
-        let source = try await provider.materialize()
-        // AC.4 — assert filename + bytes (not just provenance fields).
-        #expect(source.filename == "paper.pdf")
-        #expect(source.data == Data("%PDF".utf8))
-        let prov = try #require(source.provenance)
-        #expect(prov.agentName == "zotero")
-        #expect(prov.activityKind == "import")
-        #expect(prov.externalIdentity == "PARENT1")
-        #expect(source.ingestMetadata?.externalItemID == "PARENT1")
-        #expect(source.ingestMetadata?.externalItemTitle == "My Paper")
-    }
-
-    /// AC.3 — a Zotero HTML attachment now routes through format dispatch and
-    /// preserves the original HTML bytes (#599 — mirrors PDF → pdf2md extraction).
-    /// The HTML→Markdown conversion rides as a sidecar that the store path writes
-    /// as a `.extraction` processed-markdown version. Before #599 the HTML was
-    /// converted to Markdown at the format-dispatch layer and the original HTML
-    /// was discarded; before Phase 3a it was stored as raw HTML without a
-    /// derived-markdown version.
-    @Test func zoteroHtmlAttachmentPreservedWithoutMarkdownSidecar() async throws {
-        // (Issue #799 PR3 renames the pre-PR3 `…WithMarkdownSidecar` test:
-        // post-PR3 `ZoteroMaterializer` routes through `FormatMaterializer.dispatch`
-        // which returns `extractedMarkdown: nil` for HTML — no sidecar at
-        // ingest; the user triggers extraction via the Extract button from PR2.)
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-zotero-html-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let attachmentDir = dir.appendingPathComponent("storage", isDirectory: true)
-            .appendingPathComponent("HTML1234", isDirectory: true)
-        try FileManager.default.createDirectory(at: attachmentDir, withIntermediateDirectories: true)
-        let htmlFile = attachmentDir.appendingPathComponent("page.html")
-        let html = "<html><head><title>Zotero Page</title></head><body><p>Hello world</p></body></html>"
-        try Data(html.utf8).write(to: htmlFile)
-
-        let attachment = ZoteroAttachment(
-            key: "HTML1234", parentItem: "PARENT1", linkMode: "imported_file",
-            filename: "page.html", contentType: "text/html", title: nil)
-        let parent = ZoteroItem(
-            key: "PARENT1", version: 1, itemType: "journalArticle",
-            title: "HTML Paper", creatorSummary: "Doe", date: "2024")
-        let provider = ZoteroMaterializer(
-            attachment: attachment, parentItem: parent, zoteroDir: dir)
-        let source = try await provider.materialize()
-
-        // Issue #599: the source blob IS the original HTML bytes; the filename
-        // derives from <title> with an `.html` extension.
-        #expect(source.filename == "Zotero Page.html")
-        #expect(source.data == Data(html.utf8))
-        // PR3: NO extracted-markdown sidecar at ingest (was non-nil pre-PR3 —
-        // the Zotero materializer used to produce a tag-based sidecar via
-        // `FormatMaterializer.dispatch`). The user triggers extraction via the
-        // Extract button (PR2) afterward.
-        #expect(source.extractedMarkdown == nil,
-               "PR3: Zotero HTML materialization must NOT auto-extract markdown")
-    }
+    // MARK: - Zotero provenance persistence (retained legacy columns)
 
     @Test func addSourceZoteroPersistsAgentAndRetainedColumns() async throws {
         let store = try tempStore()

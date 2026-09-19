@@ -19,10 +19,8 @@ struct SourcesContainerView: View {
     let extractionProvider: any QueueExtractionProvider
     var ingestingSourceIDs: Set<SourceID> = []
 
-    @Binding var showingAddFromZotero: Bool
     @Binding var showingImportMarkdown: Bool
     var onAddFromURL: () -> Void
-    var isZoteroConfigured: Bool = false
 
     @State private var sourceFilter: SourceFilter = .all
     /// Display order backing the "Sort by" menu. `lastUpdated` is the
@@ -182,11 +180,6 @@ struct SourcesContainerView: View {
             HStack(spacing: 2) {
                 Text("Sources").font(.headline).foregroundStyle(.primary)
                 Spacer()
-                if isZoteroConfigured {
-                    headerButton(systemImage: "books.vertical", help: "Add from Zotero…") {
-                        showingAddFromZotero = true
-                    }
-                }
                 headerButton(systemImage: "link.badge.plus", help: "Add from URL…") {
                     onAddFromURL()
                 }

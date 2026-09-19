@@ -6,7 +6,7 @@ import FoundationNetworking
 
 /// Abstracts `URLSession.data(for:)` for the extraction HTTP clients, so the
 /// Anthropic and Docling Serve clients (and their tests) share one trivially
-/// fakeable network seam. Mirrors `ZoteroClient.RequestFetcher`: the fetcher
+/// fakeable network seam. The fetcher
 /// takes a fully-formed `URLRequest` (each client attaches its own auth headers)
 /// and returns the body bytes + HTTP status. The fetcher stays auth-agnostic.
 public protocol HTTPRequestFetcher: Sendable {

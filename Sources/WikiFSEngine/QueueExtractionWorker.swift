@@ -74,6 +74,9 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         case .transcript(let transcript):
             // Transcript sources get their own (non-PDF) capacity bucket.
             return ProviderID(rawValue: transcript.capacityID)
+        case .attachment(let attachment):
+            // Attachment acquisition shares the transcript (non-PDF) bucket.
+            return ProviderID(rawValue: attachment.capacityID)
         case .bytes(let bytes):
             // Map the backend to a provider ID that the engine's capacity
             // config can route: local → "local-pdf2md", remote → backend-specific.
@@ -262,6 +265,42 @@ struct QueueExtractionWorker: QueueWorker {
                 phase: .finished,
                 availability: .available,
                 resultSummary: "Transcript persisted",
+                targetUpserts: [QueueReportTargetRecord(
+                    target: .source(sourceID),
+                    state: .succeeded,
+                    result: outputReference.map { QueueTargetResult.outputReference($0) })]))
+
+        case .attachment(let attachment):
+            emitProgress(item.id, stamp("Acquiring attachment…"))
+            emitReport?(QueueReportMutation(phase: .running))
+            let outcome = try await attachment.fetch { [itemID = item.id] line in
+                emitProgress(itemID, stamp(line))
+            }
+
+            emitReport?(QueueReportMutation(phase: .persisting))
+            let outputReference = try await provider.persistAttachmentExtraction(
+                wikiID: item.wikiID,
+                sourceID: sourceID,
+                resolution: attachment,
+                outcome: outcome)
+
+            // Routing keys off the RESULT MIME (data), never the extractor
+            // kind: a Markdown result IS the product, while a bytes result
+            // gains a follow-on `.extraction` item so the standard PDF/HTML
+            // format route produces the Markdown version. The enqueue is a
+            // durable store write; the app or the daemon drains it on its
+            // next dispatch scan.
+            var followOnNote = ""
+            if outcome.isMarkdownResult == false {
+                try await provider.enqueueFollowOnExtraction(
+                    wikiID: item.wikiID, sourceID: sourceID)
+                followOnNote = " (format route queued)"
+            }
+
+            emitReport?(QueueReportMutation(
+                phase: .finished,
+                availability: .available,
+                resultSummary: "Attachment persisted\(followOnNote)",
                 targetUpserts: [QueueReportTargetRecord(
                     target: .source(sourceID),
                     state: .succeeded,

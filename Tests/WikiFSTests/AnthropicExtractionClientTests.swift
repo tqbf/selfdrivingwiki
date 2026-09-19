@@ -4,7 +4,8 @@ import Testing
 
 /// `AnthropicExtractionClient` request-building, decoding, status mapping, and
 /// end-to-end `convert` — driven entirely by the `FakeHTTPFetcher` returning
-/// canned `(Data, Int)` pairs, no real network. Mirrors `ZoteroClientTests`.
+/// canned `(Data, Int)` pairs, no real network (the fetcher-injected
+/// fake-fetcher pattern).
 struct AnthropicExtractionClientTests {
 
     private let apiKey = "sk-ant-test"

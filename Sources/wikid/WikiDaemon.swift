@@ -983,7 +983,8 @@ final class WikiDaemon: @unchecked Sendable {
                 guard let self else { return false }
                 _ = await self.openStore(wikiID: wikiID)
                 return self.preparedStoreIfAvailable(wikiID: wikiID) != nil
-            })
+            },
+            queueStore: queueStore)
         let dir = containerDirectory
         let ingestionProvider = DaemonQueueIngestionProvider(
             containerDirectory: dir,

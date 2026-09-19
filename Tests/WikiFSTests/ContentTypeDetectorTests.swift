@@ -88,21 +88,19 @@ struct ContentTypeDetectorTests {
     }
 
     @Test func conflictingHintsRetainEvidenceAndConflictOrigins() {
-        for origin in [DeclaredMIMEOrigin.httpResponse, .zoteroMetadata] {
-            let result = ContentTypeDetector.detect(.init(
-                data: Data("%PDF-1.7".utf8),
-                hints: .init(
-                    declaredMIME: .init("text/plain", origin: origin),
-                    filenameExtension: "txt",
-                    utiMIME: "text/plain")))
-            #expect(result.normalizedMIMEType == "application/pdf")
-            #expect(result.conflicts.map(\.conflictingEvidence.origin) == [
-                .utf8Text,
-                origin == .httpResponse ? .httpResponse : .zoteroMetadata,
-                .uti,
-                .filenameExtension,
-            ])
-        }
+        let result = ContentTypeDetector.detect(.init(
+            data: Data("%PDF-1.7".utf8),
+            hints: .init(
+                declaredMIME: .init("text/plain", origin: .httpResponse),
+                filenameExtension: "txt",
+                utiMIME: "text/plain")))
+        #expect(result.normalizedMIMEType == "application/pdf")
+        #expect(result.conflicts.map(\.conflictingEvidence.origin) == [
+            .utf8Text,
+            .httpResponse,
+            .uti,
+            .filenameExtension,
+        ])
     }
 
     @Test func binarySignatureOverridesDeclaredHTTPMIME() {

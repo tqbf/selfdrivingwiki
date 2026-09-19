@@ -5,11 +5,11 @@ import WikiFSCore
 /// LogSeq graph, or any folder of `.md` files) as source material for the wiki.
 ///
 /// The imported files land in `ingested_files` — exactly like drag-drop, URL
-/// fetch, and Zotero. The user then runs Ingest to have the agent curate them
-/// into wiki pages.
+/// fetch, and Zotero sync. The user then runs Ingest to have the agent curate
+/// them into wiki pages.
 ///
-/// Follows `AddFromURLSheet`'s phase-enum pattern and `AddFromZoteroSheet`'s
-/// progress + error-collection pattern.
+/// Follows `AddFromURLSheet`'s phase-enum and progress + error-collection
+/// pattern.
 ///
 /// macos-design + typography-designer: a clean utility sheet with `.headline`
 /// title, `.subheadline` secondary, a directory picker, inline progress, and a
