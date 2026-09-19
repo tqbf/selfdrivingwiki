@@ -47,7 +47,7 @@ Pure functions (no SwiftUI) that convert flat `[BookmarkNode]` into a
 
 ## UI Components
 
-- `BookmarksContainerView` — the section container with a header bar (compact action buttons) and `NSOutlineView` below
+- `BookmarksContainerView` — the section container with a header bar (compact action buttons, a Show kind-filter picker, a Sort by picker, and search) and `NSOutlineView` below
 - `BookmarksOutlineView` — `NSViewControllerRepresentable` wrapping `NSOutlineView` for instant selection performance
 - `EditBookmarkSheet` — rename a folder or retarget a page/source/chat reference
 - `ItemPickerSheet` — search-and-select sheet for adding page/source refs
@@ -96,3 +96,60 @@ A `NestedResourceProjection` descriptor drives all dispatch (`node`/`children`/
 `contents`/working set). A `BookmarkTokenContributor` appends a
 `bookmark_nodes` count fold to the change token so any mutation re-fetches.
 No schema change (the existing `bookmark_nodes` table is read as-is).
+
+## Sort and filter controls (#241)
+
+The Bookmarks header has a "Show" picker (All / Folders / Pages / Sources /
+Chats) and a "Sort by" picker (Custom Order / Name A–Z / Date Added / Date
+Updated). They follow the Sources filter row and the Pages sort row — same
+fonts, spacing, and picker styles. Both rows show only when at least one
+bookmark exists (the same gate as the search bar). A filter or search that
+matches nothing shows "No matching bookmarks".
+
+### Display-only guarantee
+
+Sorting never rewrites the persisted `position` column. `sortedSiblings`
+(`BookmarkDisplayOrder.swift`) is a pure function over `[BookmarkNode]`; the
+store takes no part in it. Custom Order is `position` ascending — exactly the
+persisted drag-and-drop order, and the default. Drag-and-drop reordering
+keeps working and keeps writing `position` under every sort choice.
+
+### Semantics
+
+| Sort | Key | Tie-break |
+|------|-----|-----------|
+| Custom Order | `position` ascending | — |
+| Name A–Z | resolved title, localized case-insensitive | `position` ascending |
+| Date Added | `createdAt` descending | `position` ascending |
+| Date Updated | `updatedAt` descending | `position` ascending |
+
+Titles resolve from folder labels and page/source/chat names. A rename that
+only changes a page title (not the node row) appends the resolved title to
+the outline's change signature under Name A–Z, so the next reload re-sorts.
+`reloadData` builds a title index once per pass, so sorting and signature
+checks stay linear.
+
+The kind filter keeps every node of the chosen kind plus all ancestor folders,
+so hits inside nested folders stay visible. Search and kind compose as one
+predicate before ancestor expansion.
+
+### Drag-and-drop gating
+
+Under a non-manual sort the display order ignores `position`, so
+between-sibling insertion is meaningless. `isReorderAllowed` gates intra-
+outline moves: drop-ON-folder and root drops stay allowed (reparenting works
+under every sort); leaf insertions are refused. `acceptDrop` re-checks the
+gate as defense in depth, so a sort change between validate and accept
+cannot smuggle a move through. Wiki-link and sidebar-payload copy drops are
+unaffected — they create nodes, and the sorted view places them.
+
+### Accepted limitations
+
+- Filter and sort choices live in `@State` in the container, so they reset
+  when the user switches sidebar sections. The Sources filter behaves the
+  same way.
+
+Under Name A–Z, `filteredNodes` reads the model title arrays even when the
+search is empty, so the container's `@Observable` dependency tracks renames:
+a page/source/chat rename re-renders the header and re-sorts the outline
+without any node change.

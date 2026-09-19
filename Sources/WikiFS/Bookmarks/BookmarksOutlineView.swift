@@ -21,6 +21,10 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
     /// When true, all folders are force-expanded (used during search so hits
     /// inside collapsed folders are immediately visible).
     var forceExpandAll: Bool = false
+    /// Display sort order applied when the outline builds its sibling groups
+    /// (issue #241). Display-only — the persisted `position` column (manual
+    /// drag-and-drop order) is never rewritten.
+    var sortOrder: BookmarkSortOrder = .manual
     let fileProvider: FileProviderFacade
     // All callbacks are main-actor-isolated: they touch the @MainActor
     // WikiStoreModel or present UI. @Sendable so they can be captured by the
@@ -61,9 +65,14 @@ struct BookmarksOutlineView: NSViewControllerRepresentable {
             onAddPage: onAddPage, onAddSource: onAddSource,
             onNewFolder: onNewFolder, onNewSubfolder: onNewSubfolder
         )
-        let needs = vc.needsReload(nodes: nodes) || vc.forceExpandAll != forceExpandAll
+        // Compare BEFORE assigning: `needsReload` must see the incoming
+        // `sortOrder` against the controller's current one, so a sort change
+        // alone triggers a reload. Assigning first would make the comparison
+        // always false and the outline would silently keep the old order.
+        let needs = vc.needsReload(nodes: nodes, sortOrder: sortOrder) || vc.forceExpandAll != forceExpandAll
+        vc.sortOrder = sortOrder
         vc.forceExpandAll = forceExpandAll
-        DebugLog.tabs("BookmarksOutlineView.updateNSVC: nodes=\(nodes.count) needsReload=\(needs)")
+        DebugLog.tabs("BookmarksOutlineView.updateNSVC: nodes=\(nodes.count) needsReload=\(needs) sortOrder=\(sortOrder.rawValue)")
         if needs {
             vc.reloadData(from: nodes)
         }
@@ -130,6 +139,11 @@ final class BookmarksOutlineViewController: NSViewController {
     /// When true, all folders are force-expanded on reload (search mode).
     var forceExpandAll = false
 
+    /// Display sort order applied to each sibling group when the tree is
+    /// rebuilt (issue #241). Display-only — sorting never rewrites the
+    /// persisted `position` column.
+    var sortOrder: BookmarkSortOrder = .manual
+
     override func loadView() {
         scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
@@ -187,24 +201,37 @@ final class BookmarksOutlineViewController: NSViewController {
 
     // MARK: - Data reload
 
-    func needsReload(nodes: [BookmarkNode]) -> Bool {
+    func needsReload(nodes: [BookmarkNode], sortOrder: BookmarkSortOrder) -> Bool {
+        // A sort change alone must re-render the tree, even with identical
+        // nodes. Only live because `updateNSViewController` compares against
+        // the incoming value BEFORE assigning the property.
+        if sortOrder != self.sortOrder { return true }
         guard nodes.count == lastNodeCount else { return true }
-        return nodeSignature(nodes) != lastNodeSignature
+        // Only `.nameAZ` folds titles into the signature; other orders skip
+        // the index build (title lookups are O(n·m) over the model arrays).
+        let titleIndex = sortOrder == .nameAZ ? buildTitleIndex(for: nodes) : [:]
+        return nodeSignature(nodes, titleIndex: titleIndex) != lastNodeSignature
     }
 
     func reloadData(from nodes: [BookmarkNode]? = nil) {
         let nodes = nodes ?? (store?.bookmarkNodes ?? [])
+        let titleIndex = sortOrder == .nameAZ ? buildTitleIndex(for: nodes) : [:]
         lastNodeCount = nodes.count
-        lastNodeSignature = nodeSignature(nodes)
+        lastNodeSignature = nodeSignature(nodes, titleIndex: titleIndex)
 
         // Rebuild the parent→children map once (M2: avoids O(n) filter per row).
         childrenMap.removeAll(keepingCapacity: true)
         for node in nodes {
             childrenMap[node.parentID, default: []].append(node)
         }
-        // Sort each group by position.
+        // Sort each sibling group in the current display order (issue #241).
+        // Display-only: the persisted `position` column is never rewritten —
+        // assign the sorted result, don't rely on in-place order.
         for key in childrenMap.keys {
-            childrenMap[key]?.sort { $0.position < $1.position }
+            childrenMap[key] = sortOrder.sortedSiblings(
+                childrenMap[key] ?? [],
+                resolveTitle: { titleIndex[$0.id] ?? "" }
+            )
         }
 
         if !hasPerformedInitialLoad {
@@ -234,12 +261,64 @@ final class BookmarksOutlineViewController: NSViewController {
     }
 
     /// Compact per-node signature covering all rendering-relevant fields.
-    private func nodeSignature(_ nodes: [BookmarkNode]) -> String {
-        nodes.map { "\($0.id)|\($0.parentID?.rawValue ?? "")|\($0.position)|\($0.kind.rawValue)|\($0.label ?? "")|\($0.targetRawValue ?? "")" }
-            .joined(separator: "\n")
+    /// Under `.nameAZ`, the resolved title is appended so a rename (which
+    /// changes only `store.summaries`, not node fields) invalidates the
+    /// tree and the next reload re-sorts.
+    private func nodeSignature(
+        _ nodes: [BookmarkNode],
+        titleIndex: [BookmarkID: String]
+    ) -> String {
+        nodes.map { node -> String in
+            var segment = "\(node.id)|\(node.parentID?.rawValue ?? "")|\(node.position)|\(node.kind.rawValue)|\(node.label ?? "")|\(node.targetRawValue ?? "")"
+            if sortOrder == .nameAZ {
+                segment += "|\(titleIndex[node.id] ?? "")"
+            }
+            return segment
+        }
+        .joined(separator: "\n")
     }
 
     // MARK: - Helpers
+
+    /// BookmarkID → resolved display title, built once per reload/reload
+    /// check so sorting and signature checks don't do O(n·m) linear scans
+    /// over summaries/sources/chats per comparison. Folders resolve from
+    /// their own label; missing targets become "(missing)".
+    private func buildTitleIndex(for nodes: [BookmarkNode]) -> [BookmarkID: String] {
+        var index: [BookmarkID: String] = [:]
+        index.reserveCapacity(nodes.count)
+        let pages = store?.summaries ?? []
+        let sources = store?.sources ?? []
+        let chats = store?.chats ?? []
+        for node in nodes {
+            switch node.content {
+            case .folder(let label):
+                index[node.id] = label
+            case .page(let id):
+                index[node.id] = pages.first { $0.id == id }?.title ?? "(missing)"
+            case .source(let id):
+                index[node.id] = sources.first { $0.id == id }?.effectiveName ?? "(missing)"
+            case .chat(let id):
+                index[node.id] = chats.first { $0.id == id }?.title ?? "(missing)"
+            }
+        }
+        return index
+    }
+
+    /// Sort-aware gate for intra-outline moves (issue #241). Under a
+    /// non-manual sort the display order ignores `position`, so the
+    /// between-sibling insertion gesture is meaningless — only drop-ON-folder
+    /// destinations remain allowed (reparenting stays possible, and so does
+    /// a root drop, handled separately by the caller). Pure; unit-tested
+    /// without a live outline.
+    nonisolated static func isReorderAllowed(
+        sortOrder: BookmarkSortOrder,
+        isFolderDestination: Bool,
+        dropIndex: Int
+    ) -> Bool {
+        if sortOrder == .manual { return true }
+        return isFolderDestination && dropIndex == NSOutlineViewDropOnItemIndex
+    }
 
     private func children(of parentID: BookmarkID?) -> [BookmarkNode] {
         childrenMap[parentID] ?? []
@@ -563,13 +642,26 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
                 for id in Self.draggedBookmarkNodeIDs(from: info.draggingPasteboard) {
                     if isDescendant(folder.id, of: BookmarkID(rawValue: id)) { return [] }
                 }
+                // Sort gate: drop ON a folder reparents — meaningful under
+                // any sort. Between-sibling insertion inside it is refused
+                // under a non-manual sort (issue #241).
+                guard Self.isReorderAllowed(
+                    sortOrder: sortOrder,
+                    isFolderDestination: true,
+                    dropIndex: index) else { return [] }
                 return .move
             }
             if item == nil {
+                // Root append — a reparent, meaningful under any sort.
                 return .move
             }
-            // Allow reorder between siblings.
+            // Reorder between siblings: meaningful only under the manual
+            // (persisted-position) sort; refused otherwise (issue #241).
             if item is BookmarkNode {
+                guard Self.isReorderAllowed(
+                    sortOrder: sortOrder,
+                    isFolderDestination: false,
+                    dropIndex: index) else { return [] }
                 return .move
             }
             return []
@@ -635,6 +727,14 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             }
 
             if let leaf = item as? BookmarkNode {
+                // Defense in depth for the sort gate (issue #241): a sort
+                // change between validate and accept cannot smuggle a
+                // between-sibling move through here. Folder and root
+                // destinations append (a reparent) and need no gate.
+                guard sortOrder == .manual else {
+                    DebugLog.tabs("[drop] bookmark move refused: non-manual sort on leaf destination")
+                    return false
+                }
                 // Reorder within the same parent.
                 return moveAll(toParentID: leaf.parentID, startingAt: index >= 0 ? index : leaf.position)
             }
