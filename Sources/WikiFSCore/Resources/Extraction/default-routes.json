@@ -64,6 +64,19 @@
           "registrationID": "captions"
         }
       }
+    },
+    {
+      "route": {
+        "kind": "zotero",
+        "mimeType": "application/zotero"
+      },
+      "extractor": {
+        "kind": "installed",
+        "installed": {
+          "packageID": "org.selfdrivingwiki.zotero",
+          "registrationID": "attachment"
+        }
+      }
     }
   ]
 }

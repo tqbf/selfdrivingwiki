@@ -72,9 +72,15 @@ public enum ReviewedExtractorPackages {
         version: "1.0.1",
         digest: "23e987d6ee3207ff89fb506a23c5ccef8e2693410dd14bc7f8e47e4f8acd7679")
 
+    public static let zotero = make(
+        directoryName: "Zotero",
+        packageID: "org.selfdrivingwiki.zotero",
+        version: "1.0.0",
+        digest: "93ea01105450b96814cd68f8087bfd753b001fc3fe227b5d9d3f455a9a6d3106")
+
     public static let all: [ReviewedExtractorPackage] = [
         defuddle, pdf2md, doclingServe, docx2md, podcastTranscript,
-        applePodcastTranscript, youtubeTranscript,
+        applePodcastTranscript, youtubeTranscript, zotero,
     ]
 
     /// Locates the reviewed payload. `Bundle.main` resolves in both hosts:

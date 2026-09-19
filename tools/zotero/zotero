@@ -1,0 +1,553 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12,<3.14"
+# dependencies = [
+#     "requests>=2.31",
+# ]
+# ///
+"""zotero — Zotero attachment acquisition for the extractor protocol.
+
+The reviewed extractor package serves ONE revision-4 `remote-url` request:
+a JSON request object on stdin, JSON Lines frames on stdout, and the
+attachment bytes (or Markdown) at the requested output path.
+
+The package ACQUIRES only. It downloads one Zotero attachment file and its
+item metadata through the Zotero Web API and never converts formats:
+
+- `text/markdown` / `text/plain` (or `.md`) attachments are written as-is;
+  the result frame declares no `resultMIMEType` because the output IS the
+  Markdown.
+- `application/pdf` (or `.pdf`) and `text/html` (or `.html`) attachments are
+  written as source bytes; the result frame carries `resultMIMEType` with the
+  true MIME, and the HOST owns the format conversion.
+- Anything else is a typed `unsupported-input` failure.
+
+The request URL must be exactly the canonical Zotero file endpoint
+(`https://api.zotero.org/users/<libraryID>/items/<attachmentKey>/file`).
+The API key arrives through the request-scoped credential file — never a
+request field, never an argument, never an environment variable. No frame
+message ever contains the source URL, the API key, or any credential
+material.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+import time
+import urllib.parse
+from pathlib import Path
+from typing import Any
+
+import requests
+
+# ── Package protocol (revision 4) ──────────────────────────────────────────
+
+PROTOCOL_REVISION = 4
+PROTOCOL_KIND = "zotero"
+PROTOCOL_TRANSPORT = "remote-url"
+TOOL_METADATA = {"toolName": "zotero"}
+
+# Mirrors the manifest output limit (128 MiB). Tests fail if either side
+# drifts; the host terminates the operation at its own limit regardless.
+MAX_OUTPUT_BYTES = 134_217_728
+
+# The canonical Zotero Web API base. The request URL must name exactly one
+# file endpoint under this base.
+ZOTERO_API_BASE = "https://api.zotero.org"
+ZOTERO_API_VERSION = "3"
+
+# Zotero item keys are 8 uppercase alphanumeric characters; user library IDs
+# are numeric (group libraries use a different path shape this package does
+# not serve).
+_LIBRARY_ID_RE = re.compile(r"^[0-9]+$")
+_ITEM_KEY_RE = re.compile(r"^[A-Z0-9]{8}$")
+
+_ARTICLE_TEXT_LIMIT = 1_024
+_TIMEOUT = (10, 60)
+
+
+class OutputLimitExceeded(Exception):
+    """The downloaded attachment exceeds the output byte cap."""
+
+
+class APIStatusError(Exception):
+    """The Zotero API answered with a non-200 status."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(str(status_code))
+        self.status_code = status_code
+
+
+def build_protocol_frame(kind: str, payload: dict) -> dict:
+    """One protocol envelope. The host rejects any other shape."""
+    return {"kind": kind, "payload": payload}
+
+
+def _emit(frame: dict, stream) -> None:
+    stream.write(json.dumps(frame, separators=(",", ":")))
+    stream.write("\n")
+    stream.flush()
+
+
+def _progress(request_id: str, completed: int, total: int, message: str) -> dict:
+    return build_protocol_frame(
+        "progress",
+        {
+            "requestID": request_id,
+            "completedUnitCount": completed,
+            "totalUnitCount": total,
+            "message": message,
+        },
+    )
+
+
+def _failure(request_id: str, cause: str, message: str) -> dict:
+    return build_protocol_frame(
+        "failure",
+        {
+            "requestID": request_id,
+            "cause": cause,
+            "message": message[:4096],
+        },
+    )
+
+
+def _fail(request_id: str, cause: str, message: str, out_stream) -> int:
+    """Emit exactly one terminal failure frame. The frame is the report."""
+    _emit(_failure(request_id, cause, message), out_stream)
+    return 0
+
+
+# ── Request URL parsing ────────────────────────────────────────────────────
+
+
+def parse_attachment_file_url(url: str) -> tuple[str, str] | None:
+    """Return (libraryID, attachmentKey) for a canonical file endpoint URL.
+
+    The request URL must be exactly
+    `https://api.zotero.org/users/<libraryID>/items/<attachmentKey>/file` —
+    one normalized URL, no query, no fragment, no embedded credentials, no
+    nondefault port. Anything else returns None (the caller reports
+    `invalid-request`).
+    """
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != "api.zotero.org":
+        return None
+    if parsed.query or parsed.fragment or parsed.username or parsed.password:
+        return None
+    if parsed.port not in (None, 443):
+        return None
+    parts = parsed.path.split("/")
+    # ['', 'users', <libraryID>, 'items', <attachmentKey>, 'file']
+    if len(parts) != 6:
+        return None
+    if parts[1] != "users" or parts[3] != "items" or parts[5] != "file":
+        return None
+    if not _LIBRARY_ID_RE.fullmatch(parts[2]) or not _ITEM_KEY_RE.fullmatch(parts[4]):
+        return None
+    return parts[2], parts[4]
+
+
+# ── Credentials ────────────────────────────────────────────────────────────
+
+
+def load_api_key(credential_path: str | None) -> str | None:
+    """Read the request-scoped credential file and return the API key.
+
+    The envelope shape is `{"credentials": {"zotero-api-key": ...}}`. Any
+    missing file, malformed JSON, or missing key returns None. The value is
+    never logged and never echoed into a frame.
+    """
+    if not credential_path:
+        return None
+    try:
+        envelope = json.loads(Path(credential_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(envelope, dict):
+        return None
+    credentials = envelope.get("credentials")
+    if not isinstance(credentials, dict):
+        return None
+    value = credentials.get("zotero-api-key")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
+
+
+# ── Output mapping (ported from ZoteroAttachment.isIngestable) ─────────────
+
+
+def resolve_output(content_type: str | None, filename: str | None) -> tuple[str, str | None] | None:
+    """Map attachment content to its output route.
+
+    The Zotero API `contentType` wins; the filename extension is the fallback
+    (the same policy the retired Swift picker used). Returns:
+
+    - `("markdown", None)` — the bytes ARE the Markdown result; the result
+      frame carries no `resultMIMEType`.
+    - `("bytes", <true mime>)` — the bytes are source content; the result
+      frame carries this MIME as `resultMIMEType`.
+    - None — no reviewed conversion route (`unsupported-input`).
+    """
+    ct = (content_type or "").strip().lower()
+    name = (filename or "").strip().lower()
+    if ct == "text/markdown" or ct == "text/plain":
+        return "markdown", None
+    if ct == "application/pdf":
+        return "bytes", "application/pdf"
+    if ct == "text/html":
+        return "bytes", "text/html"
+    # Filename fallback: used when the API content type is absent or is not
+    # one of the reviewed rows.
+    if name.endswith(".md"):
+        return "markdown", None
+    if name.endswith(".pdf"):
+        return "bytes", "application/pdf"
+    if name.endswith(".html") or name.endswith(".htm"):
+        return "bytes", "text/html"
+    return None
+
+
+# ── Zotero metadata → article metadata ─────────────────────────────────────
+
+
+def _bounded(value: str | None, limit: int = _ARTICLE_TEXT_LIMIT) -> str | None:
+    """Truncate to `limit` UTF-8 bytes on a whole-character boundary."""
+    if value is None:
+        return None
+    encoded = value.encode("utf-8")
+    if len(encoded) <= limit:
+        return value if value else None
+    truncated = encoded[:limit].decode("utf-8", errors="ignore")
+    return truncated or None
+
+
+def summarize_creators(creators: Any) -> str | None:
+    """Port of the host's creator summary: `Last, F.; Last2, F2.`
+
+    Single-field `name` entries (organizations) pass through as-is. Returns
+    None when there are no usable creators.
+    """
+    if not isinstance(creators, list):
+        return None
+    names: list[str] = []
+    for creator in creators:
+        if not isinstance(creator, dict):
+            continue
+        last = creator.get("lastName")
+        first = creator.get("firstName")
+        if isinstance(last, str) and last:
+            if isinstance(first, str) and first:
+                names.append(f"{last}, {first[0]}.")
+            else:
+                names.append(last)
+            continue
+        name = creator.get("name")
+        if isinstance(name, str) and name:
+            names.append(name)
+    return "; ".join(names) if names else None
+
+
+def article_metadata_from(
+    parent: dict | None, attachment_data: dict
+) -> dict[str, str] | None:
+    """Build the result-frame `articleMetadata` for one attachment.
+
+    Parent metadata fills title/author/published when the parent item exists
+    and decodes; the attachment's own title is the fallback. `identifier` is
+    the parent item key — from the parent envelope, or from the attachment's
+    own `parentItem` when the parent fetch degraded — and the attachment key
+    for a standalone attachment.
+    """
+    parent_data = parent.get("data") if isinstance(parent, dict) else None
+    if not isinstance(parent_data, dict):
+        parent_data = {}
+    title = _bounded(parent_data.get("title")) or _bounded(attachment_data.get("title"))
+    author = _bounded(summarize_creators(parent_data.get("creators")))
+    published = _bounded(parent_data.get("date"))
+    identifier = _bounded(
+        str(
+            parent_data.get("key")
+            or attachment_data.get("parentItem")
+            or attachment_data.get("key")
+            or ""
+        )
+    )
+    metadata: dict[str, str] = {}
+    for key, value in (
+        ("title", title),
+        ("author", author),
+        ("published", published),
+        ("identifier", identifier),
+    ):
+        if value:
+            metadata[key] = value
+    return metadata or None
+
+
+# ── Zotero Web API (network seams; tests patch `requests.get`) ─────────────
+
+
+def _api_headers(api_key: str) -> dict[str, str]:
+    return {
+        "Zotero-API-Key": api_key,
+        "Zotero-API-Version": ZOTERO_API_VERSION,
+    }
+
+
+def fetch_item_envelope(url: str, api_key: str) -> tuple[int, Any]:
+    """GET one item envelope. Returns (status, decoded JSON)."""
+    response = requests.get(url, headers=_api_headers(api_key), timeout=_TIMEOUT)
+    return response.status_code, response.json()
+
+
+def fetch_file_bytes(url: str, api_key: str, byte_cap: int) -> bytes:
+    """GET the attachment file with redirects, enforcing the byte cap.
+
+    Raises OutputLimitExceeded when the stream passes `byte_cap` — a typed
+    self-report (`output-limit`) — APIStatusError for a non-200 status, and
+    requests.RequestException for network failures. The returned bytes are
+    the raw file bytes; this package never converts formats.
+    """
+    response = requests.get(
+        url, headers=_api_headers(api_key), timeout=_TIMEOUT, stream=True
+    )
+    if response.status_code != 200:
+        raise APIStatusError(response.status_code)
+    total = 0
+    chunks: list[bytes] = []
+    for chunk in response.iter_content(chunk_size=256 * 1024):
+        total += len(chunk)
+        if total > byte_cap:
+            raise OutputLimitExceeded
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _deadline_passed(deadline_ms: Any) -> bool:
+    return isinstance(deadline_ms, int) and time.time() * 1000 > deadline_ms
+
+
+# ── Package protocol entry point ───────────────────────────────────────────
+
+
+def run_extractor_protocol(
+    request_text: str,
+    out_stream=None,
+    log_stream=None,
+) -> int:
+    """Serve one extractor protocol request.
+
+    Returns the process exit code. A refused or failed request still exits 0
+    when a failure frame was emitted, because the frame is the report.
+    """
+    out_stream = sys.stdout if out_stream is None else out_stream
+    log_stream = sys.stderr if log_stream is None else log_stream
+
+    try:
+        request = json.loads(request_text)
+    except (ValueError, TypeError):
+        # No request ID is known, so no frame can be attributed. Exit nonzero
+        # and let the host report a malformed protocol.
+        print("Error: malformed extractor request", file=log_stream)
+        return 2
+
+    request_id = request.get("requestID")
+    if not isinstance(request_id, str) or not request_id:
+        print("Error: extractor request has no request ID", file=log_stream)
+        return 2
+
+    output_path = request.get("outputPath")
+    source_url = request.get("remoteURL")
+
+    if request.get("protocolRevision") != PROTOCOL_REVISION:
+        return _fail(request_id, "invalid-request", "unsupported protocol revision", out_stream)
+    if request.get("kind") != PROTOCOL_KIND:
+        return _fail(
+            request_id,
+            "unsupported-input",
+            "this package downloads Zotero attachments only",
+            out_stream,
+        )
+    if request.get("inputTransport") != PROTOCOL_TRANSPORT:
+        return _fail(
+            request_id, "invalid-request", "this package accepts a remote URL only", out_stream
+        )
+    if not isinstance(source_url, str) or not source_url:
+        return _fail(request_id, "invalid-request", "request has no source URL", out_stream)
+    parsed_url = parse_attachment_file_url(source_url)
+    if parsed_url is None:
+        return _fail(
+            request_id,
+            "invalid-request",
+            "the source URL is not a Zotero attachment file endpoint",
+            out_stream,
+        )
+    if not isinstance(output_path, str) or not output_path:
+        return _fail(request_id, "invalid-request", "request has no output path", out_stream)
+
+    if _deadline_passed(request.get("deadlineMillisecondsSince1970")):
+        return _fail(
+            request_id,
+            "timeout",
+            "the request deadline passed before the download started",
+            out_stream,
+        )
+
+    api_key = load_api_key(request.get("credentialFilePath"))
+    if api_key is None:
+        return _fail(
+            request_id,
+            "invalid-request",
+            "the Zotero API key is not configured",
+            out_stream,
+        )
+
+    library_id, attachment_key = parsed_url
+    item_url = f"{ZOTERO_API_BASE}/users/{library_id}/items/{attachment_key}"
+
+    # Seam 1: attachment metadata.
+    try:
+        status, envelope = fetch_item_envelope(item_url, api_key)
+    except requests.RequestException:
+        return _fail(
+            request_id, "extraction-failure", "the Zotero metadata request failed", out_stream
+        )
+    except ValueError:
+        return _fail(
+            request_id, "extraction-failure", "the Zotero metadata response was invalid", out_stream
+        )
+    if status == 403:
+        return _fail(
+            request_id,
+            "extraction-failure",
+            "the Zotero API rejected the credentials",
+            out_stream,
+        )
+    if status == 404:
+        return _fail(
+            request_id,
+            "extraction-failure",
+            "attachment not found in the Zotero library",
+            out_stream,
+        )
+    if status != 200:
+        return _fail(
+            request_id, "extraction-failure", "the Zotero API returned an error", out_stream
+        )
+
+    attachment_data = envelope.get("data") if isinstance(envelope, dict) else None
+    if not isinstance(attachment_data, dict):
+        return _fail(
+            request_id, "extraction-failure", "the Zotero item response was invalid", out_stream
+        )
+
+    link_mode = attachment_data.get("linkMode")
+    if link_mode in ("linked_file", "linked_url"):
+        return _fail(
+            request_id,
+            "unsupported-input",
+            "linked Zotero attachments have no downloadable file",
+            out_stream,
+        )
+
+    route = resolve_output(attachment_data.get("contentType"), attachment_data.get("filename"))
+    if route is None:
+        return _fail(
+            request_id,
+            "unsupported-input",
+            "this attachment type has no conversion route",
+            out_stream,
+        )
+    output_kind, result_mime = route
+
+    _emit(_progress(request_id, 1, 2, "attachment metadata fetched"), out_stream)
+
+    # Parent metadata improves provenance but is not worth failing over: a
+    # parent fetch problem degrades to no title/author/published while the
+    # identifier still comes from the attachment's own parentItem.
+    parent: dict | None = None
+    parent_key = attachment_data.get("parentItem")
+    if isinstance(parent_key, str) and parent_key:
+        if _deadline_passed(request.get("deadlineMillisecondsSince1970")):
+            return _fail(
+                request_id,
+                "timeout",
+                "the request deadline passed during the metadata fetch",
+                out_stream,
+            )
+        try:
+            parent_status, parent = fetch_item_envelope(
+                f"{ZOTERO_API_BASE}/users/{library_id}/items/{parent_key}", api_key
+            )
+            if parent_status != 200:
+                parent = None
+        except (requests.RequestException, ValueError):
+            parent = None
+
+    article_metadata = article_metadata_from(parent, attachment_data)
+
+    # Seam 2: the attachment file itself (the request URL IS the file
+    # endpoint; the host validated and normalized it).
+    if _deadline_passed(request.get("deadlineMillisecondsSince1970")):
+        return _fail(
+            request_id,
+            "timeout",
+            "the request deadline passed before the download started",
+            out_stream,
+        )
+    try:
+        downloaded = fetch_file_bytes(source_url, api_key, MAX_OUTPUT_BYTES)
+    except OutputLimitExceeded:
+        return _fail(
+            request_id,
+            "output-limit",
+            "the attachment exceeds the output size limit",
+            out_stream,
+        )
+    except APIStatusError:
+        return _fail(
+            request_id, "extraction-failure", "the Zotero API returned an error", out_stream
+        )
+    except requests.RequestException:
+        return _fail(
+            request_id, "extraction-failure", "the Zotero file download failed", out_stream
+        )
+
+    _emit(_progress(request_id, 2, 2, "attachment bytes downloaded"), out_stream)
+
+    try:
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(downloaded)
+    except OSError:
+        return _fail(
+            request_id, "extraction-failure", "unable to write the output file", out_stream
+        )
+
+    result_payload: dict[str, Any] = {
+        "requestID": request_id,
+        "outputPath": output_path,
+        "markdownByteCount": len(downloaded),
+        "metadata": dict(TOOL_METADATA),
+    }
+    if article_metadata is not None:
+        result_payload["articleMetadata"] = article_metadata
+    # A markdown result omits resultMIMEType: the output file IS the
+    # Markdown. A bytes result names the true MIME.
+    if output_kind == "bytes" and result_mime is not None:
+        result_payload["resultMIMEType"] = result_mime
+    _emit(build_protocol_frame("result", result_payload), out_stream)
+    return 0
+
+
+if __name__ == "__main__":
+    print(
+        "This script is an extractor package entry point; the host launches "
+        "it as `uv run --script <entry point> <this file>`.",
+        file=sys.stderr,
+    )
+    sys.exit(2)

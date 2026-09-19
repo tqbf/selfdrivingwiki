@@ -315,8 +315,99 @@ struct ReviewedExtractorPackageTests {
         }
     }
 
+    /// The reviewed Zotero package: manifest revision 2 (a REQUIRED
+    /// credential requirement), protocol revision 4 (the bytes-result
+    /// fields), one `zotero` registration over the synthetic
+    /// `application/zotero` MIME, and the acquisition-only capability set.
+    /// The package downloads attachments; it never converts formats.
+    @Test func zoteroPackageValidatesRevisionFourContract() throws {
+        let output = try validate("Zotero")
+
+        #expect(output.packageID == "org.selfdrivingwiki.zotero")
+        #expect(output.protocolRevision == 4)
+        #expect(output.registrationIDs == ["attachment"])
+
+        let manifest = try manifest("Zotero")
+        #expect(manifest.manifestRevision == .v2)
+        let registration = try #require(manifest.registrations.first)
+        #expect(registration.kinds == [.zotero])
+        #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "application/zotero")])
+        // The API key is REQUIRED: acquisition cannot proceed without it.
+        let requirements = registration.credentialRequirements
+        #expect(requirements.map(\.id.rawValue) == ["zotero-api-key"])
+        #expect(requirements.allSatisfy { !$0.isOptional && $0.kind == .secret })
+        // Acquisition only: network + shared runtime cache, no model.
+        #expect(manifest.capabilities == [.network, .sharedRuntimeCache])
+        #expect(manifest.capabilities.contains(.modelDownload) == false)
+        #expect(manifest.limits.maximumMarkdownOutputByteCount == 134_217_728)
+        #expect(manifest.limits.maximumDurationMilliseconds == 600_000)
+        guard case .runtime(let command, let arguments) = manifest.launch else {
+            Issue.record("zotero must launch through a runtime")
+            return
+        }
+        #expect(command.rawValue == "uv")
+        #expect(arguments == ["run", "--script"])
+
+        // The exact reviewed identity is pinned byte-for-byte; a regenerated
+        // package whose digest changed fails this gate with the new value.
+        #expect(output.packageDigest
+            == "93ea01105450b96814cd68f8087bfd753b001fc3fe227b5d9d3f455a9a6d3106")
+
+        // Secret-free bytes: the declared requirement is a review fact; a
+        // value or a reference binding must never be committed.
+        let manifestData = try Data(contentsOf: Self.packageURL("Zotero")
+            .appendingPathComponent("manifest.json"))
+        let payload = String(decoding: manifestData, as: UTF8.self)
+        #expect(payload.contains("credentialReference") == false)
+        #expect(payload.contains("credential_locations") == false)
+    }
+
+    /// AC.3: the recorded bytes-result frame sequence from the committed
+    /// bundle replays through `protocol-smoke` — the revision-4 result frame
+    /// carries `resultMIMEType` and `articleMetadata.identifier`, and the
+    /// sequence accepts them for a revision-4 request.
+    @Test func zoteroRecordedProtocolFramesReplayThroughProtocolSmoke() throws {
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/Zotero", isDirectory: true)
+
+        let success = try ExtractorPackageToolExecutor().execute(arguments: [
+            "protocol-smoke",
+            Self.packageURL("Zotero").path,
+            fixtures.appendingPathComponent("request.json").path,
+            fixtures.appendingPathComponent("frames.jsonl").path,
+        ])
+        #expect(success.packageID == "org.selfdrivingwiki.zotero")
+        #expect(success.terminalKind == "result")
+        #expect(success.progressEventCount == 2)
+    }
+
+    /// The revision-4 result fields are revision-scoped: replaying the same
+    /// bytes-result frames against a forged revision-3 request fails the
+    /// sequence (the older-host fail-closed rule).
+    @Test func zoteroBytesResultFramesRejectRevision3Request() throws {
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/Zotero", isDirectory: true)
+        let request = try Data(contentsOf: fixtures.appendingPathComponent("request.json"))
+        let v3Request = String(decoding: request, as: UTF8.self)
+            .replacing("\"protocolRevision\": 4", with: "\"protocolRevision\": 3")
+        let v3URL = fixtures.appendingPathComponent("request-v3.json")
+        try v3Request.write(to: v3URL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: v3URL) }
+
+        #expect(throws: ExtractorPackageToolFailure.self) {
+            try ExtractorPackageToolExecutor().execute(arguments: [
+                "protocol-smoke",
+                Self.packageURL("Zotero").path,
+                v3URL.path,
+                fixtures.appendingPathComponent("frames.jsonl").path,
+            ])
+        }
+    }
+
     @Test func reviewedDigestsAreStableAcrossRepeatedValidation() throws {
-        for name in ["Defuddle", "Pdf2md", "DoclingServe", "Docx2md", "PodcastTranscript", "ApplePodcastTranscript", "YouTubeTranscript"] {
+        for name in ["Defuddle", "Pdf2md", "DoclingServe", "Docx2md", "PodcastTranscript", "ApplePodcastTranscript", "YouTubeTranscript", "Zotero"] {
             let first = try validate(name)
             let second = try validate(name)
             #expect(first.packageDigest == second.packageDigest)
@@ -342,6 +433,7 @@ struct ReviewedExtractorPackageTests {
         let podcast = try manifest("PodcastTranscript")
         let applePodcast = try manifest("ApplePodcastTranscript")
         let youtube = try manifest("YouTubeTranscript")
+        let zotero = try manifest("Zotero")
 
         #expect(defuddle.registrations.allSatisfy { $0.kinds == [.html] })
         #expect(pdf2md.registrations.allSatisfy { $0.kinds == [.pdf] })
@@ -349,6 +441,7 @@ struct ReviewedExtractorPackageTests {
         #expect(podcast.registrations.allSatisfy { $0.kinds == [.podcastTranscript] })
         #expect(applePodcast.registrations.allSatisfy { $0.kinds == [.applePodcastTranscript] })
         #expect(youtube.registrations.allSatisfy { $0.kinds == [.youtubeTranscript] })
+        #expect(zotero.registrations.allSatisfy { $0.kinds == [.zotero] })
     }
 
     /// AC.4: a frames.jsonl + request.json pair recorded from a real run of

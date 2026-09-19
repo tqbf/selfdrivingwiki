@@ -97,6 +97,12 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
     public static let reviewedYouTubeTranscriptLogical = reviewedLogical(
         package: ReviewedExtractorPackages.youtubeTranscript, registration: "captions")
 
+    /// The logical reference of the reviewed Zotero package registration.
+    /// The bundled default-route record supplies this lineage when the
+    /// canonical Zotero route has no configured selection.
+    public static let reviewedZoteroLogical = reviewedLogical(
+        package: ReviewedExtractorPackages.zotero, registration: "attachment")
+
     private static func reviewedLogical(
         package: ReviewedExtractorPackage,
         registration: String
@@ -195,6 +201,20 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
             throw ExtractionServicesError.unavailable
         }
         return transcript
+    }
+
+    /// Resolves the configured Zotero attachment adapter. The selection
+    /// state machine mirrors the transcript routes exactly (see
+    /// `podcastTranscriptKey`): the reviewed lineage is the bundled default,
+    /// an explicit `.none` disables, and everything else fails closed.
+    public func prepareZoteroAttachment() async throws -> ProcessPackageZoteroAttachment {
+        let configuration = try input.readConfiguration()
+        let key = try await zoteroKey(configuration: configuration)
+        let adapter = try await makeAdapter(for: key)
+        guard case .zotero(let attachment) = adapter else {
+            throw ExtractionServicesError.unavailable
+        }
+        return attachment
     }
 
     public func registeredExtractionInputs() async -> RegisteredExtractionInputs {
@@ -333,6 +353,23 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         }
         return try await installedKey(
             reference, kind: .youtubeTranscript, route: .canonicalYouTubeTranscript)
+    }
+
+    /// Zotero key resolution. Same shape as the transcript siblings: an
+    /// explicit `.none` stays disabled and fails closed; a host reference is
+    /// equally dead — no built-in Zotero acquisition adapter exists — and
+    /// fails closed with the route diagnostic.
+    private func zoteroKey(
+        configuration: ExtractionConfig
+    ) async throws -> ExtractionAdapterKey {
+        let record = configuration.selectionOrDefault(for: .canonicalZotero)
+        guard case .installed(let reference)? = record else {
+            throw ExtractionServicesError.selectedExtractorUnavailable(
+                route: .canonicalZotero,
+                reference: Self.reviewedZoteroLogical)
+        }
+        return try await installedKey(
+            reference, kind: .zotero, route: .canonicalZotero)
     }
 
     /// Resolves an installed lineage to its exact registry key, failing
