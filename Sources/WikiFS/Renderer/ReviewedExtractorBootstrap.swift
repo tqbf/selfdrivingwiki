@@ -81,12 +81,16 @@ enum ReviewedExtractorBootstrap {
     /// `(org.selfdrivingwiki.zotero, zotero-api-key)` to the legacy
     /// `.zoteroAPIKey()` Keychain reference, pinned to the exact requirement
     /// fingerprint the installed manifest declares. App-only (the writer's
-    /// role gate enforces it), best-effort, and a no-op when the grant
-    /// already matches this contract — a revocation by a future UI cycle is
-    /// never silently resurrected unless the contract changed. With the
-    /// binding in place, per-operation resolution flows through the standard
-    /// credential-file path; an unset Keychain value surfaces as the typed
-    /// missing-credential state, never as a value leak.
+    /// role gate enforces it) and best-effort.
+    ///
+    /// Revocation safety: revocation deletes the authorization record, so
+    /// record absence cannot distinguish "never seeded" from "revoked". A
+    /// seed-marker file records the fingerprint this host last seeded; the
+    /// grant is written ONLY when that marker's fingerprint differs from
+    /// the current contract (a real contract change) or no marker exists
+    /// yet. A revocation followed by an unchanged contract therefore stays
+    /// revoked — the seeder never resurrects it. The standard
+    /// Authorize/Revoke UI arrives with the later UI cycle.
     private static func seedReviewedCredentialGrants(
         appGroupContainerRoot: URL,
         installed: [ExtractorPackageCatalogRecord]
@@ -95,27 +99,29 @@ enum ReviewedExtractorBootstrap {
         guard let record = installed.first(where: { $0.revision == reviewed.revision }),
               let registration = record.registrations.first(where: { registration in
                   registration.credentialRequirements.contains {
-                      $0.id.rawValue == "zotero-api-key"
+                      $0.id.rawValue == Self.zoteroAPIKeyRequirementID
                   }
               }),
               let requirement = registration.credentialRequirements.first(where: {
-                  $0.id.rawValue == "zotero-api-key"
+                  $0.id.rawValue == Self.zoteroAPIKeyRequirementID
               })
         else { return }
 
         let layout = ExtractorCredentialAuthorizationStoreLayout(
             appGroupContainerRoot: appGroupContainerRoot)
-        let snapshot = ExtractorCredentialAuthorizationReader(layout: layout).snapshot()
-        let authorizationID = ExtractorCredentialAuthorizationID(
-            packageID: reviewed.packageID, requirementID: requirement.id)
         let fingerprint = ExtractorCredentialRequirementFingerprint.compute(
             packageID: reviewed.packageID.rawValue,
             registrationID: registration.id.rawValue,
             kinds: registration.kinds.map(\.rawValue),
             mimeTypes: registration.mimeTypes.map(\.rawValue),
             requirement: requirement)
-        if let existing = snapshot?.record(for: authorizationID),
-           existing.fingerprint == fingerprint {
+        let markerKey = "\(reviewed.packageID.rawValue)/\(requirement.id.rawValue)"
+
+        // The seed-marker decides: grant only on a contract change (or a
+        // first seed). Record presence is deliberately NOT consulted — a
+        // revoked record looks exactly like an absent one.
+        var markers = Self.loadSeedMarkers(layout: layout)
+        if markers[markerKey] == fingerprint.value {
             return
         }
         do {
@@ -132,6 +138,50 @@ enum ReviewedExtractorBootstrap {
         } catch {
             DebugLog.extraction(
                 "extractor bootstrap: reviewed credential grant could not be seeded")
+            return
+        }
+        // Persist the marker only after a successful grant, so a failed
+        // write retries on the next launch.
+        markers[markerKey] = fingerprint.value
+        Self.saveSeedMarkers(markers, layout: layout)
+    }
+
+    private static let zoteroAPIKeyRequirementID = "zotero-api-key"
+
+    /// Last-seeded fingerprints by `"<packageID>/<requirementID>"`. Beside
+    /// the authorization store in the credentials root; a missing or
+    /// corrupt file degrades to "nothing seeded yet" (a first seed).
+    private static func loadSeedMarkers(
+        layout: ExtractorCredentialAuthorizationStoreLayout
+    ) -> [String: String] {
+        // swiftlint:disable:next silent_try_optional
+        guard let data = try? Data(contentsOf: layout.credentialsRoot
+            .appendingPathComponent("extractor-credential-seeds.json")) else {
+            return [:]
+        }
+        // swiftlint:disable:next silent_try_optional
+        return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+    }
+
+    private static func saveSeedMarkers(
+        _ markers: [String: String],
+        layout: ExtractorCredentialAuthorizationStoreLayout
+    ) {
+        do {
+            try FileManager.default.createDirectory(
+                at: layout.credentialsRoot,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            let data = try JSONEncoder().encode(markers)
+            try data.write(
+                to: layout.credentialsRoot
+                    .appendingPathComponent("extractor-credential-seeds.json"),
+                options: [.atomic])
+        } catch {
+            // A marker write failure means the next launch re-grants — the
+            // same posture as "never seeded". One redacted diagnostic.
+            DebugLog.extraction(
+                "extractor bootstrap: credential seed marker could not be written")
         }
     }
 }

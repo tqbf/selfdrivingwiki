@@ -429,6 +429,31 @@ class TestLimitsAndDeadline:
         # No output file may be left behind.
         assert not Path("output/result.md").exists()
 
+    def test_midstream_deadline_self_reports_timeout(
+        self, credential_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A slow-drip stream must self-report `timeout` at a chunk seam
+        # instead of burning the whole duration budget. The stubbed clock
+        # passes the two pre-fetch deadline checks and then reports a passed
+        # deadline from the first stream chunk onward.
+        calls = {"n": 0}
+
+        def fake_deadline_passed(deadline_ms: object) -> bool:
+            calls["n"] += 1
+            return calls["n"] > 2
+
+        monkeypatch.setattr(_zotero, "_deadline_passed", fake_deadline_passed)
+        attachment = _attachment_envelope(
+            linkMode="imported_file", contentType="application/pdf", filename="a.pdf"
+        )
+        fake_get, _ = _fake_get(attachment, file_chunks=(b"a" * 4, b"b" * 4))
+        code, frames, _raw = _run(
+            _request(credentialFilePath=str(credential_file)), fake_get)
+        assert code == 0
+        terminal = _terminal(frames)
+        assert terminal["payload"]["cause"] == "timeout"
+        assert not Path("output/result.md").exists()
+
     def test_passed_deadline_self_reports_timeout(self, credential_file: Path) -> None:
         fake_get, calls = _fake_get(_attachment_envelope())
         request = _request(
