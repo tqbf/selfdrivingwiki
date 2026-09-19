@@ -69,8 +69,8 @@ enforces the boundary.
 | --- | --- | --- |
 | `id` | string | 1 to 64 characters, lowercase ASCII letters, digits, hyphens. |
 | `displayName` | string | 1 to 128 bytes. |
-| `kinds` | array | Nonempty subset of `pdf`, `html`, `docx`, `podcast-transcript`, `apple-podcast-transcript`, and `youtube-transcript`. |
-| `mimeTypes` | array | Nonempty set of normalized lowercase MIME types. A `podcast-transcript` registration must declare its route MIME, typically the synthetic `audio/podcast` source MIME. An `apple-podcast-transcript` registration declares the synthetic `audio/apple-podcast` source MIME. A `youtube-transcript` registration declares the synthetic `video/youtube` source MIME. |
+| `kinds` | array | Nonempty subset of `pdf`, `html`, `docx`, `podcast-transcript`, `apple-podcast-transcript`, `youtube-transcript`, and `zotero`. |
+| `mimeTypes` | array | Nonempty set of normalized lowercase MIME types. A `podcast-transcript` registration must declare its route MIME, typically the synthetic `audio/podcast` source MIME. An `apple-podcast-transcript` registration declares the synthetic `audio/apple-podcast` source MIME. A `youtube-transcript` registration declares the synthetic `video/youtube` source MIME. A `zotero` registration declares the synthetic `application/zotero` source MIME. |
 | `filenameExtensions` | array, optional | Lowercase ASCII letters and digits, no leading dot, at most 32 characters. |
 
 Duplicate values inside one registration are rejected. Duplicate registration IDs in one manifest are rejected.
@@ -181,6 +181,54 @@ The reviewed packages in `ExtractorPackages/` are complete reviewed packages:
 - `PodcastTranscript/manifest.json` — RSS podcast transcript conversion, `uv run --script` launch, manifest revision 1 with protocol revision 3 (the `remote-url` transport and the `podcast-transcript` kind are registration data, not manifest fields), `network` and `shared-runtime-cache` capabilities.
 - `ApplePodcastTranscript/manifest.json` — Apple Podcasts episode TTML transcript conversion, same launch and manifest shapes, registering only `apple-podcast-transcript` for `audio/apple-podcast`, `network` capability only. The signed `podcast-token-helper` is deliberately NOT a package file: code signing rewrites Mach-O bytes, which would break the digest contract. The host stages the helper into the private operation root for this exact revision; the request's operation configuration carries only the staged helper's relative path.
 - `YouTubeTranscript/manifest.json` — YouTube caption conversion, `uv run --script` launch, manifest revision 1 with protocol revision 3, registering only `youtube-transcript` for `video/youtube`, `network` and `shared-runtime-cache` capabilities (the shared cache keeps uv's CPython install and wheel cache warm across operations). The package fetches only the captions YouTube exposes through `youtube-transcript-api` (an unofficial interface that can change or be blocked); it never downloads media and never runs speech-to-text.
+- `Zotero/manifest.json` — Zotero attachment acquisition, `uv run --script` launch, manifest revision 2 with protocol revision 4. A worked example (see below): one `zotero` registration for the synthetic `application/zotero` MIME, a REQUIRED `zotero-api-key` secret requirement, and the `network` + `shared-runtime-cache` capabilities. The package downloads ONE attachment file plus its item metadata through the Zotero Web API and never converts formats.
+
+### Worked example: the Zotero package
+
+The Zotero package is the reference for a credential-declaring, revision-4 package:
+
+```json
+{
+  "manifestRevision": 2,
+  "packageID": "org.selfdrivingwiki.zotero",
+  "version": "1.0.0",
+  "displayName": "Zotero Attachment",
+  "protocolRevision": 4,
+  "entryPoint": "bin/zotero-extractor",
+  "launch": {"mode": "runtime", "command": "uv", "arguments": ["run", "--script"]},
+  "registrations": [
+    {
+      "id": "attachment",
+      "displayName": "Zotero Attachment",
+      "kinds": ["zotero"],
+      "mimeTypes": ["application/zotero"],
+      "credentialRequirements": [
+        {
+          "id": "zotero-api-key",
+          "kind": "secret",
+          "optional": false,
+          "label": "Zotero API Key",
+          "purpose": "Read your Zotero library and download attachment files."
+        }
+      ]
+    }
+  ],
+  "capabilities": ["network", "shared-runtime-cache"],
+  "files": [
+    {"path": "PROVENANCE.md", "digest": "…"},
+    {"path": "bin/zotero", "digest": "…"},
+    {"path": "bin/zotero-extractor", "digest": "…"}
+  ],
+  "limits": {
+    "maximumInputByteCount": 1048576,
+    "maximumMarkdownOutputByteCount": 134217728,
+    "maximumDurationMilliseconds": 600000,
+    "maximumProgressEventCount": 64
+  }
+}
+```
+
+Manifest revision 2 exists because the registration declares a credential requirement. The requirement is REQUIRED (`optional: false`) — acquisition cannot proceed without the key, and a missing Keychain value fails the operation with the typed missing-credential state rather than a launch without a key. The output bound is the full 128 MiB host maximum because the attachment file IS the revision-4 output. The duration bound is 600 s so the first operation on a machine can pay uv's one-time CPython download into the shared runtime cache.
 
 ### Protocol revisions across manifest revisions
 
