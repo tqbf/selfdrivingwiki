@@ -46,6 +46,7 @@ enum ProcessPackageRunError: LocalizedError, Equatable {
     case declaredSizeMismatch
     case invalidOutputEncoding
     case missingTerminalFrame
+    case unexpectedBytesResult
 
     var errorDescription: String? {
         switch self {
@@ -55,6 +56,8 @@ enum ProcessPackageRunError: LocalizedError, Equatable {
             return "The extractor result was not valid UTF-8."
         case .missingTerminalFrame:
             return "The extractor returned no terminal result."
+        case .unexpectedBytesResult:
+            return "The extractor returned source bytes where Markdown was expected."
         }
     }
 }
@@ -83,6 +86,25 @@ struct ProcessPackageError: Error, LocalizedError {
 internal struct ProcessPackageExecutionOutcome: Sendable {
     let frame: ExtractorResultFrame
     let markdown: String
+
+    var reportedMetadata: ExtractorReportedMetadata { frame.metadata }
+}
+
+/// The verified terminal output of one operation before interpretation: the
+/// redacted result frame plus the raw output-file bytes. A Markdown result
+/// decodes `outputData` as UTF-8; a revision-4 bytes result passes the bytes
+/// through with `frame.resultMIMEType`.
+internal struct ProcessPackageTerminalOutput: Sendable {
+    let frame: ExtractorResultFrame
+    let outputData: Data
+}
+
+/// A revision-4 bytes-capable operation outcome: the terminal frame plus the
+/// output-file bytes. The caller interprets `frame.isMarkdownResult` — the
+/// Zotero attachment route can receive either shape from the same package.
+internal struct ProcessPackageSourceOutcome: Sendable {
+    let frame: ExtractorResultFrame
+    let sourceBytes: Data
 
     var reportedMetadata: ExtractorReportedMetadata { frame.metadata }
 }
@@ -599,11 +621,11 @@ public final class PreparedProcessOperation: Sendable {
         filename: String,
         onProgress: (@Sendable (String) -> Void)?
     ) async throws -> ProcessPackageExecutionOutcome {
-        try await execute(
+        try await Self.markdownOutcome(runProtocol(
             kind: kind,
             payload: .bytes(input),
             filename: filename,
-            onProgress: onProgress)
+            onProgress: onProgress))
     }
 
     /// Runs exactly one one-shot `remote-url` conversion against the pinned
@@ -615,11 +637,46 @@ public final class PreparedProcessOperation: Sendable {
         filename: String,
         onProgress: (@Sendable (String) -> Void)?
     ) async throws -> ProcessPackageExecutionOutcome {
-        try await execute(
+        try await Self.markdownOutcome(runProtocol(
+            kind: kind,
+            payload: .remoteURL(remoteURL),
+            filename: filename,
+            onProgress: onProgress))
+    }
+
+    /// Runs one revision-4-capable `remote-url` operation and returns the
+    /// terminal frame plus the raw output-file bytes. The caller interprets
+    /// `frame.isMarkdownResult` / `frame.resultMIMEType` (the Zotero
+    /// attachment route); this edge performs no UTF-8 assumption.
+    func executeSourceResult(
+        kind: ExtractorKind,
+        remoteURL: ExtractorRemoteSourceURL,
+        filename: String,
+        onProgress: (@Sendable (String) -> Void)?
+    ) async throws -> ProcessPackageSourceOutcome {
+        let output = try await runProtocol(
             kind: kind,
             payload: .remoteURL(remoteURL),
             filename: filename,
             onProgress: onProgress)
+        return ProcessPackageSourceOutcome(
+            frame: output.frame,
+            sourceBytes: output.outputData)
+    }
+
+    /// The revision ≤ 3 result contract: the output file IS the Markdown.
+    /// A bytes result reaching a Markdown caller is a protocol violation —
+    /// fail closed rather than misinterpret source bytes as text.
+    private static func markdownOutcome(
+        _ output: ProcessPackageTerminalOutput
+    ) throws -> ProcessPackageExecutionOutcome {
+        guard output.frame.isMarkdownResult else {
+            throw ProcessPackageRunError.unexpectedBytesResult
+        }
+        guard let markdown = String(data: output.outputData, encoding: .utf8) else {
+            throw ProcessPackageRunError.invalidOutputEncoding
+        }
+        return ProcessPackageExecutionOutcome(frame: output.frame, markdown: markdown)
     }
 
     /// The internal operation payload: staged bytes for the `operation-file`
@@ -629,12 +686,17 @@ public final class PreparedProcessOperation: Sendable {
         case remoteURL(ExtractorRemoteSourceURL)
     }
 
-    private func execute(
+    /// The shared operation body: builds the request, runs the managed
+    /// process, verifies the declared size, and returns the redacted terminal
+    /// frame plus the raw output-file bytes. Markdown and revision-4 bytes
+    /// results are interpreted at their own edges (`markdownOutcome`,
+    /// `executeSourceResult`).
+    private func runProtocol(
         kind: ExtractorKind,
         payload: ProcessOperationPayload,
         filename: String,
         onProgress: (@Sendable (String) -> Void)?
-    ) async throws -> ProcessPackageExecutionOutcome {
+    ) async throws -> ProcessPackageTerminalOutput {
         let requestID = UUID()
         let name = requestID.uuidString.lowercased()
         let outputPath = "output/\(name)/result.md"
@@ -906,16 +968,17 @@ public final class PreparedProcessOperation: Sendable {
                 guard data.count == frame.markdownByteCount else {
                     throw ProcessPackageRunError.declaredSizeMismatch
                 }
-                guard let markdown = String(data: data, encoding: .utf8) else {
-                    throw ProcessPackageRunError.invalidOutputEncoding
-                }
+                // The frame's byte count is the OUTPUT-FILE byte count for
+                // both result shapes (revision 4 kept that contract), so the
+                // size check above is revision-independent. UTF-8 decoding is
+                // NOT: a bytes result is decoded by its consumer.
                 // Result-frame article metadata is package-controlled text
                 // that becomes a persisted source filename and reaches the
                 // wiki DB and File Provider — it passes through the redactor
                 // like every other package-controlled string (MEDIUM-5).
-                return ProcessPackageExecutionOutcome(
+                return ProcessPackageTerminalOutput(
                     frame: try Self.redactedResultFrame(frame, redactor: redactor),
-                    markdown: markdown)
+                    outputData: data)
             case .failure(let frame):
                 // Terminal failure frames are package-controlled: redact the
                 // message before mapping into a user error (warnings are not
@@ -935,11 +998,11 @@ public final class PreparedProcessOperation: Sendable {
     /// launch error cannot escape. Cleanup of request-scoped files is owned
     /// by `execute`'s defer, which arms the moment the credential file exists
     /// and therefore covers this entire region.
-    fileprivate func runManaged(
+    fileprivate func runManaged<Output: Sendable>(
         redactor: ExtractorSecretRedactor,
         onProgress: (@Sendable (String) -> Void)?,
-        _ body: @Sendable () async throws -> ProcessPackageExecutionOutcome
-    ) async throws -> ProcessPackageExecutionOutcome {
+        _ body: @Sendable () async throws -> Output
+    ) async throws -> Output {
         do {
             return try await body()
         } catch is CancellationError {
@@ -973,7 +1036,10 @@ public final class PreparedProcessOperation: Sendable {
                 author: article.author.map(redactor.redact),
                 description: article.description.map(redactor.redact),
                 published: article.published.map(redactor.redact),
-                wordCount: article.wordCount)
+                wordCount: article.wordCount,
+                // Revision 4: the external provenance identifier is
+                // package-controlled text like every other frame string.
+                identifier: article.identifier.map(redactor.redact))
         }
         let reported = frame.metadata
         let redactedReported = try ExtractorReportedMetadata(
@@ -993,7 +1059,8 @@ public final class PreparedProcessOperation: Sendable {
             markdownByteCount: frame.markdownByteCount,
             warnings: frame.warnings.map(redactor.redact),
             metadata: redactedReported,
-            articleMetadata: redactedMetadata)
+            articleMetadata: redactedMetadata,
+            resultMIMEType: frame.resultMIMEType)
     }
 
     /// Creates a regular owner-read-only (0400) file at `url`. The file is

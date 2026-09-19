@@ -345,10 +345,13 @@ public enum ExtractorPackagePluginDefinitionFactory {
         // #1159: protocol revision 2 (credential-declaring requests) is
         // supported alongside revision 1. Protocol revision 3 (remote-url
         // requests) is supported alongside both; the input transport never
-        // changes what the manifest itself declares.
+        // changes what the manifest itself declares. Protocol revision 4
+        // (bytes-result + external-identifier result fields) is supported
+        // alongside all three; it only extends the result frame.
         guard manifest.protocolRevision == .v1
             || manifest.protocolRevision == .v2
-            || manifest.protocolRevision == .v3 else {
+            || manifest.protocolRevision == .v3
+            || manifest.protocolRevision == .v4 else {
             throw FactoryError.unsupportedProtocol(manifest.protocolRevision)
         }
         for registration in manifest.registrations {
