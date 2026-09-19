@@ -107,13 +107,72 @@ public struct BytesExtractionResolution: Sendable {
     }
 }
 
+/// The result of one completed Zotero attachment acquisition: the
+/// output-file bytes plus the package-reported metadata. A Markdown result's
+/// bytes ARE the Markdown (`resultMIMEType` nil or text/markdown); a bytes
+/// result's bytes are the source content named by `resultMIMEType`, and the
+/// HOST owns the format conversion (routing keys off the MIME, never the
+/// extractor kind).
+public struct AttachmentFetchOutcome: Sendable, Hashable {
+    public let outputBytes: Data
+    public let resultMIMEType: ExtractorMIMEType?
+    public let articleMetadata: ExtractorArticleMetadata?
+    public let reportedMetadata: ExtractorReportedMetadata
+
+    public var isMarkdownResult: Bool {
+        guard let resultMIMEType else { return true }
+        return resultMIMEType.rawValue == "text/markdown"
+    }
+
+    public init(
+        outputBytes: Data,
+        resultMIMEType: ExtractorMIMEType? = nil,
+        articleMetadata: ExtractorArticleMetadata? = nil,
+        reportedMetadata: ExtractorReportedMetadata = .empty
+    ) {
+        self.outputBytes = outputBytes
+        self.resultMIMEType = resultMIMEType
+        self.articleMetadata = articleMetadata
+        self.reportedMetadata = reportedMetadata
+    }
+}
+
+/// URL-backed attachment work (Zotero). No local bytes exist: the fetch
+/// operation downloads the attachment itself and reports its exact package
+/// provenance. The persistence intent is fixed — the bytes become the
+/// source's blob (or the Markdown version) and the format route follows.
+public struct AttachmentExtractionResolution: Sendable {
+    /// The fetch. Progress lines are already redacted by the producer.
+    public let fetch: @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> AttachmentFetchOutcome
+    public let filename: String
+    /// Exact package provenance for the acquisition.
+    public let producer: ExtractionInstalledPackageProducer
+    /// Shares the transcript (non-PDF) capacity bucket.
+    public let capacityID: String
+
+    public static let defaultCapacityID = TranscriptExtractionResolution.defaultCapacityID
+
+    public init(
+        fetch: @escaping @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> AttachmentFetchOutcome,
+        filename: String,
+        producer: ExtractionInstalledPackageProducer,
+        capacityID: String = AttachmentExtractionResolution.defaultCapacityID
+    ) {
+        self.fetch = fetch
+        self.filename = filename
+        self.producer = producer
+        self.capacityID = capacityID
+    }
+}
+
 /// The result of resolving an extraction request. The tag is the execution
-/// model — staged bytes or a URL-backed fetch — so an invalid
-/// bytes/transcript combination is unrepresentable and the worker switches
+/// model — staged bytes, a URL-backed fetch, or a URL-backed attachment —
+/// so an invalid combination is unrepresentable and the worker switches
 /// exhaustively.
 public enum ExtractionResolution: Sendable {
     case bytes(BytesExtractionResolution)
     case transcript(TranscriptExtractionResolution)
+    case attachment(AttachmentExtractionResolution)
 }
 
 // MARK: - QueueExtractionProvider
@@ -160,6 +219,26 @@ public protocol QueueExtractionProvider: Sendable {
         resolution: TranscriptExtractionResolution,
         outcome: TranscriptFetchOutcome
     ) async throws -> QueueExtractionOutputReference?
+
+    /// Persist one Zotero attachment acquisition. A Markdown result appends
+    /// a package-provenance Markdown version (podcast-shaped); a bytes
+    /// result attaches the blob — real MIME, ext, byte size, the retained
+    /// Zotero provenance columns from `articleMetadata`, and the display
+    /// name. Returns the created version's output reference when known.
+    @discardableResult
+    func persistAttachmentExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: AttachmentExtractionResolution,
+        outcome: AttachmentFetchOutcome
+    ) async throws -> QueueExtractionOutputReference?
+
+    /// Enqueue the follow-on `.extraction` queue item for a source that just
+    /// gained bytes (the attachment drain's format route). Implementations
+    /// write the durable item through their queue store; the app or the
+    /// daemon drains it on its next dispatch scan. Never called for a
+    /// Markdown result (the Markdown IS the product).
+    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws
 }
 
 // MARK: - QueueIngestSignaling

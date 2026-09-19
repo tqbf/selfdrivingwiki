@@ -17,46 +17,10 @@ public struct URLFetchProvider: Sendable {
     }
 }
 
-/// Creates a Zotero client from one configuration and credential snapshot.
-public struct ZoteroClientProvider: Sendable {
-    public typealias ReadConfiguration = @Sendable () -> ZoteroConfig
-    public typealias ReadCredential = @Sendable () -> String?
-    public typealias MakeFetcher = @Sendable () -> any ZoteroClient.RequestFetcher
-
-    private let readConfiguration: ReadConfiguration
-    private let readCredential: ReadCredential
-    private let makeFetcher: MakeFetcher
-
-    public init(
-        readConfiguration: @escaping ReadConfiguration,
-        readCredential: @escaping ReadCredential,
-        makeFetcher: @escaping MakeFetcher
-    ) {
-        self.readConfiguration = readConfiguration
-        self.readCredential = readCredential
-        self.makeFetcher = makeFetcher
-    }
-
-    public func client(apiBaseURL: URL) throws -> ZoteroClient {
-        let configuration = readConfiguration()
-        guard let libraryID = configuration.libraryID?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !libraryID.isEmpty,
-              let apiKey = readCredential()?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !apiKey.isEmpty else {
-            throw ZoteroClient.ZoteroError.notConfigured
-        }
-        return ZoteroClient(
-            config: ZoteroClient.Config(libraryID: libraryID, apiKey: apiKey),
-            fetcher: makeFetcher(),
-            baseURL: apiBaseURL)
-    }
-}
-
 /// A typed lazy integration result. Add a case only when a consumer has a
 /// stable capability contract for that integration.
 public enum IntegrationEntryPoint: Sendable {
     case urlFetch(any URLFetchService.URLResourceFetcher)
-    case zotero(ZoteroClient)
 }
 
 /// Stable identity for one integration capability.

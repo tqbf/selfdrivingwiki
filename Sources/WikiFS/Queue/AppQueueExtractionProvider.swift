@@ -77,13 +77,22 @@ final class SessionLookupBox: @unchecked Sendable {
 final class AppQueueExtractionProvider: QueueExtractionProvider {
     private let extractionServices: any ExtractionServices
     private let sessionBox: SessionLookupBox
+    /// The queue database URL for the attachment drain's follow-on
+    /// format-route enqueue. Opened lazily (enqueue-only — never a queue
+    /// engine); nil disables the follow-on (tests). A second handle on the
+    /// same WAL database is safe: the store configures a busy timeout and
+    /// GRDB serializes per handle.
+    private let queueDatabaseURL: URL?
+    private var followOnQueueStore: QueueStore?
 
     init(
         extractionServices: any ExtractionServices,
-        sessionBox: SessionLookupBox
+        sessionBox: SessionLookupBox,
+        queueDatabaseURL: URL? = nil
     ) {
         self.extractionServices = extractionServices
         self.sessionBox = sessionBox
+        self.queueDatabaseURL = queueDatabaseURL
     }
 
     // MARK: - QueueExtractionProvider
@@ -174,6 +183,32 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                     },
                     filename: "transcript",
                     resultMode: .installedPackage(producer)))
+
+            case .zotero:
+                // Zotero attachment acquisition runs through the
+                // reviewed/selected extractor package. The sync command
+                // wrote the canonical Zotero file endpoint as the plan URL;
+                // it becomes the typed operation input only after host URL
+                // validation. The outcome is bytes-shaped: Markdown itself,
+                // or source bytes the host routes to its own format path.
+                guard let planURLString = origin.plan,
+                      let validatedURL = ExtractorRemoteSourceURL(rawValue: planURLString) else {
+                    return nil
+                }
+                let adapter = try await extractionServices.prepareZoteroAttachment()
+                let producer = adapter.packageProvenance
+                return .attachment(AttachmentExtractionResolution(
+                    fetch: { onProgress in
+                        let outcome = try await adapter.attachment(
+                            for: validatedURL.url, onProgress: onProgress)
+                        return AttachmentFetchOutcome(
+                            outputBytes: outcome.outputBytes,
+                            resultMIMEType: outcome.resultMIMEType,
+                            articleMetadata: outcome.articleMetadata,
+                            reportedMetadata: outcome.reportedMetadata)
+                    },
+                    filename: origin.externalIdentity ?? "attachment",
+                    producer: producer))
 
             default:
                 break
@@ -276,6 +311,87 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                 DebugLog.store("AppQueueExtractionProvider: package transcript write failed (source=\(sourceID.rawValue)): \(error)")
                 throw error
             }
+        }
+    }
+
+    @discardableResult
+    func persistAttachmentExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: AttachmentExtractionResolution,
+        outcome: AttachmentFetchOutcome
+    ) async throws -> QueueExtractionOutputReference? {
+        guard let store = sessionBox.resolve(wikiID: wikiID) else {
+            DebugLog.extraction("AppQueueExtractionProvider: persistAttachmentExtraction — no session for wikiID=\(wikiID)")
+            return nil
+        }
+        // Provenance fields the package reported (identifier = the Zotero
+        // parent item key; title becomes the display name).
+        let itemKey = outcome.articleMetadata?.identifier
+        let itemTitle = outcome.articleMetadata?.title
+
+        if outcome.isMarkdownResult {
+            // Markdown result: podcast-shaped package provenance write, and
+            // the retained Zotero columns ride along.
+            guard let initialVersion = store.initialContentVersion(for: sourceID) else {
+                DebugLog.store("AppQueueExtractionProvider: attachment markdown has no initial source version (source=\(sourceID.rawValue))")
+                throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
+            }
+            guard let markdown = String(data: outcome.outputBytes, encoding: .utf8) else {
+                throw ProcessPackageRunError.invalidOutputEncoding
+            }
+            let producer = ExtractionInstalledPackageProducer(
+                revision: resolution.producer.revision,
+                registrationID: resolution.producer.registrationID,
+                protocolRevision: resolution.producer.protocolRevision,
+                reportedMetadata: outcome.reportedMetadata)
+            let version = try store.internalStore.appendInstalledPackageMarkdown(
+                sourceID: sourceID, content: markdown, package: producer,
+                origin: .extraction, toolVersion: nil,
+                sourceVersionID: initialVersion.id, note: nil)
+            try store.internalStore.setZoteroProvenance(
+                sourceID: sourceID,
+                zoteroItemKey: itemKey,
+                zoteroItemTitle: itemTitle,
+                displayName: itemTitle)
+            return QueueExtractionOutputReference(versionID: version.id.rawValue)
+        }
+
+        // Bytes result: the output-file bytes ARE the source content. The
+        // mutator stores the blob, sets the real MIME/ext/byte size, and
+        // populates the retained columns in one transaction.
+        guard let mimeType = outcome.resultMIMEType else {
+            throw ProcessPackageRunError.unexpectedBytesResult
+        }
+        let version = try store.internalStore.attachZoteroAttachment(
+            sourceID: sourceID,
+            bytes: outcome.outputBytes,
+            mimeType: mimeType.rawValue,
+            zoteroItemKey: itemKey,
+            zoteroItemTitle: itemTitle,
+            displayName: itemTitle)
+        return QueueExtractionOutputReference(versionID: version.id.rawValue)
+    }
+
+    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws {
+        let store: QueueStore
+        if let followOnQueueStore {
+            store = followOnQueueStore
+        } else if let queueDatabaseURL {
+            store = try QueueStore(databaseURL: queueDatabaseURL)
+            followOnQueueStore = store
+        } else {
+            DebugLog.extraction("AppQueueExtractionProvider: no queue database URL; follow-on format route not enqueued (source=\(sourceID.rawValue))")
+            return
+        }
+        do {
+            _ = try store.enqueue(QueueItemRequest(
+                queue: .extraction,
+                wikiID: wikiID,
+                payload: QueueItemPayload(sourceIDs: [sourceID])))
+        } catch {
+            DebugLog.store("AppQueueExtractionProvider: follow-on format-route enqueue failed (source=\(sourceID.rawValue)): \(error)")
+            throw error
         }
     }
 }

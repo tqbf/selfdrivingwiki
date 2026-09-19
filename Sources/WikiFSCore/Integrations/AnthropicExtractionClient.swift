@@ -6,7 +6,7 @@ import FoundationNetworking
 
 /// The model extraction backend: sends the PDF to Claude via the Anthropic
 /// Messages API and returns the extracted Markdown. Raw HTTP (no official Swift
-/// SDK), mirroring `ZoteroClient`'s fetcher-injected, pure-helper shape.
+/// SDK) with a fetcher-injected, pure-helper shape.
 ///
 /// PDF input is a base64 `document` content block (no beta header); the API limit
 /// is a 32 MB request, so we reject oversized PDFs early with `.tooLarge` rather

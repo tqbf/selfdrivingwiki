@@ -6,7 +6,7 @@ import FoundationNetworking
 
 /// The Gemini extraction backend: sends the PDF to Google's Gemini API via the
 /// classic `generateContent` endpoint and returns the extracted Markdown. Raw
-/// HTTP (no SDK), mirroring `ZoteroClient` / `AnthropicExtractionClient`'s
+/// HTTP (no SDK), mirroring `AnthropicExtractionClient`'s
 /// fetcher-injected, pure-helper shape.
 ///
 /// PDF input is a base64 `inline_data` part; the response `candidates[0].

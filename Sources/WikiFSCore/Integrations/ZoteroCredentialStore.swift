@@ -3,9 +3,11 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Stores the Zotero API key — a secret, unlike `ZoteroConfig`'s library ID and
-/// directory override, which are plain JSON. Behind a protocol so `ZoteroClient`
-/// and tests never touch the `Security` framework directly.
+/// Stores the Zotero API key — a secret, unlike `ZoteroConfig`'s library ID
+/// and attachment keys, which are plain JSON. The shared credential service
+/// resolves the typed `.zoteroAPIKey()` reference to the exact Keychain
+/// location this store always used, so tests never touch the `Security`
+/// framework directly.
 public protocol ZoteroCredentialStore: Sendable {
     /// `nil` if no key has been set yet.
     func apiKey() -> String?

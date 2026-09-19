@@ -24,8 +24,6 @@ struct WikiDetailView: View {
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     let runIngest: (SourceID) -> Void
     @Binding var showingImportMarkdown: Bool
-    @Binding var showingAddFromZotero: Bool
-    let isZoteroConfigured: Bool
     @Environment(\.addURLHandler) private var addURLHandler
 
     init(
@@ -39,9 +37,7 @@ struct WikiDetailView: View {
         installedRendererHost: InstalledRendererHost,
         onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil,
         runIngest: @escaping (SourceID) -> Void,
-        showingImportMarkdown: Binding<Bool>,
-        showingAddFromZotero: Binding<Bool>,
-        isZoteroConfigured: Bool
+        showingImportMarkdown: Binding<Bool>
     ) {
         self._store = Bindable(wrappedValue: store)
         self._launcher = Bindable(wrappedValue: launcher)
@@ -54,8 +50,6 @@ struct WikiDetailView: View {
         self.onRendererActivation = onRendererActivation
         self.runIngest = runIngest
         self._showingImportMarkdown = showingImportMarkdown
-        self._showingAddFromZotero = showingAddFromZotero
-        self.isZoteroConfigured = isZoteroConfigured
     }
 
     /// Highlights the welcome screen as a drop target while an internal
@@ -135,7 +129,7 @@ struct WikiDetailView: View {
 
                     VStack(alignment: .leading, spacing: 20) {
                         introRow(title: "Pages", description: "Create and edit markdown notes with deep wiki-linking.", systemImage: ResourceKind.page.systemImageName)
-                        introRow(title: "Sources", description: "Manage and ingest raw material from URLs, folders, or Zotero.", systemImage: ResourceKind.source.systemImageName)
+                        introRow(title: "Sources", description: "Manage and ingest raw material from URLs, folders, or files.", systemImage: ResourceKind.source.systemImageName)
                         introRow(title: "Bookmarks", description: "Organize pages and sources into a custom folder tree for quick access.", systemImage: ResourceKind.bookmark.systemImageName)
                         introRow(title: "Chats", description: "Ask questions and edit your wiki through chat.", systemImage: ResourceKind.chat.systemImageName)
                     }
@@ -161,11 +155,6 @@ struct WikiDetailView: View {
                                 Button("Add File", systemImage: "doc", action: addFile)
                                 Button("Add Folder", systemImage: "folder") {
                                     showingImportMarkdown = true
-                                }
-                                if isZoteroConfigured {
-                                    Button("Add from Zotero", systemImage: "books.vertical") {
-                                        showingAddFromZotero = true
-                                    }
                                 }
                             } label: {
                                 Label("Add Source", systemImage: "tray.and.arrow.down")

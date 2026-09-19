@@ -2916,48 +2916,6 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Ingest one Zotero attachment by reading its local file and storing the
-    /// verbatim bytes — exactly like a drag-dropped file, but threading the
-    /// parent item's key + title into the row as provenance so the detail view
-    /// can show "From Zotero" and link back. We already know the filename and
-    /// bytes from Zotero's metadata, so this goes straight to the
-    /// `addSource(filename:data:)` seam rather than `URLFetchService`'s
-    /// content-type dispatch (that dispatch exists for the unknown-bytes-from-a-
-    /// URL case, which doesn't apply here). No network fallback in v1: an
-    /// attachment that isn't synced to `~/Zotero/storage` yet throws
-    /// `ZoteroFetchError.unavailable` rather than downloading it.
-    public func ingestFromZotero(
-        _ attachment: ZoteroAttachment,
-        parentItem: ZoteroItem,
-        zoteroDir: URL
-    ) async throws {
-        let provider = ZoteroMaterializer(
-            attachment: attachment, parentItem: parentItem, zoteroDir: zoteroDir)
-        // Resolve + read off the main actor (the provider materializes, throwing
-        // ZoteroFetchError.unavailable when the attachment isn't local).
-        let materialized = try await provider.materialize()
-        // Issue #799 PR3: HTML no longer auto-extracts at ingest — store the
-        // raw bytes only; the user triggers extraction via the Extract button
-        // (PR2). The `FormatMaterializer.dispatch` HTML branch returns
-        // `extractedMarkdown: nil`, so `appendExtractedMarkdown` (called by
-        // `storeMaterialized`) writes no markdown version for HTML sources.
-        // Pre-resolve display name off-main for PDFs (issue #229).
-        let resolvedDisplayName = await preResolveDisplayName(
-            filename: materialized.filename, data: materialized.data,
-            mimeType: materialized.mimeType,
-            zoteroItemTitle: materialized.ingestMetadata?.externalItemTitle)
-        do {
-            let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
-            // No manual reload — the bus fires reloadFromStore() async after the
-            // store write. The tab title is passed explicitly so tabTitle (which
-            // reads `sources`) needs no synchronous freshness.
-            openTab(.source(summary.id), title: summary.effectiveName)
-        } catch {
-            DebugLog.store("WikiStoreModel.ingestFromZotero failed: \(error)")
-            throw error
-        }
-    }
-
     /// Import every `.md` / `.markdown` file in `directory` (recursively) as an
     /// ingested file — a one-shot migration of an Obsidian vault, LogSeq graph, or
     /// any folder of Markdown notes. Hidden files/directories are skipped.
@@ -4631,19 +4589,6 @@ public final class WikiStoreModel {
             storeError = StoreError(
                 title: "Couldn't Delete Chat",
                 message: "Could not delete the chat: \(error.localizedDescription)")
-        }
-    }
-}
-
-/// Thrown by `WikiStoreModel.ingestFromZotero` when an attachment can't be
-/// ingested — currently just the "not synced locally yet" case, since v1 has no
-/// network-download fallback (see `ZoteroLocalStorage`).
-public enum ZoteroFetchError: LocalizedError, Equatable {
-    case unavailable(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .unavailable(let reason): return reason
         }
     }
 }

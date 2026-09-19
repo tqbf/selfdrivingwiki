@@ -71,6 +71,11 @@ public protocol ExtractionServices: Sendable {
     /// The YouTube transcript route: same package-only shape as the podcast
     /// siblings, over the `youtube-transcript` kind.
     func prepareYouTubeTranscript() async throws -> ProcessPackageYouTubeTranscript
+    /// The Zotero attachment route: same package-only shape as the
+    /// transcript siblings, over the `zotero` kind. The prepared adapter
+    /// runs validated `remote-url` operations whose revision-4 results
+    /// carry either Markdown or source bytes plus `resultMIMEType`.
+    func prepareZoteroAttachment() async throws -> ProcessPackageZoteroAttachment
     /// Active package registration claims used for import recognition.
     func registeredExtractionInputs() async -> RegisteredExtractionInputs
     /// Active package registrations with manifest-derived presentation data.
@@ -116,6 +121,13 @@ public extension ExtractionServices {
     /// coordinator). The process facade overrides it with real package
     /// resolution.
     func prepareYouTubeTranscript() async throws -> ProcessPackageYouTubeTranscript {
+        throw ExtractionServicesError.unavailable
+    }
+
+    /// Default for seams that never run packages (test runtimes, the legacy
+    /// coordinator). The process facade overrides it with real package
+    /// resolution.
+    func prepareZoteroAttachment() async throws -> ProcessPackageZoteroAttachment {
         throw ExtractionServicesError.unavailable
     }
 
@@ -202,6 +214,10 @@ public actor MutableExtractionServices: ExtractionServices {
 
     public func prepareYouTubeTranscript() async throws -> ProcessPackageYouTubeTranscript {
         try await installed.prepareYouTubeTranscript()
+    }
+
+    public func prepareZoteroAttachment() async throws -> ProcessPackageZoteroAttachment {
+        try await installed.prepareZoteroAttachment()
     }
 
     public func registeredExtractionInputs() async -> RegisteredExtractionInputs {

@@ -32,10 +32,6 @@ entries:
   id: process-url-fetch-provider
   plugin: process.integration.url-fetch-provider
 - config:
-    _scope: process
-  id: process-zotero-client-provider
-  plugin: process.integration.zotero-client-provider
-- config:
     _scope: wiki
   id: renderer-services
   plugin: wiki.renderer.services

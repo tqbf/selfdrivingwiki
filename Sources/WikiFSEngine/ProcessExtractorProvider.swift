@@ -42,13 +42,13 @@ enum ProcessPackagePreparationError: LocalizedError, Equatable {
     }
 }
 
-enum ProcessPackageRunError: LocalizedError, Equatable {
+public enum ProcessPackageRunError: LocalizedError, Equatable {
     case declaredSizeMismatch
     case invalidOutputEncoding
     case missingTerminalFrame
     case unexpectedBytesResult
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .declaredSizeMismatch:
             return "The extractor reported a different result size than written."

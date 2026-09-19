@@ -1,8 +1,15 @@
-# 2026-09-19 — Zotero moved out of Swift into a `zotero` extractor package
+---
+timestamp: 2026-09-19T200000Z
+title: Zotero moved out of Swift into a zotero extractor package
+branch: feature/zotero-extractor-package
+status: complete
+---
+
+# Zotero moved out of Swift into a `zotero` extractor package
 
 Plan: [`plans/zotero-extractor-package.md`](../plans/zotero-extractor-package.md). Branch `feature/zotero-extractor-package`.
 
-## What shipped
+## Progress
 
 - **Protocol revision 4** (`ExtractorProtocol.swift`): optional `resultMIMEType`
   and `articleMetadata.identifier` on the result frame. Requests keep the
@@ -48,7 +55,7 @@ Plan: [`plans/zotero-extractor-package.md`](../plans/zotero-extractor-package.md
   section (config shape + `wikictl zotero sync`), the maintainer skill's
   revision-4 + `zotero` rows, this progress entry, and the design doc.
 
-## Gates
+## Verification
 
 `make build`, package pytest/ruff/pyright (65 tests), package validate +
 protocol-smoke (bytes-result fixture), reviewed-package golden digest,

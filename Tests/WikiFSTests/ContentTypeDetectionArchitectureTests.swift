@@ -63,7 +63,7 @@ struct ContentTypeDetectionArchitectureTests {
                     ("public func addSource(filename: String, data: Data)", 1),
                 ],
                 testFunctions: [
-                    "localWebsiteZoteroAndMarkdownFolderShareDetectorPolicy",
+                    "localWebsiteAndMarkdownFolderShareDetectorPolicy",
                     "snapshotStoresPageAndImagesWithSharedActivity",
                     "websiteRefreshPreservesDeclaredMIMEHints",
                 ]),
@@ -79,10 +79,9 @@ struct ContentTypeDetectionArchitectureTests {
                 declarations: [
                     ("public struct LocalFileMaterializer", 1),
                     ("public struct WebsiteMaterializer", 1),
-                    ("public struct ZoteroMaterializer", 1),
                     ("public struct MarkdownFolderMaterializer", 1),
                 ],
-                testFunctions: ["localWebsiteZoteroAndMarkdownFolderShareDetectorPolicy"]),
+                testFunctions: ["localWebsiteAndMarkdownFolderShareDetectorPolicy"]),
             .init(
                 path: "Sources/WikiFSCore/Integrations/WebsiteSnapshotExtractor.swift",
                 declarations: [("public static func detection(", 1)],
@@ -166,11 +165,15 @@ struct ContentTypeDetectionArchitectureTests {
             contentsOf: root.appendingPathComponent("Sources/WikiCtlCore/SourceCommand.swift"),
             encoding: .utf8)
 
-        #expect(!storeProtocol.contains("zoteroItemKey:"))
-        #expect(!storeProtocol.contains("zoteroItemTitle:"))
+        // The add-source ingest seam stays typed + neutral (hints +
+        // `ingestMetadata`); the retained Zotero columns live only on the
+        // attachment-drain seam (`attachZoteroAttachment` /
+        // `setZoteroProvenance`), never on `addSource`.
         #expect(!storeProtocol.contains("data: Data, mimeType: String?"))
         #expect(storeProtocol.contains("detectionHints: ContentTypeDetectionHints"))
         #expect(storeProtocol.contains("ingestMetadata: SourceIngestMetadata?"))
+        #expect(storeProtocol.contains("func attachZoteroAttachment("))
+        #expect(storeProtocol.contains("func setZoteroProvenance("))
         #expect(!model.contains("zoteroItemKey: nil, zoteroItemTitle:"))
         #expect(!command.contains("zoteroItemKey: nil, zoteroItemTitle:"))
         #expect(sourceMaterializer.contains("externalItemID: String?"))
