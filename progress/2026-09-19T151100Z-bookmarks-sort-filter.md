@@ -51,6 +51,18 @@ operator check. The hosted suite still asserts, automatically: both pickers
 mount when bookmarks exist, both disappear when the store is empty, and the
 default outline renders position order.
 
+### Follow-up: filter icon menu
+
+The operator asked for the "Show" row to become a filter icon with a
+dropdown. The header's action cluster gained a `line.3.horizontal.decrease`
+menu icon (trailing-most, after Add Source…) whose `Menu { Picker(.inline) }`
+holds the five kind choices with the current one checked — the same pattern
+as `ActivityWindowView`'s filter menu. The icon tints accent while a filter
+other than All is active, and it is hidden when no bookmarks exist (the same
+gate the row had). The "Show" caption row is gone; the "Sort by" row and
+search bar stay. The hosted popup-count checks pass unchanged because the
+SwiftUI `Menu` also bridges to an `NSPopUpButton`.
+
 ## Verification
 
 - `WIKIFS_APP_TESTS=1 swift test --filter "<the seven new suites>"` — 32

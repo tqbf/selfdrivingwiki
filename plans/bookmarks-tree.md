@@ -47,7 +47,7 @@ Pure functions (no SwiftUI) that convert flat `[BookmarkNode]` into a
 
 ## UI Components
 
-- `BookmarksContainerView` — the section container with a header bar (compact action buttons, a Show kind-filter picker, a Sort by picker, and search) and `NSOutlineView` below
+- `BookmarksContainerView` — the section container with a header bar (compact action buttons, a Show filter menu icon, a Sort by row, and search) and `NSOutlineView` below
 - `BookmarksOutlineView` — `NSViewControllerRepresentable` wrapping `NSOutlineView` for instant selection performance
 - `EditBookmarkSheet` — rename a folder or retarget a page/source/chat reference
 - `ItemPickerSheet` — search-and-select sheet for adding page/source refs
@@ -99,12 +99,14 @@ No schema change (the existing `bookmark_nodes` table is read as-is).
 
 ## Sort and filter controls (#241)
 
-The Bookmarks header has a "Show" picker (All / Folders / Pages / Sources /
-Chats) and a "Sort by" picker (Custom Order / Name A–Z / Date Added / Date
-Updated). They follow the Sources filter row and the Pages sort row — same
-fonts, spacing, and picker styles. Both rows show only when at least one
-bookmark exists (the same gate as the search bar). A filter or search that
-matches nothing shows "No matching bookmarks".
+The Bookmarks header has a filter icon (line.3.horizontal.decrease) whose
+dropdown menu holds the "Show" kind filter: All / Folders / Pages / Sources /
+Chats, with the current choice checked. The icon sits with the header's
+action buttons, tints accent while a non-default filter is active, and hides
+when no bookmarks exist. A "Sort by" picker row (Custom Order / Name A–Z /
+Date Added / Date Updated) sits under the header, styled like the Pages sort
+row, next to the search bar. A filter or search that matches nothing shows
+"No matching bookmarks".
 
 ### Display-only guarantee
 

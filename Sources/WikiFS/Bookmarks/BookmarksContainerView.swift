@@ -2,8 +2,8 @@ import SwiftUI
 import WikiFSCore
 
 /// The Bookmarks section — a header bar with compact action buttons on the
-/// trailing edge, then "Show" (kind filter) and "Sort by" rows and a search
-/// bar (native macOS sidebar pattern), and `NSOutlineView` below.
+/// trailing edge, a filter menu icon, a "Sort by" row and a search bar
+/// (native macOS sidebar pattern), and `NSOutlineView` below.
 /// Uses `NSOutlineView` (via `BookmarksOutlineView`) instead of SwiftUI's
 /// `List`/`OutlineGroup` for instant selection performance on macOS.
 ///
@@ -22,7 +22,7 @@ struct BookmarksContainerView: View {
     var onNewFolder: (@MainActor @Sendable () -> Void)
 
     @State private var searchText: String = ""
-    /// Kind filter backing the "Show" picker (issue #241). View-level state,
+    /// Kind filter backing the "Show" menu (issue #241). View-level state,
     /// like `SourceFilter` in `SourcesContainerView`.
     @State private var kindFilter: BookmarkKindFilter = .all
     /// Display sort backing the "Sort by" picker (issue #241). Display-only —
@@ -35,10 +35,10 @@ struct BookmarksContainerView: View {
             // right — the native macOS pattern (Finder, Notes, Mail).
             bookmarksHeader
 
-            // Filter / sort / search chrome: shown together whenever at
-            // least one bookmark exists (issues #240, #241).
+            // Sort / search chrome: shown whenever at least one bookmark
+            // exists (issues #240, #241). The kind filter lives in the
+            // header's filter menu icon.
             if !store.bookmarkNodes.isEmpty {
-                bookmarksFilterRow
                 bookmarksSortRow
                 bookmarksSearchBar
                 Divider()
@@ -106,9 +106,41 @@ struct BookmarksContainerView: View {
             headerButton(systemImage: ResourceKind.source.systemImageName, help: "Add Source…") {
                 onShowPicker(PickerContext(id: UUID(), parentID: nil, kind: .sources))
             }
+            if !store.bookmarkNodes.isEmpty {
+                filterMenu
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+
+    /// The "Show" kind filter (issue #241) — a filter icon whose dropdown
+    /// menu lists the kinds, replacing the former "Show" caption row. The
+    /// `Picker` inside the `Menu` gives the radio-check behavior; the icon
+    /// tints accent while a non-default filter is active. Hidden when no
+    /// bookmarks exist, the same gate the "Show" row had. Follows the
+    /// `Menu { Picker … }` pattern in `ActivityWindowView`.
+    private var filterMenu: some View {
+        Menu {
+            Picker("Filter", selection: $kindFilter) {
+                Text("All").tag(BookmarkKindFilter.all)
+                Text("Folders").tag(BookmarkKindFilter.folders)
+                Text("Pages").tag(BookmarkKindFilter.pages)
+                Text("Sources").tag(BookmarkKindFilter.sources)
+                Text("Chats").tag(BookmarkKindFilter.chats)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.body)
+                .frame(width: 24, height: 24)
+                .foregroundStyle(kindFilter == .all ? Color.secondary : Color.accentColor)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Show")
     }
 
     /// A compact, borderless icon button for the header's trailing edge.
@@ -127,26 +159,7 @@ struct BookmarksContainerView: View {
         .help(help)
     }
 
-    // MARK: - Show / Sort by pickers
-
-    /// "Show" kind-filter row — same style as `SourcesContainerView`'s
-    /// filter row: caption label, trailing menu picker, tight padding.
-    private var bookmarksFilterRow: some View {
-        HStack {
-            Text("Show").font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            Picker("Filter", selection: $kindFilter) {
-                Text("All").tag(BookmarkKindFilter.all)
-                Text("Folders").tag(BookmarkKindFilter.folders)
-                Text("Pages").tag(BookmarkKindFilter.pages)
-                Text("Sources").tag(BookmarkKindFilter.sources)
-                Text("Chats").tag(BookmarkKindFilter.chats)
-            }
-            .pickerStyle(.menu).buttonStyle(.borderless).labelsHidden().fixedSize()
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
-    }
+    // MARK: - Show menu / Sort by picker
 
     /// "Sort by" row — same style as `PagesContainerView`'s sort row.
     /// "Custom Order" is the persisted drag-and-drop order (the default).
