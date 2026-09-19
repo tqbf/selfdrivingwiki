@@ -14,11 +14,11 @@ Read the normative references before you change a package:
 ## Package facts
 
 - An extractor package is one local directory with `manifest.json` and declared files. Package import accepts no archives or remote package sources.
-- Protocol revisions 1, 2, and 3 are supported. Protocol revision 2 adds credential and operation-configuration paths. Protocol revision 3 adds `remote-url` input.
+- Protocol revisions 1, 2, 3, and 4 are supported. Protocol revision 2 adds credential and operation-configuration paths. Protocol revision 3 adds `remote-url` input. Protocol revision 4 adds the optional result-frame fields `resultMIMEType` (the output file carries source bytes instead of Markdown) and `articleMetadata.identifier` (an external provenance identity). A revision 3 or lower host rejects a result frame carrying those fields.
 - Manifest revisions are separate from protocol revisions. Use manifest revision 1 unless a package declares credential requirements. Credential requirements require manifest revision 2.
 - One request enters the process. One terminal frame exits on standard output as JSON Lines.
 - Supported extractor kinds are `pdf`, `html`, `docx`, `podcast-transcript`,
-  and `apple-podcast-transcript`.
+  `apple-podcast-transcript`, `youtube-transcript`, and `zotero`.
 
 ## The Apple Podcasts helper boundary
 
@@ -38,7 +38,7 @@ kind, MIME type, capability, credential, or package identifier.
 
 ## Create or change a package
 
-1. Copy the closest reviewed package layout in `ExtractorPackages/`. Use `Defuddle` for HTML, `Pdf2md` for PDF, `DoclingServe` for direct-launch Python, `Docx2md` for DOCX, or `PodcastTranscript` for `remote-url` input.
+1. Copy the closest reviewed package layout in `ExtractorPackages/`. Use `Defuddle` for HTML, `Pdf2md` for PDF, `DoclingServe` for direct-launch Python, `Docx2md` for DOCX, `PodcastTranscript` for `remote-url` input, or `Zotero` for a `remote-url` package with a REQUIRED credential and revision-4 bytes results.
 2. Choose a lowercase reverse-DNS `packageID`, a strict semver `version`, and stable registration IDs.
 3. Declare the entry point and every file, including licenses and provenance notes. Declare no undeclared files in the folder.
 4. Choose `direct` or `runtime` launch. `direct` entry points need owner-execute source permission; `runtime` scripts need only owner-read. Keep runtime arguments fixed and bounded.
@@ -62,7 +62,7 @@ The reviewed packages are build inputs. The app and the `wikid.xpc` service rece
 5. Keep `PROVENANCE.md` and license files inside each package current. Declare them in the manifest so their digests are pinned.
 6. Keep PEP 723 metadata and `pyproject.toml` dependencies synchronized in pdf2md.
 7. If pdf2md changes, run its Python gates from `tools/pdf2md`: `mise exec -- uv run pytest tests/`, `ruff check`, and `pyright`.
-8. If Podcast Transcript changes, run its Python gates from `tools/podcast-transcript`: `mise exec -- uv run pytest tests/`, `mise exec -- uv run ruff check podcast-transcript tests/`, and `mise exec -- uv run pyright podcast-transcript tests/`. If Apple Podcast Transcript changes, run the same gates from `tools/apple-podcast-transcript`.
+8. If Podcast Transcript changes, run its Python gates from `tools/podcast-transcript`: `mise exec -- uv run pytest tests/`, `mise exec -- uv run ruff check podcast-transcript tests/`, and `mise exec -- uv run pyright podcast-transcript tests/`. If Apple Podcast Transcript changes, run the same gates from `tools/apple-podcast-transcript`. If Zotero changes, run the same gates from `tools/zotero` (`uv run pytest tests/`, `ruff check zotero tests/`, `pyright zotero tests/`).
 9. If docx2md changes, run `bun test` from `tools/docx2md`.
 
 ## Inspect lifecycle state

@@ -91,6 +91,56 @@ sources.
 - A `.docx` source is not staged to agents until it has a Markdown version.
   The raw bytes are a binary zip with no value as agent context.
 
+### Zotero attachments
+
+Zotero acquisition runs through the reviewed `zotero` package. You name the
+attachment keys; the package downloads the files from your Zotero library
+through the Zotero Web API and never converts formats.
+
+Configure two things:
+
+1. **API key + library ID** — Settings → Zotero. The key lives in your
+   Keychain. It is resolved per download through the seeded authorization;
+   it is never written to a config file, a queue item, or a log.
+2. **Attachment keys** — `zotero-config.json` in the App Group container:
+
+   ```json
+   {
+     "libraryID": "12345",
+     "attachments": ["ABCD1234", "WXYZ9876"]
+   }
+   ```
+
+   Each entry is one Zotero ATTACHMENT item key (8 characters, uppercase
+   letters and digits). An old `zoteroDirOverride` key in the file is
+   ignored and never written again.
+
+Then run `wikictl zotero sync`:
+
+- Every configured key becomes one byteless `.zotero` source whose URL is
+  the Zotero file endpoint. The command writes a durable extraction job for
+  each new source. The app or the wikid daemon drains the job on its next
+  dispatch scan — the CLI does not wait.
+- A key that already has a source is skipped. `--force` re-enqueues the
+  extraction instead (for example after you changed the file in Zotero).
+- An unconfigured library ID, an empty attachment list, or a missing API
+  key exits nonzero with a typed message.
+
+What a download produces:
+
+- `text/markdown` or `text/plain` attachments (or a `.md` file) become the
+  source's Markdown version directly.
+- `application/pdf` and `text/html` attachments (or `.pdf` / `.html` files)
+  are stored as the source's bytes, and the app runs your normal PDF or
+  HTML route on them — the same pdf2md / Docling / Defuddle selection as any
+  other file. The Markdown appears as a derived version.
+- The parent item's key and title are kept on the source, so the "From
+  Zotero" provenance and the `zotero://` deep link work as before.
+- `linked_file` and `linked_url` attachments are typed failures: Zotero
+  does not serve files for links.
+- Re-syncing changed bytes creates a new content version. Identical bytes
+  never duplicate a version.
+
 The app installs the packages into a machine catalog the first time it runs. You do not enable a package for each wiki. Every compatible installed package is available to every wiki on this Mac.
 
 ## Trust
