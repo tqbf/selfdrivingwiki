@@ -62,6 +62,77 @@ enum ReviewedExtractorBootstrap {
                     "extractor bootstrap: reviewed package failed admission; bundled revision stays in use")
             }
         }
+
+        let installedRecords: [ExtractorPackageCatalogRecord]
+        do {
+            installedRecords = try await writer.read().records
+        } catch {
+            DebugLog.extraction(
+                "extractor bootstrap: catalog unreadable after publish; grant seeding skipped")
+            installedRecords = []
+        }
+        await seedReviewedCredentialGrants(
+            appGroupContainerRoot: appGroupContainerRoot,
+            installed: installedRecords)
+    }
+
+    /// Seeds the reviewed Zotero credential binding. No UI ships in this
+    /// cycle, so the app writes one idempotent authorization record binding
+    /// `(org.selfdrivingwiki.zotero, zotero-api-key)` to the legacy
+    /// `.zoteroAPIKey()` Keychain reference, pinned to the exact requirement
+    /// fingerprint the installed manifest declares. App-only (the writer's
+    /// role gate enforces it), best-effort, and a no-op when the grant
+    /// already matches this contract — a revocation by a future UI cycle is
+    /// never silently resurrected unless the contract changed. With the
+    /// binding in place, per-operation resolution flows through the standard
+    /// credential-file path; an unset Keychain value surfaces as the typed
+    /// missing-credential state, never as a value leak.
+    private static func seedReviewedCredentialGrants(
+        appGroupContainerRoot: URL,
+        installed: [ExtractorPackageCatalogRecord]
+    ) async {
+        let reviewed = ReviewedExtractorPackages.zotero
+        guard let record = installed.first(where: { $0.revision == reviewed.revision }),
+              let registration = record.registrations.first(where: { registration in
+                  registration.credentialRequirements.contains {
+                      $0.id.rawValue == "zotero-api-key"
+                  }
+              }),
+              let requirement = registration.credentialRequirements.first(where: {
+                  $0.id.rawValue == "zotero-api-key"
+              })
+        else { return }
+
+        let layout = ExtractorCredentialAuthorizationStoreLayout(
+            appGroupContainerRoot: appGroupContainerRoot)
+        let snapshot = ExtractorCredentialAuthorizationReader(layout: layout).snapshot()
+        let authorizationID = ExtractorCredentialAuthorizationID(
+            packageID: reviewed.packageID, requirementID: requirement.id)
+        let fingerprint = ExtractorCredentialRequirementFingerprint.compute(
+            packageID: reviewed.packageID.rawValue,
+            registrationID: registration.id.rawValue,
+            kinds: registration.kinds.map(\.rawValue),
+            mimeTypes: registration.mimeTypes.map(\.rawValue),
+            requirement: requirement)
+        if let existing = snapshot?.record(for: authorizationID),
+           existing.fingerprint == fingerprint {
+            return
+        }
+        do {
+            let writer = try ExtractorCredentialAuthorizationWriter(
+                layout: layout,
+                processRole: .app)
+            _ = try await writer.grant(
+                packageID: reviewed.packageID,
+                registrationID: registration.id,
+                kinds: registration.kinds.map(\.rawValue),
+                mimeTypes: registration.mimeTypes.map(\.rawValue),
+                requirement: requirement,
+                credentialReference: .zoteroAPIKey())
+        } catch {
+            DebugLog.extraction(
+                "extractor bootstrap: reviewed credential grant could not be seeded")
+        }
     }
 }
 #endif
