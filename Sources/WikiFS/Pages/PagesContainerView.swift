@@ -2,10 +2,11 @@ import SwiftUI
 import WikiFSEngine
 import WikiFSCore
 
-/// The Pages section of the sidebar — a native header (title, New Page, sort
-/// picker, search) above an AppKit `NSTableView` (`PagesListView`). Mirrors
-/// `BookmarksContainerView`: SwiftUI chrome on top, AppKit list below for
-/// instant selection + native double-click.
+/// The Pages section of the sidebar — a native header (title, New Page,
+/// filter and sort menu icons, search) above an AppKit `NSTableView`
+/// (`PagesListView`). Mirrors `BookmarksContainerView` / `SourcesContainerView`:
+/// SwiftUI chrome on top, AppKit list below for instant selection + native
+/// double-click.
 struct PagesContainerView: View {
     @Bindable var store: WikiStoreModel
     let fileProvider: FileProviderFacade
@@ -26,9 +27,53 @@ struct PagesContainerView: View {
     @State private var deletionOutcome: DeletionConfirmationOutcome?
     /// The page ids behind `deletionOutcome` — what the action handler deletes.
     @State private var pendingDeletionIDs: [PageID] = []
+    /// "Show" date-window filter backing the filter menu. `all` is the
+    /// default and returns the list unchanged.
+    @State private var dateFilter: PageDateFilter = .all
+
+    /// "Show" date-window filter for the page list (follow-up to #241's
+    /// header treatment; display-only). `WikiPageSummary` carries only
+    /// title + dates, so the filter windows compare `updatedAt` against a
+    /// reference date at calendar granularity — `now` and `calendar` are
+    /// injectable so the predicate is unit-testable without real time.
+    enum PageDateFilter: String, CaseIterable {
+        case all
+        case today
+        case week
+        case month
+
+        func matches(
+            _ date: Date,
+            now: Date = Date(),
+            calendar: Calendar = .current
+        ) -> Bool {
+            switch self {
+            case .all: return true
+            case .today: return calendar.isDate(date, equalTo: now, toGranularity: .day)
+            case .week: return calendar.isDate(date, equalTo: now, toGranularity: .weekOfYear)
+            case .month: return calendar.isDate(date, equalTo: now, toGranularity: .month)
+            }
+        }
+
+        /// Pure: pages whose `updatedAt` falls inside the window. `all`
+        /// returns the input unchanged.
+        func filtered(
+            _ pages: [WikiPageSummary],
+            now: Date = Date(),
+            calendar: Calendar = .current
+        ) -> [WikiPageSummary] {
+            guard self != .all else { return pages }
+            return pages.filter { matches($0.updatedAt, now: now, calendar: calendar) }
+        }
+    }
 
     private var visible: [WikiPageSummary] {
-        store.searchQuery.isEmpty ? store.summaries : store.searchResults
+        // During search, results are relevance-ranked by the engine — the
+        // date filter does not apply (the same rule the sort follows).
+        if store.searchQuery.isEmpty {
+            return dateFilter.filtered(store.summaries)
+        }
+        return store.searchResults
     }
 
     var body: some View {
@@ -39,7 +84,7 @@ struct PagesContainerView: View {
                 PagesListView(store: store, fileProvider: fileProvider,
                               session: session, launcher: launcher,
                               callbacks: callbacks)
-                if visible.isEmpty && !store.searchQuery.isEmpty {
+                if visible.isEmpty && (!store.searchQuery.isEmpty || dateFilter != .all) {
                     Text("No matching pages")
                         .foregroundStyle(.secondary).font(.callout)
                         .padding(.vertical, 8).padding(.horizontal, 4)
@@ -81,9 +126,10 @@ struct PagesContainerView: View {
         }
     }
 
-    /// Header: title + compact New Page button, then the sort picker and search
-    /// bar (matching the prior pagesSection layout, with the bookmarks-style
-    /// compact action button).
+    /// Header: title + compact New Page button and the filter/sort menu
+    /// icons, then the search bar. The filter is a date-window "Show" menu
+    /// (display-only); the sort drives `store.pageSortOrder` (model-level,
+    /// re-queries the store).
     private var pagesHeader: some View {
         VStack(spacing: 0) {
             HStack(spacing: 2) {
@@ -93,27 +139,67 @@ struct PagesContainerView: View {
                     onNewPage()
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                filterMenu
+                sortMenu
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-
-            HStack {
-                Text("Sort by").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Picker("Sort", selection: $store.pageSortOrder) {
-                    Text("Last Updated").tag(PageSortOrder.lastUpdated)
-                    Text("Newest First").tag(PageSortOrder.newestFirst)
-                    Text("Title A–Z").tag(PageSortOrder.titleAZ)
-                }
-                .pickerStyle(.menu).buttonStyle(.borderless).labelsHidden().fixedSize()
-            }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
 
             searchBar
                 .padding(.horizontal, 4)
                 .padding(.vertical, 6)
         }
+    }
+
+    /// The "Show" date-window filter — a filter icon whose dropdown lists
+    /// All / Edited Today / This Week / This Month, the same
+    /// `Menu { Picker … }` pattern as the sibling sections' icons. The icon
+    /// tints accent while a non-All window is active.
+    private var filterMenu: some View {
+        Menu {
+            Picker("Filter", selection: $dateFilter) {
+                Text("All").tag(PageDateFilter.all)
+                Text("Edited Today").tag(PageDateFilter.today)
+                Text("This Week").tag(PageDateFilter.week)
+                Text("This Month").tag(PageDateFilter.month)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.body)
+                .frame(width: 24, height: 24)
+                .foregroundStyle(dateFilter == .all ? Color.secondary : Color.accentColor)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Show")
+    }
+
+    /// The "Sort by" control — a sort icon whose dropdown drives
+    /// `store.pageSortOrder` (the model re-queries the store; same choices
+    /// as the former caption row). The icon tints accent while a non-default
+    /// (non-Last Updated) sort is active.
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort", selection: $store.pageSortOrder) {
+                Text("Last Updated").tag(PageSortOrder.lastUpdated)
+                Text("Newest First").tag(PageSortOrder.newestFirst)
+                Text("Title A–Z").tag(PageSortOrder.titleAZ)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.body)
+                .frame(width: 24, height: 24)
+                .foregroundStyle(store.pageSortOrder == .lastUpdated ? Color.secondary : Color.accentColor)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Sort by")
     }
 
     private var searchBar: some View {
