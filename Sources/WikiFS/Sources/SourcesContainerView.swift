@@ -3,8 +3,8 @@ import WikiFSEngine
 import SwiftUI
 import WikiFSCore
 
-/// The Sources section — a native header (Add buttons, filter picker, search)
-/// above an AppKit `NSTableView` (`SourcesListView`). Mirrors
+/// The Sources section — a native header (Add buttons, a filter menu icon,
+/// search) above an AppKit `NSTableView` (`SourcesListView`). Mirrors
 /// `PagesContainerView` / `BookmarksContainerView`. Filtering and search live
 /// here (SwiftUI); the AppKit list below stays dumb and just renders the
 /// computed array.
@@ -150,27 +150,41 @@ struct SourcesContainerView: View {
                 headerButton(systemImage: "folder.badge.plus", help: "Add Folder…") {
                     showingImportMarkdown = true
                 }
+                filterMenu
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-
-            HStack {
-                Text("Show").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Picker("Filter", selection: $sourceFilter) {
-                    Text("All").tag(SourceFilter.all)
-                    Text("Ready").tag(SourceFilter.ready)
-                    Text("Processed").tag(SourceFilter.ingested)
-                }
-                .pickerStyle(.menu).buttonStyle(.borderless).labelsHidden().fixedSize()
-            }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
 
             sourceSearchBar
                 .padding(.horizontal, 4)
                 .padding(.vertical, 6)
         }
+    }
+
+    /// The "Show" source filter (issue follow-up to #241) — a filter icon
+    /// whose dropdown menu lists All / Ready / Processed, replacing the
+    /// former "Show" caption row. The `Picker` inside the `Menu` checks the
+    /// current choice; the icon tints accent while a non-default filter is
+    /// active. Same `Menu { Picker … }` pattern as the Bookmarks header.
+    private var filterMenu: some View {
+        Menu {
+            Picker("Filter", selection: $sourceFilter) {
+                Text("All").tag(SourceFilter.all)
+                Text("Ready").tag(SourceFilter.ready)
+                Text("Processed").tag(SourceFilter.ingested)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.body)
+                .frame(width: 24, height: 24)
+                .foregroundStyle(sourceFilter == .all ? Color.secondary : Color.accentColor)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Show")
     }
 
     private var sourceSearchBar: some View {
