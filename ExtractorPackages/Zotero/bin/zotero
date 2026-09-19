@@ -72,6 +72,10 @@ class OutputLimitExceeded(Exception):
     """The downloaded attachment exceeds the output byte cap."""
 
 
+class DeadlinePassed(Exception):
+    """The request deadline passed mid-download."""
+
+
 class APIStatusError(Exception):
     """The Zotero API answered with a non-200 status."""
 
@@ -137,7 +141,13 @@ def parse_attachment_file_url(url: str) -> tuple[str, str] | None:
         return None
     if parsed.query or parsed.fragment or parsed.username or parsed.password:
         return None
-    if parsed.port not in (None, 443):
+    try:
+        port = parsed.port
+    except ValueError:
+        # An invalid or out-of-range port literal (e.g. ":99999") raises on
+        # access; it is never a canonical endpoint.
+        return None
+    if port not in (None, 443):
         return None
     parts = parsed.path.split("/")
     # ['', 'users', <libraryID>, 'items', <attachmentKey>, 'file']
@@ -304,13 +314,15 @@ def fetch_item_envelope(url: str, api_key: str) -> tuple[int, Any]:
     return response.status_code, response.json()
 
 
-def fetch_file_bytes(url: str, api_key: str, byte_cap: int) -> bytes:
+def fetch_file_bytes(url: str, api_key: str, byte_cap: int, deadline_ms: Any = None) -> bytes:
     """GET the attachment file with redirects, enforcing the byte cap.
 
     Raises OutputLimitExceeded when the stream passes `byte_cap` — a typed
-    self-report (`output-limit`) — APIStatusError for a non-200 status, and
-    requests.RequestException for network failures. The returned bytes are
-    the raw file bytes; this package never converts formats.
+    self-report (`output-limit`) — DeadlinePassed when the request deadline
+    passes mid-stream (typed `timeout` self-report), APIStatusError for a
+    non-200 status, and requests.RequestException for network failures. The
+    returned bytes are the raw file bytes; this package never converts
+    formats.
     """
     response = requests.get(
         url, headers=_api_headers(api_key), timeout=_TIMEOUT, stream=True
@@ -320,6 +332,11 @@ def fetch_file_bytes(url: str, api_key: str, byte_cap: int) -> bytes:
     total = 0
     chunks: list[bytes] = []
     for chunk in response.iter_content(chunk_size=256 * 1024):
+        # The host owns the deadline and would kill the process anyway; the
+        # per-chunk check self-reports `timeout` for a slow-drip stream
+        # instead of burning the whole duration budget.
+        if _deadline_passed(deadline_ms):
+            raise DeadlinePassed
         total += len(chunk)
         if total > byte_cap:
             raise OutputLimitExceeded
@@ -500,12 +517,21 @@ def run_extractor_protocol(
             out_stream,
         )
     try:
-        downloaded = fetch_file_bytes(source_url, api_key, MAX_OUTPUT_BYTES)
+        downloaded = fetch_file_bytes(
+            source_url, api_key, MAX_OUTPUT_BYTES,
+            deadline_ms=request.get("deadlineMillisecondsSince1970"))
     except OutputLimitExceeded:
         return _fail(
             request_id,
             "output-limit",
             "the attachment exceeds the output size limit",
+            out_stream,
+        )
+    except DeadlinePassed:
+        return _fail(
+            request_id,
+            "timeout",
+            "the request deadline passed during the download",
             out_stream,
         )
     except APIStatusError:

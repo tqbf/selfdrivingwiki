@@ -77,6 +77,16 @@ class TestParseAttachmentFileURL:
             is None
         )
 
+    def test_rejects_invalid_port_literal_without_crashing(self) -> None:
+        # An out-of-range port literal raises ValueError on `.port` access;
+        # it must be a typed None, never an uncaught crash.
+        assert (
+            _zotero.parse_attachment_file_url(
+                "https://api.zotero.org:99999/users/1/items/ABCD1234/file"
+            )
+            is None
+        )
+
     def test_rejects_wrong_path_shapes(self) -> None:
         assert (
             _zotero.parse_attachment_file_url("https://api.zotero.org/users/1/items/ABCD1234")
