@@ -1,9 +1,9 @@
 import SwiftUI
 import WikiFSCore
 
-/// The Bookmarks section — a header bar with compact action buttons on the
-/// trailing edge, a filter menu icon, a "Sort by" row and a search bar
-/// (native macOS sidebar pattern), and `NSOutlineView` below.
+/// The Bookmarks section — a header bar with compact action buttons and
+/// filter/sort menu icons on the trailing edge, a search bar (native macOS
+/// sidebar pattern), and `NSOutlineView` below.
 /// Uses `NSOutlineView` (via `BookmarksOutlineView`) instead of SwiftUI's
 /// `List`/`OutlineGroup` for instant selection performance on macOS.
 ///
@@ -35,11 +35,10 @@ struct BookmarksContainerView: View {
             // right — the native macOS pattern (Finder, Notes, Mail).
             bookmarksHeader
 
-            // Sort / search chrome: shown whenever at least one bookmark
-            // exists (issues #240, #241). The kind filter lives in the
-            // header's filter menu icon.
+            // Search chrome: shown whenever at least one bookmark exists
+            // (issue #240). The kind filter and sort live in the header's
+            // menu icons (issue #241).
             if !store.bookmarkNodes.isEmpty {
-                bookmarksSortRow
                 bookmarksSearchBar
                 Divider()
             }
@@ -108,6 +107,7 @@ struct BookmarksContainerView: View {
             }
             if !store.bookmarkNodes.isEmpty {
                 filterMenu
+                sortMenu
             }
         }
         .padding(.horizontal, 12)
@@ -143,6 +143,33 @@ struct BookmarksContainerView: View {
         .help("Show")
     }
 
+    /// The "Sort by" control (issue #241) — a sort icon whose dropdown menu
+    /// lists the display orders, replacing the former "Sort by" caption row.
+    /// The `Picker` inside the `Menu` checks the current order; the icon
+    /// tints accent while a non-default (non-manual) sort is active. Hidden
+    /// when no bookmarks exist, the same gate the row had.
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort", selection: $sortOrder) {
+                Text("Custom Order").tag(BookmarkSortOrder.manual)
+                Text("Name A–Z").tag(BookmarkSortOrder.nameAZ)
+                Text("Date Added").tag(BookmarkSortOrder.dateAdded)
+                Text("Date Updated").tag(BookmarkSortOrder.dateUpdated)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.body)
+                .frame(width: 24, height: 24)
+                .foregroundStyle(sortOrder == .manual ? Color.secondary : Color.accentColor)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Sort by")
+    }
+
     /// A compact, borderless icon button for the header's trailing edge.
     /// Idle state uses `.secondary`; hover highlights via `.tint` — matches the
     /// subtle treatment of sidebar action buttons in native macOS apps.
@@ -157,26 +184,6 @@ struct BookmarksContainerView: View {
         }
         .buttonStyle(.plain)
         .help(help)
-    }
-
-    // MARK: - Show menu / Sort by picker
-
-    /// "Sort by" row — same style as `PagesContainerView`'s sort row.
-    /// "Custom Order" is the persisted drag-and-drop order (the default).
-    private var bookmarksSortRow: some View {
-        HStack {
-            Text("Sort by").font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            Picker("Sort", selection: $sortOrder) {
-                Text("Custom Order").tag(BookmarkSortOrder.manual)
-                Text("Name A–Z").tag(BookmarkSortOrder.nameAZ)
-                Text("Date Added").tag(BookmarkSortOrder.dateAdded)
-                Text("Date Updated").tag(BookmarkSortOrder.dateUpdated)
-            }
-            .pickerStyle(.menu).buttonStyle(.borderless).labelsHidden().fixedSize()
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
     }
 
     // MARK: - Search

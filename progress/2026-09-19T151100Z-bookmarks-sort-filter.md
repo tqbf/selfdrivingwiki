@@ -51,17 +51,21 @@ operator check. The hosted suite still asserts, automatically: both pickers
 mount when bookmarks exist, both disappear when the store is empty, and the
 default outline renders position order.
 
-### Follow-up: filter icon menu
+### Follow-up: filter and sort menu icons
 
-The operator asked for the "Show" row to become a filter icon with a
-dropdown. The header's action cluster gained a `line.3.horizontal.decrease`
-menu icon (trailing-most, after Add Source…) whose `Menu { Picker(.inline) }`
-holds the five kind choices with the current one checked — the same pattern
-as `ActivityWindowView`'s filter menu. The icon tints accent while a filter
-other than All is active, and it is hidden when no bookmarks exist (the same
-gate the row had). The "Show" caption row is gone; the "Sort by" row and
-search bar stay. The hosted popup-count checks pass unchanged because the
-SwiftUI `Menu` also bridges to an `NSPopUpButton`.
+The operator asked for the caption rows to become menu icons. The header's
+action cluster now ends with two `Menu { Picker(.inline) }` icons (the same
+pattern as `ActivityWindowView`'s filter menu):
+
+- Filter (`line.3.horizontal.decrease`) — the five kind choices, current
+  one checked; tints accent while a non-All filter is active.
+- Sort (`arrow.up.arrow.down`) — the four display orders, current one
+  checked; tints accent while a non-manual sort is active.
+
+Both icons hide when no bookmarks exist (the gate the rows had). The "Show"
+and "Sort by" caption rows are gone; the search bar stays. The hosted
+popup-count checks pass unchanged because each SwiftUI `Menu` also bridges
+to an `NSPopUpButton`.
 
 ## Verification
 
