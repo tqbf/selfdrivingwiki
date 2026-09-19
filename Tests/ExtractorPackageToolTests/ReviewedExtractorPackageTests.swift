@@ -351,7 +351,7 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "93ea01105450b96814cd68f8087bfd753b001fc3fe227b5d9d3f455a9a6d3106")
+            == "7cc2597da9d59ff8296cd4772f7b6f4acd6b4dc44d8b5d5ffcb5f16ec1568537")
 
         // Secret-free bytes: the declared requirement is a review fact; a
         // value or a reference binding must never be committed.
