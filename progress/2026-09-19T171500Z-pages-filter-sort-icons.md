@@ -33,6 +33,21 @@ cluster, matching the other sections.
   Both choices are `@State` and reset on sidebar-section switches, like the
   other sections.
 
+### Fix: the list now renders the computed rows
+
+The first cut only drove the "No matching pages" overlay —
+`PagesListView` computed its own rows from the store, so the date filter
+narrowed nothing and the operator saw stale rows stay. The fix mirrors
+`SourcesListView`: `PagesListView` takes `pages: [WikiPageSummary]` and
+renders exactly that array; `PagesContainerView.visible` is the single
+source of truth for search, date filter, and store sort. The @Observable
+trigger contract moved with it — the container's body reads
+`store.searchQuery` / `store.summaries` / `store.searchResults` (via
+`visible`) and `store.pageSortOrder` (the sort menu's tint), so SwiftUI
+still re-invokes `updateNSViewController` on every change. Verified: sort
+reorder propagates (the row signature is order-sensitive), and
+`pageSortOrder.didSet` synchronously re-lists into `summaries`.
+
 ## Verification
 
 - `make build` and `make test` — green.

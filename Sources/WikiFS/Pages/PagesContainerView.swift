@@ -81,7 +81,7 @@ struct PagesContainerView: View {
             pagesHeader
             Divider()
             ZStack(alignment: .topLeading) {
-                PagesListView(store: store, fileProvider: fileProvider,
+                PagesListView(store: store, pages: visible, fileProvider: fileProvider,
                               session: session, launcher: launcher,
                               callbacks: callbacks)
                 if visible.isEmpty && (!store.searchQuery.isEmpty || dateFilter != .all) {

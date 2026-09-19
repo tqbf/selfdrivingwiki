@@ -14,6 +14,10 @@ import WikiFSCore
 /// `NSOutlineView`).
 struct PagesListView: NSViewControllerRepresentable {
     let store: WikiStoreModel
+    /// The rows to render — computed by the parent (`PagesContainerView`),
+    /// which applies the search / date filter / store sort. The list stays
+    /// dumb and just renders this array (mirrors `SourcesListView`).
+    let pages: [WikiPageSummary]
     let fileProvider: FileProviderFacade
     let session: any WikiSessionProtocol
     let launcher: AgentLauncher
@@ -36,13 +40,13 @@ struct PagesListView: NSViewControllerRepresentable {
         vc.launcher = launcher
         vc.callbacks = callbacks
         vc.homePageID = session.descriptor.homePageID
-        // Read the @Observable props here so SwiftUI re-invokes this method
-        // when they change (the reload-trigger contract).
-        let visible = store.searchQuery.isEmpty ? store.summaries : store.searchResults
-        _ = store.pageSortOrder
-        let needs = vc.needsReload(visible)
-        DebugLog.tabs("PagesListView.updateNSVC: count=\(visible.count) needsReload=\(needs)")
-        if needs { vc.reloadData(from: visible) }
+        // The @Observable trigger contract lives in the parent: its `body`
+        // reads `store.searchQuery` / `store.summaries` (via `visible`) and
+        // `store.pageSortOrder` (the sort menu's tint), so SwiftUI re-invokes
+        // this method whenever any of them change.
+        let needs = vc.needsReload(pages)
+        DebugLog.tabs("PagesListView.updateNSVC: count=\(pages.count) needsReload=\(needs)")
+        if needs { vc.reloadData(from: pages) }
         // Always reconcile highlight to the active tab (cheap; guarded inside).
         vc.reconcileHighlight(activeSelection: store.activeTab?.selection)
         // Explicit "Show In List" reveal (issue #183): the pending target is
