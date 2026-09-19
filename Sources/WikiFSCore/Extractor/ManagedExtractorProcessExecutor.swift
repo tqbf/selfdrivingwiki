@@ -222,6 +222,7 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             requestID: operation.protocolRequest.requestID,
             outputPath: operation.protocolRequest.outputPath,
             maximumProgressEventCount: operation.manifest.limits.maximumProgressEventCount,
+            protocolRevision: operation.protocolRequest.protocolRevision,
             onFrame: trackedOnFrame,
             onFailure: { cancellationSlot.requestTermination() },
             onCompletion: { cancellationSlot.requestTermination() })
@@ -703,6 +704,7 @@ private final class ManagedProtocolState: @unchecked Sendable {
         requestID: ExtractorRequestID,
         outputPath: ExtractorRelativePath,
         maximumProgressEventCount: Int,
+        protocolRevision: ExtractorProtocolRevision,
         onFrame: @escaping @Sendable (ExtractorProtocolFrame) -> Void,
         onFailure: @escaping @Sendable () -> Void,
         onCompletion: @escaping @Sendable () -> Void
@@ -710,7 +712,8 @@ private final class ManagedProtocolState: @unchecked Sendable {
         sequence = ExtractorProtocolSequence(
             requestID: requestID,
             expectedOutputPath: outputPath,
-            maximumProgressEventCount: maximumProgressEventCount)
+            maximumProgressEventCount: maximumProgressEventCount,
+            protocolRevision: protocolRevision)
         self.onFrame = onFrame
         self.onFailure = onFailure
         self.onCompletion = onCompletion

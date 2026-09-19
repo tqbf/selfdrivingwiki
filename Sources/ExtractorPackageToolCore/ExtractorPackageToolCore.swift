@@ -238,7 +238,8 @@ public struct ExtractorPackageToolExecutor: Sendable {
         var sequence = ExtractorProtocolSequence(
             requestID: request.requestID,
             expectedOutputPath: request.outputPath,
-            maximumProgressEventCount: manifest.limits.maximumProgressEventCount)
+            maximumProgressEventCount: manifest.limits.maximumProgressEventCount,
+            protocolRevision: request.protocolRevision)
         do {
             for frame in frames { try sequence.consume(frame) }
             let terminal = try sequence.finish()

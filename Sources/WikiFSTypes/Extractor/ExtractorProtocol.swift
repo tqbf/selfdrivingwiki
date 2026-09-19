@@ -123,8 +123,9 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
             throw ExtractorValidationError.invalidManifest(
                 "credential input requires protocol revision 2")
         }
-        // The remote-url transport is a revision-3 feature. Revisions 1 and
-        // 2 keep their exact old wire contract.
+        // The remote-url transport is a revision-3 feature that revision 4
+        // carries forward unchanged. Revisions 1 and 2 keep their exact old
+        // wire contract.
         if protocolRevision.rawValue < 3,
            case .remoteURL = operationInput {
             throw ExtractorValidationError.invalidManifest(
@@ -184,7 +185,10 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
             input = .operationFile(try container.decode(
                 ExtractorRelativePath.self, forKey: .inputPath))
         case .remoteURL:
-            guard revision == .v3 else {
+            // The remote-url transport is a revision-3 feature that revision 4
+            // carries forward unchanged (revision 4 only extends the RESULT
+            // frame). Revisions 1 and 2 keep their exact old wire contract.
+            guard revision == .v3 || revision == .v4 else {
                 throw ExtractorValidationError.invalidManifest(
                     "remote-url input requires protocol revision 3")
             }
@@ -673,7 +677,7 @@ public struct ExtractorDiagnosticFrame: Codable, Hashable, Sendable {
 /// to preserve Defuddle-style article metadata end to end.
 public struct ExtractorArticleMetadata: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
-        case title, author, description, published, wordCount
+        case title, author, description, published, wordCount, identifier
     }
 
     static let maximumTextByteCount = 1_024
@@ -684,15 +688,21 @@ public struct ExtractorArticleMetadata: Codable, Hashable, Sendable {
     public let description: String?
     public let published: String?
     public let wordCount: Int?
+    /// Protocol revision 4: an EXTERNAL identity for provenance — e.g. the
+    /// Zotero parent item key behind an attachment. It is package-controlled
+    /// bounded text, not a host identifier: the host maps it into provenance
+    /// fields but never uses it to address host objects.
+    public let identifier: String?
 
     public init(
         title: String? = nil,
         author: String? = nil,
         description: String? = nil,
         published: String? = nil,
-        wordCount: Int? = nil
+        wordCount: Int? = nil,
+        identifier: String? = nil
     ) throws {
-        for value in [title, author, description, published].compactMap({ $0 }) {
+        for value in [title, author, description, published, identifier].compactMap({ $0 }) {
             guard value.isEmpty == false,
                   value.utf8.count <= Self.maximumTextByteCount,
                   value.contains("\0") == false else {
@@ -707,6 +717,7 @@ public struct ExtractorArticleMetadata: Codable, Hashable, Sendable {
         self.description = description
         self.published = published
         self.wordCount = wordCount
+        self.identifier = identifier
     }
 
     public init(from decoder: any Decoder) throws {
@@ -716,7 +727,8 @@ public struct ExtractorArticleMetadata: Codable, Hashable, Sendable {
             author: try Self.optionalString(container, .author),
             description: try Self.optionalString(container, .description),
             published: try Self.optionalString(container, .published),
-            wordCount: try container.decodeIfPresent(Int.self, forKey: .wordCount))
+            wordCount: try container.decodeIfPresent(Int.self, forKey: .wordCount),
+            identifier: try Self.optionalString(container, .identifier))
     }
 
     private static func optionalString(
@@ -735,10 +747,27 @@ public struct ExtractorResultFrame: Codable, Hashable, Sendable {
     public let warnings: [String]
     public let metadata: ExtractorReportedMetadata
     public let articleMetadata: ExtractorArticleMetadata?
+    /// Protocol revision 4. Absent or `text/markdown` ⇒ the output file IS
+    /// the Markdown product (the revision ≤ 3 contract, byte-for-byte).
+    /// Present with any other value ⇒ the output-file bytes are SOURCE
+    /// content with that MIME, and the HOST owns the format conversion.
+    /// `markdownByteCount` is still the output-file byte count, bounded by
+    /// the manifest output limit either way.
+    public let resultMIMEType: ExtractorMIMEType?
 
     private enum CodingKeys: String, CodingKey {
         case requestID, outputPath, markdownByteCount, warnings, metadata
-        case articleMetadata
+        case articleMetadata, resultMIMEType
+    }
+
+    /// The MIME value that marks a Markdown (revision ≤ 3) result when the
+    /// field is present.
+    public static let markdownResultMIMERawValue = "text/markdown"
+
+    /// True when the output file is the Markdown result itself.
+    public var isMarkdownResult: Bool {
+        guard let resultMIMEType else { return true }
+        return resultMIMEType.rawValue == Self.markdownResultMIMERawValue
     }
 
     public init(
@@ -747,7 +776,8 @@ public struct ExtractorResultFrame: Codable, Hashable, Sendable {
         markdownByteCount: Int,
         warnings: [String] = [],
         metadata: ExtractorReportedMetadata = .empty,
-        articleMetadata: ExtractorArticleMetadata? = nil
+        articleMetadata: ExtractorArticleMetadata? = nil,
+        resultMIMEType: ExtractorMIMEType? = nil
     ) throws {
         guard markdownByteCount >= 0, markdownByteCount <= ExtractorHostLimits.maximumMarkdownOutputByteCount,
               warnings.count <= 128,
@@ -760,6 +790,7 @@ public struct ExtractorResultFrame: Codable, Hashable, Sendable {
         self.warnings = warnings
         self.metadata = metadata
         self.articleMetadata = articleMetadata
+        self.resultMIMEType = resultMIMEType
     }
 
     public init(from decoder: any Decoder) throws {
@@ -772,7 +803,10 @@ public struct ExtractorResultFrame: Codable, Hashable, Sendable {
             metadata: container.decodeIfPresent(ExtractorReportedMetadata.self, forKey: .metadata) ?? ExtractorReportedMetadata(),
             articleMetadata: try container.decodeIfPresent(
                 ExtractorArticleMetadata.self,
-                forKey: .articleMetadata))
+                forKey: .articleMetadata),
+            resultMIMEType: try container.decodeIfPresent(
+                ExtractorMIMEType.self,
+                forKey: .resultMIMEType))
     }
 }
 
@@ -865,24 +899,37 @@ public enum ExtractorProtocolSequenceError: Error, Equatable, Sendable {
     case duplicateTerminal
     case outputAfterTerminal
     case missingTerminal
+    /// A result frame carried a revision-4 field (`resultMIMEType` or
+    /// `articleMetadata.identifier`) against a request of an older revision.
+    /// Fails closed: an older host never silently drops the new fields.
+    case resultFieldsRequireProtocolRevision4
 }
 
-/// Pure revision-1 frame-sequence validator. Byte and UTF-8 bounds belong to the stream decoder.
+/// Pure revision-aware frame-sequence validator. Byte and UTF-8 bounds belong
+/// to the stream decoder. The sequence enforces exactly one terminal frame and
+/// — for requests of revision ≤ 3 — rejects result frames carrying the
+/// revision-4-only fields, so an old host fails closed instead of silently
+/// ignoring them.
 public struct ExtractorProtocolSequence: Sendable {
     public let requestID: ExtractorRequestID
     public let expectedOutputPath: ExtractorRelativePath
     public let maximumProgressEventCount: Int
+    /// The request's declared protocol revision. Defaults to `.v3`, the
+    /// fail-closed "older host" posture for callers that predate revision 4.
+    public let protocolRevision: ExtractorProtocolRevision
     private(set) public var progressEventCount = 0
     private(set) public var terminalFrame: ExtractorProtocolFrame?
 
     public init(
         requestID: ExtractorRequestID,
         expectedOutputPath: ExtractorRelativePath,
-        maximumProgressEventCount: Int
+        maximumProgressEventCount: Int,
+        protocolRevision: ExtractorProtocolRevision = .v3
     ) {
         self.requestID = requestID
         self.expectedOutputPath = expectedOutputPath
         self.maximumProgressEventCount = maximumProgressEventCount
+        self.protocolRevision = protocolRevision
     }
 
     public mutating func consume(_ frame: ExtractorProtocolFrame) throws {
@@ -901,6 +948,10 @@ public struct ExtractorProtocolSequence: Sendable {
         case .result(let result):
             guard result.outputPath == expectedOutputPath else {
                 throw ExtractorProtocolSequenceError.outputPathMismatch
+            }
+            if protocolRevision.rawValue < 4,
+               result.resultMIMEType != nil || result.articleMetadata?.identifier != nil {
+                throw ExtractorProtocolSequenceError.resultFieldsRequireProtocolRevision4
             }
             terminalFrame = frame
         case .failure:

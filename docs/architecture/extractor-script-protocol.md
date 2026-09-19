@@ -1,6 +1,6 @@
 # Extractor script protocol
 
-This document is the normative reference for extractor protocol revisions 1, 2, and 3. It defines how the host talks to an extractor package script in a separate process.
+This document is the normative reference for extractor protocol revisions 1, 2, 3, and 4. It defines how the host talks to an extractor package script in a separate process.
 
 Sources of truth in code:
 
@@ -43,17 +43,17 @@ The host encodes one `ExtractorProtocolRequest` as JSON, appends a newline, writ
 | Field | Type | Rules |
 | --- | --- | --- |
 | `requestID` | UUID string | Identifies the operation. Every frame must repeat it. |
-| `protocolRevision` | integer | `1`, `2`, or `3`. Must equal the manifest `protocolRevision`. |
-| `kind` | string | `pdf`, `html`, `docx`, `podcast-transcript`, `apple-podcast-transcript`, or `youtube-transcript`. |
+| `protocolRevision` | integer | `1`, `2`, `3`, or `4`. Must equal the manifest `protocolRevision`. |
+| `kind` | string | `pdf`, `html`, `docx`, `podcast-transcript`, `apple-podcast-transcript`, `youtube-transcript`, or `zotero`. |
 | `mimeType` | string | Normalized lowercase MIME type. |
 | `originalFilename` | string | 1 to 1,024 bytes, no NUL. |
-| `inputTransport` | string | `operation-file` (all revisions) or `remote-url` (revision 3). |
+| `inputTransport` | string | `operation-file` (all revisions) or `remote-url` (revision 3 and later). |
 | `inputPath` | string | Package-relative path to the input file. Mandatory for `operation-file`; must be absent for `remote-url`. |
-| `remoteURL` | string | One normalized HTTP or HTTPS source URL (revision 3, `remote-url` only). Mandatory for `remote-url`; must be absent for `operation-file`. |
-| `outputPath` | string | Package-relative path for the Markdown result. Must differ from `inputPath`. |
+| `remoteURL` | string | One normalized HTTP or HTTPS source URL (revision 3 and later, `remote-url` only). Mandatory for `remote-url`; must be absent for `operation-file`. |
+| `outputPath` | string | Package-relative path for the result file. Must differ from `inputPath`. |
 | `deadlineMillisecondsSince1970` | integer | Positive. The host cancels the operation at this deadline. |
-| `credentialFilePath` | string | Revision 2 and 3 only. Package-relative path to the private credential input file. Must be absent in revision 1. |
-| `operationConfigurationPath` | string | Revision 2 and 3 only. Package-relative path to the public operation-configuration file. Must be absent in revision 1. |
+| `credentialFilePath` | string | Revision 2 and later. Package-relative path to the private credential input file. Must be absent in revision 1. |
+| `operationConfigurationPath` | string | Revision 2 and later. Package-relative path to the public operation-configuration file. Must be absent in revision 1. |
 
 ### Operation configuration envelope
 
@@ -112,14 +112,17 @@ Every package frame uses one envelope:
 | --- | --- | --- |
 | `requestID` | UUID string | Must match the request. |
 | `outputPath` | string | Must equal the request `outputPath`. |
-| `markdownByteCount` | integer | 0 to 128 MiB. Must match the bytes the package wrote. |
+| `markdownByteCount` | integer | 0 to 128 MiB. The output-file byte count. Must match the bytes the package wrote. |
 | `warnings` | array of strings, optional | At most 128 entries, each 1 to 1,024 bytes. |
 | `metadata` | object, optional | Package-reported tool and model facts. |
 | `articleMetadata` | object, optional | Article facts for HTML packages. |
+| `resultMIMEType` | string, optional (revision 4) | A valid MIME type. Absent or `text/markdown`: the output file IS the Markdown result. Any other value: the output file holds source bytes of that MIME, and the host owns the format conversion. |
+
+`markdownByteCount` is the output-file byte count for both result shapes.
 
 `metadata` fields, each optional and at most 256 bytes: `toolName`, `toolVersion`, `modelName`, `modelVersion`. The host records these as provenance. It does not treat a package version as a model version.
 
-`articleMetadata` fields: `title`, `author`, `description`, `published` (each an optional string of at most 1,024 bytes) and `wordCount` (an optional integer from 0 to 10,000,000). The reviewed Defuddle package uses these to carry article metadata end to end.
+`articleMetadata` fields: `title`, `author`, `description`, `published`, `identifier` (each an optional string of 1 to 1,024 bytes, no NUL) and `wordCount` (an optional integer from 0 to 10,000,000). The reviewed Defuddle package uses `title`, `author`, `description`, `published`, and `wordCount` to carry article metadata end to end. Revision 4 adds `identifier`: an external identity for provenance, for example the Zotero parent item key behind an attachment. The host records it; it never uses it to address host objects.
 
 ### Failure frame
 
@@ -154,8 +157,9 @@ Every package frame uses one envelope:
 2. Progress events must not exceed the manifest limit.
 3. The stream must contain exactly one terminal frame.
 4. A result frame must name the expected `outputPath`.
-5. No frame may follow the terminal frame.
-6. At end of stream, a terminal frame must exist. Otherwise the operation fails.
+5. A result frame against a request of revision 3 or lower must not carry `resultMIMEType` or `articleMetadata.identifier`. The host rejects the frame instead of silently dropping the new fields.
+6. No frame may follow the terminal frame.
+7. At end of stream, a terminal frame must exist. Otherwise the operation fails.
 
 The host decodes standard output continuously with `ExtractorJSONLinesDecoder`. Malformed UTF-8 or malformed JSON is a protocol failure. When the host detects a protocol failure, it requests termination of the verified process group and fails the operation. A nonzero exit code or a signal after a valid terminal frame is still a `process-termination` failure. The host requires exit code 0.
 
@@ -196,11 +200,14 @@ The host fails the operation, and the package loses the selection, when any of t
 
 ## Compatibility
 
-Revisions 1, 2, and 3 are supported. The manifest declares the revision the package speaks, and the request repeats it. A mismatch fails the operation before spawn.
+Revisions 1, 2, 3, and 4 are supported. The manifest declares the revision the package speaks, and the request repeats it. A mismatch fails the operation before spawn. A revision-4 host serves revision 1-4 packages.
 
 - Revision 1: operation-file requests only. No credential or operation-configuration paths.
 - Revision 2: adds the optional credential input file and operation-configuration file paths. The wire shape of the other fields is unchanged from revision 1.
 - Revision 3: adds the `remote-url` input transport and the `podcast-transcript`, `apple-podcast-transcript`, and `youtube-transcript` kinds. Revision 3 packages can use either input transport. Revisions 1 and 2 reject the `remoteURL` key and the `remote-url` transport; no revision accepts a mixed shape (both `inputPath` and `remoteURL`).
+- Revision 4: adds two optional result-frame fields — `resultMIMEType` and `articleMetadata.identifier`. Requests keep the exact revision-3 wire shape. When `resultMIMEType` is absent or `text/markdown`, the output file is the Markdown result, as in every earlier revision. When it names another MIME type, the output file holds source bytes of that MIME, and the host runs its own format route on those bytes. Kinds stay registration data: revision 4 adds the `zotero` kind only as a new registration value.
+
+Migration note: a revision 3 or lower host rejects a result frame that carries `resultMIMEType` or `articleMetadata.identifier` — it fails closed. It never silently drops the new fields and treats the output as Markdown. A revision-4 host accepts revision 1-3 result frames unchanged, so old packages keep working.
 
 A remote-url package is a registration and transport change, not a manifest-format change: the reviewed podcast transcript package keeps manifest revision 1 with protocol revision 3. An older host fails closed — it rejects the unknown kind at validation. Future revisions must keep this document updated with a migration note in `docs/architecture/extractor-package-manifest.md`.
 
