@@ -501,6 +501,35 @@ public protocol WikiStore: AnyObject, Sendable {
         provenance: SourceProvenance?
     ) throws -> SourceVersion
 
+    /// Attach acquired bytes to an existing (byteless) source — the Zotero
+    /// attachment drain's one store write. Creates the content version (blob,
+    /// hash, declared MIME, ext derived from the MIME), refreshes the
+    /// denormalized mirror (byte size, ext, MIME), and populates the retained
+    /// Zotero provenance columns plus the display name in ONE transaction.
+    /// Re-syncing identical bytes updates the provenance columns but never
+    /// creates a duplicate version (hash-diff, the normal versioning path).
+    /// `displayName` replaces the display name only when non-nil.
+    @discardableResult
+    func attachZoteroAttachment(
+        sourceID: SourceID,
+        bytes: Data,
+        mimeType: String,
+        zoteroItemKey: String?,
+        zoteroItemTitle: String?,
+        displayName: String?
+    ) throws -> SourceVersion
+
+    /// Populate the retained Zotero provenance columns (and optionally the
+    /// display name) for a source whose product arrived as a Markdown
+    /// version instead of a blob. Each non-nil argument replaces; nil keeps
+    /// the stored value.
+    func setZoteroProvenance(
+        sourceID: SourceID,
+        zoteroItemKey: String?,
+        zoteroItemTitle: String?,
+        displayName: String?
+    ) throws
+
     /// The latest (HEAD) version of the processed markdown for a source, or nil
     /// when no version exists yet (not yet seeded/extracted).
     func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion?

@@ -37,7 +37,6 @@ public enum ProcessServiceKeys {
     public static let renderer = ServiceKey<any RendererServices>(label: "process.renderer")
     public static let embeddings = ServiceKey<EmbeddingsSearchProvider>(label: "process.embeddings")
     public static let urlFetchProvider = ServiceKey<URLFetchProvider>(label: "process.integration.url-fetch-provider")
-    public static let zoteroClientProvider = ServiceKey<ZoteroClientProvider>(label: "process.integration.zotero-client-provider")
     public static let compositionInputs = ServiceKey<ProcessCompositionInputs>(label: "process.inputs")
 }
 
@@ -144,23 +143,19 @@ public struct ProcessCompositionInputs: Sendable {
 public struct ProcessPluginCatalogFactories: Sendable {
     public typealias EmbeddingsFactory = @Sendable () async throws -> ProcessRuntimeLease<EmbeddingsSearchProvider>
     public typealias URLFetchProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<URLFetchProvider>
-    public typealias ZoteroClientProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<ZoteroClientProvider>
 
     public let compositionInputs: ProcessCompositionInputs
     public let makeEmbeddings: EmbeddingsFactory
     public let makeURLFetchProvider: URLFetchProviderFactory?
-    public let makeZoteroClientProvider: ZoteroClientProviderFactory?
 
     public init(
         compositionInputs: ProcessCompositionInputs,
         makeEmbeddings: @escaping EmbeddingsFactory,
-        makeURLFetchProvider: URLFetchProviderFactory? = nil,
-        makeZoteroClientProvider: ZoteroClientProviderFactory? = nil
+        makeURLFetchProvider: URLFetchProviderFactory? = nil
     ) {
         self.compositionInputs = compositionInputs
         self.makeEmbeddings = makeEmbeddings
         self.makeURLFetchProvider = makeURLFetchProvider
-        self.makeZoteroClientProvider = makeZoteroClientProvider
     }
 }
 
@@ -810,7 +805,6 @@ public enum ProcessRuntimePlugins {
     public static let rendererID = PluginID("process.renderer")
     public static let embeddingsID = PluginID("process.embeddings")
     public static let urlFetchProviderID = PluginID("process.integration.url-fetch-provider")
-    public static let zoteroClientProviderID = PluginID("process.integration.zotero-client-provider")
 
     public static func definitions(_ factories: ProcessPluginCatalogFactories) -> [PluginDefinition] {
         var definitions = [
@@ -841,12 +835,6 @@ public enum ProcessRuntimePlugins {
             definitions.append(directDefinition(
                 id: urlFetchProviderID,
                 key: ProcessServiceKeys.urlFetchProvider,
-                factory: factory))
-        }
-        if let factory = factories.makeZoteroClientProvider {
-            definitions.append(directDefinition(
-                id: zoteroClientProviderID,
-                key: ProcessServiceKeys.zoteroClientProvider,
                 factory: factory))
         }
         return definitions

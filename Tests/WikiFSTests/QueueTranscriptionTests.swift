@@ -405,6 +405,13 @@ private final class FakeTranscriptionProvider: QueueExtractionProvider, @uncheck
         }
         return nil
     }
+
+    func persistAttachmentExtraction(
+        wikiID: WikiID, sourceID: SourceID,
+        resolution: AttachmentExtractionResolution, outcome: AttachmentFetchOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
+
+    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws {}
 }
 
 // MARK: - Progress event wait + CountDownLatch

@@ -10,30 +10,6 @@ import WikiFSCore
 /// sanctioned seam.
 enum HostCredentialActions {
 
-    /// Verify the stored Zotero API key against the Zotero API. Resolves
-    /// `.zoteroAPIKey()` in the privileged layer and returns only a redacted
-    /// outcome.
-    static func verifyZotero(
-        fetcher: any ZoteroClient.RequestFetcher
-    ) -> @Sendable (_ libraryID: String) async -> String? {
-        { libraryID in
-            let credentials = KeychainCredentialService()
-            do {
-                let resolved = try credentials.resolve(.zoteroAPIKey())
-                let config = ZoteroClient.Config(
-                    libraryID: libraryID, apiKey: resolved.value)
-                let client = ZoteroClient(config: config, fetcher: fetcher)
-                try await client.verifyConnection()
-                return nil
-            } catch CredentialStoreError.notConfigured {
-                return "No API key is stored. Save a key first."
-            } catch {
-                return (error as? ZoteroClient.ZoteroError)?.errorDescription
-                    ?? error.localizedDescription
-            }
-        }
-    }
-
     /// Verify Docling Serve connectivity with the STORED token (resolved in
     /// the privileged layer; never handed to the caller). Absent token → an
     /// anonymous probe, matching the optional-token server mode.

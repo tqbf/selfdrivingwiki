@@ -249,6 +249,11 @@ private struct StubExtractionProvider: QueueExtractionProvider {
         wikiID: WikiID, sourceID: SourceID,
         resolution: TranscriptExtractionResolution, outcome: TranscriptFetchOutcome
     ) async throws -> QueueExtractionOutputReference? { nil }
+    func persistAttachmentExtraction(
+        wikiID: WikiID, sourceID: SourceID,
+        resolution: AttachmentExtractionResolution, outcome: AttachmentFetchOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
+    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws {}
 }
 
 /// Creates a `QueueEngine` backed by an in-memory store + stub provider.

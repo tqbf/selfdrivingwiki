@@ -5873,6 +5873,138 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    public func attachZoteroAttachment(
+        sourceID: SourceID,
+        bytes: Data,
+        mimeType: String,
+        zoteroItemKey: String?,
+        zoteroItemTitle: String?,
+        displayName: String?
+    ) throws -> SourceVersion {
+        // The declared MIME is authoritative data from the result frame; the
+        // file extension derives from it. Detection stays out of this path:
+        // the reviewed package reported the true content type.
+        let ext = {
+            #if canImport(UniformTypeIdentifiers)
+            return UTType(mimeType: mimeType)?.preferredFilenameExtension?.lowercased()
+            #else
+            return nil
+            #endif
+        }() ?? ""
+        let sanitizedDisplayName = displayName.map { WikiNameRules.sanitized($0) }
+        return try mutate(event: { _ in
+            self.localEvent(.source, id: sourceID.rawValue, change: .updated)
+        }) { db in
+            guard bytes.count <= Self.ingestByteCap else {
+                throw WikiStoreError.unexpected(
+                    "source \(bytes.count) bytes exceeds cap \(Self.ingestByteCap)")
+            }
+            let contentHash = portableSHA256( bytes)
+                .map { String(format: "%02x", $0) }.joined()
+            let now = Date()
+            let nowTS = now.timeIntervalSince1970
+
+            guard let existing = try Row.fetchOne(
+                db,
+                sql: "SELECT content_hash FROM sources WHERE id = ?;",
+                arguments: [sourceID.rawValue]
+            ) else {
+                throw WikiStoreError.sourceNotFound(sourceID)
+            }
+            let previousHash: String? = existing["content_hash"]
+            let bytesChanged = previousHash != contentHash
+
+            // 1. Blob (identical bytes = one row, ever).
+            try db.execute(sql: """
+            INSERT OR IGNORE INTO blobs (hash, byte_size, content) VALUES (?, ?, ?);
+            """, arguments: [contentHash, Int64(bytes.count), bytes])
+
+            let parent = try self.activeContentVersion(sourceID: sourceID, on: db)
+            let prevGeneration = try self.refGeneration(sourceID: sourceID, on: db)
+
+            var versionID = parent?.id
+            // 2. A new version row only when the bytes actually changed
+            //    (hash-diff — the same gate addSource's dedup applies to a
+            //    whole-source import). Provenance-only re-syncs reuse the
+            //    current version.
+            if bytesChanged {
+                // Reuse the current version's activity: the download belongs
+                // to the same fetch lineage the sync command recorded.
+                let activityID: String? = parent?.activityID
+                let newVersionID = SourceVersionID(rawValue: ULID.generate())
+                try db.execute(sql: """
+                INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
+                                             mime_type, activity_id, external_identity, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """, arguments: [newVersionID.rawValue, sourceID.rawValue, parent?.id.rawValue,
+                                contentHash, mimeType, activityID,
+                                zoteroItemKey, nowTS])
+                // 3. UPSERT the active ref (generation + 1).
+                let nextGeneration = (prevGeneration ?? 0) + 1
+                try db.execute(sql: """
+                INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+                VALUES ('source-content', ?, ?, ?, ?)
+                ON CONFLICT(kind, owner_id) DO UPDATE SET
+                    version_id = excluded.version_id,
+                    generation = excluded.generation,
+                    updated_at = excluded.updated_at;
+                """, arguments: [sourceID.rawValue, newVersionID.rawValue,
+                                Int64(nextGeneration), nowTS])
+                versionID = newVersionID
+            }
+
+            // 4. Refresh the denormalized mirror: real MIME, ext from MIME,
+            //    byte size, hash, and the retained Zotero provenance columns.
+            //    The display name is replaced only when provided.
+            try db.execute(sql: """
+            UPDATE sources SET
+                mime_type = ?,
+                ext = ?,
+                byte_size = ?,
+                content_hash = ?,
+                zotero_item_key = COALESCE(?, zotero_item_key),
+                zotero_item_title = COALESCE(?, zotero_item_title),
+                display_name = COALESCE(?, display_name),
+                updated_at = ?,
+                version = version + 1
+            WHERE id = ?;
+            """, arguments: [mimeType, ext, Int64(bytes.count), contentHash,
+                            zoteroItemKey, zoteroItemTitle, sanitizedDisplayName,
+                            nowTS, sourceID.rawValue])
+
+            return SourceVersion(
+                id: versionID ?? SourceVersionID(rawValue: ULID.generate()),
+                sourceID: sourceID, parentID: parent?.id,
+                blobHash: contentHash,
+                mimeType: mimeType,
+                activityID: parent?.activityID,
+                externalIdentity: zoteroItemKey, fetchedAt: now
+            )
+        }
+    }
+
+    public func setZoteroProvenance(
+        sourceID: SourceID,
+        zoteroItemKey: String?,
+        zoteroItemTitle: String?,
+        displayName: String?
+    ) throws {
+        let sanitizedDisplayName = displayName.map { WikiNameRules.sanitized($0) }
+        try mutate(event: { _ in
+            self.localEvent(.source, id: sourceID.rawValue, change: .updated)
+        }) { db in
+            try db.execute(sql: """
+            UPDATE sources SET
+                zotero_item_key = COALESCE(?, zotero_item_key),
+                zotero_item_title = COALESCE(?, zotero_item_title),
+                display_name = COALESCE(?, display_name),
+                updated_at = ?
+            WHERE id = ?;
+            """, arguments: [zoteroItemKey, zoteroItemTitle, sanitizedDisplayName,
+                            Date().timeIntervalSince1970, sourceID.rawValue])
+        }
+    }
+
 
     public func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion? {
         try dbWriter.read { db in

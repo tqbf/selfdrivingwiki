@@ -735,6 +735,15 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
     ) async throws -> QueueExtractionOutputReference? {
         persistReference
     }
+
+    func persistAttachmentExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: AttachmentExtractionResolution,
+        outcome: AttachmentFetchOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
+
+    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws {}
 }
 
 /// Minimal Sendable extractor stub.

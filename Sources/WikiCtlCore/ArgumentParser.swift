@@ -57,6 +57,9 @@ public enum ArgumentParser {
         case chat(ChatCommand.Action)
         /// Bookmark commands: list, create, rename, delete, move (#239).
         case bookmark(BookmarkCommand.Action)
+        /// `wikictl zotero sync` — create one byteless `.zotero` source per
+        /// configured attachment key and enqueue its extraction job.
+        case zotero(force: Bool)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
         /// Print scoped command usage (`wikictl [source [add]] --help`).
@@ -171,6 +174,8 @@ public enum ArgumentParser {
             command = try parseChatCommand(Array(args.dropFirst()))
         case "bookmark":
             command = try parseBookmarkCommand(Array(args.dropFirst()))
+        case "zotero":
+            command = try parseZoteroCommand(Array(args.dropFirst()))
         case "workspace":
             command = try parseWorkspaceCommand(Array(args.dropFirst()))
         default:
@@ -551,6 +556,25 @@ public enum ArgumentParser {
         default:
             // Unreachable: recognition is the CLIReference leaf table above.
             throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "admin", given: sub))
+        }
+    }
+
+    private static func parseZoteroCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "zotero"))
+        }
+        guard CLIReference.leaf(family: "zotero", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "zotero", given: sub))
+        }
+        let rest = Array(args.dropFirst())
+        // `--force` re-enqueues extraction for already-synced attachment URLs.
+        let options = try Options(rest, options: CLIReference.options(forFamily: "zotero"))
+        switch sub {
+        case "sync":
+            return .zotero(force: options.flag("--force"))
+        default:
+            // Unreachable: recognition is the CLIReference leaf table above.
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "zotero", given: sub))
         }
     }
 

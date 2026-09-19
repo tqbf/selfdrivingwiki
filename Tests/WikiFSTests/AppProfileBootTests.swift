@@ -23,7 +23,6 @@ struct AppProfileBootTests {
             ProcessRuntimePlugins.rendererID,
             ProcessRuntimePlugins.embeddingsID,
             ProcessRuntimePlugins.urlFetchProviderID,
-            ProcessRuntimePlugins.zoteroClientProviderID,
         ]))
         let owner = AppProcessProfileOwner {
             await gate.wait()
@@ -42,9 +41,9 @@ struct AppProfileBootTests {
 
         await owner.shutdown()
         #expect(owner.services == nil)
-        #expect(await disposals.count == 3)
+        #expect(await disposals.count == 2)
         await owner.shutdown()
-        #expect(await disposals.count == 3)
+        #expect(await disposals.count == 2)
     }
 
     @Test("process owner reports boot failure")
@@ -147,7 +146,7 @@ struct AppProfileBootTests {
         await facade.shutdown()
         #expect(await disposals.count == 0)
         await owner.shutdown()
-        #expect(await disposals.count == 3)
+        #expect(await disposals.count == 2)
     }
 
     @Test("production-shaped app profile activates services and owns store listener")
@@ -185,9 +184,7 @@ struct AppProfileBootTests {
         _ = try #require(try await booted.context.find(ProcessServiceKeys.transport))
         _ = try #require(try await booted.context.find(ProcessServiceKeys.renderer))
         _ = try #require(try await booted.context.find(ProcessServiceKeys.urlFetchProvider))
-        _ = try #require(try await booted.context.find(ProcessServiceKeys.zoteroClientProvider))
         #expect(ProcessServiceKeys.urlFetchProvider.label == "process.integration.url-fetch-provider")
-        #expect(ProcessServiceKeys.zoteroClientProvider.label == "process.integration.zotero-client-provider")
         let store = try #require(try await booted.context.find(StoreServiceKeys.store))
         let page = try store.createPage(title: "Committed app profile page")
 
@@ -217,7 +214,7 @@ struct AppProfileBootTests {
         try await booted.shutdown()
         #expect(await processDisposals.count == 0)
         try await process.shutdown()
-        #expect(await processDisposals.count == 3)
+        #expect(await processDisposals.count == 2)
     }
 
     @Test("editing copied app YAML changes the running renderer registry")

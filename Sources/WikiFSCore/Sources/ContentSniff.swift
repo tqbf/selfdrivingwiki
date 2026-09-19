@@ -30,7 +30,6 @@ public struct BoundedContentPrefix: Codable, Hashable, Sendable {
 
 public enum DeclaredMIMEOrigin: String, Codable, CaseIterable, Hashable, Sendable {
     case httpResponse
-    case zoteroMetadata
     case localUTI
     case trustedGenerated
 }
@@ -81,7 +80,6 @@ public enum ContentTypeEvidenceOrigin: String, Codable, CaseIterable, Hashable, 
     case structuredBytes
     case utf8Text
     case httpResponse
-    case zoteroMetadata
     case trustedGenerated
     case uti
     case filenameExtension
@@ -233,7 +231,7 @@ public enum ContentTypeDetector {
         if let signature = evidence.first(where: { $0.origin == .binarySignature }) { return signature }
         if let structured = evidence.first(where: { $0.origin == .structuredBytes }) { return structured }
         if let trusted = evidence.first(where: { $0.origin == .trustedGenerated }) { return trusted }
-        if let declared = evidence.first(where: { [.httpResponse, .zoteroMetadata].contains($0.origin) }),
+        if let declared = evidence.first(where: { $0.origin == .httpResponse }),
            declared.mimeType != MimeType.octetStream {
             return declared
         }
@@ -242,7 +240,7 @@ public enum ContentTypeDetector {
             return specificText ?? text
         }
         if prefix.completeness == .truncated,
-           let declared = evidence.first(where: { [.httpResponse, .zoteroMetadata].contains($0.origin) }),
+           let declared = evidence.first(where: { $0.origin == .httpResponse }),
            declared.mimeType != MimeType.octetStream {
             return declared
         }
@@ -304,7 +302,6 @@ public enum ContentTypeDetector {
     private static func evidenceOrigin(for origin: DeclaredMIMEOrigin) -> ContentTypeEvidenceOrigin {
         switch origin {
         case .httpResponse: .httpResponse
-        case .zoteroMetadata: .zoteroMetadata
         case .localUTI: .uti
         case .trustedGenerated: .trustedGenerated
         }

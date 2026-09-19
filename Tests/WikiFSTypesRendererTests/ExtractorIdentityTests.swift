@@ -40,11 +40,12 @@ struct ExtractorIdentityTests {
         #expect(try ExtractorPackagePluginRunID(validating: run.rawValue.uuidString) == run)
         #expect(try ExtractorRequestID(validating: request.rawValue.uuidString) == request)
         #expect(ExtractorProtocolRevision(rawValue: 1) != nil)
-        // Revisions 2 and 3 are supported protocol revisions; 4 is not.
+        // Revisions 2, 3, and 4 are supported protocol revisions; 5 is not.
         #expect(ExtractorProtocolRevision(rawValue: 2) != nil)
         #expect(ExtractorProtocolRevision(rawValue: 3) != nil)
-        #expect(ExtractorProtocolRevision(rawValue: 4) == nil)
-        #expect(ExtractorKind.allCases == [.pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript, .youtubeTranscript])
+        #expect(ExtractorProtocolRevision(rawValue: 4) != nil)
+        #expect(ExtractorProtocolRevision(rawValue: 5) == nil)
+        #expect(ExtractorKind.allCases == [.pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript, .youtubeTranscript, .zotero])
         #expect(ExtractorFailureCause.allCases.count == 10)
     }
 
