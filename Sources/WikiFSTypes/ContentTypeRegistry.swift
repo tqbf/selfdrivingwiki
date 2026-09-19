@@ -53,6 +53,12 @@ public enum ContentTypeRegistry {
     /// `text/xml` — also classified as `.binary` (defies the `text/*` prefix
     /// classification on purpose, §11-C3).
     public static let xmlText = "text/xml"
+
+    /// `application/zotero` — the synthetic MIME marking a byteless Zotero
+    /// attachment source (a `.zotero` provider source whose bytes live in
+    /// the Zotero Web API until the reviewed package downloads them). The
+    /// MIME classifies as its own content kind, never as a real file type.
+    public static let zoteroAttachment = "application/zotero"
 }
 
 /// The normalized content classification a source reduces to, regardless of
@@ -97,6 +103,11 @@ public enum ContentKind: Sendable, Equatable, CaseIterable {
     /// precedence (synthetic `video/youtube` MIME is less informative than
     /// `.youtube`).
     case youtubeTranscript
+    /// Zotero attachment. Byteless until the reviewed package downloads the
+    /// attachment from the Zotero Web API; provider takes precedence
+    /// (synthetic `application/zotero` MIME). After the bytes land the
+    /// source's real MIME drives the normal PDF/HTML format route.
+    case zoteroAttachment
 
     // MARK: - No markdown path (not auto-ingestible)
 
@@ -162,6 +173,13 @@ public extension ContentKind {
         case .youtubeTranscript:
             return .init(canExtractToMarkdown: true,  shouldAutoIngest: true,
                          extractionPath: .youtubeTranscript)
+        case .zoteroAttachment:
+            // Acquisition, not conversion: the reviewed package downloads
+            // the attachment (Markdown itself, or bytes the host routes to
+            // the PDF/HTML format path). The download replaces today's
+            // local-storage reads and works for unsynced attachments too.
+            return .init(canExtractToMarkdown: true,  shouldAutoIngest: true,
+                         extractionPath: .zoteroAttachment)
         case .image:
             return .init(canExtractToMarkdown: false, shouldAutoIngest: false,
                          extractionPath: nil)
@@ -198,9 +216,18 @@ public extension ContentKind {
     /// XML exclusion (§11-C3): both `text/xml` AND `application/xml` classify
     /// as `.binary` BEFORE the `isText` / `hasPrefix("text/")` check, so
     /// neither is auto-ingested. Neither has a markdown extraction path.
+    /// `application/zotero` classifies as its own acquisition kind BEFORE the
+    /// generic binary fallthrough, so a byteless Zotero source resolves by
+    /// MIME alone (the provider arm also covers it).
     static func fromMIME(_ mime: String?) -> ContentKind {
         guard let mime else { return .unknown }
         let lowered = mime.lowercased()
+
+        // Synthetic acquisition MIME first (§ zotero): provider-backed
+        // byteless sources classify as their acquisition kind.
+        if lowered == ContentTypeRegistry.zoteroAttachment {
+            return .zoteroAttachment
+        }
 
         // XML exclusion (§11-C3): both forms → .binary. Checked BEFORE the
         // isText / hasPrefix("text/") arm so text/xml doesn't leak in.
@@ -256,11 +283,12 @@ public extension ContentKind {
         case .youtube:         return .youtubeTranscript
         case .applePodcast:    return .podcastTranscript
         case .podcast:         return .podcastTranscript
+        case .zotero:          return .zoteroAttachment
         case .spotify:         return .audioEmbedNoTranscript
         case .soundcloud:      return .audioEmbedNoTranscript
         case .vimeo:           return .videoEmbedNoTranscript
         case .remoteMedia:     return .remoteMediaNoMarkdown
-        case .localFile, .website, .zotero, .markdownFolder,
+        case .localFile, .website, .markdownFolder,
              .legacyImport, .none:
             break // fall through to MIME classification
         }
@@ -314,6 +342,7 @@ public extension ContentKind {
         case .pdf:   return .pdf
         case .html:  return .html
         case .docx:  return .docx
+        case .zotero: return .zoteroAttachment
         case .podcastTranscript, .applePodcastTranscript, .youtubeTranscript:
             return .unknown
         }
@@ -367,6 +396,9 @@ public extension ContentCapabilities {
         case podcastTranscript
         /// watch-page → caption-track scrape (pure-Swift).
         case youtubeTranscript
+        /// Reviewed Zotero package: downloads the attachment from the Zotero
+        /// Web API (acquisition, not conversion).
+        case zoteroAttachment
     }
 
     /// `true` when this kind has a **non-transcript file-extraction
@@ -390,7 +422,7 @@ public extension ContentCapabilities {
     var hasFileExtractionBackend: Bool {
         switch extractionPath {
         case .pdfBackend, .htmlToMarkdown, .docxBackend: return true
-        case .podcastTranscript, .youtubeTranscript, nil: return false
+        case .podcastTranscript, .youtubeTranscript, .zoteroAttachment, nil: return false
         }
     }
 
@@ -410,7 +442,7 @@ public extension ContentCapabilities {
     var hasTranscriptBackend: Bool {
         switch extractionPath {
         case .podcastTranscript, .youtubeTranscript: return true
-        case .pdfBackend, .htmlToMarkdown, .docxBackend, nil: return false
+        case .pdfBackend, .htmlToMarkdown, .docxBackend, .zoteroAttachment, nil: return false
         }
     }
 }

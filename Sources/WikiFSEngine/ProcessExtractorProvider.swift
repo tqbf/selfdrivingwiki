@@ -273,6 +273,19 @@ public struct ProcessExtractorProvider: Sendable {
         return ProcessPackageYouTubeTranscript(operation: operation)
     }
 
+    /// Prepares the process-backed Zotero attachment adapter for one exact
+    /// package revision. Same `remote-url` request shape as the transcript
+    /// siblings; the revision-4 operation returns either a Markdown result
+    /// or a bytes result carrying `resultMIMEType` plus article metadata.
+    public func prepareZoteroAttachment(
+        revision: ExtractorPackageRevisionID,
+        manifest: ExtractorManifest
+    ) async throws -> ProcessPackageZoteroAttachment {
+        let operation = try await prepareOperation(
+            kind: .zotero, revision: revision, manifest: manifest)
+        return ProcessPackageZoteroAttachment(operation: operation)
+    }
+
     public static func packageProvenance(
         revision: ExtractorPackageRevisionID,
         manifest: ExtractorManifest,
@@ -886,6 +899,7 @@ public final class PreparedProcessOperation: Sendable {
             case .podcastTranscript: MimeType.audioPodcast
             case .applePodcastTranscript: MimeType.audioApplePodcast
             case .youtubeTranscript: MimeType.videoYouTube
+            case .zotero: ContentTypeRegistry.zoteroAttachment
             }
             let mimeType = try ExtractorMIMEType(
                 validating: self.mimeType(defaulting: fallbackMIMEType))
@@ -1501,6 +1515,80 @@ public struct ProcessPackageYouTubeTranscript: Sendable, ProcessPackageProvenanc
             return Outcome(
                 markdown: outcome.markdown,
                 reportedMetadata: outcome.reportedMetadata)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch ManagedExtractorProcessError.cancellation {
+            throw CancellationError()
+        } catch {
+            throw ProcessPackageError(
+                message: ProcessPackageFailureMapper.message(error))
+        }
+    }
+}
+
+/// The process-backed Zotero attachment adapter for one exact package
+/// revision. Accepts the validated attachment file URL and executes one
+/// prepared revision-4 `remote-url` operation against the pinned snapshot.
+/// The outcome is bytes-shaped for both result forms: a Markdown result's
+/// bytes ARE the Markdown; a bytes result's bytes are the source content
+/// named by `frame.resultMIMEType`, which the HOST routes to its own format
+/// extraction. The package never converts formats.
+public struct ProcessPackageZoteroAttachment: Sendable, ProcessPackageProvenanceProviding {
+    public var displayName: String { operation.manifest.displayName }
+    public var packageProvenance: ExtractorPackageExecutionProvenance {
+        ExtractorPackageExecutionProvenance(
+            revision: operation.revision,
+            registrationID: operation.registrationID,
+            protocolRevision: operation.protocolRevision)
+    }
+
+    let operation: PreparedProcessOperation
+
+    init(operation: PreparedProcessOperation) {
+        self.operation = operation
+    }
+
+    /// The shared operation-level readiness answer (runtime resolution,
+    /// entry-point presence). The Zotero package is `runtime`-launched
+    /// through `uv`, so a missing runtime surfaces here as setup guidance.
+    public func readiness() async -> ExtractionReadiness {
+        operation.readiness()
+    }
+
+    /// One outcome of one attachment fetch: the terminal frame plus the
+    /// output-file bytes. Interpret `frame.isMarkdownResult` /
+    /// `frame.resultMIMEType` and read `frame.articleMetadata` for the
+    /// provenance fields (title, author, published, `identifier` = the
+    /// Zotero parent item key).
+    public struct Outcome: Sendable {
+        public let frame: ExtractorResultFrame
+        public let outputBytes: Data
+
+        public var isMarkdownResult: Bool { frame.isMarkdownResult }
+        public var resultMIMEType: ExtractorMIMEType? { frame.resultMIMEType }
+        public var articleMetadata: ExtractorArticleMetadata? { frame.articleMetadata }
+        public var reportedMetadata: ExtractorReportedMetadata { frame.metadata }
+
+        public init(frame: ExtractorResultFrame, outputBytes: Data) {
+            self.frame = frame
+            self.outputBytes = outputBytes
+        }
+    }
+
+    /// Downloads the attachment at `sourceURL`. Progress lines are
+    /// package-controlled text already redacted by the operation.
+    public func attachment(
+        for sourceURL: URL,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> Outcome {
+        do {
+            let outcome = try await operation.executeSourceResult(
+                kind: .zotero,
+                remoteURL: ExtractorRemoteSourceURL(
+                    validating: sourceURL.absoluteString),
+                filename: "attachment",
+                onProgress: onProgress)
+            return Outcome(frame: outcome.frame, outputBytes: outcome.sourceBytes)
         } catch is CancellationError {
             throw CancellationError()
         } catch ManagedExtractorProcessError.cancellation {
