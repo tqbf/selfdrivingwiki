@@ -188,6 +188,9 @@ struct BookmarksContainerView: View {
 
     // MARK: - Search
 
+    /// Compact search bar mirroring the Pages/Sources/Chats sidebars:
+    /// magnifier + plain text field + a clear button, no field chrome —
+    /// the row sits directly on the sidebar material.
     private var bookmarksSearchBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
@@ -205,12 +208,8 @@ struct BookmarksContainerView: View {
                 .buttonStyle(.borderless)
             }
         }
-        .padding(8)
         .padding(.horizontal, 4)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
     }
 
     /// Applies the search query and kind filter, then keeps every ancestor
