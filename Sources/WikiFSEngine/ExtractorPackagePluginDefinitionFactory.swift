@@ -317,6 +317,16 @@ public enum ExtractorPackagePluginDefinitionFactory {
                                 return ExtractionBackendAdapter.youtubeTranscript(adapter)
                             },
                             presentation: presentation))
+                    case .zotero:
+                        entries.append(ExtractionBatchEntry(
+                            key: .installed(kind: backendKind, reference: reference),
+                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                let adapter = try await provider.prepareZoteroAttachment(
+                                    revision: revision,
+                                    manifest: manifest)
+                                return ExtractionBackendAdapter.zotero(adapter)
+                            },
+                            presentation: presentation))
                     }
                 }
             }
@@ -338,6 +348,7 @@ public enum ExtractorPackagePluginDefinitionFactory {
         case .podcastTranscript: return .rssPodcastTranscript
         case .applePodcastTranscript: return .applePodcastTranscript
         case .youtubeTranscript: return .youtubeTranscript
+        case .zotero: return .zotero
         }
     }
 
@@ -357,12 +368,12 @@ public enum ExtractorPackagePluginDefinitionFactory {
         for registration in manifest.registrations {
             guard registration.kinds.isSubset(of: [
                 .pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript,
-                .youtubeTranscript,
+                .youtubeTranscript, .zotero,
             ]) else {
                 let offending = registration.kinds
                     .subtracting([
                         .pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript,
-                        .youtubeTranscript,
+                        .youtubeTranscript, .zotero,
                     ])
                     .first.map(\.rawValue) ?? "?"
                 throw FactoryError.unsupportedRegistrationKind(offending)

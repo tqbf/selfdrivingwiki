@@ -11,6 +11,7 @@ public enum ExtractionBackendKind: String, Codable, Hashable, Sendable {
     case youtubeTranscript
     case rssPodcastTranscript
     case applePodcastTranscript
+    case zotero
 }
 
 /// Stable registry identity for one extraction adapter.
@@ -45,6 +46,11 @@ public enum ExtractionBackendAdapter: Sendable {
     /// removed with the Apple TTML packaging (the former built-in adapter
     /// could not carry package provenance).
     case applePodcastTranscript(ProcessPackageApplePodcastTranscript)
+    /// The process-backed Zotero attachment adapter. Same prepared
+    /// operation shape as the transcript siblings (remote-url request); the
+    /// revision-4 bytes-capable outcome carries either Markdown or source
+    /// bytes plus `resultMIMEType` and article metadata.
+    case zotero(ProcessPackageZoteroAttachment)
 }
 
 public struct RegisteredExtractionBackend: Sendable {

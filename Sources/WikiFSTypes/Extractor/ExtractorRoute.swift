@@ -102,6 +102,14 @@ public extension ExtractorRouteID {
         kind: .youtubeTranscript,
         mimeTypeString: "video/youtube")
 
+    /// The Zotero attachment route. The synthetic `application/zotero`
+    /// source MIME is the route dimension for byteless `.zotero` sources;
+    /// the input itself is the attachment file URL (protocol revision 3+
+    /// transport; the package speaks revision 4 results).
+    static let canonicalZotero = ExtractorRouteID.validatedCanonical(
+        kind: .zotero,
+        mimeTypeString: "application/zotero")
+
     /// True for the routes host execution supports today. Future package
     /// registrations may declare other MIME types; displaying and resolving them
     /// is the route table's job, while execution adapters for new kinds remain
@@ -111,6 +119,7 @@ public extension ExtractorRouteID {
             || self == .canonicalPodcastTranscript
             || self == .canonicalApplePodcastTranscript
             || self == .canonicalYouTubeTranscript
+            || self == .canonicalZotero
     }
 
     private static func validatedCanonical(kind: ExtractorKind, mimeTypeString: String) -> ExtractorRouteID {

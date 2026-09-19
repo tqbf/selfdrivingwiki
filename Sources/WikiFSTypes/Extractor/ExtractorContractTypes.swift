@@ -22,6 +22,13 @@ public enum ExtractorKind: String, Codable, CaseIterable, Hashable, Sendable {
     /// and never downloads media or runs speech-to-text
     /// (`youtube-transcript` on the wire).
     case youtubeTranscript = "youtube-transcript"
+    /// Zotero attachment acquisition. Same `remote-url` request shape as
+    /// the transcript kinds, a separate operation family: the package
+    /// downloads one attachment file plus its item metadata from the Zotero
+    /// Web API and never converts formats. Markdown attachments are the
+    /// result itself; PDF/HTML attachments ride the revision-4 bytes result
+    /// (`zotero` on the wire).
+    case zotero
 }
 
 public enum ExtractorLaunchMode: String, Codable, CaseIterable, Hashable, Sendable {

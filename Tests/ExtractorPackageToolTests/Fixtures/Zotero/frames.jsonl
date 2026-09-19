@@ -1,0 +1,3 @@
+{"kind":"progress","payload":{"requestID":"7c2d4f6a-0000-4000-8000-000000000004","completedUnitCount":1,"totalUnitCount":2,"message":"attachment metadata fetched"}}
+{"kind":"progress","payload":{"requestID":"7c2d4f6a-0000-4000-8000-000000000004","completedUnitCount":2,"totalUnitCount":2,"message":"attachment bytes downloaded"}}
+{"kind":"result","payload":{"requestID":"7c2d4f6a-0000-4000-8000-000000000004","outputPath":"output/result.md","markdownByteCount":1048576,"metadata":{"toolName":"zotero"},"articleMetadata":{"title":"A Study of Extraction","author":"Doe, J.; Roe, A.","published":"2024-05-01","identifier":"PARENT01"},"resultMIMEType":"application/pdf"}}

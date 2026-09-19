@@ -78,6 +78,17 @@ struct ContentTypeRegistryTests {
         #expect(c.extractionPath == .youtubeTranscript)
     }
 
+    @Test func zoteroAttachmentAcquiresAndAutoIngests() {
+        // Acquisition, not conversion: the reviewed package downloads the
+        // attachment; neither manual backend button applies.
+        let c = ContentKind.zoteroAttachment.capabilities
+        #expect(c.canExtractToMarkdown == true)
+        #expect(c.shouldAutoIngest == true)
+        #expect(c.extractionPath == .zoteroAttachment)
+        #expect(c.hasFileExtractionBackend == false)
+        #expect(c.hasTranscriptBackend == false)
+    }
+
     @Test func imageNotExtractableNotAutoIngestible() {
         // PNG / JPEG / etc — the bug class.
         let c = ContentKind.image.capabilities
@@ -220,6 +231,20 @@ struct ContentTypeRegistryTests {
         #expect(kind == .youtubeTranscript)
         #expect(kind.capabilities.shouldAutoIngest == true)
         #expect(kind.capabilities.extractionPath == .youtubeTranscript)
+    }
+
+    @Test("Zotero provider and synthetic mime resolve to zoteroAttachment")
+    func zoteroProviderAndMIMEResolve() {
+        // Provider-first: a byteless `.zotero` source resolves to its
+        // acquisition kind regardless of the synthetic MIME.
+        let byProvider = ContentKind.resolve(
+            mimeType: ContentTypeRegistry.zoteroAttachment, provider: .zotero)
+        #expect(byProvider == .zoteroAttachment)
+        // MIME-first too: the synthetic `application/zotero` classifies as
+        // its own kind, never as `.binary`.
+        let byMIME = ContentKind.fromMIME(ContentTypeRegistry.zoteroAttachment)
+        #expect(byMIME == .zoteroAttachment)
+        #expect(ContentKind.resolve(mimeType: nil, provider: .zotero) == .zoteroAttachment)
     }
 
     @Test("Apple Podcast provider resolves to podcastTranscript") func applePodcastProvider() {
@@ -451,12 +476,12 @@ struct ContentTypeRegistryTests {
 
     // MARK: - Closed-enum exhaustiveness check
 
-    @Test("ContentKind is closed at 13 cases") func enumIsClosedAt13() {
+    @Test("ContentKind is closed at 14 cases") func enumIsClosedAt14() {
         // Adding a case is a deliberate decision (new content type added to
         // the table). Pin the count so the review catches any accidental
         // expansion. Update this number + add a per-case capability test
         // above when adding a case.
-        #expect(ContentKind.allCases.count == 13)
+        #expect(ContentKind.allCases.count == 14)
     }
 
     // MARK: - Capability conveniences (PR2)
@@ -509,18 +534,28 @@ struct ContentTypeRegistryTests {
         }
     }
 
-    /// A `canExtractToMarkdown == true` kind is EITHER a file backend OR a
-    /// transcript backend (no third path exists today). Pin so that if a
-    /// future `ExtractionPath` case is added, the conveniences are audited:
-    /// either fold it into one of the existing booleans or fail this test
-    /// to flag the gap.
-    @Test("canExtractToMarkdown kinds have one of file-or-transcript backend")
+    /// A `canExtractToMarkdown == true` kind is a file backend, a transcript
+    /// backend, or the Zotero acquisition path (no fourth path exists today).
+    /// Pin so that if a future `ExtractionPath` case is added, the
+    /// conveniences are audited: either fold it into one of the existing
+    /// booleans or fail this test to flag the gap.
+    @Test("canExtractToMarkdown kinds have file-, transcript-, or acquisition backend")
     func extractableKindsPartitionCleanly() {
         for kind in ContentKind.allCases {
             let caps = kind.capabilities
             if caps.canExtractToMarkdown {
-                #expect(caps.hasFileExtractionBackend || caps.hasTranscriptBackend,
-                        "\(kind) is canExtractToMarkdown but neither backend — convenience partition is incomplete")
+                // `.zoteroAttachment` is acquisition: the reviewed package
+                // downloads the bytes and the host routes them; it is not a
+                // manual file-extraction or transcript backend.
+                let isAcquisition = caps.extractionPath == .zoteroAttachment
+                #expect(
+                    caps.hasFileExtractionBackend || caps.hasTranscriptBackend || isAcquisition,
+                    "\(kind) is canExtractToMarkdown but neither backend — convenience partition is incomplete")
+                if isAcquisition {
+                    #expect(
+                        !caps.hasFileExtractionBackend && !caps.hasTranscriptBackend,
+                        "\(kind) acquisition path must not also claim a manual backend button")
+                }
             } else {
                 #expect(!caps.hasFileExtractionBackend && !caps.hasTranscriptBackend,
                         "\(kind) is not canExtractToMarkdown but has a backend flag set")
