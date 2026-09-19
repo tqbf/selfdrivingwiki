@@ -3,6 +3,164 @@ import Testing
 import WikiFSTypes
 
 struct ExtractorProtocolTests {
+    @Test func protocolRevision4IsAcceptedAnd5IsRejected() throws {
+        #expect(ExtractorProtocolRevision(rawValue: 4) == .v4)
+        #expect(ExtractorProtocolRevision(rawValue: 5) == nil)
+        #expect(throws: Error.self) {
+            try JSONDecoder().decode(
+                ExtractorProtocolRevision.self,
+                from: JSONEncoder().encode(5))
+        }
+        // Revision ordering: 1 < 2 < 3 < 4 (a rev-4 host still serves 1-3).
+        #expect(ExtractorProtocolRevision.v1 < .v2)
+        #expect(ExtractorProtocolRevision.v2 < .v3)
+        #expect(ExtractorProtocolRevision.v3 < .v4)
+    }
+
+    /// AC.1: a revision-4 result frame with `resultMIMEType` and
+    /// `articleMetadata.identifier` decodes and round-trips, and the
+    /// Markdown-result discriminator follows the absent/text-markdown rule.
+    @Test func revision4ResultFrameRoundTripsBytesShape() throws {
+        let requestID = ExtractorRequestID()
+        let output = try outputPath()
+        let bytesFrame = try ExtractorResultFrame(
+            requestID: requestID,
+            outputPath: output,
+            markdownByteCount: 11,
+            articleMetadata: try ExtractorArticleMetadata(
+                title: "A Paper",
+                author: "Doe, J.; Roe, A.",
+                published: "2024-05-01",
+                identifier: "ABCD1234"),
+            resultMIMEType: try ExtractorMIMEType(validating: "application/pdf"))
+        #expect(bytesFrame.isMarkdownResult == false)
+
+        let roundTrip = try JSONDecoder().decode(
+            ExtractorResultFrame.self,
+            from: JSONEncoder().encode(bytesFrame))
+        #expect(roundTrip == bytesFrame)
+        #expect(roundTrip.resultMIMEType?.rawValue == "application/pdf")
+        #expect(roundTrip.articleMetadata?.identifier == "ABCD1234")
+
+        // Absent and text/markdown both mean "the output IS the Markdown".
+        let absent = try ExtractorResultFrame(
+            requestID: requestID, outputPath: output, markdownByteCount: 1)
+        #expect(absent.isMarkdownResult)
+        let markdownMarked = try ExtractorResultFrame(
+            requestID: requestID, outputPath: output, markdownByteCount: 1,
+            resultMIMEType: try ExtractorMIMEType(validating: "text/markdown"))
+        #expect(markdownMarked.isMarkdownResult)
+
+        // Encoding omits both optional fields when absent.
+        let bareJSON = String(decoding: try JSONEncoder().encode(absent), as: UTF8.self)
+        #expect(bareJSON.contains("resultMIMEType") == false)
+
+        // An invalid MIME value fails the decode.
+        let invalidJSON = """
+        {"requestID":"\(requestID.rawValue.uuidString.lowercased())","outputPath":"output/result.md","markdownByteCount":1,"resultMIMEType":"NOT A MIME"}
+        """
+        #expect(throws: Error.self) {
+            try JSONDecoder().decode(ExtractorResultFrame.self, from: Data(invalidJSON.utf8))
+        }
+    }
+
+    /// AC.1: a revision ≤ 3 request still round-trips unchanged, and a
+    /// revision-4 remote-url request decodes (revision 4 only extends the
+    /// result frame; the request wire shape is byte-for-byte revision 3).
+    @Test func remoteURLRequestsDecodeForRevisions3And4() throws {
+        let requestID = ExtractorRequestID()
+        let deadline: Int64 = 1_735_689_600_000
+        let v3 = try ExtractorProtocolRequest(
+            requestID: requestID,
+            protocolRevision: .v3,
+            kind: .podcastTranscript,
+            mimeType: try ExtractorMIMEType(validating: "audio/podcast"),
+            originalFilename: "feed",
+            remoteURL: try ExtractorRemoteSourceURL(validating: "https://example.com/feed.rss"),
+            outputPath: try ExtractorRelativePath(validating: "output/result.md"),
+            deadlineMillisecondsSince1970: deadline)
+        let v4 = try ExtractorProtocolRequest(
+            requestID: requestID,
+            protocolRevision: .v4,
+            kind: .podcastTranscript,
+            mimeType: try ExtractorMIMEType(validating: "audio/podcast"),
+            originalFilename: "feed",
+            remoteURL: try ExtractorRemoteSourceURL(validating: "https://example.com/feed.rss"),
+            outputPath: try ExtractorRelativePath(validating: "output/result.md"),
+            deadlineMillisecondsSince1970: deadline)
+        let decoder = JSONDecoder()
+        for request in [v3, v4] {
+            let roundTrip = try decoder.decode(
+                ExtractorProtocolRequest.self,
+                from: JSONEncoder().encode(request))
+            #expect(roundTrip == request)
+        }
+        // Revisions 1 and 2 still reject the remote-url transport.
+        let v3JSON = String(decoding: try JSONEncoder().encode(v3), as: UTF8.self)
+        let v2JSON = v3JSON.replacing(
+            "\"protocolRevision\":3", with: "\"protocolRevision\":2")
+        #expect(throws: Error.self) {
+            try decoder.decode(ExtractorProtocolRequest.self, from: Data(v2JSON.utf8))
+        }
+    }
+
+    /// A revision ≤ 3 host fails closed: a result frame carrying the
+    /// revision-4 fields is rejected by the sequence instead of silently
+    /// decoded-and-dropped. The same frame is accepted for a revision-4
+    /// request.
+    @Test func sequenceRejectsRevision4ResultFieldsForOlderRevisions() throws {
+        let requestID = ExtractorRequestID()
+        let output = try outputPath()
+        func bytesFrame() throws -> ExtractorProtocolFrame {
+            .result(try ExtractorResultFrame(
+                requestID: requestID,
+                outputPath: output,
+                markdownByteCount: 3,
+                articleMetadata: try ExtractorArticleMetadata(identifier: "ABCD1234"),
+                resultMIMEType: try ExtractorMIMEType(validating: "application/pdf")))
+        }
+        func sequence(_ revision: ExtractorProtocolRevision) -> ExtractorProtocolSequence {
+            ExtractorProtocolSequence(
+                requestID: requestID,
+                expectedOutputPath: output,
+                maximumProgressEventCount: 2,
+                protocolRevision: revision)
+        }
+        // Default construction keeps the fail-closed older-host posture.
+        var legacy = sequence(.v3)
+        #expect(throws: ExtractorProtocolSequenceError.resultFieldsRequireProtocolRevision4) {
+            try legacy.consume(try bytesFrame())
+        }
+        // An identifier alone is revision-4-only too.
+        var legacyIdentifier = sequence(.v1)
+        #expect(throws: ExtractorProtocolSequenceError.resultFieldsRequireProtocolRevision4) {
+            try legacyIdentifier.consume(.result(try ExtractorResultFrame(
+                requestID: requestID,
+                outputPath: output,
+                markdownByteCount: 3,
+                articleMetadata: try ExtractorArticleMetadata(identifier: "ABCD1234"))))
+        }
+        // Revision 4 accepts the frame and terminates normally.
+        var modern = sequence(.v4)
+        try modern.consume(try bytesFrame())
+        #expect(try modern.finish().isTerminal)
+    }
+
+    /// `articleMetadata.identifier` bounds: 1–1024 bytes, no NUL, no empty.
+    @Test func articleMetadataIdentifierIsValidated() throws {
+        #expect(throws: Error.self) {
+            _ = try ExtractorArticleMetadata(identifier: "")
+        }
+        #expect(throws: Error.self) {
+            _ = try ExtractorArticleMetadata(identifier: "bad\0value")
+        }
+        #expect(throws: Error.self) {
+            _ = try ExtractorArticleMetadata(identifier: String(repeating: "x", count: 1_025))
+        }
+        let ok = try ExtractorArticleMetadata(identifier: String(repeating: "x", count: 1_024))
+        #expect(ok.identifier?.count == 1_024)
+    }
+
     @Test func validProgressAndResultRoundTrip() throws {
         let requestID = ExtractorRequestID()
         let expectedOutputPath = try outputPath()

@@ -258,8 +258,16 @@ public struct ExtractorProtocolRevision: RawRepresentable, Codable, Hashable, Se
     /// bytes. Revisions 1 and 2 keep their exact old wire shape; a v1/v2
     /// request can neither declare nor receive a remote URL.
     public static let v3 = Self(validatedRawValue: 3)
+    /// Revision 4 adds two optional result-frame fields: `resultMIMEType`
+    /// (the output file carries source bytes with that MIME instead of the
+    /// Markdown product) and `articleMetadata.identifier` (an external
+    /// identity for provenance, e.g. a Zotero parent item key). Requests keep
+    /// their exact revision-3 wire shape; a revision-4 request is byte-for-byte
+    /// a revision-3 request. Older hosts fail closed: their strict result
+    /// decoders reject frames carrying the new fields.
+    public static let v4 = Self(validatedRawValue: 4)
     public init?(rawValue: Int) {
-        guard rawValue == 1 || rawValue == 2 || rawValue == 3 else { return nil }
+        guard rawValue == 1 || rawValue == 2 || rawValue == 3 || rawValue == 4 else { return nil }
         self.rawValue = rawValue
     }
     private init(validatedRawValue: Int) { self.rawValue = validatedRawValue }
