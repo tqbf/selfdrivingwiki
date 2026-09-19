@@ -69,28 +69,38 @@ struct AgentToolsView: View {
 
     /// Section header: title on the leading edge, a `+` button on the trailing
     /// edge — mirrors `BookmarksContainerView`'s `bookmarksHeader` (native
-    /// macOS pattern: Photos, Mail, Finder sidebar section headers). The `+`
-    /// persists a durable empty chat via `store.beginNewChat()` and opens its
-    /// `.chat(id)` tab, so the new row appears in this list immediately.
+    /// macOS pattern: Photos, Mail, Finder sidebar section headers), including
+    /// the 24×24 button frame so the section rows share one height and the
+    /// titles align. The `+` persists a durable empty chat via
+    /// `store.beginNewChat()` and opens its `.chat(id)` tab, so the new row
+    /// appears in this list immediately.
     private var chatsHeader: some View {
-        HStack {
+        HStack(spacing: 2) {
             Text("Chats")
                 .font(.headline)
                 .foregroundStyle(.primary)
             Spacer()
-            Button {
+            headerButton(systemImage: "plus", help: "New Chat") {
                 store.beginNewChat()
-            } label: {
-                Image(systemName: "plus")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderless)
-            .fixedSize()
-            .help("New Chat")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+
+    /// A compact, borderless icon button for the header's trailing edge —
+    /// the same 24×24 treatment as the Pages/Sources/Bookmarks headers.
+    private func headerButton(systemImage: String, help: String,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.body)
+                .frame(width: 24, height: 24)
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     // MARK: - Chats search
@@ -102,8 +112,9 @@ struct AgentToolsView: View {
     }
 
     /// Compact search bar mirroring the Pages/Sources sidebars: magnifier +
-    /// plain text field + a clear button. Bound to `store.chatSearchQuery`,
-    /// which debounces a hybrid (FTS + semantic) search.
+    /// plain text field + a clear button, same padding. Bound to
+    /// `store.chatSearchQuery`, which debounces a hybrid (FTS + semantic)
+    /// search.
     private var chatSearchBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
@@ -116,7 +127,7 @@ struct AgentToolsView: View {
                 }.buttonStyle(.borderless)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 4)
         .padding(.vertical, 6)
     }
 
