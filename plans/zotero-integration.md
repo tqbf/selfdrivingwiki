@@ -1,5 +1,12 @@
 # Zotero integration: browse library, ingest PDF/Markdown attachments
 
+> **Status: superseded by
+> [`plans/zotero-extractor-package.md`](zotero-extractor-package.md).** The
+> in-app Zotero architecture described here (browse UI, `ZoteroClient`,
+> `ZoteroLocalStorage`, `ZoteroMaterializer`, `ZoteroCredentialStore`) was
+> removed in favor of the reviewed `org.selfdrivingwiki.zotero` extractor
+> package; this document remains as design history only.
+
 ## Why
 
 The user keeps a Zotero reference library and runs a companion Python tool
