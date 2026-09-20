@@ -169,10 +169,31 @@ struct ExtractorSyncCommandTests {
 
     @Test func unknownPackageFailsWithSupportedList() throws {
         // Parse-level grammar: an unrecognized package name is a usage
-        // error naming the supported set, never a half-run sync.
+        // error naming the supported set, never a half-run sync. The
+        // `--wiki` prefix selects a wiki first so the failure is the
+        // package parse's, not the wiki-selection gate (both throw
+        // ArgumentParser.Failure — without it this test would pass even
+        // with the package branch deleted).
         let noEnv: (String) -> String? = { _ in nil }
-        #expect(throws: ArgumentParser.Failure.self) {
-            try ArgumentParser.parse(["extractor", "sync", "notapackage"]) { key in noEnv(key) }
+        do {
+            _ = try ArgumentParser.parse(
+                ["--wiki", "test", "extractor", "sync", "notapackage"]) { key in noEnv(key) }
+            Issue.record("expected the unknown-package usage error")
+        } catch let failure as ArgumentParser.Failure {
+            #expect(failure.description.contains("Unknown extraction package") == true)
+            #expect(failure.description.contains("zotero") == true)
+        }
+    }
+
+    @Test func syncWithoutPackageFailsWithGuidance() throws {
+        // `extractor sync` with no package names the supported set too.
+        let noEnv: (String) -> String? = { _ in nil }
+        do {
+            _ = try ArgumentParser.parse(
+                ["--wiki", "test", "extractor", "sync"]) { key in noEnv(key) }
+            Issue.record("expected the missing-package usage error")
+        } catch let failure as ArgumentParser.Failure {
+            #expect(failure.description.contains("supported: zotero") == true)
         }
     }
 
