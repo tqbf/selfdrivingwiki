@@ -80,7 +80,7 @@ struct WikiFSApp: App {
     private var queueStoreError: String? { localQueueRuntimeController.startupError }
     /// Drives the Settings TabView selection so the activity windows can open
     /// Settings on the relevant tab (gear button → extraction/agents config).
-    @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.zotero.rawValue
+    @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.extraction.rawValue
     /// Per-app appearance override (Light / Dark / System). Shared key with
     /// `AppearanceSettingsView`. Applied via `.preferredColorScheme` on every
     /// scene + `NSApp.appearance` for AppKit surfaces (NSAlert, menu bar).
@@ -837,9 +837,6 @@ struct WikiFSApp: App {
 
         Settings {
             TabView(selection: settingsSelectedTab) {
-                ZoteroSettingsView(containerDirectory: containerDirectory)
-                    .tag(SettingsTab.zotero)
-                    .tabItem { Label("Zotero", systemImage: "books.vertical") }
                 ExtractionSettingsView(
                     containerDirectory: containerDirectory,
                     launcher: settingsLauncher,
@@ -1019,8 +1016,9 @@ struct WikiFSApp: App {
     }
 
     /// Settings tab tags used by the TabView selection and `@AppStorage`.
+    /// Zotero account setup lives inside the Extraction tab (the reviewed
+    /// zotero package's pane), not as its own tab.
     enum SettingsTab: String {
-        case zotero
         case extraction
         case agents
         case operations
@@ -1029,13 +1027,14 @@ struct WikiFSApp: App {
     }
 
     /// Binding that bridges `@AppStorage(String)` → `SettingsTab` for the
-    /// Settings `TabView(selection:)`. Falls back to `.zotero` (the new
+    /// Settings `TabView(selection:)`. Falls back to `.extraction` (the
     /// first tab) when the stored raw value is missing or references a
-    /// removed tab (e.g. `.about` / `.general` from before the About and
+    /// removed tab (e.g. `.zotero`, folded into the Extraction tab's
+    /// account pane; or `.about` / `.general` from before the About and
     /// General tabs were removed).
     private var settingsSelectedTab: Binding<SettingsTab> {
         Binding(
-            get: { SettingsTab(rawValue: settingsSelectedTabRaw) ?? .zotero },
+            get: { SettingsTab(rawValue: settingsSelectedTabRaw) ?? .extraction },
             set: { settingsSelectedTabRaw = $0.rawValue }
         )
     }

@@ -408,11 +408,13 @@ private extension ExtractorRouteStatus {
 
 /// Settings for source extraction. Unified PDF and HTML extractor pickers list
 /// reviewed packages, installed packages, built-in adapters, and connected
-/// services without exposing the legacy backend/package precedence. Mirrors `ZoteroSettingsView`
-/// for structure (secrets in Keychain, non-secret prefs in `ExtractionConfig`)
-/// but **auto-saves on change** instead of an explicit Save button: every edit
+/// services without exposing the legacy backend/package precedence. Secrets
+/// live in Keychain, non-secret prefs in `ExtractionConfig`, and the view
+/// **auto-saves on change** instead of an explicit Save button: every edit
 /// persists immediately, so closing the window can never drop a just-typed value
-/// (the failure mode a focus-loss/Save pattern risks).
+/// (the failure mode a focus-loss/Save pattern risks). The Zotero account pane
+/// keeps its explicit Save Key button — that write is not part of
+/// `ExtractionConfig` and mirrors the write-only credential authority.
 ///
 /// Only the selected backend's config section is shown — picking another backend
 /// swaps the section in place, so the form stays uncluttered and Test Connection
@@ -580,6 +582,14 @@ struct ExtractionSettingsView: View {
             switch selectedPane {
             case .defaults: defaultsPane
             case .packages: packagesPane
+            case .zotero:
+                // The Zotero account pane: API key (Keychain, write-only)
+                // + library ID for `wikictl zotero sync`. Lives inside
+                // Extraction because Zotero is a reviewed extractor
+                // package — this is the one home for extractor setup.
+                ZoteroSettingsView(
+                    containerDirectory: containerDirectory,
+                    credentials: credentials)
             }
         }
         .frame(minWidth: Metrics.width, minHeight: Metrics.height)
@@ -2352,12 +2362,14 @@ struct ExtractorCredentialRequirementSummary: Identifiable, Hashable, Sendable {
     }
 }
 
-/// The two jobs Settings → Extraction does. They are separate panes because
-/// only one is needed at a time: choosing what opens a document type, and
-/// managing the packages those choices draw from.
+/// The jobs Settings → Extraction does. They are separate panes because
+/// only one is needed at a time: choosing what opens a document type,
+/// managing the packages those choices draw from, and the Zotero account
+/// the reviewed zotero package draws its credentials from.
 enum ExtractionSettingsPane: String, CaseIterable, Identifiable, Hashable, Sendable {
     case defaults
     case packages
+    case zotero
 
     var id: String { rawValue }
 
@@ -2365,6 +2377,7 @@ enum ExtractionSettingsPane: String, CaseIterable, Identifiable, Hashable, Senda
         switch self {
         case .defaults: "Defaults"
         case .packages: "Packages"
+        case .zotero: "Zotero"
         }
     }
 }

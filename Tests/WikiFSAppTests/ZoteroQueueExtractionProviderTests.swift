@@ -280,7 +280,7 @@ struct ZoteroQueueExtractionProviderTests {
         #expect(summary.zoteroItemKey == "PARENT01")
         #expect(summary.zoteroItemTitle == "A Study of Extraction")
         #expect(summary.effectiveName == "A Study of Extraction")
-        let bytes = try #require(try store.sourceContent(id: sourceID))
+        let bytes = try store.sourceContent(id: sourceID)
         #expect(bytes == pdfBytes)
 
         // The follow-on format route is enqueued for a bytes result.
@@ -362,7 +362,7 @@ struct ZoteroQueueExtractionProviderTests {
         #expect(summary.byteSize == pdfBytes.count)
         #expect(summary.mimeType == "application/pdf")
         #expect(summary.zoteroItemKey == "PARENT03")
-        let bytes = try #require(try store.sourceContent(id: sourceID))
+        let bytes = try store.sourceContent(id: sourceID)
         #expect(bytes == pdfBytes)
 
         // The daemon's enqueue seam writes the durable follow-on item.

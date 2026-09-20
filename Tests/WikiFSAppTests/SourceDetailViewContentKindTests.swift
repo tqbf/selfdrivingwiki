@@ -264,6 +264,8 @@ import WikiFSMarkdown
             switch path {
             case .pdfBackend, .htmlToMarkdown, .docxBackend: expected = .extract
             case .podcastTranscript, .youtubeTranscript: expected = .transcribe
+            // Zotero acquisition is sync-driven; no manual button (yet).
+            case .zoteroAttachment:                      expected = .none
             case nil:                                    expected = .none
             }
             // We can't call extractionAffordance with the kind directly; pick

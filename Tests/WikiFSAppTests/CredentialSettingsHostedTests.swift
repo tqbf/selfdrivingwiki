@@ -43,8 +43,7 @@ struct CredentialSettingsHostedTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let window = mount(ZoteroSettingsView(
             containerDirectory: directory,
-            credentials: credentials,
-            verifyConnection: { _ in nil }))
+            credentials: credentials))
         defer { window.close() }
         // Give the view's onAppear load a runloop turn.
         try await Task.sleep(for: .milliseconds(100))
