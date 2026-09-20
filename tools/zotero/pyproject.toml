@@ -3,6 +3,7 @@ name = "zotero"
 version = "0.1.0"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "httpx2>=2.12",
     "pyzotero>=1.15",
     "requests>=2.31",
 ]

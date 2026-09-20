@@ -426,6 +426,7 @@ name = "zotero"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "httpx2" },
     { name = "pyzotero" },
     { name = "requests" },
 ]
@@ -440,6 +441,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx2", specifier = ">=2.12" },
     { name = "pyzotero", specifier = ">=1.15" },
     { name = "requests", specifier = ">=2.31" },
 ]

@@ -81,11 +81,23 @@ enum ReviewedExtractorBootstrap {
     /// here — never a new seeding branch.
     private static let reviewedCredentialSeeds: [(
         package: ReviewedExtractorPackage,
-        requirementID: String,
+        requirementID: ExtractorCredentialRequirementID,
         reference: CredentialReference
     )] = [
-        (ReviewedExtractorPackages.zotero, "zotero-api-key", .zoteroAPIKey())
+        (ReviewedExtractorPackages.zotero, zoteroAPIKeyRequirement, .zoteroAPIKey())
     ]
+
+    /// Compiled-in seed requirement identity. Same standing as the
+    /// `ReviewedExtractorPackages` golden constants: a grammar change
+    /// upstream is a programmer error and crashes at first touch.
+    private static let zoteroAPIKeyRequirement = makeRequirementID("zotero-api-key")
+
+    private static func makeRequirementID(_ raw: String) -> ExtractorCredentialRequirementID {
+        guard let id = ExtractorCredentialRequirementID(rawValue: raw) else {
+            preconditionFailure("Invalid compiled seed requirement id: \(raw)")
+        }
+        return id
+    }
 
     /// Seeds the reviewed packages' default credential bindings. No UI ships
     /// in this cycle, so the app writes idempotent authorization records
@@ -121,7 +133,7 @@ enum ReviewedExtractorBootstrap {
     /// only after a successful grant, so a failed write retries next launch).
     private static func seedCredentialGrant(
         package: ReviewedExtractorPackage,
-        requirementID: String,
+        requirementID: ExtractorCredentialRequirementID,
         reference: CredentialReference,
         appGroupContainerRoot: URL,
         installed: [ExtractorPackageCatalogRecord]
@@ -129,11 +141,11 @@ enum ReviewedExtractorBootstrap {
         guard let record = installed.first(where: { $0.revision == package.revision }),
               let registration = record.registrations.first(where: { registration in
                   registration.credentialRequirements.contains {
-                      $0.id.rawValue == requirementID
+                      $0.id == requirementID
                   }
               }),
               let requirement = registration.credentialRequirements.first(where: {
-                  $0.id.rawValue == requirementID
+                  $0.id == requirementID
               })
         else { return }
 
