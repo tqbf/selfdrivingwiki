@@ -7,7 +7,7 @@ import WikiFSCore
 ///
 /// Acquisition runs through the reviewed Zotero extractor package: the
 /// attachment keys live in `zotero-config.json` (edited via
-/// `wikictl zotero sync` today; a picker arrives with the later UI cycle),
+/// `wikictl extractor sync zotero` today; a picker arrives with the later UI cycle),
 /// and the key is resolved per operation through the seeded credential
 /// authorization — this view never reads a value.
 ///
@@ -56,7 +56,7 @@ struct ZoteroSettingsView: View {
             } header: {
                 Text("Zotero Account")
             } footer: {
-                Text("Generate a key at zotero.org/settings/keys. Your library ID is the numeric userID shown on that page. The key is stored in your Keychain and is never shown after you save it. Attachments sync via `wikictl zotero sync`.")
+                Text("Generate a key at zotero.org/settings/keys. Your library ID is the numeric userID shown on that page. The key is stored in your Keychain and is never shown after you save it. Attachments sync via `wikictl extractor sync zotero`.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

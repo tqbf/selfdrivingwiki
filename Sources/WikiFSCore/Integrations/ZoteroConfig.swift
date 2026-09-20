@@ -2,7 +2,8 @@ import Foundation
 
 /// Non-secret Zotero settings — the numeric library ID and the attachment
 /// keys to acquire. The API key itself is NOT here: secrets go in Keychain
-/// via `ZoteroCredentialStore`, never in a plaintext JSON file.
+/// via `KeychainCredentialService` (the `.zoteroAPIKey()` reference), never in a
+/// plaintext JSON file.
 ///
 /// App-wide, not per-wiki: a Zotero account is a property of the person using
 /// the app, not of any one wiki — one library, many wikis is the common case,
@@ -13,7 +14,7 @@ import Foundation
 ///
 /// `attachments` lists Zotero ATTACHMENT keys (8-character uppercase
 /// alphanumeric item keys). Each key acquires one byteless source via
-/// `wikictl zotero sync`; the reviewed Zotero package downloads the file and
+/// `wikictl extractor sync zotero`; the reviewed Zotero package downloads the file and
 /// its item metadata. The retired `zoteroDirOverride` local-storage key is
 /// no longer written and no longer read for acquisition — decode stays
 /// tolerant of old files that still carry it.

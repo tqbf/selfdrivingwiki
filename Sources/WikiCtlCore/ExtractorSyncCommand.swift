@@ -1,8 +1,11 @@
 import Foundation
 import WikiFSCore
 
-/// `wikictl zotero sync` — create one byteless `.zotero` source per
-/// configured attachment key and enqueue its durable extraction job.
+/// `wikictl extractor sync <package> [--force]` — create one byteless source
+/// per configured acquisition key of `<package>` and enqueue its durable
+/// extraction job. This is the CLI seam of the extractor-package acquisition
+/// API: today one package (`zotero`) is syncable; adding acquisition package
+/// #2 means one dispatch case, never a new CLI family.
 ///
 /// The command is ENQUEUE-ONLY: it writes the `.extraction` queue item
 /// through the injected closure (production wires `QueueStore.enqueue`, the
@@ -17,26 +20,57 @@ import WikiFSCore
 /// Hard failures exit nonzero with a typed message: an unconfigured library
 /// ID, no configured attachment keys, or no configured API key (a
 /// describe-only presence check — the value is never read here).
-public enum ZoteroSyncCommand {
+public enum ExtractorSyncCommand {
+
+    /// The packages this command can sync. One case per acquisition
+    /// package; each maps to one config sidecar + sync entry.
+    public enum Package: String, CaseIterable, Sendable {
+        /// The reviewed `org.selfdrivingwiki.zotero` package over
+        /// `zotero-config.json`.
+        case zotero
+
+        public static let supportedPackages = Package.allCases.map(\.rawValue)
+    }
+
+    /// The family's operations. One case per leaf (`sync` today).
+    public enum Action: Equatable, Sendable {
+        case sync(Package, force: Bool)
+    }
 
     /// One typed hard failure with a caller-facing message.
     public enum Failure: Error, Equatable, LocalizedError {
-        /// The Zotero API key is not configured in Keychain (presence check).
-        case apiKeyNotConfigured
+        /// The named package has no sync entry.
+        case unknownPackage(String)
 
         public var errorDescription: String? {
             switch self {
-            case .apiKeyNotConfigured:
-                return "The Zotero API key is not configured. Set it in the app (Settings → Extraction → Zotero)."
+            case .unknownPackage(let name):
+                return "Unknown extraction package '\(name)'. Supported: \(Package.supportedPackages.joined(separator: ", "))."
             }
         }
     }
 
     public static func run(
+        package: Package,
         force: Bool,
         in store: GRDBWikiStore,
         containerDirectory: URL,
         credentials: any CredentialDescribing = KeychainCredentialService(),
+        enqueue: (SourceID) async throws -> Void
+    ) async throws -> String {
+        switch package {
+        case .zotero:
+            return try await runZotero(
+                force: force, in: store, containerDirectory: containerDirectory,
+                credentials: credentials, enqueue: enqueue)
+        }
+    }
+
+    private static func runZotero(
+        force: Bool,
+        in store: GRDBWikiStore,
+        containerDirectory: URL,
+        credentials: any CredentialDescribing,
         enqueue: (SourceID) async throws -> Void
     ) async throws -> String {
         let config = ZoteroConfig.load(from: containerDirectory)
@@ -48,7 +82,7 @@ public enum ZoteroSyncCommand {
             throw ZoteroSyncError.noAttachments
         }
         guard credentials.describe(.zoteroAPIKey()).isConfigured else {
-            throw Failure.apiKeyNotConfigured
+            throw ZoteroSyncError.apiKeyNotConfigured
         }
 
         let outcomes = try await ZoteroSync.syncAttachments(

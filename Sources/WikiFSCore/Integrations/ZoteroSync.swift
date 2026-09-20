@@ -1,7 +1,7 @@
 import Foundation
 
 // Zotero attachment sync — the store-level acquisition entry shared by
-// `wikictl zotero sync` today and the Settings UI later. Plain async, NOT
+// `wikictl extractor sync zotero` today and the Settings UI later. Plain async, NOT
 // `@MainActor`: the CLI is a no-MainActor process, and the store is
 // method-atomic, so a plain entry drives both hosts.
 //
@@ -48,6 +48,9 @@ public enum ZoteroSyncError: Error, Equatable, LocalizedError {
     case libraryNotConfigured
     /// No attachment keys are configured — nothing to sync.
     case noAttachments
+    /// The Zotero API key is not configured in Keychain (presence check —
+    /// the value is never read by the sync).
+    case apiKeyNotConfigured
 
     public var errorDescription: String? {
         switch self {
@@ -55,6 +58,8 @@ public enum ZoteroSyncError: Error, Equatable, LocalizedError {
             return "The Zotero library ID is not configured. Set it in Settings → Extraction → Zotero."
         case .noAttachments:
             return "No Zotero attachment keys are configured."
+        case .apiKeyNotConfigured:
+            return "The Zotero API key is not configured. Set it in the app (Settings → Extraction → Zotero)."
         }
     }
 }

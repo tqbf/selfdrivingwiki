@@ -115,7 +115,7 @@ Configure two things:
    letters and digits). An old `zoteroDirOverride` key in the file is
    ignored and never written again.
 
-Then run `wikictl zotero sync`:
+Then run `wikictl extractor sync zotero`:
 
 - Every configured key becomes one byteless `.zotero` source whose URL is
   the Zotero file endpoint. The command writes a durable extraction job for

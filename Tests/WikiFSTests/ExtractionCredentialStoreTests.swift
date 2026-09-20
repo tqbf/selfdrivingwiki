@@ -5,7 +5,7 @@ import Testing
 /// Exercises `InMemoryExtractionCredentialStore`'s round-trip contract only.
 /// `KeychainExtractionCredentialStore` is NOT covered here — a real-Keychain
 /// integration test would pollute the test runner's Keychain; it gets a manual
-/// smoke test instead (mirrors `ZoteroCredentialStoreTests`).
+/// smoke test instead.
 struct ExtractionCredentialStoreTests {
 
     @Test func startsWithNoSecretsByDefault() {

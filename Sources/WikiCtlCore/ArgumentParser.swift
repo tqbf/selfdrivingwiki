@@ -57,9 +57,11 @@ public enum ArgumentParser {
         case chat(ChatCommand.Action)
         /// Bookmark commands: list, create, rename, delete, move (#239).
         case bookmark(BookmarkCommand.Action)
-        /// `wikictl zotero sync` — create one byteless `.zotero` source per
-        /// configured attachment key and enqueue its extraction job.
-        case zotero(force: Bool)
+        /// `wikictl extractor sync <package>` — create one byteless source
+        /// per configured acquisition key of `<package>` and enqueue its
+        /// extraction job. Generic family: new acquisition packages add a
+        /// dispatch case, not a CLI family.
+        case extractor(ExtractorSyncCommand.Action)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
         /// Print scoped command usage (`wikictl [source [add]] --help`).
@@ -174,8 +176,8 @@ public enum ArgumentParser {
             command = try parseChatCommand(Array(args.dropFirst()))
         case "bookmark":
             command = try parseBookmarkCommand(Array(args.dropFirst()))
-        case "zotero":
-            command = try parseZoteroCommand(Array(args.dropFirst()))
+        case "extractor":
+            command = try parseExtractorCommand(Array(args.dropFirst()))
         case "workspace":
             command = try parseWorkspaceCommand(Array(args.dropFirst()))
         default:
@@ -559,22 +561,32 @@ public enum ArgumentParser {
         }
     }
 
-    private static func parseZoteroCommand(_ args: [String]) throws -> Command {
+    private static func parseExtractorCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else {
-            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "zotero"))
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "extractor"))
         }
-        guard CLIReference.leaf(family: "zotero", named: sub) != nil else {
-            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "zotero", given: sub))
+        guard CLIReference.leaf(family: "extractor", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "extractor", given: sub))
         }
         let rest = Array(args.dropFirst())
-        // `--force` re-enqueues extraction for already-synced attachment URLs.
-        let options = try Options(rest, options: CLIReference.options(forFamily: "zotero"))
+        // The leaf's positional argument: the acquisition package. Pulled
+        // before the Options bag, which only accepts `--` tokens; the
+        // remainder is flags. `--force` re-enqueues extraction for
+        // already-synced acquisition URLs.
+        let packageRaw = rest.first
+        guard let packageRaw, !packageRaw.hasPrefix("-") else {
+            throw Failure.usage("extractor sync: name the package to sync (supported: \(ExtractorSyncCommand.Package.supportedPackages.joined(separator: ", ")))")
+        }
+        guard let package = ExtractorSyncCommand.Package(rawValue: packageRaw) else {
+            throw Failure.usage(ExtractorSyncCommand.Failure.unknownPackage(packageRaw).errorDescription ?? "unknown package")
+        }
+        let options = try Options(Array(rest.dropFirst()), options: CLIReference.options(forFamily: "extractor"))
         switch sub {
         case "sync":
-            return .zotero(force: options.flag("--force"))
+            return .extractor(.sync(package, force: options.flag("--force")))
         default:
             // Unreachable: recognition is the CLIReference leaf table above.
-            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "zotero", given: sub))
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "extractor", given: sub))
         }
     }
 
