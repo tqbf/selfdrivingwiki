@@ -25,7 +25,8 @@ converts formats.
   keep the exact revision-3 wire shape. A revision ≤ 3 host fails closed:
   `ExtractorProtocolSequence` rejects a result frame that carries the new
   fields against an older request, instead of silently dropping them.
-- **The package** (`tools/zotero/zotero`, PEP 723, `requests` only) accepts
+- **The package** (`tools/zotero/zotero`, PEP 723; `pyzotero` for the
+  metadata GETs, streaming `requests` for the file download) accepts
   one revision-4 `remote-url` request whose URL must be exactly
   `https://api.zotero.org/users/<libraryID>/items/<attachmentKey>/file`. It
   reads the API key from the request-scoped credential file

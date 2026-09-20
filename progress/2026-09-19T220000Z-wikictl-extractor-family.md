@@ -48,9 +48,10 @@ Branch `feature/zotero-extractor-package` (PR #1304). Follow-up to
   `HTTPError` — mapped to the same bounded no-URL/no-key messages.
   `pyzotero-cli` rejected (interactive; credentials-through-argv). Package
   deps: PEP 723 + pyproject + `uv.lock` regenerated; PROVENANCE names the
-  direct set and licenses (requests Apache-2.0, pyzotero BlueOak-1.0.0,
-  transitives feedparser/bibtexparser/whenever/httpx2). New pinned digest
-  `591062da…` in both golden locations.
+  direct set and licenses (requests Apache-2.0, pyzotero BlueOak-1.0.0;
+  `httpx2` declared directly too — the package catches its transport
+  errors — with feedparser/bibtexparser/whenever transitives). New pinned
+  digest `d0166f33…` in both golden locations.
 - **Docs**: design doc gained the CLI grammar, the neutral-seam + seeding
   notes, and a "Dependency decision" section (evidence + escape hatch);
   PLAN.md row updated; user guide already used the new grammar.
