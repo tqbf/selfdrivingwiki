@@ -349,10 +349,10 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                 sourceID: sourceID, content: markdown, package: producer,
                 origin: .extraction, toolVersion: nil,
                 sourceVersionID: initialVersion.id, note: nil)
-            try store.internalStore.setZoteroProvenance(
+            try store.internalStore.setAcquisitionProvenance(
                 sourceID: sourceID,
-                zoteroItemKey: itemKey,
-                zoteroItemTitle: itemTitle,
+                externalItemKey: itemKey,
+                externalItemTitle: itemTitle,
                 displayName: itemTitle)
             return QueueExtractionOutputReference(versionID: version.id.rawValue)
         }
@@ -363,12 +363,12 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         guard let mimeType = outcome.resultMIMEType else {
             throw ProcessPackageRunError.unexpectedBytesResult
         }
-        let version = try store.internalStore.attachZoteroAttachment(
+        let version = try store.internalStore.attachAcquiredBytes(
             sourceID: sourceID,
             bytes: outcome.outputBytes,
             mimeType: mimeType.rawValue,
-            zoteroItemKey: itemKey,
-            zoteroItemTitle: itemTitle,
+            externalItemKey: itemKey,
+            externalItemTitle: itemTitle,
             displayName: itemTitle)
         return QueueExtractionOutputReference(versionID: version.id.rawValue)
     }

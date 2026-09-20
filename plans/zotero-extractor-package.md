@@ -41,7 +41,7 @@ converts formats.
 - **Config + trigger.** `zotero-config.json` gains `attachments: [String]`
   (8-character uppercase item keys, duplicates rejected at save). The
   retired `zoteroDirOverride` is no longer written; decode stays tolerant.
-  `wikictl zotero sync` creates one byteless `.zotero` source per key (URL =
+  `wikictl extractor sync zotero` creates one byteless `.zotero` source per key (URL =
   the file endpoint), dedupes by source URL, and enqueues a durable
   `.extraction` job through `QueueStore.enqueue` — enqueue-only: no
   `QueueEngine`, no CLI-side waiting. The app or the wikid daemon drains
@@ -62,13 +62,19 @@ converts formats.
   Markdown result appends a package-provenance Markdown version
   (podcast-shaped) and still populates the columns. Re-syncing changed
   bytes creates a new content version through the normal hash-diff path.
-- **Credentials.** App startup seeds one authorization record binding
-  `(org.selfdrivingwiki.zotero, zotero-api-key)` to the legacy
-  `.zoteroAPIKey()` Keychain reference, pinned to the requirement
-  fingerprint, idempotent, and never resurrected over a mismatching
-  revocation. Value resolution flows through the standard per-operation
-  credential-file path. An unset Keychain value surfaces as the typed
-  missing-credential state.
+  The store seam is acquisition-neutral — `attachAcquiredBytes` and
+  `setAcquisitionProvenance` on the `WikiStore` protocol — so a second
+  acquisition package reuses it unchanged; only the retained DB columns
+  keep their historical `zotero_*` names (compat contract).
+- **Credentials.** App startup seeds default credential grants from a
+  per-package table in `ReviewedExtractorBootstrap` (one row:
+  `(zotero, zotero-api-key, .zoteroAPIKey())`); adding a second reviewed
+  package with a default host credential is one row. Each grant binds the
+  package's requirement to its reference pinned to the requirement
+  fingerprint, idempotent, and never resurrected over a revocation whose
+  seed-marker fingerprint is unchanged. Value resolution flows through the
+  standard per-operation credential-file path. An unset Keychain value
+  surfaces as the typed missing-credential state.
 
 ## Removed
 
@@ -77,14 +83,56 @@ converts formats.
 picker wiring, `ZoteroIntegrationPlugin`/`ZoteroIntegrationConfig`,
 `ZoteroClientProvider` and its service key + factory plumbing,
 `HostCredentialActions.verifyZotero` (the Settings Test Connection button),
-and `ContentSniff`'s `.zoteroMetadata` evidence origin. Kept:
+`ContentSniff`'s `.zoteroMetadata` evidence origin, the zotero-named CLI
+family (`wikictl zotero sync` → `wikictl extractor sync zotero`),
+`ZoteroCredentialStore` (the generic `KeychainCredentialService` +
+`.zoteroAPIKey()` owns the Keychain), and the zotero-named store mutators
+(`attachZoteroAttachment`/`setZoteroProvenance` → the acquisition-neutral
+`attachAcquiredBytes`/`setAcquisitionProvenance`). Kept:
 `SourceProvider.zotero` display data, the DB columns and read/write paths,
 `SourceSummary.zoteroItemKey/Title`, `SourceDetailView` provenance +
-`zotero://select` deep link, `ZoteroCredentialStore`, and
-`ZoteroSettingsView` (now API key + library ID only).
+`zotero://select` deep link, and `ZoteroSettingsView` (now API key +
+library ID only).
+
+## Dependency decision
+
+The package runs a HYBRID HTTP stack, chosen per seam:
+
+- **Metadata (item envelopes) → `pyzotero`.** The two metadata GETs
+  previously hand-rolled URL construction and the `Zotero-API-Key` /
+  `Zotero-API-Version` headers; the library owns that grammar and tracks
+  upstream API changes for us. Verified against the released client
+  (pyzotero 1.15.2): `Zotero.item(key)` returns the decoded API object
+  itself — a bare dict with top-level `key`/`version`/`data` (the
+  `retrieve` wrapper passes JSON responses through as `retrieved.json()`;
+  the readthedocs return-type note claiming a list is stale) — so the
+  package's `.get("data")` unwrap and `isinstance` guards are unchanged.
+  Errors map to the same bounded, no-URL/no-key messages: pyzotero maps
+  401/403 → `UserNotAuthorisedError` ("rejected the credentials"), 404 →
+  `ResourceNotFoundError` ("not found"), other non-200 → `HTTPError`
+  (generic API error); httpx2 transport failures map to the metadata
+  request failure. Tests patch a `_make_client` factory seam — pyzotero
+  rides `httpx2`, so patching `requests.get` can never intercept metadata.
+- **Attachment file download → streaming `requests` (kept).** The 128 MiB
+  byte-cap abort and the per-chunk deadline self-report are protocol
+  properties. pyzotero's `file()` materializes the whole body in memory
+  before returning, so it can enforce neither; `zot.file` adoption would
+  regress both typed self-reports until worked around.
+- **`pyzotero-cli` rejected.** It is an interactive CLI wrapper
+  (`pyzotero authorize`, prompts), the wrong shape to embed in a managed
+  one-shot protocol process, and its credentials-through-argv pattern would
+  violate the credential-file boundary.
+
+Escape hatch: if Zotero's file endpoint ever streams sensibly through the
+library, or write operations / conditional GETs become needed, revisit the
+download seam.
 
 ## Deferred (deliberately)
 
 Picker UI, Authorize/Revoke credential UI, app-launch auto-sync, item-key
 selection policy, conditional (If-Modified-Since-Version) re-download —
-all sequenced behind the later UI work.
+all sequenced behind the later UI work. Manifest-declared syncability
+(packages advertising a sync configuration in their registration data and
+the CLI discovering syncable packages from the catalog, instead of the
+compiled `Package` enum) also belongs to that cycle: it needs the picker's
+config surface to define what "syncable" means.
