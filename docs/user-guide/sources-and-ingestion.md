@@ -62,7 +62,7 @@ See [Extractor packages](extractor-packages.md).
 
 If you use [Zotero](https://www.zotero.org/) for reference management:
 
-1. Configure Zotero in **Settings → Zotero** (API key + library ID).
+1. Configure Zotero in **Settings → Extraction → Zotero** (API key + library ID).
 2. Click **Add from Zotero** in the Sources sidebar.
 3. Search your library by title, author, or year.
 4. Select an item to see its attachments (PDFs, notes).
