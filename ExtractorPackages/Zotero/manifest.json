@@ -7,15 +7,15 @@
   "entryPoint": "bin/zotero-extractor",
   "files": [
     {
-      "digest": "345413859e28d8cb752aaf96c0c8ae4f6cb13208b30e2ee2aba2b6fc8c7c217b",
+      "digest": "20a68e541692f14231590efe2ef8f9f5a706818acffe6d6976f38b7cff468691",
       "path": "PROVENANCE.md"
     },
     {
-      "digest": "fbaeff5293a7da221dfd23094a62608e4a62ee2ebcf93e1bc5e3ce129feebe17",
+      "digest": "5e9819cf4c131eb2fae61c5875d56783d1eb57772a7cb1a3104187818b87fe2c",
       "path": "bin/zotero"
     },
     {
-      "digest": "1acee45dc835ca35fcbc7e9b96d36c101694a50ecb876faa2f94a2e3c9d59e51",
+      "digest": "8747d74eb6f3b4db3beb2f9b90784c64617fff1cf51827fa7745d2a634a7e449",
       "path": "bin/zotero-extractor"
     }
   ],

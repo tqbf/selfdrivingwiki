@@ -20,8 +20,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import httpx2
 import pytest
 import requests
+from pyzotero import errors as zotero_errors
 
 _SCRIPT_PATH = Path(__file__).resolve().parent.parent / "zotero"
 assert _SCRIPT_PATH.exists(), f"zotero script not found at {_SCRIPT_PATH}"
@@ -91,6 +93,40 @@ class FakeResponse:
         yield from self._chunks
 
 
+class FakeZoteroClient:
+    """Stands in for the pyzotero client: `item()` serves the fixture
+    envelopes exactly as the released client does — the bare API object
+    (a dict with top-level `key`/`version`/`data`) — or raises the fixture
+    exception (pyzotero maps non-200 statuses to typed `zotero_errors`
+    failures)."""
+
+    def __init__(
+        self,
+        attachment: Any,
+        parent: dict[str, Any] | None = None,
+        attachment_error: Exception | None = None,
+        parent_error: Exception | None = None,
+    ) -> None:
+        self._attachment = attachment
+        self._parent = parent
+        self._attachment_error = attachment_error
+        self._parent_error = parent_error
+        self.item_keys: list[str] = []
+
+    def item(self, key: str) -> Any:
+        self.item_keys.append(key)
+        if key == _PARENT_KEY:
+            if self._parent_error is not None:
+                raise self._parent_error
+            if self._parent is None:
+                # A missing parent item is a 404 in the real client.
+                raise zotero_errors.ResourceNotFoundError("Code: 404")
+            return self._parent
+        if self._attachment_error is not None:
+            raise self._attachment_error
+        return self._attachment
+
+
 def _attachment_envelope(**data: Any) -> dict[str, Any]:
     return {"key": _ATTACHMENT_KEY, "version": 7, "data": {"key": _ATTACHMENT_KEY, **data}}
 
@@ -105,27 +141,43 @@ def _fake_get(
     file_chunks: tuple[bytes, ...] = (_PDF_BYTES,),
     file_status: int = 200,
     error: Exception | None = None,
-    attachment_status: int = 200,
 ):
+    """Build the two metadata/download fakes from one fixture set.
+
+    Metadata is served by the returned FakeZoteroClient (tests patch the
+    `_make_client` factory through `_run`); ONLY the file download flows
+    through the `requests.get` mock — the same seam split the production
+    code has (pyzotero owns metadata, streaming requests owns the download).
+    `error` raises from the client's `item()` for the ATTACHMENT fetch.
+
+    Returns `(fake_get, calls)`; the fake client rides on `fake_get.client`.
+    """
     calls: list[dict[str, Any]] = []
+    client = FakeZoteroClient(attachment, parent=parent, attachment_error=error)
 
     def fake_get(url: str, headers=None, timeout=None, stream=False, **kwargs):  # noqa: ANN001, ANN202
         calls.append({"url": url, "headers": headers, "stream": stream, "timeout": timeout})
-        if error is not None:
-            raise error
-        if url.endswith("/file"):
-            return FakeResponse(file_status, chunks=file_chunks)
-        if url.endswith(f"/items/{_PARENT_KEY}"):
-            return FakeResponse(200 if parent is not None else 404, json_data=parent)
-        return FakeResponse(attachment_status, json_data=attachment)
+        return FakeResponse(file_status, chunks=file_chunks)
 
+    fake_get.client = client  # type: ignore[attr-defined]
     return fake_get, calls
 
 
-def _run(request: dict[str, Any] | str, fake_get) -> tuple[int, list[dict[str, Any]], str]:
+def _run(
+    request: dict[str, Any] | str,
+    fake_get,
+    client: FakeZoteroClient | None = None,
+) -> tuple[int, list[dict[str, Any]], str]:
     out = io.StringIO()
     request_text = request if isinstance(request, str) else json.dumps(request)
-    with patch.object(_zotero.requests, "get", side_effect=fake_get):
+    with (
+        patch.object(_zotero.requests, "get", side_effect=fake_get),
+        patch.object(
+            _zotero,
+            "_make_client",
+            return_value=client if client is not None else fake_get.client,
+        ),
+    ):
         code = _zotero.run_extractor_protocol(
             request_text, out_stream=out, log_stream=io.StringIO()
         )
@@ -183,16 +235,15 @@ class TestMarkdownResult:
         # No URL or key material in any frame.
         assert _FILE_URL not in raw
         assert _API_KEY not in raw
-        # The file request streamed and carried the API headers.
-        file_calls = [call for call in calls if call["url"].endswith("/file")]
-        assert len(file_calls) == 1
-        assert file_calls[0]["stream"] is True
-        assert file_calls[0]["headers"] == {
+        # Metadata rides the pyzotero client; requests.get serves ONLY the
+        # file download, which streams and carries the API headers.
+        assert len(calls) == 1
+        assert calls[0]["url"].endswith("/file")
+        assert calls[0]["stream"] is True
+        assert calls[0]["headers"] == {
             "Zotero-API-Key": _API_KEY,
             "Zotero-API-Version": "3",
         }
-        # Every API request carried the API headers.
-        assert all(call["headers"]["Zotero-API-Version"] == "3" for call in calls)
 
 
 class TestBytesResult:
@@ -362,13 +413,31 @@ class TestLinkModesAndTypes:
 
 class TestHTTPErrorMapping:
     @pytest.mark.parametrize(
-        ("status", "message_fragment"),
-        [(403, "rejected the credentials"), (404, "not found"), (500, "returned an error")],
+        ("client_error", "message_fragment"),
+        [
+            # pyzotero maps 401/403 → UserNotAuthorisedError and 404 →
+            # ResourceNotFoundError; every other non-200 lands on HTTPError.
+            (
+                zotero_errors.UserNotAuthorisedError("Code: 403"),
+                "rejected the credentials",
+            ),
+            (
+                zotero_errors.ResourceNotFoundError("Code: 404"),
+                "not found",
+            ),
+            (
+                zotero_errors.HTTPError("Code: 500"),
+                "returned an error",
+            ),
+        ],
     )
     def test_status_mapping(
-        self, credential_file: Path, status: int, message_fragment: str
+        self,
+        credential_file: Path,
+        client_error: Exception,
+        message_fragment: str,
     ) -> None:
-        fake_get, _ = _fake_get(_attachment_envelope(), attachment_status=status)
+        fake_get, _ = _fake_get(_attachment_envelope(), error=client_error)
         code, frames, _raw = _run(_request(credentialFilePath=str(credential_file)), fake_get)
         assert code == 0
         terminal = _terminal(frames)
@@ -377,8 +446,10 @@ class TestHTTPErrorMapping:
         assert message_fragment in terminal["payload"]["message"]
 
     def test_transport_error_is_extraction_failure(self, credential_file: Path) -> None:
+        # pyzotero rides httpx2, so a metadata transport failure surfaces as
+        # an httpx2 exception, not a requests one.
         fake_get, _ = _fake_get(
-            _attachment_envelope(), error=requests.ConnectionError("boom")
+            _attachment_envelope(), error=httpx2.ConnectError("boom")
         )
         code, frames, _raw = _run(_request(credentialFilePath=str(credential_file)), fake_get)
         assert code == 0
@@ -392,11 +463,14 @@ class TestHTTPErrorMapping:
 
         def fake_get(url: str, headers=None, timeout=None, stream=False, **kwargs):  # noqa: ANN001, ANN202
             calls.append(url)
-            if url.endswith("/file"):
-                raise requests.ConnectionError("download failed")
-            return FakeResponse(200, json_data=attachment)
+            raise requests.ConnectionError("download failed")
 
-        code, frames, _raw = _run(_request(credentialFilePath=str(credential_file)), fake_get)
+        code, frames, _raw = _run(
+            _request(credentialFilePath=str(credential_file)),
+            fake_get,
+            client=FakeZoteroClient(attachment),
+        )
+        assert calls == [_FILE_URL]
         assert code == 0
         assert _terminal(frames)["payload"]["cause"] == "extraction-failure"
 
@@ -498,13 +572,15 @@ class TestParentDegradation:
 
         def fake_get(url: str, headers=None, timeout=None, stream=False, **kwargs):  # noqa: ANN001, ANN202
             calls.append(url)
-            if url.endswith("/file"):
-                return FakeResponse(200, chunks=(b"# md",))
-            if url.endswith(f"/items/{_PARENT_KEY}"):
-                raise requests.Timeout("slow")
-            return FakeResponse(200, json_data=attachment)
+            return FakeResponse(200, chunks=(b"# md",))
 
-        code, frames, _raw = _run(_request(credentialFilePath=str(credential_file)), fake_get)
+        client = FakeZoteroClient(
+            attachment, parent_error=httpx2.ConnectTimeout("slow parent")
+        )
+        code, frames, _raw = _run(
+            _request(credentialFilePath=str(credential_file)), fake_get, client=client
+        )
+        assert calls == [_FILE_URL]
         assert code == 0
         payload = _terminal(frames)["payload"]
         assert payload["articleMetadata"]["title"] == "Attachment title"

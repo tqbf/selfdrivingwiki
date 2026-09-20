@@ -5,8 +5,9 @@
 - Source: tools/zotero/zotero in this repository
 - Entry point: bin/zotero-extractor, generated from the same source
 - Dependencies: the PEP 723 block of the entry point is copied from the
-  script (requests — resolved by uv at first run; no third-party code is
-  bundled, so no license files are required)
+  script (requests, Apache-2.0; pyzotero, BlueOak-1.0.0, which pulls
+  feedparser, bibtexparser, whenever, and httpx2 — resolved by uv at first
+  run; no third-party code is bundled, so no license files are required)
 - Upstream interface: the Zotero Web API v3. The package downloads ONE
   attachment file plus item metadata per request and never converts
   formats. Markdown attachments are the result itself; PDF/HTML

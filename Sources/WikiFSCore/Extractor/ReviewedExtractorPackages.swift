@@ -76,7 +76,7 @@ public enum ReviewedExtractorPackages {
         directoryName: "Zotero",
         packageID: "org.selfdrivingwiki.zotero",
         version: "1.0.0",
-        digest: "7cc2597da9d59ff8296cd4772f7b6f4acd6b4dc44d8b5d5ffcb5f16ec1568537")
+        digest: "591062daf40d878595406b798cf311a6e16eaea23c96bcfee35def5c70ef8b6d")
 
     public static let all: [ReviewedExtractorPackage] = [
         defuddle, pdf2md, doclingServe, docx2md, podcastTranscript,
