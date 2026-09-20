@@ -2,6 +2,7 @@
 # /// script
 # requires-python = ">=3.12,<3.14"
 # dependencies = [
+#     "pyzotero>=1.15",
 #     "requests>=2.31",
 # ]
 # ///
@@ -12,7 +13,12 @@ a JSON request object on stdin, JSON Lines frames on stdout, and the
 attachment bytes (or Markdown) at the requested output path.
 
 The package ACQUIRES only. It downloads one Zotero attachment file and its
-item metadata through the Zotero Web API and never converts formats:
+item metadata through the Zotero Web API and never converts formats. The
+metadata GETs go through the `pyzotero` client (upstream-maintained URL
+grammar and headers); the attachment FILE download stays on streaming
+`requests` because the 128 MiB byte-cap abort and the per-chunk deadline
+self-report are protocol properties `pyzotero`'s materializing `file()`
+cannot provide:
 
 - `text/markdown` / `text/plain` (or `.md`) attachments are written as-is;
   the result frame declares no `resultMIMEType` because the output IS the
@@ -40,7 +46,10 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+import httpx2
 import requests
+from pyzotero import errors as zotero_errors
+from pyzotero.zotero import Zotero
 
 # ── Package protocol (revision 4) ──────────────────────────────────────────
 
@@ -53,9 +62,8 @@ TOOL_METADATA = {"toolName": "zotero"}
 # drifts; the host terminates the operation at its own limit regardless.
 MAX_OUTPUT_BYTES = 134_217_728
 
-# The canonical Zotero Web API base. The request URL must name exactly one
-# file endpoint under this base.
-ZOTERO_API_BASE = "https://api.zotero.org"
+# The Zotero Web API version the file-download headers declare (metadata
+# requests declare the same version through the pyzotero client).
 ZOTERO_API_VERSION = "3"
 
 # Zotero item keys are 8 uppercase alphanumeric characters; user library IDs
@@ -298,7 +306,16 @@ def article_metadata_from(
     return metadata or None
 
 
-# ── Zotero Web API (network seams; tests patch `requests.get`) ─────────────
+# ── Zotero Web API (network seams) ──────────────────────────────────────────
+#
+# Metadata goes through the `pyzotero` client (library_id + key → item
+# envelopes; pyzotero owns URL construction and the auth/API-version
+# headers). The attachment FILE download stays on streaming `requests`:
+# the byte-cap abort and the per-chunk deadline self-report are protocol
+# properties a materializing client call cannot provide. Tests patch the
+# `_make_client` factory for metadata and `requests.get` for the download
+# (pyzotero rides httpx2, so patching `requests.get` can never intercept
+# metadata calls).
 
 
 def _api_headers(api_key: str) -> dict[str, str]:
@@ -308,10 +325,25 @@ def _api_headers(api_key: str) -> dict[str, str]:
     }
 
 
-def fetch_item_envelope(url: str, api_key: str) -> tuple[int, Any]:
-    """GET one item envelope. Returns (status, decoded JSON)."""
-    response = requests.get(url, headers=_api_headers(api_key), timeout=_TIMEOUT)
-    return response.status_code, response.json()
+def _make_client(library_id: str, api_key: str) -> Any:
+    """Build the pyzotero client for one user library.
+
+    Module-level factory seam: tests monkeypatch THIS (not `requests.get`)
+    because pyzotero rides httpx2 for its transport.
+    """
+    return Zotero(library_id, "user", api_key)
+
+
+def fetch_item_envelope(client: Any, item_key: str) -> Any:
+    """GET one item envelope through the pyzotero client.
+
+    `Zotero.item()` returns the decoded API object itself — a bare dict with
+    top-level `key`/`version`/`data` for a single-item request (verified
+    against the released client: the `retrieve` wrapper passes JSON responses
+    through as `retrieved.json()`). Non-200 statuses raise typed
+    `zotero_errors` failures; transport errors surface as httpx2 exceptions.
+    """
+    return client.item(item_key)
 
 
 def fetch_file_bytes(url: str, api_key: str, byte_cap: int, deadline_ms: Any = None) -> bytes:
@@ -424,36 +456,38 @@ def run_extractor_protocol(
         )
 
     library_id, attachment_key = parsed_url
-    item_url = f"{ZOTERO_API_BASE}/users/{library_id}/items/{attachment_key}"
+    client = _make_client(library_id, api_key)
 
-    # Seam 1: attachment metadata.
+    # Seam 1: attachment metadata (pyzotero owns URL construction and the
+    # auth / API-version headers). Failures map to the same bounded,
+    # no-URL/no-key messages as before the pyzotero adoption.
     try:
-        status, envelope = fetch_item_envelope(item_url, api_key)
-    except requests.RequestException:
-        return _fail(
-            request_id, "extraction-failure", "the Zotero metadata request failed", out_stream
-        )
-    except ValueError:
-        return _fail(
-            request_id, "extraction-failure", "the Zotero metadata response was invalid", out_stream
-        )
-    if status == 403:
+        envelope = fetch_item_envelope(client, attachment_key)
+    except zotero_errors.UserNotAuthorisedError:
         return _fail(
             request_id,
             "extraction-failure",
             "the Zotero API rejected the credentials",
             out_stream,
         )
-    if status == 404:
+    except zotero_errors.ResourceNotFoundError:
         return _fail(
             request_id,
             "extraction-failure",
             "attachment not found in the Zotero library",
             out_stream,
         )
-    if status != 200:
+    except zotero_errors.PyZoteroError:
         return _fail(
             request_id, "extraction-failure", "the Zotero API returned an error", out_stream
+        )
+    except httpx2.HTTPError:
+        return _fail(
+            request_id, "extraction-failure", "the Zotero metadata request failed", out_stream
+        )
+    except ValueError:
+        return _fail(
+            request_id, "extraction-failure", "the Zotero metadata response was invalid", out_stream
         )
 
     attachment_data = envelope.get("data") if isinstance(envelope, dict) else None
@@ -497,12 +531,8 @@ def run_extractor_protocol(
                 out_stream,
             )
         try:
-            parent_status, parent = fetch_item_envelope(
-                f"{ZOTERO_API_BASE}/users/{library_id}/items/{parent_key}", api_key
-            )
-            if parent_status != 200:
-                parent = None
-        except (requests.RequestException, ValueError):
+            parent = fetch_item_envelope(client, parent_key)
+        except (zotero_errors.PyZoteroError, httpx2.HTTPError, ValueError):
             parent = None
 
     article_metadata = article_metadata_from(parent, attachment_data)
