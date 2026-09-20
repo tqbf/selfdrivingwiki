@@ -27,7 +27,7 @@ public enum ZoteroSyncCommand {
         public var errorDescription: String? {
             switch self {
             case .apiKeyNotConfigured:
-                return "The Zotero API key is not configured. Set it in the app (Settings → Zotero)."
+                return "The Zotero API key is not configured. Set it in the app (Settings → Extraction → Zotero)."
             }
         }
     }

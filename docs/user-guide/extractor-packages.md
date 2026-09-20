@@ -99,7 +99,7 @@ through the Zotero Web API and never converts formats.
 
 Configure two things:
 
-1. **API key + library ID** — Settings → Zotero. The key lives in your
+1. **API key + library ID** — Settings → Extraction → Zotero. The key lives in your
    Keychain. It is resolved per download through the seeded authorization;
    it is never written to a config file, a queue item, or a log.
 2. **Attachment keys** — `zotero-config.json` in the App Group container:

@@ -52,7 +52,7 @@ public enum ZoteroSyncError: Error, Equatable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .libraryNotConfigured:
-            return "The Zotero library ID is not configured. Set it in Settings → Zotero."
+            return "The Zotero library ID is not configured. Set it in Settings → Extraction → Zotero."
         case .noAttachments:
             return "No Zotero attachment keys are configured."
         }
