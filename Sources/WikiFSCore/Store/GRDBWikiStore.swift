@@ -5873,12 +5873,15 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
-    public func attachZoteroAttachment(
+    /// The `attachAcquiredBytes` implementation: same single-`mutate()`
+    /// transaction as before the acquisition-neutral rename — blob, hash-diff
+    /// version, mirror refresh, retained external-provenance columns.
+    public func attachAcquiredBytes(
         sourceID: SourceID,
         bytes: Data,
         mimeType: String,
-        zoteroItemKey: String?,
-        zoteroItemTitle: String?,
+        externalItemKey: String?,
+        externalItemTitle: String?,
         displayName: String?
     ) throws -> SourceVersion {
         // The declared MIME is authoritative data from the result frame; the
@@ -5938,7 +5941,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?);
                 """, arguments: [newVersionID.rawValue, sourceID.rawValue, parent?.id.rawValue,
                                 contentHash, mimeType, activityID,
-                                zoteroItemKey, nowTS])
+                                externalItemKey, nowTS])
                 // 3. UPSERT the active ref (generation + 1).
                 let nextGeneration = (prevGeneration ?? 0) + 1
                 try db.execute(sql: """
@@ -5954,8 +5957,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             }
 
             // 4. Refresh the denormalized mirror: real MIME, ext from MIME,
-            //    byte size, hash, and the retained Zotero provenance columns.
-            //    The display name is replaced only when provided.
+            //    byte size, hash, and the retained external-provenance
+            //    columns. The display name is replaced only when provided.
             try db.execute(sql: """
             UPDATE sources SET
                 mime_type = ?,
@@ -5969,7 +5972,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 version = version + 1
             WHERE id = ?;
             """, arguments: [mimeType, ext, Int64(bytes.count), contentHash,
-                            zoteroItemKey, zoteroItemTitle, sanitizedDisplayName,
+                            externalItemKey, externalItemTitle, sanitizedDisplayName,
                             nowTS, sourceID.rawValue])
 
             return SourceVersion(
@@ -5978,15 +5981,15 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 blobHash: contentHash,
                 mimeType: mimeType,
                 activityID: parent?.activityID,
-                externalIdentity: zoteroItemKey, fetchedAt: now
+                externalIdentity: externalItemKey, fetchedAt: now
             )
         }
     }
 
-    public func setZoteroProvenance(
+    public func setAcquisitionProvenance(
         sourceID: SourceID,
-        zoteroItemKey: String?,
-        zoteroItemTitle: String?,
+        externalItemKey: String?,
+        externalItemTitle: String?,
         displayName: String?
     ) throws {
         let sanitizedDisplayName = displayName.map { WikiNameRules.sanitized($0) }
@@ -6000,7 +6003,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 display_name = COALESCE(?, display_name),
                 updated_at = ?
             WHERE id = ?;
-            """, arguments: [zoteroItemKey, zoteroItemTitle, sanitizedDisplayName,
+            """, arguments: [externalItemKey, externalItemTitle, sanitizedDisplayName,
                             Date().timeIntervalSince1970, sourceID.rawValue])
         }
     }

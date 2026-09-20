@@ -314,10 +314,10 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                 sourceID: sourceID, content: markdown, package: producer,
                 origin: .extraction, toolVersion: nil,
                 sourceVersionID: initialVersion.id, note: nil)
-            try store.setZoteroProvenance(
+            try store.setAcquisitionProvenance(
                 sourceID: sourceID,
-                zoteroItemKey: itemKey,
-                zoteroItemTitle: itemTitle,
+                externalItemKey: itemKey,
+                externalItemTitle: itemTitle,
                 displayName: itemTitle)
             DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
             return QueueExtractionOutputReference(versionID: version.id.rawValue)
@@ -329,12 +329,12 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
         guard let mimeType = outcome.resultMIMEType else {
             throw ProcessPackageRunError.unexpectedBytesResult
         }
-        let version = try store.attachZoteroAttachment(
+        let version = try store.attachAcquiredBytes(
             sourceID: sourceID,
             bytes: outcome.outputBytes,
             mimeType: mimeType.rawValue,
-            zoteroItemKey: itemKey,
-            zoteroItemTitle: itemTitle,
+            externalItemKey: itemKey,
+            externalItemTitle: itemTitle,
             displayName: itemTitle)
         DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
         return QueueExtractionOutputReference(versionID: version.id.rawValue)
