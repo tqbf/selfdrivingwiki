@@ -584,7 +584,7 @@ struct ExtractionSettingsView: View {
             case .packages: packagesPane
             case .zotero:
                 // The Zotero account pane: API key (Keychain, write-only)
-                // + library ID for `wikictl zotero sync`. Lives inside
+                // + library ID for `wikictl extractor sync zotero`. Lives inside
                 // Extraction because Zotero is a reviewed extractor
                 // package — this is the one home for extractor setup.
                 ZoteroSettingsView(

@@ -5,7 +5,7 @@ import FoundationNetworking
 
 /// Stores extraction secrets — the Anthropic + Gemini API keys and an optional
 /// Docling Serve bearer token — behind a protocol so clients and tests never
-/// touch the `Security` framework directly. Mirrors `ZoteroCredentialStore`.
+/// touch the `Security` framework directly.
 public protocol ExtractionCredentialStore: Sendable {
     /// `nil` if no value has been set for this secret.
     func secret(_ secret: ExtractionSecret) -> String?
@@ -107,8 +107,8 @@ public struct KeychainExtractionCredentialStore: ExtractionCredentialStore {
 }
 #endif // os(macOS)
 
-/// In-memory test double — mirrors `InMemoryZoteroCredentialStore`'s
-/// `@unchecked Sendable` shape. NOT for production use.
+/// In-memory test double — same `@unchecked Sendable`
+/// shape. NOT for production use.
 public final class InMemoryExtractionCredentialStore: ExtractionCredentialStore, @unchecked Sendable {
     private var values: [ExtractionSecret: String] = [:]
     private let lock = NSLock()
