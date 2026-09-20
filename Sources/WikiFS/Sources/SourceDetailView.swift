@@ -2267,7 +2267,7 @@ extension SourceDetailView {
         switch kind.capabilities.extractionPath {
         case .pdfBackend, .htmlToMarkdown, .docxBackend: return .extract
         case .podcastTranscript, .youtubeTranscript:   return .transcribe
-        // Zotero acquisition is driven by `wikictl zotero sync` (UI later),
+        // Zotero acquisition is driven by `wikictl extractor sync zotero` (UI later),
         // so no manual extraction button applies yet.
         case .zoteroAttachment:                        return .none
         case nil:                                      return .none

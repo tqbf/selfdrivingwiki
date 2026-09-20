@@ -3,13 +3,13 @@ import Testing
 import WikiCtlCore
 import WikiFSCore
 
-/// AC.6, CLI layer: `wikictl zotero sync` against a temp store with an
+/// AC.6, CLI layer: `wikictl extractor sync zotero` against a temp store with an
 /// injected enqueue closure. Source creation, dedupe, `--force`, enqueue
 /// call recording, and hard-failure messages (unconfigured library, no
 /// attachments, missing API key). The drain side is covered by the
 /// queue-extraction provider-route tests in the app-target suite.
-@Suite("Zotero sync command")
-struct ZoteroSyncCommandTests {
+@Suite("Extractor sync command")
+struct ExtractorSyncCommandTests {
 
     /// A credential double whose configured state the test controls —
     /// describe-only, exactly the surface the command is allowed to see.
@@ -62,7 +62,8 @@ struct ZoteroSyncCommandTests {
         }
         let log = EnqueueLog()
 
-        let output = try await ZoteroSyncCommand.run(
+        let output = try await ExtractorSyncCommand.run(
+            package: .zotero,
             force: false,
             in: store,
             containerDirectory: container,
@@ -95,14 +96,14 @@ struct ZoteroSyncCommandTests {
 
         final class EnqueueLog: @unchecked Sendable { var ids: [SourceID] = [] }
         let log = EnqueueLog()
-        _ = try await ZoteroSyncCommand.run(
-            force: false, in: store, containerDirectory: container,
+        _ = try await ExtractorSyncCommand.run(
+            package: .zotero, force: false, in: store, containerDirectory: container,
             credentials: CredentialDouble(configured: true),
             enqueue: { log.ids.append($0) })
         #expect(log.ids.count == 1)
 
-        let second = try await ZoteroSyncCommand.run(
-            force: false, in: store, containerDirectory: container,
+        let second = try await ExtractorSyncCommand.run(
+            package: .zotero, force: false, in: store, containerDirectory: container,
             credentials: CredentialDouble(configured: true),
             enqueue: { log.ids.append($0) })
         #expect(log.ids.count == 1) // no new enqueue
@@ -119,14 +120,14 @@ struct ZoteroSyncCommandTests {
 
         final class EnqueueLog: @unchecked Sendable { var ids: [SourceID] = [] }
         let log = EnqueueLog()
-        _ = try await ZoteroSyncCommand.run(
-            force: false, in: store, containerDirectory: container,
+        _ = try await ExtractorSyncCommand.run(
+            package: .zotero, force: false, in: store, containerDirectory: container,
             credentials: CredentialDouble(configured: true),
             enqueue: { log.ids.append($0) })
         let original = log.ids
 
-        let output = try await ZoteroSyncCommand.run(
-            force: true, in: store, containerDirectory: container,
+        let output = try await ExtractorSyncCommand.run(
+            package: .zotero, force: true, in: store, containerDirectory: container,
             credentials: CredentialDouble(configured: true),
             enqueue: { log.ids.append($0) })
 
@@ -144,8 +145,8 @@ struct ZoteroSyncCommandTests {
         try writeConfig(container, libraryID: nil, attachments: ["ABCD1234"])
 
         await #expect(throws: ZoteroSyncError.libraryNotConfigured) {
-            _ = try await ZoteroSyncCommand.run(
-                force: false, in: store, containerDirectory: container,
+            _ = try await ExtractorSyncCommand.run(
+                package: .zotero, force: false, in: store, containerDirectory: container,
                 credentials: CredentialDouble(configured: true),
                 enqueue: { _ in })
         }
@@ -159,11 +160,32 @@ struct ZoteroSyncCommandTests {
         try writeConfig(container, libraryID: "12345", attachments: [])
 
         await #expect(throws: ZoteroSyncError.noAttachments) {
-            _ = try await ZoteroSyncCommand.run(
-                force: false, in: store, containerDirectory: container,
+            _ = try await ExtractorSyncCommand.run(
+                package: .zotero, force: false, in: store, containerDirectory: container,
                 credentials: CredentialDouble(configured: true),
                 enqueue: { _ in })
         }
+    }
+
+    @Test func unknownPackageFailsWithSupportedList() throws {
+        // Parse-level grammar: an unrecognized package name is a usage
+        // error naming the supported set, never a half-run sync.
+        let noEnv: (String) -> String? = { _ in nil }
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(["extractor", "sync", "notapackage"]) { key in noEnv(key) }
+        }
+    }
+
+    @Test func syncGrammarParsesPackageAndForce() throws {
+        let noEnv: (String) -> String? = { _ in nil }
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "test", "extractor", "sync", "zotero", "--force"]) { key in noEnv(key) }
+        guard case .extractor(.sync(let package, let force)) = invocation.command else {
+            Issue.record("expected an extractor sync command")
+            return
+        }
+        #expect(package == .zotero)
+        #expect(force)
     }
 
     @Test func missingAPIKeyFailsHardWithSetupGuidance() async throws {
@@ -174,14 +196,16 @@ struct ZoteroSyncCommandTests {
         try writeConfig(container, libraryID: "12345", attachments: ["ABCD1234"])
 
         do {
-            _ = try await ZoteroSyncCommand.run(
-                force: false, in: store, containerDirectory: container,
+            _ = try await ExtractorSyncCommand.run(
+                package: .zotero, force: false, in: store, containerDirectory: container,
                 credentials: CredentialDouble(configured: false),
                 enqueue: { _ in })
-            Issue.record("expected ZoteroSyncCommand.Failure.apiKeyNotConfigured")
-        } catch let failure as ZoteroSyncCommand.Failure {
-            #expect(failure == .apiKeyNotConfigured)
-            #expect(failure.errorDescription?.contains("API key") == true)
+            Issue.record("expected ZoteroSyncError.apiKeyNotConfigured")
+        } catch let error as ZoteroSyncError {
+            // The API-key gate is package-scoped: the zotero entry throws it,
+            // not the generic command (whose Failure knows only unknownPackage).
+            #expect(error == .apiKeyNotConfigured)
+            #expect(error.errorDescription?.contains("API key") == true)
         }
         #expect(try store.listSources().isEmpty)
     }

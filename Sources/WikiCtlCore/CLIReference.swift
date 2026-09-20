@@ -640,18 +640,19 @@ public enum CLIReference {
                     ]),
             ]),
         CLIFamily(
-            name: "zotero",
-            summary: "sync Zotero attachments into byteless sources via the reviewed package",
+            name: "extractor",
+            summary: "sync extractor-package acquisitions into byteless sources",
             leaves: [
                 CLILeaf(
-                    "sync", summary: "create one byteless source per configured attachment key and enqueue its extraction",
-                    commandLine: "sync [--force]",
-                    options: [CLIOption("--force", summary: "re-enqueue extraction for already-synced attachments")],
+                    "sync", summary: "create one byteless source per configured acquisition key of <package> and enqueue its extraction",
+                    commandLine: "sync <package> [--force]",
+                    options: [CLIOption("--force", summary: "re-enqueue extraction for already-synced sources")],
                     details: [
-                        "Reads zotero-config.json from the App Group container (library ID +",
-                        "attachment keys) and the API key from Keychain (presence check only).",
-                        "The enqueued extraction items drain when the app or the wikid daemon",
-                        "next runs its dispatch scan — this command only writes them.",
+                        "Reads the package's config sidecar from the App Group container",
+                        "(zotero: library ID + attachment keys in zotero-config.json) and",
+                        "the API key from Keychain (presence check only). The enqueued",
+                        "extraction items drain when the app or the wikid daemon next",
+                        "runs its dispatch scan — this command only writes them.",
                     ]),
             ]),
     ]

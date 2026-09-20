@@ -2,7 +2,7 @@ import Foundation
 
 /// Stores the ACP agent's auth secret (the API key) behind a protocol so clients
 /// and tests never touch the `Security` framework directly. Mirrors
-/// `ExtractionCredentialStore` / `ZoteroCredentialStore`: the secret lives in the
+/// `ExtractionCredentialStore`: the secret lives in the
 /// macOS Keychain, NEVER in the plaintext `acp-agent-config.json`.
 ///
 /// Slice 3 of `plans/acp-backend-and-permissions.md`: the ACP config is now a

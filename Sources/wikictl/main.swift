@@ -220,9 +220,9 @@ func execute(
                 store: store))
     case .admin(let action):
         return try AdminCommand.run(action, in: store)
-    case .zotero(let force):
-        return try await runZoteroSync(
-            force: force, in: store,
+    case .extractor(.sync(let package, let force)):
+        return try await runExtractorSync(
+            package: package, force: force, in: store,
             wikiID: wikiID, containerDirectory: containerDirectory)
     case .chat(let action):
         return try await runChatCommand(
@@ -248,16 +248,18 @@ func execute(
     }
 }
 
-/// `wikictl zotero sync` dispatch: enqueue-only queue wiring. The closure
-/// writes the durable `.extraction` item through `QueueStore.enqueue` — the
-/// same immediate durable store write `QueueEngine.enqueue` performs —
-/// WITHOUT constructing a `QueueEngine` (that needs a worker factory whose
-/// provider implementations live in targets `WikiCtlCore` cannot link) and
-/// WITHOUT waiting for completion (waiters are per-engine in-memory; a
-/// daemon-side completion could never resume a CLI waiter — it would hang).
-/// The app or the wikid daemon rehydrates and drains the persisted items on
-/// its next dispatch scan / launch.
-private func runZoteroSync(
+/// `wikictl extractor sync <package>` dispatch: enqueue-only queue wiring.
+/// The closure writes the durable `.extraction` item through
+/// `QueueStore.enqueue` — the same immediate durable store write
+/// `QueueEngine.enqueue` performs — WITHOUT constructing a `QueueEngine`
+/// (that needs a worker factory whose provider implementations live in
+/// targets `WikiCtlCore` cannot link) and WITHOUT waiting for completion
+/// (waiters are per-engine in-memory; a daemon-side completion could never
+/// resume a CLI waiter — it would hang). The app or the wikid daemon
+/// rehydrates and drains the persisted items on its next dispatch scan /
+/// launch.
+private func runExtractorSync(
+    package: ExtractorSyncCommand.Package,
     force: Bool,
     in store: GRDBWikiStore,
     wikiID: WikiID,
@@ -266,7 +268,8 @@ private func runZoteroSync(
     let queueStore = try QueueStore(
         databaseURL: try DatabaseLocation.queueDatabaseURL())
     defer { queueStore.close() }
-    let output = try await ZoteroSyncCommand.run(
+    let output = try await ExtractorSyncCommand.run(
+        package: package,
         force: force,
         in: store,
         containerDirectory: containerDirectory,
