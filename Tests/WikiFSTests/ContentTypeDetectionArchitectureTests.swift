@@ -166,16 +166,18 @@ struct ContentTypeDetectionArchitectureTests {
             encoding: .utf8)
 
         // The add-source ingest seam stays typed + neutral (hints +
-        // `ingestMetadata`); the retained Zotero columns live only on the
-        // attachment-drain seam (`attachZoteroAttachment` /
-        // `setZoteroProvenance`), never on `addSource`.
+        // `ingestMetadata`); the acquisition-neutral attachment-drain seam
+        // (`attachAcquiredBytes` / `setAcquisitionProvenance`) is the only
+        // place the retained external-provenance columns are written, and the
+        // protocol itself names no acquisition package.
         #expect(!storeProtocol.contains("data: Data, mimeType: String?"))
         #expect(storeProtocol.contains("detectionHints: ContentTypeDetectionHints"))
         #expect(storeProtocol.contains("ingestMetadata: SourceIngestMetadata?"))
-        #expect(storeProtocol.contains("func attachZoteroAttachment("))
-        #expect(storeProtocol.contains("func setZoteroProvenance("))
-        #expect(!model.contains("zoteroItemKey: nil, zoteroItemTitle:"))
-        #expect(!command.contains("zoteroItemKey: nil, zoteroItemTitle:"))
+        // AC: the WikiStore protocol has no package-named members at all —
+        // no zotero (case-insensitive) anywhere in the protocol file.
+        #expect(!storeProtocol.lowercased().contains("zotero"))
+        #expect(!model.contains("externalItemKey: nil, externalItemTitle:"))
+        #expect(!command.contains("externalItemKey: nil, externalItemTitle:"))
         #expect(sourceMaterializer.contains("externalItemID: String?"))
         #expect(sourceMaterializer.contains("externalItemTitle: String?"))
     }

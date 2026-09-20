@@ -76,12 +76,23 @@ enum ReviewedExtractorBootstrap {
             installed: installedRecords)
     }
 
-    /// Seeds the reviewed Zotero credential binding. No UI ships in this
-    /// cycle, so the app writes one idempotent authorization record binding
-    /// `(org.selfdrivingwiki.zotero, zotero-api-key)` to the legacy
-    /// `.zoteroAPIKey()` Keychain reference, pinned to the exact requirement
-    /// fingerprint the installed manifest declares. App-only (the writer's
-    /// role gate enforces it) and best-effort.
+    /// One row per reviewed package with a default host credential to seed.
+    /// Adding acquisition package #2 with a default credential is one row
+    /// here — never a new seeding branch.
+    private static let reviewedCredentialSeeds: [(
+        package: ReviewedExtractorPackage,
+        requirementID: String,
+        reference: CredentialReference
+    )] = [
+        (ReviewedExtractorPackages.zotero, "zotero-api-key", .zoteroAPIKey())
+    ]
+
+    /// Seeds the reviewed packages' default credential bindings. No UI ships
+    /// in this cycle, so the app writes idempotent authorization records
+    /// binding each `(package, requirementID)` to its credential reference,
+    /// pinned to the exact requirement fingerprint the installed manifest
+    /// declares. App-only (the writer's role gate enforces it) and
+    /// best-effort.
     ///
     /// Revocation safety: revocation deletes the authorization record, so
     /// record absence cannot distinguish "never seeded" from "revoked". A
@@ -95,27 +106,46 @@ enum ReviewedExtractorBootstrap {
         appGroupContainerRoot: URL,
         installed: [ExtractorPackageCatalogRecord]
     ) async {
-        let reviewed = ReviewedExtractorPackages.zotero
-        guard let record = installed.first(where: { $0.revision == reviewed.revision }),
+        for seed in reviewedCredentialSeeds {
+            await seedCredentialGrant(
+                package: seed.package,
+                requirementID: seed.requirementID,
+                reference: seed.reference,
+                appGroupContainerRoot: appGroupContainerRoot,
+                installed: installed)
+        }
+    }
+
+    /// The per-package seeding step: fingerprint from the installed record,
+    /// marker check, grant, marker write (in that order — the marker persists
+    /// only after a successful grant, so a failed write retries next launch).
+    private static func seedCredentialGrant(
+        package: ReviewedExtractorPackage,
+        requirementID: String,
+        reference: CredentialReference,
+        appGroupContainerRoot: URL,
+        installed: [ExtractorPackageCatalogRecord]
+    ) async {
+        guard let record = installed.first(where: { $0.revision == package.revision }),
               let registration = record.registrations.first(where: { registration in
                   registration.credentialRequirements.contains {
-                      $0.id.rawValue == Self.zoteroAPIKeyRequirementID
+                      $0.id.rawValue == requirementID
                   }
               }),
               let requirement = registration.credentialRequirements.first(where: {
-                  $0.id.rawValue == Self.zoteroAPIKeyRequirementID
+                  $0.id.rawValue == requirementID
               })
         else { return }
 
         let layout = ExtractorCredentialAuthorizationStoreLayout(
             appGroupContainerRoot: appGroupContainerRoot)
         let fingerprint = ExtractorCredentialRequirementFingerprint.compute(
-            packageID: reviewed.packageID.rawValue,
+            packageID: package.packageID.rawValue,
             registrationID: registration.id.rawValue,
             kinds: registration.kinds.map(\.rawValue),
             mimeTypes: registration.mimeTypes.map(\.rawValue),
             requirement: requirement)
-        let markerKey = "\(reviewed.packageID.rawValue)/\(requirement.id.rawValue)"
+        let markerKey = "\(package.packageID.rawValue)/\(requirement.id.rawValue)"
 
         // The seed-marker decides: grant only on a contract change (or a
         // first seed). Record presence is deliberately NOT consulted — a
@@ -129,12 +159,12 @@ enum ReviewedExtractorBootstrap {
                 layout: layout,
                 processRole: .app)
             _ = try await writer.grant(
-                packageID: reviewed.packageID,
+                packageID: package.packageID,
                 registrationID: registration.id,
                 kinds: registration.kinds.map(\.rawValue),
                 mimeTypes: registration.mimeTypes.map(\.rawValue),
                 requirement: requirement,
-                credentialReference: .zoteroAPIKey())
+                credentialReference: reference)
         } catch {
             DebugLog.extraction(
                 "extractor bootstrap: reviewed credential grant could not be seeded")
@@ -145,8 +175,6 @@ enum ReviewedExtractorBootstrap {
         markers[markerKey] = fingerprint.value
         Self.saveSeedMarkers(markers, layout: layout)
     }
-
-    private static let zoteroAPIKeyRequirementID = "zotero-api-key"
 
     /// Last-seeded fingerprints by `"<packageID>/<requirementID>"`. Beside
     /// the authorization store in the credentials root; a missing or
