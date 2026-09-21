@@ -580,7 +580,6 @@ struct ExtractorPackageSettingsTests {
         // Phase 7 import/removal/readiness controls keep derivable identifiers.
         #expect(viewSource.contains("extraction.packages.table"))
         #expect(viewSource.contains("extraction.packages.import.button"))
-        #expect(viewSource.contains("extraction.packages.import.trust"))
         #expect(viewSource.contains("extraction.packages.remove"))
         #expect(viewSource.contains("extraction.routes.table"))
         #expect(viewSource.contains("extraction.routes.picker"))
@@ -593,10 +592,10 @@ struct ExtractorPackageSettingsTests {
         #expect(!viewSource.contains("extraction.packages.failure"))
         #expect(!viewSource.contains("failedPackageRow"))
 
-        // Packages are a selectable table with a computed height, so the pane
-        // scrolls internally instead of growing the Settings window.
+        // Packages are a selectable table sized to its full row count, so the
+        // Settings form scrolls the section instead of a nested table scroll.
         #expect(viewSource.contains("Table(packageModel.tableRows, selection: $selectedPackageID)"))
-        #expect(viewSource.contains("SettingsTableMetrics.height("))
+        #expect(viewSource.contains("SettingsTableMetrics.unconstrainedHeight("))
         // Add is a first-class control under the table, not a disclosure.
         #expect(viewSource.contains("Button(\"Add Package…\", systemImage: \"plus\")"))
         #expect(!viewSource.contains("Advanced Local Package Import"))
@@ -606,7 +605,8 @@ struct ExtractorPackageSettingsTests {
         #expect(!viewSource.contains("DisclosureGroup {"))
         #expect(viewSource.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
         // Local-directory-only import contract + executable-code trust warning
-        // stay visible in the section footer rather than behind a disclosure.
+        // stay in the import surface (tooltip, selection error, help popover)
+        // rather than behind a disclosure; the section footer stays empty.
         #expect(viewSource.contains("Import Extractor Package…"))
         #expect(viewSource.contains("Select one local extractor package folder as an import source."))
         #expect(viewSource.contains("Files and archives are not supported."))
