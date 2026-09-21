@@ -1408,7 +1408,7 @@ struct ExtractionSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 100)
-                TableColumn("Configure", alignment: .center) { (row: ExtractorPackageTableRow) in
+                TableColumn("Configure") { (row: ExtractorPackageTableRow) in
                     if let installed = row.installedRow,
                        let package = packageConfigurationID(for: installed) {
                         Button("Configure…") {
