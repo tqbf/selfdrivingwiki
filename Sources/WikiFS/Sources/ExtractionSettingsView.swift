@@ -596,6 +596,8 @@ struct ExtractionSettingsView: View {
         .task {
             doclingTokenConfigured = refreshDoclingTokenState()
             await packageModel.refresh()
+            DebugLog.extraction(
+                "credentials: initial snapshot loaded rows=\(packageModel.snapshot.rows.count) requirements=\(packageModel.snapshot.credentialRequirements.count)")
             rebuildRouteRows()
             selectFirstPackageIfNeeded()
         }
@@ -1079,7 +1081,13 @@ struct ExtractionSettingsView: View {
             Task { @MainActor in serviceConfigurationDialog = dialog }
         case .authorizeCredential:
             routeStatusDialog = nil
-            guard let requirement = presentation.authorizationRequirement else { return }
+            guard let requirement = presentation.authorizationRequirement else {
+                DebugLog.extraction(
+                    "credentials: route dialog authorize tapped but the presentation carries no requirement — nothing will happen")
+                return
+            }
+            DebugLog.extraction(
+                "credentials: route dialog authorize tapped for \(requirement.packageID)/\(requirement.requirementID)")
             Task { @MainActor in authorizationCandidate = requirement }
         case .testConnection:
             // testDocling single-flights on doclingTest and returns without
@@ -1581,6 +1589,8 @@ struct ExtractionSettingsView: View {
                     Button(summary.authorizationState == .changedContract
                            ? "Re-authorize…"
                            : "Authorize…") {
+                        DebugLog.extraction(
+                            "credentials: authorize button tapped for \(summary.packageID)/\(summary.requirementID) state=\(summary.authorizationState)")
                         authorizationCandidate.wrappedValue = summary
                     }
                     .accessibilityIdentifier("\(RequirementAccessibility.authorizePrefix).\(summary.id)")
@@ -1588,6 +1598,8 @@ struct ExtractionSettingsView: View {
                 }
                 if authorizeRequirement != nil, summary.authorizationState == .authorized {
                     Button("Review Authorization…") {
+                        DebugLog.extraction(
+                            "credentials: review button tapped for \(summary.packageID)/\(summary.requirementID)")
                         authorizationCandidate.wrappedValue = summary
                     }
                     .accessibilityIdentifier("\(RequirementAccessibility.changePrefix).\(summary.id)")
@@ -1595,6 +1607,8 @@ struct ExtractionSettingsView: View {
                 }
                 if revokeRequirement != nil, summary.authorizationState == .authorized {
                     Button("Revoke…", role: .destructive) {
+                        DebugLog.extraction(
+                            "credentials: revoke button tapped for \(summary.packageID)/\(summary.requirementID)")
                         revocationCandidate.wrappedValue = summary
                     }
                     .accessibilityIdentifier("\(RequirementAccessibility.revokePrefix).\(summary.id)")
@@ -1647,10 +1661,14 @@ struct ExtractionSettingsView: View {
     /// redacted failure, then refresh the snapshot so authorization states
     /// update immediately.
     private func handleMutationOutcome(_ outcome: ExtractorPackageMutationOutcome?) async {
+        DebugLog.extraction(
+            "credentials: mutation outcome \(AuthorizationConfirmationModifier.describe(outcome)) → refreshing snapshot")
         if let outcome, case .failed(let message) = outcome {
             packageModel.reportFailure(message)
         }
         await packageModel.refresh()
+        DebugLog.extraction(
+            "credentials: snapshot refreshed rows=\(packageModel.snapshot.rows.count) requirements=\(packageModel.snapshot.credentialRequirements.count)")
     }
 
     /// The executable-code disclosure shown before any local import.
@@ -1828,31 +1846,47 @@ struct ExtractionSettingsView: View {
         }
 
         private func refreshConfiguredState() {
-            guard let reference = boundReference else { return }
+            guard let reference = boundReference else {
+                DebugLog.extraction(
+                    "credentials: value row for \(summary.packageID)/\(summary.requirementID) has no bound reference")
+                return
+            }
             isConfigured = credentials.describe(reference).isConfigured
         }
 
         private func save() {
             guard let reference = boundReference,
                   let value = CredentialValue.normalized(draft) else { return }
+            DebugLog.extraction(
+                "credentials: saving value for \(summary.packageID)/\(summary.requirementID) at \(reference.rawValue)")
             do {
                 try credentials.set(value, for: reference)
                 draft = ""
                 failureText = nil
                 refreshConfiguredState()
+                DebugLog.extraction(
+                    "credentials: value saved for \(summary.packageID)/\(summary.requirementID) configured=\(isConfigured)")
             } catch {
+                DebugLog.extraction(
+                    "credentials: value save FAILED for \(summary.packageID)/\(summary.requirementID)")
                 failureText = "The value could not be stored in your Keychain."
             }
         }
 
         private func remove() {
             guard let reference = boundReference else { return }
+            DebugLog.extraction(
+                "credentials: removing stored value for \(summary.packageID)/\(summary.requirementID) at \(reference.rawValue)")
             do {
                 try credentials.unset(reference)
                 draft = ""
                 failureText = nil
                 refreshConfiguredState()
+                DebugLog.extraction(
+                    "credentials: value removed for \(summary.packageID)/\(summary.requirementID) configured=\(isConfigured)")
             } catch {
+                DebugLog.extraction(
+                    "credentials: value remove FAILED for \(summary.packageID)/\(summary.requirementID)")
                 failureText = "The stored value could not be removed."
             }
         }
@@ -2669,13 +2703,20 @@ struct AuthorizationConfirmationModifier: ViewModifier {
             "Authorize credential use?",
             isPresented: Binding(
                 get: { candidate != nil },
-                set: { if !$0 { candidate = nil } }),
+                set: { if !$0 {
+                    DebugLog.extraction("credentials: authorize confirmation dismissed without confirming")
+                    candidate = nil
+                } }),
             titleVisibility: .visible,
             presenting: candidate) { summary in
                 Button("Authorize") {
                     candidate = nil
+                    DebugLog.extraction(
+                        "credentials: authorize confirmed for \(summary.packageID)/\(summary.requirementID); closure present=\(authorize != nil)")
                     Task {
                         let outcome = await authorize?(summary)
+                        DebugLog.extraction(
+                            "credentials: authorize finished for \(summary.packageID)/\(summary.requirementID) outcome=\(Self.describe(outcome))")
                         await onOutcome(outcome)
                     }
                 }
@@ -2683,6 +2724,14 @@ struct AuthorizationConfirmationModifier: ViewModifier {
             } message: { summary in
                 Text(ExtractionSettingsView.authorizationConfirmationMessage(summary))
             }
+    }
+
+    static func describe(_ outcome: ExtractorPackageMutationOutcome?) -> String {
+        switch outcome {
+        case .succeeded: "succeeded"
+        case .failed(let message): "failed: \(message)"
+        case nil: "none (closure missing)"
+        }
     }
 }
 

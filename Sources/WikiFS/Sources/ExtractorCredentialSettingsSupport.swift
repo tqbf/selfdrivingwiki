@@ -63,6 +63,8 @@ enum ExtractorCredentialSettingsSupport {
             descriptions = credentials.describe([record.credentialReference])
         }
         let configured = record.flatMap { descriptions[$0.credentialReference] }
+        DebugLog.extraction(
+            "credentials: summary \(registration.reference.revision.packageID.rawValue)/\(requirement.id.rawValue) state=\(state) configured=\(configured?.isConfigured ?? false)")
         return ExtractorCredentialRequirementSummary(
             packageID: registration.reference.revision.packageID.rawValue,
             packageName: registration.packageName,
