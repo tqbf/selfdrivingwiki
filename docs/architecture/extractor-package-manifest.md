@@ -191,7 +191,7 @@ The Zotero package is the reference for a credential-declaring, revision-4 packa
 {
   "manifestRevision": 2,
   "packageID": "org.selfdrivingwiki.zotero",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "displayName": "Zotero Attachment",
   "protocolRevision": 4,
   "entryPoint": "bin/zotero-extractor",

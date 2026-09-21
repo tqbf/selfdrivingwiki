@@ -449,9 +449,10 @@ private extension ExtractorRouteStatus {
 /// live in Keychain, non-secret prefs in `ExtractionConfig`, and the view
 /// **auto-saves on change** instead of an explicit Save button: every edit
 /// persists immediately, so closing the window can never drop a just-typed value
-/// (the failure mode a focus-loss/Save pattern risks). The Zotero account pane
-/// keeps its explicit Save Key button — that write is not part of
-/// `ExtractionConfig` and mirrors the write-only credential authority.
+/// (the failure mode a focus-loss/Save pattern risks). Package credential
+/// values follow the same rule: the generic package Configure dialog's
+/// write-only value rows store them, and those writes are not part of
+/// `ExtractionConfig`.
 ///
 /// Only the selected backend's config section is shown — picking another backend
 /// swaps the section in place, so the form stays uncluttered and Test Connection
@@ -518,8 +519,8 @@ struct ExtractionSettingsView: View {
     @State private var showingPackageHelp = false
     @State private var removalCandidate: ExtractorPackageSettingsRow?
     @State private var selectedPackageID: ExtractorPackageTableRow.ID?
-    /// Deliberately not persisted: Settings opens on the defaults every time,
-    /// because that is the question this pane exists to answer.
+    /// Deliberately not persisted: Settings opens on Packages, because package
+    /// lifecycle is the workflow this tab exists for.
     @State private var selectedPane: ExtractionSettingsPane
     /// Pending authorization confirmation (#1159). Non-nil shows the
     /// explicit confirmation with the inheritance rule.
@@ -559,9 +560,8 @@ struct ExtractionSettingsView: View {
         },
         importPackage: (@Sendable (URL) async -> ExtractorPackageMutationOutcome)? = nil,
         removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)? = nil,
-        /// The pane Settings opens on. Defaults to the document-type defaults,
-        /// which is the question this pane exists to answer; hosted tests pass
-        /// the other pane to mount it directly.
+        /// The pane Settings opens on. The default is `.packages`; hosted
+        /// tests pass `.defaults` to mount that pane directly.
         initialPane: ExtractionSettingsPane = .packages
     ) {
         _selectedPane = State(initialValue: initialPane)

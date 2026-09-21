@@ -99,10 +99,13 @@ through the Zotero Web API and never converts formats.
 
 Configure two things:
 
-1. **API key + library ID** — Settings → Extraction → Zotero. The key lives in your
-   Keychain. It is resolved per download through the seeded authorization;
-   it is never written to a config file, a queue item, or a log.
-2. **Attachment keys** — `zotero-config.json` in the App Group container:
+1. **API key** — **Settings → Extraction → Packages**, then **Configure…** on
+   the Zotero Attachment row. Paste the key into the **Zotero API Key** value
+   row. The key lives in your Keychain. It is resolved per download through
+   the seeded authorization; it is never written to a config file, a queue
+   item, or a log.
+2. **Library ID + attachment keys** — `zotero-config.json` in the App Group
+   container:
 
    ```json
    {
