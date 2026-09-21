@@ -237,7 +237,7 @@ enum ExtractorRouteRecoveryPresenter {
             status = .needsSetup(.missingDoclingCredential)
         } else if let requirement,
                   requirement.authorizationState != .authorized || requirement.isConfigured == false {
-            status = .needsSetup(.unauthorizedDoclingCredential)
+            status = .needsSetup(.unauthorizedCredential)
         } else if isDocling, facts.connectionTest == .failed {
             status = .needsSetup(.doclingConnectionFailed)
         } else {
@@ -342,8 +342,8 @@ enum ExtractorRouteRecoveryPresenter {
             case .missingDoclingCredential:
                 reasonText = "Add the Docling credential before this extractor can run."
                 recovery = [.configure]
-            case .unauthorizedDoclingCredential:
-                reasonText = "Authorize the package to use the configured Docling credential."
+            case .unauthorizedCredential:
+                reasonText = "Authorize the package to use the configured credential."
                 recovery = canAuthorize ? [.authorizeCredential] : [.refreshStatus]
             case .doclingConnectionFailed:
                 reasonText = "The most recent Docling connection test failed."
@@ -437,7 +437,7 @@ private extension ExtractorRouteStatus {
         case .unavailableACPProvider: "The selected ACP provider is unavailable."
         case .invalidDoclingEndpoint: "The Docling endpoint is missing or invalid."
         case .missingDoclingCredential: "The Docling credential is not configured."
-        case .unauthorizedDoclingCredential: "The package is not authorized to use the credential."
+        case .unauthorizedCredential: "The package is not authorized to use the credential."
         case .doclingConnectionFailed: "The Docling connection test failed."
         }
     }

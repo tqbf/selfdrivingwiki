@@ -126,14 +126,9 @@ enum ReviewedExtractorBootstrap {
         installed: [ExtractorPackageCatalogRecord]
     ) async {
         guard let record = installed.first(where: { $0.revision == package.revision }),
-              let registration = record.registrations.first(where: { registration in
-                  registration.credentialRequirements.contains {
-                      $0.id == requirementID
-                  }
-              }),
-              let requirement = registration.credentialRequirements.first(where: {
-                  $0.id == requirementID
-              })
+              let (registration, requirement) = Self.matchingRequirement(
+                registrations: record.registrations,
+                requirementID: requirementID)
         else { return }
 
         let layout = ExtractorCredentialAuthorizationStoreLayout(
@@ -173,6 +168,23 @@ enum ReviewedExtractorBootstrap {
         // write retries on the next launch.
         markers[markerKey] = fingerprint.value
         Self.saveSeedMarkers(markers, layout: layout)
+    }
+
+    /// The first `(registration, requirement)` pair declaring
+    /// `requirementID`, found in one pass — the requirement is looked up once,
+    /// not probed with `contains` and then re-scanned. Nil when no
+    /// registration declares it.
+    private static func matchingRequirement(
+        registrations: [ExtractorRegistration],
+        requirementID: ExtractorCredentialRequirementID
+    ) -> (registration: ExtractorRegistration, requirement: ExtractorCredentialRequirement)? {
+        for registration in registrations {
+            guard let requirement = registration.credentialRequirements.first(where: {
+                $0.id == requirementID
+            }) else { continue }
+            return (registration, requirement)
+        }
+        return nil
     }
 
     /// Last-seeded fingerprints by `"<packageID>/<requirementID>"`. Beside

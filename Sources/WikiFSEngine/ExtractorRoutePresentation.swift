@@ -123,7 +123,7 @@ public enum ExtractorRouteSetupReason: Hashable, Sendable {
     case unavailableACPProvider
     case invalidDoclingEndpoint
     case missingDoclingCredential
-    case unauthorizedDoclingCredential
+    case unauthorizedCredential
     case doclingConnectionFailed
 }
 
