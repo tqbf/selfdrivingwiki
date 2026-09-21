@@ -7,7 +7,7 @@
   "entryPoint": "bin/zotero-extractor",
   "files": [
     {
-      "digest": "51a9db122bd2d404b475826e4fb239728ae4ff1d741ebe1e93fe738cea69ddb4",
+      "digest": "07d23e9ba3748d9454cd77daaa01201bfd62785960fa9f20d995da95f820d075",
       "path": "PROVENANCE.md"
     },
     {
@@ -57,5 +57,5 @@
       ]
     }
   ],
-  "version": "1.0.0"
+  "version": "1.0.1"
 }
