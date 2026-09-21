@@ -263,9 +263,17 @@ struct ExtractorCredentialSettingsHostedTests {
             digestPrefix: String(doclingRevision.digest.hex.prefix(12)),
             registrationID: "document",
             revision: doclingRevision)
+        // Docling Serve configures through the package table now: its row
+        // yields the candidate whose Configure… opens the service dialog.
         #expect(ExtractionSettingsView.packageConfigurationID(
             for: doclingRow,
-            requirements: [doclingRequirement]) == nil)
+            requirements: [doclingRequirement]) == ExtractionSettingsView.ExtractorPackageConfigurationID(
+                packageID: doclingRevision.packageID.rawValue,
+                version: doclingRevision.version.rawValue,
+                registrationID: "document"))
+        #expect(ExtractionSettingsView.packageConfigurationID(
+            for: doclingRow,
+            requirements: []) == nil)
     }
 
     @Test func removedTopLevelCredentialSectionDoesNotReturn() throws {
