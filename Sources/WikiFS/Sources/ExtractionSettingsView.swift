@@ -756,17 +756,6 @@ struct ExtractionSettingsView: View {
             // design (PR 4 review follow-up: the long phrase truncated, so
             // the icon carries the state and the short text never wraps).
             .width(min: 110, ideal: 120)
-            TableColumn("Configuration") { (row: ExtractionDefaultsTableRow) in
-                if case .route(let routeRow) = row, let dialog = configurationDialog(for: routeRow) {
-                    Button("Configure…") {
-                        serviceConfigurationDialog = dialog
-                    }
-                    .accessibilityIdentifier("extraction.service.configure.\(dialog.id)")
-                    .accessibilityLabel(
-                        "Configure \(dialog == .acp ? "ACP Provider" : "Docling Serve")")
-                }
-            }
-            .width(min: 110, ideal: 130)
         }
         // Every cell in this table holds a pop-up, so its rows are taller
         // than the package table's text rows.
