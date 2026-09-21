@@ -907,7 +907,7 @@ PY
 # Reviewed package provenance
 
 - Package: org.selfdrivingwiki.zotero
-- Version: 1.0.0
+- Version: 1.0.1
 - Source: tools/zotero/zotero in this repository
 - Entry point: bin/zotero-extractor, generated from the same source
 - Dependencies: the PEP 723 block of the entry point is copied from the
@@ -944,7 +944,7 @@ path, script_digest, entry_digest, provenance_digest = sys.argv[1:5]
 manifest = {
     "manifestRevision": 2,
     "packageID": "org.selfdrivingwiki.zotero",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "displayName": "Zotero Attachment",
     "protocolRevision": 4,
     "entryPoint": "bin/zotero-extractor",
