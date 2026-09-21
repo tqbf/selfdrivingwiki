@@ -880,9 +880,9 @@ struct ExtractionSettingsView: View {
             EmptyView()
         }
         .labelsHidden()
-        // One shared box size: the pop-up fills a fixed frame instead of
-        // hugging the selected option's text, so every row's bezel matches.
-        .frame(width: Metrics.defaultExtractorPickerWidth, alignment: .leading)
+        // The bezel ignores stretch proposals inside table cells, so the full
+        // column width is applied explicitly — every box spans its column.
+        .frame(width: Metrics.defaultExtractorColumnWidth, alignment: .leading)
         .accessibilityIdentifier("\(RouteAccessibility.pickerPrefix).\(Self.accessibilityKey(row.route))")
         .accessibilityLabel("Default extractor for \(row.descriptor.displayName)")
         .accessibilityValue(accessibilityValue(row))
@@ -2225,10 +2225,6 @@ struct ExtractionSettingsView: View {
         /// without truncating the Status column.
         static let width: CGFloat = 700
         static let defaultExtractorColumnWidth: CGFloat = 240
-        /// The shared pop-up width inside that column: wide enough for the
-        /// longest option label ("Apple Podcasts Transcript") without
-        /// truncation, and identical for every row.
-        static let defaultExtractorPickerWidth: CGFloat = 220
         /// Connected-service configuration dialogs (macos-design: a compact
         /// modal form with a Done button).
         static let dialogWidth: CGFloat = 460
