@@ -1369,8 +1369,15 @@ struct ExtractionSettingsView: View {
         VStack(alignment: .leading, spacing: Metrics.packageSectionSpacing) {
             Table(packageModel.tableRows, selection: $selectedPackageID) {
                 TableColumn("Package") { (row: ExtractorPackageTableRow) in
-                    Text(row.packageID)
-                        .help(row.packageID)
+                    // Status rides beside the name as a symbol: the icon
+                    // carries the state, the tooltip carries the sentence,
+                    // and the full diagnostic stays in the detail below.
+                    HStack(spacing: 5) {
+                        Image(systemName: row.status.systemImage)
+                            .foregroundStyle(row.status.tint)
+                        Text(row.packageID)
+                    }
+                    .help("\(row.status.label). \(row.status.explanation)")
                 }
                 .width(min: 170, ideal: 240)
                 TableColumn("Version") { (row: ExtractorPackageTableRow) in
@@ -1383,17 +1390,6 @@ struct ExtractionSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 100)
-                // The status is the row's own diagnostic in short form. The
-                // full sentence renders in the detail below the table.
-                TableColumn("Status") { (row: ExtractorPackageTableRow) in
-                    Label(row.status.label, systemImage: row.status.systemImage)
-                        .foregroundStyle(row.status.tint)
-                        .help(row.status.explanation)
-                }
-                // Compact so the Configure column stays visible at the
-                // window's minimum width: the label truncates, and the full
-                // sentence lives in the detail below the table.
-                .width(min: 110, ideal: 120)
                 TableColumn("Configure") { (row: ExtractorPackageTableRow) in
                     if let installed = row.installedRow,
                        let package = packageConfigurationID(for: installed) {
