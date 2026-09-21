@@ -837,7 +837,7 @@ struct ExtractionSettingsView: View {
         .labelsHidden()
         // Fill the column so every row's picker is the same width instead of
         // sizing to its longest option.
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .focused($focusedRoutePicker, equals: row.route)
         .accessibilityIdentifier("\(RouteAccessibility.pickerPrefix).\(Self.accessibilityKey(row.route))")
         .accessibilityLabel("Default extractor for \(row.descriptor.displayName)")
