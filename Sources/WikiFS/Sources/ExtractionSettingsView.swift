@@ -1339,18 +1339,12 @@ struct ExtractionSettingsView: View {
                     .buttonStyle(.borderless)
                     .labelStyle(.iconOnly)
             }
-        } footer: {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Manage exact validated package revisions and their credential access. Choose defaults in the Default Extractors section above.")
-                Text("\(ExtractorSettingsPackagePicker.localImportSourceMessage) \(ExtractorSettingsPackagePicker.localImportStorageMessage) \(ExtractorSettingsPackagePicker.localImportAfterMessage) \(ExtractorSettingsPackagePicker.filesUnsupportedMessage)")
-                Label(Self.trustWarningMessage, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                    .accessibilityIdentifier(PackageAccessibility.trustWarning)
-                    .accessibilityLabel("Executable code warning. \(Self.trustWarningMessage)")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
+        // No footer: import behavior, supported sources, the executable-code
+        // warning, and defaults-vs-packages guidance all live one click away
+        // in the header's help popover, and the Add button's tooltip restates
+        // the trust caveat at the moment of import. A caption wall here only
+        // pushed the table toward (and past) the window's fold.
     }
 
     /// The package table, its add/remove bar, and the inline detail for the
@@ -1681,7 +1675,6 @@ struct ExtractionSettingsView: View {
         static let digestPrefix = "extraction.packages.digest"
         static let registrationPrefix = "extraction.packages.registration"
         static let importButton = "extraction.packages.import.button"
-        static let trustWarning = "extraction.packages.import.trust"
         static let configurePrefix = "extraction.packages.configure"
         /// Removal targets the table's selection, so it is one control rather
         /// than one per row.
@@ -2685,9 +2678,6 @@ enum ExtractorPackageMutationMessage {
 @MainActor
 enum ExtractorSettingsPackagePicker {
     static let importButtonTitle = "Import Extractor Package…"
-    static let localImportSourceMessage = "Select one local extractor package folder as an import source."
-    static let localImportStorageMessage = "Self Driving Wiki validates and copies it into the extractor store on this Mac."
-    static let localImportAfterMessage = "The selected source folder is not used after import."
     static let filesUnsupportedMessage = "Files and archives are not supported."
     static let selectionErrorMessage = "Select one local extractor package folder as an import source. Self Driving Wiki validates and copies it. Files and archives are not supported."
 
