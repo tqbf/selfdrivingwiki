@@ -84,23 +84,26 @@ enum ExtractorCredentialSettingsSupport {
     /// only.
     ///
     /// Legacy bindings are reserved for their reviewed lineages (HIGH-1,
-    /// security review): a package ID other than the reviewed Docling Serve
-    /// lineage can never bind to `extraction.docling-serve-token`, no matter
-    /// what it names its requirement. Everything else gets a package-scoped
-    /// reference under the shared credential service, keyed by a SHA-256
-    /// prefix of the package ID (injective, unlike dot-flattening — L-9).
+    /// security review): the table in `ReviewedExtractorCredentialBindings`
+    /// decides which lineage may bind to which reserved reference, no matter
+    /// what an unreviewed package names its requirement. Everything else gets
+    /// a package-scoped reference under the shared credential service, keyed
+    /// by a SHA-256 prefix of the package ID (injective, unlike
+    /// dot-flattening — L-9). The same table drives publish-time grant
+    /// seeding, so authorizing here can never re-point a seeded lineage at
+    /// an empty package-scoped reference.
     static func bindingReference(
         for summary: ExtractorCredentialRequirementSummary
     ) -> CredentialReference? {
-        let packageID = summary.packageID
-        if packageID == ReviewedExtractorPackages.doclingServe.packageID.rawValue,
-           summary.requirementID == "api-token" {
-            return CredentialReference.extraction(.doclingServeToken)
+        if let reviewed = ReviewedExtractorCredentialBindings.binding(
+            packageID: summary.packageID,
+            requirementID: summary.requirementID) {
+            return reviewed.reference
         }
         // Package-scoped NEW reference: the package ID is hashed into one
         // grammar-valid label, so two distinct lineages can never collide on
         // one reference.
-        let digest = ExtractorSHA256.digest(Data(packageID.utf8)).hex
+        let digest = ExtractorSHA256.digest(Data(summary.packageID.utf8)).hex
         let hashedLabel = String(digest.prefix(32))
         return CredentialReference(validatingLabels: [
             "extractor-package", hashedLabel, summary.requirementID.lowercased(),

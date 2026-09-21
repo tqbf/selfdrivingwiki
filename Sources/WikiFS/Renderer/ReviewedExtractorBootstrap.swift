@@ -76,28 +76,15 @@ enum ReviewedExtractorBootstrap {
             installed: installedRecords)
     }
 
-    /// One row per reviewed package with a default host credential to seed.
-    /// Adding acquisition package #2 with a default credential is one row
-    /// here — never a new seeding branch.
-    private static let reviewedCredentialSeeds: [(
-        package: ReviewedExtractorPackage,
-        requirementID: ExtractorCredentialRequirementID,
-        reference: CredentialReference
-    )] = [
-        (ReviewedExtractorPackages.zotero, zoteroAPIKeyRequirement, .zoteroAPIKey())
+    /// The seeded subset of the reviewed credential bindings: packages whose
+    /// host credential the user already manages in a Settings account pane,
+    /// so a publish-time grant is the reviewed default. Adding acquisition
+    /// package #2 with a default credential is one row here — never a new
+    /// seeding branch. Docling Serve is deliberately absent: its token is
+    /// opt-in and authorized explicitly in Settings.
+    private static let reviewedCredentialSeeds: [ReviewedExtractorCredentialBinding] = [
+        ReviewedExtractorCredentialBindings.zoteroAPIKey,
     ]
-
-    /// Compiled-in seed requirement identity. Same standing as the
-    /// `ReviewedExtractorPackages` golden constants: a grammar change
-    /// upstream is a programmer error and crashes at first touch.
-    private static let zoteroAPIKeyRequirement = makeRequirementID("zotero-api-key")
-
-    private static func makeRequirementID(_ raw: String) -> ExtractorCredentialRequirementID {
-        guard let id = ExtractorCredentialRequirementID(rawValue: raw) else {
-            preconditionFailure("Invalid compiled seed requirement id: \(raw)")
-        }
-        return id
-    }
 
     /// Seeds the reviewed packages' default credential bindings. No UI ships
     /// in this cycle, so the app writes idempotent authorization records
