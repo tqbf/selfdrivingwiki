@@ -228,10 +228,14 @@ public enum KeychainSecretStore {
                 DebugLog.config("Keychain migration: skipped \(item.account) (service \(item.service)): \(error)")
                 continue
             }
-            // Now delete the legacy file-keychain original.
+            // Now delete the legacy original — scoped to the legacy copy's OWN
+            // access group. An unscoped delete was matching the DataProtection
+            // copy too (the file and DataProtection keychains are one store on
+            // modern macOS), so every launch deleted the key the previous
+            // session had just saved.
             do {
                 try write(service: item.service, account: item.account, value: nil,
-                          useDP: false, accessGroup: "", error: migrationError)
+                          useDP: false, accessGroup: item.accessGroup ?? "", error: migrationError)
             } catch {
                 DebugLog.config("Keychain migration: failed to delete legacy \(item.account) (service \(item.service)): \(error)")
             }
@@ -249,12 +253,13 @@ public enum KeychainSecretStore {
 
     /// Enumerate every generic-password item in the LEGACY file-based keychain
     /// (no `kSecUseDataProtectionKeychain` flag), returning the items it could
-    /// read plus the raw `OSStatus` (so a failed bulk read is diagnosable, not
-    /// silent). Returns an empty list with the status on failure
-    /// (`errSecItemNotFound` when the file keychain is empty). The caller
-    /// filters to its own service prefix.
+    /// read — service, account, data, and the item's own access group (used to
+    /// scope the post-migration delete to the legacy copy) — plus the raw
+    /// `OSStatus` (so a failed bulk read is diagnosable, not silent). Returns
+    /// an empty list with the status on failure (`errSecItemNotFound` when the
+    /// file keychain is empty). The caller filters to its own service prefix.
     private static func enumerateLegacyGenericPasswords()
-    -> (items: [(service: String, account: String, data: Data)], status: OSStatus) {
+    -> (items: [(service: String, account: String, data: Data, accessGroup: String?)], status: OSStatus) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecMatchLimit as String: kSecMatchLimitAll,
@@ -266,11 +271,12 @@ public enum KeychainSecretStore {
         guard status == errSecSuccess, let items = result as? [[String: Any]] else {
             return ([], status)
         }
-        let read: [(service: String, account: String, data: Data)] = items.compactMap { dict in
+        let read: [(service: String, account: String, data: Data, accessGroup: String?)] = items.compactMap { dict in
             guard let service = dict[kSecAttrService as String] as? String,
                   let account = dict[kSecAttrAccount as String] as? String,
                   let data = dict[kSecValueData as String] as? Data else { return nil }
-            return (service, account, data)
+            let accessGroup = dict[kSecAttrAccessGroup as String] as? String
+            return (service, account, data, accessGroup)
         }
         return (read, status)
     }
