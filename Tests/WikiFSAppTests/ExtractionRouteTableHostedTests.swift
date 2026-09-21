@@ -350,6 +350,7 @@ struct ExtractionRouteTableHostedTests {
             rootView: ExtractionSettingsView.PackageConfigurationDialog(
                 title: "Example Extractor",
                 requirements: [requirement],
+                credentials: Self.stubCredentials,
                 authorizeRequirement: { _ in .succeeded(nil) },
                 revokeRequirement: { _ in .succeeded(nil) },
                 onCredentialMutation: { _ in }))
@@ -468,10 +469,9 @@ struct ExtractionRouteTableHostedTests {
     func paneSwitcherDefaultsToTheDefaultsPane() throws {
         // The order is what the segmented control renders, so defaults sits on
         // the leading edge as well as being the initial selection.
-        #expect(ExtractionSettingsPane.allCases == [.defaults, .packages, .zotero])
+        #expect(ExtractionSettingsPane.allCases == [.defaults, .packages])
         #expect(ExtractionSettingsPane.defaults.title == "Defaults")
         #expect(ExtractionSettingsPane.packages.title == "Packages")
-        #expect(ExtractionSettingsPane.zotero.title == "Zotero")
 
         let source = try sourceView()
         #expect(source.contains("initialPane: ExtractionSettingsPane = .defaults"))

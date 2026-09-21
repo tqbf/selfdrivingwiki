@@ -95,6 +95,14 @@ family (`wikictl zotero sync` → `wikictl extractor sync zotero`),
 `zotero://select` deep link, and `ZoteroSettingsView` (now API key +
 library ID only).
 
+> **Superseded (2026-09-20):** `ZoteroSettingsView` and its Extraction-tab
+> pane are gone. Extractor-kind policy comes from package data, so no kind
+> keeps a host-owned account pane: the API-key value is entered in the
+> package's generic Configure… dialog (`PackageCredentialValuesSection`,
+> one write-only value row per declared requirement, bound through
+> `bindingReference`), and the library ID stays a `ZoteroConfig` sidecar
+> read by `wikictl extractor sync`.
+
 ## Dependency decision
 
 The package runs a HYBRID HTTP stack, chosen per seam:
