@@ -441,11 +441,11 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("NSViewRepresentable") == false)
 
         // ACP and Docling configuration follows the PDF route selection only.
-        // #1159: the Configure… button lives IN the route table (a per-row
-        // Configuration column) and opens a dialog (macos-design progressive
-        // disclosure) rather than inline sections.
+        // The defaults table has no Configuration column: setup opens through
+        // the status badge's recovery dialog (Configure…) into the shared
+        // service dialogs (macos-design progressive disclosure).
         #expect(source.contains("switch routeSelections[row.id]"))
-        #expect(source.contains("TableColumn(\"Configuration\")"))
+        #expect(source.contains("TableColumn(\"Configuration\")") == false)
         #expect(source.contains("Button(\"Configure…\")"))
         #expect(source.contains(".sheet(item: $serviceConfigurationDialog)"))
         #expect(source.contains("ACPConfigurationDialog("))
