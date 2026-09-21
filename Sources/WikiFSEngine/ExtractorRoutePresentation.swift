@@ -63,9 +63,19 @@ public struct ExtractorRouteDescriptor: Hashable, Sendable {
     public let displayName: String
     public let systemImage: String?
 
+    /// A route's display name is load-bearing UI: it is what the Defaults
+    /// table shows and what accessibility speaks. Every producer feeds it
+    /// from validated data (compiled host constants, manifest-validated
+    /// registration names, or the route's MIME), so a blank name is a
+    /// programmer error and crashes loudly at first touch instead of
+    /// rendering an empty row label.
     public init(route: ExtractorRouteID, displayName: String, systemImage: String?) {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            preconditionFailure("route descriptor requires a non-blank display name for \(route)")
+        }
         self.route = route
-        self.displayName = displayName
+        self.displayName = trimmed
         self.systemImage = systemImage
     }
 }
