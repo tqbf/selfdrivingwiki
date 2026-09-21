@@ -1416,6 +1416,7 @@ struct ExtractionSettingsView: View {
                         }
                         .controlSize(.small)
                         .disabled(packageModel.isBusy)
+                        .frame(maxWidth: .infinity, alignment: .center)
                         .accessibilityIdentifier("\(PackageAccessibility.configurePrefix).\(row.id)")
                         .accessibilityLabel("Configure \(row.packageID), version \(row.version)")
                     }
