@@ -1354,9 +1354,10 @@ struct ExtractionSettingsView: View {
     }
 
     /// The package table, its add/remove bar, and the inline detail for the
-    /// selected package. The table takes a computed height and scrolls
-    /// internally, so the installed package count cannot stretch the Settings
-    /// window.
+    /// selected package. The table sizes to its full row count — no nested
+    /// scroll area, whose overlay scrollbar is invisible until scrolled and
+    /// whose wheel events the surrounding form claims — so the section
+    /// scrolls as one piece when it outgrows the Settings window.
     @ViewBuilder private var packageTable: some View {
         VStack(alignment: .leading, spacing: Metrics.packageSectionSpacing) {
             Table(packageModel.tableRows, selection: $selectedPackageID) {
@@ -1384,7 +1385,7 @@ struct ExtractionSettingsView: View {
                 }
                 .width(min: 150, ideal: 170)
             }
-            .frame(height: SettingsTableMetrics.height(
+            .frame(height: SettingsTableMetrics.unconstrainedHeight(
                 forRowCount: packageModel.tableRows.count))
             .accessibilityIdentifier(PackageAccessibility.table)
             .accessibilityLabel("Installed extractor packages")
