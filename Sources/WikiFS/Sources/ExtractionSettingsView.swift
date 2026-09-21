@@ -582,14 +582,6 @@ struct ExtractionSettingsView: View {
             switch selectedPane {
             case .defaults: defaultsPane
             case .packages: packagesPane
-            case .zotero:
-                // The Zotero account pane: API key (Keychain, write-only)
-                // + library ID for `wikictl extractor sync zotero`. Lives inside
-                // Extraction because Zotero is a reviewed extractor
-                // package — this is the one home for extractor setup.
-                ZoteroSettingsView(
-                    containerDirectory: containerDirectory,
-                    credentials: credentials)
             }
         }
         .frame(minWidth: Metrics.width, minHeight: Metrics.height)
@@ -812,6 +804,7 @@ struct ExtractionSettingsView: View {
                 PackageConfigurationDialog(
                     title: packageConfigurationTitle(package),
                     requirements: credentialRequirements(for: package),
+                    credentials: credentials,
                     authorizeRequirement: authorizeRequirement,
                     revokeRequirement: revokeRequirement,
                     onCredentialMutation: { outcome in await handleMutationOutcome(outcome) })
@@ -1769,9 +1762,106 @@ struct ExtractionSettingsView: View {
         }
     }
 
+    /// Stored credential VALUES for one package's declared requirements —
+    /// the generic, manifest-driven surface. Extractor-kind policy comes
+    /// from package data (AGENTS.md), so no package gets a host-owned
+    /// account pane: each row writes to the requirement's bound reference
+    /// through the write-only credential authority, and values are never
+    /// read back into the UI.
+    struct PackageCredentialValuesSection: View {
+        let requirements: [ExtractorCredentialRequirementSummary]
+        let credentials: any CredentialDescribing & CredentialWriting
+
+        var body: some View {
+            Section {
+                ForEach(requirements) { summary in
+                    PackageCredentialValueRow(summary: summary, credentials: credentials)
+                }
+            } header: {
+                Text("Credential Values")
+            } footer: {
+                Text("Values are stored in your Keychain and never shown. A stored value alone does not grant access — the package still needs authorization below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// One requirement's value row: a blank draft, Save (normalized), Remove
+    /// (when a value exists), and the configured state from `describe` —
+    /// never a resolved value. Mirrors the write-only discipline the former
+    /// per-service account panes kept.
+    struct PackageCredentialValueRow: View {
+        let summary: ExtractorCredentialRequirementSummary
+        let credentials: any CredentialDescribing & CredentialWriting
+        @State private var draft = ""
+        @State private var isConfigured = false
+        @State private var failureText: String?
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    SecureField(summary.label, text: $draft)
+                        .onSubmit(save)
+                    Button("Save", action: save)
+                        .disabled(CredentialValue.normalized(draft) == nil)
+                    if isConfigured {
+                        Button("Remove", role: .destructive, action: remove)
+                    }
+                }
+                if isConfigured, CredentialValue.normalized(draft) == nil {
+                    Label("A value is stored in your Keychain.", systemImage: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let failureText {
+                    Text(failureText)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+            .onAppear(perform: refreshConfiguredState)
+        }
+
+        private var boundReference: CredentialReference? {
+            ExtractorCredentialSettingsSupport.bindingReference(for: summary)
+        }
+
+        private func refreshConfiguredState() {
+            guard let reference = boundReference else { return }
+            isConfigured = credentials.describe(reference).isConfigured
+        }
+
+        private func save() {
+            guard let reference = boundReference,
+                  let value = CredentialValue.normalized(draft) else { return }
+            do {
+                try credentials.set(value, for: reference)
+                draft = ""
+                failureText = nil
+                refreshConfiguredState()
+            } catch {
+                failureText = "The value could not be stored in your Keychain."
+            }
+        }
+
+        private func remove() {
+            guard let reference = boundReference else { return }
+            do {
+                try credentials.unset(reference)
+                draft = ""
+                failureText = nil
+                refreshConfiguredState()
+            } catch {
+                failureText = "The stored value could not be removed."
+            }
+        }
+    }
+
     struct PackageConfigurationDialog: View {
         let title: String
         let requirements: [ExtractorCredentialRequirementSummary]
+        let credentials: any CredentialDescribing & CredentialWriting
         let authorizeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
         let revokeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
         let onCredentialMutation: (ExtractorPackageMutationOutcome?) async -> Void
@@ -1783,6 +1873,11 @@ struct ExtractionSettingsView: View {
                     Section {
                         Text(title)
                             .font(.headline)
+                    }
+                    if requirements.isEmpty == false {
+                        PackageCredentialValuesSection(
+                            requirements: requirements,
+                            credentials: credentials)
                     }
                     CredentialAuthorizationConfiguration(
                         requirements: requirements,
@@ -2357,13 +2452,13 @@ struct ExtractorCredentialRequirementSummary: Identifiable, Hashable, Sendable {
 }
 
 /// The jobs Settings → Extraction does. They are separate panes because
-/// only one is needed at a time: choosing what opens a document type,
-/// managing the packages those choices draw from, and the Zotero account
-/// the reviewed zotero package draws its credentials from.
+/// only one is needed at a time: choosing what opens a document type, and
+/// managing the packages those choices draw from. Per-package account and
+/// credential surfaces live in each package's Configure… dialog — no kind
+/// gets a host-owned pane (extractor-kind policy comes from package data).
 enum ExtractionSettingsPane: String, CaseIterable, Identifiable, Hashable, Sendable {
     case defaults
     case packages
-    case zotero
 
     var id: String { rawValue }
 
@@ -2371,7 +2466,6 @@ enum ExtractionSettingsPane: String, CaseIterable, Identifiable, Hashable, Senda
         switch self {
         case .defaults: "Defaults"
         case .packages: "Packages"
-        case .zotero: "Zotero"
         }
     }
 }

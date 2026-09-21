@@ -301,5 +301,37 @@ struct ExtractorCredentialSettingsHostedTests {
             encoding: .utf8)
         #expect(supportSource.contains("ExtractorCredentialAuthorizationWriter(") == false)
     }
+
+    /// Source contract: the per-package credential VALUE surface is generic
+    /// and write-only. It binds through the same `bindingReference` policy
+    /// the authorize action uses, writes normalized values only, and never
+    /// resolves one; and no extractor kind keeps a host-owned account pane.
+    @Test func packageCredentialValueSurfaceStaysGenericAndWriteOnly() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let viewSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/WikiFS/Sources/ExtractionSettingsView.swift"),
+            encoding: .utf8)
+
+        // The generic, manifest-driven value rows exist and route through
+        // the shared binding policy.
+        #expect(viewSource.contains("PackageCredentialValuesSection"))
+        #expect(viewSource.contains("PackageCredentialValueRow"))
+        #expect(viewSource.contains("ExtractorCredentialSettingsSupport.bindingReference(for:"))
+        #expect(viewSource.contains("CredentialValue.normalized"))
+        #expect(viewSource.contains("credentials.set(value, for: reference)"))
+        #expect(viewSource.contains("credentials.unset(reference)"))
+
+        // Write-only: describe and write, never resolve a value into the UI.
+        #expect(viewSource.contains("credentials.resolve") == false)
+
+        // Kind neutrality: no host-owned account pane survives for any one
+        // extractor kind.
+        #expect(viewSource.contains("ZoteroSettingsView") == false)
+        #expect(viewSource.contains("case .zotero:") == false)
+    }
 }
 #endif
