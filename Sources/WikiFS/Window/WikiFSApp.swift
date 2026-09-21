@@ -889,8 +889,12 @@ struct WikiFSApp: App {
                             guard let reference = ExtractorCredentialSettingsSupport
                                 .bindingReference(for: summary)
                             else {
+                                DebugLog.extraction(
+                                    "credentials: authorize closure found NO binding reference for \(summary.packageID)/\(summary.requirementID)")
                                 return .failed("This requirement could not be authorized.")
                             }
+                            DebugLog.extraction(
+                                "credentials: authorize closure granting \(summary.packageID)/\(summary.requirementID) → \(reference.rawValue)")
                             let requirement = try ExtractorCredentialRequirement(
                                 id: ExtractorCredentialRequirementID(
                                     validating: summary.requirementID),
@@ -898,7 +902,7 @@ struct WikiFSApp: App {
                                 isOptional: summary.isOptional,
                                 label: summary.label,
                                 purpose: summary.purpose)
-                            _ = try await writer.grant(
+                            let snapshot = try await writer.grant(
                                 packageID: ExtractorPackageID(
                                     validating: summary.packageID),
                                 registrationID: ExtractorRegistrationID(
@@ -907,8 +911,12 @@ struct WikiFSApp: App {
                                 mimeTypes: summary.mimeTypes,
                                 requirement: requirement,
                                 credentialReference: reference)
+                            DebugLog.extraction(
+                                "credentials: grant written generation=\(snapshot.generation) records=\(snapshot.records.count)")
                             return .succeeded(nil)
                         } catch {
+                            DebugLog.extraction(
+                                "credentials: authorize closure FAILED for \(summary.packageID)/\(summary.requirementID): \(ExtractorPackageMutationMessage.describe(error))")
                             return .failed(ExtractorPackageMutationMessage.describe(error))
                         }
                     },
@@ -918,13 +926,19 @@ struct WikiFSApp: App {
                                 layout: ExtractorCredentialAuthorizationStoreLayout(
                                     appGroupContainerRoot: containerDirectory),
                                 processRole: .app)
-                            _ = try await writer.revoke(
+                            DebugLog.extraction(
+                                "credentials: revoke closure revoking \(summary.packageID)/\(summary.requirementID)")
+                            let snapshot = try await writer.revoke(
                                 packageID: ExtractorPackageID(
                                     validating: summary.packageID),
                                 requirementID: ExtractorCredentialRequirementID(
                                     validating: summary.requirementID))
+                            DebugLog.extraction(
+                                "credentials: revoke written generation=\(snapshot.generation) records=\(snapshot.records.count)")
                             return .succeeded(nil)
                         } catch {
+                            DebugLog.extraction(
+                                "credentials: revoke closure FAILED for \(summary.packageID)/\(summary.requirementID): \(ExtractorPackageMutationMessage.describe(error))")
                             return .failed(ExtractorPackageMutationMessage.describe(error))
                         }
                     },
