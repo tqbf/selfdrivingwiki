@@ -61,8 +61,22 @@ struct ExtractorRouteRecoveryFacts: Hashable, Sendable {
     var macOSVersion = "unknown"
 }
 
+/// What ``ExtractorStatusDialog`` renders: the presentation-shaped parts of a
+/// status story, independent of whether the subject is a route (the Defaults
+/// picker's accessibility summary) or an installed package (the Packages
+/// table's status symbol).
+protocol ExtractorStatusPresenting: Identifiable {
+    var systemImage: String { get }
+    var title: String { get }
+    var summary: String { get }
+    var impact: String { get }
+    var actions: [ExtractorRouteRecoveryAction] { get }
+    var accessibilityText: String { get }
+    var diagnosticReport: String { get }
+}
+
 /// The complete value presentation for one route status and recovery sheet.
-struct ExtractorRouteRecoveryPresentation: Identifiable, Hashable, Sendable {
+struct ExtractorRouteRecoveryPresentation: Identifiable, Hashable, Sendable, ExtractorStatusPresenting {
     let route: ExtractorRouteID
     let extractorName: String
     let status: ExtractorRouteStatus
@@ -83,6 +97,29 @@ struct ExtractorRouteRecoveryPresentation: Identifiable, Hashable, Sendable {
         primaryAction.map { [$0] + secondaryActions } ?? secondaryActions
     }
     var isReady: Bool { status == .ready }
+}
+
+/// Recovery-sheet presentation for one installed package's status. The
+/// Packages table's status symbol opens this; actions are the package-level
+/// subset (authorize, retry activation, refresh, copy diagnostics) — route
+/// selection stays in the Defaults table.
+struct ExtractorPackageStatusPresentation: Identifiable, Hashable, Sendable, ExtractorStatusPresenting {
+    let packageRowID: ExtractorPackageTableRow.ID
+    let systemImage: String
+    let title: String
+    let summary: String
+    let impact: String
+    let primaryAction: ExtractorRouteRecoveryAction?
+    let secondaryActions: [ExtractorRouteRecoveryAction]
+    let accessibilityText: String
+    let diagnosticReport: String
+    /// The requirement the Authorize action would confirm, when one applies.
+    let authorizationRequirement: ExtractorCredentialRequirementSummary?
+
+    var id: String { packageRowID }
+    var actions: [ExtractorRouteRecoveryAction] {
+        primaryAction.map { [$0] + secondaryActions } ?? secondaryActions
+    }
 }
 
 /// A deterministic, bounded, value-only diagnostic report.
@@ -489,16 +526,14 @@ struct ExtractionSettingsView: View {
     @State private var authorizationCandidate: ExtractorCredentialRequirementSummary?
     /// Pending revocation confirmation.
     @State private var revocationCandidate: ExtractorCredentialRequirementSummary?
-    @State private var routeStatusDialog: ExtractorRouteRecoveryPresentation?
-    @State private var routeStatusAction: ExtractorRouteRecoveryAction?
-    /// Route whose picker receives focus after the status sheet finishes
-    /// dismissing ("Choose Another Extractor…").
-    @State private var pendingFocusRoute: ExtractorRouteID?
+    /// The package status symbol's recovery sheet (Packages table).
+    @State private var packageStatusDialog: ExtractorPackageStatusPresentation?
+    /// The recovery action currently running, for in-progress UI.
+    @State private var recoveryActionInProgress: ExtractorRouteRecoveryAction?
     /// Event-driven snapshot of the enabled agent providers. Computed once per
     /// rebuild instead of per render: reading provider config hits disk (and
     /// can trigger discovery), which must not run on every keystroke.
     @State private var enabledProvidersCache: [AgentProvider]?
-    @FocusState private var focusedRoutePicker: ExtractorRouteID?
 
     enum TestPhase: Equatable {
         case idle
@@ -678,20 +713,13 @@ struct ExtractionSettingsView: View {
                 announceAccessibility(diagnostic)
             }
         }
-        .sheet(item: $routeStatusDialog) { presentation in
+        .sheet(item: $packageStatusDialog) { presentation in
             ExtractorStatusDialog(
                 presentation: presentation,
-                inProgressAction: routeStatusAction,
+                inProgressAction: recoveryActionInProgress,
                 onAction: { action in
-                    handleRecoveryAction(action, presentation: presentation)
+                    handlePackageRecoveryAction(action, presentation: presentation)
                 })
-        }
-        // Focus lands after the sheet's dismissal completes, so sheet teardown
-        // cannot reset first responder before the picker receives focus.
-        .onChange(of: routeStatusDialog) { oldValue, newValue in
-            guard oldValue != nil, newValue == nil, let route = pendingFocusRoute else { return }
-            pendingFocusRoute = nil
-            focusedRoutePicker = route
         }
     }
 
@@ -726,9 +754,10 @@ struct ExtractionSettingsView: View {
     // MARK: - Extractor route table
 
     /// The native, registration-driven route table: one row per extraction
-    /// route (Format), a pop-up of compatible choices (Default extractor), and
-    /// the live status. The fixed height keeps the Settings window bounded —
-    /// the table scrolls internally when registrations add routes.
+    /// route (Format) and a pop-up of compatible choices (Default extractor).
+    /// Status presents beside the package name in the Packages table. The
+    /// fixed height keeps the Settings window bounded — the table scrolls
+    /// internally when registrations add routes.
     private var extractorRouteTable: some View {
         Table(defaultsRows) {
             TableColumn("Format") { (row: ExtractionDefaultsTableRow) in
@@ -747,15 +776,6 @@ struct ExtractionSettingsView: View {
                 }
             }
             .width(Metrics.defaultExtractorColumnWidth)
-            TableColumn("Status") { (row: ExtractionDefaultsTableRow) in
-                if case .route(let routeRow) = row {
-                    statusLabel(routeRow)
-                }
-            }
-            // Status is a semantic-colored icon + short label — compact by
-            // design (PR 4 review follow-up: the long phrase truncated, so
-            // the icon carries the state and the short text never wraps).
-            .width(min: 110, ideal: 120)
         }
         // Every cell in this table holds a pop-up, so its rows are taller
         // than the package table's text rows.
@@ -827,7 +847,6 @@ struct ExtractionSettingsView: View {
         // Fill the column so every row's picker is the same width instead of
         // sizing to its longest option.
         .frame(maxWidth: .infinity, alignment: .leading)
-        .focused($focusedRoutePicker, equals: row.route)
         .accessibilityIdentifier("\(RouteAccessibility.pickerPrefix).\(Self.accessibilityKey(row.route))")
         .accessibilityLabel("Default extractor for \(row.descriptor.displayName)")
         .accessibilityValue(accessibilityValue(row))
@@ -881,58 +900,6 @@ struct ExtractionSettingsView: View {
             return .prompt
         case .builtIn:
             return .builtInTagBased
-        }
-    }
-
-    /// Status renders as a semantic icon and a short label. Each state uses a
-    /// distinct shape so it remains clear without color.
-    @ViewBuilder
-    private func statusLabel(_ row: ExtractorRouteSettingsRow) -> some View {
-        let presentation = recoveryPresentation(for: row)
-        if presentation.isReady || isPackageRoute(row) {
-            // Package setup belongs to the package table's Configure column;
-            // keep the Defaults status as a passive summary for those routes.
-            statusBadge(presentation)
-        } else {
-            Button {
-                routeStatusDialog = presentation
-            } label: {
-                statusBadge(presentation)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier(
-                "\(RouteAccessibility.statusPrefix).\(Self.accessibilityKey(row.route))")
-            .accessibilityLabel(presentation.accessibilityText)
-            .accessibilityHint("Show status details")
-        }
-    }
-
-    private func isPackageRoute(_ row: ExtractorRouteSettingsRow) -> Bool {
-        row.choices.contains {
-            Self.selection(for: $0) == routeSelections[row.id]
-                && $0.category == .installedPackage
-        }
-    }
-
-    private func statusBadge(_ presentation: ExtractorRouteRecoveryPresentation) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: presentation.systemImage)
-                .foregroundStyle(statusColor(presentation.status))
-            Text(presentation.shortStatusLabel)
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .lineLimit(1)
-        .truncationMode(.tail)
-        .minimumScaleFactor(0.8)
-        .help("\(presentation.summary) \(presentation.impact)")
-    }
-
-    private func statusColor(_ status: ExtractorRouteStatus) -> Color {
-        switch status {
-        case .ready: .green
-        case .needsSetup, .packageNotInstalled: .orange
-        case .waitingForHostActivation: .yellow
-        case .activationFailed, .unavailableSelection: .red
         }
     }
 
@@ -1063,94 +1030,121 @@ struct ExtractionSettingsView: View {
     private enum RouteAccessibility {
         static let table = "extraction.routes.table"
         static let pickerPrefix = "extraction.routes.picker"
-        static let statusPrefix = "extraction.routes.status"
     }
 
-    // MARK: - Extractor status recovery
+    // MARK: - Package status recovery
 
-    private func handleRecoveryAction(
+    private func handlePackageRecoveryAction(
         _ action: ExtractorRouteRecoveryAction,
-        presentation: ExtractorRouteRecoveryPresentation
+        presentation: ExtractorPackageStatusPresentation
     ) {
-        guard routeStatusAction == nil else { return }
+        guard recoveryActionInProgress == nil else { return }
         switch action {
-        case .configure:
-            routeStatusDialog = nil
-            guard let row = routeRows.first(where: { $0.route == presentation.route }),
-                  let dialog = configurationDialog(for: row)
-            else { return }
-            Task { @MainActor in serviceConfigurationDialog = dialog }
         case .authorizeCredential:
-            routeStatusDialog = nil
+            packageStatusDialog = nil
             guard let requirement = presentation.authorizationRequirement else {
                 DebugLog.extraction(
-                    "credentials: route dialog authorize tapped but the presentation carries no requirement — nothing will happen")
+                    "credentials: package dialog authorize tapped but the presentation carries no requirement — nothing will happen")
                 return
             }
             DebugLog.extraction(
-                "credentials: route dialog authorize tapped for \(requirement.packageID)/\(requirement.requirementID)")
+                "credentials: package dialog authorize tapped for \(requirement.packageID)/\(requirement.requirementID)")
             Task { @MainActor in authorizationCandidate = requirement }
-        case .testConnection:
-            // testDocling single-flights on doclingTest and returns without
-            // running its completion when a test is already in flight; check
-            // the precondition BEFORE latching the in-progress action, or the
-            // sheet wedges with every control disabled.
-            guard doclingTest != .testing else {
-                announceAccessibility("A connection test is already running.")
-                return
-            }
-            routeStatusAction = action
-            testDocling {
-                routeStatusAction = nil
-                refreshPresentedStatus(for: presentation.route)
-                announceAccessibility("Docling connection test completed.")
-            }
         case .retryActivation:
-            runRecoveryAction(action, completion: "Extractor activation retry completed.") {
+            runPackageRecoveryAction(action, completion: "Extractor activation retry completed.") {
                 await retryActivation?()
             }
         case .refreshStatus:
-            runRecoveryAction(action, completion: "Extractor status refreshed.") {}
-        case .chooseAnotherExtractor:
-            pendingFocusRoute = presentation.route
-            routeStatusDialog = nil
+            runPackageRecoveryAction(action, completion: "Extractor status refreshed.") {}
         case .copyDiagnostics:
             if copyDiagnostics(presentation.diagnosticReport) {
                 announceAccessibility("Extractor diagnostics copied.")
             } else {
                 announceAccessibility("Extractor diagnostics could not be copied.")
             }
+        case .configure, .testConnection, .chooseAnotherExtractor:
+            // Route-scoped actions never appear in a package presentation.
+            DebugLog.extraction(
+                "credentials: package dialog ignored route-scoped action \(action.rawValue)")
         }
     }
 
-    private func runRecoveryAction(
+    private func runPackageRecoveryAction(
         _ action: ExtractorRouteRecoveryAction,
         completion: String,
         operation: @escaping @MainActor () async -> Void
     ) {
-        routeStatusAction = action
+        recoveryActionInProgress = action
         Task { @MainActor in
             await operation()
             await packageModel.refresh()
             rebuildRouteRows()
-            routeStatusAction = nil
-            if let route = routeStatusDialog?.route { refreshPresentedStatus(for: route) }
+            recoveryActionInProgress = nil
             announceAccessibility(completion)
         }
     }
 
-    private func refreshPresentedStatus(for route: ExtractorRouteID) {
-        rebuildRouteRows()
-        guard let row = routeRows.first(where: { $0.route == route }) else {
-            routeStatusDialog = nil
-            return
+    /// The recovery-sheet story for one package row: status-appropriate
+    /// actions plus the same bounded diagnostic text the detail pane shows.
+    private func packageStatusPresentation(
+        for row: ExtractorPackageTableRow
+    ) -> ExtractorPackageStatusPresentation {
+        let requirement = row.installedRow
+            .flatMap {
+                Self.packageConfigurationID(for: $0, requirements: packageModel.snapshot.credentialRequirements)
+            }
+            .flatMap {
+                Self.credentialRequirements(for: $0, in: packageModel.snapshot.credentialRequirements).first
+            }
+        let primary: ExtractorRouteRecoveryAction?
+        let secondary: [ExtractorRouteRecoveryAction]
+        switch row.status {
+        case .needsAuthorization:
+            primary = requirement != nil ? .authorizeCredential : .refreshStatus
+            secondary = [.refreshStatus, .copyDiagnostics]
+        case .notReady:
+            primary = .retryActivation
+            secondary = [.refreshStatus, .copyDiagnostics]
+        case .waitingForActivation:
+            primary = .refreshStatus
+            secondary = [.copyDiagnostics]
+        case .active:
+            // Active packages show a passive symbol; the dialog is a safety
+            // net if one is presented anyway.
+            primary = nil
+            secondary = [.refreshStatus, .copyDiagnostics]
         }
-        let refreshed = recoveryPresentation(for: row)
-        routeStatusDialog = refreshed.isReady ? nil : refreshed
+        return ExtractorPackageStatusPresentation(
+            packageRowID: row.id,
+            systemImage: row.status.systemImage,
+            title: "\(row.packageID) \(row.status.label.lowercased())",
+            summary: row.status.explanation,
+            impact: ExtractorRouteRecoveryPresenter.blockedImpact,
+            primaryAction: primary,
+            secondaryActions: secondary,
+            accessibilityText: "\(row.packageID), version \(row.version), \(row.status.label). \(row.status.explanation)",
+            diagnosticReport: Self.packageDiagnosticReport(for: row),
+            authorizationRequirement: requirement)
     }
 
-    struct ExtractorStatusDialog: View {
-        let presentation: ExtractorRouteRecoveryPresentation
+    /// Bounded, value-only package diagnostics — the same facts the detail
+    /// pane shows, in the copy-to-clipboard shape.
+    static func packageDiagnosticReport(for row: ExtractorPackageTableRow) -> String {
+        var lines = [
+            "Extractor Status Diagnostic",
+            "Package: \(row.packageID)",
+            "Version: \(row.version)",
+            "Status: \(row.status.label)",
+        ]
+        if let registrationID = row.registrationID {
+            lines.append("Registration: \(registrationID)")
+        }
+        lines.append("Detail: \(row.status.explanation)")
+        return lines.joined(separator: "\n")
+    }
+
+    struct ExtractorStatusDialog<Presentation: ExtractorStatusPresenting>: View {
+        let presentation: Presentation
         let inProgressAction: ExtractorRouteRecoveryAction?
         let onAction: (ExtractorRouteRecoveryAction) -> Void
         @State private var showsTechnicalDetails = false
@@ -1251,22 +1245,6 @@ struct ExtractionSettingsView: View {
 
     @State private var serviceConfigurationDialog: ServiceConfigurationDialog?
 
-    /// The configuration dialog a row needs, based on its current selection:
-    /// ACP and Docling Serve (including the reviewed-Docling selection) open
-    /// dialogs; other choices have no connected-service configuration.
-    private func configurationDialog(
-        for row: ExtractorRouteSettingsRow
-    ) -> ServiceConfigurationDialog? {
-        switch routeSelections[row.id] {
-        case .connectedService(.acp):
-            return .acp
-        case .connectedService(.doclingServe), .reviewedDocling:
-            return .docling
-        default:
-            return nil
-        }
-    }
-
     private var doclingCredentialRequirements: [ExtractorCredentialRequirementSummary] {
         let reviewed = ReviewedExtractorPackages.doclingServe
         return packageModel.snapshot.credentialRequirements.filter {
@@ -1360,10 +1338,9 @@ struct ExtractionSettingsView: View {
                 TableColumn("Package") { (row: ExtractorPackageTableRow) in
                     // Status rides beside the name as a symbol: the icon
                     // carries the state, the tooltip carries the sentence,
-                    // and the full diagnostic stays in the detail below.
+                    // and a non-active symbol opens the recovery sheet.
                     HStack(spacing: 5) {
-                        Image(systemName: row.status.systemImage)
-                            .foregroundStyle(row.status.tint)
+                        packageStatusSymbol(row)
                         Text(row.packageID)
                     }
                     .help("\(row.status.label). \(row.status.explanation)")
@@ -1479,6 +1456,29 @@ struct ExtractionSettingsView: View {
             .accessibilityLabel("Refresh installed extractor packages")
         }
         .controlSize(.small)
+    }
+
+    /// The package row's status symbol. Active is a passive glyph; any other
+    /// state is a button that opens the recovery sheet with the actions that
+    /// apply to a package (authorize, retry activation, refresh, diagnostics).
+    @ViewBuilder
+    private func packageStatusSymbol(_ row: ExtractorPackageTableRow) -> some View {
+        if row.status == .active {
+            Image(systemName: row.status.systemImage)
+                .foregroundStyle(row.status.tint)
+                .accessibilityHidden(true)
+        } else {
+            Button {
+                packageStatusDialog = packageStatusPresentation(for: row)
+            } label: {
+                Image(systemName: row.status.systemImage)
+                    .foregroundStyle(row.status.tint)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("\(PackageAccessibility.statusPrefix).\(row.id)")
+            .accessibilityLabel("\(row.packageID), version \(row.version). \(row.status.label). \(row.status.explanation)")
+            .accessibilityHint("Show status details")
+        }
     }
 
     /// The selected package's diagnostics, kept with the package they describe:

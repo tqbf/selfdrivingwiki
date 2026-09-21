@@ -395,11 +395,13 @@ struct ExtractionRouteTableHostedTests {
     func routeTableSourceContract() throws {
         let source = try sourceView()
 
-        // The table and its columns.
+        // The table and its columns. Status lives with the package in the
+        // Packages table (its symbol opens the recovery sheet), so the
+        // defaults table is just Format + picker.
         #expect(source.contains("Table(defaultsRows)"))
         #expect(source.contains("TableColumn(\"Format\")"))
         #expect(source.contains("TableColumn(\"Default extractor\")"))
-        #expect(source.contains("TableColumn(\"Status\")"))
+        #expect(source.contains("TableColumn(\"Status\")") == false)
 
         // Stable route-derived accessibility identifiers and labels.
         #expect(source.contains("extraction.routes.table"))
@@ -415,7 +417,10 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("\"Not installed\""))
         #expect(source.contains("\"Starting\""))
         #expect(source.contains("\"Failed\""))
-        #expect(source.contains("extraction.routes.status"))
+        // The route status prefix and the focus-restore flow are gone with
+        // the column; package status carries "extraction.packages.status".
+        #expect(source.contains("extraction.routes.status") == false)
+        #expect(source.contains("focusedRoutePicker") == false)
         #expect(source.contains("Show status details"))
         #expect(source.contains("ExtractorStatusDialog("))
         #expect(source.contains("Technical Details"))
@@ -440,11 +445,11 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("rebuildRouteRows()"))
         #expect(source.contains("NSViewRepresentable") == false)
 
-        // ACP and Docling configuration follows the PDF route selection only.
-        // The defaults table has no Configuration column: setup opens through
-        // the status badge's recovery dialog (Configure…) into the shared
-        // service dialogs (macos-design progressive disclosure).
-        #expect(source.contains("switch routeSelections[row.id]"))
+        // ACP and Docling configuration is package-level now: the Packages
+        // table's status symbol opens the recovery sheet, which presents the
+        // shared service dialogs above the pane switcher (macos-design
+        // progressive disclosure) rather than inline sections.
+        #expect(source.contains("switch routeSelections[row.id]") == false)
         #expect(source.contains("TableColumn(\"Configuration\")") == false)
         #expect(source.contains("Button(\"Configure…\")"))
         #expect(source.contains(".sheet(item: $serviceConfigurationDialog)"))
