@@ -34,5 +34,21 @@ enum SettingsTableMetrics {
         let visibleRows = min(max(count, minimumVisibleRows), maximumVisibleRows)
         return headerHeight + CGFloat(visibleRows) * rowHeight
     }
+
+    /// Height for a table that shows EVERY row and lets the surrounding
+    /// Settings form scroll. The capped form deliberately creates a nested
+    /// scroll area: under macOS overlay scrollbars that area shows no
+    /// scrollbar until it is scrolled, and wheel events over the nested
+    /// AppKit table are claimed by the surrounding SwiftUI form — so rows
+    /// past the ceiling were unreachable (a long packages list hid its last
+    /// rows entirely). The two-row floor stays: a one-row table still reads
+    /// as a stray strip.
+    static func unconstrainedHeight(
+        forRowCount count: Int,
+        rowHeight: CGFloat = textRowHeight
+    ) -> CGFloat {
+        guard count > 0 else { return emptyHeight }
+        return headerHeight + CGFloat(max(count, minimumVisibleRows)) * rowHeight
+    }
 }
 #endif

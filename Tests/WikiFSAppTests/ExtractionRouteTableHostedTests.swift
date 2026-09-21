@@ -242,6 +242,59 @@ struct ExtractionRouteTableHostedTests {
         #expect(content.fittingSize.height > 0)
     }
 
+    /// Regression (hidden package rows): a packages list longer than the
+    /// visible-row ceiling must not hide rows inside the table's own scroll
+    /// area. A nested scroll view under macOS overlay scrollbars shows no
+    /// scrollbar until scrolled, and wheel events over a nested AppKit table
+    /// are routinely claimed by the surrounding SwiftUI form — so rows past
+    /// the cap were unreachable (the installed Zotero package sorted last
+    /// and could not be selected or removed). The table sizes to its full
+    /// content instead, and the Settings form is the only scroll authority.
+    @Test("a packages table past the visible-row ceiling keeps every row reachable")
+    func packagesTableBeyondCeilingKeepsEveryRowReachable() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        let dir = try tempDirectory("package-table-reachability")
+        var loaded = snapshot()
+        loaded.rows = try (0..<20).map { index in
+            let raw = "org.example.pkg\(String(format: "%02d", index))"
+            return ExtractorPackageSettingsRow(
+                kind: .pdf,
+                packageID: raw,
+                version: "1.0.0",
+                digestPrefix: String(repeating: "c", count: 12),
+                registrationID: "pdf",
+                revision: ExtractorPackageRevisionID(
+                    packageID: try ExtractorPackageID(validating: raw),
+                    version: try ExtractorPackageVersion(validating: "1.0.0"),
+                    digest: try ExtractorPackageDigest(hex: String(repeating: "c", count: 64))))
+        }
+        let window = mount(makeView(directory: dir, snapshot: loaded, pane: .packages))
+        try await waitUntil { self.tableViewRowCounts(window) == [20] }
+
+        let table = try #require(tableViews(window).first)
+        // The measured row height must match the metric the frame is sized
+        // with — if the real rows are taller than `textRowHeight`, every
+        // height computed from it clips rows off the bottom.
+        let measuredRowHeight = table.rect(ofRow: 0).height
+        #expect(abs(measuredRowHeight - SettingsTableMetrics.textRowHeight) < 1.5)
+
+        // No row may live below the table's internal fold: the table shows
+        // all of its rows, so the section scrolls as one piece.
+        #expect(clippedRowCount(table) == 0)
+
+        // The section outgrows the 560pt window, so SOMETHING must scroll —
+        // and it must not be the table's own nested clip view.
+        let tableClip = try #require(table.enclosingScrollView?.contentView)
+        #expect(tableClip.documentRect.height <= tableClip.bounds.height + 0.5)
+        let content = try #require(window.contentView)
+        let scrollingAncestor = containsDescendant(content) { view in
+            guard let clip = view as? NSClipView, clip !== tableClip else { return false }
+            return clip.documentRect.height > clip.bounds.height + 0.5
+        }
+        #expect(scrollingAncestor)
+    }
+
     @Test("a non-ready route status dialog mounts with recovery controls")
     func nonReadyStatusOpensRecoverySheet() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()

@@ -387,7 +387,7 @@ struct RendererSettingsView: View {
                 }
                 .width(min: 110, ideal: 130)
             }
-            .frame(height: SettingsTableMetrics.height(forRowCount: model.rows.count))
+            .frame(height: SettingsTableMetrics.unconstrainedHeight(forRowCount: model.rows.count))
             .accessibilityIdentifier("renderer-package-table")
             .accessibilityLabel("Renderer packages installed on this Mac")
             .overlay {
