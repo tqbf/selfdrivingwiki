@@ -702,7 +702,10 @@ struct ExtractorRouteRecoveryPresenterTests {
             authorization: .needsAuthorization)]
         let unauthorized = ExtractorRouteRecoveryPresenter.present(
             row: docling, extractorName: "Docling Serve", facts: doclingFacts)
-        #expect(unauthorized.status == .needsSetup(.unauthorizedDoclingCredential))
+        #expect(unauthorized.status == .needsSetup(.unauthorizedCredential))
+        // The Docling-named fixture row must render generic copy: the branch
+        // matches any package with an unauthorized required credential.
+        #expect(unauthorized.summary == "Authorize the package to use the configured credential.")
         #expect(unauthorized.primaryAction == .authorizeCredential)
 
         doclingFacts.credentialRequirements = []
