@@ -1594,6 +1594,17 @@ struct ExtractionSettingsView: View {
             Text(summary.purpose)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            // Configuration is a separate fact from authorization; give it
+            // its own line so "Authorized" and "not set" never read as one
+            // sentence.
+            if summary.isConfigured == false {
+                Label(
+                    summary.sourceName == "" ? "Missing credential" : "\(summary.sourceName): not set",
+                    systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("\(RequirementAccessibility.missingPrefix).\(summary.id)")
+            }
             HStack {
                 Text(summary.isOptional ? "Optional" : "Required")
                     .font(.caption)
@@ -1652,12 +1663,6 @@ struct ExtractionSettingsView: View {
             Text("Changed — re-authorization needed")
                 .foregroundStyle(.orange)
                 .font(.caption)
-        }
-        if summary.isConfigured == false {
-            Text(summary.sourceName == "" ? "Missing credential" : "\(summary.sourceName): not set")
-                .foregroundStyle(.orange)
-                .font(.caption)
-                .accessibilityIdentifier("\(RequirementAccessibility.missingPrefix).\(summary.id)")
         }
     }
 
