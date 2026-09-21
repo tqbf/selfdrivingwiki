@@ -1808,11 +1808,16 @@ struct ExtractionSettingsView: View {
     struct PackageCredentialValuesSection: View {
         let requirements: [ExtractorCredentialRequirementSummary]
         let credentials: any CredentialDescribing & CredentialWriting
+        /// Refreshes the parent's snapshot after a save/remove so the
+        /// authorization rows' configured state updates in the same tick —
+        /// otherwise "not set" stays on screen until the dialog reopens.
+        let onMutation: () async -> Void
 
         var body: some View {
             Section {
                 ForEach(requirements) { summary in
-                    PackageCredentialValueRow(summary: summary, credentials: credentials)
+                    PackageCredentialValueRow(
+                        summary: summary, credentials: credentials, onMutation: onMutation)
                 }
             } header: {
                 Text("Credential Values")
@@ -1831,6 +1836,7 @@ struct ExtractionSettingsView: View {
     struct PackageCredentialValueRow: View {
         let summary: ExtractorCredentialRequirementSummary
         let credentials: any CredentialDescribing & CredentialWriting
+        let onMutation: () async -> Void
         @State private var draft = ""
         @State private var isConfigured = false
         @State private var failureText: String?
@@ -1883,6 +1889,7 @@ struct ExtractionSettingsView: View {
                 draft = ""
                 failureText = nil
                 refreshConfiguredState()
+                Task { await onMutation() }
                 DebugLog.extraction(
                     "credentials: value saved for \(summary.packageID)/\(summary.requirementID) configured=\(isConfigured)")
             } catch {
@@ -1901,6 +1908,7 @@ struct ExtractionSettingsView: View {
                 draft = ""
                 failureText = nil
                 refreshConfiguredState()
+                Task { await onMutation() }
                 DebugLog.extraction(
                     "credentials: value removed for \(summary.packageID)/\(summary.requirementID) configured=\(isConfigured)")
             } catch {
@@ -1930,7 +1938,8 @@ struct ExtractionSettingsView: View {
                     if requirements.isEmpty == false {
                         PackageCredentialValuesSection(
                             requirements: requirements,
-                            credentials: credentials)
+                            credentials: credentials,
+                            onMutation: { await onCredentialMutation(nil) })
                     }
                     CredentialAuthorizationConfiguration(
                         requirements: requirements,
