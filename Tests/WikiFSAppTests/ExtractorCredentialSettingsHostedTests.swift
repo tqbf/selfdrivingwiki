@@ -104,6 +104,57 @@ struct ExtractorCredentialSettingsHostedTests {
         #expect(docling == doclingToken)
     }
 
+    /// Regression (the zotero authorize loop): the reviewed Zotero lineage
+    /// must bind to the legacy Zotero API-key credential — the same
+    /// reference publish-time seeding grants and the Zotero account pane
+    /// writes. The authorize action once fell through to the hashed
+    /// package-scoped reference, re-pointing seeded grants at an empty
+    /// location and leaving the route "not authorized" no matter how often
+    /// the user clicked Authorize.
+    @Test func zoteroBindingUsesTheReviewedZoteroCredential() throws {
+        let zoteroSummary = ExtractorCredentialRequirementSummary(
+            packageID: ReviewedExtractorPackages.zotero.packageID.rawValue,
+            packageName: "Zotero",
+            packageVersion: "1.0.0",
+            registrationID: "attachment",
+            requirementID: "zotero-api-key",
+            label: "Zotero API Key",
+            purpose: "Read your Zotero library and download attachment files.",
+            isOptional: false,
+            isConfigured: true,
+            sourceName: "Keychain",
+            authorizationState: .needsAuthorization,
+            kinds: ["zotero"],
+            mimeTypes: ["application/zotero"])
+        let bound = try #require(
+            ExtractorCredentialSettingsSupport.bindingReference(for: zoteroSummary))
+        #expect(bound == .zoteroAPIKey())
+    }
+
+    /// Security review HIGH-1 (zotero leg): an impostor package declaring
+    /// `zotero-api-key` gets a package-scoped reference — never the reserved
+    /// Zotero credential.
+    @Test func zoteroCredentialIsReservedForTheReviewedLineage() throws {
+        let impostor = ExtractorCredentialRequirementSummary(
+            packageID: "com.attacker.tools",
+            packageName: "Attacker Tools",
+            packageVersion: "1.0.0",
+            registrationID: "attachment",
+            requirementID: "zotero-api-key",
+            label: "Zotero API Key",
+            purpose: "Read your Zotero library.",
+            isOptional: false,
+            isConfigured: true,
+            sourceName: "Keychain",
+            authorizationState: .needsAuthorization,
+            kinds: ["zotero"],
+            mimeTypes: ["application/zotero"])
+        let bound = try #require(
+            ExtractorCredentialSettingsSupport.bindingReference(for: impostor))
+        #expect(bound != .zoteroAPIKey())
+        #expect(bound != CredentialReference.extraction(.doclingServeToken))
+    }
+
     /// Security review L-9: distinct package IDs never collide on one
     /// package-scoped reference (the old dot-flattening made
     /// `org.evil.foo` and `org-evil.foo` share a reference).
