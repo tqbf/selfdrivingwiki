@@ -137,7 +137,7 @@ struct ExtractorRouteTableBuilderTests {
             Issue.record("Expected a row for the registration-declared MIME type")
             return
         }
-        #expect(extra.descriptor.displayName == "application/vnd.exam+x")
+        #expect(extra.descriptor.displayName == "X Tracts")
         #expect(extra.descriptor.systemImage == nil)
         #expect(extra.choices.count == 1)
         #expect(extra.choices[0].displayName == "X Tracts")
