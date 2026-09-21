@@ -126,6 +126,75 @@ public enum ReviewedExtractorPackages {
     }
 }
 
+/// One reviewed-lineage host-credential binding (security review HIGH-1):
+/// the exact stored credential a reviewed package's declared requirement
+/// resolves to when the user authorizes it. These references are reserved
+/// for their reviewed lineages — a package outside this table can never
+/// bind to them, no matter what it names its requirements.
+///
+/// One table serves both binding-policy consumers — publish-time grant
+/// seeding (`ReviewedExtractorBootstrap`) and the Settings authorize
+/// action (`ExtractorCredentialSettingsSupport`) — so the two can never
+/// disagree about which credential a lineage uses.
+public struct ReviewedExtractorCredentialBinding: Sendable, Hashable {
+    public let package: ReviewedExtractorPackage
+    public let requirementID: ExtractorCredentialRequirementID
+    public let reference: CredentialReference
+}
+
+/// Compiled reviewed credential bindings: golden constants with the same
+/// standing as the reviewed package identities.
+public enum ReviewedExtractorCredentialBindings {
+    /// Docling Serve's optional API token at its legacy extraction location.
+    public static let doclingServeToken = make(
+        package: ReviewedExtractorPackages.doclingServe,
+        requirementID: "api-token",
+        reference: CredentialReference.extraction(.doclingServeToken))
+
+    /// The Zotero API key at its legacy zotero-service location — the same
+    /// reference the Zotero account pane writes and publish-time seeding
+    /// grants.
+    public static let zoteroAPIKey = make(
+        package: ReviewedExtractorPackages.zotero,
+        requirementID: "zotero-api-key",
+        reference: .zoteroAPIKey())
+
+    public static let all: [ReviewedExtractorCredentialBinding] = [
+        doclingServeToken,
+        zoteroAPIKey,
+    ]
+
+    /// The reserved binding for one lineage + requirement id, if any.
+    public static func binding(
+        packageID: String,
+        requirementID: String
+    ) -> ReviewedExtractorCredentialBinding? {
+        all.first {
+            $0.package.packageID.rawValue == packageID
+                && $0.requirementID.rawValue == requirementID
+        }
+    }
+
+    /// Golden-constant construction: an invalid id or reference is a
+    /// programmer error and crashes at first touch.
+    private static func make(
+        package: ReviewedExtractorPackage,
+        requirementID: String,
+        reference: CredentialReference?
+    ) -> ReviewedExtractorCredentialBinding {
+        guard let requirementID = ExtractorCredentialRequirementID(rawValue: requirementID),
+              let reference
+        else {
+            preconditionFailure(
+                "Invalid compiled reviewed credential binding: \(package.packageID.rawValue)/\(requirementID)")
+        }
+        return ReviewedExtractorCredentialBinding(
+            package: package,
+            requirementID: requirementID,
+            reference: reference)
+    }
+}
+
 /// The host-owned reviewed overlay for one process.
 ///
 /// Reviewed revisions are admitted into this process's own operation root, so
