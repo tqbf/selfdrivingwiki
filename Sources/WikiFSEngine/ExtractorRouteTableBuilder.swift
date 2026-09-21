@@ -188,7 +188,10 @@ public enum ExtractorRouteTableBuilder {
     /// The display name package data gives one route: the lexicographically
     /// smallest registration displayName among the registrations whose
     /// declared kinds × MIME types cover the route, so the result never
-    /// depends on snapshot order.
+    /// depends on snapshot order. Blank names are treated as absent — the
+    /// manifest gate rejects them, but a snapshot built any other way
+    /// degrades to the MIME fallback instead of tripping the descriptor's
+    /// precondition in a settings render path.
     private static func registrationDisplayName(
         for route: ExtractorRouteID,
         in registrations: [ExtractorRouteRegistrationSnapshot]
@@ -202,6 +205,7 @@ public enum ExtractorRouteTableBuilder {
                 }
             }
             .map(\.displayName)
+            .filter { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
             .min()
     }
 
