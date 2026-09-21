@@ -1377,7 +1377,7 @@ struct ExtractionSettingsView: View {
                     Text(row.version)
                         .monospacedDigit()
                 }
-                .width(min: 70, ideal: 90)
+                .width(min: 60, ideal: 70)
                 TableColumn("Handles") { (row: ExtractorPackageTableRow) in
                     Text(row.kind.map(kindDisplayName) ?? "—")
                         .foregroundStyle(.secondary)
