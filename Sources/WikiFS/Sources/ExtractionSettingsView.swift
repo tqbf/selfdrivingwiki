@@ -900,7 +900,9 @@ struct ExtractionSettingsView: View {
     @ViewBuilder
     private func statusLabel(_ row: ExtractorRouteSettingsRow) -> some View {
         let presentation = recoveryPresentation(for: row)
-        if presentation.isReady {
+        if presentation.isReady || isPackageRoute(row) {
+            // Package setup belongs to the package table's Configure column;
+            // keep the Defaults status as a passive summary for those routes.
             statusBadge(presentation)
         } else {
             Button {
@@ -913,6 +915,13 @@ struct ExtractionSettingsView: View {
                 "\(RouteAccessibility.statusPrefix).\(Self.accessibilityKey(row.route))")
             .accessibilityLabel(presentation.accessibilityText)
             .accessibilityHint("Show status details")
+        }
+    }
+
+    private func isPackageRoute(_ row: ExtractorRouteSettingsRow) -> Bool {
+        row.choices.contains {
+            Self.selection(for: $0) == routeSelections[row.id]
+                && $0.category == .installedPackage
         }
     }
 
