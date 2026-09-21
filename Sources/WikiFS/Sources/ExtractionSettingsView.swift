@@ -2172,7 +2172,7 @@ struct ExtractionSettingsView: View {
         /// Status 110+, Configuration 110+) need this minimum to display
         /// without truncating the Status column.
         static let width: CGFloat = 700
-        static let defaultExtractorColumnWidth: CGFloat = 280
+        static let defaultExtractorColumnWidth: CGFloat = 240
         /// Connected-service configuration dialogs (macos-design: a compact
         /// modal form with a Done button).
         static let dialogWidth: CGFloat = 460
