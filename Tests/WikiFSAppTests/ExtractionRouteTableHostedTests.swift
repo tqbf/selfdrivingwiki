@@ -164,11 +164,13 @@ struct ExtractionRouteTableHostedTests {
         }.count
     }
 
-    @Test("Settings opens on the defaults pane, which mounts the route table")
+    @Test("the defaults pane mounts the route table")
     func rendersRouteTableWithoutCrash() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let dir = try tempDirectory("route-table-render")
+        // Packages is the opening pane now, so mount the defaults pane
+        // explicitly for the route-table assertions.
         // A real registration whose MIME is outside the host routes: the table
         // then holds seven rows: six canonical routes and one registration-derived
         // EPUB route. Row views only exist after the async snapshot load rebuilds
@@ -469,12 +471,12 @@ struct ExtractionRouteTableHostedTests {
     func paneSwitcherDefaultsToTheDefaultsPane() throws {
         // The order is what the segmented control renders, so defaults sits on
         // the leading edge as well as being the initial selection.
-        #expect(ExtractionSettingsPane.allCases == [.defaults, .packages])
-        #expect(ExtractionSettingsPane.defaults.title == "Defaults")
+        #expect(ExtractionSettingsPane.allCases == [.packages, .defaults])
         #expect(ExtractionSettingsPane.packages.title == "Packages")
+        #expect(ExtractionSettingsPane.defaults.title == "Defaults")
 
         let source = try sourceView()
-        #expect(source.contains("initialPane: ExtractionSettingsPane = .defaults"))
+        #expect(source.contains("initialPane: ExtractionSettingsPane = .packages"))
         #expect(source.contains(".pickerStyle(.segmented)"))
         #expect(source.contains("extraction.pane.switcher"))
         #expect(source.contains("case .defaults: defaultsPane"))
