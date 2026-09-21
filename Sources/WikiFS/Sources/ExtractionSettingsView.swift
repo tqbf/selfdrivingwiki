@@ -1390,7 +1390,10 @@ struct ExtractionSettingsView: View {
                         .foregroundStyle(row.status.tint)
                         .help(row.status.explanation)
                 }
-                .width(min: 150, ideal: 170)
+                // Compact so the Configure column stays visible at the
+                // window's minimum width: the label truncates, and the full
+                // sentence lives in the detail below the table.
+                .width(min: 110, ideal: 120)
                 TableColumn("Configure") { (row: ExtractorPackageTableRow) in
                     if let installed = row.installedRow,
                        let package = packageConfigurationID(for: installed) {
