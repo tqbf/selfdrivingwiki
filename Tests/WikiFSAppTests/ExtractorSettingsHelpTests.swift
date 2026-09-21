@@ -32,7 +32,7 @@ struct ExtractorSettingsHelpContentTests {
         let source = try sourceText()
 
         // One definition of the warning: the popover reuses the string the
-        // import footer shows, so the two can never drift apart.
+        // Add-package tooltip shows, so the two can never drift apart.
         #expect(source.contains("ExtractionSettingsView.trustWarningMessage"))
         #expect(source.contains("Executable code warning."))
         #expect(source.contains("Declared capabilities are a declaration, not a security sandbox."))
