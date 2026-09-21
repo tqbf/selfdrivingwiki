@@ -527,7 +527,7 @@ struct ExtractionSettingsView: View {
         /// The pane Settings opens on. Defaults to the document-type defaults,
         /// which is the question this pane exists to answer; hosted tests pass
         /// the other pane to mount it directly.
-        initialPane: ExtractionSettingsPane = .defaults
+        initialPane: ExtractionSettingsPane = .packages
     ) {
         _selectedPane = State(initialValue: initialPane)
         self.containerDirectory = containerDirectory
@@ -561,10 +561,11 @@ struct ExtractionSettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Two jobs, two panes: choosing what opens a document type, and
-            // managing the packages those choices draw from. Only one is
-            // needed at a time, and the defaults are what a user comes here
-            // for, so they open first.
+            // Two jobs, two panes: managing the installed packages and their
+            // credentials, and choosing what opens a document type. Packages
+            // comes first — package lifecycle (install, credentials, removal)
+            // is the workflow this tab exists for, and defaults pick from what
+            // packages provide.
             if packageSnapshot != nil {
                 Picker("Extraction settings section", selection: $selectedPane) {
                     ForEach(ExtractionSettingsPane.allCases) { pane in
@@ -2493,15 +2494,15 @@ struct ExtractorCredentialRequirementSummary: Identifiable, Hashable, Sendable {
 /// credential surfaces live in each package's Configure… dialog — no kind
 /// gets a host-owned pane (extractor-kind policy comes from package data).
 enum ExtractionSettingsPane: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case defaults
     case packages
+    case defaults
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .defaults: "Defaults"
         case .packages: "Packages"
+        case .defaults: "Defaults"
         }
     }
 }
