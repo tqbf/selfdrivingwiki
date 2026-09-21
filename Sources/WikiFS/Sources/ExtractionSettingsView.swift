@@ -1219,7 +1219,7 @@ struct ExtractionSettingsView: View {
     // MARK: - Selected service configuration
 
     /// Which connected service has a configuration dialog open (macOS
-    /// Settings idiom: the Configure… button lives in the route table row;
+    /// Settings idiom: the Configure… button lives in the package table row;
     /// the options open in a dialog, per the macos-design skill).
     enum ServiceConfigurationDialog: Identifiable, Hashable {
         case acp
@@ -1266,14 +1266,30 @@ struct ExtractionSettingsView: View {
         for row: ExtractorPackageSettingsRow,
         requirements: [ExtractorCredentialRequirementSummary]
     ) -> ExtractorPackageConfigurationID? {
-        guard row.packageID != ReviewedExtractorPackages.doclingServe.packageID.rawValue else {
-            return nil
-        }
+        // Docling Serve is INCLUDED: its Packages-table Configure… opens the
+        // host-managed service dialog (endpoint, timeout, token, test
+        // connection) rather than the generic credentials dialog.
         let candidate = ExtractorPackageConfigurationID(
             packageID: row.packageID,
             version: row.version,
             registrationID: row.registrationID)
         return credentialRequirements(for: candidate, in: requirements).isEmpty ? nil : candidate
+    }
+
+    /// Which dialog a package row's Configure… opens. Docling Serve is a
+    /// reviewed host-managed SERVICE (endpoint, timeout, token, test
+    /// connection live in host config, not package-held state), so it keeps
+    /// its dedicated dialog; every other package opens the manifest-driven
+    /// credentials dialog. This is routing for one reviewed lineage's known
+    /// shape — the same compiled-constant standing as
+    /// ``ReviewedExtractorCredentialBindings`` — not a kind-based policy gate.
+    private func packageServiceDialog(
+        _ installed: ExtractorPackageSettingsRow,
+        package: ExtractorPackageConfigurationID
+    ) -> ServiceConfigurationDialog {
+        installed.packageID == ReviewedExtractorPackages.doclingServe.packageID.rawValue
+            ? .docling
+            : .package(package)
     }
 
     private func credentialRequirements(
@@ -1360,12 +1376,12 @@ struct ExtractionSettingsView: View {
                     if let installed = row.installedRow,
                        let package = packageConfigurationID(for: installed) {
                         Button("Configure…") {
-                            serviceConfigurationDialog = .package(package)
+                            serviceConfigurationDialog = packageServiceDialog(installed, package: package)
                         }
                         .controlSize(.small)
                         .disabled(packageModel.isBusy)
                         .accessibilityIdentifier("\(PackageAccessibility.configurePrefix).\(row.id)")
-                        .accessibilityLabel("Configure credentials for \(row.packageID), version \(row.version)")
+                        .accessibilityLabel("Configure \(row.packageID), version \(row.version)")
                     }
                 }
                 .width(min: 110, ideal: 130)
