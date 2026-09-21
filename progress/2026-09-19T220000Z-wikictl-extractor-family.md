@@ -29,8 +29,10 @@ Branch `feature/zotero-extractor-package` (PR #1304). Follow-up to
   protocol file now names no package at all (architecture test restored to a
   blanket negative). Typed operation shapes that genuinely differ per kind
   (`prepareZoteroAttachment()`, `ExtractorKind.zotero`, provider routing,
-  `ZoteroConfig`, `ZoteroSettingsView`, provider display data) stay — the
-  neutrality contract allows typed operation seams and per-package config.
+  `ZoteroConfig`, provider display data) stay — the neutrality contract
+  allows typed operation seams and per-package config. The Zotero account
+  pane (`ZoteroSettingsView`) is removed; the package's generic Configure
+  dialog owns the API-key value.
 - **Seeding table**: `ReviewedExtractorBootstrap`'s inline zotero seeding is
   a `reviewedCredentialSeeds` table iterated generically (fingerprint from
   the installed record → marker check → grant → marker write). Revocation
@@ -51,7 +53,7 @@ Branch `feature/zotero-extractor-package` (PR #1304). Follow-up to
   direct set and licenses (requests Apache-2.0, pyzotero BlueOak-1.0.0;
   `httpx2` declared directly too — the package catches its transport
   errors — with feedparser/bibtexparser/whenever transitives). New pinned
-  digest `d0166f33…` in both golden locations.
+  digest `3f3707e0…` in both golden locations.
 - **Docs**: design doc gained the CLI grammar, the neutral-seam + seeding
   notes, and a "Dependency decision" section (evidence + escape hatch);
   PLAN.md row updated; user guide already used the new grammar.
