@@ -738,8 +738,44 @@ struct ExtractionSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            // The ACP provider choice is contextual: it only matters while
+            // some route's default extractor is the ACP connected service.
+            if showsACPProviderPicker {
+                Section {
+                    Picker("Provider", selection: $acpProviderSelection) {
+                        Text("Default (use app's default provider)").tag("")
+                        ForEach(enabledACPProviders, id: \.id) { provider in
+                            Text(provider.label).tag(provider.id.rawValue)
+                        }
+                    }
+                    .onChange(of: acpProviderSelection) { persistAll() }
+                    .accessibilityIdentifier("extraction.defaults.acp.provider")
+                } header: {
+                    Text("ACP Provider")
+                } footer: {
+                    Text("The provider backing routes whose default extractor is ACP. Choose \"Default\" to use the same provider as chat and ingest.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
+    }
+
+    /// Whether the ACP provider picker has anything to configure: at least one
+    /// route currently defaults to the ACP connected service.
+    private var showsACPProviderPicker: Bool {
+        routeSelections.values.contains { selection in
+            if case .connectedService(.acp) = selection { return true }
+            return false
+        }
+    }
+
+    /// The enabled ACP providers for the contextual picker. Same cache
+    /// discipline as the recovery summary: provider config hits disk, so it
+    /// is read once per rebuild rather than on every keystroke.
+    private var enabledACPProviders: [AgentProvider] {
+        enabledProvidersCache ?? launcher.providersConfig().enabledProviders
     }
 
     /// Installed extractor-package lifecycle (Phase 7): the exact registry
