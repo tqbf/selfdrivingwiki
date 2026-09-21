@@ -48,7 +48,7 @@ several ways to add them:
 |---|---|
 | **Drag and drop** | Drag a file (PDF, markdown, text) from Finder directly onto the wiki window. A blue border appears as you hover. |
 | **From a URL** | Click **Add from URL** in the Sources sidebar (or toolbar), paste a web link, and click **Fetch**. The page is downloaded and converted to markdown. |
-| **From Zotero** | Click **Add from Zotero** in the Sources sidebar. Search your Zotero library, select attachments, and import them. (Requires Zotero setup in Settings.) |
+| **From Zotero** | Configure the Zotero package and run `wikictl extractor sync zotero`. See [Extractor packages](extractor-packages.md#zotero-attachments). |
 | **Import a folder** | Click **Import Folder** to bring in an entire directory of `.md` files (e.g., an Obsidian vault or a folder of notes). |
 | **Right-click a link** | While reading a page, right-click any `https://` link and choose **Add as Source**. |
 

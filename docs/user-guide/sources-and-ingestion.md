@@ -60,17 +60,32 @@ See [Extractor packages](extractor-packages.md).
 
 ### From Zotero
 
-If you use [Zotero](https://www.zotero.org/) for reference management:
+If you use [Zotero](https://www.zotero.org/) for reference management, the
+reviewed `zotero` package downloads the attachments you name. The in-app
+library picker is not built yet; you list attachment keys in a config file.
 
-1. Configure Zotero in **Settings → Extraction → Zotero** (API key + library ID).
-2. Click **Add from Zotero** in the Sources sidebar.
-3. Search your library by title, author, or year.
-4. Select an item to see its attachments (PDFs, notes).
-5. Toggle which attachments to import.
-6. Click **Add Selected**.
+1. Store your API key: open **Settings → Extraction → Packages** and click
+   **Configure…** on the Zotero Attachment row. Paste the key into the
+   **Zotero API Key** value row. The key lives in your Keychain.
+2. Name what to fetch: edit `zotero-config.json` in the App Group container:
 
-Imported sources carry a **Zotero** origin tag with a clickable "View in Zotero"
-link that opens the item in the Zotero app.
+   ```json
+   {
+     "libraryID": "12345",
+     "attachments": ["ABCD1234", "WXYZ9876"]
+   }
+   ```
+
+   Each entry is one Zotero attachment key (8 characters, uppercase letters
+   and digits).
+3. Run `wikictl extractor sync zotero`. Each configured key becomes one
+   source, and the app (or the wikid daemon) downloads it on its next scan.
+   Add `--force` to re-fetch a key whose file you changed in Zotero.
+
+Imported sources carry a **Zotero** origin tag with a clickable "View in
+Zotero" link that opens the item in the Zotero app. See
+[Extractor packages](extractor-packages.md#zotero-attachments) for the full
+detail, including typed failures.
 
 ### Import a folder
 
