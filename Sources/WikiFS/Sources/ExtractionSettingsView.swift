@@ -746,7 +746,7 @@ struct ExtractionSettingsView: View {
                     routePicker(routeRow)
                 }
             }
-            .width(min: 220, ideal: 280)
+            .width(Metrics.defaultExtractorColumnWidth)
             TableColumn("Status") { (row: ExtractionDefaultsTableRow) in
                 if case .route(let routeRow) = row {
                     statusLabel(routeRow)
@@ -1382,6 +1382,19 @@ struct ExtractionSettingsView: View {
                         .help(row.status.explanation)
                 }
                 .width(min: 150, ideal: 170)
+                TableColumn("Configure") { (row: ExtractorPackageTableRow) in
+                    if let installed = row.installedRow,
+                       let package = packageConfigurationID(for: installed) {
+                        Button("Configure…") {
+                            serviceConfigurationDialog = .package(package)
+                        }
+                        .controlSize(.small)
+                        .disabled(packageModel.isBusy)
+                        .accessibilityIdentifier("\(PackageAccessibility.configurePrefix).\(row.id)")
+                        .accessibilityLabel("Configure credentials for \(row.packageID), version \(row.version)")
+                    }
+                }
+                .width(min: 110, ideal: 130)
             }
             .frame(height: SettingsTableMetrics.unconstrainedHeight(
                 forRowCount: packageModel.tableRows.count))
@@ -1500,16 +1513,6 @@ struct ExtractionSettingsView: View {
                 packageNoticeLabel(notice)
             }
 
-            if let installed = row.installedRow,
-               let package = packageConfigurationID(for: installed) {
-                Button("Configure…") {
-                    serviceConfigurationDialog = .package(package)
-                }
-                .controlSize(.small)
-                .disabled(packageModel.isBusy)
-                .accessibilityIdentifier("\(PackageAccessibility.configurePrefix).\(row.id)")
-                .accessibilityLabel("Configure credentials for \(row.packageID), version \(row.version)")
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
@@ -2157,6 +2160,7 @@ struct ExtractionSettingsView: View {
         /// Status 110+, Configuration 110+) need this minimum to display
         /// without truncating the Status column.
         static let width: CGFloat = 700
+        static let defaultExtractorColumnWidth: CGFloat = 280
         /// Connected-service configuration dialogs (macos-design: a compact
         /// modal form with a Done button).
         static let dialogWidth: CGFloat = 460
