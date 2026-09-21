@@ -143,7 +143,13 @@ public enum ExtractorRouteTableBuilder {
             extra.append(record.route)
         }
         // Deterministic: typed route order (kind raw value, then MIME raw value).
-        descriptors.append(contentsOf: extra.sorted().map(ExtractorRouteHostCatalog.genericDescriptor(for:)))
+        descriptors.append(contentsOf: extra.sorted().map { route in
+            ExtractorRouteDescriptor(
+                route: route,
+                displayName: registrationDisplayName(for: route, in: input.availableRegistrations)
+                    ?? route.mimeType.rawValue,
+                systemImage: nil)
+        })
         return descriptors
     }
 
@@ -178,8 +184,36 @@ public enum ExtractorRouteTableBuilder {
     }
 
     private static func descriptor(for route: ExtractorRouteID, input: Input) -> ExtractorRouteDescriptor {
-        ExtractorRouteHostCatalog.descriptors.first { $0.route == route }
-            ?? ExtractorRouteHostCatalog.genericDescriptor(for: route)
+        if let hosted = ExtractorRouteHostCatalog.descriptors.first(where: { $0.route == route }) {
+            return hosted
+        }
+        // Registration-derived route: package data names it. The raw MIME is
+        // only the fallback for routes that survive solely as saved
+        // selections.
+        if let name = registrationDisplayName(for: route, in: input.availableRegistrations) {
+            return ExtractorRouteDescriptor(route: route, displayName: name, systemImage: nil)
+        }
+        return ExtractorRouteHostCatalog.genericDescriptor(for: route)
+    }
+
+    /// The display name package data gives one route: the lexicographically
+    /// smallest registration displayName among the registrations whose
+    /// declared kinds × MIME types cover the route, so the result never
+    /// depends on snapshot order.
+    private static func registrationDisplayName(
+        for route: ExtractorRouteID,
+        in registrations: [ExtractorRouteRegistrationSnapshot]
+    ) -> String? {
+        registrations
+            .filter { snapshot in
+                snapshot.kinds.contains { kind in
+                    snapshot.mimeTypes.contains { mimeType in
+                        ExtractorRouteID(kind: kind, mimeType: mimeType) == route
+                    }
+                }
+            }
+            .map(\.displayName)
+            .min()
     }
 
     private static func buildChoices(
