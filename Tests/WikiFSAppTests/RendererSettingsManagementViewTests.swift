@@ -30,7 +30,7 @@ struct RendererSettingsManagementViewTests {
         // Packages are a selectable table with a fixed height, so the pane
         // scrolls internally instead of growing the Settings window.
         #expect(source.contains("Table(model.rows, selection: $selectedPackageID)"))
-        #expect(source.contains(".frame(height: SettingsTableMetrics.height(forRowCount: model.rows.count))"))
+        #expect(source.contains(".frame(height: SettingsTableMetrics.unconstrainedHeight(forRowCount: model.rows.count))"))
         // Add is a first-class control under the table, not a disclosure.
         #expect(source.contains("Button(\"Add Package…\", systemImage: \"plus\")"))
         #expect(source.contains("renderer-package-add-button"))
@@ -157,6 +157,28 @@ struct RendererSettingsManagementViewTests {
         let ceiling = metrics.headerHeight + CGFloat(metrics.maximumVisibleRows) * metrics.textRowHeight
         #expect(metrics.height(forRowCount: metrics.maximumVisibleRows) == ceiling)
         #expect(metrics.height(forRowCount: 200) == ceiling)
+    }
+
+    @Test("the unconstrained table shows every row so the form scrolls instead")
+    func unconstrainedTableHeightGrowsWithEveryRow() {
+        let metrics = SettingsTableMetrics.self
+
+        // Empty and floor behave like the capped form.
+        #expect(metrics.unconstrainedHeight(forRowCount: 0) == metrics.emptyHeight)
+        let floor = metrics.headerHeight + CGFloat(metrics.minimumVisibleRows) * metrics.textRowHeight
+        #expect(metrics.unconstrainedHeight(forRowCount: 1) == floor)
+
+        // Past the capped ceiling the height keeps growing row for row —
+        // no nested scroll area hiding rows under an invisible overlay
+        // scrollbar.
+        let pastCeiling = metrics.maximumVisibleRows + 3
+        #expect(metrics.unconstrainedHeight(forRowCount: pastCeiling)
+            == metrics.headerHeight + CGFloat(pastCeiling) * metrics.textRowHeight)
+        #expect(metrics.unconstrainedHeight(forRowCount: pastCeiling) > metrics.height(forRowCount: pastCeiling))
+
+        // The row-height override still applies (a table of pop-ups).
+        #expect(metrics.unconstrainedHeight(forRowCount: 4, rowHeight: metrics.controlRowHeight)
+            == metrics.headerHeight + 4 * metrics.controlRowHeight)
     }
 
     @Test("status resolution keeps unavailable, safe mode, and rollback distinct")
