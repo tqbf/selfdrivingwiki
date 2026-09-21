@@ -880,9 +880,11 @@ struct ExtractionSettingsView: View {
             EmptyView()
         }
         .labelsHidden()
-        // The bezel ignores stretch proposals inside table cells, so the full
-        // column width is applied explicitly — every box spans its column.
-        .frame(width: Metrics.defaultExtractorColumnWidth, alignment: .leading)
+        // macOS 26 fitted button sizing makes button-style pickers hug the
+        // selected option's text (release note 136649748); opt back into
+        // filling the frame so every bezel spans the column.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .flexibleButtonSizing()
         .accessibilityIdentifier("\(RouteAccessibility.pickerPrefix).\(Self.accessibilityKey(row.route))")
         .accessibilityLabel("Default extractor for \(row.descriptor.displayName)")
         .accessibilityValue(accessibilityValue(row))
@@ -2239,6 +2241,22 @@ struct ExtractionSettingsView: View {
         static let packageSectionSpacing: CGFloat = 10
         static let packageActionBarSpacing: CGFloat = 6
         static let packageDetailSpacing: CGFloat = 6
+    }
+}
+
+// MARK: - macOS 26 button sizing
+
+extension View {
+    /// Opts a button-style control (menu Picker) into filling its frame on
+    /// macOS 26, where fitted sizing became the default. A no-op on earlier
+    /// systems, where controls already stretch to the proposed frame.
+    @ViewBuilder
+    func flexibleButtonSizing() -> some View {
+        if #available(macOS 26.0, *) {
+            self.buttonSizing(.flexible)
+        } else {
+            self
+        }
     }
 }
 
