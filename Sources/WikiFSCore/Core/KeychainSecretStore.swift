@@ -194,13 +194,26 @@ public enum KeychainSecretStore {
         let group = accessGroup
         guard !group.isEmpty else { return }
 
-        guard let legacy = enumerateLegacyGenericPasswords() else {
-            return  // file keychain empty / unreadable
+        let enumerated = enumerateLegacyGenericPasswords()
+        guard enumerated.status == errSecSuccess, !enumerated.items.isEmpty else {
+            // Was silent: a failed bulk enumeration (e.g. errSecAuthFailed when
+            // one item's data is not readable by this process) is
+            // indistinguishable from an empty legacy keychain without the
+            // status, which hid stranded legacy items (the zotero API key
+            // stayed file-based while reads went to DataProtection+group).
+            DebugLog.config(
+                "Keychain migration: legacy enumeration returned nothing (status \(enumerated.status)); no items considered")
+            return
         }
+        let legacy = enumerated.items
         // Scope to THIS app's own items (by service-prefix convention) so
         // unrelated file-keychain items the process can see are left untouched.
         let ownItems = legacy.filter { $0.service.hasPrefix(migrationServicePrefix) }
-        guard !ownItems.isEmpty else { return }
+        guard !ownItems.isEmpty else {
+            DebugLog.config(
+                "Keychain migration: legacy keychain held \(legacy.count) item(s), none with prefix \(migrationServicePrefix)")
+            return
+        }
 
         var migrated = 0
         for item in ownItems {
@@ -235,11 +248,13 @@ public enum KeychainSecretStore {
     private static let migrationServicePrefix = "org.sockpuppet.WikiFS."
 
     /// Enumerate every generic-password item in the LEGACY file-based keychain
-    /// (no `kSecUseDataProtectionKeychain` flag), returning `(service, account,
-    /// data)` tuples. Returns nil if the file keychain is empty / unreadable
-    /// (`errSecItemNotFound`). The caller filters to its own service prefix.
+    /// (no `kSecUseDataProtectionKeychain` flag), returning the items it could
+    /// read plus the raw `OSStatus` (so a failed bulk read is diagnosable, not
+    /// silent). Returns an empty list with the status on failure
+    /// (`errSecItemNotFound` when the file keychain is empty). The caller
+    /// filters to its own service prefix.
     private static func enumerateLegacyGenericPasswords()
-    -> [(service: String, account: String, data: Data)]? {
+    -> (items: [(service: String, account: String, data: Data)], status: OSStatus) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecMatchLimit as String: kSecMatchLimitAll,
@@ -248,13 +263,16 @@ public enum KeychainSecretStore {
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let items = result as? [[String: Any]] else { return nil }
-        return items.compactMap { dict in
+        guard status == errSecSuccess, let items = result as? [[String: Any]] else {
+            return ([], status)
+        }
+        let read: [(service: String, account: String, data: Data)] = items.compactMap { dict in
             guard let service = dict[kSecAttrService as String] as? String,
                   let account = dict[kSecAttrAccount as String] as? String,
                   let data = dict[kSecValueData as String] as? Data else { return nil }
             return (service, account, data)
         }
+        return (read, status)
     }
 
     /// Minimal error factory for the migration's best-effort writes — the actual
