@@ -152,8 +152,8 @@ public enum ReviewedExtractorCredentialBindings {
         reference: CredentialReference.extraction(.doclingServeToken))
 
     /// The Zotero API key at its legacy zotero-service location — the same
-    /// reference the Zotero account pane writes and publish-time seeding
-    /// grants.
+    /// reference the generic extractor-package credential dialog writes and
+    /// publish-time seeding grants.
     public static let zoteroAPIKey = make(
         package: ReviewedExtractorPackages.zotero,
         requirementID: "zotero-api-key",
