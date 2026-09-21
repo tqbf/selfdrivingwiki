@@ -1410,7 +1410,10 @@ struct ExtractionSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 100)
-                TableColumn("Configure") { (row: ExtractorPackageTableRow) in
+                // SwiftUI Table offers no centered header for custom-content
+                // columns, so this header stays blank by design review; the
+                // centered button carries the meaning.
+                TableColumn("") { (row: ExtractorPackageTableRow) in
                     if let installed = row.installedRow,
                        let package = packageConfigurationID(for: installed) {
                         Button("Configure…") {
