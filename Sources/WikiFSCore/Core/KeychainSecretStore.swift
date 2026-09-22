@@ -207,16 +207,28 @@ public enum KeychainSecretStore {
         }
         let legacy = enumerated.items
         // Scope to THIS app's own items (by service-prefix convention) so
-        // unrelated file-keychain items the process can see are left untouched.
+        // unrelated file-keychain items the process can see are left untouched,
+        // then drop items that already live in the shared DataProtection group:
+        // the one-store enumeration surfaces those too, and "migrating" one
+        // erases it (see isMigrationCandidate).
         let ownItems = legacy.filter { $0.service.hasPrefix(migrationServicePrefix) }
         guard !ownItems.isEmpty else {
             DebugLog.config(
                 "Keychain migration: legacy keychain held \(legacy.count) item(s), none with prefix \(migrationServicePrefix)")
             return
         }
+        let strays = ownItems.filter {
+            isMigrationCandidate(
+                service: $0.service, accessGroup: $0.accessGroup, sharedGroup: group)
+        }
+        if strays.count != ownItems.count {
+            DebugLog.config(
+                "Keychain migration: skipped \(ownItems.count - strays.count) item(s) already in the shared DataProtection group")
+        }
+        guard !strays.isEmpty else { return }
 
         var migrated = 0
-        for item in ownItems {
+        for item in strays {
             guard let value = String(data: item.data, encoding: .utf8) else { continue }
             // Write to the DP keychain under the shared group. If this fails
             // (e.g. errSecMissingEntitlement on an un-entitled build, or a
@@ -250,6 +262,23 @@ public enum KeychainSecretStore {
     /// (`org.sockpuppet.WikiFS.acp` / `.extraction` / `.zotero`). Used to scope
     /// the migration to this app's own items only.
     private static let migrationServicePrefix = "org.sockpuppet.WikiFS."
+
+    /// Whether an enumerated legacy-keychain item is a true legacy stray worth
+    /// migrating. Items whose access group is already the shared group are
+    /// DataProtection items: the legacy enumeration (no
+    /// `kSecUseDataProtectionKeychain` flag) still matches them, because the
+    /// file and DataProtection keychains are one store on modern macOS.
+    /// "Migrating" one re-writes it in place and then deletes the "legacy
+    /// original" scoped to its own access group — which IS the shared group —
+    /// erasing the item. That deleted a freshly saved Zotero API key 30
+    /// seconds after the user stored it (2026-09-21). A true stray carries a
+    /// different access group or none.
+    static func isMigrationCandidate(
+        service: String, accessGroup: String?, sharedGroup: String
+    ) -> Bool {
+        guard service.hasPrefix(migrationServicePrefix) else { return false }
+        return accessGroup != sharedGroup
+    }
 
     /// Enumerate every generic-password item in the LEGACY file-based keychain
     /// (no `kSecUseDataProtectionKeychain` flag), returning the items it could
