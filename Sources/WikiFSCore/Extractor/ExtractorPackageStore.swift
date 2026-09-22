@@ -67,7 +67,15 @@ public struct ExtractorPackageCatalogReader: ExtractorPackageCatalogReading, Sen
             throw ExtractorPackageStoreError.corruptCatalog
         }
         do {
-            return try JSONDecoder().decode(ExtractorPackageCatalog.self, from: data)
+            let catalog = try JSONDecoder().decode(ExtractorPackageCatalog.self, from: data)
+            if catalog.skippedUnknownRevisionRecordCount > 0 {
+                // Skipped-with-diagnostic, not corrupt: the record was
+                // written by a newer host whose manifest revision this
+                // build does not know.
+                DebugLog.extraction(
+                    "extractor catalog: skipped \(catalog.skippedUnknownRevisionRecordCount) record(s) with a newer manifest revision")
+            }
+            return catalog
         } catch let error as ExtractorPackageCatalogError {
             throw error
         } catch {

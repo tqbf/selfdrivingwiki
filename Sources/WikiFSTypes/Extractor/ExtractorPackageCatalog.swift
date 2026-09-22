@@ -156,12 +156,18 @@ public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
     public let generation: UInt64
     public let records: [ExtractorPackageCatalogRecord]
     public let reservations: [ExtractorPackageReservationRecord]
+    /// Records the decoder skipped because their persisted manifest
+    /// revision is newer than this build understands. Never encoded: it is
+    /// a read-time observation, not durable state — the durable catalog
+    /// file's bytes are unchanged by skipping.
+    public let skippedUnknownRevisionRecordCount: Int
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
         generation: UInt64 = 0,
         records: [ExtractorPackageCatalogRecord] = [],
-        reservations: [ExtractorPackageReservationRecord] = []
+        reservations: [ExtractorPackageReservationRecord] = [],
+        skippedUnknownRevisionRecordCount: Int = 0
     ) throws {
         guard schemaVersion == Self.currentSchemaVersion else {
             throw ExtractorPackageCatalogError.unsupportedSchemaVersion
@@ -196,17 +202,61 @@ public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
         self.reservations = reservationDigests.map {
             ExtractorPackageReservationRecord(reservation: $0.key, digest: $0.value)
         }.sorted()
+        self.skippedUnknownRevisionRecordCount = skippedUnknownRevisionRecordCount
+    }
+
+    /// Probes one record element for its raw manifest revision, without
+    /// decoding the whole record.
+    private struct RecordManifestRevisionProbe: Decodable {
+        let manifestRevision: Int?
+        private enum CodingKeys: String, CodingKey { case manifestRevision }
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            manifestRevision = try container.decodeIfPresent(Int.self, forKey: .manifestRevision)
+        }
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Read tolerance: records decode element-by-element so one written
+        // by a NEWER host (a manifest revision this build does not know) is
+        // skipped with a diagnostic instead of failing the whole read — the
+        // same poisoning class revision 2 fixed for v1 hosts. Skipped
+        // records keep their reservations, so the newer host's claim on that
+        // package identity survives.
+        var recordsContainer = try container.nestedUnkeyedContainer(forKey: .records)
+        var records: [ExtractorPackageCatalogRecord] = []
+        var skippedUnknownRevisionRecordCount = 0
+        while recordsContainer.isAtEnd == false {
+            let element = try recordsContainer.superDecoder()
+            // A probe decode failure is genuinely ignorable: it falls
+            // through to the full record decode, which throws the proper
+            // typed error for a malformed record.
+            // swiftlint:disable:next silent_try_optional
+            if let probe = try? RecordManifestRevisionProbe(from: element),
+               let rawRevision = probe.manifestRevision,
+               rawRevision > ExtractorManifestRevision.maximumKnownRawValue {
+                skippedUnknownRevisionRecordCount += 1
+                continue
+            }
+            records.append(try ExtractorPackageCatalogRecord(from: element))
+        }
         try self.init(
             schemaVersion: container.decode(Int.self, forKey: .schemaVersion),
             generation: container.decode(UInt64.self, forKey: .generation),
-            records: container.decode([ExtractorPackageCatalogRecord].self, forKey: .records),
+            records: records,
             reservations: container.decodeIfPresent(
                 [ExtractorPackageReservationRecord].self,
-                forKey: .reservations) ?? [])
+                forKey: .reservations) ?? [],
+            skippedUnknownRevisionRecordCount: skippedUnknownRevisionRecordCount)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(generation, forKey: .generation)
+        try container.encode(records, forKey: .records)
+        try container.encode(reservations, forKey: .reservations)
     }
 
     public func replacing(records: [ExtractorPackageCatalogRecord]) throws -> Self {
