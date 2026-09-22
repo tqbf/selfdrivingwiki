@@ -19,7 +19,9 @@ import WikiFSCore
 ///
 /// Hard failures exit nonzero with a typed message: an unconfigured library
 /// ID, no configured attachment keys, or no configured API key (a
-/// describe-only presence check — the value is never read here).
+/// describe-only presence check — the value is never read here). A key this
+/// process cannot READ (no shared-keychain entitlement) defers the check to
+/// the draining host instead of failing.
 public enum ExtractorSyncCommand {
 
     /// The packages this command can sync. One case per acquisition
@@ -81,8 +83,23 @@ public enum ExtractorSyncCommand {
         guard !config.attachments.isEmpty else {
             throw ZoteroSyncError.noAttachments
         }
-        guard credentials.describe(.zoteroAPIKey()).isConfigured else {
-            throw ZoteroSyncError.apiKeyNotConfigured
+        // API-key presence — still describe-only (the value is never read
+        // here), but "absent" and "unreadable here" are different outcomes.
+        // A bare CLI Mach-O cannot carry keychain-access-groups (AMFI
+        // SIGKILLs any that claim them without an embedded profile — see
+        // build.sh), so on a configured machine EVERY shared-keychain read in
+        // this process fails, and describe surfaces that as
+        // verificationFailed, not as "unset". Failing the sync there would
+        // block the documented flow even though the entitled host draining
+        // this job (app / wikid.xpc) resolves the same key fine. Absent →
+        // hard typed failure; unreadable → defer, and say so in the output.
+        var keyCheckDeferred = false
+        let keyInfo = credentials.describe(.zoteroAPIKey())
+        if keyInfo.isConfigured == false {
+            guard keyInfo.verificationFailed else {
+                throw ZoteroSyncError.apiKeyNotConfigured
+            }
+            keyCheckDeferred = true
         }
 
         let outcomes = try await ZoteroSync.syncAttachments(
@@ -108,6 +125,10 @@ public enum ExtractorSyncCommand {
         }
         lines.append(
             "Enqueued items drain when the app or the wikid daemon next runs its dispatch scan.")
+        if keyCheckDeferred {
+            lines.append(
+                "Note: the API key could not be verified from this process; the host that drains these jobs will check it before downloading.")
+        }
         return lines.joined(separator: "\n")
     }
 }

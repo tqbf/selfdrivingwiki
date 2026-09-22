@@ -142,16 +142,18 @@ public struct KeychainCredentialService: CredentialService {
                 source: .keychain,
                 isWritable: true)
         } catch {
-            // A read failure is surfaced as not-configured to UI callers via
-            // `describe`'s no-throw contract; privileged `resolve` callers get
-            // the typed error. Bounded, value-free diagnostic:
+            // A read failure is NOT the same as absence: surface it via
+            // `verificationFailed` so callers can tell "unset" from "cannot
+            // tell" (the sync command defers its API-key check to the
+            // draining host on this flag). Bounded, value-free diagnostic:
             DebugLog.config(
                 "CredentialService: describe failed for \(reference.rawValue): \(error)")
             return CredentialInfo(
                 reference: reference,
                 isConfigured: false,
                 source: .keychain,
-                isWritable: true)
+                isWritable: true,
+                verificationFailed: true)
         }
     }
 

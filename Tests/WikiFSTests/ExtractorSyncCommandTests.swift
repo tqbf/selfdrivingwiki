@@ -13,16 +13,25 @@ struct ExtractorSyncCommandTests {
 
     /// A credential double whose configured state the test controls —
     /// describe-only, exactly the surface the command is allowed to see.
+    /// `verificationFailed` models the unreadable-here case (a bare CLI
+    /// Mach-O cannot carry keychain-access-groups; every shared-keychain
+    /// read fails errSecMissingEntitlement and describe reports it via the
+    /// flag, not as "unset").
     private final class CredentialDouble: CredentialDescribing, @unchecked Sendable {
         var configured: Bool
-        init(configured: Bool) { self.configured = configured }
+        var verificationFailed: Bool
+        init(configured: Bool, verificationFailed: Bool = false) {
+            self.configured = configured
+            self.verificationFailed = verificationFailed
+        }
 
         var maximumDescribeBatchSize: Int { 1 }
 
         func describe(_ reference: CredentialReference) -> CredentialInfo {
             CredentialInfo(
                 reference: reference, isConfigured: configured,
-                source: .keychain, isWritable: false)
+                source: .keychain, isWritable: false,
+                verificationFailed: verificationFailed)
         }
 
         func describe(_ references: [CredentialReference]) -> [CredentialReference: CredentialInfo] {
@@ -229,5 +238,23 @@ struct ExtractorSyncCommandTests {
             #expect(error.errorDescription?.contains("API key") == true)
         }
         #expect(try store.listSources().isEmpty)
+    }
+
+    @Test func unreadableAPIKeyDefersTheCheckToTheDrainingHost() async throws {
+        // verificationFailed (not "unset") must NOT fail the sync: the
+        // entitled host draining the job re-checks the key. The command
+        // proceeds, creates the sources, and says it deferred the check.
+        let store = try tempStore()
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zotero-cfg-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        try writeConfig(container, libraryID: "12345", attachments: ["ABCD1234"])
+
+        let output = try await ExtractorSyncCommand.run(
+            package: .zotero, force: false, in: store, containerDirectory: container,
+            credentials: CredentialDouble(configured: false, verificationFailed: true),
+            enqueue: { _ in })
+        #expect(output.contains("could not be verified from this process"))
+        #expect(try store.listSources().count == 1)
     }
 }
