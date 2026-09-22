@@ -373,6 +373,9 @@ stage_spm_bundles() {
     case "${name}" in
       *Tests*|*FuzzHarness*) continue ;;  # test-only targets
     esac
+    # Idempotent: ${BUILD_DIR} is not wiped between builds (only the .app is),
+    # so replace any previous copy rather than merging into it.
+    rm -rf "${dest:?}/${name}"
     cp -R "${bundle}" "${dest}/" 2>/dev/null || continue
     staged=$((staged + 1))
   done
@@ -382,6 +385,14 @@ mkdir -p "${APPEX_CONTENTS}/Resources" "${DAEMON_XPC_CONTENTS}/Resources"
 stage_spm_bundles "${RESOURCES_DIR}"
 stage_spm_bundles "${APPEX_CONTENTS}/Resources"
 stage_spm_bundles "${DAEMON_XPC_CONTENTS}/Resources"
+# ...and beside build/wikictl. That copy is a bare executable with no Info.plist
+# and no enclosing bundle, so `Bundle.module` resolves only against the
+# executable's own directory — without the bundles here, the first dispatched
+# command that builds the Cordis composition dies with
+# "unable to find bundle named WikiFS_CordisLoader" (exit 133). Same source as
+# the app/appex/daemon staging above, so the copies cannot diverge; build/ is
+# not code-signed, so a plain cp -R is enough.
+stage_spm_bundles "${BUILD_DIR}"
 
 # RendererPackageGuide is a bounded WIKI_STATE.md reference, not a prompt.
 # Copy it beside the prompts so app, extension, and wikid XPC Bundle.main
