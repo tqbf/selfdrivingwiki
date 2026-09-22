@@ -227,6 +227,14 @@ for package_dir in "${EXTRACTOR_PACKAGES_SRC}"/*; do
   cp -R "${package_dir}" "${DAEMON_EXTRACTOR_PACKAGES}/"
   echo "  ✓ bundled extractor package ${package_name}"
 done
+# Stage the reviewed packages beside build/wikictl as well: the CLI's
+# `extractor sync` discovery passes this directory as the reviewed overlay
+# root (ReviewedExtractorPackages.bundledRoot(explicitRoot:)), so a bare
+# `build/wikictl extractor sync <package>` finds declared packages even
+# before the app has published them into the durable machine catalog.
+# Idempotent: remove first so a package deleted from the tree disappears.
+rm -rf "${BUILD_DIR}/ExtractorPackages"
+cp -R "${EXTRACTOR_PACKAGES_SRC}" "${BUILD_DIR}/ExtractorPackages"
 for package_root in \
   "${APP_EXTRACTOR_PACKAGES}/SignedWikiDExtractorFixture" \
   "${DAEMON_EXTRACTOR_PACKAGES}/SignedWikiDExtractorFixture"; do

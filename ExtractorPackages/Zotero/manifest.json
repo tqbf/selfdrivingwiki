@@ -7,7 +7,7 @@
   "entryPoint": "bin/zotero-extractor",
   "files": [
     {
-      "digest": "07d23e9ba3748d9454cd77daaa01201bfd62785960fa9f20d995da95f820d075",
+      "digest": "322147fa4e1a9c918e2517be2f1bda452f86a5e87488edabba94e6310144ed1c",
       "path": "PROVENANCE.md"
     },
     {
@@ -33,7 +33,7 @@
     "maximumMarkdownOutputByteCount": 134217728,
     "maximumProgressEventCount": 64
   },
-  "manifestRevision": 2,
+  "manifestRevision": 3,
   "packageID": "org.selfdrivingwiki.zotero",
   "protocolRevision": 4,
   "registrations": [
@@ -54,8 +54,28 @@
       ],
       "mimeTypes": [
         "application/zotero"
-      ]
+      ],
+      "sync": {
+        "configFileName": "zotero-config.json",
+        "fields": [
+          {
+            "name": "libraryID",
+            "required": true
+          },
+          {
+            "isList": true,
+            "name": "attachments",
+            "required": true
+          }
+        ],
+        "itemValidation": {
+          "alphabet": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+          "maximumLength": 8,
+          "minimumLength": 8
+        },
+        "urlTemplate": "https://api.zotero.org/users/{libraryID}/items/{itemKey}/file"
+      }
     }
   ],
-  "version": "1.0.1"
+  "version": "1.0.2"
 }
