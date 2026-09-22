@@ -97,5 +97,40 @@ struct KeychainSecretStoreTests {
         #expect(query[kSecAttrService as String] as? String == "org.sockpuppet.WikiFS.credentials")
         #expect(query[kSecAttrAccount as String] as? String == "test.reference")
     }
+
+    // MARK: - Migration candidate decision (launch-migration self-delete fix)
+
+    @Test func migrationCandidateAcceptsTrueLegacyStrays() {
+        // Own service prefix with an absent access group (the pre-sharing
+        // shape) or a foreign group — both are real strays worth moving.
+        let shared = "ABCDE12345.com.example.wiki"
+        #expect(KeychainSecretStore.isMigrationCandidate(
+            service: "org.sockpuppet.WikiFS.zotero",
+            accessGroup: nil,
+            sharedGroup: shared))
+        #expect(KeychainSecretStore.isMigrationCandidate(
+            service: "org.sockpuppet.WikiFS.extraction",
+            accessGroup: "FFFF9999.someother.app",
+            sharedGroup: shared))
+    }
+
+    @Test func migrationCandidateRejectsForeignServicesAndSharedGroupItems() {
+        let shared = "ABCDE12345.com.example.wiki"
+        // Another app's service stays out of scope even with no group.
+        #expect(KeychainSecretStore.isMigrationCandidate(
+            service: "com.unrelated.app",
+            accessGroup: nil,
+            sharedGroup: shared) == false)
+        // THE REGRESSION: an item already tagged with the shared group is a
+        // DataProtection item surfaced by the one-store enumeration.
+        // "Migrating" it re-writes it in place, and the scoped "legacy"
+        // delete — its own access group IS the shared group — erased it
+        // (2026-09-21: a Zotero API key was deleted 30 seconds after the
+        // user saved it; the migration then logged "moved 1 item(s)").
+        #expect(KeychainSecretStore.isMigrationCandidate(
+            service: "org.sockpuppet.WikiFS.zotero",
+            accessGroup: shared,
+            sharedGroup: shared) == false)
+    }
 }
 #endif // os(macOS)
