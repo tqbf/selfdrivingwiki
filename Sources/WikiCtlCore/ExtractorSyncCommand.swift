@@ -1,11 +1,16 @@
 import Foundation
 import WikiFSCore
+import WikiFSTypes
+#if canImport(WikiFSEngine)
+import WikiFSEngine
+#endif
 
 /// `wikictl extractor sync <package> [--force]` — create one byteless source
-/// per configured acquisition key of `<package>` and enqueue its durable
-/// extraction job. This is the CLI seam of the extractor-package acquisition
-/// API: today one package (`zotero`) is syncable; adding acquisition package
-/// #2 means one dispatch case, never a new CLI family.
+/// per configured acquisition item of `<package>` and enqueue its durable
+/// extraction job. The CLI seam of the extractor-package acquisition API,
+/// fully generic: syncable packages are DISCOVERED from the machine catalog
+/// (durable records ∪ this process's reviewed overlay) by their declared
+/// sync surface, so a second syncable package needs zero host-code changes.
 ///
 /// The command is ENQUEUE-ONLY: it writes the `.extraction` queue item
 /// through the injected closure (production wires `QueueStore.enqueue`, the
@@ -17,117 +22,214 @@ import WikiFSCore
 /// wikid daemon rehydrates and drains the persisted items on its next
 /// dispatch scan / launch.
 ///
-/// Hard failures exit nonzero with a typed message: an unconfigured library
-/// ID, no configured attachment keys, or no configured API key (a
-/// describe-only presence check — the value is never read here). A key this
-/// process cannot READ (no shared-keychain entitlement) defers the check to
-/// the draining host instead of failing.
+/// Hard failures exit nonzero with a typed message: an unknown package
+/// name, an unconfigured required config field, an empty item list, an
+/// unbound or absent required credential (a describe-only presence check —
+/// the value is never read here). A credential this process cannot READ (no
+/// shared-keychain entitlement) defers the check to the draining host
+/// instead of failing.
 public enum ExtractorSyncCommand {
-
-    /// The packages this command can sync. One case per acquisition
-    /// package; each maps to one config sidecar + sync entry.
-    public enum Package: String, CaseIterable, Sendable {
-        /// The reviewed `org.selfdrivingwiki.zotero` package over
-        /// `zotero-config.json`.
-        case zotero
-
-        public static let supportedPackages = Package.allCases.map(\.rawValue)
-    }
 
     /// The family's operations. One case per leaf (`sync` today).
     public enum Action: Equatable, Sendable {
-        case sync(Package, force: Bool)
+        /// The positional package name stays a raw string here: which names
+        /// are valid is catalog data, resolved at execution — never a
+        /// compiled set.
+        case sync(packageName: String, force: Bool)
     }
 
     /// One typed hard failure with a caller-facing message.
     public enum Failure: Error, Equatable, LocalizedError {
-        /// The named package has no sync entry.
-        case unknownPackage(String)
+        /// The named package has no discovered sync declaration. The
+        /// discovered names ride along so the message can list them.
+        case unknownPackage(String, discovered: [String])
+        /// The registration's required credential has no compiled binding —
+        /// reviewed packages only.
+        case requiredCredentialUnavailable(packageName: String, requirementID: String)
+        /// The bound required credential is absent (as opposed to
+        /// unreadable, which defers instead of failing).
+        case requiredCredentialNotConfigured(label: String)
 
         public var errorDescription: String? {
             switch self {
-            case .unknownPackage(let name):
-                return "Unknown extraction package '\(name)'. Supported: \(Package.supportedPackages.joined(separator: ", "))."
+            case .unknownPackage(let name, let discovered):
+                if discovered.isEmpty {
+                    return "Unknown extraction package '\(name)'. No syncable packages are installed; launch the app once so reviewed packages publish, then retry."
+                }
+                return "Unknown extraction package '\(name)'. Syncable: \(discovered.joined(separator: ", "))."
+            case .requiredCredentialUnavailable(let name, let requirementID):
+                return "The sync for '\(name)' requires credential '\(requirementID)', which has no reviewed binding in this build."
+            case .requiredCredentialNotConfigured(let label):
+                return "The \(label) is not configured. Set it in the app's extraction package settings and sync again."
             }
         }
+    }
+
+    /// One discovered syncable package.
+    public struct DiscoveredSyncPackage {
+        let record: ExtractorPackageCatalogRecord
+        let registration: ExtractorRegistration
+        let sync: ExtractorSyncDeclaration
+        let shortName: String
+
+        init?(record: ExtractorPackageCatalogRecord) {
+            guard let registration = record.registrations.first(where: { $0.sync != nil }),
+                  let sync = registration.sync else { return nil }
+            self.record = record
+            self.registration = registration
+            self.sync = sync
+            self.shortName = Self.shortName(of: record.revision.packageID)
+        }
+
+        /// `org.example.attachment` → `attachment`.
+        static func shortName(of packageID: ExtractorPackageID) -> String {
+            packageID.rawValue.split(separator: ".").last.map(String.init) ?? packageID.rawValue
+        }
+    }
+
+    /// Resolves the newest record per package lineage, keeping the ones
+    /// whose newest revision declares a sync surface.
+    public static func discoverSyncablePackages(
+        in catalog: ExtractorPackageCatalog
+    ) -> [DiscoveredSyncPackage] {
+        var newest: [ExtractorPackageID: ExtractorPackageCatalogRecord] = [:]
+        for record in catalog.records {
+            if let current = newest[record.revision.packageID] {
+                if record.revision.version > current.revision.version {
+                    newest[record.revision.packageID] = record
+                }
+            } else {
+                newest[record.revision.packageID] = record
+            }
+        }
+        return newest.values.compactMap { DiscoveredSyncPackage(record: $0) }
+            .sorted { $0.shortName < $1.shortName }
+    }
+
+    /// Production discovery for a command-line host: the durable machine
+    /// catalog unioned with this process's reviewed overlay. The overlay
+    /// covers the window before the app publishes a reviewed revision (and
+    /// CLI-only machines, where the durable catalog never carries it); the
+    /// durable catalog wins for any revision the machine has installed.
+    ///
+    /// `reviewedPackageRoot` is the directory containing the staged
+    /// `ExtractorPackages/` tree (beside the binary in build layouts). When
+    /// it does not resolve — an app-bundled helper has no such tree beside
+    /// it — discovery still works through the durable catalog the app
+    /// published at launch.
+    public static func productionCatalogReader(
+        containerDirectory: URL,
+        reviewedPackageRoot: URL? = nil
+    ) throws -> any ExtractorPackageCatalogReading {
+        let layout = try ExtractorPackageStoreLayout(
+            appGroupContainerRoot: containerDirectory,
+            processRole: .commandLine)
+        let overlay = ReviewedExtractorPackageOverlay.resolve(
+            layout: layout, explicitRoot: reviewedPackageRoot)
+        for notice in overlay.diagnostics {
+            DebugLog.extraction("extractor sync: \(notice)")
+        }
+        return ReviewedOverlayCatalogReader(
+            durable: ExtractorPackageCatalogReader(layout: layout),
+            overlay: overlay)
     }
 
     public static func run(
-        package: Package,
+        packageName: String,
         force: Bool,
         in store: GRDBWikiStore,
         containerDirectory: URL,
+        catalog: any ExtractorPackageCatalogReading,
         credentials: any CredentialDescribing = KeychainCredentialService(),
         enqueue: (SourceID) async throws -> Void
     ) async throws -> String {
-        switch package {
-        case .zotero:
-            return try await runZotero(
-                force: force, in: store, containerDirectory: containerDirectory,
-                credentials: credentials, enqueue: enqueue)
+        // Discovery at execution time: the catalog says what is syncable.
+        let syncable = discoverSyncablePackages(in: try catalog.read())
+        guard let package = syncable.first(where: { $0.shortName == packageName }) else {
+            throw Failure.unknownPackage(
+                packageName, discovered: syncable.map(\.shortName))
         }
-    }
+        let declaration = package.sync
 
-    private static func runZotero(
-        force: Bool,
-        in store: GRDBWikiStore,
-        containerDirectory: URL,
-        credentials: any CredentialDescribing,
-        enqueue: (SourceID) async throws -> Void
-    ) async throws -> String {
-        let config = ZoteroConfig.load(from: containerDirectory)
-        // Hard gates first — nonzero exits with a typed message.
-        guard config.isConfigured, let _ = config.libraryID else {
-            throw ZoteroSyncError.libraryNotConfigured
-        }
-        guard !config.attachments.isEmpty else {
-            throw ZoteroSyncError.noAttachments
-        }
-        // API-key presence — still describe-only (the value is never read
-        // here), but "absent" and "unreadable here" are different outcomes.
-        // A bare CLI Mach-O cannot carry keychain-access-groups (AMFI
-        // SIGKILLs any that claim them without an embedded profile — see
-        // build.sh), so on a configured machine EVERY shared-keychain read in
-        // this process fails, and describe surfaces that as
-        // verificationFailed, not as "unset". Failing the sync there would
-        // block the documented flow even though the entitled host draining
-        // this job (app / wikid.xpc) resolves the same key fine. Absent →
-        // hard typed failure; unreadable → defer, and say so in the output.
-        var keyCheckDeferred = false
-        let keyInfo = credentials.describe(.zoteroAPIKey())
-        if keyInfo.isConfigured == false {
-            guard keyInfo.verificationFailed else {
-                throw ZoteroSyncError.apiKeyNotConfigured
+        // The required-credential gate. Manifest validation guarantees at
+        // most one required requirement on a sync declaration; zero means
+        // the package syncs without a gate (the second-package contract).
+        // The gate is describe-only — the value is never read here — but
+        // "absent" and "unreadable here" are different outcomes. A bare CLI
+        // Mach-O cannot carry keychain-access-groups (AMFI SIGKILLs any
+        // that claim them without an embedded profile — see build.sh), so
+        // on a configured machine EVERY shared-keychain read in this
+        // process fails, and describe surfaces that as verificationFailed,
+        // not as "unset". Failing the sync there would block the documented
+        // flow even though the entitled host draining this job (app /
+        // wikid.xpc) resolves the same key fine. Absent → hard typed
+        // failure; unreadable → defer, and say so in the output.
+        var credentialCheckDeferred = false
+        let requiredRequirement = package.registration.credentialRequirements
+            .first { $0.isOptional == false }
+        if let requiredRequirement {
+            guard let binding = ReviewedExtractorCredentialBindings.binding(
+                packageID: package.record.revision.packageID.rawValue,
+                requirementID: requiredRequirement.id.rawValue) else {
+                throw Failure.requiredCredentialUnavailable(
+                    packageName: packageName, requirementID: requiredRequirement.id.rawValue)
             }
-            keyCheckDeferred = true
+            let info = credentials.describe(binding.reference)
+            if info.isConfigured == false {
+                if info.verificationFailed {
+                    credentialCheckDeferred = true
+                } else {
+                    throw Failure.requiredCredentialNotConfigured(
+                        label: requiredRequirement.label)
+                }
+            }
         }
 
-        let outcomes = try await ZoteroSync.syncAttachments(
+        // The declared config sidecar. A missing or corrupt file loads as no
+        // values, so validation names the first required field — the same
+        // fresh-install failure the config gate always had.
+        let config = try ExtractorSyncSidecar.load(
+            declaration: declaration, from: containerDirectory)
+
+        // The byteless source MIME: the declaration's explicit MIME, or the
+        // registration's single declared MIME (manifest validation makes the
+        // fallback total).
+        guard let sourceMIMEType = declaration.sourceMIMEType
+            ?? package.registration.mimeTypes.sorted().first else {
+            throw Failure.unknownPackage(packageName, discovered: [])
+        }
+
+        let outcomes = try await ExtractorPackageSync.syncItems(
             store: store,
+            declaration: declaration,
+            packageIdentity: ExtractorSyncPackageIdentity(
+                packageID: package.record.revision.packageID,
+                displayName: package.record.displayName),
             config: config,
+            sourceMIMEType: sourceMIMEType,
             enqueue: enqueue,
             force: force)
 
         var lines: [String] = []
-        lines.append("Zotero sync: \(outcomes.count) attachment(s)")
+        lines.append("\(package.record.displayName) sync: \(outcomes.count) item(s)")
         for outcome in outcomes {
             switch outcome.action {
             case .created:
                 lines.append(
-                    "  created  \(outcome.attachmentKey) → source \(outcome.sourceID.rawValue) (extraction enqueued)")
+                    "  created  \(outcome.itemKey) → source \(outcome.sourceID.rawValue) (extraction enqueued)")
             case .reenqueued:
                 lines.append(
-                    "  re-enqueued  \(outcome.attachmentKey) → source \(outcome.sourceID.rawValue)")
+                    "  re-enqueued  \(outcome.itemKey) → source \(outcome.sourceID.rawValue)")
             case .skipped:
                 lines.append(
-                    "  skipped  \(outcome.attachmentKey) → source \(outcome.sourceID.rawValue) already synced (use --force to re-extract)")
+                    "  skipped  \(outcome.itemKey) → source \(outcome.sourceID.rawValue) already synced (use --force to re-extract)")
             }
         }
         lines.append(
             "Enqueued items drain when the app or the wikid daemon next runs its dispatch scan.")
-        if keyCheckDeferred {
+        if credentialCheckDeferred {
             lines.append(
-                "Note: the API key could not be verified from this process; the host that drains these jobs will check it before downloading.")
+                "Note: the \(requiredRequirement?.label ?? "required credential") could not be verified from this process; the host that drains these jobs will check it before downloading.")
         }
         return lines.joined(separator: "\n")
     }

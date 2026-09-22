@@ -648,11 +648,12 @@ public enum CLIReference {
                     commandLine: "sync <package> [--force]",
                     options: [CLIOption("--force", summary: "re-enqueue extraction for already-synced sources")],
                     details: [
-                        "Reads the package's config sidecar from the App Group container",
-                        "(zotero: library ID + attachment keys in zotero-config.json) and",
-                        "the API key from Keychain (presence check only). The enqueued",
-                        "extraction items drain when the app or the wikid daemon next",
-                        "runs its dispatch scan — this command only writes them.",
+                        "Reads the package's declared config sidecar from the App Group",
+                        "container (the file name comes from the package manifest) and",
+                        "checks any required credential from Keychain (presence check",
+                        "only). The enqueued extraction items drain when the app or the",
+                        "wikid daemon next runs its dispatch scan — this command only",
+                        "writes them.",
                     ]),
             ]),
     ]

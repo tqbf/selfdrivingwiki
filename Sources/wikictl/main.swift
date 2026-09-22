@@ -220,9 +220,9 @@ func execute(
                 store: store))
     case .admin(let action):
         return try AdminCommand.run(action, in: store)
-    case .extractor(.sync(let package, let force)):
+    case .extractor(.sync(let packageName, let force)):
         return try await runExtractorSync(
-            package: package, force: force, in: store,
+            packageName: packageName, force: force, in: store,
             wikiID: wikiID, containerDirectory: containerDirectory)
     case .chat(let action):
         return try await runChatCommand(
@@ -259,7 +259,7 @@ func execute(
 /// rehydrates and drains the persisted items on its next dispatch scan /
 /// launch.
 private func runExtractorSync(
-    package: ExtractorSyncCommand.Package,
+    packageName: String,
     force: Bool,
     in store: GRDBWikiStore,
     wikiID: WikiID,
@@ -268,11 +268,21 @@ private func runExtractorSync(
     let queueStore = try QueueStore(
         databaseURL: try DatabaseLocation.queueDatabaseURL())
     defer { queueStore.close() }
+    // Discovery = durable machine catalog ∪ this process's reviewed overlay.
+    // The reviewed root is wherever an `ExtractorPackages/` tree is staged
+    // beside this binary (the build layout); when that does not resolve
+    // (an app-bundled helper), the durable catalog the app published at
+    // launch still carries the record.
+    let reviewedRoot = Bundle.main.bundleURL
+    let catalog = try ExtractorSyncCommand.productionCatalogReader(
+        containerDirectory: containerDirectory,
+        reviewedPackageRoot: reviewedRoot)
     let output = try await ExtractorSyncCommand.run(
-        package: package,
+        packageName: packageName,
         force: force,
         in: store,
         containerDirectory: containerDirectory,
+        catalog: catalog,
         enqueue: { sourceID in
             _ = try queueStore.enqueue(QueueItemRequest(
                 queue: .extraction,
