@@ -720,6 +720,13 @@ PLIST
   # Inside-out: sign nested Mach-O (the wikictl helper + the .appex) first, then
   # the outer app. wikictl needs no entitlements — it's an un-sandboxed helper
   # writing user-owned App Group files, launched by the un-sandboxed app.
+  # NOTE: do NOT add keychain-access-groups here to let `wikictl extractor
+  # sync` read the shared keychain directly. Restricted entitlements on a bare
+  # Mach-O require an embedded provisioning profile, and a profile cannot
+  # embed in a bare executable — AMFI SIGKILLs the helper at exec ("No
+  # matching profile found"; verified 2026-09-21). The sync command instead
+  # defers the API-key check to the entitled host that drains the job
+  # (app / wikid.xpc).
   echo "→ codesign wikictl helper (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${CTL_NAME}"
