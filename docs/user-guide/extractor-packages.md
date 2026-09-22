@@ -118,6 +118,13 @@ Configure two things:
    letters and digits). An old `zoteroDirOverride` key in the file is
    ignored and never written again.
 
+Zotero is not special-cased for this: packages declare their sync config.
+The file name above, the URL shape, and the key rules all come from the
+package's manifest (`sync` on the registration, manifest revision 3), so a
+second syncable package works through the same command with no host
+changes. The command discovers syncable packages from the machine catalog
+and lists them when you name one it does not know.
+
 Then run `wikictl extractor sync zotero`:
 
 - Every configured key becomes one byteless `.zotero` source whose URL is

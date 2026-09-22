@@ -67,7 +67,8 @@ library picker is not built yet; you list attachment keys in a config file.
 1. Store your API key: open **Settings → Extraction → Packages** and click
    **Configure…** on the Zotero Attachment row. Paste the key into the
    **Zotero API Key** value row. The key lives in your Keychain.
-2. Name what to fetch: edit `zotero-config.json` in the App Group container:
+2. Name what to fetch: edit `zotero-config.json` in the App Group container
+   (the file name comes from the package's sync declaration):
 
    ```json
    {
@@ -81,6 +82,8 @@ library picker is not built yet; you list attachment keys in a config file.
 3. Run `wikictl extractor sync zotero`. Each configured key becomes one
    source, and the app (or the wikid daemon) downloads it on its next scan.
    Add `--force` to re-fetch a key whose file you changed in Zotero.
+   Packages declare their own sync config, so other syncable packages use
+   the same command under their own name.
 
 Imported sources carry a **Zotero** origin tag with a clickable "View in
 Zotero" link that opens the item in the Zotero app. See

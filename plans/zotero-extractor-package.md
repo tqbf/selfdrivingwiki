@@ -140,8 +140,14 @@ download seam.
 
 Picker UI, Authorize/Revoke credential UI, app-launch auto-sync, item-key
 selection policy, conditional (If-Modified-Since-Version) re-download —
-all sequenced behind the later UI work. Manifest-declared syncability
+all sequenced behind the later UI work. ~~Manifest-declared syncability
 (packages advertising a sync configuration in their registration data and
 the CLI discovering syncable packages from the catalog, instead of the
 compiled `Package` enum) also belongs to that cycle: it needs the picker's
-config surface to define what "syncable" means.
+config surface to define what "syncable" means.~~ **Delivered** — decoupled
+from the picker: syncable now means a registration carries a `sync`
+declaration (manifest revision 3), the CLI discovers syncable packages from
+the machine catalog ∪ reviewed overlay, and one generic engine serves every
+declared package. Reference:
+[`docs/architecture/extractor-package-manifest.md`](../docs/architecture/extractor-package-manifest.md)
+§"Sync declarations (manifest revision 3)".
