@@ -181,6 +181,12 @@ struct ExtractorSyncDeclarationTests {
         #expect(throws: ExtractorValidationError.self) {
             _ = try syncDeclaration(template: "https://api.example.org/}libraryID{")
         }
+        // A stray `}` before a later `{` is malformed too, even though the
+        // placeholder set itself is well-formed.
+        #expect(throws: ExtractorValidationError.self) {
+            _ = try syncDeclaration(
+                template: "https://api.example.org/prefix}/users/{libraryID}/items/{itemKey}")
+        }
         // Not HTTPS.
         #expect(throws: ExtractorValidationError.self) {
             _ = try syncDeclaration(
@@ -219,6 +225,15 @@ struct ExtractorSyncDeclarationTests {
         #expect(throws: ExtractorValidationError.self) {
             _ = try syncDeclaration(fields: [
                 ExtractorSyncFieldDeclaration(name: "library-id", required: true),
+                ExtractorSyncFieldDeclaration(name: "items", required: true, isList: true),
+            ])
+        }
+        // The placeholder name is reserved for the item key: a field named
+        // `itemKey` would be demanded at load but silently ignored at
+        // interpolation.
+        #expect(throws: ExtractorValidationError.self) {
+            _ = try syncDeclaration(fields: [
+                ExtractorSyncFieldDeclaration(name: "itemKey", required: true),
                 ExtractorSyncFieldDeclaration(name: "items", required: true, isList: true),
             ])
         }

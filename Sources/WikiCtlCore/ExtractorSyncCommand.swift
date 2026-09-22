@@ -43,6 +43,10 @@ public enum ExtractorSyncCommand {
         /// The named package has no discovered sync declaration. The
         /// discovered names ride along so the message can list them.
         case unknownPackage(String, discovered: [String])
+        /// The name matches more than one declared sync surface (two
+        /// packages whose short names collide, or one package with two
+        /// sync-bearing registrations). Candidates are `packageID#registrationID`.
+        case ambiguousPackage(String, candidates: [String])
         /// The registration's required credential has no compiled binding —
         /// reviewed packages only.
         case requiredCredentialUnavailable(packageName: String, requirementID: String)
@@ -57,6 +61,8 @@ public enum ExtractorSyncCommand {
                     return "Unknown extraction package '\(name)'. No syncable packages are installed; launch the app once so reviewed packages publish, then retry."
                 }
                 return "Unknown extraction package '\(name)'. Syncable: \(discovered.joined(separator: ", "))."
+            case .ambiguousPackage(let name, let candidates):
+                return "The package name '\(name)' is ambiguous; it matches \(candidates.joined(separator: ", "))."
             case .requiredCredentialUnavailable(let name, let requirementID):
                 return "The sync for '\(name)' requires credential '\(requirementID)', which has no reviewed binding in this build."
             case .requiredCredentialNotConfigured(let label):
@@ -65,16 +71,18 @@ public enum ExtractorSyncCommand {
         }
     }
 
-    /// One discovered syncable package.
+    /// One discovered syncable surface: one registration of one record.
     public struct DiscoveredSyncPackage {
         let record: ExtractorPackageCatalogRecord
         let registration: ExtractorRegistration
         let sync: ExtractorSyncDeclaration
         let shortName: String
 
-        init?(record: ExtractorPackageCatalogRecord) {
-            guard let registration = record.registrations.first(where: { $0.sync != nil }),
-                  let sync = registration.sync else { return nil }
+        init?(
+            record: ExtractorPackageCatalogRecord,
+            registration: ExtractorRegistration
+        ) {
+            guard let sync = registration.sync else { return nil }
             self.record = record
             self.registration = registration
             self.sync = sync
@@ -85,10 +93,16 @@ public enum ExtractorSyncCommand {
         static func shortName(of packageID: ExtractorPackageID) -> String {
             packageID.rawValue.split(separator: ".").last.map(String.init) ?? packageID.rawValue
         }
+
+        /// The ambiguity identity: `packageID#registrationID`.
+        var candidateID: String {
+            "\(record.revision.packageID.rawValue)#\(registration.id.rawValue)"
+        }
     }
 
-    /// Resolves the newest record per package lineage, keeping the ones
-    /// whose newest revision declares a sync surface.
+    /// Resolves the newest record per package lineage, keeping one entry per
+    /// sync-bearing registration of the newest revision, deterministically
+    /// ordered.
     public static func discoverSyncablePackages(
         in catalog: ExtractorPackageCatalog
     ) -> [DiscoveredSyncPackage] {
@@ -102,8 +116,25 @@ public enum ExtractorSyncCommand {
                 newest[record.revision.packageID] = record
             }
         }
-        return newest.values.compactMap { DiscoveredSyncPackage(record: $0) }
-            .sorted { $0.shortName < $1.shortName }
+        return newest.values.flatMap { record in
+            record.registrations.compactMap { registration in
+                DiscoveredSyncPackage(record: record, registration: registration)
+            }
+        }.sorted {
+            $0.shortName == $1.shortName
+                ? $0.candidateID < $1.candidateID
+                : $0.shortName < $1.shortName
+        }
+    }
+
+    /// The reviewed overlay root for a command-line host: the staged
+    /// `ExtractorPackages/` tree beside the binary. `Bundle.main.bundleURL`
+    /// of a bare Mach-O is the directory containing it, and the build stages
+    /// the tree under that directory's `ExtractorPackages/` — exactly what
+    /// `ReviewedExtractorPackages.bundledRoot(explicitRoot:)` probes.
+    public static func reviewedPackageRoot(for bundle: Bundle = .main) -> URL {
+        bundle.bundleURL.appendingPathComponent(
+            ReviewedExtractorPackages.resourceDirectoryName, isDirectory: true)
     }
 
     /// Production discovery for a command-line host: the durable machine
@@ -145,9 +176,23 @@ public enum ExtractorSyncCommand {
     ) async throws -> String {
         // Discovery at execution time: the catalog says what is syncable.
         let syncable = discoverSyncablePackages(in: try catalog.read())
-        guard let package = syncable.first(where: { $0.shortName == packageName }) else {
-            throw Failure.unknownPackage(
-                packageName, discovered: syncable.map(\.shortName))
+        let matches = syncable.filter { $0.shortName == packageName }
+        guard matches.isEmpty == false else {
+            // Sorted input, so an adjacent-unique pass dedupes names that
+            // carry multiple declared surfaces.
+            let discovered = syncable.map(\.shortName)
+                .reduce(into: [String]()) { names, name in
+                    if names.last != name { names.append(name) }
+                }
+            throw Failure.unknownPackage(packageName, discovered: discovered)
+        }
+        // A name that matches more than one declared surface is a typed
+        // ambiguity failure, never an arbitrary pick: two packages whose
+        // short names collide, or one package with two sync-bearing
+        // registrations.
+        guard matches.count == 1, let package = matches.first else {
+            throw Failure.ambiguousPackage(
+                packageName, candidates: matches.map(\.candidateID))
         }
         let declaration = package.sync
 

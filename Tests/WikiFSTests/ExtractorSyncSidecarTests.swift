@@ -270,6 +270,51 @@ struct ExtractorSyncSidecarTests {
         }
     }
 
+    /// The host's item/field length caps are hard, declaration or not: a
+    /// config file cannot make the host store an unbounded string even when
+    /// the package declares no item validation.
+    @Test func hostLengthCapsHoldWithoutDeclaredValidation() throws {
+        let noValidation = try ExtractorSyncDeclaration(
+            configFileName: "cap-config.json",
+            urlTemplate: "https://api.example.org/lib/{libraryID}/items/{itemKey}",
+            fields: [
+                ExtractorSyncFieldDeclaration(name: "libraryID", required: true),
+                ExtractorSyncFieldDeclaration(name: "items", required: true, isList: true),
+            ])
+        let dir = tempDirectory()
+        let long = String(repeating: "a", count: ExtractorHostLimits.maximumSyncItemLength + 1)
+
+        try write(
+            ["libraryID": "9", "items": [long]],
+            fileName: "cap-config.json", to: dir)
+        #expect(throws: ExtractorSyncSidecarError.invalidItem(item: long, reason: "exceeds the supported length")) {
+            _ = try ExtractorSyncSidecar.load(declaration: noValidation, from: dir)
+        }
+
+        try write(
+            ["libraryID": long, "items": ["ok-item"]],
+            fileName: "cap-config.json", to: dir)
+        #expect(throws: ExtractorSyncSidecarError.invalidFieldValue(
+            field: "libraryID", reason: "exceeds the supported length")) {
+            _ = try ExtractorSyncSidecar.load(declaration: noValidation, from: dir)
+        }
+    }
+
+    /// An empty item is never valid, even without declared validation.
+    @Test func emptyItemFailsWithoutDeclaredValidation() throws {
+        let noValidation = try ExtractorSyncDeclaration(
+            configFileName: "empty-config.json",
+            urlTemplate: "https://api.example.org/{itemKey}",
+            fields: [
+                ExtractorSyncFieldDeclaration(name: "items", required: true, isList: true),
+            ])
+        let dir = tempDirectory()
+        try write(["items": ["   "]], fileName: "empty-config.json", to: dir)
+        #expect(throws: ExtractorSyncSidecarError.invalidItem(item: "", reason: "is empty")) {
+            _ = try ExtractorSyncSidecar.load(declaration: noValidation, from: dir)
+        }
+    }
+
     /// An optional absent field is simply missing from the values; an
     /// optional absent list syncs nothing (the engine's contract).
     @Test func optionalFieldsMayBeAbsent() throws {

@@ -557,4 +557,111 @@ struct ExtractorSyncCommandTests {
         #expect(packageName == "notapackage")
         #expect(force == false)
     }
+
+    // MARK: - Ambiguity (review finding)
+
+    /// Two packages whose short names collide are a typed ambiguity
+    /// failure, never an arbitrary pick — the discovery list stays usable,
+    /// but invoking the colliding name names both candidates.
+    @Test func collidingShortNamesFailWithType() async throws {
+        let store = try tempStore()
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("extractorsync-cfg-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+
+        // Two readium-shaped packages whose IDs share the last label.
+        let a = try readiumRecord()
+        let b = try ExtractorPackageCatalogRecord(
+            revision: ExtractorPackageRevisionID(
+                packageID: ExtractorPackageID(validating: "org.other.tools"),
+                version: a.revision.version,
+                digest: a.revision.digest),
+            displayName: a.displayName,
+            protocolRevision: a.protocolRevision,
+            manifestRevision: .v3,
+            launch: a.launch,
+            registrations: a.registrations,
+            capabilities: a.capabilities,
+            installedAt: a.installedAt)
+
+        do {
+            _ = try await ExtractorSyncCommand.run(
+                packageName: "tools", force: false, in: store,
+                containerDirectory: container,
+                catalog: catalog(records: [
+                    renamed(a, to: "org.example.tools"), b,
+                ]),
+                credentials: CredentialDouble(configured: false),
+                enqueue: { _ in })
+            Issue.record("expected ambiguousPackage")
+        } catch let error as ExtractorSyncCommand.Failure {
+            guard case .ambiguousPackage(let name, let candidates) = error else {
+                Issue.record("expected ambiguousPackage, got \(error)")
+                return
+            }
+            #expect(name == "tools")
+            #expect(candidates.count == 2)
+            #expect(candidates.contains { $0.hasPrefix("org.example.tools#") })
+            #expect(candidates.contains { $0.hasPrefix("org.other.tools#") })
+            #expect(error.errorDescription?.contains("ambiguous") == true)
+        }
+    }
+
+    private func renamed(
+        _ record: ExtractorPackageCatalogRecord, to packageID: String
+    ) throws -> ExtractorPackageCatalogRecord {
+        try ExtractorPackageCatalogRecord(
+            revision: ExtractorPackageRevisionID(
+                packageID: ExtractorPackageID(validating: packageID),
+                version: record.revision.version,
+                digest: record.revision.digest),
+            displayName: record.displayName,
+            protocolRevision: record.protocolRevision,
+            manifestRevision: record.manifestRevision,
+            launch: record.launch,
+            registrations: record.registrations,
+            capabilities: record.capabilities,
+            installedAt: record.installedAt)
+    }
+
+    // MARK: - The reviewed overlay root (review finding)
+
+    /// The command-line reviewed root must point at the STAGED
+    /// `ExtractorPackages/` tree beside the binary — the layout build.sh
+    /// stages and `ReviewedExtractorPackages.bundledRoot(explicitRoot:)`
+    /// probes. A bare `bundleURL` (the binary's directory) does not.
+    @Test func reviewedPackageRootResolvesTheStagedLayout() throws {
+        let root = ExtractorSyncCommand.reviewedPackageRoot()
+        #expect(root.lastPathComponent == ReviewedExtractorPackages.resourceDirectoryName)
+        #expect(root.deletingLastPathComponent().path == Bundle.main.bundleURL.path)
+
+        // The staged layout: <dir>/ExtractorPackages/<Package>. Resolve the
+        // real committed zotero package through it, exactly as build/
+        // presents to build/wikictl.
+        let repositoryPackages = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ExtractorPackages", isDirectory: true)
+        let staged = FileManager.default.temporaryDirectory
+            .appendingPathComponent("extractorsync-staged-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: staged, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: staged) }
+        let stagedPackages = staged.appendingPathComponent(
+            ReviewedExtractorPackages.resourceDirectoryName, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: stagedPackages, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: repositoryPackages.appendingPathComponent("Zotero", isDirectory: true),
+            to: stagedPackages.appendingPathComponent("Zotero", isDirectory: true))
+
+        let probed = ReviewedExtractorPackages.bundledRoot(
+            for: ReviewedExtractorPackages.zotero,
+            explicitRoot: stagedPackages)
+        #expect(probed != nil, "the staged layout must resolve the reviewed package")
+        // …while the bare binary directory (the old, wrong root) does not.
+        #expect(ReviewedExtractorPackages.bundledRoot(
+            for: ReviewedExtractorPackages.zotero, explicitRoot: staged) == nil)
+    }
 }

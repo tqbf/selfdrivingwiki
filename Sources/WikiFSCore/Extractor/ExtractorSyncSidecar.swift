@@ -137,6 +137,13 @@ public enum ExtractorSyncSidecar {
                 }
                 continue
             }
+            // The host cap is hard, declaration or not: a config file cannot
+            // make the host store an unbounded string.
+            guard trimmed.utf8.count <= ExtractorHostLimits.maximumSyncItemLength else {
+                throw ExtractorSyncSidecarError.invalidFieldValue(
+                    field: field.name,
+                    reason: "exceeds the supported length")
+            }
             if let reason = field.invalidReason(forValue: trimmed) {
                 throw ExtractorSyncSidecarError.invalidFieldValue(field: field.name, reason: reason)
             }
@@ -159,9 +166,19 @@ public enum ExtractorSyncSidecar {
                     throw ExtractorSyncSidecarError.itemNotAString(field: list.name, index: index)
                 }
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let validation = declaration.itemValidation,
-                   let reason = validation.invalidReason(forItem: trimmed) {
-                    throw ExtractorSyncSidecarError.invalidItem(item: trimmed, reason: reason)
+                if let validation = declaration.itemValidation {
+                    if let reason = validation.invalidReason(forItem: trimmed) {
+                        throw ExtractorSyncSidecarError.invalidItem(item: trimmed, reason: reason)
+                    }
+                } else if trimmed.isEmpty
+                    || trimmed.utf8.count > ExtractorHostLimits.maximumSyncItemLength {
+                    // The host cap is hard even without a declared
+                    // itemValidation: items are always 1…256 bytes.
+                    throw ExtractorSyncSidecarError.invalidItem(
+                        item: trimmed,
+                        reason: trimmed.isEmpty
+                            ? "is empty"
+                            : "exceeds the supported length")
                 }
                 guard seen.insert(trimmed).inserted else {
                     throw ExtractorSyncSidecarError.duplicateItem(item: trimmed)
