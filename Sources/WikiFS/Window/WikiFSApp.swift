@@ -93,7 +93,16 @@ struct WikiFSApp: App {
     /// app delegate) so wiki windows can be reopened from the status item
     /// when no windows are visible (accessory mode). Wired by
     /// `WindowBridgeProbe`, a hidden view inside the main `WindowGroup`.
-    @State private var openWindowBridge = OpenWindowBridge()
+    /// Process-wide window-opening bridge. Deliberately NOT `@State`:
+    /// SwiftUI re-creates the App struct, and a `@State` reference read from
+    /// a non-installed copy (the AppDelegate bootstrap closure, the windows'
+    /// `.task` fallbacks — all call `startStatusItem()`) yields a DISTINCT
+    /// freshly-initialized instance. The status item then holds a bridge no
+    /// `WindowBridgeProbe` ever wires, and every window-opening menu entry
+    /// silently no-ops. A static reference is shared by every copy by
+    /// construction, so the probe's wiring is always visible to the menu.
+    private static let sharedOpenWindowBridge = OpenWindowBridge()
+    private var openWindowBridge: OpenWindowBridge { Self.sharedOpenWindowBridge }
     /// Owns the open-windows list for the standard Window menu (issue #567).
     @State private var windowTracker: WindowListTracker
 
@@ -681,6 +690,16 @@ struct WikiFSApp: App {
             }
         }
         .windowToolbarStyle(.unified)
+        // Always PRESENT the main window at launch. Without this, a relaunch
+        // that restores a windowless session (quit with all windows closed)
+        // starts the app headless — only the status item exists — and the
+        // `OpenWindowBridge` closures are never created, because they only
+        // come into existence when the `WindowBridgeProbe`'s hosting window
+        // first appears. In that state every bridge-driven status-item entry
+        // (queue windows, wiki opens) silently no-ops until some other path
+        // opens a window (e.g. a Dock reopen). The closures survive a window
+        // CLOSE by design; this closes the never-opened gap.
+        .defaultLaunchBehavior(.presented)
         .commands {
             // Suppress the auto-generated File ▸ New Window command (Cmd-N).
             // This app is single-window per wiki; Cmd-N would open a broken

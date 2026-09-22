@@ -110,5 +110,6 @@ struct WindowBridgeProbe: View {
         bridge.openQueueWindow = { queue in
             openWindow(value: queue)
         }
+        DebugLog.tabs("bridge: probe wired openQueueWindow")
     }
 }

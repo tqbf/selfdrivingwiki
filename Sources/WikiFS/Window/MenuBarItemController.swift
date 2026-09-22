@@ -500,11 +500,19 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     @objc private func openIngestionWindow(_ sender: NSMenuItem?) {
         NSApplication.shared.activate(ignoringOtherApps: true)
+        if openWindowBridge.openQueueWindow == nil {
+            // Unwired means no probe-hosting window has appeared this
+            // session — the click would be a silent no-op, so say so.
+            DebugLog.tabs("menu: openIngestionWindow dropped — window bridge unwired (no window has appeared this session)")
+        }
         openWindowBridge.openQueueWindow?(.ingestion)
     }
 
     @objc private func openExtractionWindow(_ sender: NSMenuItem?) {
         NSApplication.shared.activate(ignoringOtherApps: true)
+        if openWindowBridge.openQueueWindow == nil {
+            DebugLog.tabs("menu: openExtractionWindow dropped — window bridge unwired (no window has appeared this session)")
+        }
         openWindowBridge.openQueueWindow?(.extraction)
     }
 
