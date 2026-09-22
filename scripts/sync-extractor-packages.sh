@@ -838,9 +838,12 @@ PY
 # Zotero attachment plus its item metadata through the Zotero Web API and
 # never converts formats: Markdown attachments are the result itself, while
 # PDF/HTML attachments ride the revision-4 bytes result (`resultMIMEType`)
-# for the host's own format route. It needs the user's API key, so it is a
-# manifest-revision-2 package with a REQUIRED `zotero-api-key` credential
-# requirement.
+# for the host's own format route. It needs the user's API key, so it
+# carries a REQUIRED `zotero-api-key` credential requirement, and its
+# attachment registration declares its acquisition-sync surface (manifest
+# revision 3): the `zotero-config.json` sidecar, the Zotero file-endpoint
+# URL template, and the libraryID field plus the 8-character A–Z0–9
+# attachment-key list.
 
 generate_zotero_package() {
   local target="$1"
@@ -907,7 +910,7 @@ PY
 # Reviewed package provenance
 
 - Package: org.selfdrivingwiki.zotero
-- Version: 1.0.1
+- Version: 1.0.2
 - Source: tools/zotero/zotero in this repository
 - Entry point: bin/zotero-extractor, generated from the same source
 - Dependencies: the PEP 723 block of the entry point is copied from the
@@ -925,6 +928,11 @@ PY
 - Credential: a REQUIRED `zotero-api-key` requirement. The key arrives
   only through the request-scoped credential file and never appears in a
   frame, a message, or the committed bytes.
+- Sync: the attachment registration declares its acquisition-sync surface
+  (manifest revision 3) — the `zotero-config.json` sidecar, the
+  `https://api.zotero.org/users/{libraryID}/items/{itemKey}/file` URL
+  template, and the 8-character A–Z0–9 attachment-key list — so
+  `wikictl extractor sync zotero` runs entirely on package data.
 - Capabilities: network and shared-runtime-cache. The shared cache keeps
   uv's CPython install and wheel cache warm across operations (shared
   with the other uv-launched packages).
@@ -942,9 +950,9 @@ import json, sys
 
 path, script_digest, entry_digest, provenance_digest = sys.argv[1:5]
 manifest = {
-    "manifestRevision": 2,
+    "manifestRevision": 3,
     "packageID": "org.selfdrivingwiki.zotero",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "displayName": "Zotero Attachment",
     "protocolRevision": 4,
     "entryPoint": "bin/zotero-extractor",
@@ -966,6 +974,26 @@ manifest = {
                     ),
                 }
             ],
+            # The acquisition-sync declaration (manifest revision 3): the
+            # generic host engine reads exactly these facts, so the sync
+            # surface is package data, never host code. `attachments` holds
+            # the 8-character A-Z0-9 Zotero item keys; `{itemKey}`
+            # substitutes one per item into the canonical file endpoint.
+            "sync": {
+                "configFileName": "zotero-config.json",
+                "urlTemplate": (
+                    "https://api.zotero.org/users/{libraryID}/items/{itemKey}/file"
+                ),
+                "fields": [
+                    {"name": "libraryID", "required": True},
+                    {"name": "attachments", "required": True, "isList": True},
+                ],
+                "itemValidation": {
+                    "minimumLength": 8,
+                    "maximumLength": 8,
+                    "alphabet": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+                },
+            },
         }
     ],
     # The package fetches attachment metadata and files from the Zotero Web

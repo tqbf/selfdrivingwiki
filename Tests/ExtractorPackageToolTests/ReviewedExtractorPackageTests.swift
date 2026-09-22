@@ -328,7 +328,7 @@ struct ReviewedExtractorPackageTests {
         #expect(output.registrationIDs == ["attachment"])
 
         let manifest = try manifest("Zotero")
-        #expect(manifest.manifestRevision == .v2)
+        #expect(manifest.manifestRevision == .v3)
         let registration = try #require(manifest.registrations.first)
         #expect(registration.kinds == [.zotero])
         #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "application/zotero")])
@@ -336,6 +336,20 @@ struct ReviewedExtractorPackageTests {
         let requirements = registration.credentialRequirements
         #expect(requirements.map(\.id.rawValue) == ["zotero-api-key"])
         #expect(requirements.allSatisfy { !$0.isOptional && $0.kind == .secret })
+        // The sync declaration is the package's declared acquisition surface:
+        // the config sidecar, the file-endpoint URL template, and the
+        // 8-character A-Z0-9 attachment-key list. Nothing host-side knows
+        // these facts.
+        let sync = try #require(registration.sync)
+        #expect(sync.configFileName == "zotero-config.json")
+        #expect(sync.urlTemplate == "https://api.zotero.org/users/{libraryID}/items/{itemKey}/file")
+        #expect(sync.fields.map(\.name) == ["libraryID", "attachments"])
+        #expect(sync.fields.map(\.isRequired) == [true, true])
+        #expect(sync.fields.last?.isList == true)
+        #expect(sync.itemValidation?.minimumLength == 8)
+        #expect(sync.itemValidation?.maximumLength == 8)
+        #expect(sync.itemValidation?.alphabet == "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        #expect(sync.sourceMIMEType == nil)
         // Acquisition only: network + shared runtime cache, no model.
         #expect(manifest.capabilities == [.network, .sharedRuntimeCache])
         #expect(manifest.capabilities.contains(.modelDownload) == false)
@@ -351,7 +365,7 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "a18cbc86b6a4f949f267ccfb94956b6361422a8d063259b504b8316ac350e8f8")
+            == "5460e414e96cc8f4dc87dfd561cdbb2d6cdd16a2cb360c85d736803539643a83")
 
         // Secret-free bytes: the declared requirement is a review fact; a
         // value or a reference binding must never be committed.
