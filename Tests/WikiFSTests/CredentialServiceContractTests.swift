@@ -106,7 +106,12 @@ struct CredentialServiceContractTests {
             reference: Self.reference, isConfigured: true,
             source: .keychain, isWritable: true))
         let propertyNames = mirror.children.compactMap(\.label)
-        #expect(propertyNames == ["reference", "isConfigured", "source", "isWritable"])
+        // `verificationFailed` (2026-09-21) is a Bool status flag — it lets a
+        // caller tell "unset" from "unreadable in this process" and can never
+        // carry a value. Any String/Data-typed addition must fail this list.
+        #expect(propertyNames == [
+            "reference", "isConfigured", "source", "isWritable", "verificationFailed",
+        ])
     }
 
     @Test func inMemoryServiceSatisfiesReferenceContract() throws {
