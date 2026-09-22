@@ -72,6 +72,16 @@ against that state.
 - `scripts/sync-extractor-packages.sh --check` — green.
 - `make build` / `make test` — green (after updating the reviewed-package
   gate to revision 3 and the unsupported-revision fixture to 4).
+- Post-gates review (general-purpose subagent, focus: neutrality, bounds,
+  compat) returned FIX-FIRST with one MAJOR — the CLI's reviewed overlay
+  root probed `build/Zotero` while the build stages
+  `build/ExtractorPackages/Zotero`, so the pre-publish overlay never
+  resolved — plus four hardening findings. All five addressed in
+  78f46816: the root now composes the staged path (pinned by a layout
+  test), host item/field length caps are hard without declared
+  validation, colliding sync names fail typed `ambiguousPackage`, the
+  `itemKey` field name is reserved, and a stray `}` before a `{` is
+  malformed braces. Full gates re-run green after the fixes.
 - Documented deltas (not regressions): load-time item validation is
   intentionally stricter than the old engine (which validated nothing in
   production), and duplicate list items hard-fail instead of deduping.
