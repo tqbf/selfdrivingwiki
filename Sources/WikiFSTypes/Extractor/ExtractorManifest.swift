@@ -134,6 +134,12 @@ public struct ExtractorSyncFieldDeclaration: Codable, Hashable, Sendable {
         guard ExtractorIdentifierRules.isSyncFieldName(name) else {
             throw ExtractorValidationError.invalidManifest("sync field name \(name)")
         }
+        // The placeholder name is reserved: a field named `itemKey` would be
+        // demanded at load but silently ignored at interpolation.
+        guard name != ExtractorSyncPlaceholder.itemKey else {
+            throw ExtractorValidationError.invalidManifest(
+                "sync field name \(name) is reserved")
+        }
         if let pattern {
             try ExtractorSyncPatternRules.validate(pattern, what: "sync field pattern")
         }
@@ -308,6 +314,12 @@ public struct ExtractorSyncDeclaration: Codable, Hashable, Sendable {
         var tokens: [String] = []
         var remainder = Substring(template)
         while let open = remainder.firstIndex(of: "{") {
+            // A stray `}` before the next `{` is malformed braces, not a
+            // literal — the template grammar reserves both characters.
+            guard remainder[..<open].contains("}") == false else {
+                throw ExtractorValidationError.invalidManifest(
+                    "sync URL template has malformed braces")
+            }
             guard let close = remainder[open...].firstIndex(of: "}"),
                   close > remainder.index(after: open),
                   remainder[remainder.index(after: open)..<close].contains("{") == false else {

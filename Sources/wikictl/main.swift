@@ -273,7 +273,7 @@ private func runExtractorSync(
     // beside this binary (the build layout); when that does not resolve
     // (an app-bundled helper), the durable catalog the app published at
     // launch still carries the record.
-    let reviewedRoot = Bundle.main.bundleURL
+    let reviewedRoot = ExtractorSyncCommand.reviewedPackageRoot()
     let catalog = try ExtractorSyncCommand.productionCatalogReader(
         containerDirectory: containerDirectory,
         reviewedPackageRoot: reviewedRoot)
