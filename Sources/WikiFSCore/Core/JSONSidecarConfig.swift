@@ -1,13 +1,12 @@
 import Foundation
 
 /// A config value type persisted as a single pretty-printed JSON sidecar file
-/// in the App Group container (e.g. `zotero-config.json`, `extraction-config.json`,
+/// in the App Group container (e.g. `extraction-config.json`,
 /// `agent-providers.json`).
 ///
 /// Conformers supply only `fileName` (and whatever type-specific fields they
 /// need); the protocol's default implementations provide the load/save
-/// boilerplate that was previously copy-pasted across `ZoteroConfig`,
-/// `ExtractionConfig`, and `AgentProvidersConfig`.
+/// boilerplate that was previously copy-pasted across the config types.
 ///
 /// Semantics (matching the prior hand-written implementations):
 /// - `save(to:)` writes atomically, pretty-printed with sorted keys, so diffs
@@ -17,7 +16,7 @@ import Foundation
 ///   the call never throws — callers degrade to a default).
 ///
 /// Types that want non-optional "default-on-missing" loading keep a one-line
-/// delegator, e.g. `ZoteroConfig.load(from:) -> ZoteroConfig`.
+/// delegator that falls back to the empty value.
 ///
 /// Notes:
 /// - `WikiRegistry` deliberately does NOT conform here: it uses an ISO-8601 date
@@ -26,6 +25,9 @@ import Foundation
 ///   issue #518.
 /// - No secret ever lives in these files (keys go in Keychain); the protocol only
 ///   handles the secrets-free JSON sidecar.
+/// - Dynamically-shaped configs (a package's declared sync fields) use
+///   `ExtractorSyncSidecar` instead: their schema comes from manifest data,
+///   not a compiled type.
 public protocol JSONSidecarConfig: Codable, Equatable, Sendable {
     /// The JSON filename inside the App Group container, e.g.
     /// `"zotero-config.json"`.

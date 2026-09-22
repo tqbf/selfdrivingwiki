@@ -569,21 +569,20 @@ public enum ArgumentParser {
             throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "extractor", given: sub))
         }
         let rest = Array(args.dropFirst())
-        // The leaf's positional argument: the acquisition package. Pulled
-        // before the Options bag, which only accepts `--` tokens; the
-        // remainder is flags. `--force` re-enqueues extraction for
+        // The leaf's positional argument: the acquisition package name. It
+        // stays a RAW string here — which names are valid is catalog data
+        // (the sync declarations the machine has installed), resolved at
+        // execution time after wiki selection, never a compiled set. The
+        // remainder is flags; `--force` re-enqueues extraction for
         // already-synced acquisition URLs.
-        let packageRaw = rest.first
-        guard let packageRaw, !packageRaw.hasPrefix("-") else {
-            throw Failure.usage("extractor sync: name the package to sync (supported: \(ExtractorSyncCommand.Package.supportedPackages.joined(separator: ", ")))")
-        }
-        guard let package = ExtractorSyncCommand.Package(rawValue: packageRaw) else {
-            throw Failure.usage(ExtractorSyncCommand.Failure.unknownPackage(packageRaw).errorDescription ?? "unknown package")
+        let packageName = rest.first
+        guard let packageName, !packageName.hasPrefix("-") else {
+            throw Failure.usage("extractor sync: name the acquisition package to sync (see 'wikictl help extractor' for the grammar; syncable packages are the ones the catalog declares)")
         }
         let options = try Options(Array(rest.dropFirst()), options: CLIReference.options(forFamily: "extractor"))
         switch sub {
         case "sync":
-            return .extractor(.sync(package, force: options.flag("--force")))
+            return .extractor(.sync(packageName: packageName, force: options.flag("--force")))
         default:
             // Unreachable: recognition is the CLIReference leaf table above.
             throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "extractor", given: sub))

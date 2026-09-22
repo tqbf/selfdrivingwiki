@@ -7,9 +7,9 @@ import Foundation
 ///
 /// App-wide, not per-wiki: an extraction preference is a property of the person
 /// using the app, not of any one wiki. Persisted once at the App Group container
-/// root as a sibling of `zotero-config.json`. Follows `ZoteroConfig`'s load/save
-/// pattern exactly (pure value type, explicit injected directory, atomic write),
-/// and `WikiRegistry`'s degrade-to-empty-on-corrupt rule.
+/// root. Follows the config load/save pattern exactly (pure value type,
+/// explicit injected directory, atomic write), and `WikiRegistry`'s
+/// degrade-to-empty-on-corrupt rule.
 public struct ExtractionConfig: JSONSidecarConfig {
     /// For the `.acp` backend: the provider id (from `AgentProvidersConfig`)
     /// to use for extraction. nil = use the app's default provider. Ignored by
@@ -285,8 +285,8 @@ public struct ExtractionConfig: JSONSidecarConfig {
     // MARK: - Persistence (via `JSONSidecarConfig`)
 
     /// Load from `extraction-config.json` in `directory`. A missing or corrupt
-    /// file degrades to an empty (default) config rather than throwing — same
-    /// fresh-install behavior as `ZoteroConfig.load`. Delegates the file read +
+    /// file degrades to an empty (default) config rather than throwing — the
+    /// standard fresh-install behavior. Delegates the file read +
     /// decode to `JSONSidecarConfig.load(from:)` and supplies the default config.
     ///
     /// The loaded config is NOT baked with the bundled default-route policy:

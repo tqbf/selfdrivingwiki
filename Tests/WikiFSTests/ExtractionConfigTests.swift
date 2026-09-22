@@ -5,7 +5,7 @@ import WikiFSTypes
 
 /// `ExtractionConfig` load/save round-trip, defaulting, resilient decode, and
 /// the one-time migration of the retired typed selection keys into the generic
-/// route-record table — mirrors `ZoteroConfigTests`'s temp-directory pattern.
+/// route-record table — mirrors the sync-sidecar tests' temp-directory pattern.
 struct ExtractionConfigTests {
 
     private func tempDirectory() -> URL {
