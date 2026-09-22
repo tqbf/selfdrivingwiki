@@ -161,17 +161,26 @@ public struct CredentialInfo: Hashable, Sendable, CustomStringConvertible {
     public let isConfigured: Bool
     public let source: CredentialSource
     public let isWritable: Bool
+    /// True when `isConfigured == false` because the READ ITSELF failed
+    /// (locked keychain, `errSecMissingEntitlement` in a process the shared
+    /// access group does not cover, ...), not because the item is absent.
+    /// `describe` never throws, so this is how a caller tells "unset" from
+    /// "cannot tell" — e.g. `wikictl extractor sync` defers its API-key
+    /// check to the entitled draining host on this flag instead of failing.
+    public let verificationFailed: Bool
 
     public init(
         reference: CredentialReference,
         isConfigured: Bool,
         source: CredentialSource,
-        isWritable: Bool
+        isWritable: Bool,
+        verificationFailed: Bool = false
     ) {
         self.reference = reference
         self.isConfigured = isConfigured
         self.source = source
         self.isWritable = isWritable
+        self.verificationFailed = verificationFailed
     }
 
     public var description: String {
