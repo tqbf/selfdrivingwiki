@@ -118,7 +118,13 @@ public enum ManagedExtractorProcessError: Error, Equatable, Sendable {
     case timeout(detail: String)
     case cancellation
     case outputLimit
-    case processTermination(ProcessTerminationCause)
+    /// The extractor exited nonzero (or was signaled) without a terminal
+    /// frame. `stderrTail` is the bounded single-line tail of the package's
+    /// own stderr — its last words before dying — so a queue failure names
+    /// the package's cause instead of a bare exit code. Same Console
+    /// exposure as the `nonzeroExit` diagnostics event; `timeout(detail:)`
+    /// sets the precedent for bounded detail in messages.
+    case processTermination(ProcessTerminationCause, stderrTail: String)
     /// macOS seatbelt confinement could not be applied, so nothing was
     /// spawned. Fail closed: a managed package never runs unsandboxed on
     /// macOS (Linux diagnostic builds spawn unwrapped and are loudly logged
@@ -154,8 +160,9 @@ extension ManagedExtractorProcessError: LocalizedError {
             "The extraction was cancelled."
         case .outputLimit:
             "The extractor exceeded its output limit."
-        case .processTermination(let cause):
+        case .processTermination(let cause, let stderrTail):
             "The extractor process stopped unexpectedly (\(cause))."
+                + (stderrTail.isEmpty ? "" : " Package stderr: \(stderrTail)")
         case .sandboxUnavailable:
             "The extractor sandbox could not be set up, so the package did not run."
         }
@@ -347,14 +354,15 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             break
         case .exited, .signaled:
             guard !protocolCompleted else { break }
+            let stderrTail = ManagedExtractorDiagnostics.singleLineTail(
+                execution.stderr,
+                displayLimit: ManagedExtractorDiagnostics.maximumStderrTailDisplayLength)
             diagnostics.send(ManagedExtractorDiagnostics.Event.nonzeroExit(
                 command: launch.commandDescription,
                 termination: String(describing: execution.terminationCause),
-                stderrTail: ManagedExtractorDiagnostics.singleLineTail(
-                    execution.stderr,
-                    displayLimit: ManagedExtractorDiagnostics
-                        .maximumStderrTailDisplayLength)).consoleLine)
-            throw ManagedExtractorProcessError.processTermination(execution.terminationCause)
+                stderrTail: stderrTail).consoleLine)
+            throw ManagedExtractorProcessError.processTermination(
+                execution.terminationCause, stderrTail: stderrTail)
         }
         do {
             let summary = try protocolState.finish()

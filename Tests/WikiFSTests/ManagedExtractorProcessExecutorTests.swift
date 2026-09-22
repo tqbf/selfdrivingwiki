@@ -317,8 +317,18 @@ struct ManagedExtractorProcessExecutorTests {
 
         let nonzero = try Fixture(mode: "nonzero", maximumDurationMilliseconds: 30_000)
         defer { nonzero.cleanup() }
-        await #expect(throws: ManagedExtractorProcessError.processTermination(.exited(code: 17))) {
+        do {
             _ = try await ManagedExtractorProcessExecutor().execute(nonzero.operation)
+            Issue.record("expected processTermination")
+        } catch let error as ManagedExtractorProcessError {
+            guard case .processTermination(.exited(code: 17), let stderrTail) = error else {
+                Issue.record("unexpected error: \(error)")
+                return
+            }
+            // The bounded stderr tail rides on the failure so the queue item
+            // names the package's own cause instead of a bare exit code.
+            #expect(error.localizedDescription.contains("exited(code: 17)"))
+            #expect(error.localizedDescription.contains("Package stderr: ") == (stderrTail.isEmpty == false))
         }
     }
 
