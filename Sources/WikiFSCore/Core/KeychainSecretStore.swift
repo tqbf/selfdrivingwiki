@@ -195,28 +195,37 @@ public enum KeychainSecretStore {
         guard !group.isEmpty else { return }
 
         let enumerated = enumerateLegacyGenericPasswords()
-        guard enumerated.status == errSecSuccess, !enumerated.items.isEmpty else {
-            // Was silent: a failed bulk enumeration (e.g. errSecAuthFailed when
-            // one item's data is not readable by this process) is
-            // indistinguishable from an empty legacy keychain without the
-            // status, which hid stranded legacy items (the zotero API key
-            // stayed file-based while reads went to DataProtection+group).
-            DebugLog.config(
-                "Keychain migration: legacy enumeration returned nothing (status \(enumerated.status)); no items considered")
+        guard enumerated.status == errSecSuccess else {
+            // Was silent: a failed bulk enumeration is indistinguishable from an
+            // empty legacy keychain without the status, which hid stranded
+            // legacy items (the zotero API key stayed file-based while reads
+            // went to DataProtection+group).
+            if enumerated.status == errSecItemNotFound {
+                DebugLog.config("Keychain migration: legacy keychain holds no generic-password items")
+            } else {
+                DebugLog.config(
+                    "Keychain migration: legacy enumeration failed (status \(enumerated.status)); no items considered")
+            }
             return
         }
-        let legacy = enumerated.items
-        // Scope to THIS app's own items (by service-prefix convention) so
-        // unrelated file-keychain items the process can see are left untouched,
-        // then drop items that already live in the shared DataProtection group:
-        // the one-store enumeration surfaces those too, and "migrating" one
-        // erases it (see isMigrationCandidate).
-        let ownItems = legacy.filter { $0.service.hasPrefix(migrationServicePrefix) }
-        guard !ownItems.isEmpty else {
+        // The enumeration already scoped to THIS app's own items (by
+        // service-prefix convention) so unrelated file-keychain items the
+        // process can see are left untouched — and, critically, so their
+        // secret data is never read.
+        guard enumerated.ownAttributeCount > 0 else {
             DebugLog.config(
-                "Keychain migration: legacy keychain held \(legacy.count) item(s), none with prefix \(migrationServicePrefix)")
+                "Keychain migration: legacy keychain held \(enumerated.totalAttributeCount) item(s), none with prefix \(migrationServicePrefix)")
             return
         }
+        if enumerated.unreadableCount > 0 {
+            DebugLog.config(
+                "Keychain migration: \(enumerated.unreadableCount) of \(enumerated.ownAttributeCount) own item(s) had unreadable secret data; skipped")
+        }
+        // Drop items that already live in the shared DataProtection group: the
+        // one-store enumeration surfaces those too, and "migrating" one erases
+        // it (see isMigrationCandidate).
+        let ownItems = enumerated.items
+        guard !ownItems.isEmpty else { return }
         let strays = ownItems.filter {
             isMigrationCandidate(
                 service: $0.service, accessGroup: $0.accessGroup, sharedGroup: group)
@@ -276,38 +285,135 @@ public enum KeychainSecretStore {
     static func isMigrationCandidate(
         service: String, accessGroup: String?, sharedGroup: String
     ) -> Bool {
-        guard service.hasPrefix(migrationServicePrefix) else { return false }
+        guard isOwnLegacyService(service) else { return false }
         return accessGroup != sharedGroup
     }
 
-    /// Enumerate every generic-password item in the LEGACY file-based keychain
-    /// (no `kSecUseDataProtectionKeychain` flag), returning the items it could
-    /// read — service, account, data, and the item's own access group (used to
-    /// scope the post-migration delete to the legacy copy) — plus the raw
-    /// `OSStatus` (so a failed bulk read is diagnosable, not silent). Returns
-    /// an empty list with the status on failure (`errSecItemNotFound` when the
-    /// file keychain is empty). The caller filters to its own service prefix.
-    private static func enumerateLegacyGenericPasswords()
-    -> (items: [(service: String, account: String, data: Data, accessGroup: String?)], status: OSStatus) {
-        let query: [String: Any] = [
+    /// Whether an enumerated service belongs to this app. The single place the
+    /// `migrationServicePrefix` convention is applied — the enumeration uses it
+    /// to decide whose secret data it is allowed to read, and
+    /// `isMigrationCandidate` uses it to decide what may be moved.
+    static func isOwnLegacyService(_ service: String) -> Bool {
+        service.hasPrefix(migrationServicePrefix)
+    }
+
+    /// One legacy generic-password item the migration can act on: its identity,
+    /// its secret, and the item's own access group (used to scope the
+    /// post-migration delete to the legacy copy).
+    struct LegacyItem {
+        let service: String
+        let account: String
+        let data: Data
+        let accessGroup: String?
+    }
+
+    /// The outcome of a legacy enumeration: the readable own items, the raw
+    /// `OSStatus` of the bulk attributes query (so a failed read is diagnosable,
+    /// not silent), and value-free counts for the launch log.
+    struct LegacyEnumeration {
+        /// Own-prefix items whose secret data this process could read.
+        let items: [LegacyItem]
+        /// Status of the bulk **attributes** query (phase 1).
+        let status: OSStatus
+        /// Every generic-password attribute row the bulk query returned.
+        let totalAttributeCount: Int
+        /// …of which this many carried `migrationServicePrefix`.
+        let ownAttributeCount: Int
+        /// …and this many of those had a secret this process could not read.
+        let unreadableCount: Int
+    }
+
+    /// Enumerate this app's generic-password items in the LEGACY file-based
+    /// keychain (no `kSecUseDataProtectionKeychain` flag) in TWO phases.
+    ///
+    /// 1. A bulk **attributes-only** query (`kSecMatchLimitAll` +
+    ///    `kSecReturnAttributes`, deliberately **no** `kSecReturnData`).
+    /// 2. A per-item data read for each own-prefix candidate.
+    ///
+    /// The split is the fix for #50. `SecItemCopyMatching` with
+    /// `kSecMatchLimitAll` is all-or-nothing: asking for `kSecReturnData` makes
+    /// it decrypt EVERY match, so one item this process cannot silently read
+    /// (another app's ACL, or an interaction-required item in the shared login
+    /// keychain) fails the WHOLE query. On a configured machine that surfaced as
+    /// `status -50` (`errSecParam`) on almost every launch, with zero items
+    /// returned — so real stranded items of ours never migrated (two
+    /// `org.sockpuppet.WikiFS.extraction` keys sat in the file keychain while
+    /// every read went to DataProtection+group). Attributes live in the
+    /// keychain's metadata and need no data decryption, so phase 1 cannot be
+    /// poisoned by one locked item; phase 2 degrades a failure to a single
+    /// skipped item instead of an empty batch.
+    private static func enumerateLegacyGenericPasswords() -> LegacyEnumeration {
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(legacyEnumerationQuery() as CFDictionary, &result)
+        guard status == errSecSuccess, let rows = result as? [[String: Any]] else {
+            return LegacyEnumeration(
+                items: [], status: status,
+                totalAttributeCount: 0, ownAttributeCount: 0, unreadableCount: 0)
+        }
+
+        // Phase 2 reads secrets, so scope to our own services FIRST: another
+        // app's item is never decrypted, and its ACL can never affect us.
+        let candidates: [(service: String, account: String, accessGroup: String?)] = rows.compactMap { row in
+            guard let service = row[kSecAttrService as String] as? String,
+                  isOwnLegacyService(service),
+                  let account = row[kSecAttrAccount as String] as? String else { return nil }
+            return (service, account, row[kSecAttrAccessGroup as String] as? String)
+        }
+
+        var items: [LegacyItem] = []
+        var unreadable = 0
+        for candidate in candidates {
+            let query = legacyItemDataQuery(
+                service: candidate.service, account: candidate.account,
+                accessGroup: candidate.accessGroup)
+            var payload: CFTypeRef?
+            let readStatus = SecItemCopyMatching(query as CFDictionary, &payload)
+            guard readStatus == errSecSuccess, let data = payload as? Data else {
+                // One unreadable item must not cost us the others. Log only
+                // its status, never its account, service, or secret.
+                DebugLog.config(
+                    "Keychain migration: skipped unreadable legacy item (status \(readStatus))")
+                unreadable += 1
+                continue
+            }
+            items.append(LegacyItem(
+                service: candidate.service, account: candidate.account,
+                data: data, accessGroup: candidate.accessGroup))
+        }
+
+        return LegacyEnumeration(
+            items: items, status: status,
+            totalAttributeCount: rows.count,
+            ownAttributeCount: candidates.count,
+            unreadableCount: unreadable)
+    }
+
+    /// Phase 1 of the legacy enumeration: every generic-password item's
+    /// ATTRIBUTES, with no `kSecUseDataProtectionKeychain` flag and — load
+    /// bearing — no `kSecReturnData`. Internal so tests can pin the shape
+    /// without touching the real Keychain.
+    static func legacyEnumerationQuery() -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecReturnAttributes as String: true,
-            kSecReturnData as String: true,
         ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let items = result as? [[String: Any]] else {
-            return ([], status)
-        }
-        let read: [(service: String, account: String, data: Data, accessGroup: String?)] = items.compactMap { dict in
-            guard let service = dict[kSecAttrService as String] as? String,
-                  let account = dict[kSecAttrAccount as String] as? String,
-                  let data = dict[kSecValueData as String] as? Data else { return nil }
-            let accessGroup = dict[kSecAttrAccessGroup as String] as? String
-            return (service, account, data, accessGroup)
-        }
-        return (read, status)
+    }
+
+    /// Phase 2 of the legacy enumeration: one item's secret, in the same legacy
+    /// (non-DataProtection) shape as the migration's scoped delete. The item's
+    /// OWN access group is carried through: the file and DataProtection
+    /// keychains are one store on modern macOS, so an unscoped
+    /// service+account read could return the DataProtection copy's data rather
+    /// than the legacy stray's.
+    static func legacyItemDataQuery(
+        service: String, account: String, accessGroup: String?
+    ) -> [String: Any] {
+        var query = baseQuery(service: service, account: account,
+                              useDP: false, accessGroup: accessGroup ?? "")
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        return query
     }
 
     /// Minimal error factory for the migration's best-effort writes — the actual

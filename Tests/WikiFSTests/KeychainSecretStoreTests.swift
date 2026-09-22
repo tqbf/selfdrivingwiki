@@ -132,5 +132,80 @@ struct KeychainSecretStoreTests {
             accessGroup: shared,
             sharedGroup: shared) == false)
     }
+
+    // MARK: - Two-phase legacy enumeration (#50, the status -50 blackout)
+
+    // NOT covered here, for the same reason the file's header lists: the real
+    // failure needs a second app's generic password with a restrictive ACL in
+    // the login keychain, so that the ONE bulk read returns errSecParam (-50)
+    // and no items. The un-entitled `swift test` runner cannot create that
+    // state, so these tests pin the query SHAPE that makes the failure
+    // impossible — the absence of `kSecReturnData` in the bulk query is the
+    // whole fix — plus the scoping decision that keeps other apps' secrets out
+    // of the per-item read entirely.
+
+    @Test func bulkLegacyEnumerationQueryNeverAsksForData() {
+        // THE REGRESSION: the bulk query used to carry kSecReturnData, which
+        // makes SecItemCopyMatching decrypt EVERY match. One item this process
+        // cannot silently read fails the whole all-or-nothing query, so a
+        // configured machine logged "legacy enumeration returned nothing
+        // (status -50)" on nearly every launch and two stranded
+        // org.sockpuppet.WikiFS.extraction keys never migrated (2026-09-21).
+        // Attributes alone need no data decryption, so they cannot be poisoned.
+        let query = KeychainSecretStore.legacyEnumerationQuery()
+
+        #expect(query[kSecReturnData as String] == nil)
+        #expect(query[kSecClass as String] as? String == kSecClassGenericPassword as String)
+        #expect(query[kSecReturnAttributes as String] as? Bool == true)
+        #expect(query[kSecMatchLimit as String] as? String == kSecMatchLimitAll as String)
+        // It enumerates the LEGACY keychain: neither the DataProtection flag
+        // nor an access group may narrow it, or the strays are invisible.
+        #expect(query[kSecUseDataProtectionKeychain as String] == nil)
+        #expect(query[kSecAttrAccessGroup as String] == nil)
+    }
+
+    @Test func perItemDataQueryIsScopedAndLegacyShaped() {
+        // Phase 2 reads ONE item's secret. It must keep the legacy (no-DP)
+        // shape and carry the item's OWN access group: the file and
+        // DataProtection keychains are one store on modern macOS, so an
+        // unscoped service+account read with kSecMatchLimitOne could return
+        // the DataProtection copy's data instead of the legacy stray's.
+        let ownGroup = "FFFF9999.someother.app"
+        let query = KeychainSecretStore.legacyItemDataQuery(
+            service: "org.sockpuppet.WikiFS.extraction",
+            account: "anthropic-api-key",
+            accessGroup: ownGroup)
+
+        #expect(query[kSecClass as String] as? String == kSecClassGenericPassword as String)
+        #expect(query[kSecAttrService as String] as? String == "org.sockpuppet.WikiFS.extraction")
+        #expect(query[kSecAttrAccount as String] as? String == "anthropic-api-key")
+        #expect(query[kSecReturnData as String] as? Bool == true)
+        #expect(query[kSecMatchLimit as String] as? String == kSecMatchLimitOne as String)
+        #expect(query[kSecAttrAccessGroup as String] as? String == ownGroup)
+        #expect(query[kSecUseDataProtectionKeychain as String] == nil)
+    }
+
+    @Test func perItemDataQueryOmitsAnAbsentAccessGroup() {
+        // The pre-sharing shape: a file-keychain item carries no access group,
+        // and an empty-string group must never reach SecItem (it reads as a
+        // bogus group → errSecMissingEntitlement).
+        let query = KeychainSecretStore.legacyItemDataQuery(
+            service: "org.sockpuppet.WikiFS.extraction",
+            account: "gemini-api-key",
+            accessGroup: nil)
+
+        #expect(query[kSecAttrAccessGroup as String] == nil)
+        #expect(query[kSecReturnData as String] as? Bool == true)
+    }
+
+    @Test func ownServiceScopingKeepsOtherAppsOutOfThePerItemRead() {
+        // Phase 2 decrypts, so the prefix filter runs BEFORE it: another app's
+        // item is never read, and therefore its ACL can never fail anything.
+        #expect(KeychainSecretStore.isOwnLegacyService("org.sockpuppet.WikiFS.extraction"))
+        #expect(KeychainSecretStore.isOwnLegacyService("org.sockpuppet.WikiFS.zotero"))
+        #expect(KeychainSecretStore.isOwnLegacyService("com.unrelated.app") == false)
+        // A near-miss prefix is still someone else's.
+        #expect(KeychainSecretStore.isOwnLegacyService("org.sockpuppet.WikiFSOther") == false)
+    }
 }
 #endif // os(macOS)
