@@ -475,6 +475,7 @@ struct ActivityWindowView: View {
                 .foregroundStyle(.secondary)
                 .padding(8)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// The navigator footer: scope truth plus the summary-load labels (plan:
