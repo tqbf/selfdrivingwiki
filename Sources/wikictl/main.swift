@@ -104,6 +104,19 @@ func run() async -> Int32 {
         return await runDaemonChatStop(wikiSelector: invocation.wikiSelector, chatID: chatID)
     }
 
+    // Job inspection is read-only end to end. It bypasses WikiCtlRunner's
+    // writable wiki-store profile and opens both SQLite files without
+    // migrations or checkpoints.
+    if case .job(let action) = invocation.command {
+        do {
+            print(try await runJobCommand(action, wikiSelector: invocation.wikiSelector))
+            return 0
+        } catch {
+            FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
+            return 1
+        }
+    }
+
     do {
         let output = try await makeRunner().runOrdinary(
             command: invocation.command,
@@ -224,6 +237,9 @@ func execute(
         return try await runExtractorSync(
             packageName: packageName, force: force, in: store,
             wikiID: wikiID, containerDirectory: containerDirectory)
+    case .job:
+        // Handled before the writable ordinary-command runner.
+        return SourceCommand.Result(payload: .text(""), didCommit: false)
     case .chat(let action):
         return try await runChatCommand(
             action,
@@ -283,13 +299,81 @@ private func runExtractorSync(
         in: store,
         containerDirectory: containerDirectory,
         catalog: catalog,
-        enqueue: { sourceID in
-            _ = try queueStore.enqueue(QueueItemRequest(
+        enqueueJob: { sourceID in
+            try queueStore.enqueue(QueueItemRequest(
                 queue: .extraction,
                 wikiID: wikiID,
-                payload: QueueItemPayload(sourceIDs: [sourceID])))
+                payload: QueueItemPayload(sourceIDs: [sourceID]))).id
         })
     return SourceCommand.Result(payload: .text(output), didCommit: true)
+}
+
+/// Read durable job state without creating, migrating, or checkpointing either
+/// database. A missing queue database is an empty list, not an invitation to
+/// create the file.
+private func runJobCommand(
+    _ action: JobCommand.Action,
+    wikiSelector: String
+) async throws -> String {
+    let resolver = try WikiResolver.appGroupContainer()
+    guard let descriptor = resolver.descriptor(forSelector: wikiSelector) else {
+        throw PageCommand.Failure.message(
+            "no wiki matching \(wikiSelector.debugDescription) in the registry")
+    }
+
+    let queueURL = try DatabaseLocation.queueDatabaseURL()
+    let items: [QueueItem]
+    if FileManager.default.fileExists(atPath: queueURL.path) {
+        let queueStore = try QueueStore(readOnlyDatabaseURL: queueURL)
+        defer { queueStore.close() }
+        items = try queueStore.loadItems(wikiID: descriptor.id)
+    } else {
+        items = []
+    }
+
+    let selectedItems: [QueueItem]
+    let json: Bool
+    switch action {
+    case .list(let wantsJSON):
+        selectedItems = items
+        json = wantsJSON
+    case .get(let id, let wantsJSON):
+        guard let item = items.first(where: { $0.id == id }) else {
+            throw JobCommand.Failure.notFound(id)
+        }
+        selectedItems = [item]
+        json = wantsJSON
+    }
+
+    // The wiki leg goes through WikiReadService — the sanctioned read-only
+    // projection seam (the boundary script rejects bare GRDBWikiStore
+    // construction in this target). Existence of any processed markdown is
+    // what "extraction completed" means here: a byteless placeholder source
+    // has none.
+    let wikiReadService = WikiReadService(
+        databaseURL: resolver.databaseURL(for: descriptor))
+    let sourceIDs = Set(selectedItems.flatMap(\.payload.sourceIDs))
+    var completedSourceIDs = Set<SourceID>()
+    for sourceID in sourceIDs {
+        let head = try await wikiReadService.asyncRead { access in
+            try access.processedMarkdownHead(sourceID: sourceID)
+        }
+        if head != nil {
+            completedSourceIDs.insert(sourceID)
+        }
+    }
+    await wikiReadService.shutdown()
+
+    let output: String
+    switch action {
+    case .list:
+        output = try JobCommand.renderList(
+            items: selectedItems, completedSourceIDs: completedSourceIDs, json: json)
+    case .get:
+        output = try JobCommand.renderGet(
+            item: selectedItems[0], completedSourceIDs: completedSourceIDs, json: json)
+    }
+    return output
 }
 
 /// #637: split-out dispatch for the `wikictl chat …` subcommands. Resolves

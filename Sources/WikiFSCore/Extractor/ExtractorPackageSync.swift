@@ -38,11 +38,18 @@ public struct ExtractorSyncOutcome: Sendable, Equatable {
     public let itemKey: String
     public let action: Action
     public let sourceID: SourceID
+    public let jobID: QueueItem.ID?
 
-    public init(itemKey: String, action: Action, sourceID: SourceID) {
+    public init(
+        itemKey: String,
+        action: Action,
+        sourceID: SourceID,
+        jobID: QueueItem.ID? = nil
+    ) {
         self.itemKey = itemKey
         self.action = action
         self.sourceID = sourceID
+        self.jobID = jobID
     }
 }
 
@@ -108,6 +115,29 @@ public enum ExtractorPackageSync {
         enqueue: (SourceID) async throws -> Void,
         force: Bool = false
     ) async throws -> [ExtractorSyncOutcome] {
+        try await syncItems(
+            store: store,
+            declaration: declaration,
+            packageIdentity: packageIdentity,
+            config: config,
+            sourceMIMEType: sourceMIMEType,
+            enqueueJob: { sourceID in
+                try await enqueue(sourceID)
+                return nil
+            },
+            force: force)
+    }
+
+    /// Sync variant that preserves the stable durable queue item identifier.
+    public static func syncItems(
+        store: any WikiStore,
+        declaration: ExtractorSyncDeclaration,
+        packageIdentity: ExtractorSyncPackageIdentity,
+        config: ExtractorSyncSidecarValues,
+        sourceMIMEType: ExtractorMIMEType,
+        enqueueJob: (SourceID) async throws -> QueueItem.ID?,
+        force: Bool = false
+    ) async throws -> [ExtractorSyncOutcome] {
         var outcomes: [ExtractorSyncOutcome] = []
         outcomes.reserveCapacity(config.items.count)
         for itemKey in config.items {
@@ -119,9 +149,10 @@ public enum ExtractorPackageSync {
             let existing = try identity.flatMap { try store.sourceMatchingURLIdentity($0) }
             if let existing {
                 if force {
-                    try await enqueue(existing.id)
+                    let jobID = try await enqueueJob(existing.id)
                     outcomes.append(ExtractorSyncOutcome(
-                        itemKey: itemKey, action: .reenqueued, sourceID: existing.id))
+                        itemKey: itemKey, action: .reenqueued,
+                        sourceID: existing.id, jobID: jobID))
                 } else {
                     outcomes.append(ExtractorSyncOutcome(
                         itemKey: itemKey, action: .skipped, sourceID: existing.id))
@@ -139,9 +170,10 @@ public enum ExtractorPackageSync {
                     externalRef: sourceURL.absoluteString,
                     externalIdentity: itemKey),
                 role: .primary)
-            try await enqueue(summary.id)
+            let jobID = try await enqueueJob(summary.id)
             outcomes.append(ExtractorSyncOutcome(
-                itemKey: itemKey, action: .created, sourceID: summary.id))
+                itemKey: itemKey, action: .created,
+                sourceID: summary.id, jobID: jobID))
         }
         return outcomes
     }

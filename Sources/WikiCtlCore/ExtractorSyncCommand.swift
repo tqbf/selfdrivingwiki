@@ -53,6 +53,10 @@ public enum ExtractorSyncCommand {
         /// The bound required credential is absent (as opposed to
         /// unreadable, which defers instead of failing).
         case requiredCredentialNotConfigured(label: String)
+        /// The queue rejected the extraction request before it became a
+        /// durable job. The source row exists (created or pre-existing);
+        /// the message names the retry that actually enqueues extraction.
+        case enqueueRejected(sourceID: SourceID, packageName: String, detail: String)
 
         public var errorDescription: String? {
             switch self {
@@ -67,6 +71,10 @@ public enum ExtractorSyncCommand {
                 return "The sync for '\(name)' requires credential '\(requirementID)', which has no reviewed binding in this build."
             case .requiredCredentialNotConfigured(let label):
                 return "The \(label) is not configured. Set it in the app's extraction package settings and sync again."
+            case .enqueueRejected(let sourceID, let packageName, let detail):
+                return
+                    "The extraction request for source \(sourceID.rawValue) failed before the queue accepted it: \(detail). " +
+                    "The source exists but no job was created; retry `wikictl extractor sync \(packageName) --force` to enqueue extraction, then `wikictl job list` to watch it."
             }
         }
     }
@@ -174,6 +182,29 @@ public enum ExtractorSyncCommand {
         credentials: any CredentialDescribing = KeychainCredentialService(),
         enqueue: (SourceID) async throws -> Void
     ) async throws -> String {
+        try await run(
+            packageName: packageName,
+            force: force,
+            in: store,
+            containerDirectory: containerDirectory,
+            catalog: catalog,
+            credentials: credentials,
+            enqueueJob: { sourceID in
+                try await enqueue(sourceID)
+                return nil
+            })
+    }
+
+    /// Runs sync and reports the durable job ID returned by the queue store.
+    public static func run(
+        packageName: String,
+        force: Bool,
+        in store: GRDBWikiStore,
+        containerDirectory: URL,
+        catalog: any ExtractorPackageCatalogReading,
+        credentials: any CredentialDescribing = KeychainCredentialService(),
+        enqueueJob: (SourceID) async throws -> QueueItem.ID?
+    ) async throws -> String {
         // Discovery at execution time: the catalog says what is syncable.
         let syncable = discoverSyncablePackages(in: try catalog.read())
         let matches = syncable.filter { $0.shortName == packageName }
@@ -252,7 +283,18 @@ public enum ExtractorSyncCommand {
                 displayName: package.record.displayName),
             config: config,
             sourceMIMEType: sourceMIMEType,
-            enqueue: enqueue,
+            enqueueJob: { sourceID in
+                do {
+                    return try await enqueueJob(sourceID)
+                } catch {
+                    // Never silent: the source row is durable either way, so
+                    // the failure must say what exists and what retries it.
+                    throw Failure.enqueueRejected(
+                        sourceID: sourceID,
+                        packageName: packageName,
+                        detail: String(describing: error))
+                }
+            },
             force: force)
 
         var lines: [String] = []
@@ -260,14 +302,18 @@ public enum ExtractorSyncCommand {
         for outcome in outcomes {
             switch outcome.action {
             case .created:
+                let job = outcome.jobID.map { " job \($0.rawValue);" } ?? ""
                 lines.append(
-                    "  created  \(outcome.itemKey) → source \(outcome.sourceID.rawValue) (extraction enqueued)")
+                    "  created  \(outcome.itemKey) → source \(outcome.sourceID.rawValue);\(job) request accepted; extraction is not complete")
             case .reenqueued:
+                let job = outcome.jobID.map { " job \($0.rawValue);" } ?? ""
                 lines.append(
-                    "  re-enqueued  \(outcome.itemKey) → source \(outcome.sourceID.rawValue)")
+                    "  re-enqueued  \(outcome.itemKey) → source \(outcome.sourceID.rawValue);\(job) request accepted; extraction is not complete")
             case .skipped:
+                let completed = try store.processedMarkdownAlternatives(
+                    sourceID: outcome.sourceID).isEmpty == false
                 lines.append(
-                    "  skipped  \(outcome.itemKey) → source \(outcome.sourceID.rawValue) already synced (use --force to re-extract)")
+                    "  skipped  \(outcome.itemKey) → source \(outcome.sourceID.rawValue); source exists; extraction \(completed ? "completed" : "not completed")\(completed ? "" : " (use --force to enqueue extraction)")")
             }
         }
         lines.append(
