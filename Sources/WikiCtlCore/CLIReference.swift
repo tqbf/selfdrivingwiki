@@ -640,6 +640,22 @@ public enum CLIReference {
                     ]),
             ]),
         CLIFamily(
+            name: "job",
+            summary: "inspect durable queue jobs without changing queue state",
+            leaves: [
+                CLILeaf(
+                    "list", summary: "list queue jobs for the selected wiki",
+                    commandLine: "list [--json]",
+                    options: [CLIOption("--json", summary: "print JSON instead of TSV")]),
+                CLILeaf(
+                    "get", summary: "inspect one queue job by its stable ID",
+                    commandLine: "get --id <job-id> [--json]",
+                    options: [
+                        CLIOption("--id <job-id>", required: true, summary: "the queue job ID"),
+                        CLIOption("--json", summary: "print JSON instead of TSV"),
+                    ]),
+            ]),
+        CLIFamily(
             name: "extractor",
             summary: "sync extractor-package acquisitions into byteless sources",
             leaves: [

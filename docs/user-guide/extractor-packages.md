@@ -129,12 +129,37 @@ Then run `wikictl extractor sync zotero`:
 
 - Every configured key becomes one byteless `.zotero` source whose URL is
   the Zotero file endpoint. The command writes a durable extraction job for
-  each new source. The app or the wikid daemon drains the job on its next
-  dispatch scan — the CLI does not wait.
-- A key that already has a source is skipped. `--force` re-enqueues the
-  extraction instead (for example after you changed the file in Zotero).
+  each new source and prints that job's stable ID. The app or the wikid
+  daemon drains the job on its next dispatch scan — the CLI does not wait,
+  and "request accepted" never means the extraction has finished.
+- A key that already has a source is skipped, and the output says whether
+  that source's extraction has completed. A zero-byte placeholder with no
+  Markdown reports `source exists; extraction not completed` — not "already
+  synced". `--force` re-enqueues the extraction instead (for example after
+  you changed the file in Zotero).
 - An unconfigured library ID, an empty attachment list, or a missing API
-  key exits nonzero with a typed message.
+  key exits nonzero with a typed message. If the queue rejects a request
+  before it becomes a job, the message names the source and the `--force`
+  retry that enqueues it.
+
+## Inspecting extraction jobs
+
+`wikictl job list` prints every queue job for the selected wiki, newest
+first, including finished and failed ones. `wikictl job get --id <job-id>`
+prints one job. Both accept `--json` for stable machine-readable fields:
+
+- `id` — the job ID that `extractor sync` printed when it enqueued.
+- `queue` — the queue kind, for example `extraction`.
+- `state` — `queued`, `running`, `completed`, `failed`, or `cancelled`.
+- `sourceIDs` — the sources the job processes.
+- `attempt` — the attempt count.
+- `failureReason` — the recorded error, or null.
+- `extractionCompleted` — true when every source of an extraction job has
+  a processed Markdown version. A completed job implies it; a source can
+  also be complete without any job (for example, extracted in the app).
+
+Both commands are read-only: they never create, migrate, or checkpoint the
+queue database, so they are safe while the app runs and after it quits.
 
 What a download produces:
 

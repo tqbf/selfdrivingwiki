@@ -62,6 +62,8 @@ public enum ArgumentParser {
         /// extraction job. Generic family: new acquisition packages add a
         /// dispatch case, not a CLI family.
         case extractor(ExtractorSyncCommand.Action)
+        /// Read-only durable queue job inspection.
+        case job(JobCommand.Action)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
         /// Print scoped command usage (`wikictl [source [add]] --help`).
@@ -178,6 +180,8 @@ public enum ArgumentParser {
             command = try parseBookmarkCommand(Array(args.dropFirst()))
         case "extractor":
             command = try parseExtractorCommand(Array(args.dropFirst()))
+        case "job":
+            command = try parseJobCommand(Array(args.dropFirst()))
         case "workspace":
             command = try parseWorkspaceCommand(Array(args.dropFirst()))
         default:
@@ -586,6 +590,30 @@ public enum ArgumentParser {
         default:
             // Unreachable: recognition is the CLIReference leaf table above.
             throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "extractor", given: sub))
+        }
+    }
+
+    private static func parseJobCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "job"))
+        }
+        guard CLIReference.leaf(family: "job", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "job", given: sub))
+        }
+        let options = try Options(
+            Array(args.dropFirst()), options: CLIReference.options(forFamily: "job"))
+        switch sub {
+        case "list":
+            return .job(.list(json: options.flag("--json")))
+        case "get":
+            guard let rawID = options.value("--id") else {
+                throw Failure.usage("job get: --id is required")
+            }
+            return .job(.get(
+                id: QueueItemID(rawValue: rawID),
+                json: options.flag("--json")))
+        default:
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "job", given: sub))
         }
     }
 

@@ -15,6 +15,51 @@ import Testing
 @Suite
 struct QueueStoreTests {
 
+    @Test func readOnlyOpenReadsStablyWithoutMigrating() throws {
+        let url = tempDatabaseURL()
+        let writer = try QueueStore(databaseURL: url)
+        let item = try writer.enqueue(QueueItemRequest(
+            queue: .extraction,
+            wikiID: WikiID(rawValue: "01JREADONLYWIKI00000000000"),
+            payload: QueueItemPayload(sourceIDs: [
+                SourceID(rawValue: "01JREADONLYSOURCE000000000"),
+            ])))
+        writer.close()
+
+        let before = try Data(contentsOf: url)
+        let reader = try QueueStore(readOnlyDatabaseURL: url)
+        #expect(try reader.getItem(item.id)?.id == item.id)
+        #expect(try reader.loadItems(wikiID: item.wikiID).map(\.id) == [item.id])
+        reader.close()
+
+        // No checkpoint, no migration, no byte of the queue database changed
+        // by the status reader.
+        #expect(try Data(contentsOf: url) == before)
+    }
+
+    @Test func readOnlyListFiltersByWikiAndIncludesTerminalItems() throws {
+        let url = tempDatabaseURL()
+        let writer = try QueueStore(databaseURL: url)
+        let selectedWiki = WikiID(rawValue: "01JSELECTEDWIKI0000000000")
+        let otherWiki = WikiID(rawValue: "01JOTHERWIKI0000000000000")
+        let selected = try writer.enqueue(QueueItemRequest(
+            queue: .extraction, wikiID: selectedWiki,
+            payload: QueueItemPayload(sourceIDs: [])))
+        try writer.markRunning(id: selected.id, providerID: ProviderID(rawValue: "test"))
+        try writer.markFailed(id: selected.id, error: "failed")
+        _ = try writer.enqueue(QueueItemRequest(
+            queue: .extraction, wikiID: otherWiki,
+            payload: QueueItemPayload(sourceIDs: [])))
+        writer.close()
+
+        let reader = try QueueStore(readOnlyDatabaseURL: url)
+        let items = try reader.loadItems(wikiID: selectedWiki)
+        reader.close()
+
+        #expect(items.map(\.id) == [selected.id])
+        #expect(items.first?.state == .failed)
+    }
+
     // MARK: - Test helpers
 
     /// Canonical JSON string for structural comparison across Foundation runtimes.

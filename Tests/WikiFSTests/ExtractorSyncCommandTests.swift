@@ -222,6 +222,59 @@ struct ExtractorSyncCommandTests {
             enqueue: { log.ids.append($0) })
         #expect(log.ids.count == 1) // no new enqueue
         #expect(second.contains("skipped  ABCD1234"))
+        #expect(second.contains("source exists; extraction not completed"))
+        #expect(!second.contains("already synced"))
+        #expect(try store.listSources().count == 1)
+    }
+
+    @Test func createdOutputIncludesStableEnqueueJobID() async throws {
+        let store = try tempStore()
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("extractorsync-cfg-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        try writeConfig(
+            ["libraryID": "12345", "attachments": ["ABCD1234"]],
+            fileName: "zotero-config.json", to: container)
+        let jobID = QueueItemID(rawValue: "01JJOB00000000000000000000")
+
+        let output = try await ExtractorSyncCommand.run(
+            packageName: "zotero", force: false, in: store,
+            containerDirectory: container,
+            catalog: catalog(records: [zoteroRecord()]),
+            credentials: CredentialDouble(configured: true),
+            enqueueJob: { _ in jobID })
+
+        #expect(output.contains("job \(jobID.rawValue)"))
+        #expect(output.contains("request accepted; extraction is not complete"))
+    }
+
+    @Test func enqueueFailureNamesTheSourceAndTheForceRetry() async throws {
+        let store = try tempStore()
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("extractorsync-cfg-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        try writeConfig(
+            ["libraryID": "12345", "attachments": ["ABCD1234"]],
+            fileName: "zotero-config.json", to: container)
+
+        struct RejectedEnqueue: Error {}
+
+        do {
+            _ = try await ExtractorSyncCommand.run(
+                packageName: "zotero", force: false, in: store,
+                containerDirectory: container,
+                catalog: catalog(records: [zoteroRecord()]),
+                credentials: CredentialDouble(configured: true),
+                enqueueJob: { _ in throw RejectedEnqueue() })
+            Issue.record("expected the enqueue failure to propagate")
+        } catch let failure as ExtractorSyncCommand.Failure {
+            let message = try #require(failure.errorDescription)
+            #expect(message.contains("failed before the queue accepted it"))
+            #expect(message.contains("--force"))
+            #expect(message.contains("wikictl job list"))
+        }
+        // The source row is durable even though the queue never accepted a
+        // request — the message must not imply otherwise.
         #expect(try store.listSources().count == 1)
     }
 

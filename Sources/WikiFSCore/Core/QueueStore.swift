@@ -79,6 +79,7 @@ public final class QueueStore: @unchecked Sendable {
     /// The serial GRDB connection. Reads and writes are serialized through
     /// GRDB's internal dispatch queue — no external lock needed.
     private var dbQueue: DatabaseQueue?
+    private let isReadOnly: Bool
 
     /// Guards against double-close (`close()` then `deinit`).
     private let closeLock = NSLock()
@@ -90,6 +91,7 @@ public final class QueueStore: @unchecked Sendable {
     /// Phase 1 tests inject a temp-directory URL; the app injects
     /// `DatabaseLocation.queueDatabaseURL()` in Phase 2.
     public init(databaseURL: URL) throws {
+        isReadOnly = false
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(5)
@@ -115,8 +117,29 @@ public final class QueueStore: @unchecked Sendable {
         }
     }
 
+    /// Open an existing queue database without creating files, running
+    /// migrations, changing pragmas, or checkpointing its WAL on close.
+    /// Intended for status readers such as `wikictl job`.
+    public init(readOnlyDatabaseURL: URL) throws {
+        isReadOnly = true
+        var config = Configuration()
+        config.foreignKeysEnabled = true
+        config.busyMode = .timeout(5)
+        config.readonly = true
+        config.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA query_only=ON")
+        }
+
+        do {
+            dbQueue = try DatabaseQueue(
+                path: readOnlyDatabaseURL.path, configuration: config)
+        } catch {
+            throw QueueStoreError.open("\(error)")
+        }
+    }
+
     deinit {
-        checkpoint()
+        if !isReadOnly { checkpoint() }
         dbQueue = nil
     }
 
@@ -129,7 +152,7 @@ public final class QueueStore: @unchecked Sendable {
         defer { closeLock.unlock() }
         guard !closed else { return }
         closed = true
-        checkpoint()
+        if !isReadOnly { checkpoint() }
         dbQueue = nil
     }
 
@@ -747,6 +770,26 @@ public final class QueueStore: @unchecked Sendable {
                     LIMIT ?;
                     """,
                     arguments: [Int64(limit)])
+                return try Self.readItemsSkippingUnknownQueues(from: rows)
+            }
+        }
+    }
+
+    /// Load every item for one wiki, including terminal history, newest first.
+    /// This query is the durable read surface for CLI job inspection.
+    public func loadItems(wikiID: WikiID) throws -> [QueueItem] {
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT \(Self.selectColumns)
+                    FROM queue_items
+                    WHERE wiki_id = ?
+                    ORDER BY created_at DESC, id DESC;
+                    """,
+                    arguments: [wikiID.rawValue])
                 return try Self.readItemsSkippingUnknownQueues(from: rows)
             }
         }
