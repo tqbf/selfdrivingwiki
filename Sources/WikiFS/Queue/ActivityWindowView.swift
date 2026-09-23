@@ -1838,8 +1838,23 @@ struct ActivityWindowView: View {
             transcriptID: TranscriptID.queueItem(item.id),
             isStreaming: item.state == .running,
             onIntent: { intent in
-                if case .openWikiLink(let url, let inNewTab) = intent {
+                switch intent {
+                case .openWikiLink(let url, let inNewTab):
                     wikiLinkHandler(for: item.wikiID)(url, inNewTab)
+                case .openWikiLinkInBackground(let url):
+                    // #1315: the wiki's own window owns background tabs, and
+                    // `selection(for:)` prefers the canonical `?id=` (rename-
+                    // stable). Without a live store (window closed) or with a
+                    // dead link, fall back to the click handler's routing —
+                    // it stashes the link and opens/focuses the window.
+                    if let store = store(for: item.wikiID),
+                       let selection = WikiLinkMenuNSItems.selection(for: url, store: store) {
+                        store.openTabInBackground(selection)
+                    } else {
+                        wikiLinkHandler(for: item.wikiID)(url, true)
+                    }
+                case .resolvePermission:
+                    break
                 }
             },
             renderContext: renderContextProvider(for: item.wikiID),

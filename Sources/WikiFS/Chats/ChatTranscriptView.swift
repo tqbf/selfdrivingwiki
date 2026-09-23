@@ -68,6 +68,12 @@ private enum ChatTranscriptMetrics {
 /// into the store or daemon on its own.
 enum ChatTranscriptIntent {
     case openWikiLink(URL, inNewTab: Bool)
+    /// Open a `wiki://` link in a background tab (issue #1315, from the
+    /// transcript's native link context menu). The consumer resolves the URL
+    /// where the store lives — `WikiLinkMenuNSItems.selection(for:store:)`
+    /// prefers the canonical `?id=` and falls back to the display name for
+    /// legacy `?title=`-only links.
+    case openWikiLinkInBackground(URL)
     case resolvePermission(ChatPermissionResolutionIntent)
 }
 

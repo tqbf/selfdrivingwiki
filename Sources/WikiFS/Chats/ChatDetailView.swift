@@ -375,7 +375,8 @@ struct ChatDetailView: View {
         AgentQueueView(
             remoteSession: remoteSession,
             showsInternals: true,
-            onWikiLink: WikiReaderView.onWikiLinkHandler(for: store)
+            onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
+            onWikiLinkBackground: openWikiLinkInBackground
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(ChatMetrics.contentInset)
@@ -467,12 +468,28 @@ struct ChatDetailView: View {
         switch intent {
         case .openWikiLink(let url, let inNewTab):
             WikiReaderView.onWikiLinkHandler(for: store)(url, inNewTab)
+        case .openWikiLinkInBackground(let url):
+            openWikiLinkInBackground(url)
         case .resolvePermission(let resolution):
             guard let chatID else { return }
             Task {
                 await coordinator.resolvePermission(
                     wikiID: session.wikiID, chatID: chatID, intent: resolution)
             }
+        }
+    }
+
+    /// Open a right-clicked `wiki://` link in a background tab (issue #1315).
+    /// `WikiLinkMenuNSItems.selection` prefers the canonical `?id=` (rename-
+    /// stable) and falls back to the display name for legacy links. A link
+    /// that no longer resolves (deleted target) is logged and dropped rather
+    /// than opened as a dead tab.
+    private func openWikiLinkInBackground(_ url: URL) {
+        if let selection = WikiLinkMenuNSItems.selection(for: url, store: store) {
+            store.openTabInBackground(selection)
+        } else {
+            DebugLog.store(
+                "chat background open: wiki link no longer resolves: \(url.absoluteString)")
         }
     }
 

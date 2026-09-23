@@ -1,3 +1,5 @@
+// pattern: Imperative Shell
+
 import AppKit
 import SwiftUI
 import WikiFSCore
@@ -14,6 +16,43 @@ import WikiFSCore
 /// boundary is crossed.
 @MainActor
 enum WikiLinkMenuNSItems {
+
+    /// Resolve a canonical wiki URL to its typed navigation target. Mirrors the
+    /// click router's id-first discipline (`selectPage(byID:)` & friends): the
+    /// `?id=<ULID>` query wins when it names a loaded row — rename-stable, so
+    /// a menu action keeps working after a rename leaves the link's display
+    /// alias stale (issue #1315). Only when the URL carries no id (a legacy
+    /// `?title=`-only link) or names a row that no longer loads does the
+    /// title/display-name lookup decide — the pre-#1315 behavior.
+    ///
+    /// Used by the reader's context menu AND the chat transcript's
+    /// `.openWikiLinkInBackground` consumers, so both surfaces resolve the same
+    /// link the same way.
+    static func selection(for url: URL, store: WikiStoreModel) -> WikiSelection? {
+        let target = WikiLinkMarkdown.target(from: url) ?? ""
+        switch WikiLinkMarkdown.resolvedKind(from: url) {
+        case .page:
+            if let id = WikiLinkMarkdown.id(from: url),
+               store.summaries.contains(where: { $0.id == id }) {
+                return .page(id)
+            }
+            return store.pageID(forTitle: target).map(WikiSelection.page)
+        case .source:
+            if let id = WikiLinkMarkdown.sourceID(from: url),
+               store.sources.contains(where: { $0.id == id }) {
+                return .source(id)
+            }
+            return store.sourceID(forDisplayName: target).map(WikiSelection.source)
+        case .chat:
+            let chatID = WikiLinkMarkdown.id(from: url).map { ChatID(rawValue: $0.rawValue) }
+            if let chatID, store.chats.contains(where: { $0.id == chatID }) {
+                return .chat(chatID)
+            }
+            return store.chatID(forTitle: target).map(WikiSelection.chat)
+        case nil:
+            return nil
+        }
+    }
 
     static func items(
         for url: URL,
@@ -41,23 +80,13 @@ enum WikiLinkMenuNSItems {
                 // folder picker. Omitted when no handler is wired or the link no
                 // longer resolves (e.g. the page was just deleted). Issue #188.
                 guard let addBookmark else { continue }
-                let kind = WikiLinkMarkdown.resolvedKind(from: url)
-                let target = WikiLinkMarkdown.target(from: url) ?? ""
-                let ctx: BookmarkTargetPickerContext?
-                switch kind {
-                case .page:
-                    guard let id = store.pageID(forTitle: target) else { continue }
-                    ctx = BookmarkTargetPickerContext(targets: .pages([id]))
-                case .source:
-                    guard let id = store.sourceID(forDisplayName: target) else { continue }
-                    ctx = BookmarkTargetPickerContext(targets: .sources([id]))
-                case .chat:
-                    guard let id = store.chatID(forTitle: target) else { continue }
-                    ctx = BookmarkTargetPickerContext(targets: .chats([id]))
-                case nil:
-                    continue
+                let ctx: BookmarkTargetPickerContext
+                switch selection(for: url, store: store) {
+                case .page(let id): ctx = BookmarkTargetPickerContext(targets: .pages([id]))
+                case .source(let id): ctx = BookmarkTargetPickerContext(targets: .sources([id]))
+                case .chat(let id): ctx = BookmarkTargetPickerContext(targets: .chats([id]))
+                default: continue
                 }
-                guard let ctx else { continue }
                 items.append(.wikiItem("Add Bookmark…") { addBookmark(ctx) })
             case .suggest:
                 items.append(
@@ -72,21 +101,12 @@ enum WikiLinkMenuNSItems {
                         query: WikiLinkMarkdown.target(from: url) ?? "",
                         store: store))
             case .openInBackgroundTab:
-                let kind = WikiLinkMarkdown.resolvedKind(from: url)
-                let target = WikiLinkMarkdown.target(from: url) ?? ""
+                guard let selection = selection(for: url, store: store) else { continue }
                 items.append(.wikiItem("Open in Background") {
-                    switch kind {
-                    case .page:
-                        if let id = store.pageID(forTitle: target) { store.openTabInBackground(.page(id)) }
-                    case .source:
-                        if let id = store.sourceID(forDisplayName: target) { store.openTabInBackground(.source(id)) }
-                    case .chat:
-                        if let id = store.chatID(forTitle: target) { store.openTabInBackground(.chat(id)) }
-                    case nil: break
-                    }
+                    store.openTabInBackground(selection)
                 })
             }
-            }
+        }
         return items
     }
 

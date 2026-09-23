@@ -15,11 +15,21 @@ struct AgentQueueView: View {
     /// where the store lives and threaded down; `nil` when navigation is
     /// impossible (links still render, just don't navigate).
     var onWikiLink: ((URL, Bool) -> Void)? = nil
+    /// Background-tab variant of `onWikiLink` (issue #1315). Resolved where
+    /// the store lives so the canonical `?id=` wins. `nil` degrades to a
+    /// foreground `onWikiLink(url, true)` — the best a store-less host can do.
+    var onWikiLinkBackground: ((URL) -> Void)? = nil
 
-    init(remoteSession: RemoteChatSession, showsInternals: Bool = false, onWikiLink: ((URL, Bool) -> Void)? = nil) {
+    init(
+        remoteSession: RemoteChatSession,
+        showsInternals: Bool = false,
+        onWikiLink: ((URL, Bool) -> Void)? = nil,
+        onWikiLinkBackground: ((URL) -> Void)? = nil
+    ) {
         self.remoteSession = remoteSession
         self.showsInternals = showsInternals
         self.onWikiLink = onWikiLink
+        self.onWikiLinkBackground = onWikiLinkBackground
     }
 
     var body: some View {
@@ -73,6 +83,12 @@ struct AgentQueueView: View {
         switch intent {
         case .openWikiLink(let url, let inNewTab):
             onWikiLink?(url, inNewTab)
+        case .openWikiLinkInBackground(let url):
+            if let onWikiLinkBackground {
+                onWikiLinkBackground(url)
+            } else {
+                onWikiLink?(url, true)
+            }
         case .resolvePermission:
             break
         }

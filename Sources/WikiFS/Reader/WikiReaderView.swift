@@ -953,18 +953,9 @@ final class WikiReaderWebView: WKWebView {
         // Insert "Open in Background" right after WebKit's "Open Link"
         // for resolved wiki links, so it's the second item in the menu.
         if let openLinkIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == "WKMenuItemIdentifierOpenLink" }),
-           WikiLinkMarkdown.resolvedKind(from: url) != nil {
-            let target = WikiLinkMarkdown.target(from: url) ?? ""
+           let selection = WikiLinkMenuNSItems.selection(for: url, store: store) {
             let bgItem = NSMenuItem.wikiItem("Open in Background") {
-                switch WikiLinkMarkdown.resolvedKind(from: url) {
-                case .page:
-                    if let id = store.pageID(forTitle: target) { store.openTabInBackground(.page(id)) }
-                case .source:
-                    if let id = store.sourceID(forDisplayName: target) { store.openTabInBackground(.source(id)) }
-                case .chat:
-                    if let id = store.chatID(forTitle: target) { store.openTabInBackground(.chat(id)) }
-                case nil: break
-                }
+                store.openTabInBackground(selection)
             }
             bgItem.image = NSImage(systemSymbolName: "dock.arrow.down.rectangle",
                                    accessibilityDescription: "Open in Background")
@@ -998,21 +989,15 @@ final class WikiReaderWebView: WKWebView {
             let viewPoint = convert(event.locationInWindow, from: nil)
 
             let shareURLTask: Task<URL?, Never>?
-            switch WikiLinkMarkdown.resolvedKind(from: url) {
-            case .page?:
-                let target = WikiLinkMarkdown.target(from: url) ?? ""
-                if let id = store.pageID(forTitle: target) {
-                    shareURLTask = Task { await fp.resolvePageByTitleURL(id: id) }
-                } else { shareURLTask = nil }
-            case .source?:
-                let target = WikiLinkMarkdown.target(from: url) ?? ""
-                if let id = store.sourceID(forDisplayName: target) {
-                    shareURLTask = Task { await fp.resolveSourceByNameURL(id: id) }
-                } else { shareURLTask = nil }
-            case .chat?:
+            switch WikiLinkMenuNSItems.selection(for: url, store: store) {
+            case .page(let id):
+                shareURLTask = Task { await fp.resolvePageByTitleURL(id: id) }
+            case .source(let id):
+                shareURLTask = Task { await fp.resolveSourceByNameURL(id: id) }
+            case .chat:
                 // Chat sharing via File Provider URL is not yet wired — no-op.
                 shareURLTask = nil
-            case nil:
+            default:
                 shareURLTask = nil
             }
 

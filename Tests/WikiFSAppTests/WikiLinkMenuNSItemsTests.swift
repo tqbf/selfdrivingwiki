@@ -2,6 +2,7 @@
 import AppKit
 import Foundation
 import Testing
+import WebKit
 import WikiFSCore
 @testable import WikiFS
 
@@ -22,6 +23,20 @@ struct WikiLinkMenuNSItemsTests {
 
     private static func page(_ title: String, id: String) -> WikiPageSummary {
         WikiPageSummary(id: PageID(rawValue: id), title: title, updatedAt: .now, createdAt: .now)
+    }
+
+    private func tempModel() throws -> (model: WikiStoreModel, store: GRDBWikiStore) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wiki-link-menu-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = try GRDBWikiStore(databaseURL: directory.appendingPathComponent("WikiFS.sqlite"))
+        return (WikiStoreModel(store: store), store)
+    }
+
+    private func perform(_ item: NSMenuItem) throws {
+        let target = try #require(item.target)
+        let action = try #require(item.action)
+        _ = target.perform(action)
     }
 
     /// Records every search the loader starts and holds the result until the
@@ -82,6 +97,115 @@ struct WikiLinkMenuNSItemsTests {
     }
 
     // MARK: - Construction (AC.7)
+
+    // MARK: - #1315 source-link menus
+
+    /// A legacy `?title=`-only link whose display name carries an apostrophe
+    /// (issue #1315's chat transcript). The menu action must resolve the
+    /// source by display name and open it.
+    @Test("Legacy source menu resolves an apostrophe title", .bug(id: 1315))
+    func legacySourceMenuResolvesApostropheTitle() throws {
+        let (model, store) = try tempModel()
+        let source = try store.addSource(
+            filename: "Consciousness doesn't overflow cognition.pdf",
+            data: Data("pdf".utf8))
+        model.reloadFromStore()
+        let url = try #require(URL(
+            string: "wiki://source?title=Consciousness%20doesn%27t%20overflow%20cognition"))
+
+        let item = try #require(WikiLinkMenuNSItems.items(
+            for: url, actions: [.openInBackgroundTab], store: model, fileProvider: nil
+        ).first)
+        try perform(item)
+
+        // Empty tab bar → `openTabInBackground` falls back to the focused
+        // open, so the selection is the source itself.
+        #expect(model.selection == .source(source.id))
+    }
+
+    /// A canonical `?id=` link whose display alias went stale (the source was
+    /// renamed after the link was written). The id must win — no name lookup —
+    /// so the menu action still opens the source.
+    @Test("Canonical source menu ignores a stale display alias", .bug(id: 1315))
+    func canonicalSourceMenuIgnoresStaleDisplayAlias() throws {
+        let (model, store) = try tempModel()
+        let active = try store.createPage(title: "Active")
+        let source = try store.addSource(filename: "Current title.pdf", data: Data("pdf".utf8))
+        model.reloadFromStore()
+        model.openTab(.page(active.id))
+        let url = try #require(URL(
+            string: "wiki://source?id=\(source.id.rawValue)&title=Former%20title"))
+
+        let item = try #require(WikiLinkMenuNSItems.items(
+            for: url, actions: [.openInBackgroundTab], store: model, fileProvider: nil
+        ).first)
+        try perform(item)
+
+        // "Former title" matches nothing; the canonical id still resolves.
+        // Background open: the focused selection is unchanged, and a tab for
+        // the source appears at the end of the bar.
+        #expect(model.selection == .page(active.id))
+        #expect(model.tabs.contains { $0.selection == .source(source.id) })
+    }
+
+    /// Builds a link menu the way AppKit presents one for a right-click:
+    /// WebKit's "Open Link" item is present, our items go right after it.
+    private func linkMenu() -> NSMenu {
+        let menu = NSMenu()
+        let openLink = NSMenuItem(title: "Open Link", action: nil, keyEquivalent: "")
+        openLink.identifier = NSUserInterfaceItemIdentifier("WKMenuItemIdentifierOpenLink")
+        menu.addItem(openLink)
+        return menu
+    }
+
+    private func rightClickEvent() throws -> NSEvent {
+        try #require(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+    }
+
+    /// Right-clicking a resolved source link in a chat transcript inserts the
+    /// reader's tab actions after WebKit's "Open Link", and each item hands
+    /// the link's URL to its callback (issue #1315).
+    @Test("Chat source link menu adds the native tab actions", .bug(id: 1315))
+    func chatSourceLinkMenuAddsTabActions() throws {
+        let webView = ChatTranscriptWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        var newTabURLs: [URL] = []
+        var backgroundURLs: [URL] = []
+        webView.onOpenInNewTab = { newTabURLs.append($0) }
+        webView.onOpenInBackgroundTab = { backgroundURLs.append($0) }
+        webView.hoveredLinkHref = "wiki://source?id=01JZZZZZZZZZZZZZZZZZZZZZZZ&title=Publisher"
+        let menu = linkMenu()
+
+        webView.willOpenMenu(menu, with: try rightClickEvent())
+
+        // The inserted items sit right after WebKit's "Open Link"; a trailing
+        // separator groups them apart from WebKit's Reload/Inspect items.
+        #expect(menu.items.filter { !$0.isSeparatorItem }.map(\.title)
+            == ["Open Link", "Open in New Tab", "Open in Background"])
+        #expect(menu.items.last?.isSeparatorItem == true)
+
+        try perform(try #require(menu.items.first { $0.title == "Open in New Tab" }))
+        try perform(try #require(menu.items.first { $0.title == "Open in Background" }))
+        let hovered = try #require(URL(
+            string: "wiki://source?id=01JZZZZZZZZZZZZZZZZZZZZZZZ&title=Publisher"))
+        #expect(newTabURLs == [hovered])
+        #expect(backgroundURLs == [hovered])
+    }
+
+    /// External links and unresolved (`wiki://missing`) links keep WebKit's
+    /// menu — no tab actions are inserted.
+    @Test("Chat menu leaves non-wiki links to WebKit", .bug(id: 1315))
+    func chatMenuLeavesNonWikiLinksToWebKit() throws {
+        let webView = ChatTranscriptWebView(frame: .zero, configuration: WKWebViewConfiguration())
+
+        for href in ["https://example.com/post", "wiki://missing?title=Ghost"] {
+            webView.hoveredLinkHref = href
+            let menu = linkMenu()
+            webView.willOpenMenu(menu, with: try rightClickEvent())
+            #expect(menu.items.map(\.title) == ["Open Link"], "href: \(href)")
+        }
+    }
 
     @Test func menuConstructionReturnsSearchingPlaceholder() throws {
         let (item, probe) = openItem(query: "Alpha")
