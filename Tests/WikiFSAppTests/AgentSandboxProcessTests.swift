@@ -31,6 +31,7 @@ struct AgentSandboxProcessTests {
         let home: URL
         let container: URL
         let scratch: URL
+        let queueDatabase: URL
         let wikiA: WikiDescriptor
         let wikiB: WikiDescriptor
         let storeA: GRDBWikiStore
@@ -51,6 +52,7 @@ struct AgentSandboxProcessTests {
                 .appendingPathComponent("Group Containers", isDirectory: true)
                 .appendingPathComponent("group.test.selfdrivingwiki", isDirectory: true)
             scratch = root.appendingPathComponent("scratch", isDirectory: true)
+            queueDatabase = container.appendingPathComponent("queue.sqlite", isDirectory: false)
             for dir in [home, container, scratch] {
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             }
@@ -98,7 +100,8 @@ struct AgentSandboxProcessTests {
             SandboxProfile.invocation(
                 homePath: home.path,
                 scratchDir: scratch.path,
-                wikiDBPath: container.appendingPathComponent(wikiA.dbFileName, isDirectory: false).path)
+                wikiDBPath: container.appendingPathComponent(wikiA.dbFileName, isDirectory: false).path,
+                queueDBPath: queueDatabase.path)
         }
 
         /// The child environment an adapter would receive: scratch-relocated
@@ -242,6 +245,82 @@ struct AgentSandboxProcessTests {
         #expect(denied.status != 0, "the outside write must be denied, not silently allowed")
         #expect(!FileManager.default.fileExists(atPath: outside.path),
                 "a denied write must not leave an artifact")
+    }
+
+    /// Issue #1314: an agent-launched `wikictl extractor sync … --force`
+    /// reads the existing source from the active wiki, then persists its
+    /// extraction request in the sibling central queue database. Exercise the
+    /// same SQLite write under the real Seatbelt profile, entirely inside the
+    /// disposable test App Group container.
+    @Test func writeProfileAllowsCentralQueueSQLiteInsert() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+
+        let queue = try QueueStore(databaseURL: fixture.queueDatabase)
+        queue.close()
+
+        var environment = fixture.childEnvironment()
+        environment["QUEUE_DB"] = fixture.queueDatabase.path
+        let result = try await runSandboxed(
+            fixture,
+            executablePath: "/usr/bin/sqlite3",
+            arguments: [
+                fixture.queueDatabase.path,
+                "INSERT INTO queue_items "
+                    + "(id, queue, wiki_id, payload, state, ordering_key, attempt, created_at) "
+                    + "VALUES ('issue-1314', 'extraction', 'test-wiki', "
+                    + "'{\"sourceIDs\":[\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"]}', 'queued', 1000, 0, 0);",
+            ],
+            environment: environment)
+
+        #expect(result.status == 0, "queue INSERT failed: \(result.errorText)")
+        let reopened = try QueueStore(databaseURL: fixture.queueDatabase)
+        defer { reopened.close() }
+        #expect(try reopened.loadActive(for: .extraction).count == 1)
+    }
+
+    /// Issue #1314 root-cause control: the PRE-FIX write fence — the production
+    /// invocation WITHOUT the queue DB allowance — denies the same central-queue
+    /// INSERT, and SQLite surfaces the seatbelt denial as its classic
+    /// "attempt to write a readonly database" (SQLITE_READONLY, error 8): the
+    /// exact failure the issue reports for `extractor sync --force`. The denial
+    /// must also leave no durable row behind (the zero-byte, never-extracted
+    /// source the issue describes).
+    @Test func profileWithoutQueueAllowanceDeniesCentralQueueSQLiteInsert() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+
+        let queue = try QueueStore(databaseURL: fixture.queueDatabase)
+        queue.close()
+
+        let invocation = SandboxProfile.invocation(
+            homePath: fixture.home.path,
+            scratchDir: fixture.scratch.path,
+            wikiDBPath: fixture.container.appendingPathComponent(
+                fixture.wikiA.dbFileName, isDirectory: false).path)
+        let wrapped = SandboxProfile.wrappedArguments(
+            executablePath: "/usr/bin/sqlite3",
+            arguments: [
+                fixture.queueDatabase.path,
+                "INSERT INTO queue_items "
+                    + "(id, queue, wiki_id, payload, state, ordering_key, attempt, created_at) "
+                    + "VALUES ('issue-1314-denied', 'extraction', 'test-wiki', "
+                    + "'{\"sourceIDs\":[\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"]}', 'queued', 1000, 0, 0);",
+            ],
+            invocation: invocation)
+        let result = try await run(
+            executablePath: SandboxProfile.sandboxExecutablePath,
+            arguments: wrapped,
+            environment: fixture.childEnvironment())
+
+        #expect(result.status != 0,
+                "the queue INSERT must be denied under the pre-fix fence")
+        #expect(result.errorText.contains("attempt to write a readonly database"),
+                "the denial must surface as SQLITE_READONLY (error 8), got: \(result.errorText)")
+        let reopened = try QueueStore(databaseURL: fixture.queueDatabase)
+        defer { reopened.close() }
+        #expect(try reopened.loadActive(for: .extraction).isEmpty,
+                "a denied enqueue must not persist a durable row")
     }
 
     @Test func posixShellHeredocWorksInsideScratch() async throws {

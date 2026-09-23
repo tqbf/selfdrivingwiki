@@ -3,6 +3,8 @@ import Darwin
 #endif
 import Foundation
 
+// pattern: Functional Core
+
 /// Pure generator for the macOS seatbelt (`sandbox-exec`) profile that confines the
 /// spawned agent's filesystem writes to a strict allowlist.
 ///
@@ -13,7 +15,13 @@ import Foundation
 ///
 /// - the per-run scratch dir (a directory tree → `subpath`),
 /// - the active wiki's `<ulid>.sqlite` + its SQLite `-wal` / `-shm` / `-journal`
-///   sidecars (exact files → `literal`).
+///   sidecars (exact files → `literal`),
+/// - when the launcher supplies it (issue #1314), the central `queue.sqlite`
+///   + the same sidecar suffixes (exact files → `literal`) — acquisition sync
+///   run from a chat (`wikictl extractor sync …`) persists its durable
+///   extraction job there, and a profile without the allowance denied the
+///   enqueue write, which SQLite surfaced as its classic "attempt to write a
+///   readonly database" (SQLITE_READONLY, error 8).
 ///
 /// This is provider-agnostic: the profile never names a provider; it fences the write
 /// channel only. See `plans/sandbox-agent.md` for the threat model and the
@@ -106,6 +114,10 @@ public enum SandboxProfile {
     /// - Parameters:
     ///   - scratchDir: the per-run scratch directory absolute path (the writable cwd).
     ///   - wikiDBPath: the active wiki's `<ulid>.sqlite` absolute file path.
+    ///   - queueDBPath: when non-nil, the central `queue.sqlite` absolute path —
+    ///     emits `QUEUE_DB` literal write allows (base + the SQLite sidecar
+    ///     suffixes) so a sandboxed agent can persist extraction jobs (issue
+    ///     #1314). Nil (default) emits nothing — the write fence is unchanged.
     ///   - pdf2mdScriptPath: when non-nil, the resolved absolute path to the bundled
     ///     `pdf2md` PEP 723 script. Emits `process-exec*` + `file-read*` denies (by
     ///     `literal` on the script file) so a sandboxed agent can't run it or feed it
@@ -115,6 +127,7 @@ public enum SandboxProfile {
     public static func generate(
         scratchDir: String,
         wikiDBPath: String,
+        queueDBPath: String? = nil,
         pdf2mdScriptPath: String? = nil
     ) -> String {
         var lines: [String] = [
@@ -138,6 +151,10 @@ public enum SandboxProfile {
             // The active wiki DB and its SQLite sidecars are exact files.
             "(allow file-write* (literal (param \"WIKI_DB\")))",
         ]
+        if queueDBPath != nil {
+            // Acquisition sync writes its durable job to the central queue DB.
+            lines.append("(allow file-write* (literal (param \"QUEUE_DB\")))")
+        }
         // Layer the ~/.claude execution-vector / credential denies over the subtree allow.
         lines.append(contentsOf: claudeHomeDenyRules())
         lines.append(contentsOf: agentRuntimeWriteRules())
@@ -145,6 +162,11 @@ public enum SandboxProfile {
             lines.append(
                 "(allow file-write* (literal (string-append (param \"WIKI_DB\") \"\(suffix)\")))"
             )
+            if queueDBPath != nil {
+                lines.append(
+                    "(allow file-write* (literal (string-append (param \"QUEUE_DB\") \"\(suffix)\")))"
+                )
+            }
         }
         // The deny rules reference only the `PDF2MD_SCRIPT` param NAME; the resolved
         // value flows in via `-D` at sandbox-exec time. Guard just to avoid emitting
@@ -360,8 +382,8 @@ public enum SandboxProfile {
         return rules
     }
 
-    /// Build a `SandboxInvocation` from the three spawn-time paths. The scratch dir and
-    /// DB path are **symlink-resolved** here, because the seatbelt `subpath`/`literal`
+    /// Build a `SandboxInvocation` from the spawn-time paths. The scratch dir and
+    /// DB paths are **symlink-resolved** here, because the seatbelt `subpath`/`literal`
     /// matchers match the CANONICAL path — a symlinked component (e.g. `/tmp` →
     /// `/private/tmp`) makes an allow rule silently fail and writes get denied. Keeping
     /// this resolution in the (tested) core layer guards against a launcher regression
@@ -370,6 +392,7 @@ public enum SandboxProfile {
         homePath: String,
         scratchDir: String,
         wikiDBPath: String,
+        queueDBPath: String? = nil,
         claudeTempBase: String = defaultClaudeTempBase(),
         pdf2mdScriptPath: String? = nil
     ) -> SandboxInvocation {
@@ -383,6 +406,7 @@ public enum SandboxProfile {
         let resolvedHome = realPath(homePath)
         let resolvedScratch = realPath(scratchDir)
         let resolvedDB = realPath(wikiDBPath)
+        let resolvedQueueDB = queueDBPath.map(realPath)
         let resolvedClaudeTemp = realPath(claudeTempBase)
         // The script file exists when the launcher hands it to us (it probed
         // `isExecutableFile`), so `realpath` fully resolves it — important because
@@ -393,6 +417,7 @@ public enum SandboxProfile {
         let profile = generate(
             scratchDir: resolvedScratch,
             wikiDBPath: resolvedDB,
+            queueDBPath: resolvedQueueDB,
             pdf2mdScriptPath: resolvedPdf2md
         )
         // NOTE: these are profile parameters, NOT child env vars. `-D WIKI_DB=<path>`
@@ -406,6 +431,9 @@ public enum SandboxProfile {
             ("WIKI_DB", resolvedDB),
             ("CLAUDE_TMP", resolvedClaudeTemp),
         ]
+        if let resolvedQueueDB {
+            defines.append(("QUEUE_DB", resolvedQueueDB))
+        }
         if let resolvedPdf2md, !resolvedPdf2md.isEmpty {
             defines.append(("PDF2MD_SCRIPT", resolvedPdf2md))
         }

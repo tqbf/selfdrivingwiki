@@ -9,6 +9,7 @@ struct SandboxProfileTests {
 
   static let scratchDir = "/Users/me/Library/Caches/Self Driving Wiki-agent/UUID"
   static let wikiDB = "/Users/me/Library/Group Containers/group.x/01WIKI.sqlite"
+  static let queueDB = "/Users/me/Library/Group Containers/group.x/queue.sqlite"
 
   private func profile() -> String {
     SandboxProfile.generate(
@@ -44,6 +45,31 @@ struct SandboxProfileTests {
 
   @Test func sidecarSuffixesAreExactlyWalShmJournal() {
     #expect(SandboxProfile.sqliteSidecarSuffixes == ["-wal", "-shm", "-journal"])
+  }
+
+  @Test func queueDatabaseAllowanceIsExplicitAndIncludesSQLiteSidecars() {
+    let invocation = SandboxProfile.invocation(
+      homePath: "/Users/me",
+      scratchDir: Self.scratchDir,
+      wikiDBPath: Self.wikiDB,
+      queueDBPath: Self.queueDB)
+
+    #expect(invocation.defines.contains { $0.0 == "QUEUE_DB" && $0.1 == Self.queueDB })
+    #expect(invocation.profile.contains("(allow file-write* (literal (param \"QUEUE_DB\")))"))
+    for suffix in SandboxProfile.sqliteSidecarSuffixes {
+      #expect(invocation.profile.contains(
+        "(allow file-write* (literal (string-append (param \"QUEUE_DB\") \"\(suffix)\")))"))
+    }
+  }
+
+  @Test func queueDatabaseAllowanceIsAbsentUnlessRequested() {
+    let invocation = SandboxProfile.invocation(
+      homePath: "/Users/me",
+      scratchDir: Self.scratchDir,
+      wikiDBPath: Self.wikiDB)
+
+    #expect(invocation.defines.contains { $0.0 == "QUEUE_DB" } == false)
+    #expect(invocation.profile.contains("QUEUE_DB") == false)
   }
 
   // MARK: - Claude config writes (generate)

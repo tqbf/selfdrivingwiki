@@ -4,6 +4,8 @@ import Observation
 import WikiFSCore
 import ACPModel
 
+// pattern: Imperative Shell
+
 /// Runs the three ACP agent operations — Ingest / Query / Lint — against the
 /// currently-selected wiki, streaming a live activity feed back into the app
 /// (`plans/llm-wiki.md` Phase C). Generalizes the v0 agent launcher: instead of a
@@ -4724,6 +4726,7 @@ public final class AgentLauncher {
         // Symlink resolution is performed inside `SandboxProfile.invocation` (the
         // tested core layer) so the canonical path reaches the seatbelt profile.
         let dbPath = dir.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false).path
+        let queueDBPath = dir.appendingPathComponent("queue.sqlite", isDirectory: false).path
 
         // Fail-open if any required path is empty/relative (misconfiguration).
         guard !scratch.path.isEmpty, scratch.path.hasPrefix("/"),
@@ -4736,10 +4739,12 @@ public final class AgentLauncher {
             homePath: homePath,
             scratchDir: scratch.path,
             wikiDBPath: dbPath,
+            queueDBPath: queueDBPath,
             pdf2mdScriptPath: pdf2mdScriptPath
         )
         let pdf2mdNote = pdf2mdScriptPath.map { " + denying pdf2md @ \($0)" } ?? ""
-        DebugLog.agent("sandbox: confining Ingest/Edit agent writes to scratch + \(dbPath)\(pdf2mdNote)")
+        DebugLog.agent(
+            "sandbox: confining Ingest/Edit agent writes to scratch + \(dbPath) + \(queueDBPath)\(pdf2mdNote)")
         return invocation
     }
 
