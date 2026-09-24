@@ -300,7 +300,9 @@ struct PageContextMenuTests {
         // #925: the unresolved-link menu still offers a lazy "Suggest…" submenu
         // that has not searched anything yet.
         let url = try #require(URL(string: "wiki://missing?title=Ghost"))
-        let linkItems = WikiLinkMenuNSItems.items(for: url, store: model, fileProvider: nil)
+        let linkItems = WikiLinkMenuNSItems.items(
+            for: url,
+            capabilities: .full(store: model, fileProvider: nil))
         #expect(linkItems.map(\.title) == ["Suggest…"])
         let suggest = try #require(linkItems.first)
         #expect(suggest.submenu?.items.map(\.title) == ["Searching…"])

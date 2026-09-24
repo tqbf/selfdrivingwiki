@@ -948,7 +948,15 @@ final class WikiReaderWebView: WKWebView {
 
         DebugLog.reader("willOpenMenu: building custom items for url=\(url.absoluteString)")
 
-        let custom = WikiLinkMenuNSItems.items(for: url, store: store, fileProvider: fileProvider, addURL: addURLHandler, addBookmark: addBookmarkHandler)
+        // One capabilities value per right-click: `.full` is the only place the
+        // store meets menu construction; the builder downstream sees closures.
+        let capabilities = WikiLinkMenuCapabilities.full(
+            store: store,
+            fileProvider: fileProvider,
+            addURL: addURLHandler,
+            addBookmark: addBookmarkHandler)
+
+        let custom = WikiLinkMenuNSItems.items(for: url, capabilities: capabilities)
 
         // Insert "Open in Background" right after WebKit's "Open Link"
         // for resolved wiki links, so it's the second item in the menu.
@@ -1014,8 +1022,7 @@ final class WikiReaderWebView: WKWebView {
 
             let bottomActions = WikiLinkMenuBuilder.bottomActions(for: url)
             let bottomItems = WikiLinkMenuNSItems.items(
-                for: url, actions: bottomActions, store: store, fileProvider: fileProvider,
-                addURL: addURLHandler, addBookmark: addBookmarkHandler)
+                for: url, actions: bottomActions, capabilities: capabilities)
 
             // Insert at insertIdx in reverse so they appear in order.
             for item in bottomItems.reversed() { menu.insertItem(item, at: insertIdx) }

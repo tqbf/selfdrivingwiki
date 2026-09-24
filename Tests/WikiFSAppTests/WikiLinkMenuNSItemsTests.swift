@@ -114,7 +114,8 @@ struct WikiLinkMenuNSItemsTests {
             string: "wiki://source?title=Consciousness%20doesn%27t%20overflow%20cognition"))
 
         let item = try #require(WikiLinkMenuNSItems.items(
-            for: url, actions: [.openInBackgroundTab], store: model, fileProvider: nil
+            for: url, actions: [.openInBackgroundTab],
+            capabilities: .full(store: model, fileProvider: nil)
         ).first)
         try perform(item)
 
@@ -137,7 +138,8 @@ struct WikiLinkMenuNSItemsTests {
             string: "wiki://source?id=\(source.id.rawValue)&title=Former%20title"))
 
         let item = try #require(WikiLinkMenuNSItems.items(
-            for: url, actions: [.openInBackgroundTab], store: model, fileProvider: nil
+            for: url, actions: [.openInBackgroundTab],
+            capabilities: .full(store: model, fileProvider: nil)
         ).first)
         try perform(item)
 
@@ -205,6 +207,146 @@ struct WikiLinkMenuNSItemsTests {
             webView.willOpenMenu(menu, with: try rightClickEvent())
             #expect(menu.items.map(\.title) == ["Open Link"], "href: \(href)")
         }
+    }
+
+    // MARK: - Capability seam (menu construction without a store)
+
+    /// Records every capability-closure call. The `capabilities` value built
+    /// from it contains no store anywhere — menu construction is driven by
+    /// opaque closures alone.
+    @MainActor
+    private final class CapabilityRecorder {
+        var resolvedSelections: [URL] = []
+        var openedInBackground: [WikiSelection] = []
+        var searchedQueries: [String] = []
+        var addedURLs: [String] = []
+        var addedBookmarks: [BookmarkTargetPickerContext] = []
+
+        private static let stubPageID = PageID(rawValue: "01JZZZZZZZZZZZZZZZZZZZZZZA")
+
+        var capabilities: WikiLinkMenuCapabilities {
+            WikiLinkMenuCapabilities(
+                selection: { [weak self] url in
+                    self?.resolvedSelections.append(url)
+                    return .page(Self.stubPageID)
+                },
+                openInBackground: { [weak self] in self?.openedInBackground.append($0) },
+                similarPages: { [weak self] query, _ in
+                    self?.searchedQueries.append(query)
+                    return []
+                },
+                navigateToPage: { _ in },
+                sharePresent: nil,
+                addURL: { [weak self] in self?.addedURLs.append($0) },
+                addBookmark: { [weak self] in self?.addedBookmarks.append($0) })
+        }
+    }
+
+    private func url(_ string: String) throws -> URL {
+        try #require(URL(string: string))
+    }
+
+    /// AC.2 golden: with every capability present, the builder's default
+    /// (top-actions) output per URL kind is exactly the reader's historical
+    /// menu — titles and order unchanged by the capabilities conversion.
+    @Test("Golden titles per URL kind with every capability present", .bug(id: 1315))
+    func goldenTitlesPerURLKind() throws {
+        let recorder = CapabilityRecorder()
+        let kinds: [(String, URL, [String])] = [
+            ("resolved page", try url("wiki://page?title=Alpha"), ["Add Bookmark…"]),
+            ("resolved source", try url("wiki://source?title=Paper"), ["Add Bookmark…"]),
+            ("resolved chat", try url("wiki://chat?title=Assistant"), ["Add Bookmark…"]),
+            ("missing", try url("wiki://missing?title=Ghost"), ["Suggest…"]),
+            ("external", try url("https://example.com/post"), ["Add as Source"]),
+            ("anchor", try url("wiki://anchor#section"), []),
+        ]
+        for (name, kindURL, expected) in kinds {
+            #expect(
+                WikiLinkMenuNSItems.items(for: kindURL, capabilities: recorder.capabilities)
+                    .map(\.title) == expected,
+                "\(name)")
+        }
+    }
+
+    /// AC.4 omission matrix: a missing capability omits its item (never shows
+    /// it inert); a capability that cannot resolve THIS link omits it too;
+    /// `.none` omits everything.
+    @Test("Omission matrix: absent capability omits its action", .bug(id: 1315))
+    func omissionMatrix() throws {
+        let resolvedPage = try url("wiki://page?title=Alpha")
+        let missing = try url("wiki://missing?title=Ghost")
+        let external = try url("https://example.com/post")
+
+        func stub() -> WikiLinkMenuCapabilities { CapabilityRecorder().capabilities }
+
+        // `.none` — nothing capability-driven survives.
+        #expect(WikiLinkMenuNSItems.items(for: resolvedPage, capabilities: .none).isEmpty)
+        #expect(WikiLinkMenuNSItems.items(for: missing, capabilities: .none).isEmpty)
+        #expect(WikiLinkMenuNSItems.items(for: external, capabilities: .none).isEmpty)
+
+        // No addBookmark → Add Bookmark… omitted.
+        var caps = stub()
+        caps.addBookmark = nil
+        #expect(WikiLinkMenuNSItems.items(for: resolvedPage, capabilities: caps).isEmpty)
+
+        // No addURL → Add as Source omitted.
+        caps = stub()
+        caps.addURL = nil
+        #expect(WikiLinkMenuNSItems.items(for: external, capabilities: caps).isEmpty)
+
+        // No similar search (or no navigate) → Suggest… / Find Similar… omitted.
+        caps = stub()
+        caps.similarPages = nil
+        #expect(WikiLinkMenuNSItems.items(for: missing, capabilities: caps).isEmpty)
+        caps = stub()
+        caps.navigateToPage = nil
+        #expect(WikiLinkMenuNSItems.items(
+            for: resolvedPage, actions: [.findSimilar], capabilities: caps).isEmpty)
+
+        // No selection → Add Bookmark… and Open in Background omitted.
+        caps = stub()
+        caps.selection = nil
+        #expect(WikiLinkMenuNSItems.items(for: resolvedPage, capabilities: caps).isEmpty)
+        #expect(WikiLinkMenuNSItems.items(
+            for: resolvedPage, actions: [.openInBackgroundTab], capabilities: caps).isEmpty)
+
+        // No openInBackground → Open in Background omitted even though the
+        // link resolves.
+        caps = stub()
+        caps.openInBackground = nil
+        #expect(WikiLinkMenuNSItems.items(
+            for: resolvedPage, actions: [.openInBackgroundTab], capabilities: caps).isEmpty)
+
+        // Capability present but THIS link is dead → omitted, not inert.
+        caps = stub()
+        caps.selection = { _ in nil }
+        #expect(WikiLinkMenuNSItems.items(for: resolvedPage, capabilities: caps).isEmpty)
+        #expect(WikiLinkMenuNSItems.items(
+            for: resolvedPage, actions: [.openInBackgroundTab], capabilities: caps).isEmpty)
+    }
+
+    /// Invoking built items hands the right payloads to the injected closures.
+    @Test("Capability closures receive the link's payloads", .bug(id: 1315))
+    func capabilityClosuresReceivePayloads() throws {
+        let recorder = CapabilityRecorder()
+
+        let external = try url("https://example.com/post")
+        let addSource = try #require(WikiLinkMenuNSItems.items(
+            for: external, capabilities: recorder.capabilities).first)
+        try perform(addSource)
+        #expect(recorder.addedURLs == ["https://example.com/post"])
+
+        let resolved = try url("wiki://page?title=Alpha")
+        let bookmark = try #require(WikiLinkMenuNSItems.items(
+            for: resolved, capabilities: recorder.capabilities).first)
+        try perform(bookmark)
+        let added = try #require(recorder.addedBookmarks.first)
+        if case .pages(let ids) = added.targets {
+            #expect(ids == [PageID(rawValue: "01JZZZZZZZZZZZZZZZZZZZZZZA")])
+        } else {
+            Issue.record("Add Bookmark… resolved a non-page target: \(added.targets)")
+        }
+        #expect(recorder.resolvedSelections.map(\.absoluteString) == [resolved.absoluteString])
     }
 
     @Test func menuConstructionReturnsSearchingPlaceholder() throws {
