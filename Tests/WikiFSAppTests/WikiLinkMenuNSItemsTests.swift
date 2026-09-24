@@ -150,6 +150,35 @@ struct WikiLinkMenuNSItemsTests {
         #expect(model.tabs.contains { $0.selection == .source(source.id) })
     }
 
+    /// AC.6: menu actions RE-RESOLVE at click time. A target deleted between
+    /// right-click and click no-ops — no dead tab, no selection change.
+    @Test("Menu action on a target deleted after build no-ops", .bug(id: 1315))
+    func deletedTargetNoOpsAtClickTime() throws {
+        let (model, store) = try tempModel()
+        let active = try store.createPage(title: "Active")
+        let source = try store.addSource(filename: "Ephemeral.pdf", data: Data("pdf".utf8))
+        model.reloadFromStore()
+        model.openTab(.page(active.id))
+        let url = try #require(URL(
+            string: "wiki://source?id=\(source.id.rawValue)&title=Ephemeral"))
+
+        let item = try #require(WikiLinkMenuNSItems.items(
+            for: url, actions: [.openInBackgroundTab],
+            capabilities: .full(store: model, fileProvider: nil)
+        ).first)
+
+        // The target vanishes after the menu is built.
+        try store.deleteSource(id: source.id)
+        model.reloadFromStore()
+
+        try perform(item)
+
+        // No dead tab opened; the focused selection is untouched.
+        #expect(model.selection == .page(active.id))
+        #expect(model.tabs.contains { $0.selection == .page(active.id) })
+        #expect(model.tabs.count == 1)
+    }
+
     /// Builds a link menu the way AppKit presents one for a right-click:
     /// WebKit's "Open Link" item is present, our items go right after it.
     private func linkMenu() -> NSMenu {

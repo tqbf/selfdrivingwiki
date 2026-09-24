@@ -67,9 +67,14 @@ private enum ChatTranscriptMetrics {
     static let placeholderSpacing: CGFloat = 7
 }
 
-/// A typed UI intent emitted by the transcript. `ChatDetailView` owns the
-/// authority required to resolve it; neither this view nor its pane reaches
-/// into the store or daemon on its own.
+/// A typed UI intent emitted by the transcript. The transcript view layer
+/// holds NO AUTHORITY: it may carry references and closures its host supplies
+/// — a blob store for scheme serving, link-menu capabilities for the context
+/// menu — but it never calls a store method, reads store state to decide
+/// anything, or mutates store state. Every such call happens inside a closure
+/// the host built, where the host's authority already lives, and navigation
+/// itself flows through these intents. A capability the host does not supply
+/// is `nil`, and the corresponding UI is omitted — never shown inert.
 enum ChatTranscriptIntent {
     case openWikiLink(URL, inNewTab: Bool)
     /// Open a `wiki://` link in a background tab (issue #1315, from the

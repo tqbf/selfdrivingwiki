@@ -108,11 +108,14 @@ enum WikiLinkMenuNSItems {
                         search: similarPages,
                         navigate: navigateToPage))
             case .openInBackgroundTab:
-                // Presence needs a resolved target now (omit dead links); the
-                // action opens exactly the selection captured here.
+                // Presence needs the link to resolve NOW (a dead link omits
+                // the item); the action RE-RESOLVES at click time, so a
+                // target deleted between right-click and click no-ops instead
+                // of opening a dead tab.
                 guard let openInBackground = capabilities.openInBackground,
-                      let selection = capabilities.selection?(url) else { continue }
+                      capabilities.selection?(url) != nil else { continue }
                 items.append(.wikiItem("Open in Background") {
+                    guard let selection = capabilities.selection?(url) else { return }
                     openInBackground(selection)
                 })
             case .share:

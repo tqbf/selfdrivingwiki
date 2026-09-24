@@ -960,10 +960,16 @@ final class WikiReaderWebView: WKWebView {
 
         // Insert "Open in Background" right after WebKit's "Open Link"
         // for resolved wiki links, so it's the second item in the menu.
+        // Presence is decided now (a link that resolves to nothing is
+        // omitted); the action RE-RESOLVES at click time through the
+        // capabilities, so a target deleted between right-click and click
+        // no-ops instead of opening a dead tab.
         if let openLinkIdx = menu.items.firstIndex(where: { $0.identifier?.rawValue == "WKMenuItemIdentifierOpenLink" }),
-           let selection = WikiLinkMenuNSItems.selection(for: url, store: store) {
+           capabilities.selection?(url) != nil,
+           capabilities.openInBackground != nil {
             let bgItem = NSMenuItem.wikiItem("Open in Background") {
-                store.openTabInBackground(selection)
+                guard let selection = capabilities.selection?(url) else { return }
+                capabilities.openInBackground?(selection)
             }
             bgItem.image = NSImage(systemSymbolName: "dock.arrow.down.rectangle",
                                    accessibilityDescription: "Open in Background")
