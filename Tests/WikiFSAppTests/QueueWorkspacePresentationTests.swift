@@ -716,6 +716,33 @@ import WikiFSEngine
                 help: "Resume Queue — allow queued jobs to start"))
     }
 
+    // MARK: - Paused-lane notice bar
+
+    @Test func pausedNoticeCarriesWaitingCount() {
+        // One waiting job — singular grammar, count visible.
+        #expect(QueuePausedNoticePresentation.make(queueTitle: "Extraction", queuedCount: 1)
+            == QueuePausedNoticePresentation(
+                message: "Extraction is paused — 1 queued job waiting",
+                resumeLabel: "Resume",
+                symbol: "pause.circle.fill"))
+        // Several waiting jobs — plural grammar.
+        #expect(QueuePausedNoticePresentation.make(queueTitle: "Extraction", queuedCount: 3)
+            == QueuePausedNoticePresentation(
+                message: "Extraction is paused — 3 queued jobs waiting",
+                resumeLabel: "Resume",
+                symbol: "pause.circle.fill"))
+    }
+
+    @Test func pausedNoticeWithoutQueuedJobsStillExplainsTheState() {
+        // Paused with an empty queue must not say "0 jobs waiting" — the
+        // useful fact is that nothing will start.
+        #expect(QueuePausedNoticePresentation.make(queueTitle: "Ingestion", queuedCount: 0)
+            == QueuePausedNoticePresentation(
+                message: "Ingestion is paused — queued jobs will not start",
+                resumeLabel: "Resume",
+                symbol: "pause.circle.fill"))
+    }
+
     // MARK: - Sidebar search
 
     @Test func sidebarSearchPromptIsPinned() {

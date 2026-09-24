@@ -255,6 +255,15 @@ struct ActivityWindowView: View {
         // visibly established for the inset to apply (the main wiki window gets
         // this implicitly via its `.navigation` + `.principal` toolbar items).
         .toolbarBackground(.visible, for: .windowToolbar)
+        // Queue-state visibility: while this window's lane is paused, a
+        // full-width notice bar sits under the toolbar so "paused, nothing
+        // will start" is visible at a glance — not only via the sidebar's
+        // icon-only Pause/Resume toggle. Scoped animation: the bar slides
+        // in/out; unrelated list churn is untouched.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            pausedNoticeBar
+        }
+        .animation(.snappy, value: laneRunState == .paused)
         .onAppear {
             viewModel.attach(engine: queueEngine)
             consumePendingSelectionIfNeeded()
@@ -904,13 +913,49 @@ struct ActivityWindowView: View {
 
     // MARK: - Toolbar
 
+    /// This window's lane run state (`.running` / `.paused`). The notice bar,
+    /// the sidebar Pause/Resume control, and the animation trigger all read
+    /// this one property so they can never disagree about the lane's state.
+    private var laneRunState: QueueRunState {
+        viewModel.snapshot.runStates[queue] ?? .running
+    }
+
+    /// Full-width notice bar shown while this window's lane is paused. A
+    /// paused lane looks identical to "nothing is happening" from the job
+    /// list alone — queued jobs wait forever with no error — so the state
+    /// gets a colored bar with the waiting count and a one-click Resume.
+    @ViewBuilder
+    private var pausedNoticeBar: some View {
+        if laneRunState == .paused {
+            let presentation = QueuePausedNoticePresentation.make(
+                queueTitle: queueTitle,
+                queuedCount: activeItems.filter { $0.state == .queued }.count)
+            HStack(spacing: QueueWorkspaceMetrics.Spacing.sm) {
+                Image(systemName: presentation.symbol)
+                    .foregroundStyle(.orange)
+                Text(presentation.message)
+                    .font(.callout.weight(.medium))
+                Spacer(minLength: QueueWorkspaceMetrics.Spacing.xs)
+                Button(presentation.resumeLabel) {
+                    runQueueCommand("resume queue") { try await queueEngine.resume(queue) }
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .help("Resume Queue — allow queued jobs to start (⌘R)")
+            }
+            .padding(.horizontal, QueueWorkspaceMetrics.Spacing.md)
+            .padding(.vertical, QueueWorkspaceMetrics.Spacing.xs)
+            .background(Color.yellow.opacity(0.18))
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
     /// Queue-wide controls live beside the navigator heading. They are
     /// separate buttons so Pause and Stop remain visible without opening a
     /// menu. Tooltips state the semantic difference: Pause lets running jobs
     /// finish, while Stop opens the existing destructive confirmation.
     @ViewBuilder
     private var sidebarQueueControls: some View {
-        let state = viewModel.snapshot.runStates[queue] ?? .running
+        let state = laneRunState
         let pauseResume = QueuePauseResumePresentation.make(for: state)
         HStack(spacing: QueueWorkspaceMetrics.Spacing.xs) {
             Button {

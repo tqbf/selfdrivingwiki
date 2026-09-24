@@ -160,8 +160,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // existed). The guarded apply seeds the membership sets from that
         // snapshot — events emitted before we subscribed are not replayed
         // (#1222) — while still refusing stale data if events have already
-        // changed membership since the fetch started.
-        refreshSnapshotGuarded()
+        // changed membership since the fetch started. Recomputing the paused
+        // lanes here is how a lane paused in a PREVIOUS session is learned:
+        // it never emits `.runStateChanged` at launch, so the initial
+        // snapshot is the only truth available. No events can race this
+        // first fetch (the subscription starts below), so the recompute
+        // cannot clobber event truth.
+        refreshSnapshotGuarded(recomputesPaused: true)
 
         // Observe engine events to update the icon + menu.
         streamTask = Task { @MainActor [weak self] in
@@ -661,8 +666,11 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // While working, breathe the books glyph between its outline and
         // filled forms so the menu bar shows live progress without opening
         // the Activity window. Every other state is a static glyph; leaving
-        // the working state cancels the loop (no CPU when idle).
-        if state == .working {
+        // the working state cancels the loop (no CPU when idle). With
+        // Reduce Motion enabled the working glyph stays static (filled) —
+        // animation is never the only carrier of state.
+        if state == .working
+            && NSWorkspace.shared.accessibilityDisplayShouldReduceMotion == false {
             startIconAnimation()
         } else {
             stopIconAnimation()
@@ -915,6 +923,15 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// was in flight. This is what makes snapshot data safe to apply as a
     /// full membership replace: it can never resurrect an item a terminal
     /// event already removed, nor erase one an enqueue event already added.
+    ///
+    /// With `recomputesPaused` the per-lane pause set is re-derived from the
+    /// snapshot's run states. Callers pass it at launch (a lane paused in a
+    /// previous session never emits `.runStateChanged`, so the initial
+    /// snapshot is the only truth available) and after a resume event (the
+    /// synchronous `pausedLanes.remove` above needs the snapshot to agree).
+    /// Everywhere else events stay the timely pause truth: a pause event
+    /// changes no membership, so the epoch guard cannot protect `pausedLanes`
+    /// from an in-flight stale snapshot.
     private func refreshSnapshotGuarded(recomputesPaused: Bool = false) {
         let epochAtFetch = membershipEpoch
         Task { @MainActor [weak self] in
