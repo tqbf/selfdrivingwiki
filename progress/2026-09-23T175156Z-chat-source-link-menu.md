@@ -56,3 +56,10 @@ Changes:
   `?title=` link, canonical id winning over a stale display alias, chat menu
   insertion + callback routing, and non-wiki links left alone.
 - `PageContextMenuHostedTests` — green (reader menu still builds).
+
+## Follow-up
+
+The URL-only menu grew to full reader parity (Add Bookmark…, Add as Source,
+Suggest…, Find Similar…, Share…) through the `WikiLinkMenuCapabilities` seam
+— see `plans/chat-link-menu-capabilities.md` and
+`progress/2026-09-24T010854Z-chat-link-menu-capabilities.md`.
