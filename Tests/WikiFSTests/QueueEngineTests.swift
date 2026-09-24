@@ -1017,8 +1017,9 @@ struct QueueEngineTests {
 // MARK: - Fake worker infrastructure
 
 /// A factory that returns a fixed provider ID and a closure-based worker.
-/// Used by tests to inject controlled worker behavior.
-private final class FakeWorkerFactory: QueueWorkerFactory, @unchecked Sendable {
+/// Used by tests to inject controlled worker behavior. Shared with the
+/// sibling claim/settlement suites in this target — do not duplicate.
+final class FakeWorkerFactory: QueueWorkerFactory, @unchecked Sendable {
     let providerIDFunc: @Sendable (QueueItem) async -> ProviderID?
     let workerFunc: @Sendable (QueueItem) async throws -> Void
 
@@ -1172,8 +1173,8 @@ private final class LockedQueueEventLog: Sendable {
 
 /// Records the order of item executions. Test-only — uses
 /// `OSAllocatedUnfairLock` (async-safe) so properties can be read
-/// synchronously from `#expect` assertions.
-private final class FakeWorkerRecorder: @unchecked Sendable {
+/// synchronously from `#expect` assertions. Shared across the engine suites.
+final class FakeWorkerRecorder: @unchecked Sendable {
     private let lock = OSAllocatedUnfairLock(initialState: [QueueItem.ID]())
 
     var executedIDs: [QueueItem.ID] {
@@ -1275,7 +1276,7 @@ private final class UncooperativeWorkerControl: Sendable {
     }
 }
 
-private final class ManualQueueEngineDeadlineSource: QueueEngineDeadlineSource, Sendable {
+final class ManualQueueEngineDeadlineSource: QueueEngineDeadlineSource, Sendable {
     private struct State: Sendable {
         var waiters: [UUID: AsyncStream<Void>.Continuation] = [:]
     }

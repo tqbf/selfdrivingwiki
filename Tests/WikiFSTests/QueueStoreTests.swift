@@ -60,6 +60,121 @@ struct QueueStoreTests {
         #expect(items.first?.state == .failed)
     }
 
+    // MARK: - Compare-and-set transitions (AC.3)
+
+    @Test func markRunningCASRejectsSecondClaimAndChangesNothing() throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let item = try store.enqueue(QueueItemRequest(
+            queue: .ingestion, wikiID: WikiID(rawValue: "01JCASWIKI0000000000000"),
+            payload: QueueItemPayload(sourceIDs: [])))
+
+        let first = ProviderID(rawValue: "provider-a")
+        try store.markRunning(id: item.id, providerID: first)
+
+        // A second claim of the same row — the exact shape a reentrant scan
+        // or a second connection produces — fails and changes nothing.
+        do {
+            try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "provider-b"))
+            Issue.record("second claim should throw")
+        } catch {
+            guard case QueueStoreError.invalidStateTransition(let from, let to) = error else {
+                Issue.record("unexpected error: \(error)")
+                return
+            }
+            #expect(from == .running)
+            #expect(to == .running)
+        }
+        let after = try #require(try store.getItem(item.id))
+        #expect(after.state == .running)
+        #expect(after.providerID == first)
+        store.close()
+    }
+
+    @Test func markRunningCASReportsNotFoundForMissingRow() throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        do {
+            try store.markRunning(
+                id: QueueItemID(rawValue: "01JMISSINGROW000000000000"),
+                providerID: ProviderID(rawValue: "provider-a"))
+            Issue.record("claim of a missing row should throw")
+        } catch {
+            guard case QueueStoreError.notFound = error else {
+                Issue.record("unexpected error: \(error)")
+                return
+            }
+        }
+        store.close()
+    }
+
+    @Test func transitionsFromWrongStateThrowInvalidTransition() throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let item = try store.enqueue(QueueItemRequest(
+            queue: .extraction, wikiID: WikiID(rawValue: "01JCASWIKI0000000000000"),
+            payload: QueueItemPayload(sourceIDs: [])))
+
+        // completed requires .running; the item is .queued.
+        #expect(throws: QueueStoreError.self) {
+            try store.markCompleted(id: item.id)
+        }
+        // cancel from .queued is allowed; a SECOND cancel then throws and
+        // must not touch finished_at again.
+        try store.markCancelled(id: item.id)
+        let cancelled = try #require(try store.getItem(item.id))
+        #expect(throws: QueueStoreError.self) {
+            try store.requeue(id: item.id)  // requires .running
+        }
+        #expect(try #require(try store.getItem(item.id)).state == .cancelled)
+        #expect(try #require(try store.getItem(item.id)).finishedAt == cancelled.finishedAt)
+        store.close()
+    }
+
+    @Test func retryItemCASRejectsNonTerminalRetry() throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let item = try store.enqueue(QueueItemRequest(
+            queue: .extraction, wikiID: WikiID(rawValue: "01JCASWIKI0000000000000"),
+            payload: QueueItemPayload(sourceIDs: [])))
+
+        // Retry of a .queued item is not a legal transition: the ordering key
+        // and attempt must not move.
+        let before = try #require(try store.getItem(item.id))
+        #expect(throws: QueueStoreError.self) {
+            try store.retryItem(id: item.id)
+        }
+        let after = try #require(try store.getItem(item.id))
+        #expect(after.orderingKey == before.orderingKey)
+        #expect(after.attempt == before.attempt)
+        #expect(after.state == .queued)
+        store.close()
+    }
+
+    @Test func secondConnectionCannotClaimAlreadyClaimedRow() throws {
+        let url = tempDatabaseURL()
+        let writer = try QueueStore(databaseURL: url)
+        let item = try writer.enqueue(QueueItemRequest(
+            queue: .ingestion, wikiID: WikiID(rawValue: "01JCASWIKI0000000000000"),
+            payload: QueueItemPayload(sourceIDs: [])))
+
+        let first = try QueueStore(databaseURL: url)
+        let second = try QueueStore(databaseURL: url)
+        try first.markRunning(id: item.id, providerID: ProviderID(rawValue: "conn-a"))
+
+        do {
+            try second.markRunning(id: item.id, providerID: ProviderID(rawValue: "conn-b"))
+            Issue.record("cross-connection second claim should throw")
+        } catch {
+            guard case QueueStoreError.invalidStateTransition = error else {
+                Issue.record("unexpected error: \(error)")
+                return
+            }
+        }
+        let after = try #require(try second.getItem(item.id))
+        #expect(after.providerID == ProviderID(rawValue: "conn-a"))
+
+        first.close()
+        second.close()
+        writer.close()
+    }
+
     // MARK: - Test helpers
 
     /// Canonical JSON string for structural comparison across Foundation runtimes.
