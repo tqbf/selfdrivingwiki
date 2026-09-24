@@ -242,13 +242,14 @@ struct WikiLinkMenuNSItemsTests {
 
         webView.willOpenMenu(menu, with: try rightClickEvent())
 
-        #expect(menu.items.filter { !$0.isSeparatorItem }.map(\.title) == [
-            "Add Bookmark…", "Open Link", "Open in New Tab", "Open in Background",
-            "Share…", "Find Similar…",
+        // The reader's exact topology, separators pinned: Add Bookmark… leads;
+        // the tab actions, Share…, and Find Similar… form one custom group
+        // (Share inside it, right after the tab actions); the group separator
+        // trails Find Similar… before WebKit's own items.
+        #expect(menu.items.map { $0.isSeparatorItem ? "—" : $0.title } == [
+            "Add Bookmark…", "—", "Open Link", "Open in New Tab",
+            "Open in Background", "Share…", "—", "Find Similar…", "—",
         ])
-        // Separators: after the prepended group, after the tab group, and
-        // between Share… and Find Similar… (the reader's bottom grouping).
-        #expect(menu.items.filter(\.isSeparatorItem).count == 3)
 
         // Built items route through the host's closures.
         try perform(try #require(menu.items.first { $0.title == "Add Bookmark…" }))
@@ -282,9 +283,10 @@ struct WikiLinkMenuNSItemsTests {
         webView.hoveredLinkHref = "wiki://page?title=Alpha"
         let resolvedMenu = linkMenu()
         webView.willOpenMenu(resolvedMenu, with: try rightClickEvent())
-        #expect(resolvedMenu.items.filter { !$0.isSeparatorItem }.map(\.title)
-            == ["Add Bookmark…", "Open Link", "Open in New Tab", "Open in Background",
-                "Share…", "Find Similar…"])
+        #expect(resolvedMenu.items.map { $0.isSeparatorItem ? "—" : $0.title } == [
+            "Add Bookmark…", "—", "Open Link", "Open in New Tab",
+            "Open in Background", "Share…", "—", "Find Similar…", "—",
+        ])
     }
 
     /// AC.5: the web view reads capabilities at menu-build time, so a host
@@ -305,8 +307,8 @@ struct WikiLinkMenuNSItemsTests {
         webView.linkMenuCapabilities = .none
         let none = linkMenu()
         webView.willOpenMenu(none, with: try rightClickEvent())
-        #expect(none.items.filter { !$0.isSeparatorItem }.map(\.title)
-            == ["Open Link", "Open in New Tab", "Open in Background"])
+        #expect(none.items.map { $0.isSeparatorItem ? "—" : $0.title }
+            == ["Open Link", "Open in New Tab", "Open in Background", "—"])
     }
 
     /// Degraded host (`.none`): only the URL-only tab actions on resolved

@@ -163,17 +163,19 @@ final class ChatTranscriptWebView: WKWebView {
             menu.insertItem(background, at: insertionIndex + 1)
             menu.insertItem(NSMenuItem.separator(), at: insertionIndex + 2)
 
-            // Bottom group (Share…, Find Similar…) between the tab actions and
-            // WebKit's own items — the reader's placement. Built through the
-            // same capability seam; items whose capability the host lacks are
-            // simply absent. The click point anchors Share's picker.
+            // Bottom group (Share…, Find Similar…) INSIDE the custom group —
+            // inserted at the separator's index so the separator trails the
+            // whole group, exactly the reader's topology:
+            // … Open in Background → Share… → — → Find Similar… → — → WebKit.
+            // Inserting after the separator would leave Find Similar… bare
+            // against WebKit's own items.
             let clickPoint = convert(event.locationInWindow, from: nil)
             let bottom = WikiLinkMenuNSItems.items(
                 for: url, actions: WikiLinkMenuBuilder.bottomActions(for: url),
                 capabilities: linkMenuCapabilities,
                 anchorView: self,
                 anchorRect: NSRect(x: clickPoint.x, y: clickPoint.y, width: 1, height: 1))
-            for item in bottom.reversed() { menu.insertItem(item, at: insertionIndex + 3) }
+            for item in bottom.reversed() { menu.insertItem(item, at: insertionIndex + 2) }
         }
 
         // Reader-parity actions from the capability seam, prepended above
