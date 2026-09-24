@@ -18,6 +18,8 @@ struct ChatDetailView: View {
     var session: any WikiSessionProtocol
     let fileProvider: FileProviderFacade
     @Environment(WindowRightInspectorController.self) private var rightInspector
+    @Environment(\.addURLHandler) private var addURLHandler
+    @Environment(\.addBookmarkHandler) private var addBookmarkHandler
 
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ChatMetrics.composerFont)
@@ -376,7 +378,12 @@ struct ChatDetailView: View {
             remoteSession: remoteSession,
             showsInternals: true,
             onWikiLink: WikiReaderView.onWikiLinkHandler(for: store),
-            onWikiLinkBackground: openWikiLinkInBackground
+            onWikiLinkBackground: openWikiLinkInBackground,
+            linkMenuCapabilities: .full(
+                store: store,
+                fileProvider: fileProvider,
+                addURL: addURLHandler,
+                addBookmark: addBookmarkHandler)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(ChatMetrics.contentInset)
@@ -458,7 +465,12 @@ struct ChatDetailView: View {
             ),
             renderer: ChatTranscriptRendererEnvironment(
                 renderContext: { [weak store] in store?.renderContext() },
-                blobStore: store
+                blobStore: store,
+                linkMenuCapabilities: .full(
+                    store: store,
+                    fileProvider: fileProvider,
+                    addURL: addURLHandler,
+                    addBookmark: addBookmarkHandler)
             ),
             onIntent: handleTranscriptIntent
         )

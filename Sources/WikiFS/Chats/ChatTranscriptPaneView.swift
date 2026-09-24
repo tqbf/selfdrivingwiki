@@ -28,7 +28,8 @@ struct ChatTranscriptPaneView: View {
                 blobStore: renderer.blobStore,
                 zoom: presentation.chatZoom,
                 scrollRequest: rendererInput.webScrollRequest(for: presentation.outlineScroll),
-                quoteAnchor: presentation.quoteAnchor
+                quoteAnchor: presentation.quoteAnchor,
+                linkMenuCapabilities: renderer.linkMenuCapabilities
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
@@ -131,8 +132,13 @@ struct ChatTranscriptPanePresentation {
 
 /// Renderer dependencies prepared by `ChatDetailView`. This shell contains no
 /// persistence or daemon operations; it merely carries the already-authorized
-/// values required by the single WebKit surface.
+/// values required by the single WebKit surface. Main-actor isolated: the
+/// link-menu capabilities it carries are menu-construction closures.
+@MainActor
 struct ChatTranscriptRendererEnvironment {
     let renderContext: () -> WikiRenderContext?
     let blobStore: WikiStoreModel?
+    /// Link-menu actions the host authorizes, as opaque closures (`.full` in
+    /// the chat pane; see ``WikiLinkMenuCapabilities``).
+    var linkMenuCapabilities: WikiLinkMenuCapabilities = .none
 }

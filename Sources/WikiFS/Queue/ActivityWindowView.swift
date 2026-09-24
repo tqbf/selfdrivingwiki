@@ -14,6 +14,33 @@ struct ActivityTranscriptPresentation {
     let onIntent: (ChatTranscriptIntent) -> Void
     let renderContext: (() -> WikiRenderContext?)?
     let blobStore: WikiStoreModel?
+    /// Reader-parity link-menu actions for the row's wiki, as opaque
+    /// closures (`.none` when that wiki's window — and therefore its store —
+    /// is closed). Add as Source / Add Bookmark… stay nil here: this window
+    /// is a separate scene, so the sheet-hosting environment handlers are
+    /// structurally unreachable, and the facade-dependent Share… is omitted
+    /// until a facade is threaded through.
+    let linkMenuCapabilities: WikiLinkMenuCapabilities
+
+    init(
+        items: [ChatTranscriptItem],
+        progressText: String,
+        transcriptID: TranscriptID,
+        isStreaming: Bool,
+        onIntent: @escaping (ChatTranscriptIntent) -> Void,
+        renderContext: (() -> WikiRenderContext?)? = nil,
+        blobStore: WikiStoreModel? = nil,
+        linkMenuCapabilities: WikiLinkMenuCapabilities = .none
+    ) {
+        self.items = items
+        self.progressText = progressText
+        self.transcriptID = transcriptID
+        self.isStreaming = isStreaming
+        self.onIntent = onIntent
+        self.renderContext = renderContext
+        self.blobStore = blobStore
+        self.linkMenuCapabilities = linkMenuCapabilities
+    }
 
     static func canonicalItems(
         persisted: [ChatTranscriptItem],
@@ -45,7 +72,8 @@ struct ActivityTranscriptPresentation {
             isStreaming: isStreaming,
             onIntent: onIntent,
             renderContext: renderContext,
-            blobStore: blobStore
+            blobStore: blobStore,
+            linkMenuCapabilities: linkMenuCapabilities
         )
     }
 
@@ -1830,7 +1858,16 @@ struct ActivityWindowView: View {
     }
 
     private func transcriptPresentation(for item: QueueItem) -> ActivityTranscriptPresentation {
-        ActivityTranscriptPresentation(
+        // Store-backed capabilities while the row's wiki window is open;
+        // `.none` (URL-only menu) once it closes — refreshed on every update
+        // by the transcript's representable. No facade is threaded into this
+        // window, so Share… is omitted; Add as Source / Add Bookmark… stay
+        // nil because this scene cannot host their sheets.
+        let wikiStore = store(for: item.wikiID)
+        let capabilities = wikiStore.map {
+            WikiLinkMenuCapabilities.full(store: $0, fileProvider: nil)
+        } ?? .none
+        return ActivityTranscriptPresentation(
             items: ActivityTranscriptPresentation.canonicalItems(
             persisted: loadedTranscriptItems,
             live: activityTracker.transcript(for: item.id)),
@@ -1847,7 +1884,7 @@ struct ActivityWindowView: View {
                     // stable). Without a live store (window closed) or with a
                     // dead link, fall back to the click handler's routing —
                     // it stashes the link and opens/focuses the window.
-                    if let store = store(for: item.wikiID),
+                    if let store = wikiStore,
                        let selection = WikiLinkMenuNSItems.selection(for: url, store: store) {
                         store.openTabInBackground(selection)
                     } else {
@@ -1858,7 +1895,8 @@ struct ActivityWindowView: View {
                 }
             },
             renderContext: renderContextProvider(for: item.wikiID),
-            blobStore: store(for: item.wikiID)
+            blobStore: wikiStore,
+            linkMenuCapabilities: capabilities
         )
     }
 

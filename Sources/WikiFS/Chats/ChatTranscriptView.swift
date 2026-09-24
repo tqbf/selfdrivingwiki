@@ -19,6 +19,9 @@ struct ChatTranscriptView: View {
     var zoom: Double = Double(ZoomScale.defaultScale)
     var scrollRequest: ChatWebScrollRequest? = nil
     var quoteAnchor: ChatHighlightRequest? = nil
+    /// Reader-parity link-menu actions, as host-supplied closures. `.none`
+    /// (the default) keeps the transcript's menu to the URL-only tab actions.
+    var linkMenuCapabilities: WikiLinkMenuCapabilities = .none
 
     var body: some View {
         let visibleRows = rendering.rows
@@ -35,7 +38,8 @@ struct ChatTranscriptView: View {
                     blobStore: blobStore,
                     zoom: zoom,
                     scrollRequest: scrollRequest,
-                    quoteAnchor: quoteAnchor
+                    quoteAnchor: quoteAnchor,
+                    linkMenuCapabilities: linkMenuCapabilities
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

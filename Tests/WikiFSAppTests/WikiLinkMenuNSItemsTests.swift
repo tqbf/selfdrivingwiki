@@ -195,17 +195,117 @@ struct WikiLinkMenuNSItemsTests {
         #expect(backgroundURLs == [hovered])
     }
 
-    /// External links and unresolved (`wiki://missing`) links keep WebKit's
-    /// menu — no tab actions are inserted.
-    @Test("Chat menu leaves non-wiki links to WebKit", .bug(id: 1315))
-    func chatMenuLeavesNonWikiLinksToWebKit() throws {
+    /// Right-clicking a resolved wiki link in a chat transcript with full
+    /// capabilities shows the reader's parity menu: Add Bookmark… prepended,
+    /// the URL-only tab actions after WebKit's "Open Link" (issue #1315).
+    @Test("Chat resolved link with full capabilities gains the reader menu", .bug(id: 1315))
+    func resolvedLinkGainsReaderParityMenu() throws {
+        let webView = ChatTranscriptWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        var newTabURLs: [URL] = []
+        var backgroundURLs: [URL] = []
+        webView.onOpenInNewTab = { newTabURLs.append($0) }
+        webView.onOpenInBackgroundTab = { backgroundURLs.append($0) }
+        let recorder = CapabilityRecorder()
+        webView.linkMenuCapabilities = recorder.capabilities
+        webView.hoveredLinkHref = "wiki://page?title=Alpha"
+        let menu = linkMenu()
+
+        webView.willOpenMenu(menu, with: try rightClickEvent())
+
+        #expect(menu.items.filter { !$0.isSeparatorItem }.map(\.title) == [
+            "Add Bookmark…", "Open Link", "Open in New Tab", "Open in Background",
+        ])
+        // One separator after the prepended group, one after the tab group.
+        #expect(menu.items.filter(\.isSeparatorItem).count == 2)
+
+        // Built items route through the host's closures.
+        try perform(try #require(menu.items.first { $0.title == "Add Bookmark…" }))
+        #expect(recorder.addedBookmarks.count == 1)
+    }
+
+    /// The three link kinds the composed chat menu serves, with full
+    /// capabilities: resolved links get the whole menu, unresolved links get
+    /// Suggest…, external http(s) links get Add as Source.
+    @Test("Chat menu parity per link kind", .bug(id: 1315))
+    func chatMenuParityPerLinkKind() throws {
+        let webView = ChatTranscriptWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        webView.linkMenuCapabilities = CapabilityRecorder().capabilities
+
+        webView.hoveredLinkHref = "wiki://missing?title=Ghost"
+        let missingMenu = linkMenu()
+        webView.willOpenMenu(missingMenu, with: try rightClickEvent())
+        #expect(missingMenu.items.filter { !$0.isSeparatorItem }.map(\.title)
+            == ["Suggest…", "Open Link"])
+
+        webView.hoveredLinkHref = "https://example.com/post"
+        let externalMenu = linkMenu()
+        webView.willOpenMenu(externalMenu, with: try rightClickEvent())
+        #expect(externalMenu.items.filter { !$0.isSeparatorItem }.map(\.title)
+            == ["Add as Source", "Open Link"])
+
+        webView.hoveredLinkHref = "wiki://page?title=Alpha"
+        let resolvedMenu = linkMenu()
+        webView.willOpenMenu(resolvedMenu, with: try rightClickEvent())
+        #expect(resolvedMenu.items.filter { !$0.isSeparatorItem }.map(\.title)
+            == ["Add Bookmark…", "Open Link", "Open in New Tab", "Open in Background"])
+    }
+
+    /// AC.5: the web view reads capabilities at menu-build time, so a host
+    /// that swaps the value (as `updateNSView` does on every update — e.g. an
+    /// Activity row's wiki window opening or closing) retargets the menu
+    /// without rebuilding the web view.
+    @Test("Capabilities swap between builds retargets the menu", .bug(id: 1315))
+    func capabilitySwapRetargetsMenu() throws {
+        let webView = ChatTranscriptWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        webView.hoveredLinkHref = "wiki://page?title=Alpha"
+        webView.linkMenuCapabilities = CapabilityRecorder().capabilities
+        let full = linkMenu()
+        webView.willOpenMenu(full, with: try rightClickEvent())
+        #expect(full.items.contains { $0.title == "Add Bookmark…" })
+
+        // The update path (updateNSView) re-assigns this property; the next
+        // right-click must reflect the new value, not a makeNSView snapshot.
+        webView.linkMenuCapabilities = .none
+        let none = linkMenu()
+        webView.willOpenMenu(none, with: try rightClickEvent())
+        #expect(none.items.filter { !$0.isSeparatorItem }.map(\.title)
+            == ["Open Link", "Open in New Tab", "Open in Background"])
+    }
+
+    /// Degraded host (`.none`): only the URL-only tab actions on resolved
+    /// links; missing and external links keep WebKit's plain menu.
+    @Test("Chat menu degrades to URL-only actions with no capabilities", .bug(id: 1315))
+    func chatMenuDegradesToURLOnlyActions() throws {
         let webView = ChatTranscriptWebView(frame: .zero, configuration: WKWebViewConfiguration())
 
-        for href in ["https://example.com/post", "wiki://missing?title=Ghost"] {
+        webView.hoveredLinkHref = "wiki://page?title=Alpha"
+        let resolvedMenu = linkMenu()
+        webView.willOpenMenu(resolvedMenu, with: try rightClickEvent())
+        #expect(resolvedMenu.items.filter { !$0.isSeparatorItem }.map(\.title)
+            == ["Open Link", "Open in New Tab", "Open in Background"])
+
+        for href in ["wiki://missing?title=Ghost", "https://example.com/post"] {
             webView.hoveredLinkHref = href
             let menu = linkMenu()
             webView.willOpenMenu(menu, with: try rightClickEvent())
-            #expect(menu.items.map(\.title) == ["Open Link"], "href: \(href)")
+            #expect(menu.items.filter { !$0.isSeparatorItem }.map(\.title) == ["Open Link"],
+                    "href: \(href)")
+        }
+    }
+
+    /// Non-link hrefs — same-page anchors and non-http external schemes —
+    /// keep WebKit's menu; no chat items are inserted.
+    @Test("Chat menu leaves non-link hrefs to WebKit", .bug(id: 1315))
+    func chatMenuLeavesNonLinkHrefsToWebKit() throws {
+        let webView = ChatTranscriptWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        webView.linkMenuCapabilities = CapabilityRecorder().capabilities
+
+        for href in ["wiki://anchor#section", "mailto:someone@example.com"] {
+            webView.hoveredLinkHref = href
+            let menu = linkMenu()
+            webView.willOpenMenu(menu, with: try rightClickEvent())
+            #expect(menu.items.filter { !$0.isSeparatorItem }.map(\.title) == ["Open Link"],
+                    "href: \(href)")
         }
     }
 

@@ -19,17 +19,23 @@ struct AgentQueueView: View {
     /// the store lives so the canonical `?id=` wins. `nil` degrades to a
     /// foreground `onWikiLink(url, true)` — the best a store-less host can do.
     var onWikiLinkBackground: ((URL) -> Void)? = nil
+    /// Reader-parity link-menu actions, as host-supplied closures. Defaults
+    /// to `.none`: a host with no store keeps the URL-only tab actions, whose
+    /// background open still routes through `onWikiLinkBackground` above.
+    var linkMenuCapabilities: WikiLinkMenuCapabilities = .none
 
     init(
         remoteSession: RemoteChatSession,
         showsInternals: Bool = false,
         onWikiLink: ((URL, Bool) -> Void)? = nil,
-        onWikiLinkBackground: ((URL) -> Void)? = nil
+        onWikiLinkBackground: ((URL) -> Void)? = nil,
+        linkMenuCapabilities: WikiLinkMenuCapabilities = .none
     ) {
         self.remoteSession = remoteSession
         self.showsInternals = showsInternals
         self.onWikiLink = onWikiLink
         self.onWikiLinkBackground = onWikiLinkBackground
+        self.linkMenuCapabilities = linkMenuCapabilities
     }
 
     var body: some View {
@@ -69,7 +75,8 @@ struct AgentQueueView: View {
                 transcriptID: remoteSession.chatID.chatID.map(TranscriptID.chat),
                 emptyStateMessage: "No activity yet.",
                 isStreaming: remoteSession.runState.isAnswering,
-                onIntent: handleTranscriptIntent
+                onIntent: handleTranscriptIntent,
+                linkMenuCapabilities: linkMenuCapabilities
             )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
