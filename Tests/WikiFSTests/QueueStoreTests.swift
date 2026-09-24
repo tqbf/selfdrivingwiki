@@ -112,14 +112,20 @@ struct QueueStoreTests {
             queue: .extraction, wikiID: WikiID(rawValue: "01JCASWIKI0000000000000"),
             payload: QueueItemPayload(sourceIDs: [])))
 
-        // completed requires .running; the item is .queued.
+        // completed and failed require .running; the item is .queued.
         #expect(throws: QueueStoreError.self) {
             try store.markCompleted(id: item.id)
+        }
+        #expect(throws: QueueStoreError.self) {
+            try store.markFailed(id: item.id, error: "nope")
         }
         // cancel from .queued is allowed; a SECOND cancel then throws and
         // must not touch finished_at again.
         try store.markCancelled(id: item.id)
         let cancelled = try #require(try store.getItem(item.id))
+        #expect(throws: QueueStoreError.self) {
+            try store.markCancelled(id: item.id)
+        }
         #expect(throws: QueueStoreError.self) {
             try store.requeue(id: item.id)  // requires .running
         }

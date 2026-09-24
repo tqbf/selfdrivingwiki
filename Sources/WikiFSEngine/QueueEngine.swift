@@ -829,8 +829,11 @@ public actor QueueEngine {
                 // provider resolution above was suspended. Re-check the lane's
                 // run state alongside the lifecycle so a pause landing
                 // mid-resolution cannot be raced by a claim — the item stays
-                // queued and the next `resume` re-scans.
-                guard lifecycle == .running, runStates[queue] == .running else { return }
+                // queued and the next `resume` re-scans. A lifecycle stop
+                // aborts the whole scan; a lane pause only stops THIS lane,
+                // so the other lane's queued items still get their shot.
+                guard lifecycle == .running else { return }
+                guard runStates[queue] == .running else { break }
 
                 // From here, NO await until the item is claimed and the
                 // in-memory counts are updated. This keeps the check-and-claim

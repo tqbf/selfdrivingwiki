@@ -65,7 +65,7 @@ struct QueueEngineClaimTests {
         #expect(item.state == .queued)
         #expect(recorder.executedIDs.isEmpty)
         let snapshot = await engine.snapshot()
-        #expect(snapshot.providerCounts[ProviderID(rawValue: "p1")] == nil)
+        #expect(snapshot.providerCounts.isEmpty)
 
         // The next `resume` re-scans and the item dispatches normally.
         try await engine.resume(.ingestion)
