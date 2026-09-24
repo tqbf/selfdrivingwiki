@@ -60,9 +60,12 @@ enum WikiLinkMenuNSItems {
     static func items(
         for url: URL,
         actions: [WikiLinkAction]? = nil,
-        capabilities: WikiLinkMenuCapabilities
+        capabilities: WikiLinkMenuCapabilities,
+        anchorView: NSView? = nil,
+        anchorRect: NSRect = .zero
     ) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
+        var shareIndex: Int? = nil
         for action in actions ?? WikiLinkMenuBuilder.actions(for: url) {
             switch action {
             case .addAsSource:
@@ -112,7 +115,28 @@ enum WikiLinkMenuNSItems {
                 items.append(.wikiItem("Open in Background") {
                     openInBackground(selection)
                 })
+            case .share:
+                // Share heads the bottom group. Presence needs the host's
+                // presenter AND anchor facts; the File Provider resolution
+                // itself happens at CLICK time inside the presenter — never
+                // here, so an unclicked Share… does no work (the #925 rule,
+                // one branch over). Chat targets resolve to nothing and the
+                // click is a deliberate no-op (reader parity).
+                guard let sharePresent = capabilities.sharePresent,
+                      let anchorView else { continue }
+                shareIndex = items.count
+                let shareItem = NSMenuItem.wikiItem("Share…") {
+                    sharePresent(url, anchorView, anchorRect)
+                }
+                shareItem.image = NSImage(systemSymbolName: "square.and.arrow.up",
+                                          accessibilityDescription: "Share")
+                items.append(shareItem)
             }
+        }
+        // Keep the reader's visual grouping: Share… leads the bottom group,
+        // separated from the actions under it.
+        if let shareIndex, shareIndex + 1 < items.count {
+            items.insert(NSMenuItem.separator(), at: shareIndex + 1)
         }
         return items
     }

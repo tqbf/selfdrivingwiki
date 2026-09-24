@@ -991,44 +991,24 @@ final class WikiReaderWebView: WKWebView {
             menu.removeItem(at: webKitShareIdx)
         }
 
-        // Build Share + bottom items for wiki links.
-        if url.scheme == WikiLinkMarkdown.scheme, let fp = fileProvider {
-            let shareWebView = self
-            let viewPoint = convert(event.locationInWindow, from: nil)
-
-            let shareURLTask: Task<URL?, Never>?
-            switch WikiLinkMenuNSItems.selection(for: url, store: store) {
-            case .page(let id):
-                shareURLTask = Task { await fp.resolvePageByTitleURL(id: id) }
-            case .source(let id):
-                shareURLTask = Task { await fp.resolveSourceByNameURL(id: id) }
-            case .chat:
-                // Chat sharing via File Provider URL is not yet wired — no-op.
-                shareURLTask = nil
-            default:
-                shareURLTask = nil
-            }
-
-            let customShare = NSMenuItem.wikiItem("Share…") {
-                Task { @MainActor in
-                    guard let fileURL = await shareURLTask?.value as? URL else { return }
-                    let picker = NSSharingServicePicker(items: [fileURL])
-                    let rect = NSRect(x: viewPoint.x, y: viewPoint.y, width: 1, height: 1)
-                    picker.show(relativeTo: rect, of: shareWebView, preferredEdge: .minY)
-                }
-            }
-            customShare.image = NSImage(systemSymbolName: "square.and.arrow.up",
-                                        accessibilityDescription: "Share")
-
+        // Build Share + bottom items for wiki links through the shared
+        // builder. The builder emits Share… only when the capabilities carry a
+        // presenter (a reader without a facade omits it — its File Provider
+        // resolution runs at CLICK time, not on every right-click), and
+        // unresolved links get neither Share… nor Find Similar…, so no
+        // action-less item is built (the old code inserted a dead Share… whose
+        // task resolved nil on `wiki://missing` and anchors).
+        if url.scheme == WikiLinkMarkdown.scheme {
             let bottomActions = WikiLinkMenuBuilder.bottomActions(for: url)
+            let clickPoint = convert(event.locationInWindow, from: nil)
             let bottomItems = WikiLinkMenuNSItems.items(
-                for: url, actions: bottomActions, capabilities: capabilities)
+                for: url, actions: bottomActions, capabilities: capabilities,
+                anchorView: self,
+                anchorRect: NSRect(x: clickPoint.x, y: clickPoint.y, width: 1, height: 1))
 
             // Insert at insertIdx in reverse so they appear in order.
             for item in bottomItems.reversed() { menu.insertItem(item, at: insertIdx) }
-            if !bottomItems.isEmpty { menu.insertItem(NSMenuItem.separator(), at: insertIdx) }
-            menu.insertItem(customShare, at: insertIdx)
-            collapseMenuSeparators(menu)
+            if !bottomItems.isEmpty { collapseMenuSeparators(menu) }
         } else {
             // External link: Share the URL directly.
             let shareWebView = self

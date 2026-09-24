@@ -197,7 +197,8 @@ struct WikiLinkMenuNSItemsTests {
 
     /// Right-clicking a resolved wiki link in a chat transcript with full
     /// capabilities shows the reader's parity menu: Add Bookmark… prepended,
-    /// the URL-only tab actions after WebKit's "Open Link" (issue #1315).
+    /// the URL-only tab actions after WebKit's "Open Link", then the bottom
+    /// group Share… / Find Similar… (issue #1315).
     @Test("Chat resolved link with full capabilities gains the reader menu", .bug(id: 1315))
     func resolvedLinkGainsReaderParityMenu() throws {
         let webView = ChatTranscriptWebView(frame: .zero, configuration: WKWebViewConfiguration())
@@ -214,13 +215,19 @@ struct WikiLinkMenuNSItemsTests {
 
         #expect(menu.items.filter { !$0.isSeparatorItem }.map(\.title) == [
             "Add Bookmark…", "Open Link", "Open in New Tab", "Open in Background",
+            "Share…", "Find Similar…",
         ])
-        // One separator after the prepended group, one after the tab group.
-        #expect(menu.items.filter(\.isSeparatorItem).count == 2)
+        // Separators: after the prepended group, after the tab group, and
+        // between Share… and Find Similar… (the reader's bottom grouping).
+        #expect(menu.items.filter(\.isSeparatorItem).count == 3)
 
         // Built items route through the host's closures.
         try perform(try #require(menu.items.first { $0.title == "Add Bookmark…" }))
         #expect(recorder.addedBookmarks.count == 1)
+        try perform(try #require(menu.items.first { $0.title == "Share…" }))
+        let share = try #require(recorder.shareCalls.first)
+        #expect(share.url.absoluteString == "wiki://page?title=Alpha")
+        #expect(share.view === webView)
     }
 
     /// The three link kinds the composed chat menu serves, with full
@@ -247,7 +254,8 @@ struct WikiLinkMenuNSItemsTests {
         let resolvedMenu = linkMenu()
         webView.willOpenMenu(resolvedMenu, with: try rightClickEvent())
         #expect(resolvedMenu.items.filter { !$0.isSeparatorItem }.map(\.title)
-            == ["Add Bookmark…", "Open Link", "Open in New Tab", "Open in Background"])
+            == ["Add Bookmark…", "Open Link", "Open in New Tab", "Open in Background",
+                "Share…", "Find Similar…"])
     }
 
     /// AC.5: the web view reads capabilities at menu-build time, so a host
@@ -321,6 +329,7 @@ struct WikiLinkMenuNSItemsTests {
         var searchedQueries: [String] = []
         var addedURLs: [String] = []
         var addedBookmarks: [BookmarkTargetPickerContext] = []
+        var shareCalls: [(url: URL, view: NSView, rect: NSRect)] = []
 
         private static let stubPageID = PageID(rawValue: "01JZZZZZZZZZZZZZZZZZZZZZZA")
 
@@ -336,7 +345,9 @@ struct WikiLinkMenuNSItemsTests {
                     return []
                 },
                 navigateToPage: { _ in },
-                sharePresent: nil,
+                sharePresent: { [weak self] url, view, rect in
+                    self?.shareCalls.append((url, view, rect))
+                },
                 addURL: { [weak self] in self?.addedURLs.append($0) },
                 addBookmark: { [weak self] in self?.addedBookmarks.append($0) })
         }
@@ -447,6 +458,63 @@ struct WikiLinkMenuNSItemsTests {
             Issue.record("Add Bookmark… resolved a non-page target: \(added.targets)")
         }
         #expect(recorder.resolvedSelections.map(\.absoluteString) == [resolved.absoluteString])
+    }
+
+    /// Share… heads the bottom group, separated from the actions under it,
+    /// and does NO work at menu-build time — the File Provider resolution
+    /// runs only when the item is clicked (the #925 rule, Share branch).
+    @Test("Share… builds from the capability with click-time-only work", .bug(id: 1315))
+    func shareItemBuildsWithClickTimeWork() throws {
+        let recorder = CapabilityRecorder()
+        let resolved = try url("wiki://source?title=Paper")
+        let anchorView = NSView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        let anchorRect = NSRect(x: 3, y: 4, width: 1, height: 1)
+
+        let items = WikiLinkMenuNSItems.items(
+            for: resolved, actions: WikiLinkMenuBuilder.bottomActions(for: resolved),
+            capabilities: recorder.capabilities,
+            anchorView: anchorView, anchorRect: anchorRect)
+
+        let titles = items.map { $0.isSeparatorItem ? "—" : $0.title }
+        #expect(titles == ["Share…", "—", "Find Similar…"])
+
+        // Building the menu performs no share-presenter work.
+        #expect(recorder.shareCalls.isEmpty)
+
+        try perform(try #require(items.first))
+        let call = try #require(recorder.shareCalls.first)
+        #expect(call.url == resolved)
+        #expect(call.view === anchorView)
+        #expect(call.rect == anchorRect)
+    }
+
+    /// Without a presenter, or without anchor facts, Share… is omitted rather
+    /// than shown inert; unresolved links never offer it at all.
+    @Test("Share… omitted without presenter or anchor facts", .bug(id: 1315))
+    func shareItemOmission() throws {
+        let resolved = try url("wiki://source?title=Paper")
+        let recorder = CapabilityRecorder()
+
+        // No presenter → only Find Similar… survives, with no orphaned divider.
+        var caps = recorder.capabilities
+        caps.sharePresent = nil
+        let noPresenter = WikiLinkMenuNSItems.items(
+            for: resolved, actions: [.share, .findSimilar], capabilities: caps,
+            anchorView: NSView())
+        #expect(noPresenter.map { $0.isSeparatorItem ? "—" : $0.title } == ["Find Similar…"])
+
+        // Presenter but no anchor view → the picker has nowhere to anchor.
+        #expect(WikiLinkMenuNSItems.items(
+            for: resolved, actions: [.share], capabilities: recorder.capabilities
+        ).isEmpty)
+
+        // Unresolved links: bottomActions carries no .share, so the dead
+        // Share… item the reader once built on wiki://missing is gone.
+        let missing = try url("wiki://missing?title=Ghost")
+        #expect(WikiLinkMenuNSItems.items(
+            for: missing, actions: WikiLinkMenuBuilder.bottomActions(for: missing),
+            capabilities: recorder.capabilities, anchorView: NSView()
+        ).isEmpty)
     }
 
     @Test func menuConstructionReturnsSearchingPlaceholder() throws {

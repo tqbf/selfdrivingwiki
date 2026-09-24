@@ -32,12 +32,26 @@ struct WikiLinkMenuBuilderTests {
         == [.addBookmark])
   }
 
-  @Test func resolvedPageBottomActionsAreFindSimilar() {
-    #expect(WikiLinkMenuBuilder.bottomActions(for: url("wiki://page?title=Foo")) == [.findSimilar])
+  @Test func resolvedPageBottomActionsAreShareThenFindSimilar() {
+    // Share… heads the bottom group (its File Provider resolution runs at
+    // click time), followed by Find Similar….
+    #expect(
+      WikiLinkMenuBuilder.bottomActions(for: url("wiki://page?title=Foo"))
+        == [.share, .findSimilar])
   }
 
-  @Test func resolvedSourceBottomActionsAreFindSimilar() {
-    #expect(WikiLinkMenuBuilder.bottomActions(for: url("wiki://source?title=Bar")) == [.findSimilar])
+  @Test func resolvedSourceBottomActionsAreShareThenFindSimilar() {
+    #expect(
+      WikiLinkMenuBuilder.bottomActions(for: url("wiki://source?title=Bar"))
+        == [.share, .findSimilar])
+  }
+
+  @Test func resolvedChatBottomActionsIncludeNoOpShare() {
+    // Chat targets have no File Provider URL yet; the Share… item is still
+    // offered (parity with the reader, whose chat Share click also no-ops).
+    #expect(
+      WikiLinkMenuBuilder.bottomActions(for: url("wiki://chat?title=Assistant"))
+        == [.share, .findSimilar])
   }
 
   @Test func missingLinkHasNoBottomActions() {

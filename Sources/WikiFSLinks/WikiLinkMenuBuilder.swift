@@ -44,6 +44,13 @@ public enum WikiLinkAction: Sendable, Equatable {
     /// context menu. Not offered for unresolved (`wiki://missing`) links (no
     /// existing id to file) or external links. Issue #188.
     case addBookmark
+    /// Resolved wiki link — share the target through the system sharing
+    /// picker. For pages and sources the host resolves a File Provider URL at
+    /// CLICK time; chat targets have no File Provider URL yet, so their Share…
+    /// click is a deliberate no-op (reader parity). Never offered for
+    /// unresolved links (nothing to share) or external links (which keep the
+    /// host's raw-URL Share).
+    case share
 }
 
 public enum WikiLinkMenuBuilder {
@@ -80,13 +87,15 @@ public enum WikiLinkMenuBuilder {
         }
     }
 
-    /// Actions for the bottom section (inserted before the Share item, below
-    /// WebKit's Open/Copy Link items). Currently only resolved wiki links get
-    /// "Find Similar…" here.
+    /// Actions for the bottom section (Share… first, then the rest, below
+    /// WebKit's Open/Copy Link items). Resolved wiki links — including chat
+    /// links, whose Share click no-ops until chat sharing is wired — get
+    /// "Share…" and "Find Similar…"; unresolved and external links get
+    /// nothing, so no action-less item is ever built.
     public static func bottomActions(for url: URL) -> [WikiLinkAction] {
         guard url.scheme == WikiLinkMarkdown.scheme,
               WikiLinkMarkdown.resolvedKind(from: url) != nil else { return [] }
-        return [.findSimilar]
+        return [.share, .findSimilar]
     }
 
 }
