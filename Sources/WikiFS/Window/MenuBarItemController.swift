@@ -62,18 +62,22 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// the icon leaves the working state, so it consumes no CPU when idle.
     private var animationTask: Task<Void, Never>?
     private var hasFailedItems = false
-    private var isPaused = false
+    /// Per-lane paused truth (Phase 6): lanes pause independently, and the
+    /// tooltip/menu must name WHICH lane is paused instead of a bare global
+    /// flag.
+    private var pausedLanes: Set<QueueKind> = []
     private var lastSnapshot: QueueSnapshot = QueueSnapshot()
-    /// Queue item IDs known to be `.queued`, maintained synchronously from
-    /// queue events (#1222). Every `.enqueued` inserts and every terminal
-    /// event removes, so the blinker reacts to the event the controller
-    /// actually received instead of waiting on an async snapshot RPC.
-    private var queuedItemIDs: Set<QueueItem.ID> = []
-    /// Queue item IDs known to be `.running` (`.started` → insert, terminal
-    /// event → remove). Split from ``queuedItemIDs`` so the tooltip's
+    /// Per-lane event-maintained membership: items known to be `.queued`
+    /// (Phase 6 — keyed by `QueueKind` so the tooltip and menu can report
+    /// per-lane facts). Every `.enqueued` inserts and every terminal event
+    /// removes, so the blinker reacts to the event the controller actually
+    /// received instead of waiting on an async snapshot RPC (#1222).
+    private var queuedItems: [QueueKind: Set<QueueItem.ID>] = [:]
+    /// Per-lane items known to be `.running` (`.started` → insert, terminal
+    /// event → remove). Split from ``queuedItems`` so the tooltip's
     /// "Processing (N active, M queued)" counts are consistent with the icon
     /// state by construction.
-    private var runningItemIDs: Set<QueueItem.ID> = []
+    private var runningItems: [QueueKind: Set<QueueItem.ID>] = [:]
     /// Bumped on every event-driven membership change. Snapshot refresh tasks
     /// capture the epoch when the fetch starts and discard the result if the
     /// epoch moved while the RPC was in flight — a snapshot taken BEFORE an
@@ -200,8 +204,9 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // #1222: drop the event-maintained membership so a restarted
         // controller re-seeds from its own initial snapshot instead of
         // inheriting stale activity.
-        queuedItemIDs.removeAll()
-        runningItemIDs.removeAll()
+        queuedItems.removeAll()
+        runningItems.removeAll()
+        pausedLanes.removeAll()
         membershipEpoch &+= 1
         lastDerivedIconState = nil
         if let item = statusItem {
@@ -644,16 +649,15 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             state = .daemonDown
         } else if hasFailedItems {
             state = .attention
-        } else if isPaused {
+        } else if !pausedLanes.isEmpty {
             state = .paused
-        } else if !queuedItemIDs.isEmpty || !runningItemIDs.isEmpty {
+        } else if hasLaneActivity {
             state = .working
         } else {
             state = .idle
         }
         lastDerivedIconState = state
         statusItem?.button?.toolTip = tooltipText(for: state)
-
         // While working, breathe the books glyph between its outline and
         // filled forms so the menu bar shows live progress without opening
         // the Activity window. Every other state is a static glyph; leaving
@@ -666,26 +670,59 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// Observability accessor (tests): the tooltip text the controller last
+    /// set on the status item. Phase 6 asserts per-lane facts through this.
+    var currentTooltipText: String? {
+        statusItem?.button?.toolTip
+    }
+
     private func tooltipText(for state: IconState) -> String {
         switch state {
         case .idle: return "Self Driving Wiki — Idle"
         case .working:
-            // #1222: counts come from the event-maintained membership sets so
-            // the tooltip always agrees with the blinker — even in the window
-            // before a snapshot RPC returns (or when it returned stale data).
-            let running = runningItemIDs.count
-            let queued = queuedItemIDs.count
-            if running > 0 && queued > 0 {
-                return "Self Driving Wiki — Processing (\(running) active, \(queued) queued)"
-            } else if running > 0 {
-                return "Self Driving Wiki — Processing (\(running) active)"
-            } else {
-                return "Self Driving Wiki — \(queued) item\(queued == 1 ? "" : "s") queued"
+            // Phase 6: per-lane facts — a paused lane under an active one is
+            // NAMED, not masked by a global aggregate. Lanes with no activity
+            // and no pause are omitted.
+            let lines = activeLaneLines
+            if lines.isEmpty {
+                return "Self Driving Wiki — Idle"
             }
-        case .paused: return "Self Driving Wiki — Paused"
+            return "Self Driving Wiki — " + lines.joined(separator: " · ")
+        case .paused: return "Self Driving Wiki — " + activeLaneLines.joined(separator: " · ")
         case .attention: return "Self Driving Wiki — Attention needed"
         case .daemonDown: return "Self Driving Wiki — wikid daemon not running (local fallback)"
         }
+    }
+
+    /// Per-lane tooltip/menu lines ("Extraction: paused (2 waiting) ·
+    /// Ingestion: running (1)"), computed from the event-maintained per-lane
+    /// membership so the tooltip always agrees with the blinker (#1222 +
+    /// Phase 6).
+    private var activeLaneLines: [String] {
+        var lines: [String] = []
+        for lane in [QueueKind.extraction, QueueKind.ingestion] {
+            let running = runningItems[lane]?.count ?? 0
+            let queued = queuedItems[lane]?.count ?? 0
+            let lanePaused = pausedLanes.contains(lane)
+            guard running > 0 || queued > 0 || lanePaused else { continue }
+            if lanePaused {
+                lines.append("\(lane.canonical.rawValue.capitalized): paused (\(queued) waiting)")
+            } else if running > 0 && queued > 0 {
+                lines.append("\(lane.canonical.rawValue.capitalized): running (\(running) active, \(queued) queued)")
+            } else if running > 0 {
+                lines.append("\(lane.canonical.rawValue.capitalized): running (\(running) active)")
+            } else {
+                lines.append("\(lane.canonical.rawValue.capitalized): \(queued) queued")
+            }
+        }
+        return lines
+    }
+
+    /// Whether ANY lane has queued or running work (the working-state
+    /// decision), computed from per-lane membership.
+    private var hasLaneActivity: Bool {
+        queuedItems.values.contains { !$0.isEmpty }
+            || runningItems.values.contains { !$0.isEmpty }
     }
 
     // MARK: - Working-state animation
@@ -738,10 +775,17 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// truth without ever letting a stale snapshot override event truth.
     private func handleEvent(_ event: QueueEvent) {
         switch event {
-        case .runStateChanged(_, let state):
+        case .runStateChanged(let lane, let state):
+            // Phase 6: per-lane pause truth. The paused/running decision and
+            // the tooltip must name the lane, not a global aggregate.
             if state == .paused {
-                isPaused = true
+                pausedLanes.insert(lane)
+                updateIcon()
             } else {
+                pausedLanes.remove(lane)
+                // Re-derive synchronously: the guarded snapshot refresh below
+                // may park on an RPC; the lane's resume is event truth.
+                updateIcon()
                 refreshSnapshotGuarded(recomputesPaused: true)
                 return
             }
@@ -781,15 +825,15 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             // reply (or one racing the daemon's immediate dispatch) left the
             // icon idle even though the user just saw the "Lint queued"
             // hint.
-            queuedItemIDs.insert(item.id)
-            runningItemIDs.remove(item.id)
+            queuedItems[item.queue, default: []].insert(item.id)
+            runningItems[item.queue]?.remove(item.id)
             noteMembershipChanged()
             return
         case .started(let item):
             // Move the item queued → running on the event itself, then let
             // the guarded refresh reconcile `lastSnapshot`.
-            queuedItemIDs.remove(item.id)
-            runningItemIDs.insert(item.id)
+            queuedItems[item.queue]?.remove(item.id)
+            runningItems[item.queue, default: []].insert(item.id)
             noteMembershipChanged()
             return
         case .reordered:
@@ -812,14 +856,22 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Membership + guarded snapshot refresh (#1222)
 
-    /// Remove an item from the active membership sets. Returns whether the
-    /// membership actually changed, so terminal handlers only spawn a
-    /// refresh (and bump the epoch) when needed.
+    /// Remove an item from the per-lane active membership. Returns whether
+    /// the membership actually changed, so terminal handlers only spawn a
+    /// refresh (and bump the epoch) when needed. Falls back to a scan across
+    /// all lanes when the item's lane is unknown.
     @discardableResult
-    private func removeMembership(itemID: QueueItem.ID) -> Bool {
-        let removedQueued = queuedItemIDs.remove(itemID) != nil
-        let removedRunning = runningItemIDs.remove(itemID) != nil
-        return removedQueued || removedRunning
+    private func removeMembership(itemID: QueueItem.ID, lane: QueueKind? = nil) -> Bool {
+        if let lane {
+            let removedQueued = queuedItems[lane]?.remove(itemID) != nil
+            let removedRunning = runningItems[lane]?.remove(itemID) != nil
+            return removedQueued || removedRunning
+        }
+        var changed = false
+        for lane in [QueueKind.extraction, QueueKind.ingestion] {
+            changed = removeMembership(itemID: itemID, lane: lane) || changed
+        }
+        return changed
     }
 
     /// Bump the membership epoch, spawn a guarded snapshot refresh, and
@@ -870,7 +922,9 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             guard let snapshot = await self.queueSnapshot() else { return }
             guard epochAtFetch == self.membershipEpoch else { return }
             if recomputesPaused {
-                self.isPaused = snapshot.runStates.values.contains(.paused)
+                self.pausedLanes = Set(snapshot.runStates.filter {
+                    $0.value == .paused
+                }.map(\.key))
             }
             self.lastSnapshot = snapshot
             self.applySnapshotMembership(from: snapshot)
@@ -885,17 +939,17 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// lost. `activeItems` contains only non-terminal items; anything not
     /// `.running` counts toward the queued side.
     private func applySnapshotMembership(from snapshot: QueueSnapshot) {
-        var queued: Set<QueueItem.ID> = []
-        var running: Set<QueueItem.ID> = []
+        var queued: [QueueKind: Set<QueueItem.ID>] = [:]
+        var running: [QueueKind: Set<QueueItem.ID>] = [:]
         for item in snapshot.activeItems {
             if item.state == .running {
-                running.insert(item.id)
+                running[item.queue, default: []].insert(item.id)
             } else {
-                queued.insert(item.id)
+                queued[item.queue, default: []].insert(item.id)
             }
         }
-        queuedItemIDs = queued
-        runningItemIDs = running
+        queuedItems = queued
+        runningItems = running
     }
 
     // MARK: - Transient hint

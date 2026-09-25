@@ -206,14 +206,56 @@ struct MenuBarItemLintBlinkerTests {
         return QueueEngine(store: store, workerFactory: factory)
     }
 
+    // MARK: - Per-lane truth (Phase 6)
+
+    /// Mixed lanes: ingestion RUNNING while extraction is PAUSED with a
+    /// queued item. The precedence stays paused-first (a paused lane must
+    /// not be masked), but the tooltip NAMES each lane's facts — the paused
+    /// extraction lane is explicit, not a bare "Paused".
+    @Test("Mixed lanes: paused extraction is named alongside running ingestion")
+    func mixedLaneTooltipNamesEachLane() async throws {
+        let engine = GatedSnapshotEngine()
+        let controller = makeController(engine: engine)
+        controller.start()
+        defer { controller.stop() }
+        _ = await waitUntil { controller.lastDerivedIconState == .idle }
+
+        engine.yield(.started(makeLintItem(
+            state: .running, queue: .ingestion, id: "01992222-mixed-ingestion")))
+        engine.yield(.runStateChanged(queue: .extraction, state: .paused))
+        engine.yield(.enqueued(makeLintItem(
+            state: .queued, queue: .extraction, id: "01992222-mixed-extraction")))
+
+        // Paused precedence wins the icon (unchanged), and the tooltip names
+        // BOTH lanes: the paused extraction lane with its waiting count, and
+        // the running ingestion lane.
+        let pausedSettled = await waitUntil {
+            controller.lastDerivedIconState == .paused
+                && controller.currentTooltipText?.contains("Extraction: paused (1 waiting)") == true
+        }
+        #expect(pausedSettled, "the tooltip must name the paused extraction lane")
+        let tooltip = try #require(controller.currentTooltipText)
+        #expect(tooltip.contains("Ingestion: running (1 active)"))
+
+        // Resume extraction: the paused line disappears and the working
+        // state takes over (both lanes active).
+        engine.yield(.runStateChanged(queue: .extraction, state: .running))
+        let working = await waitUntil { controller.lastDerivedIconState == .working }
+        #expect(working)
+        let resumedTooltip = try #require(controller.currentTooltipText)
+        #expect(!resumedTooltip.contains("paused"))
+        #expect(resumedTooltip.contains("Extraction:"))
+    }
+
     private func makeLintItem(
         state: QueueItemState,
+        queue: QueueKind = .ingestion,
         id: String = "01992222-lint-item",
         lintPageIDs: [PageID] = [PageID(rawValue: "lint-page-1")]
     ) -> QueueItem {
         QueueItem(
             id: QueueItemID(rawValue: id),
-            queue: .ingestion,
+            queue: queue,
             wikiID: wikiID,
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: lintPageIDs),
             state: state,
