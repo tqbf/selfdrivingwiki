@@ -342,4 +342,17 @@ public struct QueueEngineConfig: Sendable {
         }
         return remoteExtractionLimit
     }
+
+    /// The configuration a daemon-hosted engine runs with: per-provider
+    /// ingestion limits mapped straight from `AgentProvidersConfig
+    /// .maxConcurrent` (same key space — provider ids), and everything else
+    /// at this struct's named defaults. `WikiDaemon.buildQueueResources` is
+    /// private and cannot be behavior-tested directly, so the mapping lives
+    /// here: configured limits must actually reach the engine, and a test
+    /// pins both the mapping and the defaults.
+    public static func daemonConfig(agents: AgentProvidersConfig) -> QueueEngineConfig {
+        var config = QueueEngineConfig()
+        config.ingestionLimits = agents.maxConcurrent
+        return config
+    }
 }

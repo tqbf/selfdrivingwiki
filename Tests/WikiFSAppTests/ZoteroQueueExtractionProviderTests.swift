@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import Synchronization
 import Testing
 import WikiFSCore
 import WikiFSTypes
@@ -483,6 +484,45 @@ struct ZoteroQueueExtractionProviderTests {
             return
         }
         #expect(bytes.sourceBytes == pdfBytes)
+    }
+
+    // MARK: - Engine wakeup (Tier 1 Phase 4)
+
+    /// With the engine-enqueue seam injected, a follow-on format route goes
+    /// THROUGH the engine — the closure receives the request (and the
+    /// engine's dispatch scan runs) without needing any other engine event.
+    /// The store-only fallback is not used.
+    @Test func followOnEnqueueWakesTheEngineWhenTheSeamIsInjected() async throws {
+        let executor = FakeZoteroExecutor(
+            outputBytes: Data("%PDF-1.4\n".utf8),
+            resultMIMEType: try ExtractorMIMEType(validating: "application/pdf"),
+            identifier: "WAKE01")
+        let (queueStore, _) = try makeFollowOnQueueStore()
+        defer { queueStore.close() }
+
+        let recorded = Mutex<[QueueItemRequest]>([])
+        let provider = DaemonQueueExtractionProvider(
+            extractionServices: try await makeServices(executor: executor),
+            storeResolver: { _ in nil },
+            queueStore: queueStore,
+            engineEnqueue: { request in
+                var seen = recorded.withLock { $0 }
+                seen.append(request)
+                recorded.withLock { $0 = seen }
+                return QueueItemID(rawValue: "01JWAKEDINSERT00000000000")
+            })
+
+        let sourceID = SourceID(rawValue: "01JWAKESOURCE00000000000")
+        try await provider.enqueueFollowOnExtraction(
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID)
+
+        let requests = recorded.withLock { $0 }
+        #expect(requests.count == 1)
+        #expect(requests.first?.queue == QueueKind.extraction)
+        #expect(requests.first?.wikiID == WikiID(rawValue: "w"))
+        #expect(requests.first?.payload.sourceIDs == [sourceID])
+        // The engine route means the bare store row was never written.
+        #expect(try queueStore.loadActive(for: .extraction).isEmpty)
     }
 }
 #endif

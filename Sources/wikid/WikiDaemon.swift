@@ -984,7 +984,20 @@ final class WikiDaemon: @unchecked Sendable {
                 _ = await self.openStore(wikiID: wikiID)
                 return self.preparedStoreIfAvailable(wikiID: wikiID) != nil
             },
-            queueStore: queueStore)
+            queueStore: queueStore,
+            // Follow-on format routes enqueue through the engine so their
+            // dispatch scan runs immediately (no wait for an unrelated
+            // engine event to notice the bare store row).
+            engineEnqueue: { [weak self] request in
+                guard let self else {
+                    // The daemon went away mid-follow-on; surface it as the
+                    // cancellation it effectively is.
+                    throw CancellationError()
+                }
+                return try await self.performQueueOperation { engine in
+                    try await engine.enqueue(request)
+                }.value
+            })
         let dir = containerDirectory
         let ingestionProvider = DaemonQueueIngestionProvider(
             containerDirectory: dir,
@@ -1034,10 +1047,17 @@ final class WikiDaemon: @unchecked Sendable {
             .extraction: extractionFactory,
             .ingestion: ingestionFactory,
         ])
+        // Real limits: configured AgentProvidersConfig.maxConcurrent must
+        // actually reach the engine's ingestion admission (see
+        // QueueEngineConfig.daemonConfig(agents:) for the mapping and its
+        // tests); extraction stays at the named defaults.
+        let engineConfig = QueueEngineConfig.daemonConfig(
+            agents: AgentProvidersConfig.loadOrSeed(from: containerDirectory))
         let engine: QueueEngine
         if let tools = runtime.tools {
             engine = QueueEngine(
                 store: queueStore,
+                config: engineConfig,
                 workerFactory: workerFactory,
                 workerExecutor: CordisQueueWorkerExecutor(runtime: tools),
                 outputChannel: outputChannel)
@@ -1045,6 +1065,7 @@ final class WikiDaemon: @unchecked Sendable {
             // The synchronous daemon initializer is test/compatibility-only.
             engine = QueueEngine(
                 store: queueStore,
+                config: engineConfig,
                 workerFactory: workerFactory,
                 outputChannel: outputChannel)
         }
