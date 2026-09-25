@@ -1,10 +1,19 @@
-# 2026-09-24 — Queue Engine Hardening (Tier 0 + Tier 1, all six phases)
+---
+timestamp: 2026-09-24T120000Z
+title: Queue engine hardening (Tier 0 + Tier 1, all six phases)
+branch: feature/queue-per-lane-status
+status: complete
+---
+
+# Queue engine hardening (Tier 0 + Tier 1, all six phases)
+
+## Progress
 
 Implements [`plans/queue-engine-hardening.md`](../plans/queue-engine-hardening.md)
 (committee consensus, 2026-09-24). Six phases, one branch + PR each, stacked
 in order. The operator owns every merge.
 
-## Branches (in merge order)
+### Branches (in merge order)
 
 1. `bugfix/queue-claim-correctness` — pause-race-proof claims, stranded-claim
    repair, CAS store transitions, one-shot `getItem` test seam. Review
@@ -23,17 +32,31 @@ in order. The operator owns every merge.
    deficit accounting in `finishAdmission`). Review follow-up commit closes
    two HIGH findings: queued-item cancels now resume their waiters, and a
    halted dispatch's late settlement no longer releases a sibling's capacity
-   (`releaseDeferredByRebuild`). Also carries the Phase 4 commit.
+   (`releaseDeferredByRebuild`). Also carries the Phase 4 commit
+   (daemon config mapping + follow-on engine wakeup + `try?` guard).
 4. `feature/queue-per-lane-status` — per-lane menu-bar truth: per-lane
    membership dictionaries, per-lane pause tracking, tooltip lines naming
    each lane, synchronous icon re-derivation on lane resume. Also carries
-   the Phase 5 commit (admission status + `wikictl queue` verbs).
+   the Phase 5 commit (durable admission status + `wikictl queue` verbs)
+   and the test-fix commit (admission-test subscription race; migration
+   fixture schema delta for v10).
 
 Note on PR stacking: Phases 3–5 sit on the Phase 2 branch, and Phase 6
 sits on Phase 3 — merge in the listed order. PR #1321 (paused-lane
 visibility) merges independently; Phase 6's `MenuBarItemController` changes
 were written against main and will need a rebase over #1321 (both reshape
 the same icon/tooltip derivation).
+
+### Decisions recorded
+
+- Cancellation contract: cooperative cancellation accepted and documented
+  (extraction is manifest-deadline-bounded; ingestion settles via ACP
+  launcher cancellation) instead of a cancel-path deadline race.
+- Admission status is two nullable columns, not a new item state.
+- Waiter truth: a lost terminal-transition race means waiters learn the
+  item's terminal state (cancellation), not the worker's raw outcome.
+- Known follow-ups are listed in the design note (admission re-check on
+  catalog/credential changes; orphan-on-store-I/O-failure; deferred tiers).
 
 ## Verification
 

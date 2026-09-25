@@ -211,7 +211,8 @@ struct QueueEngineClaimTests {
         // cleared, then the scan re-records them for items whose route STILL
         // resolves to nil (a fresh checked-at timestamp). The item stays
         // queued — and the second progress line proves the clear + re-record
-        // cycle ran.
+        // cycle ran. Delivery is asynchronous (broadcaster buffering), so
+        // poll with a generous starvation budget instead of asserting once.
         try await engine.resume(.ingestion)
         // The resume scan's store write and its progress emission both race a
         // zero-wait read under parallel-suite load; settle like the enqueue
@@ -221,6 +222,10 @@ struct QueueEngineClaimTests {
         #expect(after.state == .queued)
         #expect(after.admissionReason == QueueAdmissionReason.noExtractorRoute)
         #expect(after.admissionCheckedAt != nil)
+        let reRecordDeadline = Date().addingTimeInterval(30)
+        while progressLines.lines(for: itemID).count < 2 && Date() < reRecordDeadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
         #expect(progressLines.lines(for: itemID).count == 2)
 
         eventsTask.cancel()
