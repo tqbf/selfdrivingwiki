@@ -359,7 +359,9 @@ public actor QueueEngine {
         emit(.runStateChanged(queue: queue, state: .paused))
     }
 
-    /// Resume a queue: restart dispatch. Persists the run state.
+    /// Resume a queue: restart dispatch. Persists the run state. Recorded
+    /// admission blockers on this lane's queued items are cleared first — a
+    /// resume is the operator saying "re-check admission now".
     public func resume(_ queue: QueueKind) async throws {
         try requireRunning()
         runStates[queue] = .running
@@ -367,6 +369,11 @@ public actor QueueEngine {
             try store.setQueueRunState(queue, .running)
         } catch {
             DebugLog.store("QueueEngine: failed to persist resume state for \(queue): \(error)")
+        }
+        do {
+            _ = try store.clearAdmissionWaitForQueue(queue)
+        } catch {
+            DebugLog.store("QueueEngine: failed to clear admission status for \(queue): \(error)")
         }
         emit(.runStateChanged(queue: queue, state: .running))
         await dispatchScan()
@@ -935,7 +942,22 @@ public actor QueueEngine {
             for item in active where item.state == .queued {
                 // The ONE await — resolve the provider up front.
                 guard let providerID = await workerFactory.providerID(for: item) else {
-                    continue  // No provider available; item stays queued.
+                    // No route: record the durable admission status so the
+                    // forever-queued item carries a visible, persisted reason
+                    // (Activity chip + `wikictl job`), and surface it on the
+                    // progress trail. Re-record only when the reason changed —
+                    // scans run on every event; the row write and the progress
+                    // line must not.
+                    if item.admissionReason != QueueAdmissionReason.noExtractorRoute {
+                        do {
+                            try store.recordAdmissionWait(
+                                id: item.id, reason: QueueAdmissionReason.noExtractorRoute)
+                        } catch {
+                            DebugLog.store("QueueEngine.dispatchScan: admission record failed for \(item.id.rawValue): \(error)")
+                        }
+                        emit(.progress(item.id, line: QueueAdmissionReason.noExtractorRouteProgressLine))
+                    }
+                    continue
                 }
                 // Actors are reentrant: `pause()` may have run while the
                 // provider resolution above was suspended. Re-check the lane's

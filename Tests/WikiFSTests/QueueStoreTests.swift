@@ -60,6 +60,54 @@ struct QueueStoreTests {
         #expect(items.first?.state == .failed)
     }
 
+    @Test func preMigrationRowDecodesWithNilAdmissionFields() throws {
+        // Simulate a pre-v10 database: create with the current migrator, then
+        // remove the admission columns AND the v10 migration record so a
+        // reopen re-runs v10 against a populated row.
+        let url = tempDatabaseURL()
+        let store = try QueueStore(databaseURL: url)
+        let item = try store.enqueue(QueueItemRequest(
+            queue: .extraction, wikiID: WikiID(rawValue: "01JADMWIKI0000000000000"),
+            payload: QueueItemPayload(sourceIDs: [])))
+        store.close()
+
+        try openRawQueueDatabase(at: url, statements: [
+            "ALTER TABLE queue_items DROP COLUMN admission_reason;",
+            "ALTER TABLE queue_items DROP COLUMN admission_checked_at;",
+            "DELETE FROM grdb_migrations WHERE identifier = 'v10_add_admission_status';",
+        ])
+
+        let reopened = try QueueStore(databaseURL: url)
+        let decoded = try #require(try reopened.getItem(item.id))
+        #expect(decoded.state == .queued)
+        #expect(decoded.admissionReason == nil)
+        #expect(decoded.admissionCheckedAt == nil)
+        reopened.close()
+    }
+
+    /// Runs raw SQL statements against the queue database with plain SQLite3
+    /// (no migrations, no store) — schema-surgery fixtures.
+    private func openRawQueueDatabase(at url: URL, statements: [String]) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else {
+            throw QueueStoreError.open("cannot open \(url.path)")
+        }
+        defer { sqlite3_close(db) }
+        for sql in statements {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK,
+                  let stmt
+            else {
+                throw QueueStoreError.open(
+                    "prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+            }
+            // Step to completion; finalize (the defer) resets the statement —
+            // no handle survives this method (repo sqlite-concurrency rule).
+            while sqlite3_step(stmt) == SQLITE_ROW {}
+            sqlite3_finalize(stmt)
+        }
+    }
+
     // MARK: - Compare-and-set transitions (AC.3)
 
     @Test func markRunningCASRejectsSecondClaimAndChangesNothing() throws {

@@ -672,6 +672,27 @@ public enum CLIReference {
                         "writes them.",
                     ]),
             ]),
+        CLIFamily(
+            name: "queue",
+            summary: "per-lane queue truth and lane controls over the live daemon",
+            leaves: [
+                CLILeaf(
+                    "status", summary: "per-lane run state and counts, including items waiting for a route",
+                    commandLine: "status [--json]",
+                    options: [CLIOption("--json", summary: "print JSON instead of TSV")]),
+                CLILeaf(
+                    "pause", summary: "pause one queue lane (new items stop dispatching; in-flight items finish)",
+                    commandLine: "pause --lane <extraction|ingestion>",
+                    options: [CLIOption("--lane <lane>", required: true, summary: "the queue lane (extraction|ingestion)")]),
+                CLILeaf(
+                    "resume", summary: "resume one queue lane and re-check recorded admission blockers",
+                    commandLine: "resume --lane <extraction|ingestion>",
+                    options: [CLIOption("--lane <lane>", required: true, summary: "the queue lane (extraction|ingestion)")]),
+                CLILeaf(
+                    "halt", summary: "pause one queue lane and return its in-flight items to queued",
+                    commandLine: "halt --lane <extraction|ingestion>",
+                    options: [CLIOption("--lane <lane>", required: true, summary: "the queue lane (extraction|ingestion)")]),
+            ]),
     ]
 
     // MARK: - Lookup helpers

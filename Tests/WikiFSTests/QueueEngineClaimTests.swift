@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import WikiFSEngine
 @testable import WikiFSCore
@@ -156,6 +157,82 @@ struct QueueEngineClaimTests {
         }
 
         store.close()
+    }
+
+    // MARK: - Durable admission status (AC.8)
+
+    @Test func nilRouteRecordsAdmissionStatusAndResumeClearsIt() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let recorder = FakeWorkerRecorder()
+        // No provider route ever resolves for this item.
+        let factory = FakeWorkerFactory(
+            providerID: { _ in nil },
+            worker: { item in recorder.record(item.id) })
+        let engine = QueueEngine(
+            store: store,
+            config: QueueEngineConfig(ingestionLimits: ["p1": 1]),
+            workerFactory: factory)
+
+        // Collect progress events to assert the surfaced trail line.
+        let progressLines = AdmissionProgressRecorder()
+        let eventsTask = Task {
+            for await event in engine.events {
+                if case .progress(let id, let line) = event {
+                    progressLines.record(id: id, line: line)
+                }
+            }
+        }
+        await engine.start()
+
+        let itemID = try await engine.enqueue(QueueItemRequest(
+            queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        // The forever-queued item now carries a durable, visible reason.
+        let item = try #require(try store.getItem(itemID))
+        #expect(item.state == .queued)
+        #expect(item.admissionReason == QueueAdmissionReason.noExtractorRoute)
+        #expect(item.admissionCheckedAt != nil)
+        #expect(progressLines.lines(for: itemID).contains(
+            QueueAdmissionReason.noExtractorRouteProgressLine))
+
+        // Re-scans must not duplicate the record or the progress line: poke
+        // another scan and assert the recorded line count is unchanged.
+        _ = try await engine.enqueue(QueueItemRequest(
+            queue: .ingestion, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(progressLines.lines(for: itemID).count == 1)
+
+        // Resume re-checks admission: the lane's recorded blockers are
+        // cleared, then the scan re-records them for items whose route STILL
+        // resolves to nil (a fresh checked-at timestamp). The item stays
+        // queued — and the second progress line proves the clear + re-record
+        // cycle ran.
+        try await engine.resume(.ingestion)
+        let after = try #require(try store.getItem(itemID))
+        #expect(after.state == .queued)
+        #expect(after.admissionReason == QueueAdmissionReason.noExtractorRoute)
+        #expect(after.admissionCheckedAt != nil)
+        #expect(progressLines.lines(for: itemID).count == 2)
+
+        eventsTask.cancel()
+        store.close()
+    }
+}
+
+/// Collects `.progress` lines per item for trail assertions.
+private final class AdmissionProgressRecorder: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock(
+        initialState: [QueueItem.ID: [String]]())
+
+    func record(id: QueueItem.ID, line: String) {
+        lock.withLock { state in
+            state[id, default: []].append(line)
+        }
+    }
+
+    func lines(for id: QueueItem.ID) -> [String] {
+        lock.withLock { $0[id] ?? [] }
     }
 }
 

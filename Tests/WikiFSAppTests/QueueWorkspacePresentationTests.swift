@@ -28,6 +28,35 @@ import WikiFSEngine
             text: "Failed", symbol: "exclamationmark.triangle.fill", style: .failure))
         #expect(QueueWorkspaceStatus.cancelled() == QueueWorkspaceStatus(
             text: "Cancelled", symbol: "xmark.circle", style: .secondary))
+        // Durable admission blocker: a queued item with a recorded reason
+        // renders the "Waiting for route" chip, not a bare "Queued".
+        let waiting = QueueWorkspaceStatus.waitingForRoute(
+            reason: QueueAdmissionReason.noExtractorRoute)
+        #expect(waiting.style == .warning)
+        #expect(waiting.text == "Waiting for route — no-extractor-route")
+    }
+
+    @Test func queuedItemWithAdmissionReasonMapsToWaitingForRouteChip() {
+        var item = QueueItem(
+            id: QueueItemID(rawValue: "01JADMCHIP000000000000000"),
+            queue: .ingestion,
+            wikiID: WikiID(rawValue: "01JADMCHIPWIKI00000000000"),
+            payload: QueueItemPayload(sourceIDs: []),
+            state: .queued,
+            orderingKey: 1_000,
+            attempt: 0,
+            createdAt: 0)
+        #expect(QueueWorkspaceMapper.status(for: item) == QueueWorkspaceStatus.queued())
+
+        item.admissionReason = QueueAdmissionReason.noExtractorRoute
+        item.admissionCheckedAt = 42
+        let status = QueueWorkspaceMapper.status(for: item)
+        #expect(status.style == .warning)
+        #expect(status.text == "Waiting for route — no-extractor-route")
+
+        // A running item never renders the admission chip.
+        item.state = .running
+        #expect(QueueWorkspaceMapper.status(for: item) == QueueWorkspaceStatus.running())
     }
 
     @Test func targetStatusVocabulary() {

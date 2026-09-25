@@ -52,6 +52,17 @@ extension QueueWorkspaceStatus {
         QueueWorkspaceStatus(text: "Queued", symbol: "clock", style: .secondary)
     }
 
+    /// Queued with a durable admission blocker — the item carries a
+    /// recorded, persisted reason for why nothing is happening yet (e.g.
+    /// `no-extractor-route`). Distinct from `queued()`: "nothing happens"
+    /// must show its reason, not a bare "Queued" chip.
+    static func waitingForRoute(reason: String) -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(
+            text: "Waiting for route — \(reason)",
+            symbol: "questionmark.circle",
+            style: .warning)
+    }
+
     /// A worker is actively processing.
     static func running() -> QueueWorkspaceStatus {
         QueueWorkspaceStatus(text: "Running", symbol: "ellipsis.circle", style: .running)

@@ -21,6 +21,72 @@ struct JobCommandTests {
             id: QueueItemID(rawValue: "01JJOB00000000000000000000"), json: true)))
     }
 
+    @Test func parserRecognizesQueueFamilyVerbs() throws {
+        let status = try ArgumentParser.parse(
+            ["--wiki", wikiID.rawValue, "queue", "status", "--json"], env: { _ in nil })
+        #expect(status.command == .queue(.status(json: true)))
+
+        let pause = try ArgumentParser.parse(
+            ["--wiki", wikiID.rawValue, "queue", "pause", "--lane", "ingestion"],
+            env: { _ in nil })
+        #expect(pause.command == .queue(.pause(.ingestion)))
+
+        let resume = try ArgumentParser.parse(
+            ["--wiki", wikiID.rawValue, "queue", "resume", "--lane", "extraction"],
+            env: { _ in nil })
+        #expect(resume.command == .queue(.resume(.extraction)))
+
+        let halt = try ArgumentParser.parse(
+            ["--wiki", wikiID.rawValue, "queue", "halt", "--lane", "ingestion"],
+            env: { _ in nil })
+        #expect(halt.command == .queue(.halt(.ingestion)))
+
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(["queue", "pause"], env: { _ in nil })
+        }
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(["queue", "pause", "--lane", "lint"], env: { _ in nil })
+        }
+    }
+
+    @Test func jobRowsCarryTheAdmissionColumn() throws {
+        let sourceID = SourceID(rawValue: "01JSOURCE00000000000000000")
+        let waiting = QueueItem(
+            id: QueueItemID(rawValue: "01JJOB00000000000000000000"),
+            queue: .extraction,
+            wikiID: wikiID,
+            payload: QueueItemPayload(sourceIDs: [sourceID]),
+            state: .queued,
+            orderingKey: 1_000,
+            attempt: 0,
+            createdAt: 0,
+            admissionReason: QueueAdmissionReason.noExtractorRoute,
+            admissionCheckedAt: 42)
+
+        let text = try JobCommand.renderList(
+            items: [waiting], completedSourceIDs: [], json: false)
+        #expect(text.contains("admission"))
+        #expect(text.contains(QueueAdmissionReason.noExtractorRoute))
+
+        let json = try JobCommand.renderList(
+            items: [waiting], completedSourceIDs: [], json: true)
+        #expect(json.contains("no-extractor-route"))
+
+        // A plain item renders an empty admission column and JSON nil.
+        let plain = QueueItem(
+            id: QueueItemID(rawValue: "01JJOB00000000000000000001"),
+            queue: .extraction,
+            wikiID: wikiID,
+            payload: QueueItemPayload(sourceIDs: [sourceID]),
+            state: .queued,
+            orderingKey: 2_000,
+            attempt: 0,
+            createdAt: 0)
+        let plainText = try JobCommand.renderList(
+            items: [plain], completedSourceIDs: [], json: false)
+        #expect(!plainText.contains("no-extractor-route"))
+    }
+
     @Test func emptyJSONListUsesStableArrayShape() throws {
         let output = try JobCommand.renderList(items: [], completedSourceIDs: [], json: true)
         #expect(output == "[]")

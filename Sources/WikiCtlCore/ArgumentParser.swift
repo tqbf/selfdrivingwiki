@@ -64,6 +64,8 @@ public enum ArgumentParser {
         case extractor(ExtractorSyncCommand.Action)
         /// Read-only durable queue job inspection.
         case job(JobCommand.Action)
+        /// Per-lane queue truth + lane controls over the live daemon.
+        case queue(QueueCommand.Action)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
         /// Print scoped command usage (`wikictl [source [add]] --help`).
@@ -182,6 +184,8 @@ public enum ArgumentParser {
             command = try parseExtractorCommand(Array(args.dropFirst()))
         case "job":
             command = try parseJobCommand(Array(args.dropFirst()))
+        case "queue":
+            command = try parseQueueCommand(Array(args.dropFirst()))
         case "workspace":
             command = try parseWorkspaceCommand(Array(args.dropFirst()))
         default:
@@ -614,6 +618,38 @@ public enum ArgumentParser {
                 json: options.flag("--json")))
         default:
             throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "job", given: sub))
+        }
+    }
+
+    private static func parseQueueCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "queue"))
+        }
+        guard CLIReference.leaf(family: "queue", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "queue", given: sub))
+        }
+        let options = try Options(
+            Array(args.dropFirst()), options: CLIReference.options(forFamily: "queue"))
+        switch sub {
+        case "status":
+            return .queue(.status(json: options.flag("--json")))
+        case "pause", "resume", "halt":
+            guard let laneValue = options.value("--lane") else {
+                throw Failure.usage("queue \(sub): --lane is required (extraction|ingestion)")
+            }
+            guard let lane = QueueKind(rawValue: laneValue) else {
+                throw Failure.usage("queue \(sub): unknown lane \(laneValue.debugDescription) (use extraction|ingestion)")
+            }
+            switch sub {
+            case "pause":
+                return .queue(.pause(lane))
+            case "resume":
+                return .queue(.resume(lane))
+            default:
+                return .queue(.halt(lane))
+            }
+        default:
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "queue", given: sub))
         }
     }
 

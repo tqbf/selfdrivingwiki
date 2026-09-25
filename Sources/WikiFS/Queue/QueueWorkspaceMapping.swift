@@ -35,6 +35,18 @@ enum QueueWorkspaceMapper {
         }
     }
 
+    /// Row/header status for an item: the lifecycle projection, EXCEPT a
+    /// queued item carrying a durable admission blocker renders the recorded
+    /// reason ("Waiting for route — …") instead of a bare "Queued" —
+    /// queue hardening Phase 5 made the forever-queued hole durable, so it
+    /// must be surfaced here too.
+    static func status(for item: QueueItem) -> QueueWorkspaceStatus {
+        if item.state == .queued, let reason = item.admissionReason {
+            return .waitingForRoute(reason: reason)
+        }
+        return lifecycle(for: item.state).status
+    }
+
     /// Operation word for the selected-job header: "Ingest" / "Extract" /
     /// "Lint" (plan §1 header). Derived from the payload + queue kind exactly
     /// like the navigator's kind labels.

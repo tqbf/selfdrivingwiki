@@ -1437,7 +1437,7 @@ struct ActivityWindowView: View {
             id: "scope:whole-wiki",
             identity: nil,
             title: "Whole wiki",
-            status: QueueWorkspaceMapper.lifecycle(for: item.state).status,
+            status: QueueWorkspaceMapper.status(for: item),
             actions: [QueueWorkspaceAction(
                 label: "Browse Pages", systemImage: "sidebar.left") {
                 self.browsePages(in: item.wikiID)

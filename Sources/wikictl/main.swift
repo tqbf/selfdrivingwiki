@@ -117,6 +117,18 @@ func run() async -> Int32 {
         }
     }
 
+    // The queue family runs against the LIVE daemon over the workload XPC
+    // surface — no writable wiki-store profile involved.
+    if case .queue(let action) = invocation.command {
+        do {
+            print(try await runQueueCommand(action))
+            return 0
+        } catch {
+            FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
+            return 1
+        }
+    }
+
     do {
         let output = try await makeRunner().runOrdinary(
             command: invocation.command,
@@ -240,6 +252,9 @@ func execute(
     case .job:
         // Handled before the writable ordinary-command runner.
         return SourceCommand.Result(payload: .text(""), didCommit: false)
+    case .queue:
+        // Handled before the writable ordinary-command runner.
+        return SourceCommand.Result(payload: .text(""), didCommit: false)
     case .chat(let action):
         return try await runChatCommand(
             action,
@@ -306,6 +321,49 @@ private func runExtractorSync(
                 payload: QueueItemPayload(sourceIDs: [sourceID]))).id
         })
     return SourceCommand.Result(payload: .text(output), didCommit: true)
+}
+
+/// Read durable job state without creating, migrating, or checkpointing either
+/// `wikictl queue status|pause|resume|halt` — runs against the live daemon
+/// over the workload XPC surface. `status` renders per-lane truth from the
+/// daemon's queue snapshot; the lane controls are pass-through verbs whose
+/// effect is durable in the daemon's queue store.
+private func runQueueCommand(_ action: QueueCommand.Action) async throws -> String {
+    #if os(macOS)
+    let connection = try WikiDaemonConnection.connect()
+    let client = try DaemonWorkloadClient(connection: connection)
+    switch action {
+    case .status(let json):
+        let snapshot = try await client.queueSnapshot()
+        let lanes: [QueueKind] = [.extraction, .ingestion]
+        let statuses: [QueueCommand.LaneStatus] = lanes.map { lane in
+            let active = snapshot.activeItems.filter { $0.queue == lane }
+            let queued = active.filter { $0.state == .queued }
+            return QueueCommand.LaneStatus(
+                queue: lane.canonical.rawValue,
+                runState: (snapshot.runStates[lane] ?? .running).rawValue,
+                running: active.filter { $0.state == .running }.count,
+                queued: queued.count,
+                waitingForRoute: queued.filter { $0.admissionReason != nil }.count)
+        }
+        return try QueueCommand.renderStatus(lanes: statuses, json: json)
+    case .pause(let lane):
+        try await client.pause(lane)
+        return QueueCommand.renderLaneChanged(queue: lane, state: "paused")
+    case .resume(let lane):
+        try await client.resume(lane)
+        return QueueCommand.renderLaneChanged(queue: lane, state: "running")
+    case .halt(let lane):
+        try await client.halt(lane)
+        return QueueCommand.renderLaneChanged(queue: lane, state: "halted")
+    }
+    #else
+    throw QueueCommandUnsupportedError()
+    #endif
+}
+
+private struct QueueCommandUnsupportedError: LocalizedError {
+    var errorDescription: String? { "wikictl queue requires macOS (the wikid daemon XPC surface)" }
 }
 
 /// Read durable job state without creating, migrating, or checkpointing either

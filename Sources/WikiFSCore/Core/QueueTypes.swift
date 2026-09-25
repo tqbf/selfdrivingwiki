@@ -193,6 +193,15 @@ public struct QueueItem: Codable, Sendable, Identifiable {
     public var startedAt: Int64?
     /// Epoch milliseconds when processing finished (set by terminal transitions).
     public var finishedAt: Int64?
+    /// Durable admission status: why a queued item is not yet dispatched
+    /// (e.g. `no-extractor-route` — no provider route resolved for it).
+    /// `nil` means no admission blocker is recorded. Cleared by lane resume
+    /// and retry. Additive + optional: rows and wire payloads from before
+    /// this field decode with `nil` (XPC payload compatibility).
+    public var admissionReason: String?
+    /// Epoch milliseconds of the last admission check that recorded
+    /// `admissionReason`. `nil` together with a `nil` reason.
+    public var admissionCheckedAt: Int64?
 
     public init(
         id: ID,
@@ -206,7 +215,9 @@ public struct QueueItem: Codable, Sendable, Identifiable {
         error: String? = nil,
         createdAt: Int64,
         startedAt: Int64? = nil,
-        finishedAt: Int64? = nil
+        finishedAt: Int64? = nil,
+        admissionReason: String? = nil,
+        admissionCheckedAt: Int64? = nil
     ) {
         self.id = id
         self.queue = queue
@@ -220,7 +231,25 @@ public struct QueueItem: Codable, Sendable, Identifiable {
         self.createdAt = createdAt
         self.startedAt = startedAt
         self.finishedAt = finishedAt
+        self.admissionReason = admissionReason
+        self.admissionCheckedAt = admissionCheckedAt
     }
+}
+
+// MARK: - QueueAdmissionReason
+
+/// Named durable admission reasons stored on queued items (queue hardening
+/// Phase 5). The raw strings are the persisted + surfaced contract
+/// (`wikictl job` prints them; the Activity window matches them for the
+/// "Waiting for route" chip) — never rename a value, only add.
+public enum QueueAdmissionReason: Sendable {
+    /// `QueueWorkerFactory.providerID(for:)` returned nil: no extractor route
+    /// resolved for the item. Re-checked on lane resume and retry.
+    public static let noExtractorRoute = "no-extractor-route"
+
+    /// Human-facing progress-trail line for ``noExtractorRoute``.
+    public static let noExtractorRouteProgressLine =
+        "Waiting for route — no extractor route"
 }
 
 // MARK: - Enqueue request

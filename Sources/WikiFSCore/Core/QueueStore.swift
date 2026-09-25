@@ -237,6 +237,9 @@ public final class QueueStore: @unchecked Sendable {
     /// - v7: durable attempt report headers and target rows.
     /// - v8: nullable durable usage columns on attempt report headers.
     /// - v9: durable ingestion output snapshots with explicit presence.
+    /// - v10: nullable durable admission status on queue_items
+    ///   (`admission_reason`, `admission_checked_at`) — why a queued item is
+    ///   not yet dispatched.
     private static let migrator: DatabaseMigrator = {
         var m = DatabaseMigrator()
 
@@ -479,6 +482,26 @@ public final class QueueStore: @unchecked Sendable {
             """)
         }
 
+        m.registerMigration("v10_add_admission_status") { db in
+            // Durable admission status (queue hardening Phase 5): why a
+            // queued item is not yet dispatched. Additive + nullable —
+            // pre-migration rows decode with nils, and QueueItem rides XPC
+            // payloads as additive optional Codable fields only.
+            let existing = Set(try db.columns(in: "queue_items").map(\.name))
+            if !existing.contains("admission_reason") {
+                try db.execute(sql: """
+                ALTER TABLE queue_items
+                ADD COLUMN admission_reason TEXT;
+                """)
+            }
+            if !existing.contains("admission_checked_at") {
+                try db.execute(sql: """
+                ALTER TABLE queue_items
+                ADD COLUMN admission_checked_at INTEGER;
+                """)
+            }
+        }
+
         return m
     }()
 
@@ -583,7 +606,8 @@ public final class QueueStore: @unchecked Sendable {
     /// Shared SELECT column list for `queue_items`.
     private static let selectColumns = """
         id, queue, wiki_id, payload, state, ordering_key,
-        provider_id, attempt, error, created_at, started_at, finished_at
+        provider_id, attempt, error, created_at, started_at, finished_at,
+        admission_reason, admission_checked_at
     """
 
     /// Decode a stored `queue` raw value into a `QueueKind`.
@@ -640,6 +664,10 @@ public final class QueueStore: @unchecked Sendable {
         let createdAt: Int64 = row["created_at"]
         let startedAt: Int64? = row["started_at"]
         let finishedAt: Int64? = row["finished_at"]
+        // SQL/Row boundary: the raw TEXT/INTEGER columns wrap as the item's
+        // durable admission status (nil when no blocker is recorded).
+        let admissionReason: String? = row["admission_reason"]
+        let admissionCheckedAt: Int64? = row["admission_checked_at"]
 
         let queue = try decodeQueueKind(queueRaw)
         guard let state = QueueItemState(rawValue: stateRaw) else {
@@ -659,7 +687,9 @@ public final class QueueStore: @unchecked Sendable {
             error: errorText,
             createdAt: createdAt,
             startedAt: startedAt,
-            finishedAt: finishedAt
+            finishedAt: finishedAt,
+            admissionReason: admissionReason,
+            admissionCheckedAt: admissionCheckedAt
         )
     }
 
@@ -984,13 +1014,61 @@ public final class QueueStore: @unchecked Sendable {
                     sql: """
                     UPDATE queue_items
                     SET ordering_key = ?, attempt = attempt + 1,
-                        error = NULL, finished_at = NULL
+                        error = NULL, finished_at = NULL,
+                        admission_reason = NULL, admission_checked_at = NULL
                     WHERE id = ?;
                     """,
                     arguments: [newOrderingKey, id.rawValue])
                 try db.execute(
                     sql: "DELETE FROM queue_item_transcript_items WHERE item_id = ?;",
                     arguments: [id.rawValue])
+            }
+        }
+    }
+
+    // MARK: - Public API: Admission status
+
+    /// Record why a queued item is not yet dispatched (durable admission
+    /// status). Compare-and-set on `state = 'queued'`: a record landing on a
+    /// row that just started running is rejected — running items have no
+    /// admission blocker.
+    public func recordAdmissionWait(id: QueueItem.ID, reason: String) throws {
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                    UPDATE queue_items
+                    SET admission_reason = ?, admission_checked_at = ?
+                    WHERE id = ? AND state = 'queued';
+                    """,
+                    arguments: [reason, Self.nowMillis(), id.rawValue])
+                guard db.changesCount == 1 else {
+                    try Self.casTransitionFailure(
+                        db, id: id, allowedFrom: [.queued], to: .queued)
+                }
+            }
+        }
+    }
+
+    /// Clear the recorded admission status for every queued item of one lane.
+    /// Called by the engine on lane resume (and implicitly by `retryItem`,
+    /// whose transition clears the columns) so a stale reason cannot outlive
+    /// the condition that produced it.
+    @discardableResult
+    public func clearAdmissionWaitForQueue(_ queue: QueueKind) throws -> Int {
+        try Self.wrap {
+            let dbQueue = try self.queue()
+            return try dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                    UPDATE queue_items
+                    SET admission_reason = NULL, admission_checked_at = NULL
+                    WHERE queue = ? AND state = 'queued'
+                      AND admission_reason IS NOT NULL;
+                    """,
+                    arguments: [queue.rawValue])
+                return db.changesCount
             }
         }
     }

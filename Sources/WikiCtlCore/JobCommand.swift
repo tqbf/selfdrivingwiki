@@ -30,9 +30,12 @@ public enum JobCommand {
         let attempt: Int
         let failureReason: String?
         let extractionCompleted: Bool
+        /// Durable admission blocker for a queued item (e.g.
+        /// `no-extractor-route`); nil when none is recorded.
+        let admission: String?
 
         enum CodingKeys: String, CodingKey {
-            case id, queue, state, sourceIDs, attempt, failureReason, extractionCompleted
+            case id, queue, state, sourceIDs, attempt, failureReason, extractionCompleted, admission
         }
 
         func encode(to encoder: Encoder) throws {
@@ -48,6 +51,11 @@ public enum JobCommand {
                 try values.encodeNil(forKey: .failureReason)
             }
             try values.encode(extractionCompleted, forKey: .extractionCompleted)
+            if let admission {
+                try values.encode(admission, forKey: .admission)
+            } else {
+                try values.encodeNil(forKey: .admission)
+            }
         }
     }
 
@@ -84,7 +92,8 @@ public enum JobCommand {
             failureReason: item.error,
             extractionCompleted: item.queue.canonical == .extraction
                 && !item.payload.sourceIDs.isEmpty
-                && item.payload.sourceIDs.allSatisfy { completedSourceIDs.contains($0) })
+                && item.payload.sourceIDs.allSatisfy { completedSourceIDs.contains($0) },
+            admission: item.admissionReason)
     }
 
     private static func render(records: [Record], json: Bool) throws -> String {
@@ -104,11 +113,12 @@ public enum JobCommand {
     }
 
     private static func text(records: [Record]) -> String {
-        var lines = ["id\tqueue\tstate\tsource_ids\tattempt\tfailure_reason\textraction_completed"]
+        var lines = ["id\tqueue\tstate\tsource_ids\tattempt\tfailure_reason\textraction_completed\tadmission"]
         lines.append(contentsOf: records.map {
             [
                 $0.id, $0.queue, $0.state, $0.sourceIDs.joined(separator: ","),
                 String($0.attempt), $0.failureReason ?? "", String($0.extractionCompleted),
+                $0.admission ?? "",
             ].joined(separator: "\t")
         })
         return lines.joined(separator: "\n")
