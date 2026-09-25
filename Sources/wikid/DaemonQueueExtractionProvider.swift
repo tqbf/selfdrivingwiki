@@ -134,6 +134,17 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                     resultMode: .installedPackage(producer)))
 
             case .zotero:
+                // An acquisition arm runs once. A source that already holds
+                // content bytes — from a previous acquisition, or from the
+                // follow-on format-route item this provider enqueues after a
+                // bytes result — belongs to the bytes route below. Without
+                // this guard the follow-on resolved as another acquisition
+                // and re-fetched the same attachment forever (observed live:
+                // one PDF re-acquired 200+ times, one queue item per fetch).
+                let alreadyAcquired = !(DebugLog.trying("sourceContent", operation: {
+                    try store.sourceContent(id: sourceID)
+                }) ?? Data()).isEmpty
+                guard alreadyAcquired == false else { break }
                 // Zotero attachment acquisition runs through the
                 // reviewed/selected extractor package. The sync command
                 // wrote the canonical Zotero file endpoint as the plan URL;
