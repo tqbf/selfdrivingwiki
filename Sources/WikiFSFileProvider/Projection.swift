@@ -2239,6 +2239,53 @@ struct Projection {
         return scoped.childrenResolved(of: container)
     }
 
+    /// The child of `container` whose filename is exactly `name`, if any.
+    /// `FileProviderExtension.createItem` uses it to match an item the daemon
+    /// re-offers with `.mayAlreadyExist` to the node it came from.
+    ///
+    /// A replica rebuild re-offers every file on disk, so this runs once per
+    /// file. In a by-id container the filename starts with the row's ULID,
+    /// which gives the identifier directly: one row read, not a build of the
+    /// whole folder (that would make a rebuild O(N²)). Other containers have
+    /// names that do not carry the full ULID (by-title, by-name, bookmarks)
+    /// or are small (root, `pages`, `indexes`), so they scan `children(of:)`.
+    func child(named name: String, in container: NSFileProviderItemIdentifier) -> ProjectedNode? {
+        guard let candidates = Self.byIDCandidates(named: name, in: container) else {
+            return children(of: container).first { $0.name == name }
+        }
+        // By-id names are fully determined by the ULID: if no candidate
+        // resolves to this exact name and parent, the folder has no such child.
+        for id in candidates {
+            if let node = node(for: id), node.parent == container, node.name == name {
+                return node
+            }
+        }
+        return nil
+    }
+
+    /// Length of a ULID: the prefix of every by-id filename.
+    private static let ulidLength = 26
+
+    /// The identifiers a by-id filename can name, or nil when `container` is
+    /// not a by-id view (the caller then scans). A by-id filename is
+    /// `<ulid>` or `<ulid>.<ext>`; a source's ULID can name the verbatim file
+    /// or its `.md` sibling, so both are candidates.
+    static func byIDCandidates(named name: String,
+                               in container: NSFileProviderItemIdentifier) -> [NSFileProviderItemIdentifier]? {
+        let byIDContainers = [Identity.pagesByID, Identity.sourcesByID, Identity.chatsByID]
+        guard byIDContainers.contains(container) else { return nil }
+        guard name.count >= Self.ulidLength else { return [] }
+        let ulid = String(name.prefix(Self.ulidLength))
+        switch container {
+        case Identity.pagesByID:
+            return [Identity.pageByID(ulid)]
+        case Identity.chatsByID:
+            return [Identity.chatByID(ulid)]
+        default:
+            return [Identity.sourceByID(ulid), Identity.sourceMarkdownByID(ulid)]
+        }
+    }
+
     /// Store-sharing implementation of `children(of:)`. Called on a scoped copy
     /// carrying a `ReadScope` so every `openReadStore()` / `changeToken()` within
     /// this enumeration reuses one connection (#291).
