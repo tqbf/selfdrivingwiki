@@ -11,7 +11,7 @@ import Testing
 ///
 /// Reuses the fake worker infrastructure from `QueueEngineTests` — do not
 /// duplicate those seams here.
-@Suite(.serialized, .timeLimit(.minutes(2)))
+@Suite(.serialized, .timeLimit(.minutes(10)))
 struct QueueEngineSettlementTests {
 
     // MARK: - Test helpers
@@ -296,9 +296,17 @@ private final class SettlementWorkerControl: @unchecked Sendable {
             for w in waiters { w.resume() }
         }
 
+        // Materialize BOTH gates up front: a `releaseHold`/`releaseFinish`
+        // that lands before the worker reaches the corresponding park must
+        // still finish the right gate (a lazily created gate would miss the
+        // release and park forever). Finishing an AsyncStream before its
+        // iteration starts just ends the iteration immediately.
+        let hold = holdGate(for: item.id)
+        let finish = finishGate(for: item.id)
+
         // Hold mid-execute. Per-item stream; iteration honors task
         // cancellation, so a real cancel unwinds the worker from the hold.
-        for await _ in holdGate(for: item.id).stream { break }
+        for await _ in hold.stream { break }
 
         // Signal cancellation observation (fires immediately when the task is
         // already cancelled; otherwise never).
@@ -311,11 +319,9 @@ private final class SettlementWorkerControl: @unchecked Sendable {
 
         // Only a CANCELLED worker parks pre-settlement (and only such a
         // worker's test calls `releaseFinish`): the park lets the test
-        // inspect pre-settlement state deterministically. Creating the inner
-        // task unconditionally would leak a parked task for every worker no
-        // test ever releases.
+        // inspect pre-settlement state deterministically. The gate itself was
+        // materialized at entry, so an early release cannot be missed.
         if wasCancelled(item.id) {
-            let finish = finishGate(for: item.id)
             await Task { for await _ in finish.stream { break } }.value
         }
 

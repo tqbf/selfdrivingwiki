@@ -685,13 +685,42 @@ public actor QueueEngine {
             DebugLog.store("QueueEngine.waitForCompletion: failed to fetch item \(id): \(error)")
         }
 
-        // Register a waiter. The registration body is synchronous on the
-        // actor, so the post-registration re-check below is atomic with it:
-        // if the item settled between the fast-path check above and this
-        // registration, the waiter would otherwise strand forever (the
-        // settlement already swept the waiters array). Detecting the terminal
-        // state HERE resumes every late registrant instead.
-        return await withCheckedContinuation { (c: CheckedContinuation<Result<Void, Error>, Never>) in
+        // Race the registered waiter against the completion deadline. On
+        // timeout the waiter entries are REMOVED BEFORE the continuation is
+        // resumed (remove-then-resume, exactly-once — both under the actor
+        // lock) — otherwise the worker's eventual settlement would resume the
+        // same continuation a second time: a continuation-misuse crash, not a
+        // catchable failure. The item is left untouched (still running): the
+        // WAIT is bounded, not the work, and a later waitForCompletion
+        // observes the item's real outcome.
+        return await withTaskGroup(of: Result<Void, Error>.self) { group in
+            group.addTask { [self] in
+                await awaitSettlement(id: id)
+            }
+            group.addTask { [self] in
+                for await _ in deadlineSource.stream(
+                    after: QueueEngineWaitPolicy.completionWaitDeadline) { break }
+                // Settlement won the race — do not steal waiters registered
+                // after its sweep.
+                if Task.isCancelled { return .failure(CancellationError()) }
+                return await timeoutWaiters(for: id)
+            }
+            let first = await group.next()
+                ?? .failure(QueueEngineCompletionWaitError.timeout(itemID: id))
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// Register a completion waiter and park until settlement resumes it.
+    /// The registration body is synchronous on the actor, so the
+    /// post-registration re-check below is atomic with it: if the item
+    /// settled between the fast-path check above and this registration, the
+    /// waiter would otherwise strand forever (the settlement already swept
+    /// the waiters array). Detecting the terminal state HERE resumes every
+    /// late registrant instead.
+    private func awaitSettlement(id: QueueItem.ID) async -> Result<Void, Error> {
+        await withCheckedContinuation { (c: CheckedContinuation<Result<Void, Error>, Never>) in
             completionWaiters[id, default: []].append(c)
             let terminal: Result<Void, Error>?
             do {
@@ -714,6 +743,21 @@ public actor QueueEngine {
                 resumeWaiters(for: id, result: terminal)
             }
         }
+    }
+
+    /// Deadline expiry for `waitForCompletion`: remove-then-resume every
+    /// waiter for the item with the typed timeout, on the actor. Returns the
+    /// timeout result for the racing caller.
+    private func timeoutWaiters(for id: QueueItem.ID) -> Result<Void, Error> {
+        let timeout = Result<Void, Error>.failure(
+            QueueEngineCompletionWaitError.timeout(itemID: id))
+        guard let waiters = completionWaiters.removeValue(forKey: id) else {
+            return timeout
+        }
+        for waiter in waiters {
+            waiter.resume(returning: timeout)
+        }
+        return timeout
     }
 
     /// Load durable typed transcript items for a queue item.

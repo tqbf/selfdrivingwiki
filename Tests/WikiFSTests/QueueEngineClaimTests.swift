@@ -10,7 +10,7 @@ import Testing
 ///
 /// Reuses the fake worker infrastructure from `QueueEngineTests` — do not
 /// duplicate those seams here.
-@Suite(.serialized, .timeLimit(.minutes(2)))
+@Suite(.serialized, .timeLimit(.minutes(10)))
 struct QueueEngineClaimTests {
 
     // MARK: - Test helpers

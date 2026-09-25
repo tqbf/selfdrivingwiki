@@ -756,6 +756,67 @@ struct DaemonQueueHostTests {
         #expect(buildCount.value == 1)
     }
 
+    /// Relinquish must never hang behind a hung admitted RPC: the
+    /// admission-drain deadline force-finishes the stuck admission (with
+    /// deficit accounting so the RPC's late `finishAdmission` cannot trip the
+    /// admissions-pair invariant) and relinquishment proceeds.
+    @Test func admissionDrainDeadlineForceFinishesAndRelinquishProceeds() async throws {
+        let directory = makeHostTempDirectory()
+        let hangGate = HostTestSignal()
+        let operationStarted = HostTestSignal()
+        let manual = HostManualDeadlineSource()
+        let epoch = QueueOwnershipEpoch(rawValue: 91)
+        let host = DaemonQueueHost(
+            initialEpoch: epoch,
+            admissionDrainDeadline: .seconds(60),
+            deadlineSource: manual) {
+            let store = try QueueStore(
+                databaseURL: directory.appendingPathComponent("queue.sqlite"))
+            let factory = HostClosureWorkerFactory(
+                providerID: ProviderID(rawValue: "drain-provider"),
+                body: { _ in })
+            let engine = QueueEngine(store: store, workerFactory: factory)
+            await engine.start()
+            let forwardingTask = Task {
+                for await _ in engine.events {}
+            }
+            return DaemonQueueResources(
+                engine: engine,
+                store: store,
+                forwardingTask: forwardingTask)
+        }
+
+        // An admitted operation that hangs: relinquish would wait forever on
+        // it without the drain deadline.
+        let performTask = Task {
+            try await host.perform { _ in
+                operationStarted.signal()
+                await hangGate.wait()
+            }
+        }
+        await operationStarted.wait()
+
+        let relinquishTask = Task {
+            try await host.relinquish(expectedEpoch: epoch)
+        }
+        await manual.awaitWaiting()
+        manual.fire()
+
+        let success = try await relinquishTask.value
+        #expect(success.isComplete)
+        let status = await host.status()
+        #expect(status.epoch == epoch)
+        #expect(status.hostState == .relinquished)
+
+        // Release the hung RPC: its late finishAdmission consumes the forced
+        // drain's deficit (an invariant failure here would abort the run).
+        hangGate.signal()
+        _ = try await performTask.value
+
+        let lateStatus = await host.status()
+        #expect(lateStatus.hostState == .relinquished)
+    }
+
     private func expectOwnershipError<Value: Sendable>(
         _ operation: @Sendable () async throws -> DaemonQueueOperationResult<Value>,
         epoch: QueueOwnershipEpoch,
