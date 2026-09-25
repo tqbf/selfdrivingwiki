@@ -47,6 +47,11 @@ visibility) merges independently; Phase 6's `MenuBarItemController` changes
 were written against main and will need a rebase over #1321 (both reshape
 the same icon/tooltip derivation).
 
+PRs (stacked, merge in order): [#1322](https://github.com/tqbf/selfdrivingwiki/pull/1322)
+→ [#1323](https://github.com/tqbf/selfdrivingwiki/pull/1323)
+→ [#1324](https://github.com/tqbf/selfdrivingwiki/pull/1324)
+→ [#1325](https://github.com/tqbf/selfdrivingwiki/pull/1325).
+
 ### Decisions recorded
 
 - Cancellation contract: cooperative cancellation accepted and documented
