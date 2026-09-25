@@ -249,6 +249,138 @@ struct QueueEngineSettlementTests {
         _ = await engine.shutdownForHandoff()
         store.close()
     }
+
+    /// Regression (review H1): cancelling a QUEUED item — one that never
+    /// dispatched — must resume its completion waiters immediately. There is
+    /// no dispatch, so no settlement would ever run for it.
+    @Test func cancelQueuedItemResumesItsWaiters() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let control = SettlementWorkerControl(honorsCancellation: true)
+        let recorder = FakeWorkerRecorder()
+        let factory = FakeWorkerFactory(
+            providerID: { _ in ProviderID(rawValue: "p1") },
+            worker: { item in
+                recorder.record(item.id)
+                try await control.execute(item)
+            })
+        let engine = QueueEngine(
+            store: store,
+            config: QueueEngineConfig(ingestionLimits: ["p1": 1]),
+            workerFactory: factory)
+        await engine.start()
+
+        // The running item holds p1's only slot; the second stays queued.
+        let runningID = try await engine.enqueue(QueueItemRequest(
+            queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
+        let queuedID = try await engine.enqueue(QueueItemRequest(
+            queue: .ingestion, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
+        try await recorder.waitForCount(1, timeoutSeconds: 5)
+        var queued = try #require(try store.getItem(queuedID))
+        #expect(queued.state == .queued)
+
+        let waiterTask = Task { await engine.waitForCompletion(of: queuedID) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        await engine.cancelItem(queuedID)
+        let result = await waiterTask.value
+        guard case .failure(let error) = result else {
+            Issue.record("queued-cancel waiter should fail, got success")
+            return
+        }
+        #expect(error is CancellationError)
+        queued = try #require(try store.getItem(queuedID))
+        #expect(queued.state == .cancelled)
+
+        // The unrelated running dispatch is untouched.
+        control.releaseHold(runningID)
+        control.releaseFinish(runningID)
+        let runningResult = await engine.waitForCompletion(of: runningID)
+        if case .failure(let error) = runningResult {
+            Issue.record("running item should complete, got \(error)")
+        }
+
+        _ = await engine.shutdownForHandoff()
+        store.close()
+    }
+
+    /// Regression (review H2): a halted dispatch's late settlement must not
+    /// release the capacity a SIBLING dispatch claimed after halt's rebuild.
+    /// X runs (holding p1's only slot); V queues behind it. Halt requeues X
+    /// and rebuilds the counts to zero; X is then reordered behind V so that
+    /// on resume V (not X) claims p1. When X's old worker finally settles,
+    /// its release is deferred (the rebuilt state owns the slot) — V's slot
+    /// must survive.
+    @Test func haltSettlementDoesNotReleaseASiblingDispatchsCapacity() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let control = SettlementWorkerControl(honorsCancellation: true)
+        let recorder = FakeWorkerRecorder()
+        let factory = FakeWorkerFactory(
+            providerID: { _ in ProviderID(rawValue: "p1") },
+            worker: { item in
+                recorder.record(item.id)
+                try await control.execute(item)
+            })
+        let engine = QueueEngine(
+            store: store,
+            config: QueueEngineConfig(ingestionLimits: ["p1": 1]),
+            workerFactory: factory)
+        await engine.start()
+
+        // X runs and holds p1's only slot; V queues behind it.
+        let xID = try await engine.enqueue(QueueItemRequest(
+            queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
+        let vID = try await engine.enqueue(QueueItemRequest(
+            queue: .ingestion, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
+        try await recorder.waitForCount(1, timeoutSeconds: 5)
+        #expect(try #require(try store.getItem(vID)).state == .queued)
+        #expect(try #require(try store.getItem(xID)).state == .running)
+
+        let xWaiter = Task { await engine.waitForCompletion(of: xID) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // Halt requeues X and rebuilds the counts to zero.
+        await engine.halt(.ingestion)
+        #expect(try #require(try store.getItem(xID)).state == .queued)
+        var snapshot = await engine.snapshot()
+        #expect(snapshot.providerCounts.isEmpty)
+
+        // Push X behind V so the resume lets V — not X — claim p1, leaving
+        // X's old dispatch entry in place (its lease is not replaced).
+        await engine.reorderItem(id: xID, beforeItemID: nil)
+
+        // Resume: V claims p1; X stays queued — the provider is at capacity
+        // again.
+        try await engine.resume(.ingestion)
+        try await recorder.waitForCount(2, timeoutSeconds: 5)
+        snapshot = await engine.snapshot()
+        #expect(snapshot.providerCounts[ProviderID(rawValue: "p1")] == 1)
+        #expect(snapshot.activeIngestionWikis == [WikiID(rawValue: "w2")])
+        #expect(try #require(try store.getItem(xID)).state == .queued)
+
+        // X's old worker settles now: its release is deferred, so V's slot
+        // survives, and X's waiter learns the wait is over.
+        control.releaseFinish(xID)
+        let xResult = await xWaiter.value
+        guard case .failure(let error) = xResult else {
+            Issue.record("halted item's waiter should fail, got success")
+            return
+        }
+        #expect(error is CancellationError)
+        snapshot = await engine.snapshot()
+        #expect(snapshot.providerCounts[ProviderID(rawValue: "p1")] == 1)
+        #expect(snapshot.activeIngestionWikis == [WikiID(rawValue: "w2")])
+        #expect(try #require(try store.getItem(xID)).state == .queued)
+
+        // KEY assertions made: X's stale settlement released nothing, and V's
+        // slot survived. Shut down without unwinding V — the shutdown
+        // requeues V and settles its worker defensively; the counts must end
+        // at zero either way.
+        _ = await engine.shutdownForHandoff()
+        let endSnapshot = await engine.snapshot()
+        #expect(endSnapshot.providerCounts.isEmpty)
+        #expect(endSnapshot.activeIngestionWikis.isEmpty)
+        store.close()
+    }
 }
 
 /// Worker control for settlement races: signals start, holds mid-execute on
@@ -327,19 +459,6 @@ private final class SettlementWorkerControl: @unchecked Sendable {
 
         guard honorsCancellation else { return }
         try Task.checkCancellation()
-    }
-
-    /// Wait until at least one worker entered `execute`.
-    func awaitStarted() async {
-        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            lock.withLock { state in
-                if state.startedCount > 0 {
-                    c.resume()
-                } else {
-                    state.startedWaiters.append(c)
-                }
-            }
-        }
     }
 
     /// Open the hold gate for one item (unblocks a never-cancelled worker).

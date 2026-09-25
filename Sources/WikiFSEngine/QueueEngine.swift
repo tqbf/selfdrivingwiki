@@ -64,6 +64,15 @@ public actor QueueEngine {
     /// `resume`. Persisted via `QueueStore.setQueueRunState`.
     private var runStates: [QueueKind: QueueRunState] = [:]
 
+    /// Halted dispatches whose capacity attribution `rebuildInMemoryState`
+    /// has already rebuilt away: the item was requeued, so the store no
+    /// longer counts it as running and the rebuilt counts belong to whatever
+    /// dispatches the rebuilt state actually holds. When such a dispatch
+    /// finally settles, its release must be SKIPPED — decrementing would
+    /// release a sibling dispatch's slot — while the settle-once entry
+    /// removal and the waiter resume still happen exactly once.
+    private var releaseDeferredByRebuild: Set<WorkerLeaseID> = []
+
     /// Ready-at-construction output boundary shared with worker factories.
     /// It owns event multicast, transcript reduction, and output persistence.
     public nonisolated let outputChannel: QueueWorkerOutputChannel
@@ -511,6 +520,13 @@ public actor QueueEngine {
                 }
             } catch {
                 DebugLog.store("QueueEngine.cancelItem: report projection failed for \(id.rawValue): \(error)")
+            }
+            // A QUEUED item has no dispatch, so no settlement will ever run
+            // for it — resume its completion waiters here, exactly once. A
+            // RUNNING item's waiters are resumed by its settlement (the
+            // settle-once path below), never here.
+            if dispatch == nil {
+                resumeWaiters(for: id, result: .failure(CancellationError()))
             }
         } catch {
             // The item may be in a terminal state already, or the
@@ -1155,7 +1171,9 @@ public actor QueueEngine {
 
         // The result the waiters receive. Usually the worker's outcome, but
         // when the store transition loses a race (the item was cancelled or
-        // requeued elsewhere mid-finish), the item's terminal truth wins.
+        // requeued elsewhere mid-finish), the item's terminal state won —
+        // waiters learn that (a cancelled item is terminal; a requeued one
+        // tells them THIS wait is over), not the worker's raw outcome.
         var waiterResult = result
 
         switch result {
@@ -1219,13 +1237,22 @@ public actor QueueEngine {
                     }
                 } catch {
                     DebugLog.store("QueueEngine: markFailed failed for \(item.id.rawValue): \(error)")
+                    // Same race rule as the success branch: the transition
+                    // lost to a cancel/requeue, and the waiters learn that.
+                    waiterResult = .failure(CancellationError())
                 }
             }
         }
 
         // Settlement-owned bookkeeping: exactly once per dispatch, on every
-        // path (success, failure, user cancellation, halt, orphan).
-        releaseDispatchSlots(for: item)
+        // path (success, failure, user cancellation, halt, orphan). A halt's
+        // rebuild may have already rebuilt this dispatch's attribution away —
+        // then the rebuilt state owns the slot and the release is skipped,
+        // while the settle-once entry removal and the waiter resume above
+        // still happen.
+        if releaseDeferredByRebuild.remove(leaseID) == nil {
+            releaseDispatchSlots(for: item)
+        }
 
         // Resume any `waitForCompletion` waiters for this item.
         resumeWaiters(for: item.id, result: waiterResult)
@@ -1293,13 +1320,24 @@ public actor QueueEngine {
         providerActiveCounts.removeAll()
         activeIngestionWikis.removeAll()
 
+        var stillRunning = Set<QueueItem.ID>()
         for item in active where item.state == .running {
+            stillRunning.insert(item.id)
             if let providerID = item.providerID {
                 incrementProviderCount(providerID)
             }
             if item.queue == .ingestion {
                 activeIngestionWikis.insert(item.wikiID)
             }
+        }
+
+        // Halted-but-still-settling dispatches: the rebuild no longer counts
+        // their items as running, so their slot attribution is gone. Record
+        // the leases so their eventual settlement skips the release instead
+        // of decrementing a sibling dispatch's slot (the clamp cannot restore
+        // attribution — only skipping can).
+        for (id, dispatch) in runningTasks where !stillRunning.contains(id) {
+            releaseDeferredByRebuild.insert(dispatch.leaseID)
         }
     }
 
