@@ -541,6 +541,10 @@ struct WikiFSApp: App {
             // leaves a private operation root (input/output/home/cache); a
             // clean close is the moment to reclaim it. Stale sessions from
             // crashes are reclaimed by the daemon at its startup.
+            // #1330: the app runs its own managed operations, so the same
+            // quit backstop applies — kill every process group this process
+            // still owns, synchronously, before the session goes away.
+            OwnedProcessGroupRegistry.terminateAllOwnedGroups()
             do {
                 let layout = try ExtractorPackageStoreLayout(
                     appGroupContainerRoot: containerDirectory,

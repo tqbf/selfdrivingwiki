@@ -38,6 +38,26 @@ public enum ExtractorOperationCleanupScope: Sendable {
     case staleSessions
 }
 
+/// An operation-session directory name: `<pid>-<staging-id>`. The pid names
+/// the process that created the session. A name that does not parse belongs
+/// to no live process's session.
+struct ExtractorOperationSessionName: Equatable, Sendable {
+    let processID: Int32
+    let stagingID: ExtractorStagingID
+
+    /// Parses `<pid>-<staging-id>`. The pid must be positive. The staging id
+    /// must satisfy the staging-id rules (ASCII letters, digits, `-`, `_`).
+    /// A directory named by a process that later died keeps parsing; pid
+    /// liveness is a separate question with a separate answer per caller.
+    static func parse(_ name: String) -> ExtractorOperationSessionName? {
+        guard let separator = name.firstIndex(of: "-") else { return nil }
+        guard let processID = Int32(name[..<separator]), processID > 0 else { return nil }
+        let remainder = String(name[name.index(after: separator)...])
+        guard let stagingID = ExtractorStagingID(rawValue: remainder) else { return nil }
+        return ExtractorOperationSessionName(processID: processID, stagingID: stagingID)
+    }
+}
+
 public struct ExtractorPackageStoreLayout: Sendable {
     public let appGroupContainerRoot: URL
     public let processRole: ExtractorPackageProcessRole
@@ -464,13 +484,11 @@ public enum ExtractorDirectoryValidator {
     }
 
     private static func operationSessionIsStale(_ name: String) -> Bool {
-        guard let separator = name.firstIndex(of: "-"),
-              let processID = Int32(name[..<separator]),
-              processID > 0 else {
+        guard let session = ExtractorOperationSessionName.parse(name) else {
             return true
         }
-        if processID == getpid() { return true }
-        if kill(processID, 0) == 0 { return false }
+        if session.processID == getpid() { return true }
+        if kill(session.processID, 0) == 0 { return false }
         return errno != EPERM
     }
 
