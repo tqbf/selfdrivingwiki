@@ -213,6 +213,10 @@ struct QueueEngineClaimTests {
         // queued — and the second progress line proves the clear + re-record
         // cycle ran.
         try await engine.resume(.ingestion)
+        // The resume scan's store write and its progress emission both race a
+        // zero-wait read under parallel-suite load; settle like the enqueue
+        // phases above before asserting.
+        try await Task.sleep(nanoseconds: 200_000_000)
         let after = try #require(try store.getItem(itemID))
         #expect(after.state == .queued)
         #expect(after.admissionReason == QueueAdmissionReason.noExtractorRoute)
