@@ -112,6 +112,111 @@ struct TypedMarkdownHTMLRendererTests {
         #expect(html.contains(">Live</a>"))
     }
 
+    /// A wiki link whose label wraps onto the next source line spans a
+    /// range-less `SoftBreak`. The paragraph's other Markdown must still render,
+    /// and the link must render once, not as authored literal text.
+    @Test func wikiLinkWrappedAcrossSoftBreakRendersParagraphMarkdown() {
+        let prepared = ReaderMarkdown.preparedDocument(
+            "**Barriers** stop a [[page:01KWRYQKPE2G145H22H6BYSSN8|taint\nanalysis]] uses to *stop* flow.")
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: permissiveProjection(for: prepared),
+            options: .disabled)
+        #expect(html.contains("<strong>Barriers</strong>"))
+        #expect(html.contains("<em>stop</em>"))
+        #expect(html.components(separatedBy: "</a>").count == 2)
+        #expect(!html.contains("[["))
+        #expect(!html.contains("]]"))
+        #expect(html.contains("</a> uses to"))
+    }
+
+    /// A range-less `SoftBreak` *before* an ordinary, single-line wiki link
+    /// must not fail the whole paragraph closed either — only a spanning
+    /// overlay should open a span; an unrelated line break earlier in the
+    /// same container must fall through to ordinary rendering.
+    @Test func softBreakBeforeSingleLineWikiLinkRendersParagraphMarkdown() {
+        let prepared = ReaderMarkdown.preparedDocument(
+            "Barriers stop a taint\nanalysis uses [[page:01KWRYQKPE2G145H22H6BYSSN8|flow]] to *stop* it.")
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: permissiveProjection(for: prepared),
+            options: .disabled)
+        #expect(html.contains("<em>stop</em>"))
+        #expect(html.components(separatedBy: "</a>").count == 2)
+        #expect(!html.contains("[["))
+        #expect(!html.contains("]]"))
+        #expect(html.contains(">flow</a>"))
+    }
+
+    /// Two wiki links in one paragraph, the first wrapped across a line: the
+    /// wrapped overlay must close its span cleanly and let the second,
+    /// ordinary link resolve normally afterward.
+    @Test func twoWikiLinksWithFirstWrappedAcrossSoftBreakBothRenderOnce() {
+        let prepared = ReaderMarkdown.preparedDocument(
+            "A [[page:01KWRYQKPE2G145H22H6BYSSN8|taint\nanalysis]] uses [[page:01KWRYQKPE2G145H22H6BYSSN9|flow]] to stop it."
+        )
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: permissiveProjection(for: prepared),
+            options: .disabled)
+        #expect(html.components(separatedBy: "</a>").count == 3)
+        #expect(!html.contains("[["))
+        #expect(!html.contains("]]"))
+        #expect(html.contains(">taint analysis</a>"))
+        #expect(html.contains(">flow</a>"))
+    }
+
+    /// A wrapped link's tail leaf carries more authored text *and* another
+    /// wiki link — `renderTextRange` must keep handling overlays after the
+    /// span closes, within the same leaf.
+    @Test func wrappedLinkFollowedByAnotherLinkInTailLeafRendersBoth() {
+        let prepared = ReaderMarkdown.preparedDocument(
+            "A [[page:01KWRYQKPE2G145H22H6BYSSN8|taint\nanalysis]] uses to reach [[page:01KWRYQKPE2G145H22H6BYSSN9|flow]] here."
+        )
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: permissiveProjection(for: prepared),
+            options: .disabled)
+        #expect(html.components(separatedBy: "</a>").count == 3)
+        #expect(!html.contains("[["))
+        #expect(!html.contains("]]"))
+        #expect(html.contains("</a> uses to reach"))
+        #expect(html.contains(">flow</a>"))
+    }
+
+    /// The leaf that opens a wrapped link already holds an earlier link, so the
+    /// span must open from inside the ordinary text-range split.
+    @Test func wrappedLinkOpeningInLeafWithEarlierLinkRendersBoth() {
+        let prepared = ReaderMarkdown.preparedDocument(
+            "See [[page:01KWRYQKPE2G145H22H6BYSSN9|flow]] and a [[page:01KWRYQKPE2G145H22H6BYSSN8|taint\nanalysis]] tail *end*."
+        )
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: permissiveProjection(for: prepared),
+            options: .disabled)
+        #expect(html.components(separatedBy: "</a>").count == 3)
+        #expect(!html.contains("[["))
+        #expect(!html.contains("]]"))
+        #expect(html.contains("</a> and a <a"))
+        #expect(html.contains("</a> tail <em>end</em>"))
+    }
+
+    /// The second wrapped link opens inside the first link's closing leaf.
+    @Test func consecutiveWrappedLinksBothRenderOnce() {
+        let prepared = ReaderMarkdown.preparedDocument(
+            "A [[page:01KWRYQKPE2G145H22H6BYSSN8|taint\nanalysis]] and [[page:01KWRYQKPE2G145H22H6BYSSN9|flow\nguard]] *end*."
+        )
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: permissiveProjection(for: prepared),
+            options: .disabled)
+        #expect(html.components(separatedBy: "</a>").count == 3)
+        #expect(!html.contains("[["))
+        #expect(!html.contains("]]"))
+        #expect(html.contains("</a> and <a"))
+        #expect(html.contains("</a> <em>end</em>"))
+    }
+
     private func permissiveProjection(
         for prepared: PreparedMarkdownDocument
     ) -> ResolvedDocumentProjection {

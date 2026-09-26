@@ -136,6 +136,17 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         }
     }
 
+    /// Whether the container walk is between the head and tail of a wiki
+    /// overlay that spans several consecutive inline siblings (e.g. a wiki
+    /// link label wrapped across a range-less `SoftBreak`/`LineBreak`).
+    /// Modeled explicitly instead of a bool cluster: `.spanning` carries the
+    /// overlay itself, so the closing leaf and any skipped siblings resolve
+    /// against it without re-deriving state from `overlayIndex`.
+    private enum OverlaySpan {
+        case none
+        case spanning(WikiMarkdownSyntaxNode)
+    }
+
     private mutating func visitChildren(_ markup: Markup) -> String {
         guard let prepared = preparedDocument,
               prepared.wikiSyntax.isEmpty == false else {
@@ -157,15 +168,59 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
 
         var output = ""
         var overlayIndex = 0
+        var span: OverlaySpan = .none
         for child in markup.children {
-            guard let childRange = sourceRange(of: child, in: prepared) else {
-                // A range-less node is safe only when no remaining overlay is
-                // owned by this container. Otherwise preserve the exact authored
-                // container slice once instead of guessing ownership.
-                if overlayIndex < overlays.count {
-                    DebugLog.reader("Range-less Markdown node intersects wiki overlay; rendering authored container literally")
-                    return escapedAuthoredSlice(containerRange, prepared: prepared)
+            let childRange = sourceRange(of: child, in: prepared)
+
+            if case .spanning(let overlay) = span {
+                let overlayRange = overlay.sourceRange
+                guard let childRange else {
+                    // Range-less sibling inside the overlay's authored span
+                    // (e.g. the SoftBreak the label wrapped across); its
+                    // content is already covered by the overlay's rendered
+                    // output.
+                    continue
                 }
+                if overlayRange.contains(childRange) {
+                    // Interior sibling fully inside the overlay's remaining
+                    // span; nothing left to emit for it.
+                    if childRange.upperBound == overlayRange.upperBound { span = .none }
+                    continue
+                }
+                if child.childCount == 0, overlayRange.upperBound <= childRange.upperBound {
+                    // The closing leaf: emit only the authored tail after the
+                    // overlay ends, and keep handling any further overlay in
+                    // that same leaf via the ordinary text-range path (which
+                    // may open the next span).
+                    span = .none
+                    do {
+                        let tailRange = try MarkdownSourceRange(
+                            lowerBound: overlayRange.upperBound,
+                            upperBound: childRange.upperBound)
+                        output += renderTextRange(tailRange, overlays: overlays, overlayIndex: &overlayIndex, span: &span, prepared: prepared)
+                    } catch {
+                        DebugLog.reader("Invalid wiki overlay span tail: \(error)")
+                        output += escapedAuthoredSlice(childRange, prepared: prepared)
+                    }
+                    continue
+                }
+                // A non-leaf sibling only partially overlapping the overlay's
+                // tail crosses AST structure; fail closed on just this child.
+                DebugLog.reader("Crossing Markdown AST and wiki overlay ranges; rendering authored child literally")
+                output += escapedAuthoredSlice(childRange, prepared: prepared)
+                span = .none
+                while overlayIndex < overlays.count,
+                      overlays[overlayIndex].sourceRange.lowerBound < childRange.upperBound {
+                    emittedWikiRanges.insert(overlays[overlayIndex].sourceRange)
+                    overlayIndex += 1
+                }
+                continue
+            }
+
+            guard let childRange else {
+                // No overlay is currently open, so a range-less node (a
+                // SoftBreak/LineBreak before, between, or after overlays)
+                // cannot be inside one — render it normally.
                 output += visit(child)
                 continue
             }
@@ -179,17 +234,18 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 overlayIndex += 1
             }
             if overlayIndex < overlays.count {
-                let overlayRange = overlays[overlayIndex].sourceRange
+                let overlay = overlays[overlayIndex]
+                let overlayRange = overlay.sourceRange
                 if overlayRange.contains(childRange) {
                     if emittedWikiRanges.insert(overlayRange).inserted {
-                        output += renderWikiNode(overlays[overlayIndex])
+                        output += renderWikiNode(overlay)
                     }
                     if childRange.upperBound == overlayRange.upperBound { overlayIndex += 1 }
                     continue
                 }
                 if childRange.contains(overlayRange) {
                     if child.childCount == 0 {
-                        output += renderTextRange(childRange, overlays: overlays, overlayIndex: &overlayIndex, prepared: prepared)
+                        output += renderTextRange(childRange, overlays: overlays, overlayIndex: &overlayIndex, span: &span, prepared: prepared)
                     } else {
                         output += visit(child)
                         while overlayIndex < overlays.count,
@@ -204,7 +260,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                     // Leaf nodes may contain ordinary text around an overlay.
                     // Split them from the exact authored UTF-8 slice.
                     if child.childCount == 0 {
-                        output += renderTextRange(childRange, overlays: overlays, overlayIndex: &overlayIndex, prepared: prepared)
+                        output += renderTextRange(childRange, overlays: overlays, overlayIndex: &overlayIndex, span: &span, prepared: prepared)
                         continue
                     }
                     DebugLog.reader("Crossing Markdown AST and wiki overlay ranges; rendering authored child literally")
@@ -267,6 +323,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         _ textRange: MarkdownSourceRange,
         overlays: [WikiMarkdownSyntaxNode],
         overlayIndex: inout Int,
+        span: inout OverlaySpan,
         prepared: PreparedMarkdownDocument
     ) -> String {
         var output = ""
@@ -275,7 +332,11 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             let node = overlays[overlayIndex]
             let range = node.sourceRange
             guard range.lowerBound < textRange.upperBound else { break }
-            guard range.lowerBound >= cursor, range.upperBound <= textRange.upperBound else {
+            // An overlay that starts here but ends past this leaf (a label
+            // wrapped across a SoftBreak/LineBreak) opens a span: the caller
+            // skips the siblings it covers and emits the closing leaf's tail.
+            let opensSpan = range.upperBound > textRange.upperBound
+            guard range.lowerBound >= cursor else {
                 DebugLog.reader("Invalid text and wiki overlay crossing; rendering authored text literally")
                 return escapedAuthoredSlice(textRange, prepared: prepared)
             }
@@ -292,8 +353,12 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             }
             output += renderWikiNode(node)
             emittedWikiRanges.insert(range)
-            cursor = range.upperBound
             overlayIndex += 1
+            if opensSpan {
+                span = .spanning(node)
+                return output
+            }
+            cursor = range.upperBound
         }
         if cursor < textRange.upperBound {
             do {
