@@ -25,8 +25,12 @@ struct QueueStoreTypedTranscriptMigrationTests {
             "chats", "chat_messages", "usage_data", "log_data",
             "debug_data", "progress_data",
         ]
+        // queue_items' SCHEMA may grow additively after the fixture (v10 adds
+        // the nullable admission columns), so its equality check is rows-only;
+        // every other preserved table is compared schema-and-rows.
+        let schemaPreserved = Set(preservedTables).subtracting(["queue_items"])
         let before = try Dictionary(uniqueKeysWithValues: preservedTables.map { table in
-            (table, try tableSnapshot(named: table, in: url))
+            (table, try tableSnapshot(named: table, in: url, includeSchema: schemaPreserved.contains(table)))
         })
 
         let store = try QueueStore(databaseURL: url)
@@ -35,8 +39,11 @@ struct QueueStoreTypedTranscriptMigrationTests {
         #expect(try tableExists(named: "queue_item_events", in: url) == false)
         #expect(try tableExists(named: "queue_item_transcript_items", in: url))
         for table in preservedTables {
-            #expect(try tableSnapshot(named: table, in: url) == before[table])
+            #expect(try tableSnapshot(named: table, in: url, includeSchema: schemaPreserved.contains(table)) == before[table])
         }
+        // v10's additive columns must exist after the migration.
+        #expect(try columnExists(named: "admission_reason", in: url))
+        #expect(try columnExists(named: "admission_checked_at", in: url))
     }
 
     private func temporaryDatabaseURL() throws -> URL {
@@ -44,6 +51,50 @@ struct QueueStoreTypedTranscriptMigrationTests {
             .appendingPathComponent("queue-typed-migration-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent("queue.sqlite")
+    }
+
+    /// Reads the stored CREATE TABLE statement for a table (nil if missing).
+    private func migrationTableSchema(
+        named tableName: String, in database: OpaquePointer
+    ) throws -> String {
+        let sql = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?;"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw QueueStoreError.sqlite(code: -1, message: "Could not prepare migration snapshot")
+        }
+        defer { sqlite3_finalize(statement) }
+        return try tableName.withCString { pointer -> String in
+            guard sqlite3_bind_text(statement, 1, pointer, -1, nil) == SQLITE_OK else {
+                throw QueueStoreError.sqlite(code: -1, message: "Could not bind migration snapshot table")
+            }
+            guard sqlite3_step(statement) == SQLITE_ROW,
+                  let schemaPointer = sqlite3_column_text(statement, 0)
+            else {
+                throw QueueStoreError.sqlite(code: -1, message: "Missing migration snapshot table \(tableName)")
+            }
+            return String(cString: schemaPointer)
+        }
+    }
+
+    /// True when the table has a column with this name.
+    private func columnExists(named columnName: String, in url: URL) throws -> Bool {
+        var database: OpaquePointer?
+        guard sqlite3_open(url.path, &database) == SQLITE_OK else {
+            throw QueueStoreError.sqlite(code: -1, message: "Could not open column lookup database")
+        }
+        defer { sqlite3_close(database) }
+        let sql = "SELECT 1 FROM pragma_table_info('queue_items') WHERE name = ? LIMIT 1;"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw QueueStoreError.sqlite(code: -1, message: "Could not prepare column lookup")
+        }
+        defer { sqlite3_finalize(statement) }
+        return try columnName.withCString { pointer -> Bool in
+            guard sqlite3_bind_text(statement, 1, pointer, -1, nil) == SQLITE_OK else {
+                throw QueueStoreError.sqlite(code: -1, message: "Could not bind column lookup")
+            }
+            return sqlite3_step(statement) == SQLITE_ROW
+        }
     }
 
     private func tableExists(named tableName: String, in url: URL) throws -> Bool {
@@ -121,29 +172,16 @@ struct QueueStoreTypedTranscriptMigrationTests {
         """, in: url)
     }
 
-    private func tableSnapshot(named tableName: String, in url: URL) throws -> String {
+    private func tableSnapshot(named tableName: String, in url: URL, includeSchema: Bool = true) throws -> String {
         var database: OpaquePointer?
-        guard sqlite3_open(url.path, &database) == SQLITE_OK else {
+        guard sqlite3_open(url.path, &database) == SQLITE_OK, let database else {
             throw QueueStoreError.sqlite(code: -1, message: "Could not open migration snapshot database")
         }
         defer { sqlite3_close(database) }
 
-        let sql = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?;"
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
-            throw QueueStoreError.sqlite(code: -1, message: "Could not prepare migration snapshot")
-        }
-        defer { sqlite3_finalize(statement) }
-        let schema = try tableName.withCString { pointer -> String in
-            guard sqlite3_bind_text(statement, 1, pointer, -1, nil) == SQLITE_OK else {
-                throw QueueStoreError.sqlite(code: -1, message: "Could not bind migration snapshot table")
-            }
-            guard sqlite3_step(statement) == SQLITE_ROW,
-                  let schemaPointer = sqlite3_column_text(statement, 0)
-            else {
-                throw QueueStoreError.sqlite(code: -1, message: "Missing migration snapshot table \(tableName)")
-            }
-            return String(cString: schemaPointer)
+        var schema = ""
+        if includeSchema {
+            schema = try migrationTableSchema(named: tableName, in: database)
         }
 
         let rowExpression: String
