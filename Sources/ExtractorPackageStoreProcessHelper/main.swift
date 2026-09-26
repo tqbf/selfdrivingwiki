@@ -9,7 +9,20 @@ private enum HelperError: Error {
 
 @main
 struct ExtractorPackageStoreProcessHelper {
-    static func main() async throws {
+    static func main() async {
+        // A throw out of an async @main dies by SIGTRAP ("Fatal error: Error
+        // raised at top level"), which `Process.terminationStatus` reports as
+        // 5 — indistinguishable from a runtime trap. Exit 3 names it as an
+        // ordinary helper failure instead.
+        do {
+            try await run()
+        } catch {
+            FileHandle.standardError.write(Data("helper failed: \(error)\n".utf8))
+            exit(3)
+        }
+    }
+
+    private static func run() async throws {
         guard CommandLine.arguments.count >= 3 else { throw HelperError.invalidArguments }
         let mode = CommandLine.arguments[1]
         let root = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
@@ -25,8 +38,13 @@ struct ExtractorPackageStoreProcessHelper {
             let coordinator = ExtractorPackageStoreCoordinator(layout: layout)
             try await coordinator.withExclusiveAccess {
                 try Data().write(to: ready, options: .atomic)
+                // Generous on purpose: the test drives this deadline from its
+                // own side, and a loaded CI runner can take tens of seconds
+                // between seeing `ready` and writing `release`. Dying early
+                // releases the flock and turns the exclusion assertion into
+                // a confusing spurious pass-through.
                 let clock = ContinuousClock()
-                let deadline = clock.now.advanced(by: .seconds(15))
+                let deadline = clock.now.advanced(by: .seconds(60))
                 while FileManager.default.fileExists(atPath: release.path) == false {
                     guard clock.now < deadline else { throw ExtractorPackageStoreError.lockTimedOut }
                     try await Task.sleep(for: .milliseconds(10))
