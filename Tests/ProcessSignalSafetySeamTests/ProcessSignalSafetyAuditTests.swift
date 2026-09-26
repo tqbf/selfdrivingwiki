@@ -80,6 +80,23 @@ struct ProcessSignalSafetyAuditTests {
                     + "ID, and treat ESRCH as an already-reaped group. One site sends the "
                     + "initial TERM, the other sends KILL to the same re-verified group "
                     + "after the grace period"),
+            .init(path: "Sources/WikiFSCore/Extractor/OwnedProcessGroupRegistry.swift",
+                  primitive: .posixSignal):
+                (1, "guarded: the quit-time backstop (#1330) signals the negative group "
+                    + "ID only after the registered identity — PID, parent PID, and "
+                    + "kernel start time — is re-observed and equals the pinned value. "
+                    + "An unobservable PID (already reaped) or a changed one (PID "
+                    + "recycled) is skipped, never signaled"),
+            .init(path: "Sources/WikiFSCore/Extractor/ExtractorOrphanWrapperReaper.swift",
+                  primitive: .posixSignal):
+                (3, "guarded: the daemon-startup orphan sweep (#1330). One site is a "
+                    + "kill(pid, 0) liveness probe that delivers no signal and reads "
+                    + "EPERM as still-live. The two SIGKILL sites fire only for a "
+                    + "same-UID process that is not the caller, whose process group ID "
+                    + "is greater than 1, and whose arguments reference an operation "
+                    + "session directory whose recorded owner PID is dead. The group "
+                    + "signal is tried first; the direct PID signal is the fallback "
+                    + "when the group is already gone"),
             .init(path: "scripts/lib/test-watchdog-process-control.sh",
                   primitive: .shellSignal):
                 (1, "guarded: builtin kill is addressed by jobspec (%N), never by a "

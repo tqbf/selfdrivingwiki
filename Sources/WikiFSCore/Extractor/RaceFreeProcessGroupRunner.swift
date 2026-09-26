@@ -194,6 +194,14 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
             throw RaceFreeProcessGroupError.identityUnavailable
         }
         expectedIdentity = identity
+        // The registry owns the quit-time backstop for this group from the
+        // moment its identity is pinned (#1330). Deregistration happens at
+        // observed leader exit or handle teardown.
+        OwnedProcessGroupRegistry.register(
+            OwnedProcessGroupRegistry.Entry(
+                processID: spawnedPID,
+                identity: identity,
+                parentProcessID: parentProcessID))
 
         let stdoutPair = AsyncStream<Data>.makeStream(
             bufferingPolicy: .bufferingNewest(64))
@@ -255,12 +263,16 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
             } while result < 0 && errno == EINTR
             guard result == spawnedPID else { return }
             exitState.finish(cause: Self.decodeWaitStatus(status))
+            // The leader is reaped, so no verified group signal is possible
+            // any more. Leave the quit registry (#1330).
+            OwnedProcessGroupRegistry.deregister(processID: spawnedPID)
         }
         processSource.resume()
     }
     #endif
 
     deinit {
+        OwnedProcessGroupRegistry.deregister(processID: processID)
         processSource.cancel()
         stdoutReader.readabilityHandler = nil
         stderrReader.readabilityHandler = nil
