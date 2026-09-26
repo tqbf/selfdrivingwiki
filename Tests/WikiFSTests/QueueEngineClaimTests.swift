@@ -173,10 +173,14 @@ struct QueueEngineClaimTests {
             config: QueueEngineConfig(ingestionLimits: ["p1": 1]),
             workerFactory: factory)
 
-        // Collect progress events to assert the surfaced trail line.
+        // Collect progress events to assert the surfaced trail line. The
+        // stream must be captured BEFORE start()/enqueue: `engine.events`
+        // registers a new subscriber per access, and the scan's progress
+        // emission can win the race against a late subscription under load.
+        let events = engine.events
         let progressLines = AdmissionProgressRecorder()
         let eventsTask = Task {
-            for await event in engine.events {
+            for await event in events {
                 if case .progress(let id, let line) = event {
                     progressLines.record(id: id, line: line)
                 }
