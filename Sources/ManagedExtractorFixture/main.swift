@@ -265,6 +265,27 @@ case "hold":
     // runner's verified group signal; alarm(2) covers a dead supervisor (#1259).
     alarm(600)
     while true { _ = Darwin.pause() }
+case "stall":
+    // Mid-run stall for the #1330 end-to-end test: one progress frame,
+    // then no output file and no terminal frame. The operation is simply
+    // still working. The progress frame doubles as the test's spawn
+    // rendezvous: the host registers the group at spawn, so the frame
+    // proves the group is registered and the process is mid-run.
+    // alarm(600) is the failsafe ceiling when no supervisor ever reaps it
+    // (#1259).
+    do {
+        try write(Frame(
+            kind: "progress",
+            payload: Progress(
+                requestID: request.requestID,
+                completedUnitCount: 0,
+                totalUnitCount: 1,
+                message: "extracting")))
+    } catch {
+        exit(3)
+    }
+    alarm(600)
+    while true { _ = Darwin.pause() }
 case "htmlsuccess":
     let markdown = "# Hello\n\nWorld.\n"
     do {

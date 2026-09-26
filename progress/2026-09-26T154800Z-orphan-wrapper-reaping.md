@@ -1,3 +1,4 @@
+---
 timestamp: 2026-09-26T154800Z
 title: Orphaned uv extractor wrappers are reaped at quit and at daemon startup
 branch: fix/reap-orphaned-extractor-wrappers
@@ -38,7 +39,7 @@ Two changes close the leak:
 `operationSessionIsStale` now shares a validated `<pid>-<staging-id>` parser
 (`ExtractorOperationSessionName`) with the sweep.
 
-## Evidence
+## Verification
 
 - `make test` green, 4153 tests.
 - New suites: `OwnedProcessGroupRegistryTests` (6 tests, one real
