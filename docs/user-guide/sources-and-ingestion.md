@@ -61,8 +61,9 @@ See [Extractor packages](extractor-packages.md).
 ### From Zotero
 
 If you use [Zotero](https://www.zotero.org/) for reference management, the
-reviewed `zotero` package downloads the attachments you name. The in-app
-library picker is not built yet; you list attachment keys in a config file.
+reviewed `zotero` fetcher package acquires the attachments you name. The
+in-app library picker is not built yet; you list attachment keys in a config
+file.
 
 1. Store your API key: open **Settings → Extraction → Packages** and click
    **Configure…** on the Zotero Attachment row. Paste the key into the
@@ -85,10 +86,21 @@ library picker is not built yet; you list attachment keys in a config file.
    Packages declare their own sync config, so other syncable packages use
    the same command under their own name.
 
-Imported sources carry a **Zotero** origin tag with a clickable "View in
-Zotero" link that opens the item in the Zotero app. See
-[Extractor packages](extractor-packages.md#zotero-attachments) for the full
-detail, including typed failures.
+What a fetch produces:
+
+- A PDF becomes the source's stored bytes. The app converts it once through
+  your configured PDF extractor.
+- A Markdown or plain-text attachment becomes the source's Markdown
+  directly.
+- The source records the acquisition's external item key and title. The
+  display keeps the **Zotero** origin tag with a clickable "View in Zotero"
+  link that opens the item in the Zotero app.
+- A failed fetch leaves the source pending for a normal retry. If the app
+  stops between storing bytes and queueing the conversion, the next queue
+  scan creates the missing job. Nothing is fetched or converted twice.
+
+See [Extractor packages](extractor-packages.md#zotero-attachments) for the
+full detail, including typed failures.
 
 ### Import a folder
 

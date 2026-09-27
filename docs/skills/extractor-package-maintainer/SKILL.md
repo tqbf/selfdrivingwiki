@@ -1,6 +1,6 @@
 ---
 name: extractor-package-maintainer
-description: Create and maintain Self Driving Wiki extractor packages. Use when you create, review, validate, update, or remove a package, including Defuddle, pdf2md, DoclingServe, Docx2md, and Podcast Transcript.
+description: Create and maintain Self Driving Wiki extractor and fetcher packages. Use when you create, review, validate, update, or remove a package, including Defuddle, pdf2md, DoclingServe, Docx2md, and Podcast Transcript.
 ---
 
 # Extractor package maintainer
@@ -14,11 +14,12 @@ Read the normative references before you change a package:
 ## Package facts
 
 - An extractor package is one local directory with `manifest.json` and declared files. Package import accepts no archives or remote package sources.
-- Protocol revisions 1, 2, 3, and 4 are supported. Protocol revision 2 adds credential and operation-configuration paths. Protocol revision 3 adds `remote-url` input. Protocol revision 4 adds the optional result-frame fields `resultMIMEType` (the output file carries source bytes instead of Markdown) and `articleMetadata.identifier` (an external provenance identity). A revision 3 or lower host rejects a result frame carrying those fields.
-- Manifest revisions are separate from protocol revisions. Use manifest revision 1 unless a package declares credential requirements. Credential requirements require manifest revision 2.
+- Protocol revisions 1, 2, 3, 4, and 5 are supported. Protocol revision 2 adds credential and operation-configuration paths. Protocol revision 3 adds `remote-url` input. Protocol revision 4 adds the optional result-frame fields `resultMIMEType` (the output file carries source bytes instead of Markdown) and `articleMetadata.identifier` (an external provenance identity). Protocol revision 5 adds the fetcher `resultType` result frame. A revision 3 or lower host rejects a result frame carrying the revision-4 fields.
+- Manifest revisions are separate from protocol revisions. Use manifest revision 1 unless a package declares credential requirements. Credential requirements require manifest revision 2. The fetcher role requires manifest revision 4.
 - One request enters the process. One terminal frame exits on standard output as JSON Lines.
 - Supported extractor kinds are `pdf`, `html`, `docx`, `podcast-transcript`,
-  `apple-podcast-transcript`, `youtube-transcript`, and `zotero`.
+  `apple-podcast-transcript`, and `youtube-transcript`. A fetcher declares no
+  kinds.
 
 ## The Apple Podcasts helper boundary
 
@@ -36,9 +37,30 @@ kind, MIME type, capability, credential, or package identifier.
 - Capabilities are the closed set `network`, `shared-runtime-cache`, `model-download`. `model-download` requires `network`. A capability is a declaration, not a sandbox.
 - A package runs as a one-shot process. It never runs as Swift, never provides a Cordis plugin, and never receives a `CordisContext`.
 
+## Fetcher packages
+
+A package declares one registration role. An `extractor` converts content it
+is handed — staged bytes or a remote URL — into Markdown. A `fetcher`
+acquires one remote source per request. The reviewed `Zotero` package is
+the fetcher example.
+
+- The fetcher role requires manifest revision 4 and protocol revision 5.
+- Declare `role: "fetcher"`. Declare no kinds and no `filenameExtensions`.
+  Set `mimeTypes` to the synthetic source MIME types the package claims,
+  such as `application/zotero`.
+- The `network` capability is required.
+- A sync declaration's `sourceMIMEType` must be one of the claimed MIME
+  types.
+- The result frame must state `resultType: "source-bytes"` — with a concrete
+  `resultMIMEType` and an optional `originalFilename` — or
+  `resultType: "markdown"`. One request produces exactly one result.
+- The host stores `source-bytes` as the source blob and queues one
+  follow-on format-extraction job. A `markdown` result is the finished
+  product; it needs no conversion.
+
 ## Create or change a package
 
-1. Copy the closest reviewed package layout in `ExtractorPackages/`. Use `Defuddle` for HTML, `Pdf2md` for PDF, `DoclingServe` for direct-launch Python, `Docx2md` for DOCX, `PodcastTranscript` for `remote-url` input, or `Zotero` for a `remote-url` package with a REQUIRED credential and revision-4 bytes results.
+1. Copy the closest reviewed package layout in `ExtractorPackages/`. Use `Defuddle` for HTML, `Pdf2md` for PDF, `DoclingServe` for direct-launch Python, `Docx2md` for DOCX, `PodcastTranscript` for `remote-url` input, or `Zotero` for the fetcher role: a `remote-url` package with a REQUIRED credential that claims a synthetic source MIME and returns `source-bytes` or `markdown`.
 2. Choose a lowercase reverse-DNS `packageID`, a strict semver `version`, and stable registration IDs.
 3. Declare the entry point and every file, including licenses and provenance notes. Declare no undeclared files in the folder.
 4. Choose `direct` or `runtime` launch. `direct` entry points need owner-execute source permission; `runtime` scripts need only owner-read. Keep runtime arguments fixed and bounded.

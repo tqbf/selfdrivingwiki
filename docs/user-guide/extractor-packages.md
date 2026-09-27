@@ -2,6 +2,8 @@
 
 An extractor package converts one source format to Markdown. The app uses extractor packages when it converts a PDF, HTML, or Word source, transcribes a podcast feed, and produces a Markdown page. A package is one folder that contains `manifest.json` and the files the manifest declares.
 
+Each package declares a role. An **extractor** converts the content it is handed — staged bytes or a remote URL — into Markdown. A **fetcher** acquires one remote source per request. It reports the exact downloaded bytes and their MIME type, or the finished Markdown itself. The app stores fetched bytes as the source's bytes and converts them once through the configured route. Fetched Markdown needs no conversion. The role is a declaration, not a test for network use: the podcast, Apple Podcasts, and YouTube packages fetch URLs, but they stay extractors because they convert the captions to Markdown. A fetcher only acquires.
+
 This Mac ships with five reviewed packages:
 
 | Package | Format | What it does | Runtime it needs |
@@ -93,9 +95,12 @@ sources.
 
 ### Zotero attachments
 
-Zotero acquisition runs through the reviewed `zotero` package. You name the
-attachment keys; the package downloads the files from your Zotero library
-through the Zotero Web API and never converts formats.
+Zotero acquisition runs through the reviewed `zotero` package. It is the
+reviewed fetcher example. The package claims the synthetic
+`application/zotero` source MIME type, and each request acquires one
+attachment. You name the attachment keys; the package downloads the files
+from your Zotero library through the Zotero Web API and never converts
+formats.
 
 Configure two things:
 
@@ -120,10 +125,11 @@ Configure two things:
 
 Zotero is not special-cased for this: packages declare their sync config.
 The file name above, the URL shape, and the key rules all come from the
-package's manifest (`sync` on the registration, manifest revision 3), so a
+package's manifest (`sync` on the registration, manifest revision 4), so a
 second syncable package works through the same command with no host
-changes. The command discovers syncable packages from the machine catalog
-and lists them when you name one it does not know.
+changes. The command name is unchanged: `wikictl extractor sync zotero`.
+The command discovers syncable packages from the machine catalog and lists
+them when you name one it does not know.
 
 Then run `wikictl extractor sync zotero`:
 
@@ -169,8 +175,14 @@ What a download produces:
   are stored as the source's bytes, and the app runs your normal PDF or
   HTML route on them — the same pdf2md / Docling / Defuddle selection as any
   other file. The Markdown appears as a derived version.
-- The parent item's key and title are kept on the source, so the "From
-  Zotero" provenance and the `zotero://` deep link work as before.
+- The app queues one conversion job for those bytes. If the app stops
+  between storing the bytes and queueing the job, the next queue scan
+  creates the missing job. Nothing is fetched or converted twice.
+- The parent item's key and title are kept on the source as its external
+  item provenance, so the Zotero origin label and the `zotero://` deep link
+  work as before.
+- A failed download leaves the source pending. A normal retry fetches it
+  again.
 - `linked_file` and `linked_url` attachments are typed failures: Zotero
   does not serve files for links.
 - Re-syncing changed bytes creates a new content version. Identical bytes
@@ -191,7 +203,7 @@ The capability list in a manifest (network, shared caches, model download) is a 
 
 ## Selection and route status
 
-Open **Settings** → **Extraction** and use the **Default Extractors** section. The table has one row for each extraction route. The current routes are PDF, HTML, Word (.docx), and Podcast transcript. A registration can add a row for a new format without an app update. Formats without a route do not have an extraction adapter yet.
+Open **Settings** → **Extraction** and use the **Default Extractors** section. The table has one row for each extraction route. The current routes are PDF, HTML, Word (.docx), and Podcast transcript. A registration can add a row for a new format without an app update. A fetcher registration adds a fetch route row for each MIME type it claims, such as **Fetch: application/zotero**, with its own picker. Formats without a route do not have an extraction adapter yet.
 
 Each row has four columns:
 
@@ -210,7 +222,7 @@ Older package versions stay available while a newer version is installed. A fail
 
 ## Installed packages in Settings
 
-Use **Installed Extractor Packages** to manage exact revisions. This section does not contain another default picker or the local import workflow. Expand a row to see its version, digest prefix, and registration name.
+Use **Installed Extractor Packages** to manage exact revisions. This section does not contain another default picker or the local import workflow. The **Handles** column shows what a package serves: a format such as PDF or HTML for an extractor, or **Fetch** for a fetcher. Expand a row to see its version, digest prefix, and registration name. An expanded fetcher row adds the detail line **Role: Fetcher (acquires one source per request)**.
 
 Click the **Advanced Local Package Import** row to expand or contract it. Use the row's **Import Extractor Package…** button to add a local package folder. The app validates and copies the folder into the extractor store on this Mac.
 
