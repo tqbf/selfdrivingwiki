@@ -97,10 +97,11 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
     public static let reviewedYouTubeTranscriptLogical = reviewedLogical(
         package: ReviewedExtractorPackages.youtubeTranscript, registration: "captions")
 
-    /// The logical reference of the reviewed Zotero package registration.
-    /// The bundled default-route record supplies this lineage when the
-    /// canonical Zotero route has no configured selection.
-    public static let reviewedZoteroLogical = reviewedLogical(
+    /// The logical reference of the reviewed Zotero fetcher registration.
+    /// The bundled default fetcher-route record supplies this lineage when
+    /// the canonical `application/zotero` fetcher route has no configured
+    /// selection.
+    public static let reviewedZoteroFetcherLogical = reviewedLogical(
         package: ReviewedExtractorPackages.zotero, registration: "attachment")
 
     private static func reviewedLogical(
@@ -203,18 +204,37 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         return transcript
     }
 
-    /// Resolves the configured Zotero attachment adapter. The selection
-    /// state machine mirrors the transcript routes exactly (see
-    /// `podcastTranscriptKey`): the reviewed lineage is the bundled default,
-    /// an explicit `.none` disables, and everything else fails closed.
-    public func prepareZoteroAttachment() async throws -> ProcessPackageZoteroAttachment {
+    /// Resolves the configured fetcher for one synthetic source MIME. The
+    /// selection state machine mirrors the transcript routes: the bundled
+    /// default fetcher-route record supplies the reviewed lineage when the
+    /// user has never configured the route, an explicit `.none` disables,
+    /// and everything else fails closed. The resolved adapter's registration
+    /// must actually claim this MIME — a mismatched claim fails closed.
+    public func prepareFetcher(sourceMIMEType: ExtractorMIMEType) async throws -> ProcessPackageFetcher {
         let configuration = try input.readConfiguration()
-        let key = try await zoteroKey(configuration: configuration)
-        let adapter = try await makeAdapter(for: key)
-        guard case .zotero(let attachment) = adapter else {
+        let route = FetcherRouteID(mimeType: sourceMIMEType)
+        let record = configuration.fetcherSelectionOrDefault(for: route)
+        guard case .installed(let reference)? = record else {
+            throw ExtractionServicesError.selectedFetcherUnavailable(
+                route: route,
+                reference: Self.reviewedZoteroFetcherLogical)
+        }
+        guard let match = await registry.resolveInstalledFetcher(reference) else {
+            throw ExtractionServicesError.selectedFetcherUnavailable(
+                route: route, reference: reference)
+        }
+        let adapter = try await match.backend.make()
+        guard case .fetcher(let fetcher) = adapter else {
             throw ExtractionServicesError.unavailable
         }
-        return attachment
+        // The selection's exact registration must claim the requested
+        // source MIME. An install that changed its claims cannot acquire
+        // sources routed under the old claims.
+        guard fetcher.claimsInputMIMEType(sourceMIMEType) else {
+            throw ExtractionServicesError.selectedFetcherUnavailable(
+                route: route, reference: reference)
+        }
+        return fetcher
     }
 
     public func registeredExtractionInputs() async -> RegisteredExtractionInputs {
@@ -353,23 +373,6 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         }
         return try await installedKey(
             reference, kind: .youtubeTranscript, route: .canonicalYouTubeTranscript)
-    }
-
-    /// Zotero key resolution. Same shape as the transcript siblings: an
-    /// explicit `.none` stays disabled and fails closed; a host reference is
-    /// equally dead — no built-in Zotero acquisition adapter exists — and
-    /// fails closed with the route diagnostic.
-    private func zoteroKey(
-        configuration: ExtractionConfig
-    ) async throws -> ExtractionAdapterKey {
-        let record = configuration.selectionOrDefault(for: .canonicalZotero)
-        guard case .installed(let reference)? = record else {
-            throw ExtractionServicesError.selectedExtractorUnavailable(
-                route: .canonicalZotero,
-                reference: Self.reviewedZoteroLogical)
-        }
-        return try await installedKey(
-            reference, kind: .zotero, route: .canonicalZotero)
     }
 
     /// Resolves an installed lineage to its exact registry key, failing

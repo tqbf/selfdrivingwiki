@@ -266,8 +266,18 @@ public struct ExtractorProtocolRevision: RawRepresentable, Codable, Hashable, Se
     /// a revision-3 request. Older hosts fail closed: their strict result
     /// decoders reject frames carrying the new fields.
     public static let v4 = Self(validatedRawValue: 4)
+    /// Revision 5 adds the fetcher role: a package registration may declare
+    /// itself a FETCHER — one validated `remote-url` acquisition per request
+    /// whose result states either `source-bytes` (a concrete MIME plus the
+    /// exact downloaded bytes, with an optional display filename) or
+    /// `markdown` — instead of an extractor conversion. Revision-5 extractor
+    /// requests keep their exact revision-1–4 wire shape and add only the
+    /// `role: "extractor"` tag; revisions 1–4 frames are byte-for-byte
+    /// unchanged and reject the new fields, so an older host fails closed.
+    public static let v5 = Self(validatedRawValue: 5)
     public init?(rawValue: Int) {
-        guard rawValue == 1 || rawValue == 2 || rawValue == 3 || rawValue == 4 else { return nil }
+        guard rawValue == 1 || rawValue == 2 || rawValue == 3 || rawValue == 4
+            || rawValue == 5 else { return nil }
         self.rawValue = rawValue
     }
     private init(validatedRawValue: Int) { self.rawValue = validatedRawValue }
@@ -294,8 +304,14 @@ public struct ExtractorManifestRevision: RawRepresentable, Codable, Hashable, Se
     /// Revisions 1 and 2 validation, canonical JSON, and package digests
     /// are preserved byte-for-byte.
     public static let v3 = Self(validatedRawValue: 3)
+    /// Revision 4 adds the explicit registration role (`extractor` or
+    /// `fetcher`). Older revisions never encode a `role` key and reject it
+    /// (unknown-field policy), so every revision 1–3 manifest — and its
+    /// canonical JSON and package digest — is preserved byte-for-byte.
+    /// Revision-4 canonical encoding always writes `role`.
+    public static let v4 = Self(validatedRawValue: 4)
     public init?(rawValue: Int) {
-        guard rawValue == 1 || rawValue == 2 || rawValue == 3 else { return nil }
+        guard rawValue == 1 || rawValue == 2 || rawValue == 3 || rawValue == 4 else { return nil }
         self.rawValue = rawValue
     }
     private init(validatedRawValue: Int) { self.rawValue = validatedRawValue }
@@ -303,7 +319,7 @@ public struct ExtractorManifestRevision: RawRepresentable, Codable, Hashable, Se
     /// reader uses it to skip — not fail on — records persisted by a newer
     /// host, so a mixed-version machine degrades to "record invisible"
     /// instead of an unreadable catalog.
-    public static var maximumKnownRawValue: Int { v3.rawValue }
+    public static var maximumKnownRawValue: Int { v4.rawValue }
     public init(from decoder: any Decoder) throws {
         let rawValue = try Int(from: decoder)
         guard let value = Self(rawValue: rawValue) else { throw ExtractorValidationError.invalidRevision(rawValue) }

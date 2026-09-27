@@ -3,13 +3,14 @@ import Testing
 import WikiFSTypes
 
 struct ExtractorProtocolTests {
-    @Test func protocolRevision4IsAcceptedAnd5IsRejected() throws {
+    @Test func protocolRevision5IsAcceptedAnd6IsRejected() throws {
         #expect(ExtractorProtocolRevision(rawValue: 4) == .v4)
-        #expect(ExtractorProtocolRevision(rawValue: 5) == nil)
+        // Revision 5 (fetcher requests + typed fetch results) is valid.
+        #expect(ExtractorProtocolRevision(rawValue: 5) == .v5)
         #expect(throws: Error.self) {
             try JSONDecoder().decode(
                 ExtractorProtocolRevision.self,
-                from: JSONEncoder().encode(5))
+                from: JSONEncoder().encode(6))
         }
         // Revision ordering: 1 < 2 < 3 < 4 (a rev-4 host still serves 1-3).
         #expect(ExtractorProtocolRevision.v1 < .v2)

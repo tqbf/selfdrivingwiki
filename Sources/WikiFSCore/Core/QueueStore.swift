@@ -46,6 +46,63 @@ public enum QueueStoreError: Error, CustomStringConvertible, LocalizedError {
     public var errorDescription: String? { description }
 }
 
+// MARK: - QueueItemDedupeKey
+
+/// A caller-supplied typed dedupe key for idempotent queue operations.
+/// Scope-encoding by construction: the follow-on format job's key carries
+/// the wiki ID, the source ID, and the exact acquired content-version ID, so
+/// two hosts (app + daemon) racing the same recovery scan insert one item,
+/// and a repeat insert returns the SAME row — including a completed one —
+/// instead of creating a second format job.
+public struct QueueItemDedupeKey: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public static let maximumByteCount = 256
+
+    public let rawValue: String
+
+    public init?(rawValue: String) {
+        guard rawValue.isEmpty == false,
+              rawValue.utf8.count <= Self.maximumByteCount,
+              rawValue.contains("\0") == false,
+              rawValue.contains("\n") == false else { return nil }
+        self.rawValue = rawValue
+    }
+
+    public init(from decoder: any Decoder) throws {
+        try self.init(validating: String(from: decoder))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
+    public init(validating rawValue: String) throws {
+        guard let value = Self(rawValue: rawValue) else {
+            throw QueueStoreError.invalidRequest("dedupe key \(rawValue)")
+        }
+        self = value
+    }
+
+    /// The follow-on format-extraction key for one acquired fetch: scoped to
+    /// the wiki, the source, and the exact acquired content version.
+    public static func followOnFormatExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        acquiredContentVersionID: SourceVersionID
+    ) -> QueueItemDedupeKey {
+        // All three components are ULIDs (alphanumeric only), so the joined
+        // form is bounded well under the cap and collision-free across
+        // namespaces. Construction from validated IDs cannot fail.
+        let raw = "follow-on-format/\(wikiID.rawValue)/\(sourceID.rawValue)/\(acquiredContentVersionID.rawValue)"
+        guard let key = QueueItemDedupeKey(rawValue: raw) else {
+            preconditionFailure("follow-on dedupe key exceeds the bounded key shape: \(raw)")
+        }
+        return key
+    }
+
+    public var description: String { rawValue }
+}
+
 // MARK: - QueueStore
 
 /// Persistent, durable store for the extraction / ingestion work queue.
@@ -240,6 +297,10 @@ public final class QueueStore: @unchecked Sendable {
     /// - v10: nullable durable admission status on queue_items
     ///   (`admission_reason`, `admission_checked_at`) — why a queued item is
     ///   not yet dispatched.
+    /// - v11: nullable UNIQUE `dedupe_key` on `queue_items` — the typed
+    ///   idempotency key for follow-on operations (the fetch drain's format
+    ///   job). `ON CONFLICT(dedupe_key) DO NOTHING` + a same-transaction
+    ///   select-by-key make concurrent inserts return one item.
     private static let migrator: DatabaseMigrator = {
         var m = DatabaseMigrator()
 
@@ -257,7 +318,8 @@ public final class QueueStore: @unchecked Sendable {
                 error         TEXT,
                 created_at    INTEGER NOT NULL,
                 started_at    INTEGER,
-                finished_at   INTEGER
+                finished_at   INTEGER,
+                dedupe_key    TEXT
             );
             """)
 
@@ -502,6 +564,26 @@ public final class QueueStore: @unchecked Sendable {
             }
         }
 
+        m.registerMigration("v11_add_dedupe_key") { db in
+            // Typed idempotency for follow-on operations (fetcher packages):
+            // the follow-on format job carries a caller-supplied key scoped
+            // to wiki + source + acquired content version. Nullable + UNIQUE
+            // (a SQLite UNIQUE index treats NULLs as distinct, so plain
+            // enqueues are unaffected). The insert path relies on
+            // ON CONFLICT + a same-transaction select-by-key, so concurrent
+            // hosts racing one key converge on one item.
+            let existing = Set(try db.columns(in: "queue_items").map(\.name))
+            if !existing.contains("dedupe_key") {
+                try db.execute(sql: """
+                ALTER TABLE queue_items ADD COLUMN dedupe_key TEXT;
+                """)
+            }
+            try db.execute(sql: """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_items_dedupe_key
+                ON queue_items(dedupe_key) WHERE dedupe_key IS NOT NULL;
+            """)
+        }
+
         return m
     }()
 
@@ -711,15 +793,56 @@ public final class QueueStore: @unchecked Sendable {
     /// Enqueue a new item: generates a ULID ID, assigns the next ordering key
     /// (max + 1000 for this queue kind), sets `state = .queued`, `attempt = 0`,
     /// and records `createdAt`. Returns the fully-populated item.
+    ///
+    /// With `request.dedupeKey`, the insert is idempotent:
+    /// `ON CONFLICT(dedupe_key) … DO NOTHING` (conflict target matching the
+    /// partial UNIQUE index) followed by a select-by-key
+    /// INSIDE THE SAME transaction returns the existing item for a repeat
+    /// insert — whatever its state, including a completed one. There is no
+    /// select-then-insert race: two stores (app + daemon) racing one key
+    /// converge on exactly one row.
     @discardableResult
     public func enqueue(_ request: QueueItemRequest) throws -> QueueItem {
         try Self.wrap {
             let queue = try self.queue()
+            let dedupeKey = request.dedupeKey
             return try queue.write { db in
                 let id = QueueItemID(rawValue: ULID.generate())
                 let orderingKey = try Self.nextOrderingKey(db, for: request.queue)
                 let now = Self.nowMillis()
                 let payloadJSON = try Self.encodePayload(request.payload)
+
+                if let dedupeKey {
+                    try db.execute(
+                        sql: """
+                        INSERT INTO queue_items
+                            (id, queue, wiki_id, payload, state, ordering_key,
+                             provider_id, attempt, error, created_at, started_at, finished_at,
+                             dedupe_key)
+                        VALUES
+                            (?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?, NULL, NULL, ?)
+                        ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING;
+                        """,
+                        arguments: [
+                            id.rawValue, request.queue.rawValue, request.wikiID.rawValue, payloadJSON,
+                            QueueItemState.queued.rawValue, orderingKey, now,
+                            dedupeKey.rawValue,
+                        ])
+                    // The winner's row — ours when the insert landed, the
+                    // existing item when a concurrent host won the race.
+                    guard let row = try Row.fetchOne(
+                        db,
+                        sql: """
+                        SELECT \(Self.selectColumns)
+                        FROM queue_items WHERE dedupe_key = ?;
+                        """,
+                        arguments: [dedupeKey.rawValue]) else {
+                        throw QueueStoreError.sqlite(
+                            code: -1,
+                            message: "deduped enqueue inserted no readable row for \(dedupeKey.rawValue)")
+                    }
+                    return try Self.readItem(from: row)
+                }
 
                 try db.execute(
                     sql: """
@@ -748,6 +871,25 @@ public final class QueueStore: @unchecked Sendable {
                     startedAt: nil,
                     finishedAt: nil
                 )
+            }
+        }
+    }
+
+    /// The item carrying `key`, if any — any state, including completed.
+    /// The recovery scan reads this to settle a `formatJobPending` marker
+    /// whose deduped item already finished.
+    public func item(forDedupeKey key: QueueItemDedupeKey) throws -> QueueItem? {
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                guard let row = try Row.fetchOne(
+                    db,
+                    sql: """
+                    SELECT \(Self.selectColumns)
+                    FROM queue_items WHERE dedupe_key = ?;
+                    """,
+                    arguments: [key.rawValue]) else { return nil }
+                return try Self.readItem(from: row)
             }
         }
     }

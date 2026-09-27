@@ -102,29 +102,74 @@ public extension ExtractorRouteID {
         kind: .youtubeTranscript,
         mimeTypeString: "video/youtube")
 
-    /// The Zotero attachment route. The synthetic `application/zotero`
-    /// source MIME is the route dimension for byteless `.zotero` sources;
-    /// the input itself is the attachment file URL (protocol revision 3+
-    /// transport; the package speaks revision 4 results).
-    static let canonicalZotero = ExtractorRouteID.validatedCanonical(
-        kind: .zotero,
-        mimeTypeString: "application/zotero")
-
     /// True for the routes host execution supports today. Future package
     /// registrations may declare other MIME types; displaying and resolving them
     /// is the route table's job, while execution adapters for new kinds remain
-    /// separate work.
+    /// separate work. The retired `zotero` extractor route is gone: fetcher
+    /// acquisitions resolve through `FetcherRouteID`, not this type.
     var isCanonical: Bool {
         self == .canonicalPDF || self == .canonicalHTML || self == .canonicalDOCX
             || self == .canonicalPodcastTranscript
             || self == .canonicalApplePodcastTranscript
             || self == .canonicalYouTubeTranscript
-            || self == .canonicalZotero
     }
 
     private static func validatedCanonical(kind: ExtractorKind, mimeTypeString: String) -> ExtractorRouteID {
         guard let route = ExtractorRouteID(normalizing: kind, mimeTypeString: mimeTypeString) else {
             preconditionFailure("canonical route literal must be a valid MIME type: \(kind.rawValue) \(mimeTypeString)")
+        }
+        return route
+    }
+}
+
+/// One fetcher route: the synthetic input MIME type of the byteless sources
+/// a fetcher registration can acquire. Distinct from `ExtractorRouteID` by
+/// construction — a fetcher route has no `ExtractorKind`, and an extractor
+/// route can never claim a fetcher's synthetic source MIME — so a
+/// same-MIME extractor can never replace a fetcher selection, and the two
+/// selection tables (`routeExtractors` / `routeFetchers`) cannot collide.
+public struct FetcherRouteID: Codable, Hashable, Sendable, Comparable, CustomStringConvertible {
+    public let mimeType: ExtractorMIMEType
+
+    private enum CodingKeys: String, CodingKey { case mimeType }
+
+    public init(mimeType: ExtractorMIMEType) {
+        self.mimeType = mimeType
+    }
+
+    /// Builds a fetcher route from a caller-supplied MIME string, normalizing
+    /// surrounding whitespace and case before validation. Returns `nil` when
+    /// the normalized string is still not a valid MIME type.
+    public init?(normalizing mimeTypeString: String) {
+        let normalized = mimeTypeString.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let mimeType = ExtractorMIMEType(rawValue: normalized) else { return nil }
+        self.init(mimeType: mimeType)
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.mimeType = try container.decode(ExtractorMIMEType.self, forKey: .mimeType)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mimeType, forKey: .mimeType)
+    }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.mimeType < rhs.mimeType }
+
+    public var description: String { "fetch \(mimeType.rawValue)" }
+
+    /// The canonical Zotero acquisition route. The synthetic
+    /// `application/zotero` source MIME is the route dimension for the
+    /// byteless sources the `wikictl extractor sync zotero` command creates;
+    /// the input itself is the attachment file URL (protocol revision 5).
+    public static let canonicalZotero = FetcherRouteID.validatedCanonical(
+        mimeTypeString: "application/zotero")
+
+    private static func validatedCanonical(mimeTypeString: String) -> FetcherRouteID {
+        guard let route = FetcherRouteID(normalizing: mimeTypeString) else {
+            preconditionFailure("canonical fetcher route literal must be a valid MIME type: \(mimeTypeString)")
         }
         return route
     }

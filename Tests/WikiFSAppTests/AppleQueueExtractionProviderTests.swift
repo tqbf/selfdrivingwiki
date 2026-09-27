@@ -33,15 +33,18 @@ struct AppleQueueExtractionProviderTests {
             _ operation: ManagedExtractorProcessRequest,
             onFrame: @escaping @Sendable (ExtractorProtocolFrame) -> Void
         ) async throws -> ManagedExtractorProcessResult {
-            lastRequest = operation.protocolRequest
+            guard case .extractor(let request) = operation.request else {
+                throw ExtractionServicesError.unavailable
+            }
+            lastRequest = request
             let output = operation.paths.operationRoot
-                .appendingPathComponent(operation.protocolRequest.outputPath.rawValue)
+                .appendingPathComponent(request.outputPath.rawValue)
             try FileManager.default.createDirectory(
                 at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(markdown.utf8).write(to: output)
             let frame = ExtractorProtocolFrame.result(try ExtractorResultFrame(
-                requestID: operation.protocolRequest.requestID,
-                outputPath: operation.protocolRequest.outputPath,
+                requestID: request.requestID,
+                outputPath: request.outputPath,
                 markdownByteCount: markdown.utf8.count,
                 metadata: try ExtractorReportedMetadata(toolName: "apple-podcast-transcript")))
             return ManagedExtractorProcessResult(

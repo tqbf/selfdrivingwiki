@@ -212,6 +212,7 @@ struct ExtractorCredentialSettingsHostedTests {
             version: try ExtractorPackageVersion(validating: "1.0.0"),
             digest: try ExtractorPackageDigest(hex: String(repeating: "a", count: 64)))
         let row = ExtractorPackageSettingsRow(
+            role: .extractor,
             kind: .pdf,
             packageID: revision.packageID.rawValue,
             version: revision.version.rawValue,
@@ -257,6 +258,7 @@ struct ExtractorCredentialSettingsHostedTests {
             kinds: ["pdf"],
             mimeTypes: ["application/pdf"])
         let doclingRow = ExtractorPackageSettingsRow(
+            role: .extractor,
             kind: .pdf,
             packageID: doclingRevision.packageID.rawValue,
             version: doclingRevision.version.rawValue,

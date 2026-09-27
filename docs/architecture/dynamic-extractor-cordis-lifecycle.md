@@ -110,8 +110,9 @@ Cross-process wake notifications are payload-free hints. Every reconciliation re
 
 The generated component registers all declared registrations through `ExtractionBackendRegistry.registerBatch`:
 
-- Each registration derives one revision-qualified exact key (`kind` plus exact `ExtractorReference`).
-- The registry validates every entry and collision before it commits anything.
+- An EXTRACTOR registration derives one revision-qualified exact key (`kind` plus exact `ExtractorReference`), one entry per declared kind, through the per-kind prepared-operation switch.
+- A FETCHER registration (manifest revision 4, `role: "fetcher"`) derives its own kind-free exact key (`.installedFetcher` plus exact `ExtractorReference`): one entry per registration, no `ExtractorKind` and no `ExtractionBackendKind`. The definition fingerprint covers the role and the claimed input MIME set, so a role change is a definition change.
+- The registry validates every entry and collision before it commits anything. The two namespaces stay disjoint: a same-MIME extractor can never collide with, or resolve as, a fetcher.
 - The batch commits atomically and returns a handle with an exact activation token.
 - The batch removes only registrations owned by that token. A stale disposer is a no-op against newer registrations.
 - The plugin's staged cleanup effect disposes the batch in defined order when the component is disposed.

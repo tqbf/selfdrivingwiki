@@ -35,6 +35,12 @@ public enum ExtractionServicesError: Error, Equatable, Sendable, LocalizedError 
     case selectedExtractorUnavailable(
         route: ExtractorRouteID,
         reference: LogicalExtractorReference)
+    /// An explicit installed fetcher selection has no executable registration.
+    /// Fetcher routes are their own namespace, so the diagnostic names the
+    /// fetcher route, never an extractor kind.
+    case selectedFetcherUnavailable(
+        route: FetcherRouteID,
+        reference: LogicalExtractorReference)
 
     public var errorDescription: String? {
         switch self {
@@ -43,6 +49,9 @@ public enum ExtractionServicesError: Error, Equatable, Sendable, LocalizedError 
         case .selectedExtractorUnavailable(let route, let reference):
             return "The selected \(route.kind.rawValue.uppercased()) extractor "
                 + "\(reference.packageID.rawValue) is unavailable. Open Extraction Settings to fix this route or choose another extractor."
+        case .selectedFetcherUnavailable(let route, let reference):
+            return "The selected fetcher \(reference.packageID.rawValue) for "
+                + "\(route.mimeType.rawValue) is unavailable. Open Extraction Settings to fix this route or choose another fetcher."
         }
     }
 }
@@ -71,11 +80,12 @@ public protocol ExtractionServices: Sendable {
     /// The YouTube transcript route: same package-only shape as the podcast
     /// siblings, over the `youtube-transcript` kind.
     func prepareYouTubeTranscript() async throws -> ProcessPackageYouTubeTranscript
-    /// The Zotero attachment route: same package-only shape as the
-    /// transcript siblings, over the `zotero` kind. The prepared adapter
-    /// runs validated `remote-url` operations whose revision-4 results
-    /// carry either Markdown or source bytes plus `resultMIMEType`.
-    func prepareZoteroAttachment() async throws -> ProcessPackageZoteroAttachment
+    /// The generic fetcher route: resolves the configured fetcher for one
+    /// synthetic source MIME (the fetcher registration's claimed input) and
+    /// fails closed on a missing, ambiguous, or incompatible selection. The
+    /// prepared adapter runs validated revision-5 `remote-url` acquisitions
+    /// whose typed results are `source-bytes` or `markdown`.
+    func prepareFetcher(sourceMIMEType: ExtractorMIMEType) async throws -> ProcessPackageFetcher
     /// Active package registration claims used for import recognition.
     func registeredExtractionInputs() async -> RegisteredExtractionInputs
     /// Active package registrations with manifest-derived presentation data.
@@ -127,7 +137,7 @@ public extension ExtractionServices {
     /// Default for seams that never run packages (test runtimes, the legacy
     /// coordinator). The process facade overrides it with real package
     /// resolution.
-    func prepareZoteroAttachment() async throws -> ProcessPackageZoteroAttachment {
+    func prepareFetcher(sourceMIMEType: ExtractorMIMEType) async throws -> ProcessPackageFetcher {
         throw ExtractionServicesError.unavailable
     }
 
@@ -216,8 +226,8 @@ public actor MutableExtractionServices: ExtractionServices {
         try await installed.prepareYouTubeTranscript()
     }
 
-    public func prepareZoteroAttachment() async throws -> ProcessPackageZoteroAttachment {
-        try await installed.prepareZoteroAttachment()
+    public func prepareFetcher(sourceMIMEType: ExtractorMIMEType) async throws -> ProcessPackageFetcher {
+        try await installed.prepareFetcher(sourceMIMEType: sourceMIMEType)
     }
 
     public func registeredExtractionInputs() async -> RegisteredExtractionInputs {

@@ -74,7 +74,7 @@ struct SourcesTests {
         let store = try tempStore()
         let source = try store.addSource(
             filename: "data.pdf", data: Data("%PDF-1.4\ncontent".utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil,
+            externalItemKey: nil, externalItemTitle: nil,
             mimeType: "application/custom")
         #expect(source.mimeType == "application/custom")
     }
@@ -222,17 +222,17 @@ struct SourcesTests {
         let store = try tempStore()
         let summary = try store.addSource(
             filename: "drop.pdf", data: Data("%PDF".utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil)
-        #expect(summary.zoteroItemKey == nil)
-        #expect(summary.zoteroItemTitle == nil)
+            externalItemKey: nil, externalItemTitle: nil)
+        #expect(summary.externalItemKey == nil)
+        #expect(summary.externalItemTitle == nil)
 
         let readBack = try store.getSource(id: summary.id)
-        #expect(readBack.zoteroItemKey == nil)
-        #expect(readBack.zoteroItemTitle == nil)
+        #expect(readBack.externalItemKey == nil)
+        #expect(readBack.externalItemTitle == nil)
 
         let listed = try store.listSources()
-        #expect(listed.first?.zoteroItemKey == nil)
-        #expect(listed.first?.zoteroItemTitle == nil)
+        #expect(listed.first?.externalItemKey == nil)
+        #expect(listed.first?.externalItemTitle == nil)
     }
 
     /// The Zotero seam writes the item key + title and they survive a read-back.
@@ -240,13 +240,13 @@ struct SourcesTests {
         let store = try tempStore()
         let summary = try store.addSource(
             filename: "paper.pdf", data: Data("%PDF".utf8),
-            zoteroItemKey: "ABC123", zoteroItemTitle: "A Study in Scarlet")
-        #expect(summary.zoteroItemKey == "ABC123")
-        #expect(summary.zoteroItemTitle == "A Study in Scarlet")
+            externalItemKey: "ABC123", externalItemTitle: "A Study in Scarlet")
+        #expect(summary.externalItemKey == "ABC123")
+        #expect(summary.externalItemTitle == "A Study in Scarlet")
 
         let readBack = try store.getSource(id: summary.id)
-        #expect(readBack.zoteroItemKey == "ABC123")
-        #expect(readBack.zoteroItemTitle == "A Study in Scarlet")
+        #expect(readBack.externalItemKey == "ABC123")
+        #expect(readBack.externalItemTitle == "A Study in Scarlet")
     }
 
     // MARK: - Content is byte-identical (== and sha256)
@@ -415,7 +415,7 @@ struct SourcesTests {
         let result = DisplayNameResolver.resolve(
             filename: "abc123.pdf", data: Data(),
             mimeType: "application/pdf",
-            zoteroItemTitle: "A Study in Scarlet")
+            externalItemTitle: "A Study in Scarlet")
         #expect(result == "A Study in Scarlet")
     }
 
@@ -423,7 +423,7 @@ struct SourcesTests {
         let result = DisplayNameResolver.resolve(
             filename: "abc123.pdf", data: Data(),
             mimeType: "application/pdf",
-            zoteroItemTitle: "   ")
+            externalItemTitle: "   ")
         #expect(result == nil)
     }
 
@@ -436,7 +436,7 @@ struct SourcesTests {
         """
         let result = DisplayNameResolver.resolve(
             filename: "note.md", data: Data(md.utf8),
-            mimeType: nil, zoteroItemTitle: nil)
+            mimeType: nil, externalItemTitle: nil)
         #expect(result == "Hello World")
     }
 
@@ -449,7 +449,7 @@ struct SourcesTests {
         """
         let result = DisplayNameResolver.resolve(
             filename: "doc.md", data: Data(md.utf8),
-            mimeType: nil, zoteroItemTitle: nil)
+            mimeType: nil, externalItemTitle: nil)
         #expect(result == "Single Quoted Title")
     }
 
@@ -462,7 +462,7 @@ struct SourcesTests {
         """
         let result = DisplayNameResolver.resolve(
             filename: "page.md", data: Data(md.utf8),
-            mimeType: nil, zoteroItemTitle: nil)
+            mimeType: nil, externalItemTitle: nil)
         #expect(result == "Plain Title")
     }
 
@@ -470,7 +470,7 @@ struct SourcesTests {
         let md = "# Just a heading\n\nSome content."
         let result = DisplayNameResolver.resolve(
             filename: "plain.md", data: Data(md.utf8),
-            mimeType: nil, zoteroItemTitle: nil)
+            mimeType: nil, externalItemTitle: nil)
         #expect(result == "Just a heading")
     }
 
@@ -478,7 +478,7 @@ struct SourcesTests {
         let md = "\n\n\n# Heading After Blanks\n\nBody."
         let result = DisplayNameResolver.resolve(
             filename: "plain.md", data: Data(md.utf8),
-            mimeType: nil, zoteroItemTitle: nil)
+            mimeType: nil, externalItemTitle: nil)
         #expect(result == "Heading After Blanks")
     }
 
@@ -491,7 +491,7 @@ struct SourcesTests {
         """
         let result = DisplayNameResolver.resolve(
             filename: "page.md", data: Data(md.utf8),
-            mimeType: nil, zoteroItemTitle: nil)
+            mimeType: nil, externalItemTitle: nil)
         #expect(result == "Fallback Heading")
     }
 
@@ -499,7 +499,7 @@ struct SourcesTests {
         let md = "## Not An H1\n\nSome content."
         let result = DisplayNameResolver.resolve(
             filename: "plain.md", data: Data(md.utf8),
-            mimeType: nil, zoteroItemTitle: nil)
+            mimeType: nil, externalItemTitle: nil)
         #expect(result == nil)
     }
 
@@ -507,7 +507,7 @@ struct SourcesTests {
         let md = "# `Code` in a Title\n\nBody."
         let result = DisplayNameResolver.resolve(
             filename: "plain.md", data: Data(md.utf8),
-            mimeType: nil, zoteroItemTitle: nil)
+            mimeType: nil, externalItemTitle: nil)
         #expect(result == "`Code` in a Title")
     }
 
@@ -519,7 +519,7 @@ struct SourcesTests {
         """
         let result = DisplayNameResolver.resolve(
             filename: "file.txt", data: Data(md.utf8),
-            mimeType: "text/markdown", zoteroItemTitle: nil)
+            mimeType: "text/markdown", externalItemTitle: nil)
         #expect(result == "From MIME")
     }
 
@@ -535,14 +535,14 @@ struct SourcesTests {
         let pdfData = try minimalPDF(title: title)
         let result = DisplayNameResolver.resolve(
             filename: "report.pdf", data: pdfData,
-            mimeType: "application/pdf", zoteroItemTitle: nil)
+            mimeType: "application/pdf", externalItemTitle: nil)
         #expect(result == "My PDF Document")
     }
 
     @Test func displayNameNilForInvalidPDF() {
         let result = DisplayNameResolver.resolve(
             filename: "corrupt.pdf", data: Data("not a pdf".utf8),
-            mimeType: "application/pdf", zoteroItemTitle: nil)
+            mimeType: "application/pdf", externalItemTitle: nil)
         #expect(result == nil)
     }
 
@@ -551,14 +551,14 @@ struct SourcesTests {
         let pdfData = try minimalPDF()
         let result = DisplayNameResolver.resolve(
             filename: "untitled.pdf", data: pdfData,
-            mimeType: nil, zoteroItemTitle: nil)
+            mimeType: nil, externalItemTitle: nil)
         #expect(result == nil)
     }
 
     @Test func displayNameNilForPlainTextFile() {
         let result = DisplayNameResolver.resolve(
             filename: "readme.txt", data: Data("Hello".utf8),
-            mimeType: "text/plain", zoteroItemTitle: nil)
+            mimeType: "text/plain", externalItemTitle: nil)
         #expect(result == nil)
     }
 
@@ -567,7 +567,7 @@ struct SourcesTests {
         let result = DisplayNameResolver.resolve(
             filename: "doc.pdf", data: pdfData,
             mimeType: "application/pdf",
-            zoteroItemTitle: "Zotero Title")
+            externalItemTitle: "Zotero Title")
         #expect(result == "Zotero Title")
     }
 
@@ -580,7 +580,7 @@ struct SourcesTests {
         let result = DisplayNameResolver.resolve(
             filename: "note.md", data: Data(md.utf8),
             mimeType: "text/markdown",
-            zoteroItemTitle: "Zotero Title")
+            externalItemTitle: "Zotero Title")
         #expect(result == "Zotero Title")
     }
 
@@ -594,7 +594,7 @@ struct SourcesTests {
         let store = try tempStore()
         let summary = try store.addSource(
             filename: "report.pdf", data: pdfData,
-            zoteroItemKey: nil, zoteroItemTitle: nil,
+            externalItemKey: nil, externalItemTitle: nil,
             mimeType: "application/pdf", provenance: nil, role: .primary,
             originalPath: nil, activityID: nil,
             resolvedDisplayName: .some("Pre-Resolved Title"))
@@ -609,7 +609,7 @@ struct SourcesTests {
         let store = try tempStore()
         let summary = try store.addSource(
             filename: "report.pdf", data: pdfData,
-            zoteroItemKey: nil, zoteroItemTitle: nil,
+            externalItemKey: nil, externalItemTitle: nil,
             mimeType: "application/pdf", provenance: nil, role: .primary,
             originalPath: nil, activityID: nil,
             resolvedDisplayName: .some(nil))
@@ -622,7 +622,7 @@ struct SourcesTests {
         let store = try tempStore()
         let summary = try store.addSource(
             filename: "note.md", data: Data(md.utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil,
+            externalItemKey: nil, externalItemTitle: nil,
             mimeType: nil, provenance: nil, role: .primary,
             originalPath: nil, activityID: nil)
         #expect(summary.displayName == "Inline Title")

@@ -1,10 +1,9 @@
 {
   "requestID": "7c2d4f6a-0000-4000-8000-000000000004",
-  "protocolRevision": 4,
-  "kind": "zotero",
+  "protocolRevision": 5,
+  "role": "fetcher",
   "mimeType": "application/zotero",
   "originalFilename": "ABCD1234",
-  "inputTransport": "remote-url",
   "remoteURL": "https://api.zotero.org/users/1234567/items/ABCD1234/file",
   "outputPath": "output/result.md",
   "deadlineMillisecondsSince1970": 1735689600000,

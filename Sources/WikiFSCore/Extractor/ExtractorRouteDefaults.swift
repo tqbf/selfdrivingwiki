@@ -5,9 +5,25 @@ import Foundation
 /// the user has not configured a route.
 public struct ExtractorRouteDefaults: Decodable, Sendable {
     public let routeExtractors: [ExtractorRouteSelectionRecord]
+    /// Host-owned default fetcher selections. Keys are `FetcherRouteID`s —
+    /// distinct from any extractor route — so a default fetcher can never be
+    /// read as an extractor choice or the reverse. A missing key decodes to
+    /// an empty table (older bundled data).
+    public let routeFetchers: [FetcherRouteSelectionRecord]
 
-    public init(routeExtractors: [ExtractorRouteSelectionRecord]) {
+    public init(
+        routeExtractors: [ExtractorRouteSelectionRecord],
+        routeFetchers: [FetcherRouteSelectionRecord] = []
+    ) {
         self.routeExtractors = routeExtractors.normalizedForPersistence().records
+        self.routeFetchers = routeFetchers.normalizedForPersistence().records
+    }
+
+    private enum CodingKeys: String, CodingKey { case routeExtractors, routeFetchers }
+
+    /// The bundled fetcher default record for one route, if any.
+    public func fetcherDefault(for route: FetcherRouteID) -> ExtractionBackendReference? {
+        routeFetchers.first(where: { $0.route == route })?.fetcher
     }
 
     /// Defaults shipped with this build. A missing or invalid resource is a
@@ -40,6 +56,10 @@ public extension ExtractionConfig {
         where result.extractorSelection(for: record.route) == nil {
             result.setExtractorSelection(record.extractor, for: record.route)
         }
+        for record in defaults.routeFetchers
+        where result.fetcherSelection(for: record.route) == nil {
+            result.setFetcherSelection(record.fetcher, for: record.route)
+        }
         return result
     }
 
@@ -50,6 +70,14 @@ public extension ExtractionConfig {
     func selectionOrDefault(for route: ExtractorRouteID) -> ExtractionBackendReference? {
         extractorSelection(for: route)
             ?? ExtractorRouteDefaults.bundled.routeExtractors.first { $0.route == route }?.extractor
+    }
+
+    /// The fetcher route's effective selection: the stored record when
+    /// present, otherwise the bundled default fetcher record for that route.
+    /// Used by `prepareFetcher`, never the extractor tables.
+    func fetcherSelectionOrDefault(for route: FetcherRouteID) -> ExtractionBackendReference? {
+        fetcherSelection(for: route)
+            ?? ExtractorRouteDefaults.bundled.fetcherDefault(for: route)
     }
 
     /// Presentation mapping for the HTML route: the effective selection as the

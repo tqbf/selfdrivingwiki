@@ -190,13 +190,18 @@ private struct QueueRuntimeExtractionProvider: QueueExtractionProvider {
         resolution: TranscriptExtractionResolution,
         outcome: TranscriptFetchOutcome
     ) async throws -> QueueExtractionOutputReference? { nil }
-    func persistAttachmentExtraction(
+    func persistFetch(
         wikiID: WikiID,
         sourceID: SourceID,
-        resolution: AttachmentExtractionResolution,
-        outcome: AttachmentFetchOutcome
+        resolution: FetcherResolution,
+        outcome: FetchOutcome
     ) async throws -> QueueExtractionOutputReference? { nil }
-    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws {}
+    func enqueueFollowOnExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        acquiredContentVersionID: SourceVersionID,
+        dedupeKey: QueueItemDedupeKey
+    ) async throws {}
 }
 
 private struct QueueRuntimeIngestionProvider: QueueIngestionProvider {

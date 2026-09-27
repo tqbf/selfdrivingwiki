@@ -1,11 +1,13 @@
 """Unit tests for the zotero package protocol entry point.
 
-The reviewed package serves ONE revision-4 `remote-url` request per process:
-a JSON request object on stdin, JSON Lines frames on stdout, and the
-attachment bytes at the requested output path. These tests pin request
-validation, credential handling, link-mode rejection, HTTP error mapping,
-result shapes (markdown vs bytes), frame emission, and the output limit.
-All HTTP is mocked; no test touches the network.
+The reviewed package serves ONE revision-5 `remote-url` FETCH request
+(role `fetcher`) per process: a JSON request object on stdin, JSON Lines
+frames on stdout, and the attachment bytes at the requested output path.
+These tests pin request validation, credential handling, link-mode
+rejection, HTTP error mapping, result shapes (markdown vs source-bytes,
+including the explicit resultType tag and display filename), frame
+emission, and the output limit. All HTTP is mocked; no test touches the
+network.
 
 Run from the tools/zotero directory:
     uv run pytest tests/test_package_protocol.py -v
@@ -43,11 +45,10 @@ _PDF_BYTES = b"%PDF-1.4\n...fixture..."
 def _request(**overrides: Any) -> dict[str, Any]:
     request: dict[str, Any] = {
         "requestID": _REQUEST_ID,
-        "protocolRevision": 4,
-        "kind": "zotero",
+        "protocolRevision": 5,
+        "role": "fetcher",
         "mimeType": "application/zotero",
         "originalFilename": _ATTACHMENT_KEY,
-        "inputTransport": "remote-url",
         "remoteURL": _FILE_URL,
         "outputPath": "output/result.md",
         "deadlineMillisecondsSince1970": 9999999999999,
@@ -220,6 +221,7 @@ class TestMarkdownResult:
         payload = terminal["payload"]
         assert payload["requestID"] == _REQUEST_ID
         assert payload["markdownByteCount"] == len(markdown)
+        assert payload["resultType"] == "markdown"
         assert "resultMIMEType" not in payload
         assert payload["articleMetadata"] == {
             "title": "A Study of Tests",
@@ -261,7 +263,9 @@ class TestBytesResult:
 
         assert code == 0
         payload = _terminal(frames)["payload"]
+        assert payload["resultType"] == "source-bytes"
         assert payload["resultMIMEType"] == "application/pdf"
+        assert payload["originalFilename"] == "paper.pdf"
         assert payload["markdownByteCount"] == len(_PDF_BYTES)
         assert Path("output/result.md").read_bytes() == _PDF_BYTES
 
@@ -277,6 +281,7 @@ class TestBytesResult:
 
         assert code == 0
         payload = _terminal(frames)["payload"]
+        assert payload["resultType"] == "source-bytes"
         assert payload["resultMIMEType"] == "text/html"
         # No parent item: identifier falls back to the attachment key.
         assert payload["articleMetadata"]["identifier"] == _ATTACHMENT_KEY
@@ -291,6 +296,7 @@ class TestBytesResult:
 
         assert code == 0
         payload = _terminal(frames)["payload"]
+        assert payload["resultType"] == "markdown"
         assert "resultMIMEType" not in payload
         assert payload["markdownByteCount"] == 5
 
@@ -302,9 +308,12 @@ class TestRequestValidation:
     @pytest.mark.parametrize(
         ("override", "cause"),
         [
-            ({"protocolRevision": 3}, "invalid-request"),
-            ({"kind": "podcast-transcript"}, "unsupported-input"),
-            ({"inputTransport": "operation-file"}, "invalid-request"),
+            ({"protocolRevision": 4}, "invalid-request"),
+            ({"role": "extractor"}, "invalid-request"),
+            ({"mimeType": "application/pdf"}, "invalid-request"),
+            ({"kind": "zotero"}, "invalid-request"),
+            ({"inputTransport": "remote-url"}, "invalid-request"),
+            ({"inputPath": "input/source"}, "invalid-request"),
             ({"remoteURL": None}, "invalid-request"),
             ({"remoteURL": "https://api.zotero.org/users/1/items/ABCD1234"}, "invalid-request"),
             (

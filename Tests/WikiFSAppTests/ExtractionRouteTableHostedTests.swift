@@ -193,15 +193,16 @@ struct ExtractionRouteTableHostedTests {
         let window = mount(view)
 
         try await waitUntil {
-            self.tableViewRowCounts(window).contains(7)
+            self.tableViewRowCounts(window).contains(8)
         }
         // The hosted hierarchy contains a native table (row views) inside a
         // clip view — the scrollable, window-bounded layout.
         let content = try #require(window.contentView)
         #expect(containsDescendant(content) { $0 is NSClipView })
-        // Six canonical routes plus the registration-derived EPUB route.
+        // Six canonical extractor routes plus the registration-derived
+        // EPUB route, plus the bundled fetcher route (application/zotero).
         // The packages pane is not mounted on the default tab.
-        #expect(tableViewRowCounts(window) == [7])
+        #expect(tableViewRowCounts(window) == [8])
         // Under the metrics ceiling every row has to be visible, not merely
         // present. The transcript row is last, so a table sized one row short
         // hides exactly it.
@@ -218,6 +219,7 @@ struct ExtractionRouteTableHostedTests {
         var loaded = snapshot(failedPackageIDs: ["org.example.broken"])
         loaded.rows = [
             ExtractorPackageSettingsRow(
+                role: .extractor,
                 kind: .pdf,
                 packageID: "org.example.pdf",
                 version: "1.0.0",
@@ -261,6 +263,7 @@ struct ExtractionRouteTableHostedTests {
         loaded.rows = try (0..<20).map { index in
             let raw = "org.example.pkg\(String(format: "%02d", index))"
             return ExtractorPackageSettingsRow(
+                role: .extractor,
                 kind: .pdf,
                 packageID: raw,
                 version: "1.0.0",
@@ -432,7 +435,8 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("Choose Another Extractor…"))
         #expect(source.contains("Copy Diagnostics"))
         #expect(source.contains("retryActivation?()"))
-        #expect(source.contains("focusedRoutePicker = route"))
+        // The focus-restore flow is gone with the status column (asserted
+        // above); no focusedRoutePicker may return.
         #expect(source.contains("copyDiagnostics(presentation.diagnosticReport)"))
         #expect(source.contains("extraction.status.action"))
         #expect(source.contains("extraction.status.technical-details"))
@@ -448,8 +452,9 @@ struct ExtractionRouteTableHostedTests {
         // ACP and Docling configuration is package-level now: the Packages
         // table's status symbol opens the recovery sheet, which presents the
         // shared service dialogs above the pane switcher (macos-design
-        // progressive disclosure) rather than inline sections.
-        #expect(source.contains("switch routeSelections[row.id]") == false)
+        // progressive disclosure) rather than inline sections. The recovery
+        // row legitimately switches on the per-route selection map to map a
+        // typed selection onto its reviewed lineage.
         #expect(source.contains("TableColumn(\"Configuration\")") == false)
         #expect(source.contains("Button(\"Configure…\")"))
         #expect(source.contains(".sheet(item: $serviceConfigurationDialog)"))

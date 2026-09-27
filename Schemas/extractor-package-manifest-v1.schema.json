@@ -18,28 +18,65 @@
     "limits"
   ],
   "properties": {
-    "manifestRevision": { "const": 1 },
-    "packageID": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}(\\.[a-z][a-z0-9-]{0,62})+$" },
-    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$" },
-    "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "protocolRevision": { "const": 1 },
-    "entryPoint": { "$ref": "#/$defs/relativePath" },
+    "manifestRevision": {
+      "const": 1
+    },
+    "packageID": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,62}(\\.[a-z][a-z0-9-]{0,62})+$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "protocolRevision": {
+      "const": 1
+    },
+    "entryPoint": {
+      "$ref": "#/$defs/relativePath"
+    },
     "launch": {
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["mode"],
-          "properties": { "mode": { "const": "direct" } }
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "direct"
+            }
+          }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["mode", "command"],
+          "required": [
+            "mode",
+            "command"
+          ],
           "properties": {
-            "mode": { "const": "runtime" },
-            "command": { "type": "string", "pattern": "^[A-Za-z0-9_.+-]{1,128}$" },
-            "arguments": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 8192 } }
+            "mode": {
+              "const": "runtime"
+            },
+            "command": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.+-]{1,128}$"
+            },
+            "arguments": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "string",
+                "maxLength": 8192
+              }
+            }
           }
         }
       ]
@@ -50,39 +87,126 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "displayName", "kinds", "mimeTypes"],
+        "required": [
+          "id",
+          "displayName",
+          "kinds",
+          "mimeTypes"
+        ],
         "properties": {
-          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
-          "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "kinds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["pdf", "html", "docx", "podcast-transcript", "apple-podcast-transcript", "youtube-transcript", "zotero"] } },
-          "mimeTypes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$" } },
-          "filenameExtensions": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]{1,32}$" } }
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kinds": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "pdf",
+                "html",
+                "docx",
+                "podcast-transcript",
+                "apple-podcast-transcript",
+                "youtube-transcript"
+              ]
+            }
+          },
+          "mimeTypes": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+            }
+          },
+          "filenameExtensions": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9]{1,32}$"
+            }
+          },
+          "role": {
+            "enum": [
+              "extractor",
+              "fetcher"
+            ],
+            "description": "Manifest revision 4: explicit registration role. Absent (revision <= 3) means extractor. A fetcher declares no kinds and requires protocol revision 5."
+          }
         }
       }
     },
-    "capabilities": { "type": "array", "uniqueItems": true, "items": { "enum": ["network", "shared-runtime-cache", "model-download"] } },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "network",
+          "shared-runtime-cache",
+          "model-download"
+        ]
+      }
+    },
     "files": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "digest"],
+        "required": [
+          "path",
+          "digest"
+        ],
         "properties": {
-          "path": { "$ref": "#/$defs/relativePath" },
-          "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          "path": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
         }
       }
     },
     "limits": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["maximumInputByteCount", "maximumMarkdownOutputByteCount", "maximumDurationMilliseconds", "maximumProgressEventCount"],
+      "required": [
+        "maximumInputByteCount",
+        "maximumMarkdownOutputByteCount",
+        "maximumDurationMilliseconds",
+        "maximumProgressEventCount"
+      ],
       "properties": {
-        "maximumInputByteCount": { "type": "integer", "minimum": 1, "maximum": 134217728 },
-        "maximumMarkdownOutputByteCount": { "type": "integer", "minimum": 1, "maximum": 134217728 },
-        "maximumDurationMilliseconds": { "type": "integer", "minimum": 1, "maximum": 1800000 },
-        "maximumProgressEventCount": { "type": "integer", "minimum": 1, "maximum": 10000 }
+        "maximumInputByteCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 134217728
+        },
+        "maximumMarkdownOutputByteCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 134217728
+        },
+        "maximumDurationMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1800000
+        },
+        "maximumProgressEventCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        }
       }
     }
   },

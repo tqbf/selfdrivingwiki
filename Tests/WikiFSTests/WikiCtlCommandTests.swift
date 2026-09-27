@@ -1400,7 +1400,7 @@ struct WikiCtlCommandTests {
             externalIdentity: "https://example.com/article")
         let summary = try store.addSource(
             filename: "Article.md", data: Data("# Article".utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            externalItemKey: nil, externalItemTitle: nil, mimeType: nil,
             provenance: prov)
 
         let byID = try SourceCommand.run(.info(.id(summary.id)), in: store, cwd: "/tmp")
@@ -1457,7 +1457,7 @@ struct WikiCtlCommandTests {
         let source = try await provider.materialize()
         let summary = try store.addSource(
             filename: source.filename, data: source.data,
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            externalItemKey: nil, externalItemTitle: nil, mimeType: nil,
             provenance: source.provenance)
         let historyBefore = try store.contentVersionHistory(sourceID: summary.id).count
 

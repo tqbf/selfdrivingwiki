@@ -116,7 +116,7 @@ struct StoreConcurrencyTests {
         let (store, _) = try makeStore()
         let source = try store.addSource(
             filename: "paper.md", data: Data("hello".utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: "text/markdown")
+            externalItemKey: nil, externalItemTitle: nil, mimeType: "text/markdown")
 
         var pageIDs: [PageID] = []
         var originalBodies: [PageID: String] = [:]

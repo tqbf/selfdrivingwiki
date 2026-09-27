@@ -607,7 +607,7 @@ private final class BunFixture: @unchecked Sendable {
         operation = ManagedExtractorProcessRequest(
             revision: revision,
             manifest: manifest,
-            protocolRequest: request,
+            request: .extractor(request),
             paths: ManagedExtractorProcessPaths(
                 operationRoot: operationRoot,
                 packageRoot: packageRoot,
@@ -913,7 +913,7 @@ final class ManagedExtractorOperationFixture: @unchecked Sendable {
         operation = ManagedExtractorProcessRequest(
             revision: revision,
             manifest: manifest,
-            protocolRequest: request,
+            request: .extractor(request),
             paths: ManagedExtractorProcessPaths(
                 operationRoot: operationRoot,
                 packageRoot: packageRoot,

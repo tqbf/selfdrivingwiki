@@ -2,9 +2,17 @@ import Foundation
 
 // pattern: Functional Core
 
+/// The revision-5 request role tag. A revision-5 request states which of the
+/// two operation families it asks for; revisions 1–4 have no role field and
+/// are extractors by construction.
+public enum ExtractorRequestRole: String, Codable, CaseIterable, Hashable, Sendable {
+    case extractor
+    case fetcher
+}
+
 public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
-        case requestID, protocolRevision, kind, mimeType, originalFilename
+        case requestID, protocolRevision, role, kind, mimeType, originalFilename
         case inputTransport, inputPath, remoteURL, outputPath, deadlineMillisecondsSince1970
         case credentialFilePath, operationConfigurationPath
     }
@@ -169,6 +177,23 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
             throw ExtractorValidationError.invalidManifest(
                 "credential input requires protocol revision 2")
         }
+        // The role tag is a revision-5 key. Older revisions reject it
+        // outright (fail closed); a revision-5 EXTRACTOR request must carry
+        // exactly `role: "extractor"` — a fetcher request is a different
+        // tagged type and cannot decode through this struct.
+        if revision.rawValue < 5 {
+            guard container.contains(.role) == false else {
+                throw ExtractorValidationError.invalidManifest(
+                    "request role requires protocol revision 5")
+            }
+        } else {
+            let role = try container.decode(
+                ExtractorRequestRole.self, forKey: .role)
+            guard role == .extractor else {
+                throw ExtractorValidationError.invalidManifest(
+                    "fetcher requests decode through the fetch request type")
+            }
+        }
         // Decode the input transport explicitly, then enforce the revision's
         // exact wire shape. `remoteURL` is rejected wherever it may not
         // appear, so old revisions never silently ignore a revision-3 key
@@ -218,6 +243,11 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(requestID, forKey: .requestID)
         try container.encode(protocolRevision, forKey: .protocolRevision)
+        // Revision 5 states its role explicitly; older revisions keep their
+        // exact wire shape with no role field.
+        if protocolRevision == .v5 {
+            try container.encode(ExtractorRequestRole.extractor, forKey: .role)
+        }
         try container.encode(kind, forKey: .kind)
         try container.encode(mimeType, forKey: .mimeType)
         try container.encode(originalFilename, forKey: .originalFilename)
@@ -236,6 +266,173 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
         if let operationConfigurationPath {
             try container.encode(operationConfigurationPath, forKey: .operationConfigurationPath)
         }
+    }
+}
+
+// MARK: - Fetch requests (protocol revision 5)
+
+/// A revision-5 FETCHER request: one validated remote source acquisition.
+/// The wire shape carries no extractor `kind` and no staged input path — a
+/// fetcher acquires the source at `remoteURL` and reports one result. The
+/// claimed input `mimeType` is the synthetic source MIME the fetcher's
+/// registration declared; dispatch validation rejects a request whose MIME
+/// is outside the selected registration's claims. `originalFilename` is a
+/// bounded display name derived from the sync item key — never a path.
+public struct ExtractorFetchRequest: Codable, Hashable, Sendable {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case requestID, protocolRevision, role, mimeType, originalFilename
+        case remoteURL, outputPath, deadlineMillisecondsSince1970
+        case credentialFilePath, operationConfigurationPath
+    }
+
+    /// Bounded like every other host-supplied request string.
+    public static let maximumFilenameByteCount = 1_024
+
+    public let requestID: ExtractorRequestID
+    public let protocolRevision: ExtractorProtocolRevision
+    /// The claimed input MIME — one of the selected registration's declared
+    /// input MIME types.
+    public let mimeType: ExtractorMIMEType
+    /// Bounded display filename derived from the sync item key. Never a
+    /// path: path separators, NUL, and dot entries are rejected.
+    public let originalFilename: String
+    public let remoteURL: ExtractorRemoteSourceURL
+    public let outputPath: ExtractorRelativePath
+    public let deadlineMillisecondsSince1970: Int64
+    /// Request-scoped credential input paths, same rules as extractor
+    /// requests (revision-2+ semantics carried forward).
+    public let credentialFilePath: ExtractorRelativePath?
+    public let operationConfigurationPath: ExtractorRelativePath?
+
+    public init(
+        requestID: ExtractorRequestID,
+        mimeType: ExtractorMIMEType,
+        originalFilename: String,
+        remoteURL: ExtractorRemoteSourceURL,
+        outputPath: ExtractorRelativePath,
+        deadlineMillisecondsSince1970: Int64,
+        credentialFilePath: ExtractorRelativePath? = nil,
+        operationConfigurationPath: ExtractorRelativePath? = nil
+    ) throws {
+        try Self.validateFilename(originalFilename)
+        guard deadlineMillisecondsSince1970 > 0 else {
+            throw ExtractorValidationError.invalidManifest("deadline")
+        }
+        self.requestID = requestID
+        self.protocolRevision = .v5
+        self.mimeType = mimeType
+        self.originalFilename = originalFilename
+        self.remoteURL = remoteURL
+        self.outputPath = outputPath
+        self.deadlineMillisecondsSince1970 = deadlineMillisecondsSince1970
+        self.credentialFilePath = credentialFilePath
+        self.operationConfigurationPath = operationConfigurationPath
+    }
+
+    /// Display-filename policy: bounded text that names, never addresses.
+    /// The value is stored in `sources.filename` as data, never resolved.
+    public static func validateFilename(_ filename: String) throws {
+        guard filename.isEmpty == false,
+              filename.utf8.count <= Self.maximumFilenameByteCount,
+              filename.contains("\0") == false,
+              filename.contains("/") == false,
+              filename.contains("\\") == false,
+              filename != ".",
+              filename != ".." else {
+            throw ExtractorValidationError.invalidManifest("fetch request display filename")
+        }
+    }
+
+    public init(from decoder: any Decoder) throws {
+        try rejectUnknownKeys(from: decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let revision = try container.decode(
+            ExtractorProtocolRevision.self, forKey: .protocolRevision)
+        guard revision == .v5 else {
+            throw ExtractorValidationError.invalidManifest(
+                "fetch requests require protocol revision 5")
+        }
+        let role = try container.decode(ExtractorRequestRole.self, forKey: .role)
+        guard role == .fetcher else {
+            throw ExtractorValidationError.invalidManifest(
+                "extractor requests decode through the extractor request type")
+        }
+        // A fetch request has no extractor kind and no staged input path;
+        // both keys are unknown to this decoder and rejected above.
+        let filename = try container.decode(String.self, forKey: .originalFilename)
+        try Self.validateFilename(filename)
+        self.requestID = try container.decode(ExtractorRequestID.self, forKey: .requestID)
+        self.protocolRevision = revision
+        self.mimeType = try container.decode(ExtractorMIMEType.self, forKey: .mimeType)
+        self.originalFilename = filename
+        self.remoteURL = try container.decode(ExtractorRemoteSourceURL.self, forKey: .remoteURL)
+        self.outputPath = try container.decode(ExtractorRelativePath.self, forKey: .outputPath)
+        let deadline = try container.decode(Int64.self, forKey: .deadlineMillisecondsSince1970)
+        guard deadline > 0 else {
+            throw ExtractorValidationError.invalidManifest("deadline")
+        }
+        self.deadlineMillisecondsSince1970 = deadline
+        self.credentialFilePath = try container.decodeIfPresent(
+            ExtractorRelativePath.self, forKey: .credentialFilePath)
+        self.operationConfigurationPath = try container.decodeIfPresent(
+            ExtractorRelativePath.self, forKey: .operationConfigurationPath)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(requestID, forKey: .requestID)
+        try container.encode(protocolRevision, forKey: .protocolRevision)
+        try container.encode(ExtractorRequestRole.fetcher, forKey: .role)
+        try container.encode(mimeType, forKey: .mimeType)
+        try container.encode(originalFilename, forKey: .originalFilename)
+        try container.encode(remoteURL, forKey: .remoteURL)
+        try container.encode(outputPath, forKey: .outputPath)
+        try container.encode(deadlineMillisecondsSince1970, forKey: .deadlineMillisecondsSince1970)
+        if let credentialFilePath {
+            try container.encode(credentialFilePath, forKey: .credentialFilePath)
+        }
+        if let operationConfigurationPath {
+            try container.encode(operationConfigurationPath, forKey: .operationConfigurationPath)
+        }
+    }
+}
+
+/// The revision-aware tagged request envelope. Revisions 1–4 decode the
+/// existing `ExtractorProtocolRequest` unchanged; revision 5 decodes either
+/// an extractor request (same shape plus `role: "extractor"`) or a fetch
+/// request. The tag is the construction seam: a fetch request can never
+/// carry an extractor kind, and an extractor request can never carry the
+/// fetch role.
+public enum ExtractorRequestEnvelope: Sendable {
+    case extractor(ExtractorProtocolRequest)
+    case fetch(ExtractorFetchRequest)
+
+    /// True when this envelope carries a revision-5 fetch request.
+    public var isFetcher: Bool {
+        if case .fetch = self { return true }
+        return false
+    }
+
+    /// Decodes one request payload. The envelope peeks at the revision and
+    /// role keys, then routes to the matching typed decoder, so a mixed or
+    /// mismatched shape fails with the typed error of the routed type.
+    public static func decode(_ data: Data) throws -> ExtractorRequestEnvelope {
+        struct Peek: Decodable {
+            enum PeekKeys: String, CodingKey { case protocolRevision, role }
+            let revision: ExtractorProtocolRevision
+            let role: String?
+            init(from decoder: any Decoder) throws {
+                let container = try decoder.container(keyedBy: PeekKeys.self)
+                revision = try container.decode(
+                    ExtractorProtocolRevision.self, forKey: .protocolRevision)
+                role = try container.decodeIfPresent(String.self, forKey: .role)
+            }
+        }
+        let peek = try JSONDecoder().decode(Peek.self, from: data)
+        if peek.revision == .v5, peek.role == ExtractorRequestRole.fetcher.rawValue {
+            return .fetch(try JSONDecoder().decode(ExtractorFetchRequest.self, from: data))
+        }
+        return .extractor(try JSONDecoder().decode(ExtractorProtocolRequest.self, from: data))
     }
 }
 
@@ -740,6 +937,17 @@ public struct ExtractorArticleMetadata: Codable, Hashable, Sendable {
     }
 }
 
+/// The typed result a revision-5 FETCHER reports. A fetcher result must
+/// state exactly one of these — absent or contradictory values are protocol
+/// violations rejected before any storage.
+public enum ExtractorFetchResultType: String, Codable, CaseIterable, Hashable, Sendable {
+    /// The output file holds the acquired source content named by the
+    /// frame's `resultMIMEType`; the host owns any later format conversion.
+    case sourceBytes = "source-bytes"
+    /// The output file IS the finished Markdown product; no format job runs.
+    case markdown
+}
+
 public struct ExtractorResultFrame: Codable, Hashable, Sendable {
     public let requestID: ExtractorRequestID
     public let outputPath: ExtractorRelativePath
@@ -754,10 +962,20 @@ public struct ExtractorResultFrame: Codable, Hashable, Sendable {
     /// `markdownByteCount` is still the output-file byte count, bounded by
     /// the manifest output limit either way.
     public let resultMIMEType: ExtractorMIMEType?
+    /// Protocol revision 5, fetcher results only. The explicit result tag:
+    /// `source-bytes` requires a concrete non-Markdown `resultMIMEType`;
+    /// `markdown` carries no competing source-byte MIME. Older revisions
+    /// reject the field.
+    public let resultType: ExtractorFetchResultType?
+    /// Protocol revision 5, fetcher results only. An optional validated
+    /// display filename for a `source-bytes` result, stored in
+    /// `sources.filename` as data — never treated as a path.
+    public let originalFilename: String?
 
     private enum CodingKeys: String, CodingKey {
         case requestID, outputPath, markdownByteCount, warnings, metadata
         case articleMetadata, resultMIMEType
+        case resultType, originalFilename
     }
 
     /// The MIME value that marks a Markdown (revision ≤ 3) result when the
@@ -777,12 +995,37 @@ public struct ExtractorResultFrame: Codable, Hashable, Sendable {
         warnings: [String] = [],
         metadata: ExtractorReportedMetadata = .empty,
         articleMetadata: ExtractorArticleMetadata? = nil,
-        resultMIMEType: ExtractorMIMEType? = nil
+        resultMIMEType: ExtractorMIMEType? = nil,
+        resultType: ExtractorFetchResultType? = nil,
+        originalFilename: String? = nil
     ) throws {
         guard markdownByteCount >= 0, markdownByteCount <= ExtractorHostLimits.maximumMarkdownOutputByteCount,
               warnings.count <= 128,
               warnings.allSatisfy({ $0.isEmpty == false && $0.utf8.count <= 1_024 && $0.contains("\0") == false }) else {
             throw ExtractorValidationError.invalidManifest("result frame")
+        }
+        if let originalFilename {
+            try ExtractorFetchRequest.validateFilename(originalFilename)
+        }
+        // The explicit fetch result tag must be internally consistent when
+        // present. (Full fetch-result contract validation — required tag on
+        // fetcher requests, revision gating — lives in the sequence and the
+        // fetcher execution edge.)
+        if let resultType {
+            switch resultType {
+            case .markdown:
+                if let resultMIMEType,
+                   resultMIMEType.rawValue != Self.markdownResultMIMERawValue {
+                    throw ExtractorValidationError.invalidManifest(
+                        "markdown fetch result cannot carry a source-byte MIME")
+                }
+            case .sourceBytes:
+                guard let resultMIMEType,
+                      resultMIMEType.rawValue != Self.markdownResultMIMERawValue else {
+                    throw ExtractorValidationError.invalidManifest(
+                        "source-bytes fetch result requires a concrete source MIME")
+                }
+            }
         }
         self.requestID = requestID
         self.outputPath = outputPath
@@ -791,6 +1034,8 @@ public struct ExtractorResultFrame: Codable, Hashable, Sendable {
         self.metadata = metadata
         self.articleMetadata = articleMetadata
         self.resultMIMEType = resultMIMEType
+        self.resultType = resultType
+        self.originalFilename = originalFilename
     }
 
     public init(from decoder: any Decoder) throws {
@@ -806,7 +1051,25 @@ public struct ExtractorResultFrame: Codable, Hashable, Sendable {
                 forKey: .articleMetadata),
             resultMIMEType: try container.decodeIfPresent(
                 ExtractorMIMEType.self,
-                forKey: .resultMIMEType))
+                forKey: .resultMIMEType),
+            resultType: try container.decodeIfPresent(
+                ExtractorFetchResultType.self,
+                forKey: .resultType),
+            originalFilename: try container.decodeIfPresent(
+                String.self, forKey: .originalFilename))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(requestID, forKey: .requestID)
+        try container.encode(outputPath, forKey: .outputPath)
+        try container.encode(markdownByteCount, forKey: .markdownByteCount)
+        try container.encode(warnings, forKey: .warnings)
+        try container.encode(metadata, forKey: .metadata)
+        if let articleMetadata { try container.encode(articleMetadata, forKey: .articleMetadata) }
+        if let resultMIMEType { try container.encode(resultMIMEType, forKey: .resultMIMEType) }
+        if let resultType { try container.encode(resultType, forKey: .resultType) }
+        if let originalFilename { try container.encode(originalFilename, forKey: .originalFilename) }
     }
 }
 
@@ -903,13 +1166,26 @@ public enum ExtractorProtocolSequenceError: Error, Equatable, Sendable {
     /// `articleMetadata.identifier`) against a request of an older revision.
     /// Fails closed: an older host never silently drops the new fields.
     case resultFieldsRequireProtocolRevision4
+    /// A result frame carried a revision-5 fetcher field (`resultType` or
+    /// `originalFilename`) against a request of an older revision. Fails
+    /// closed: an older host never silently drops the new fields.
+    case fetchResultFieldsRequireProtocolRevision5
+    /// A fetcher's terminal result stated no explicit result type. A
+    /// fetcher must state `source-bytes` or `markdown` — absence is a
+    /// protocol violation, never an implied Markdown.
+    case fetcherResultTypeMissing
+    /// A fetcher result contradicted its own type tag (a `markdown` result
+    /// carrying a source-byte MIME, or a `source-bytes` result without a
+    /// concrete source MIME).
+    case fetcherResultTypeMismatch
 }
 
 /// Pure revision-aware frame-sequence validator. Byte and UTF-8 bounds belong
 /// to the stream decoder. The sequence enforces exactly one terminal frame and
 /// — for requests of revision ≤ 3 — rejects result frames carrying the
 /// revision-4-only fields, so an old host fails closed instead of silently
-/// ignoring them.
+/// ignoring them. Fetcher requests additionally enforce the revision-5
+/// explicit-result contract.
 public struct ExtractorProtocolSequence: Sendable {
     public let requestID: ExtractorRequestID
     public let expectedOutputPath: ExtractorRelativePath
@@ -917,6 +1193,9 @@ public struct ExtractorProtocolSequence: Sendable {
     /// The request's declared protocol revision. Defaults to `.v3`, the
     /// fail-closed "older host" posture for callers that predate revision 4.
     public let protocolRevision: ExtractorProtocolRevision
+    /// True when the validated request is a revision-5 FETCH request: the
+    /// terminal result must state exactly one typed result.
+    public let isFetcherRequest: Bool
     private(set) public var progressEventCount = 0
     private(set) public var terminalFrame: ExtractorProtocolFrame?
 
@@ -924,12 +1203,14 @@ public struct ExtractorProtocolSequence: Sendable {
         requestID: ExtractorRequestID,
         expectedOutputPath: ExtractorRelativePath,
         maximumProgressEventCount: Int,
-        protocolRevision: ExtractorProtocolRevision = .v3
+        protocolRevision: ExtractorProtocolRevision = .v3,
+        isFetcherRequest: Bool = false
     ) {
         self.requestID = requestID
         self.expectedOutputPath = expectedOutputPath
         self.maximumProgressEventCount = maximumProgressEventCount
         self.protocolRevision = protocolRevision
+        self.isFetcherRequest = isFetcherRequest
     }
 
     public mutating func consume(_ frame: ExtractorProtocolFrame) throws {
@@ -952,6 +1233,27 @@ public struct ExtractorProtocolSequence: Sendable {
             if protocolRevision.rawValue < 4,
                result.resultMIMEType != nil || result.articleMetadata?.identifier != nil {
                 throw ExtractorProtocolSequenceError.resultFieldsRequireProtocolRevision4
+            }
+            if protocolRevision.rawValue < 5,
+               result.resultType != nil || result.originalFilename != nil {
+                throw ExtractorProtocolSequenceError.fetchResultFieldsRequireProtocolRevision5
+            }
+            if isFetcherRequest {
+                guard let resultType = result.resultType else {
+                    throw ExtractorProtocolSequenceError.fetcherResultTypeMissing
+                }
+                switch resultType {
+                case .markdown:
+                    if let mime = result.resultMIMEType,
+                       mime.rawValue != ExtractorResultFrame.markdownResultMIMERawValue {
+                        throw ExtractorProtocolSequenceError.fetcherResultTypeMismatch
+                    }
+                case .sourceBytes:
+                    guard let mime = result.resultMIMEType,
+                          mime.rawValue != ExtractorResultFrame.markdownResultMIMERawValue else {
+                        throw ExtractorProtocolSequenceError.fetcherResultTypeMismatch
+                    }
+                }
             }
             terminalFrame = frame
         case .failure:

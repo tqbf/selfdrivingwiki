@@ -1,6 +1,6 @@
 # Extractor package manifest
 
-This document is the normative reference for the extractor package manifest, revision 1, and for the package digest.
+This document is the normative reference for the extractor package manifest, revisions 1 through 4, and for the package digest.
 
 Sources of truth in code:
 
@@ -69,11 +69,28 @@ enforces the boundary.
 | --- | --- | --- |
 | `id` | string | 1 to 64 characters, lowercase ASCII letters, digits, hyphens. |
 | `displayName` | string | 1 to 128 bytes. |
-| `kinds` | array | Nonempty subset of `pdf`, `html`, `docx`, `podcast-transcript`, `apple-podcast-transcript`, `youtube-transcript`, and `zotero`. |
-| `mimeTypes` | array | Nonempty set of normalized lowercase MIME types. A `podcast-transcript` registration must declare its route MIME, typically the synthetic `audio/podcast` source MIME. An `apple-podcast-transcript` registration declares the synthetic `audio/apple-podcast` source MIME. A `youtube-transcript` registration declares the synthetic `video/youtube` source MIME. A `zotero` registration declares the synthetic `application/zotero` source MIME. |
-| `filenameExtensions` | array, optional | Lowercase ASCII letters and digits, no leading dot, at most 32 characters. |
+| `role` | string, optional (revision 4) | `extractor` (default) or `fetcher`. Revisions 1–3 reject the key; every older registration is an extractor. Revision-4 canonical encoding always writes it. |
+| `kinds` | array | Required for extractors, FORBIDDEN for fetchers. Extractors: nonempty subset of `pdf`, `html`, `docx`, `podcast-transcript`, `apple-podcast-transcript`, and `youtube-transcript`. The retired `zotero` kind is rejected; catalog records carrying it are skipped at read time. |
+| `mimeTypes` | array | Nonempty set of normalized lowercase MIME types. For extractors this is the input format. For fetchers this is the claimed input MIME set — the synthetic source MIME types of the byteless sources the fetcher can acquire. A `podcast-transcript` registration must declare its route MIME, typically the synthetic `audio/podcast` source MIME. An `apple-podcast-transcript` registration declares the synthetic `audio/apple-podcast` source MIME. A `youtube-transcript` registration declares the synthetic `video/youtube` source MIME. |
+| `filenameExtensions` | array, optional | Lowercase ASCII letters and digits, no leading dot, at most 32 characters. Must be empty for fetchers. |
 
 Duplicate values inside one registration are rejected. Duplicate registration IDs in one manifest are rejected.
+
+### Roles (manifest revision 4)
+
+Revision 4 adds the explicit registration role. The role is package data — never inferred from URL transport, MIME type, provider, or package ID — and decides which claim surface the registration owns:
+
+- `extractor` converts content it is handed (staged bytes or a remote URL) into Markdown. Declares one or more operation `kinds`.
+- `fetcher` acquires ONE remote source per request (protocol revision 5, `remote-url`) and reports either exact `source-bytes` or the finished `markdown`. Declares NO kinds and NO filename extensions; its `mimeTypes` are the claimed input MIME set — the synthetic source MIME types of the byteless sources it can acquire.
+
+Fetcher rules, enforced at manifest validation:
+
+- Manifest revision must be 4 and protocol revision must be 5.
+- The manifest capabilities must include `network`.
+- A sync declaration's `sourceMIMEType` must be one of the fetcher's claimed input MIME types, so the byteless sources the sync creates are exactly ones the fetcher claims.
+- A fetcher's claims live in their own route and registry namespaces (`FetcherRouteID`, `.installedFetcher`), so a same-MIME extractor can never replace a fetcher selection or the reverse.
+
+Revisions 1–3 reject the `role` key outright (unknown-field policy); every older registration decodes as an extractor. Revision-1/2/3 canonical bytes and package digests are unchanged. Revision-4 canonical encoding always writes `role`, including for plain extractors.
 
 ### Sync declarations (manifest revision 3)
 
@@ -94,6 +111,8 @@ Revision 1 and 2 reject the `sync` key outright (unknown-field policy), so only 
 #### Catalog read tolerance
 
 A catalog record whose persisted `manifestRevision` is newer than the reading host understands is skipped with a diagnostic, not treated as corruption: the whole catalog still reads, and the record's reservations survive. A mixed-version machine (app published a newer record, CLI not yet updated) degrades to "that package is invisible to this host" instead of an unreadable catalog.
+
+A record whose registrations declare the RETIRED `zotero` extractor kind is also skipped whole, with its own bounded read-time count. The fetcher role replaced that kind; the retired record's digest reservation survives untouched and the durable catalog bytes are never rewritten by a read. Every other record decodes strictly — unrelated malformed data remains fatal.
 
 ### Capabilities
 
@@ -181,11 +200,11 @@ The index file is `derived/index.json` under the store root. Its schema version 
 
 ## Configuration compatibility
 
-`extraction-config.json` stores one generic selection table: `routeExtractors`, a sorted array of route records. Each record names a typed extraction route (kind plus MIME type) and a version-free reference — a host adapter identity, an installed package lineage, or an explicit no-default value. The route supplies the input format; the reference names only the implementation.
+`extraction-config.json` stores two generic selection tables: `routeExtractors` (extractor routes — a typed route of kind plus MIME type, each naming a version-free reference) and `routeFetchers` (fetcher routes — a `FetcherRouteID` of the synthetic source MIME, naming the fetcher lineage that acquires such sources). The two tables have distinct key types, so a fetcher selection and an extractor selection can never collide or overwrite one another. Both are sorted arrays; encode never writes retired keys.
 
-One-time migration. The retired `backend`, `htmlBackend`, `pdfExtractor`, and `htmlExtractor` keys are decode-only inputs. The decoder adopts each retired value into the matching route record when no record claims that route: `backend` values become host references (`localPdf2md` leaves the record absent, because the bundled default supplies it), and `htmlBackend` values become host references. Encode never writes the retired keys again.
+One-time migration. The retired `backend`, `htmlBackend`, `pdfExtractor`, and `htmlExtractor` keys are decode-only inputs. The decoder adopts each retired value into the matching route record when no record claims that route: `backend` values become host references (`localPdf2md` leaves the record absent, because the bundled default supplies it), and `htmlBackend` values become host references. Encode never writes the retired keys again. The retired Zotero EXTRACTOR route record (`kind: "zotero"`) no longer decodes — the kind is retired — so a saved record of that shape is dropped non-fatally at decode; the fetcher default supplies the route instead.
 
-Defaults. Fresh installs and record-less routes resolve through the bundled default-route policy (`default-routes.json`): the PDF route defaults to the reviewed pdf2md lineage, and the DOCX route to the reviewed docx2md lineage (`org.selfdrivingwiki.docx2md`, registration `document`). HTML has no shipped default — the user picks an extractor, and the built-in tag-based adapter is the execution floor. An explicit no-default record disables the shipped default for its route.
+Defaults. Fresh installs and record-less routes resolve through the bundled default-route policy (`default-routes.json`): the PDF route defaults to the reviewed pdf2md lineage, and the DOCX route to the reviewed docx2md lineage (`org.selfdrivingwiki.docx2md`, registration `document`). HTML has no shipped default — the user picks an extractor, and the built-in tag-based adapter is the execution floor. The fetcher table's bundled default routes `application/zotero` to the reviewed Zotero fetcher lineage (`org.selfdrivingwiki.zotero`, registration `attachment`). An explicit no-default record disables the shipped default for its route.
 
 Failure posture. An installed selection with no compatible active registration keeps its saved identity, emits one redacted diagnostic, and fails closed. The app never silently selects a different third-party package.
 
@@ -201,26 +220,26 @@ The reviewed packages in `ExtractorPackages/` are complete reviewed packages:
 - `PodcastTranscript/manifest.json` — RSS podcast transcript conversion, `uv run --script` launch, manifest revision 1 with protocol revision 3 (the `remote-url` transport and the `podcast-transcript` kind are registration data, not manifest fields), `network` and `shared-runtime-cache` capabilities.
 - `ApplePodcastTranscript/manifest.json` — Apple Podcasts episode TTML transcript conversion, same launch and manifest shapes, registering only `apple-podcast-transcript` for `audio/apple-podcast`, `network` capability only. The signed `podcast-token-helper` is deliberately NOT a package file: code signing rewrites Mach-O bytes, which would break the digest contract. The host stages the helper into the private operation root for this exact revision; the request's operation configuration carries only the staged helper's relative path.
 - `YouTubeTranscript/manifest.json` — YouTube caption conversion, `uv run --script` launch, manifest revision 1 with protocol revision 3, registering only `youtube-transcript` for `video/youtube`, `network` and `shared-runtime-cache` capabilities (the shared cache keeps uv's CPython install and wheel cache warm across operations). The package fetches only the captions YouTube exposes through `youtube-transcript-api` (an unofficial interface that can change or be blocked); it never downloads media and never runs speech-to-text.
-- `Zotero/manifest.json` — Zotero attachment acquisition, `uv run --script` launch, manifest revision 3 with protocol revision 4. A worked example (see below): one `zotero` registration for the synthetic `application/zotero` MIME, a REQUIRED `zotero-api-key` secret requirement, the acquisition-sync declaration, and the `network` + `shared-runtime-cache` capabilities. The package downloads ONE attachment file plus its item metadata through the Zotero Web API and never converts formats.
+- `Zotero/manifest.json` — Zotero attachment acquisition as a FETCHER, `uv run --script` launch, manifest revision 4 with protocol revision 5. A worked example (see below): one `attachment` registration with `role: "fetcher"` claiming the synthetic `application/zotero` MIME, a REQUIRED `zotero-api-key` secret requirement, the acquisition-sync declaration, and the `network` + `shared-runtime-cache` capabilities. The package downloads ONE attachment file plus its item metadata through the Zotero Web API and never converts formats.
 
-### Worked example: the Zotero package
+### Worked example: the Zotero fetcher package
 
-The Zotero package is the reference for a credential-declaring, sync-declaring, revision-4 package:
+The Zotero package is the reference for a credential-declaring, sync-declaring FETCHER package (manifest revision 4, protocol revision 5):
 
 ```json
 {
-  "manifestRevision": 3,
+  "manifestRevision": 4,
   "packageID": "org.selfdrivingwiki.zotero",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "displayName": "Zotero Attachment",
-  "protocolRevision": 4,
+  "protocolRevision": 5,
   "entryPoint": "bin/zotero-extractor",
   "launch": {"mode": "runtime", "command": "uv", "arguments": ["run", "--script"]},
   "registrations": [
     {
       "id": "attachment",
       "displayName": "Zotero Attachment",
-      "kinds": ["zotero"],
+      "role": "fetcher",
       "mimeTypes": ["application/zotero"],
       "credentialRequirements": [
         {
@@ -234,6 +253,7 @@ The Zotero package is the reference for a credential-declaring, sync-declaring, 
       "sync": {
         "configFileName": "zotero-config.json",
         "urlTemplate": "https://api.zotero.org/users/{libraryID}/items/{itemKey}/file",
+        "sourceMIMEType": "application/zotero",
         "fields": [
           {"name": "libraryID", "required": true},
           {"name": "attachments", "required": true, "isList": true}
@@ -261,7 +281,9 @@ The Zotero package is the reference for a credential-declaring, sync-declaring, 
 }
 ```
 
-Manifest revision 3 exists because the registration declares a sync surface (revision 2 would suffice for the credential requirement alone). The requirement is REQUIRED (`optional: false`) — acquisition cannot proceed without the key, and a missing Keychain value fails the operation with the typed missing-credential state rather than a launch without a key. The sync declaration names the same `zotero-config.json` file the app has always written, so existing configs keep working; `{itemKey}` substitutes one attachment key per item, and the item validation pins the 8-character A–Z0–9 key shape. The output bound is the full 128 MiB host maximum because the attachment file IS the revision-4 output. The duration bound is 600 s so the first operation on a machine can pay uv's one-time CPython download into the shared runtime cache.
+The registration declares `role: "fetcher"` and NO `kinds`: the package acquires; it never converts. Its claimed input MIME set is exactly the synthetic `application/zotero` source route, and the sync declares the same MIME as its `sourceMIMEType`, so every byteless source the sync creates is one this fetcher claims. The requirement is REQUIRED (`optional: false`) — acquisition cannot proceed without the key, and a missing Keychain value fails the operation with the typed missing-credential state rather than a launch without a key. The sync declaration names the same `zotero-config.json` file the app has always written, so existing configs keep working; `{itemKey}` substitutes one attachment key per item, and the item validation pins the 8-character A–Z0–9 key shape. The output bound is the full 128 MiB host maximum because the attachment file IS the result. The duration bound is 600 s so the first operation on a machine can pay uv's one-time CPython download into the shared runtime cache.
+
+On each request the package reports an explicit result type: `markdown` for Markdown/plain-text attachments (the output IS the product; no format job follows), and `source-bytes` with the true MIME plus the attachment's display filename for PDF/HTML attachments. The host stores the bytes as the source blob, writes the format-job marker in the same transaction, and queues ONE deduped follow-on `.extraction` item so the standard PDF/HTML format route produces the Markdown version.
 
 ### Protocol revisions across manifest revisions
 

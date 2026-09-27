@@ -44,19 +44,21 @@ public enum ExtractorPackagePluginDefinitionFactory {
 
     /// Immutable fingerprint over everything this definition's behavior
     /// depends on: exact revision, supported protocol, normalized
-    /// registrations, and the fixed dependency contract version.
+    /// registrations (role and route claims included), and the fixed
+    /// dependency contract version.
     public static func fingerprint(
         for manifest: ExtractorManifest,
         revision: ExtractorPackageRevisionID,
-        dependencyContractVersion: Int = 2
+        dependencyContractVersion: Int = 3
     ) throws -> DynamicPluginDefinitionFingerprint {
         try validate(manifest)
         let registrationDescription = manifest.registrations
             .sorted()
             .map { registration -> String in
+                let role = registration.role.rawValue
                 let kinds = registration.kinds.map(\.rawValue).sorted().joined(separator: ",")
                 let mimeTypes = registration.mimeTypes.map(\.rawValue).sorted().joined(separator: ",")
-                return "\(registration.id.rawValue)|\(kinds)|\(mimeTypes)"
+                return "\(registration.id.rawValue)|role:\(role)|\(kinds)|\(mimeTypes)"
             }
             .joined(separator: ";")
         let canonical = """
@@ -243,90 +245,101 @@ public enum ExtractorPackagePluginDefinitionFactory {
                 let presentation = ExtractorRegistrationPresentation(
                     displayName: registration.displayName,
                     packageName: manifest.displayName,
+                    role: registration.role,
                     kinds: registration.kinds,
                     mimeTypes: registration.mimeTypes,
                     filenameExtensions: registration.filenameExtensions,
                     credentialRequirements: registration.credentialRequirements)
-                let kinds = registration.kinds
-                    .sorted { $0.rawValue < $1.rawValue }
-                for kind in kinds {
-                    guard let backendKind = backendKind(for: kind) else {
-                        throw FactoryError.unsupportedRegistrationKind(kind.rawValue)
-                    }
-                    let reference = ExtractorReference(
-                        revision: revision,
-                        registrationID: registration.id)
-                    switch kind {
-                    case .pdf:
-                        entries.append(ExtractionBatchEntry(
-                            key: .installed(kind: backendKind, reference: reference),
-                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
-                                let preparation = try await provider.preparePDF(
-                                    revision: revision,
-                                    manifest: manifest)
-                                return ExtractionBackendAdapter.pdf(preparation)
-                            },
-                            presentation: presentation))
-                    case .html:
-                        entries.append(ExtractionBatchEntry(
-                            key: .installed(kind: backendKind, reference: reference),
-                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
-                                let html = try await provider.prepareHTML(
-                                    revision: revision,
-                                    manifest: manifest)
-                                return ExtractionBackendAdapter.html(html)
-                            },
-                            presentation: presentation))
-                    case .docx:
-                        entries.append(ExtractionBatchEntry(
-                            key: .installed(kind: backendKind, reference: reference),
-                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
-                                let docx = try await provider.prepareDOCX(
-                                    revision: revision,
-                                    manifest: manifest)
-                                return ExtractionBackendAdapter.docx(docx)
-                            },
-                            presentation: presentation))
-                    case .podcastTranscript:
-                        entries.append(ExtractionBatchEntry(
-                            key: .installed(kind: backendKind, reference: reference),
-                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
-                                let adapter = try await provider.preparePodcastTranscript(
-                                    revision: revision,
-                                    manifest: manifest)
-                                return ExtractionBackendAdapter.podcastTranscript(adapter)
-                            },
-                            presentation: presentation))
-                    case .applePodcastTranscript:
-                        entries.append(ExtractionBatchEntry(
-                            key: .installed(kind: backendKind, reference: reference),
-                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
-                                let adapter = try await provider.prepareApplePodcastTranscript(
-                                    revision: revision,
-                                    manifest: manifest)
-                                return ExtractionBackendAdapter.applePodcastTranscript(adapter)
-                            },
-                            presentation: presentation))
-                    case .youtubeTranscript:
-                        entries.append(ExtractionBatchEntry(
-                            key: .installed(kind: backendKind, reference: reference),
-                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
-                                let adapter = try await provider.prepareYouTubeTranscript(
-                                    revision: revision,
-                                    manifest: manifest)
-                                return ExtractionBackendAdapter.youtubeTranscript(adapter)
-                            },
-                            presentation: presentation))
-                    case .zotero:
-                        entries.append(ExtractionBatchEntry(
-                            key: .installed(kind: backendKind, reference: reference),
-                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
-                                let adapter = try await provider.prepareZoteroAttachment(
-                                    revision: revision,
-                                    manifest: manifest)
-                                return ExtractionBackendAdapter.zotero(adapter)
-                            },
-                            presentation: presentation))
+                let reference = ExtractorReference(
+                    revision: revision,
+                    registrationID: registration.id)
+                switch registration.role {
+                case .fetcher:
+                    // One kind-free fetcher entry per registration. The
+                    // synthetic source MIME claims live in the presentation
+                    // data; the adapter resolves per acquisition against the
+                    // claimed input MIME.
+                    entries.append(ExtractionBatchEntry(
+                        key: .installedFetcher(reference: reference),
+                        backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                            let adapter = try await provider.prepareFetcher(
+                                registration: registration,
+                                revision: revision,
+                                manifest: manifest)
+                            return ExtractionBackendAdapter.fetcher(adapter)
+                        },
+                        presentation: presentation))
+                case .extractor:
+                    // Preserve the per-kind switch for actual extractor
+                    // operations.
+                    let kinds = registration.kinds
+                        .sorted { $0.rawValue < $1.rawValue }
+                    for kind in kinds {
+                        guard let backendKind = backendKind(for: kind) else {
+                            throw FactoryError.unsupportedRegistrationKind(kind.rawValue)
+                        }
+                        switch kind {
+                        case .pdf:
+                            entries.append(ExtractionBatchEntry(
+                                key: .installed(kind: backendKind, reference: reference),
+                                backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                    let preparation = try await provider.preparePDF(
+                                        revision: revision,
+                                        manifest: manifest)
+                                    return ExtractionBackendAdapter.pdf(preparation)
+                                },
+                                presentation: presentation))
+                        case .html:
+                            entries.append(ExtractionBatchEntry(
+                                key: .installed(kind: backendKind, reference: reference),
+                                backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                    let html = try await provider.prepareHTML(
+                                        revision: revision,
+                                        manifest: manifest)
+                                    return ExtractionBackendAdapter.html(html)
+                                },
+                                presentation: presentation))
+                        case .docx:
+                            entries.append(ExtractionBatchEntry(
+                                key: .installed(kind: backendKind, reference: reference),
+                                backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                    let docx = try await provider.prepareDOCX(
+                                        revision: revision,
+                                        manifest: manifest)
+                                    return ExtractionBackendAdapter.docx(docx)
+                                },
+                                presentation: presentation))
+                        case .podcastTranscript:
+                            entries.append(ExtractionBatchEntry(
+                                key: .installed(kind: backendKind, reference: reference),
+                                backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                    let adapter = try await provider.preparePodcastTranscript(
+                                        revision: revision,
+                                        manifest: manifest)
+                                    return ExtractionBackendAdapter.podcastTranscript(adapter)
+                                },
+                                presentation: presentation))
+                        case .applePodcastTranscript:
+                            entries.append(ExtractionBatchEntry(
+                                key: .installed(kind: backendKind, reference: reference),
+                                backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                    let adapter = try await provider.prepareApplePodcastTranscript(
+                                        revision: revision,
+                                        manifest: manifest)
+                                    return ExtractionBackendAdapter.applePodcastTranscript(adapter)
+                                },
+                                presentation: presentation))
+                        case .youtubeTranscript:
+                            entries.append(ExtractionBatchEntry(
+                                key: .installed(kind: backendKind, reference: reference),
+                                backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                    let adapter = try await provider.prepareYouTubeTranscript(
+                                        revision: revision,
+                                        manifest: manifest)
+                                    return ExtractionBackendAdapter.youtubeTranscript(adapter)
+                                },
+                                presentation: presentation))
+                        }
                     }
                 }
             }
@@ -348,7 +361,6 @@ public enum ExtractorPackagePluginDefinitionFactory {
         case .podcastTranscript: return .rssPodcastTranscript
         case .applePodcastTranscript: return .applePodcastTranscript
         case .youtubeTranscript: return .youtubeTranscript
-        case .zotero: return .zotero
         }
     }
 
@@ -358,22 +370,25 @@ public enum ExtractorPackagePluginDefinitionFactory {
         // requests) is supported alongside both; the input transport never
         // changes what the manifest itself declares. Protocol revision 4
         // (bytes-result + external-identifier result fields) is supported
-        // alongside all three; it only extends the result frame.
+        // alongside all three; it only extends the result frame. Protocol
+        // revision 5 (fetcher requests + typed fetch results) is supported
+        // for fetcher-role registrations.
         guard manifest.protocolRevision == .v1
             || manifest.protocolRevision == .v2
             || manifest.protocolRevision == .v3
-            || manifest.protocolRevision == .v4 else {
+            || manifest.protocolRevision == .v4
+            || manifest.protocolRevision == .v5 else {
             throw FactoryError.unsupportedProtocol(manifest.protocolRevision)
         }
         for registration in manifest.registrations {
             guard registration.kinds.isSubset(of: [
                 .pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript,
-                .youtubeTranscript, .zotero,
+                .youtubeTranscript,
             ]) else {
                 let offending = registration.kinds
                     .subtracting([
                         .pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript,
-                        .youtubeTranscript, .zotero,
+                        .youtubeTranscript,
                     ])
                     .first.map(\.rawValue) ?? "?"
                 throw FactoryError.unsupportedRegistrationKind(offending)

@@ -35,20 +35,20 @@ public enum DisplayNameResolver {
     ///   - data: The verbatim file bytes (used for front matter / PDF metadata).
     ///   - mimeType: Best-effort MIME type (used to skip expensive checks on
     ///     obviously-wrong types).
-    ///   - zoteroItemTitle: The Zotero parent item title when this source came
-    ///     from the Zotero ingest seam; `nil` otherwise.
+    ///   - externalItemTitle: The acquisition's captured external item title
+    ///     (e.g. the parent item title a fetcher reported); `nil` otherwise.
     /// - Returns: A display name string, or `nil` when no richer metadata is
     ///   available (caller falls back to the filename).
     public static func resolve(
         filename: String,
         data: Data,
         mimeType: String?,
-        zoteroItemTitle: String?
+        externalItemTitle: String?
     ) -> String? {
-        // 1. Zotero title — the richest metadata we have.
-        if let zoteroTitle = zoteroItemTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !zoteroTitle.isEmpty {
-            return zoteroTitle
+        // 1. The captured external item title — the richest metadata we have.
+        if let itemTitle = externalItemTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !itemTitle.isEmpty {
+            return itemTitle
         }
 
         // 2. Markdown front matter title, falling back to a leading H1 heading

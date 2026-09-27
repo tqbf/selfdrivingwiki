@@ -16,9 +16,12 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
     public let displayName: String
     /// User-facing package name from the validated manifest.
     public let packageName: String
-    /// Declared operation kinds.
+    /// The registration's declared package role (extractor or fetcher).
+    public let role: ExtractorPackageRole
+    /// Declared operation kinds. Always empty for fetchers.
     public let kinds: Set<ExtractorKind>
-    /// Declared input MIME types — each (kind, MIME) pair is a route.
+    /// Declared input MIME types — each (kind, MIME) pair is an extractor
+    /// route; for a fetcher these are the synthetic source-route claims.
     public let mimeTypes: Set<ExtractorMIMEType>
     /// Declared filename extensions — matching hints, never route identity.
     public let filenameExtensions: Set<ExtractorFileExtension>
@@ -30,6 +33,7 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
         sourceCategory: ExtractorRouteSourceCategory = .installedPackage,
         displayName: String,
         packageName: String,
+        role: ExtractorPackageRole = .extractor,
         kinds: Set<ExtractorKind>,
         mimeTypes: Set<ExtractorMIMEType>,
         filenameExtensions: Set<ExtractorFileExtension>,
@@ -39,6 +43,7 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
         self.sourceCategory = sourceCategory
         self.displayName = displayName
         self.packageName = packageName
+        self.role = role
         self.kinds = kinds
         self.mimeTypes = mimeTypes
         self.filenameExtensions = filenameExtensions

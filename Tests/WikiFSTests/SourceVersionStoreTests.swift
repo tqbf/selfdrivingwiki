@@ -201,8 +201,8 @@ struct SourceVersionStoreTests {
         let source = try store.addSource(
             filename: "origin.html",
             data: Data("<html>v1</html>".utf8),
-            zoteroItemKey: nil,
-            zoteroItemTitle: nil,
+            externalItemKey: nil,
+            externalItemTitle: nil,
             mimeType: "text/html",
             provenance: sourceProvenance("https://example.com/origin")
         )
@@ -251,8 +251,8 @@ struct SourceVersionStoreTests {
         let source = try store.addSource(
             filename: "vacuum-activities.txt",
             data: Data("v1".utf8),
-            zoteroItemKey: nil,
-            zoteroItemTitle: nil,
+            externalItemKey: nil,
+            externalItemTitle: nil,
             mimeType: "text/plain",
             provenance: sourceProvenance("https://example.com/v1")
         )

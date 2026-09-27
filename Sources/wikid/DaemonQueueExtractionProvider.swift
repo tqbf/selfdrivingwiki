@@ -12,10 +12,13 @@ import WikiFSEngine
 /// no `SessionLookupBox`.
 ///
 /// Unlike the app's `@MainActor AppQueueExtractionProvider`, this type is
-/// `@unchecked Sendable` (all stored properties are immutable `let`s of
-/// `Sendable` types). It hops to the main actor only when reading
+/// `@unchecked Sendable`: every stored `let` is immutable and `Sendable`, and
+/// the one mutable surface (the per-wiki recovery one-shot set) is
+/// NSLock-guarded, which is the invariant that makes the unchecked
+/// conformance safe. It hops to the main actor only when reading
 /// `ExtractionCoordinator` state.
-final class DaemonQueueExtractionProvider: QueueExtractionProvider {
+// swiftlint:disable:next unchecked_sendable
+final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked Sendable {
     private let extractionServices: any ExtractionServices
     private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
     /// Prepares the wiki's store on demand (`WikiDaemon.openStore`). A fresh
@@ -29,7 +32,9 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
     /// Engine-side enqueue for follow-on format routes. When injected, a
     /// follow-on item is enqueued THROUGH the engine — its dispatch scan
     /// runs immediately, so the follow-on job starts without waiting for an
-    /// unrelated engine event to notice the bare store row. When `nil`, the
+    /// unrelated engine event to notice the bare store row. The typed dedupe
+    /// key makes the insert idempotent (app and daemon share the key shape,
+    /// so a race between both hosts converges on one item). When `nil`, the
     /// store-only fallback below applies (construction sites without an
     /// engine; the row is still visible to any later scan).
     private let engineEnqueue: (@Sendable (QueueItemRequest) async throws -> QueueItem.ID)?
@@ -66,6 +71,12 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             DebugLog.extraction("DaemonQueueExtractionProvider: no store for wikiID=\(wikiID.rawValue)")
             return nil
         }
+
+        // First-dispatch recovery (fetcher packages): converge any stranded
+        // `formatJobPending` markers before resolving routes. One-shot per
+        // wiki; the dedupe keys match the app's, so a concurrent app scan
+        // cannot create a second item.
+        await recoverStrandedFormatJobs(wikiID: wikiID, store: store)
 
         if let origin = DebugLog.trying("sourceOrigin", operation: { try store.sourceOrigin(sourceID: sourceID) }),
            let providerKind = origin.provider {
@@ -142,54 +153,81 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                     filename: "transcript",
                     resultMode: .installedPackage(producer)))
 
-            case .zotero:
-                // An acquisition arm runs once. A source that already holds
-                // content bytes — from a previous acquisition, or from the
-                // follow-on format-route item this provider enqueues after a
-                // bytes result — belongs to the bytes route below. Without
-                // this guard the follow-on resolved as another acquisition
-                // and re-fetched the same attachment forever (observed live:
-                // one PDF re-acquired 200+ times, one queue item per fetch).
-                let alreadyAcquired = !(DebugLog.trying("sourceContent", operation: {
-                    try store.sourceContent(id: sourceID)
-                }) ?? Data()).isEmpty
-                guard alreadyAcquired == false else { break }
-                // Zotero attachment acquisition runs through the
-                // reviewed/selected extractor package. The sync command
-                // wrote the canonical Zotero file endpoint as the plan URL;
-                // it becomes the typed operation input only after host URL
-                // validation. The outcome is bytes-shaped: Markdown itself,
-                // or source bytes the host routes to its own format path.
-                guard let planURLString = origin.plan,
-                      let validatedURL = ExtractorRemoteSourceURL(rawValue: planURLString) else {
-                    return nil
-                }
-                let adapter = try await extractionServices.prepareZoteroAttachment()
-                let producer = adapter.packageProvenance
-                return .attachment(AttachmentExtractionResolution(
-                    fetch: { onProgress in
-                        let outcome = try await adapter.attachment(
-                            for: validatedURL.url, onProgress: onProgress)
-                        return AttachmentFetchOutcome(
-                            outputBytes: outcome.outputBytes,
-                            resultMIMEType: outcome.resultMIMEType,
-                            articleMetadata: outcome.articleMetadata,
-                            reportedMetadata: outcome.reportedMetadata)
-                    },
-                    filename: origin.externalIdentity ?? "attachment",
-                    producer: producer))
-
             default:
                 break
             }
         }
 
-        guard let bytes = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) }) else {
-            DebugLog.extraction("DaemonQueueExtractionProvider: no bytes for \(sourceID.rawValue)")
+        // The generic acquisition decision — shared with the app, no
+        // origin-provider branch. A byteless source with a validated plan
+        // URL whose MIME an active fetcher registration claims resolves as
+        // a fetch; a source with acquired bytes falls through to the
+        // standard format route below.
+        guard let origin = DebugLog.trying("sourceOrigin", operation: {
+            try store.sourceOrigin(sourceID: sourceID)
+        }) else {
             return nil
         }
         let sources = (DebugLog.trying("listSources", operation: { try store.listSources() })) ?? []
-        guard let source = sources.first(where: { $0.id == sourceID }) else {
+        let source = sources.first(where: { $0.id == sourceID })
+        let claimedMIMEs = await activeFetcherClaimedMIMETypes()
+        let readBytes = DebugLog.trying("sourceContent", operation: {
+            try store.sourceContent(id: sourceID)
+        })
+        // A FAILED byte read is a typed error, never a silent "not yet
+        // acquired": failing the item loudly keeps the queue truthful.
+        guard readBytes != nil else {
+            DebugLog.extraction("DaemonQueueExtractionProvider: source bytes unreadable for \(sourceID.rawValue)")
+            throw DaemonStoreUnavailableError(wikiID: wikiID)
+        }
+        let route = FetchRouteDecision.resolve(
+            hasBytes: !(readBytes ?? Data()).isEmpty,
+            planURL: origin.plan,
+            mimeType: source?.mimeType,
+            fetcherClaimedMIMETypes: claimedMIMEs)
+        if route == .fetch {
+            // The plan URL becomes the typed operation input only after
+            // host URL validation (the decision already checked it).
+            guard let planURLString = origin.plan,
+                  let validatedURL = ExtractorRemoteSourceURL(rawValue: planURLString),
+                  let sourceMIME = source?.mimeType,
+                  let claimedMIME = ExtractorMIMEType(rawValue: sourceMIME.lowercased()) else {
+                return nil
+            }
+            let adapter = try await extractionServices.prepareFetcher(
+                sourceMIMEType: claimedMIME)
+            let producer = adapter.packageProvenance
+            return .fetch(FetcherResolution(
+                fetch: { onProgress in
+                    let outcome = try await adapter.fetch(
+                        for: validatedURL.url,
+                        claimedMIMEType: claimedMIME,
+                        displayFilename: origin.externalIdentity ?? "source",
+                        onProgress: onProgress)
+                    switch outcome {
+                    case .markdown(let markdown):
+                        return .markdown(FetchedMarkdown(
+                            markdown: markdown.markdown,
+                            reportedMetadata: markdown.reportedMetadata,
+                            articleMetadata: markdown.articleMetadata))
+                    case .sourceBytes(let bytes):
+                        return .sourceBytes(FetchedSourceBytes(
+                            bytes: bytes.bytes,
+                            mimeType: bytes.mimeType,
+                            originalFilename: bytes.originalFilename,
+                            reportedMetadata: bytes.reportedMetadata,
+                            articleMetadata: bytes.articleMetadata))
+                    }
+                },
+                claimedMIMEType: claimedMIME,
+                filename: origin.externalIdentity ?? "source",
+                producer: producer))
+        }
+        guard let bytes = readBytes, bytes.isEmpty == false else {
+            DebugLog.extraction("DaemonQueueExtractionProvider: no bytes for \(sourceID.rawValue)")
+            return nil
+        }
+        guard let source else {
             DebugLog.extraction("DaemonQueueExtractionProvider: no source row for \(sourceID.rawValue)")
             return nil
         }
@@ -297,41 +335,81 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
         }
     }
 
+    /// The synthetic input MIME types the ACTIVE fetcher registrations
+    /// claim — the decision input for the shared fetch route. Same source of
+    /// truth as the app provider, so both hosts decide identically.
+    private func activeFetcherClaimedMIMETypes() async -> Set<String> {
+        let snapshots = await extractionServices.activeRegistrationSnapshots()
+        var claims: Set<String> = []
+        for snapshot in snapshots where snapshot.role == .fetcher {
+            for mimeType in snapshot.mimeTypes {
+                claims.insert(mimeType.rawValue)
+            }
+        }
+        return claims
+    }
+
+    private func outcomeReportedIdentifier(_ outcome: FetchOutcome) -> String? {
+        switch outcome {
+        case .markdown(let value): return value.articleMetadata?.identifier
+        case .sourceBytes(let value): return value.articleMetadata?.identifier
+        }
+    }
+
+    private func outcomeReportedTitle(_ outcome: FetchOutcome) -> String? {
+        switch outcome {
+        case .markdown(let value): return value.articleMetadata?.title
+        case .sourceBytes(let value): return value.articleMetadata?.title
+        }
+    }
+
+    /// The exact fetch producer for the outcome's reported metadata.
+    private func fetchProducer(
+        _ resolution: FetcherResolution,
+        _ outcome: FetchOutcome
+    ) -> ExtractionInstalledPackageProducer {
+        let reported: ExtractorReportedMetadata
+        switch outcome {
+        case .markdown(let value): reported = value.reportedMetadata
+        case .sourceBytes(let value): reported = value.reportedMetadata
+        }
+        return ExtractionInstalledPackageProducer(
+            revision: resolution.producer.revision,
+            registrationID: resolution.producer.registrationID,
+            protocolRevision: resolution.producer.protocolRevision,
+            reportedMetadata: reported)
+    }
+
     @discardableResult
-    func persistAttachmentExtraction(
+    func persistFetch(
         wikiID: WikiID,
         sourceID: SourceID,
-        resolution: AttachmentExtractionResolution,
-        outcome: AttachmentFetchOutcome
+        resolution: FetcherResolution,
+        outcome: FetchOutcome
     ) async throws -> QueueExtractionOutputReference? {
         guard let store = storeResolver(wikiID) else {
             // A finished acquisition whose store vanished mid-flight is data
             // loss — fail the item loudly instead of silently completing.
-            DebugLog.extraction("DaemonQueueExtractionProvider: persistAttachmentExtraction — no store for wikiID=\(wikiID.rawValue)")
+            DebugLog.extraction("DaemonQueueExtractionProvider: persistFetch — no store for wikiID=\(wikiID.rawValue)")
             throw DaemonStoreUnavailableError(wikiID: wikiID)
         }
-        // Provenance fields the package reported (identifier = the Zotero
-        // parent item key; title becomes the display name).
-        let itemKey = outcome.articleMetadata?.identifier
-        let itemTitle = outcome.articleMetadata?.title
+        // Provenance fields the package reported (identifier = the returned
+        // parent item key; title becomes the display name). Neutral
+        // acquisition metadata — never a host identity.
+        let itemKey = outcomeReportedIdentifier(outcome)
+        let itemTitle = outcomeReportedTitle(outcome)
 
-        if outcome.isMarkdownResult {
-            // Markdown result: podcast-shaped package provenance write, and
-            // the retained Zotero columns ride along.
+        switch outcome {
+        case .markdown(let markdown):
+            // Markdown result: package-provenance write, then the source is
+            // complete — no format job exists to wait for.
             guard let initialVersion = try store.initialContentVersion(sourceID: sourceID) else {
-                DebugLog.store("DaemonQueueExtractionProvider: attachment markdown has no initial source version (source=\(sourceID.rawValue))")
+                DebugLog.store("DaemonQueueExtractionProvider: fetch markdown has no initial source version (source=\(sourceID.rawValue))")
                 throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
             }
-            guard let markdown = String(data: outcome.outputBytes, encoding: .utf8) else {
-                throw ProcessPackageRunError.invalidOutputEncoding
-            }
-            let producer = ExtractionInstalledPackageProducer(
-                revision: resolution.producer.revision,
-                registrationID: resolution.producer.registrationID,
-                protocolRevision: resolution.producer.protocolRevision,
-                reportedMetadata: outcome.reportedMetadata)
             let version = try store.appendInstalledPackageMarkdown(
-                sourceID: sourceID, content: markdown, package: producer,
+                sourceID: sourceID, content: markdown.markdown,
+                package: fetchProducer(resolution, outcome),
                 origin: .extraction, toolVersion: nil,
                 sourceVersionID: initialVersion.id, note: nil)
             try store.setAcquisitionProvenance(
@@ -339,35 +417,46 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                 externalItemKey: itemKey,
                 externalItemTitle: itemTitle,
                 displayName: itemTitle)
+            try store.markFetchComplete(sourceID: sourceID)
+            DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+            return QueueExtractionOutputReference(versionID: version.id.rawValue)
+
+        case .sourceBytes(let bytes):
+            // Bytes result: the output-file bytes ARE the source content. The
+            // mutator stores the blob, sets the real MIME/ext/byte size and
+            // the validated display filename, and writes the
+            // `formatJobPending` marker with its exact producer — in one
+            // transaction. The follow-on enqueue happens OUTSIDE this
+            // wiki-store transaction (different database); the queue startup
+            // recovery scan closes the crash gap between the two.
+            let version = try store.attachAcquiredBytes(
+                sourceID: sourceID,
+                bytes: bytes.bytes,
+                mimeType: bytes.mimeType.rawValue,
+                originalFilename: bytes.originalFilename,
+                externalItemKey: itemKey,
+                externalItemTitle: itemTitle,
+                producer: fetchProducer(resolution, outcome))
             DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
             return QueueExtractionOutputReference(versionID: version.id.rawValue)
         }
-
-        // Bytes result: the output-file bytes ARE the source content. The
-        // mutator stores the blob, sets the real MIME/ext/byte size, and
-        // populates the retained columns in one transaction.
-        guard let mimeType = outcome.resultMIMEType else {
-            throw ProcessPackageRunError.unexpectedBytesResult
-        }
-        let version = try store.attachAcquiredBytes(
-            sourceID: sourceID,
-            bytes: outcome.outputBytes,
-            mimeType: mimeType.rawValue,
-            externalItemKey: itemKey,
-            externalItemTitle: itemTitle,
-            displayName: itemTitle)
-        DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
-        return QueueExtractionOutputReference(versionID: version.id.rawValue)
     }
 
-    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws {
+    func enqueueFollowOnExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        acquiredContentVersionID: SourceVersionID,
+        dedupeKey: QueueItemDedupeKey
+    ) async throws {
         let request = QueueItemRequest(
             queue: .extraction,
             wikiID: wikiID,
-            payload: QueueItemPayload(sourceIDs: [sourceID]))
+            payload: QueueItemPayload(sourceIDs: [sourceID]),
+            dedupeKey: dedupeKey)
         // Preferred route: enqueue through the engine so its dispatch scan
         // runs immediately — the follow-on job dispatches with no other
-        // trigger required.
+        // trigger required. The dedupe key rides the request, so the XPC
+        // surface carries it unchanged.
         if let engineEnqueue {
             do {
                 _ = try await engineEnqueue(request)
@@ -389,6 +478,39 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             DebugLog.store("DaemonQueueExtractionProvider: follow-on format-route enqueue failed (source=\(sourceID.rawValue)): \(error)")
             throw error
         }
+    }
+
+    // MARK: - FetchFormatJobRecovering (daemon)
+
+    /// The queue startup path's recovery for this daemon process: at most
+    /// one pass per wiki (first dispatch triggers it; the one-shot guard
+    /// makes later dispatches no-ops).
+    public func recoverStrandedFormatJobs(wikiID: WikiID, store: any WikiStore) async {
+        guard markRecoveryStarted(wikiID) else { return }
+        guard let queueStore else {
+            unmarkRecovery(wikiID)
+            return
+        }
+        await FetchFormatJobRecovery.run(
+            wikiID: wikiID, store: store, queueStore: queueStore)
+    }
+
+    /// Wikis this process already recovery-scanned (one-shot per wiki).
+    /// Lock-guarded: the class is `@unchecked Sendable` over immutable lets;
+    /// this is the one mutable surface.
+    private let recoveryLock = NSLock()
+    private var recoveredWikis: Set<WikiID> = []
+
+    private func markRecoveryStarted(_ wikiID: WikiID) -> Bool {
+        recoveryLock.lock()
+        defer { recoveryLock.unlock() }
+        return recoveredWikis.insert(wikiID).inserted
+    }
+
+    private func unmarkRecovery(_ wikiID: WikiID) {
+        recoveryLock.lock()
+        defer { recoveryLock.unlock() }
+        recoveredWikis.remove(wikiID)
     }
 }
 

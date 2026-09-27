@@ -84,6 +84,8 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
     /// GRDB serializes per handle.
     private let queueDatabaseURL: URL?
     private var followOnQueueStore: QueueStore?
+    /// Wikis this process already recovery-scanned (one-shot per wiki).
+    private var recoveredWikis: Set<WikiID> = []
 
     init(
         extractionServices: any ExtractionServices,
@@ -184,46 +186,61 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                     filename: "transcript",
                     resultMode: .installedPackage(producer)))
 
-            case .zotero:
-                // An acquisition arm runs once. A source that already holds
-                // content bytes — from a previous acquisition, or from the
-                // follow-on format-route item this provider enqueues after a
-                // bytes result — belongs to the bytes route below. Without
-                // this guard the follow-on resolved as another acquisition
-                // and re-fetched the same attachment forever (observed live:
-                // one PDF re-acquired 200+ times, one queue item per fetch).
-                // `sourceBytes` is nil only when the read fails; a byteless
-                // source reads as empty data, so emptiness is the
-                // "not yet acquired" marker.
-                let alreadyAcquired = !(store.sourceBytes(id: sourceID) ?? Data()).isEmpty
-                guard alreadyAcquired == false else { break }
-                // Zotero attachment acquisition runs through the
-                // reviewed/selected extractor package. The sync command
-                // wrote the canonical Zotero file endpoint as the plan URL;
-                // it becomes the typed operation input only after host URL
-                // validation. The outcome is bytes-shaped: Markdown itself,
-                // or source bytes the host routes to its own format path.
-                guard let planURLString = origin.plan,
-                      let validatedURL = ExtractorRemoteSourceURL(rawValue: planURLString) else {
-                    return nil
-                }
-                let adapter = try await extractionServices.prepareZoteroAttachment()
-                let producer = adapter.packageProvenance
-                return .attachment(AttachmentExtractionResolution(
-                    fetch: { onProgress in
-                        let outcome = try await adapter.attachment(
-                            for: validatedURL.url, onProgress: onProgress)
-                        return AttachmentFetchOutcome(
-                            outputBytes: outcome.outputBytes,
-                            resultMIMEType: outcome.resultMIMEType,
-                            articleMetadata: outcome.articleMetadata,
-                            reportedMetadata: outcome.reportedMetadata)
-                    },
-                    filename: origin.externalIdentity ?? "attachment",
-                    producer: producer))
-
             default:
                 break
+            }
+        }
+
+        // The generic acquisition decision — shared with the daemon, no
+        // origin-provider branch. A byteless source with a validated plan
+        // URL whose MIME an active fetcher registration claims resolves as
+        // a fetch; a source with acquired bytes falls through to the
+        // standard format route below.
+        if let origin = store.sourceOrigin(for: sourceID) {
+            let source = store.sources.first(where: { $0.id == sourceID })
+            let claimedMIMEs = await activeFetcherClaimedMIMETypes()
+            let route = FetchRouteDecision.resolve(
+                hasBytes: !(store.sourceBytes(id: sourceID) ?? Data()).isEmpty,
+                planURL: origin.plan,
+                mimeType: source?.mimeType,
+                fetcherClaimedMIMETypes: claimedMIMEs)
+            if route == .fetch {
+                // The plan URL becomes the typed operation input only after
+                // host URL validation (the decision already checked it).
+                guard let planURLString = origin.plan,
+                      let validatedURL = ExtractorRemoteSourceURL(rawValue: planURLString),
+                      let sourceMIME = source?.mimeType,
+                      let claimedMIME = ExtractorMIMEType(rawValue: sourceMIME.lowercased()) else {
+                    return nil
+                }
+                let adapter = try await extractionServices.prepareFetcher(
+                    sourceMIMEType: claimedMIME)
+                let producer = adapter.packageProvenance
+                return .fetch(FetcherResolution(
+                    fetch: { onProgress in
+                        let outcome = try await adapter.fetch(
+                            for: validatedURL.url,
+                            claimedMIMEType: claimedMIME,
+                            displayFilename: origin.externalIdentity ?? "source",
+                            onProgress: onProgress)
+                        switch outcome {
+                        case .markdown(let markdown):
+                            return .markdown(FetchedMarkdown(
+                                markdown: markdown.markdown,
+                                reportedMetadata: markdown.reportedMetadata,
+                                articleMetadata: markdown.articleMetadata))
+                        case .sourceBytes(let bytes):
+                            return .sourceBytes(FetchedSourceBytes(
+                                bytes: bytes.bytes,
+                                mimeType: bytes.mimeType,
+                                originalFilename: bytes.originalFilename,
+                                reportedMetadata: bytes.reportedMetadata,
+                                articleMetadata: bytes.articleMetadata))
+                        }
+                    },
+                    claimedMIMEType: claimedMIME,
+                    filename: origin.externalIdentity ?? "source",
+                    producer: producer))
             }
         }
 
@@ -326,39 +343,51 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         }
     }
 
+    /// The synthetic input MIME types the ACTIVE fetcher registrations
+    /// claim — the decision input for the shared fetch route.
+    private func activeFetcherClaimedMIMETypes() async -> Set<String> {
+        let snapshots = await extractionServices.activeRegistrationSnapshots()
+        var claims: Set<String> = []
+        for snapshot in snapshots where snapshot.role == .fetcher {
+            for mimeType in snapshot.mimeTypes {
+                claims.insert(mimeType.rawValue)
+            }
+        }
+        return claims
+    }
+
     @discardableResult
-    func persistAttachmentExtraction(
+    func persistFetch(
         wikiID: WikiID,
         sourceID: SourceID,
-        resolution: AttachmentExtractionResolution,
-        outcome: AttachmentFetchOutcome
+        resolution: FetcherResolution,
+        outcome: FetchOutcome
     ) async throws -> QueueExtractionOutputReference? {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
-            DebugLog.extraction("AppQueueExtractionProvider: persistAttachmentExtraction — no session for wikiID=\(wikiID)")
+            DebugLog.extraction("AppQueueExtractionProvider: persistFetch — no session for wikiID=\(wikiID)")
             return nil
         }
-        // Provenance fields the package reported (identifier = the Zotero
-        // parent item key; title becomes the display name).
-        let itemKey = outcome.articleMetadata?.identifier
-        let itemTitle = outcome.articleMetadata?.title
+        // Provenance fields the package reported (identifier = the returned
+        // parent item key; title becomes the display name). Neutral
+        // acquisition metadata — never a host identity.
+        let itemKey = outcomeReportedIdentifier(outcome)
+        let itemTitle = outcomeReportedTitle(outcome)
 
-        if outcome.isMarkdownResult {
-            // Markdown result: podcast-shaped package provenance write, and
-            // the retained Zotero columns ride along.
+        switch outcome {
+        case .markdown(let markdown):
+            // Markdown result: package-provenance write, then the source is
+            // complete — no format job exists to wait for.
             guard let initialVersion = store.initialContentVersion(for: sourceID) else {
-                DebugLog.store("AppQueueExtractionProvider: attachment markdown has no initial source version (source=\(sourceID.rawValue))")
+                DebugLog.store("AppQueueExtractionProvider: fetch markdown has no initial source version (source=\(sourceID.rawValue))")
                 throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
-            }
-            guard let markdown = String(data: outcome.outputBytes, encoding: .utf8) else {
-                throw ProcessPackageRunError.invalidOutputEncoding
             }
             let producer = ExtractionInstalledPackageProducer(
                 revision: resolution.producer.revision,
                 registrationID: resolution.producer.registrationID,
                 protocolRevision: resolution.producer.protocolRevision,
-                reportedMetadata: outcome.reportedMetadata)
+                reportedMetadata: markdown.reportedMetadata)
             let version = try store.internalStore.appendInstalledPackageMarkdown(
-                sourceID: sourceID, content: markdown, package: producer,
+                sourceID: sourceID, content: markdown.markdown, package: producer,
                 origin: .extraction, toolVersion: nil,
                 sourceVersionID: initialVersion.id, note: nil)
             try store.internalStore.setAcquisitionProvenance(
@@ -366,26 +395,68 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                 externalItemKey: itemKey,
                 externalItemTitle: itemTitle,
                 displayName: itemTitle)
+            // Complete in the same logical step as the derived version; a
+            // failure above leaves the source pending for a controlled retry.
+            try store.internalStore.markFetchComplete(sourceID: sourceID)
+            return QueueExtractionOutputReference(versionID: version.id.rawValue)
+
+        case .sourceBytes(let bytes):
+            // Bytes result: the output-file bytes ARE the source content. The
+            // mutator stores the blob, sets the real MIME/ext/byte size and
+            // the validated display filename, and writes the
+            // `formatJobPending` marker with its exact producer — in one
+            // transaction. The follow-on enqueue happens OUTSIDE this
+            // wiki-store transaction (different database), and the queue
+            // startup recovery scan closes the crash gap between the two.
+            let version = try store.internalStore.attachAcquiredBytes(
+                sourceID: sourceID,
+                bytes: bytes.bytes,
+                mimeType: bytes.mimeType.rawValue,
+                originalFilename: bytes.originalFilename,
+                externalItemKey: itemKey,
+                externalItemTitle: itemTitle,
+                producer: producer(resolution: resolution, outcome: outcome))
             return QueueExtractionOutputReference(versionID: version.id.rawValue)
         }
-
-        // Bytes result: the output-file bytes ARE the source content. The
-        // mutator stores the blob, sets the real MIME/ext/byte size, and
-        // populates the retained columns in one transaction.
-        guard let mimeType = outcome.resultMIMEType else {
-            throw ProcessPackageRunError.unexpectedBytesResult
-        }
-        let version = try store.internalStore.attachAcquiredBytes(
-            sourceID: sourceID,
-            bytes: outcome.outputBytes,
-            mimeType: mimeType.rawValue,
-            externalItemKey: itemKey,
-            externalItemTitle: itemTitle,
-            displayName: itemTitle)
-        return QueueExtractionOutputReference(versionID: version.id.rawValue)
     }
 
-    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws {
+    private func outcomeReportedIdentifier(_ outcome: FetchOutcome) -> String? {
+        switch outcome {
+        case .markdown(let value): return value.articleMetadata?.identifier
+        case .sourceBytes(let value): return value.articleMetadata?.identifier
+        }
+    }
+
+    private func outcomeReportedTitle(_ outcome: FetchOutcome) -> String? {
+        switch outcome {
+        case .markdown(let value): return value.articleMetadata?.title
+        case .sourceBytes(let value): return value.articleMetadata?.title
+        }
+    }
+
+    /// The exact fetch producer for the outcome's reported metadata.
+    private func producer(
+        resolution: FetcherResolution,
+        outcome: FetchOutcome
+    ) -> ExtractionInstalledPackageProducer {
+        let reported: ExtractorReportedMetadata
+        switch outcome {
+        case .markdown(let value): reported = value.reportedMetadata
+        case .sourceBytes(let value): reported = value.reportedMetadata
+        }
+        return ExtractionInstalledPackageProducer(
+            revision: resolution.producer.revision,
+            registrationID: resolution.producer.registrationID,
+            protocolRevision: resolution.producer.protocolRevision,
+            reportedMetadata: reported)
+    }
+
+    func enqueueFollowOnExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        acquiredContentVersionID: SourceVersionID,
+        dedupeKey: QueueItemDedupeKey
+    ) async throws {
         let store: QueueStore
         if let followOnQueueStore {
             store = followOnQueueStore
@@ -400,10 +471,41 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
             _ = try store.enqueue(QueueItemRequest(
                 queue: .extraction,
                 wikiID: wikiID,
-                payload: QueueItemPayload(sourceIDs: [sourceID])))
+                payload: QueueItemPayload(sourceIDs: [sourceID]),
+                dedupeKey: dedupeKey))
         } catch {
             DebugLog.store("AppQueueExtractionProvider: follow-on format-route enqueue failed (source=\(sourceID.rawValue)): \(error)")
             throw error
+        }
+    }
+}
+
+// MARK: - FetchFormatJobRecovering (app)
+
+extension AppQueueExtractionProvider: FetchFormatJobRecovering {
+    /// The queue startup path's recovery for this app process: at most one
+    /// pass per wiki (session open triggers the first; a dispatch re-entry
+    /// is a no-op via the one-shot guard).
+    public func recoverStrandedFormatJobs(wikiID: WikiID, store: any WikiStore) async {
+        guard recoveredWikis.insert(wikiID).inserted else { return }
+        guard let queueStore = followOnQueueStoreOrOpened() else {
+            recoveredWikis.remove(wikiID)
+            return
+        }
+        await FetchFormatJobRecovery.run(
+            wikiID: wikiID, store: store, queueStore: queueStore)
+    }
+
+    private func followOnQueueStoreOrOpened() -> QueueStore? {
+        if let followOnQueueStore { return followOnQueueStore }
+        guard let queueDatabaseURL else { return nil }
+        do {
+            let store = try QueueStore(databaseURL: queueDatabaseURL)
+            followOnQueueStore = store
+            return store
+        } catch {
+            DebugLog.store("AppQueueExtractionProvider: recovery queue store open failed: \(error)")
+            return nil
         }
     }
 }

@@ -205,18 +205,40 @@ public struct ExtractorPackageToolExecutor: Sendable {
             requestURL,
             maximumByteCount: ExtractorHostLimits.maximumFrameByteCount,
             overflow: .requestTooLarge)
-        let request: ExtractorProtocolRequest
+        // The revision-aware tagged request: revisions 1–4 decode the
+        // extractor request unchanged; revision 5 decodes either an
+        // extractor request or a fetch request.
+        let envelope: ExtractorRequestEnvelope
         do {
-            request = try JSONDecoder().decode(ExtractorProtocolRequest.self, from: requestData)
+            envelope = try ExtractorRequestEnvelope.decode(requestData)
         } catch {
             throw ExtractorPackageToolFailure.malformedRequest
         }
         let manifest = validated.validated.manifest
-        guard request.protocolRevision == manifest.protocolRevision else {
-            throw ExtractorPackageToolFailure.protocolRevisionMismatch
+        let requestRevision: ExtractorProtocolRevision
+        let requestID: ExtractorRequestID
+        let outputPath: ExtractorRelativePath
+        let isSupported: Bool
+        switch envelope {
+        case .extractor(let request):
+            requestRevision = request.protocolRevision
+            requestID = request.requestID
+            outputPath = request.outputPath
+            isSupported = manifest.registrations.contains { registration in
+                registration.kinds.contains(request.kind)
+                    && registration.mimeTypes.contains(request.mimeType)
+            }
+        case .fetch(let request):
+            requestRevision = request.protocolRevision
+            requestID = request.requestID
+            outputPath = request.outputPath
+            isSupported = manifest.registrations.contains { registration in
+                registration.role == .fetcher
+                    && registration.mimeTypes.contains(request.mimeType)
+            }
         }
-        let isSupported = manifest.registrations.contains { registration in
-            registration.kinds.contains(request.kind) && registration.mimeTypes.contains(request.mimeType)
+        guard requestRevision == manifest.protocolRevision else {
+            throw ExtractorPackageToolFailure.protocolRevisionMismatch
         }
         guard isSupported else { throw ExtractorPackageToolFailure.unsupportedRegistration }
 
@@ -236,10 +258,11 @@ public struct ExtractorPackageToolExecutor: Sendable {
             throw ExtractorPackageToolFailure.frames(error)
         }
         var sequence = ExtractorProtocolSequence(
-            requestID: request.requestID,
-            expectedOutputPath: request.outputPath,
+            requestID: requestID,
+            expectedOutputPath: outputPath,
             maximumProgressEventCount: manifest.limits.maximumProgressEventCount,
-            protocolRevision: request.protocolRevision)
+            protocolRevision: requestRevision,
+            isFetcherRequest: envelope.isFetcher)
         do {
             for frame in frames { try sequence.consume(frame) }
             let terminal = try sequence.finish()

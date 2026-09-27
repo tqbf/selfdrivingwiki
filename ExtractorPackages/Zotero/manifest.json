@@ -7,15 +7,15 @@
   "entryPoint": "bin/zotero-extractor",
   "files": [
     {
-      "digest": "322147fa4e1a9c918e2517be2f1bda452f86a5e87488edabba94e6310144ed1c",
+      "digest": "4a1c89cdc6ce6e8b0f6d4f4e5d767318503765233da048dd533a8984ae9c092a",
       "path": "PROVENANCE.md"
     },
     {
-      "digest": "3f3707e0f7fda78dc24d44cfe269e156a2e00031b427e870f93ae77e75831160",
+      "digest": "06b9bb3af673a6c17b74e9a6ce7315e9bba21baff3204684b6a1c6d4e397d482",
       "path": "bin/zotero"
     },
     {
-      "digest": "2d79916a205fc2483080ab0956bdfc45d1b6b82d9bbce940346ac16cd0d7edfc",
+      "digest": "c9192e2493074138e86bede9cb8f4db57d0a60d02a1f7bc3cf701f72aeadf508",
       "path": "bin/zotero-extractor"
     }
   ],
@@ -33,9 +33,9 @@
     "maximumMarkdownOutputByteCount": 134217728,
     "maximumProgressEventCount": 64
   },
-  "manifestRevision": 3,
+  "manifestRevision": 4,
   "packageID": "org.selfdrivingwiki.zotero",
-  "protocolRevision": 4,
+  "protocolRevision": 5,
   "registrations": [
     {
       "credentialRequirements": [
@@ -49,12 +49,10 @@
       ],
       "displayName": "Zotero Attachment",
       "id": "attachment",
-      "kinds": [
-        "zotero"
-      ],
       "mimeTypes": [
         "application/zotero"
       ],
+      "role": "fetcher",
       "sync": {
         "configFileName": "zotero-config.json",
         "fields": [
@@ -73,9 +71,10 @@
           "maximumLength": 8,
           "minimumLength": 8
         },
+        "sourceMIMEType": "application/zotero",
         "urlTemplate": "https://api.zotero.org/users/{libraryID}/items/{itemKey}/file"
       }
     }
   ],
-  "version": "1.0.2"
+  "version": "1.1.0"
 }

@@ -64,13 +64,14 @@
           "registrationID": "captions"
         }
       }
-    },
+    }
+  ],
+  "routeFetchers": [
     {
       "route": {
-        "kind": "zotero",
         "mimeType": "application/zotero"
       },
-      "extractor": {
+      "fetcher": {
         "kind": "installed",
         "installed": {
           "packageID": "org.selfdrivingwiki.zotero",

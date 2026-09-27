@@ -20,7 +20,9 @@ struct ExtractorKindNeutralityContractTests {
 
     private static let requiredTenetMarkers = [
         ("AGENTS.md", "Extractor-kind policy comes from package data"),
+        ("AGENTS.md", "Package roles are package data too"),
         ("docs/architecture/extractor-package-manifest.md", "Kind neutrality"),
+        ("docs/architecture/extractor-package-manifest.md", "Roles (manifest revision 4)"),
     ]
 
     private struct ContractFailure: Error, CustomStringConvertible {
@@ -302,5 +304,53 @@ struct ExtractorKindNeutralityContractTests {
                     "\(file.lastPathComponent) hard-codes the reviewed Zotero package ID; eligibility must come from registration data")
             }
         }
+    }
+
+    /// Fetcher-role neutrality (package-declared roles): whether a byteless
+    /// source acquires must derive from the ACTIVE fetcher registrations'
+    /// claimed input MIME set — never from the source's origin provider. No
+    /// queue-path source may branch acquisition on a provider comparison,
+    /// and both hosts must resolve the same shared pure decision
+    /// (`FetchRouteDecision`) so app and daemon cannot drift.
+    @Test func fetcherAcquisitionIsRoleAndClaimDriven() throws {
+        let root = try Self.locateRepositoryRoot()
+        let files = try Self.sourceFiles(under: root)
+        #expect(files.isEmpty == false, "no host sources found to scan")
+
+        // No origin-provider acquisition gate: a `provider == .zotero`
+        // comparison is how the pre-fetcher host privileged Zotero. Display
+        // code outside the scanned roots may still map the provider to a
+        // label — labels are data.
+        let providerGate = try NSRegularExpression(
+            pattern: #"provider(Kind)?\s*[=!]=\s*\.zotero\b"#)
+
+        var queueProviderFiles = 0
+        for file in files {
+            var contents = try String(contentsOf: file, encoding: .utf8)
+            // Identifiers only: strip comments first so prose cannot trip
+            // the scan (mirrors the per-kind scans above).
+            contents = contents.replacingOccurrences(
+                of: #"//.*"#,
+                with: "",
+                options: .regularExpression)
+            let range = NSRange(contents.startIndex..., in: contents)
+
+            let gateMatches = providerGate.matches(in: contents, range: range)
+            #expect(
+                gateMatches.isEmpty,
+                "\(file.lastPathComponent) gates behavior on the .zotero origin provider; acquisition must come from fetcher registration claims")
+
+            // Both hosts must consult the shared decision.
+            if file.lastPathComponent == "AppQueueExtractionProvider.swift"
+                || file.lastPathComponent == "DaemonQueueExtractionProvider.swift" {
+                queueProviderFiles += 1
+                #expect(
+                    contents.contains("FetchRouteDecision"),
+                    "\(file.lastPathComponent) must resolve acquisition through the shared FetchRouteDecision, not its own branch")
+            }
+        }
+        #expect(
+            queueProviderFiles == 2,
+            "the app and daemon queue extraction providers must both exist and be scanned")
     }
 }

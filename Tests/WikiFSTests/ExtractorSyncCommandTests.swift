@@ -75,10 +75,13 @@ struct ExtractorSyncCommandTests {
             itemValidation: ExtractorSyncItemValidation(
                 minimumLength: 8, maximumLength: 8,
                 alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"))
+        // The reviewed Zotero package's new shape: a FETCHER registration —
+        // no kinds, its claims are the claimed input MIME types — under a
+        // revision-4 manifest speaking protocol revision 5.
         let registration = try ExtractorRegistration(
             id: ExtractorRegistrationID(validating: "attachment"),
             displayName: "Zotero Attachment",
-            kinds: [.zotero],
+            kinds: [],
             mimeTypes: [ExtractorMIMEType(validating: "application/zotero")],
             credentialRequirements: [
                 ExtractorCredentialRequirement(
@@ -88,7 +91,8 @@ struct ExtractorSyncCommandTests {
                     label: "Zotero API Key",
                     purpose: "Read your Zotero library and download attachment files."),
             ],
-            sync: sync)
+            sync: sync,
+            role: .fetcher)
         return try ExtractorPackageCatalogRecord(
             revision: ExtractorPackageRevisionID(
                 packageID: ExtractorPackageID(validating: "org.selfdrivingwiki.zotero"),
@@ -96,8 +100,8 @@ struct ExtractorSyncCommandTests {
                 digest: ExtractorPackageDigest(
                     bytes: Array(repeating: 0x2a, count: 32))),
             displayName: "Zotero Attachment",
-            protocolRevision: .v4,
-            manifestRevision: .v3,
+            protocolRevision: .v5,
+            manifestRevision: .v4,
             launch: .runtime(command: ExtractorRuntimeName(rawValue: "uv")!, arguments: ["run", "--script"]),
             registrations: [registration],
             capabilities: [.network],
@@ -452,7 +456,9 @@ struct ExtractorSyncCommandTests {
             fileName: "zotero-config.json", to: container)
 
         var older = try zoteroRecord()
-        // Same lineage, older version, no sync declaration.
+        // Same lineage, older version, no sync declaration. The registration
+        // keeps its fetcher role — an older release of the same package —
+        // and the record stays revision-4/protocol-5 consistent.
         older = try ExtractorPackageCatalogRecord(
             revision: ExtractorPackageRevisionID(
                 packageID: older.revision.packageID,
@@ -460,13 +466,14 @@ struct ExtractorSyncCommandTests {
                 digest: ExtractorPackageDigest(bytes: Array(repeating: 0x0f, count: 32))),
             displayName: older.displayName,
             protocolRevision: older.protocolRevision,
-            manifestRevision: .v2,
+            manifestRevision: older.manifestRevision,
             launch: older.launch,
             registrations: try older.registrations.map {
                 try ExtractorRegistration(
                     id: $0.id, displayName: $0.displayName, kinds: $0.kinds,
                     mimeTypes: $0.mimeTypes, filenameExtensions: $0.filenameExtensions,
-                    credentialRequirements: $0.credentialRequirements)
+                    credentialRequirements: $0.credentialRequirements,
+                    role: $0.role)
             },
             capabilities: older.capabilities,
             installedAt: older.installedAt)

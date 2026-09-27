@@ -92,6 +92,40 @@ private func makeOperation(
         runtimeResolution: nil)
 }
 
+/// Test-only conveniences over the request envelope: the request fields every
+/// revision-1–5 payload carries, regardless of role. These stubs only ever
+/// launch extractor-shaped operations, but the fields are shared by both
+/// payload types, so the switch stays exhaustive over the envelope.
+extension ExtractorRequestEnvelope {
+    var requestID: ExtractorRequestID {
+        switch self {
+        case .extractor(let request): request.requestID
+        case .fetch(let request): request.requestID
+        }
+    }
+
+    var outputPath: ExtractorRelativePath {
+        switch self {
+        case .extractor(let request): request.outputPath
+        case .fetch(let request): request.outputPath
+        }
+    }
+
+    var credentialFilePath: ExtractorRelativePath? {
+        switch self {
+        case .extractor(let request): request.credentialFilePath
+        case .fetch(let request): request.credentialFilePath
+        }
+    }
+
+    var operationConfigurationPath: ExtractorRelativePath? {
+        switch self {
+        case .extractor(let request): request.operationConfigurationPath
+        case .fetch(let request): request.operationConfigurationPath
+        }
+    }
+}
+
 /// Captures the managed request, verifies the credential file existed at
 /// launch time (owner-read-only), records the envelope VALUES it contained,
 /// and returns a successful result frame.
@@ -120,7 +154,7 @@ final class StubCredentialExecutor: ManagedProcessExecuting, @unchecked Sendable
         lock.withLock { requests.append(operation) }
         if let failWith { throw failWith }
         // The credential file must exist and be owner-read-only at launch.
-        if let credentialPath = operation.protocolRequest.credentialFilePath {
+        if let credentialPath = operation.request.credentialFilePath {
             let url = operation.paths.operationRoot
                 .appendingPathComponent(credentialPath.rawValue)
             var status = stat()
@@ -137,12 +171,12 @@ final class StubCredentialExecutor: ManagedProcessExecuting, @unchecked Sendable
             lock.withLock { observed.append([:]) }
         }
         let result = try ExtractorResultFrame(
-            requestID: operation.protocolRequest.requestID,
-            outputPath: operation.protocolRequest.outputPath,
+            requestID: operation.request.requestID,
+            outputPath: operation.request.outputPath,
             markdownByteCount: 2)
         // Behave like a real package: write the declared output.
         let outputURL = operation.paths.operationRoot
-            .appendingPathComponent(operation.protocolRequest.outputPath.rawValue)
+            .appendingPathComponent(operation.request.outputPath.rawValue)
         try FileManager.default.createDirectory(
             at: outputURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
@@ -460,8 +494,8 @@ struct ProcessExtractorCredentialTests {
         _ = try await operation.execute(
             kind: .pdf, input: Data(), filename: "x.pdf", onProgress: nil)
         let request = try #require(executor.capturedRequests.first)
-        #expect(request.protocolRequest.credentialFilePath == nil)
-        #expect(request.protocolRequest.operationConfigurationPath == nil)
+        #expect(request.request.credentialFilePath == nil)
+        #expect(request.request.operationConfigurationPath == nil)
         #expect(resolver.callCount == 0)
     }
 

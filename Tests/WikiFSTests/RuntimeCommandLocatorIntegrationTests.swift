@@ -258,7 +258,7 @@ struct RuntimeCommandLocatorIntegrationTests {
         let operation = ManagedExtractorProcessRequest(
             revision: revision,
             manifest: manifest,
-            protocolRequest: request,
+            request: .extractor(request),
             paths: ManagedExtractorProcessPaths(
                 operationRoot: operationRoot,
                 packageRoot: packageRoot,

@@ -105,7 +105,7 @@ struct SourceMaterializerTests {
         let (source, _) = try await provider.materializeWithPlan()
         let summary = try store.addSource(
             filename: source.filename, data: source.data,
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            externalItemKey: nil, externalItemTitle: nil, mimeType: nil,
             provenance: source.provenance)
 
         let origin = try requireOrigin(store, summary.id)
@@ -134,10 +134,10 @@ struct SourceMaterializerTests {
         let (m1, _) = try await p1.materializeWithPlan()
         let (m2, _) = try await p2.materializeWithPlan()
         let s1 = try store.addSource(
-            filename: m1.filename, data: m1.data, zoteroItemKey: nil, zoteroItemTitle: nil,
+            filename: m1.filename, data: m1.data, externalItemKey: nil, externalItemTitle: nil,
             mimeType: nil, provenance: m1.provenance)
         let s2 = try store.addSource(
-            filename: m2.filename, data: m2.data, zoteroItemKey: nil, zoteroItemTitle: nil,
+            filename: m2.filename, data: m2.data, externalItemKey: nil, externalItemTitle: nil,
             mimeType: nil, provenance: m2.provenance)
 
         let o1 = try requireOrigin(store, s1.id)
@@ -164,10 +164,10 @@ struct SourceMaterializerTests {
         let (m1, _) = try await p1.materializeWithPlan()
         let (m2, _) = try await p2.materializeWithPlan()
         _ = try store.addSource(
-            filename: m1.filename, data: m1.data, zoteroItemKey: nil, zoteroItemTitle: nil,
+            filename: m1.filename, data: m1.data, externalItemKey: nil, externalItemTitle: nil,
             mimeType: nil, provenance: m1.provenance)
         _ = try store.addSource(
-            filename: m2.filename, data: m2.data, zoteroItemKey: nil, zoteroItemTitle: nil,
+            filename: m2.filename, data: m2.data, externalItemKey: nil, externalItemTitle: nil,
             mimeType: nil, provenance: m2.provenance)
 
         var db: OpaquePointer?
@@ -216,10 +216,10 @@ struct SourceMaterializerTests {
         let folder = try await MarkdownFolderMaterializer(
             filename: "f.md", data: Data("y".utf8)).materialize()
         let s1 = try store.addSource(
-            filename: local.filename, data: local.data, zoteroItemKey: nil, zoteroItemTitle: nil,
+            filename: local.filename, data: local.data, externalItemKey: nil, externalItemTitle: nil,
             mimeType: local.mimeType, provenance: local.provenance)
         let s2 = try store.addSource(
-            filename: folder.filename, data: folder.data, zoteroItemKey: nil, zoteroItemTitle: nil,
+            filename: folder.filename, data: folder.data, externalItemKey: nil, externalItemTitle: nil,
             mimeType: folder.mimeType, provenance: folder.provenance)
 
         #expect(try store.sourceOrigin(sourceID: s1.id)?.agentName == "local-file")
@@ -234,15 +234,15 @@ struct SourceMaterializerTests {
             agentName: "zotero", activityKind: "import", externalIdentity: "KEY123")
         let summary = try store.addSource(
             filename: "paper.pdf", data: Data("%PDF".utf8),
-            zoteroItemKey: "KEY123", zoteroItemTitle: "Title",
+            externalItemKey: "KEY123", externalItemTitle: "Title",
             mimeType: "application/pdf", provenance: prov)
 
         let origin = try requireOrigin(store, summary.id)
         #expect(origin.agentName == "zotero")
         #expect(origin.externalIdentity == "KEY123")
         // Retained legacy columns are still populated.
-        #expect(summary.zoteroItemKey == "KEY123")
-        #expect(summary.zoteroItemTitle == "Title")
+        #expect(summary.externalItemKey == "KEY123")
+        #expect(summary.externalItemTitle == "Title")
     }
 
     // MARK: - AC.4: nil-provenance legacy fallback
@@ -488,7 +488,7 @@ struct SourceMaterializerTests {
         // A content source (different content_hash) — coexists (disjoint dedup).
         _ = try store.addSource(
             filename: "doc.txt", data: Data("hello".utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            externalItemKey: nil, externalItemTitle: nil, mimeType: nil,
             provenance: SourceProvenance(
                 agentName: "website", activityKind: "fetch",
                 externalIdentity: "X"))

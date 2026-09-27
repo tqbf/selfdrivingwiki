@@ -315,31 +315,36 @@ struct ReviewedExtractorPackageTests {
         }
     }
 
-    /// The reviewed Zotero package: manifest revision 2 (a REQUIRED
-    /// credential requirement), protocol revision 4 (the bytes-result
-    /// fields), one `zotero` registration over the synthetic
-    /// `application/zotero` MIME, and the acquisition-only capability set.
-    /// The package downloads attachments; it never converts formats.
-    @Test func zoteroPackageValidatesRevisionFourContract() throws {
+    /// The reviewed Zotero package: manifest revision 4 with the FETCHER
+    /// role (no operation kinds — its claims are the synthetic source MIME),
+    /// protocol revision 5 (typed fetch results), a REQUIRED credential
+    /// requirement, and the acquisition-only capability set. The package
+    /// downloads attachments; it never converts formats.
+    @Test func zoteroPackageValidatesFetcherContract() throws {
         let output = try validate("Zotero")
 
         #expect(output.packageID == "org.selfdrivingwiki.zotero")
-        #expect(output.protocolRevision == 4)
+        #expect(output.protocolRevision == 5)
         #expect(output.registrationIDs == ["attachment"])
 
         let manifest = try manifest("Zotero")
-        #expect(manifest.manifestRevision == .v3)
+        #expect(manifest.manifestRevision == .v4)
         let registration = try #require(manifest.registrations.first)
-        #expect(registration.kinds == [.zotero])
+        // Fetcher: role declared by the package, no kinds, and the claimed
+        // input MIME set is exactly the synthetic source route.
+        #expect(registration.role == .fetcher)
+        #expect(registration.kinds.isEmpty)
         #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "application/zotero")])
+        #expect(registration.filenameExtensions.isEmpty)
         // The API key is REQUIRED: acquisition cannot proceed without it.
         let requirements = registration.credentialRequirements
         #expect(requirements.map(\.id.rawValue) == ["zotero-api-key"])
         #expect(requirements.allSatisfy { !$0.isOptional && $0.kind == .secret })
         // The sync declaration is the package's declared acquisition surface:
         // the config sidecar, the file-endpoint URL template, and the
-        // 8-character A-Z0-9 attachment-key list. Nothing host-side knows
-        // these facts.
+        // 8-character A-Z0-9 attachment-key list. The declared source MIME
+        // is one of this fetcher's claimed input MIME types. Nothing
+        // host-side knows these facts.
         let sync = try #require(registration.sync)
         #expect(sync.configFileName == "zotero-config.json")
         #expect(sync.urlTemplate == "https://api.zotero.org/users/{libraryID}/items/{itemKey}/file")
@@ -349,8 +354,9 @@ struct ReviewedExtractorPackageTests {
         #expect(sync.itemValidation?.minimumLength == 8)
         #expect(sync.itemValidation?.maximumLength == 8)
         #expect(sync.itemValidation?.alphabet == "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-        #expect(sync.sourceMIMEType == nil)
-        // Acquisition only: network + shared runtime cache, no model.
+        #expect(sync.sourceMIMEType == registration.mimeTypes.first)
+        // Acquisition only: network (REQUIRED for a fetcher) + shared
+        // runtime cache, no model.
         #expect(manifest.capabilities == [.network, .sharedRuntimeCache])
         #expect(manifest.capabilities.contains(.modelDownload) == false)
         #expect(manifest.limits.maximumMarkdownOutputByteCount == 134_217_728)
@@ -365,7 +371,7 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "5460e414e96cc8f4dc87dfd561cdbb2d6cdd16a2cb360c85d736803539643a83")
+            == "ecd2466df32e81a5347caee9b30b75b9fc9672b9429f4f406c3045d6ae0f9f7a")
 
         // Secret-free bytes: the declared requirement is a review fact; a
         // value or a reference binding must never be committed.
@@ -376,10 +382,12 @@ struct ReviewedExtractorPackageTests {
         #expect(payload.contains("credential_locations") == false)
     }
 
-    /// AC.3: the recorded bytes-result frame sequence from the committed
-    /// bundle replays through `protocol-smoke` — the revision-4 result frame
-    /// carries `resultMIMEType` and `articleMetadata.identifier`, and the
-    /// sequence accepts them for a revision-4 request.
+    /// AC.3: the recorded source-bytes result frame sequence from the
+    /// committed bundle replays through `protocol-smoke` — the revision-5
+    /// fetch request plus an explicit `source-bytes` result frame carrying
+    /// `resultMIMEType`, `originalFilename`, and
+    /// `articleMetadata.identifier`, and the sequence accepts them for a
+    /// revision-5 fetch request.
     @Test func zoteroRecordedProtocolFramesReplayThroughProtocolSmoke() throws {
         let fixtures = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -396,25 +404,26 @@ struct ReviewedExtractorPackageTests {
         #expect(success.progressEventCount == 2)
     }
 
-    /// The revision-4 result fields are revision-scoped: replaying the same
-    /// bytes-result frames against a forged revision-3 request fails the
-    /// sequence (the older-host fail-closed rule).
-    @Test func zoteroBytesResultFramesRejectRevision3Request() throws {
+    /// The revision-5 fetch fields are revision-scoped: replaying the same
+    /// result frames against a forged revision-4 extractor request fails
+    /// the sequence (the older-host fail-closed rule — a revision-4 request
+    /// can never carry a `resultType` tag, and a v4 request is not a fetch).
+    @Test func zoteroFetchResultFramesRejectRevision4Request() throws {
         let fixtures = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .appendingPathComponent("Fixtures/Zotero", isDirectory: true)
         let request = try Data(contentsOf: fixtures.appendingPathComponent("request.json"))
-        let v3Request = String(decoding: request, as: UTF8.self)
-            .replacing("\"protocolRevision\": 4", with: "\"protocolRevision\": 3")
-        let v3URL = fixtures.appendingPathComponent("request-v3.json")
-        try v3Request.write(to: v3URL, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: v3URL) }
+        let v4Request = String(decoding: request, as: UTF8.self)
+            .replacing("\"protocolRevision\": 5", with: "\"protocolRevision\": 4")
+        let v4URL = fixtures.appendingPathComponent("request-v4.json")
+        try v4Request.write(to: v4URL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: v4URL) }
 
         #expect(throws: ExtractorPackageToolFailure.self) {
             try ExtractorPackageToolExecutor().execute(arguments: [
                 "protocol-smoke",
                 Self.packageURL("Zotero").path,
-                v3URL.path,
+                v4URL.path,
                 fixtures.appendingPathComponent("frames.jsonl").path,
             ])
         }
@@ -455,7 +464,9 @@ struct ReviewedExtractorPackageTests {
         #expect(podcast.registrations.allSatisfy { $0.kinds == [.podcastTranscript] })
         #expect(applePodcast.registrations.allSatisfy { $0.kinds == [.applePodcastTranscript] })
         #expect(youtube.registrations.allSatisfy { $0.kinds == [.youtubeTranscript] })
-        #expect(zotero.registrations.allSatisfy { $0.kinds == [.zotero] })
+        // Zotero is the fetcher member: no kind at all — its claims are the
+        // synthetic source MIME set.
+        #expect(zotero.registrations.allSatisfy { $0.role == .fetcher && $0.kinds.isEmpty })
     }
 
     /// AC.4: a frames.jsonl + request.json pair recorded from a real run of

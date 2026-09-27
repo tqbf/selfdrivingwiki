@@ -107,43 +107,71 @@ public struct BytesExtractionResolution: Sendable {
     }
 }
 
-/// The result of one completed Zotero attachment acquisition: the
-/// output-file bytes plus the package-reported metadata. A Markdown result's
-/// bytes ARE the Markdown (`resultMIMEType` nil or text/markdown); a bytes
-/// result's bytes are the source content named by `resultMIMEType`, and the
-/// HOST owns the format conversion (routing keys off the MIME, never the
-/// extractor kind).
-public struct AttachmentFetchOutcome: Sendable, Hashable {
-    public let outputBytes: Data
-    public let resultMIMEType: ExtractorMIMEType?
-    public let articleMetadata: ExtractorArticleMetadata?
-    public let reportedMetadata: ExtractorReportedMetadata
+/// The typed result of one completed fetch acquisition, keyed exactly as the
+/// fetcher stated it: `markdown` (the product itself) or `sourceBytes`
+/// (source content plus its concrete MIME and optional display filename).
+/// The persistence layer consumes the case tag directly — never a MIME
+/// inference.
+public enum FetchOutcome: Sendable, Hashable {
+    case markdown(FetchedMarkdown)
+    case sourceBytes(FetchedSourceBytes)
+}
 
-    public var isMarkdownResult: Bool {
-        guard let resultMIMEType else { return true }
-        return resultMIMEType.rawValue == "text/markdown"
-    }
+/// The `markdown` fetch result. The bytes arrived as valid UTF-8 at the
+/// protocol edge — this carries the decoded text plus the package-reported
+/// metadata (article metadata holds the acquisition-provenance fields).
+public struct FetchedMarkdown: Sendable, Hashable {
+    public let markdown: String
+    public let reportedMetadata: ExtractorReportedMetadata
+    public let articleMetadata: ExtractorArticleMetadata?
 
     public init(
-        outputBytes: Data,
-        resultMIMEType: ExtractorMIMEType? = nil,
-        articleMetadata: ExtractorArticleMetadata? = nil,
-        reportedMetadata: ExtractorReportedMetadata = .empty
+        markdown: String,
+        reportedMetadata: ExtractorReportedMetadata = .empty,
+        articleMetadata: ExtractorArticleMetadata? = nil
     ) {
-        self.outputBytes = outputBytes
-        self.resultMIMEType = resultMIMEType
-        self.articleMetadata = articleMetadata
+        self.markdown = markdown
         self.reportedMetadata = reportedMetadata
+        self.articleMetadata = articleMetadata
     }
 }
 
-/// URL-backed attachment work (Zotero). No local bytes exist: the fetch
-/// operation downloads the attachment itself and reports its exact package
-/// provenance. The persistence intent is fixed — the bytes become the
-/// source's blob (or the Markdown version) and the format route follows.
-public struct AttachmentExtractionResolution: Sendable {
+/// The `source-bytes` fetch result. The bytes are the acquired source
+/// content; `mimeType` is the concrete MIME the fetcher declared;
+/// `originalFilename` is optional validated display data (never a path).
+public struct FetchedSourceBytes: Sendable, Hashable {
+    public let bytes: Data
+    public let mimeType: ExtractorMIMEType
+    public let originalFilename: String?
+    public let reportedMetadata: ExtractorReportedMetadata
+    public let articleMetadata: ExtractorArticleMetadata?
+
+    public init(
+        bytes: Data,
+        mimeType: ExtractorMIMEType,
+        originalFilename: String? = nil,
+        reportedMetadata: ExtractorReportedMetadata = .empty,
+        articleMetadata: ExtractorArticleMetadata? = nil
+    ) {
+        self.bytes = bytes
+        self.mimeType = mimeType
+        self.originalFilename = originalFilename
+        self.reportedMetadata = reportedMetadata
+        self.articleMetadata = articleMetadata
+    }
+}
+
+/// URL-backed fetcher work. No local bytes exist: the fetch operation
+/// acquires one remote source per run and reports its exact package
+/// provenance. The persistence intent follows the typed result — `markdown`
+/// appends a package-provenance Markdown version; `source-bytes` stores the
+/// blob and queues the format route.
+public struct FetcherResolution: Sendable {
     /// The fetch. Progress lines are already redacted by the producer.
-    public let fetch: @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> AttachmentFetchOutcome
+    public let fetch: @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> FetchOutcome
+    /// The claimed synthetic source MIME of the fetcher route.
+    public let claimedMIMEType: ExtractorMIMEType
+    /// The display filename fallback (the configured item key).
     public let filename: String
     /// Exact package provenance for the acquisition.
     public let producer: ExtractionInstalledPackageProducer
@@ -153,12 +181,14 @@ public struct AttachmentExtractionResolution: Sendable {
     public static let defaultCapacityID = TranscriptExtractionResolution.defaultCapacityID
 
     public init(
-        fetch: @escaping @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> AttachmentFetchOutcome,
+        fetch: @escaping @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> FetchOutcome,
+        claimedMIMEType: ExtractorMIMEType,
         filename: String,
         producer: ExtractionInstalledPackageProducer,
-        capacityID: String = AttachmentExtractionResolution.defaultCapacityID
+        capacityID: String = FetcherResolution.defaultCapacityID
     ) {
         self.fetch = fetch
+        self.claimedMIMEType = claimedMIMEType
         self.filename = filename
         self.producer = producer
         self.capacityID = capacityID
@@ -166,13 +196,13 @@ public struct AttachmentExtractionResolution: Sendable {
 }
 
 /// The result of resolving an extraction request. The tag is the execution
-/// model — staged bytes, a URL-backed fetch, or a URL-backed attachment —
+/// model — staged bytes, a URL-backed transcript, or a URL-backed fetch —
 /// so an invalid combination is unrepresentable and the worker switches
 /// exhaustively.
 public enum ExtractionResolution: Sendable {
     case bytes(BytesExtractionResolution)
     case transcript(TranscriptExtractionResolution)
-    case attachment(AttachmentExtractionResolution)
+    case fetch(FetcherResolution)
 }
 
 // MARK: - QueueExtractionProvider
@@ -220,25 +250,34 @@ public protocol QueueExtractionProvider: Sendable {
         outcome: TranscriptFetchOutcome
     ) async throws -> QueueExtractionOutputReference?
 
-    /// Persist one Zotero attachment acquisition. A Markdown result appends
-    /// a package-provenance Markdown version (podcast-shaped); a bytes
-    /// result attaches the blob — real MIME, ext, byte size, the retained
-    /// Zotero provenance columns from `articleMetadata`, and the display
-    /// name. Returns the created version's output reference when known.
+    /// Persist one fetch acquisition. A `markdown` result appends a
+    /// package-provenance Markdown version and marks the source complete; a
+    /// `source-bytes` result attaches the blob — real MIME, ext, byte size,
+    /// the validated display filename, the neutral external provenance from
+    /// `articleMetadata`, and the `formatJobPending` marker — all in one
+    /// transaction. Returns the created version's output reference when
+    /// known.
     @discardableResult
-    func persistAttachmentExtraction(
+    func persistFetch(
         wikiID: WikiID,
         sourceID: SourceID,
-        resolution: AttachmentExtractionResolution,
-        outcome: AttachmentFetchOutcome
+        resolution: FetcherResolution,
+        outcome: FetchOutcome
     ) async throws -> QueueExtractionOutputReference?
 
     /// Enqueue the follow-on `.extraction` queue item for a source that just
-    /// gained bytes (the attachment drain's format route). Implementations
-    /// write the durable item through their queue store; the app or the
-    /// daemon drains it on its next dispatch scan. Never called for a
-    /// Markdown result (the Markdown IS the product).
-    func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID) async throws
+    /// gained bytes (the fetch's format route). The caller supplies the
+    /// acquired content-version ID and the typed dedupe key scoped to wiki +
+    /// source + that version, so a crash between persistence and enqueue is
+    /// recoverable and a repeat insert returns the SAME item (including a
+    /// completed one) instead of creating a second format job. Never called
+    /// for a Markdown result (the Markdown IS the product).
+    func enqueueFollowOnExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        acquiredContentVersionID: SourceVersionID,
+        dedupeKey: QueueItemDedupeKey
+    ) async throws
 }
 
 // MARK: - QueueIngestSignaling

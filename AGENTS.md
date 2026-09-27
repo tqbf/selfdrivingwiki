@@ -105,6 +105,15 @@ Last verified: 2026-08-13
   protocols and their `prepare…` functions may keep kind names — their
   operation shapes genuinely differ — and kind-to-value mapping tables
   (MIME fallbacks, labels) are data, not policy.
+  **Package roles are package data too.** Whether a registration is an
+  `extractor` (converts content) or a `fetcher` (acquires one remote
+  source, stating `source-bytes` or `markdown`) is the manifest's explicit
+  `role` — the host must not infer a role from URL transport, MIME,
+  provider, or package ID, and must not gate acquisition on an origin
+  provider. Acquisition eligibility derives from the active fetcher
+  registrations' claimed input MIME set (`FetchRouteDecision`); fetchers
+  route through their own kind-free namespaces (`FetcherRouteID`,
+  `.installedFetcher`), never through `ExtractorKind`.
   `ExtractorKindNeutralityContractTests` enforces this.
 
 ## Design skills — sources

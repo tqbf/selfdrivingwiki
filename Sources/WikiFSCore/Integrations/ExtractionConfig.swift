@@ -67,6 +67,14 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// string-keyed dictionary); a missing key decodes to an empty list.
     public private(set) var routeExtractors: [ExtractorRouteSelectionRecord]
 
+    /// Route-indexed fetcher selections, one record per `FetcherRouteID`
+    /// (the synthetic input MIME of byteless sources). Keys are distinct
+    /// from `routeExtractors`, so a fetcher selection and an extractor
+    /// selection cannot collide. Same persistence rules: sorted array,
+    /// missing key decodes empty, mutation flows only through
+    /// `setFetcherSelection(_:for:)`.
+    public private(set) var routeFetchers: [FetcherRouteSelectionRecord]
+
     /// The config's JSON filename inside the App Group container.
     public static let fileName = "extraction-config.json"
 
@@ -78,7 +86,8 @@ public struct ExtractionConfig: JSONSidecarConfig {
         geminiBaseURLOverride: String? = nil,
         doclingServeEndpoint: String? = nil,
         doclingServeTimeoutMilliseconds: Int? = nil,
-        routeExtractors: [ExtractorRouteSelectionRecord] = []
+        routeExtractors: [ExtractorRouteSelectionRecord] = [],
+        routeFetchers: [FetcherRouteSelectionRecord] = []
     ) {
         self.acpProviderId = acpProviderId
         self.anthropicModel = anthropicModel
@@ -88,6 +97,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.doclingServeEndpoint = doclingServeEndpoint
         self.doclingServeTimeoutMilliseconds = doclingServeTimeoutMilliseconds
         self.routeExtractors = routeExtractors.normalizedForPersistence().records
+        self.routeFetchers = routeFetchers.normalizedForPersistence().records
     }
 
     /// The default model id used everywhere a model isn't explicitly set, so the
@@ -121,7 +131,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         case doclingServeTimeoutMilliseconds
         case htmlBackend
         case pdfExtractor, htmlExtractor
-        case routeExtractors
+        case routeExtractors, routeFetchers
     }
 
     public init(from decoder: Decoder) throws {
@@ -177,7 +187,20 @@ public struct ExtractionConfig: JSONSidecarConfig {
                 routes.append(.init(route: .canonicalHTML, extractor: migrated))
             }
         }
-        self.routeExtractors = routes.normalizedForPersistence().records
+        self.routeExtractors = Self.logDroppedDuplicates(
+            routes.normalizedForPersistence())
+        self.routeFetchers = Self.logDroppedDuplicates(
+            Self.decodedFetcherRecords(from: c).normalizedForPersistence())
+    }
+
+    /// Emits the one bounded duplicate-diagnostic for a normalization pass.
+    private static func logDroppedDuplicates<R>(
+        _ normalized: (records: [R], droppedDuplicates: Int)
+    ) -> [R] {
+        if normalized.droppedDuplicates > 0 {
+            DebugLog.config("ExtractionConfig: resolved \(normalized.droppedDuplicates) duplicate route selection record(s); kept the canonically-greatest record per route")
+        }
+        return normalized.records
     }
 
     /// Legacy `backend` values map onto generic host references. `.localPdf2md`
@@ -215,6 +238,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         try c.encodeIfPresent(doclingServeEndpoint, forKey: .doclingServeEndpoint)
         try c.encodeIfPresent(doclingServeTimeoutMilliseconds, forKey: .doclingServeTimeoutMilliseconds)
         try c.encode(routeExtractors.sorted(), forKey: .routeExtractors)
+        try c.encode(routeFetchers.sorted(), forKey: .routeFetchers)
     }
 
     // MARK: - Route selections
@@ -236,6 +260,21 @@ public struct ExtractionConfig: JSONSidecarConfig {
         }
     }
 
+    /// The configured version-free fetcher selection for one fetcher route.
+    public func fetcherSelection(for route: FetcherRouteID) -> ExtractionBackendReference? {
+        routeFetchers.first(where: { $0.route == route })?.fetcher
+    }
+
+    /// Insert, replace, or remove (`nil`) the fetcher selection for one
+    /// fetcher route. Unrelated route records are preserved.
+    public mutating func setFetcherSelection(_ fetcher: ExtractionBackendReference?, for route: FetcherRouteID) {
+        routeFetchers.removeAll { $0.route == route }
+        if let fetcher {
+            routeFetchers.append(FetcherRouteSelectionRecord(route: route, fetcher: fetcher))
+            routeFetchers.sort()
+        }
+    }
+
     /// Resilient route-record decode, matching the config's degrade-don't-throw
     /// philosophy: a missing key decodes to an empty list, a wholly malformed
     /// array degrades to empty through the logged decode seam, a malformed
@@ -246,11 +285,35 @@ public struct ExtractionConfig: JSONSidecarConfig {
     private static func decodedRouteRecords(
         from container: KeyedDecodingContainer<CodingKeys>
     ) -> [ExtractorRouteSelectionRecord] {
-        guard container.contains(.routeExtractors) else { return [] }
-        guard var array = DebugLog.trying("init(from:) decode routeExtractors", operation: { try container.nestedUnkeyedContainer(forKey: .routeExtractors) }) else {
+        decodedSelectionRecords(
+            ExtractorRouteSelectionRecord.self, key: .routeExtractors,
+            label: "routeExtractors", from: container)
+    }
+
+    /// The fetcher-selection table's decode: identical resilience rules,
+    /// distinct key and record type.
+    private static func decodedFetcherRecords(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> [FetcherRouteSelectionRecord] {
+        decodedSelectionRecords(
+            FetcherRouteSelectionRecord.self, key: .routeFetchers,
+            label: "routeFetchers", from: container)
+    }
+
+    /// The shared resilient record-array decode over one route-selection
+    /// table. Generic over the record type so the extractor and fetcher
+    /// tables can never drift in behavior.
+    private static func decodedSelectionRecords<R: Decodable & Comparable>(
+        _ recordType: R.Type,
+        key: CodingKeys,
+        label: String,
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> [R] {
+        guard container.contains(key) else { return [] }
+        guard var array = DebugLog.trying("init(from:) decode \(label)", operation: { try container.nestedUnkeyedContainer(forKey: key) }) else {
             return []
         }
-        var records: [ExtractorRouteSelectionRecord] = []
+        var records: [R] = []
         // A decoder is not required to advance an unkeyed container when a
         // decode throws — Foundation's JSONDecoder leaves the index in place —
         // so each failed record is explicitly consumed before continuing.
@@ -259,27 +322,23 @@ public struct ExtractionConfig: JSONSidecarConfig {
         var consecutiveFailures = 0
         while array.isAtEnd == false {
             let countBefore = records.count
-            if let record = DebugLog.trying("init(from:) decode routeExtractors record", operation: { try array.decode(ExtractorRouteSelectionRecord.self) }) {
+            if let record = DebugLog.trying("init(from:) decode \(label) record", operation: { try array.decode(R.self) }) {
                 records.append(record)
-            } else if DebugLog.trying("init(from:) consume malformed routeExtractors record", operation: { try array.decode(AnyJSONValue.self) }) != nil {
+            } else if DebugLog.trying("init(from:) consume malformed \(label) record", operation: { try array.decode(AnyJSONValue.self) }) != nil {
                 consecutiveFailures = 0
                 continue
             }
             if records.count == countBefore {
                 consecutiveFailures += 1
                 if consecutiveFailures > Self.maximumConsecutiveRouteDecodeFailures {
-                    DebugLog.config("ExtractionConfig: routeExtractors decode stalled after \(consecutiveFailures) malformed records; truncating the remainder")
+                    DebugLog.config("ExtractionConfig: \(label) decode stalled after \(consecutiveFailures) malformed records; truncating the remainder")
                     break
                 }
             } else {
                 consecutiveFailures = 0
             }
         }
-        let normalized = records.normalizedForPersistence()
-        if normalized.droppedDuplicates > 0 {
-            DebugLog.config("ExtractionConfig: resolved \(normalized.droppedDuplicates) duplicate route selection record(s); kept the canonically-greatest record per route")
-        }
-        return normalized.records
+        return records
     }
 
     // MARK: - Persistence (via `JSONSidecarConfig`)

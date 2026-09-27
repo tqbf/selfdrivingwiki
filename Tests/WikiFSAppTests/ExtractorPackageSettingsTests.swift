@@ -49,6 +49,7 @@ struct ExtractorPackageSettingsTests {
 
         #expect(rows.count == 3)
         #expect(rows.contains(ExtractorPackageSettingsRow(
+            role: .extractor,
             kind: .pdf,
             packageID: "org.example.pdfpkg",
             version: "1.2.0",
@@ -56,6 +57,7 @@ struct ExtractorPackageSettingsTests {
             registrationID: "pdf",
             revision: pdfReference.revision)))
         #expect(rows.contains(ExtractorPackageSettingsRow(
+            role: .extractor,
             kind: .html,
             packageID: "org.example.pdfpkg",
             version: "1.2.0",
@@ -63,6 +65,7 @@ struct ExtractorPackageSettingsTests {
             registrationID: "html",
             revision: pdfReference.revision)))
         #expect(rows.contains(ExtractorPackageSettingsRow(
+            role: .extractor,
             kind: .docx,
             packageID: "org.example.pdfpkg",
             version: "1.2.0",
@@ -846,6 +849,7 @@ struct ExtractorPackageSettingsTests {
     func reviewedPackageRemovalIsRefused() async throws {
         let reviewed = ReviewedExtractorPackages.youtubeTranscript
         let reviewedRow = ExtractorPackageSettingsRow(
+            role: .extractor,
             kind: .youtubeTranscript,
             packageID: reviewed.packageID.rawValue,
             version: reviewed.version.rawValue,
@@ -915,6 +919,7 @@ struct ExtractorPackageSettingsTests {
             version: "1.0.0",
             digestHex: String(repeating: "b", count: 64))
         return ExtractorPackageSettingsRow(
+            role: .extractor,
             kind: .pdf,
             packageID: "org.example.pdfpkg",
             version: "1.0.0",

@@ -47,6 +47,16 @@ public enum ProcessPackageRunError: LocalizedError, Equatable {
     case invalidOutputEncoding
     case missingTerminalFrame
     case unexpectedBytesResult
+    /// A fetch operation was asked to acquire a source MIME the selected
+    /// fetcher registration does not claim.
+    case unclaimedFetchMIMEType
+    /// A fetcher's terminal result stated no explicit result type.
+    case fetcherResultTypeMissing
+    /// A fetcher reported a `source-bytes` result with zero bytes — it can
+    /// never become a source, so it fails instead of looping.
+    case emptyFetchResult
+    /// A fetcher result contradicted its own type tag.
+    case fetcherResultTypeMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -58,6 +68,14 @@ public enum ProcessPackageRunError: LocalizedError, Equatable {
             return "The extractor returned no terminal result."
         case .unexpectedBytesResult:
             return "The extractor returned source bytes where Markdown was expected."
+        case .unclaimedFetchMIMEType:
+            return "The selected fetcher does not claim this source type."
+        case .fetcherResultTypeMissing:
+            return "The fetcher did not state a source-bytes or markdown result."
+        case .emptyFetchResult:
+            return "The fetcher returned an empty acquisition."
+        case .fetcherResultTypeMismatch:
+            return "The fetcher result contradicted its own result type."
         }
     }
 }
@@ -273,17 +291,19 @@ public struct ProcessExtractorProvider: Sendable {
         return ProcessPackageYouTubeTranscript(operation: operation)
     }
 
-    /// Prepares the process-backed Zotero attachment adapter for one exact
-    /// package revision. Same `remote-url` request shape as the transcript
-    /// siblings; the revision-4 operation returns either a Markdown result
-    /// or a bytes result carrying `resultMIMEType` plus article metadata.
-    public func prepareZoteroAttachment(
+    /// Prepares the process-backed fetcher adapter for one exact package
+    /// revision and its selected fetcher registration. The revision-5
+    /// operation accepts the validated attachment URL plus the claimed input
+    /// MIME and a bounded display filename; its typed result is either the
+    /// finished Markdown or exact source bytes.
+    public func prepareFetcher(
+        registration: ExtractorRegistration,
         revision: ExtractorPackageRevisionID,
         manifest: ExtractorManifest
-    ) async throws -> ProcessPackageZoteroAttachment {
-        let operation = try await prepareOperation(
-            kind: .zotero, revision: revision, manifest: manifest)
-        return ProcessPackageZoteroAttachment(operation: operation)
+    ) async throws -> ProcessPackageFetcher {
+        let operation = try await prepareFetcherOperation(
+            registration: registration, revision: revision, manifest: manifest)
+        return ProcessPackageFetcher(operation: operation)
     }
 
     public static func packageProvenance(
@@ -301,6 +321,28 @@ public struct ProcessExtractorProvider: Sendable {
 
     func prepareOperation(
         kind: ExtractorKind,
+        revision: ExtractorPackageRevisionID,
+        manifest: ExtractorManifest
+    ) async throws -> PreparedProcessOperation {
+        try await prepareOperation(
+            registration: Self.registration(manifest: manifest, kind: kind),
+            revision: revision,
+            manifest: manifest)
+    }
+
+    /// The fetcher variant: the caller supplies the exact fetcher
+    /// registration (selected by its claimed source MIME), not a kind.
+    func prepareFetcherOperation(
+        registration: ExtractorRegistration,
+        revision: ExtractorPackageRevisionID,
+        manifest: ExtractorManifest
+    ) async throws -> PreparedProcessOperation {
+        try await prepareOperation(
+            registration: registration, revision: revision, manifest: manifest)
+    }
+
+    private func prepareOperation(
+        registration: ExtractorRegistration,
         revision: ExtractorPackageRevisionID,
         manifest: ExtractorManifest
     ) async throws -> PreparedProcessOperation {
@@ -329,7 +371,6 @@ public struct ProcessExtractorProvider: Sendable {
             throw ProcessPackagePreparationError.notAdmitted
         }
 
-        let registration = try Self.registration(manifest: manifest, kind: kind)
         let source = sourceLocator.location(for: revision)
         let snapshot = try ExtractorDirectoryValidator.snapshot(
             installedRoot: source.root,
@@ -657,7 +698,7 @@ public final class PreparedProcessOperation: Sendable {
             onProgress: onProgress))
     }
 
-    /// Runs one revision-4-capable `remote-url` operation and returns the
+    /// Runs one revision-5-capable `remote-url` operation and returns the
     /// terminal frame plus the raw output-file bytes. The caller interprets
     /// `frame.isMarkdownResult` / `frame.resultMIMEType` (the Zotero
     /// attachment route); this edge performs no UTF-8 assumption.
@@ -675,6 +716,23 @@ public final class PreparedProcessOperation: Sendable {
         return ProcessPackageSourceOutcome(
             frame: output.frame,
             sourceBytes: output.outputData)
+    }
+
+    /// Runs exactly one revision-5 FETCH acquisition against the pinned
+    /// snapshot. No input bytes exist and nothing is staged; the request is
+    /// the validated typed fetch request (claimed MIME, remote URL, bounded
+    /// display filename). The terminal frame carries the explicit fetch
+    /// result tag; interpretation happens at the fetcher edge.
+    func executeFetch(
+        request: ExtractorFetchRequest,
+        onProgress: (@Sendable (String) -> Void)?
+    ) async throws -> ProcessPackageTerminalOutput {
+        try await runProtocol(
+            kind: nil,
+            payload: nil,
+            fetchRequest: request,
+            filename: request.originalFilename,
+            onProgress: onProgress)
     }
 
     /// The revision ≤ 3 result contract: the output file IS the Markdown.
@@ -701,12 +759,15 @@ public final class PreparedProcessOperation: Sendable {
 
     /// The shared operation body: builds the request, runs the managed
     /// process, verifies the declared size, and returns the redacted terminal
-    /// frame plus the raw output-file bytes. Markdown and revision-4 bytes
-    /// results are interpreted at their own edges (`markdownOutcome`,
-    /// `executeSourceResult`).
+    /// frame plus the raw output-file bytes. Markdown, revision-4 bytes, and
+    /// revision-5 fetch results are interpreted at their own edges
+    /// (`markdownOutcome`, `executeSourceResult`, `ProcessPackageFetcher`).
+    /// Exactly one of `payload` (extractor operation) and `fetchRequest`
+    /// (revision-5 fetch) is present.
     private func runProtocol(
-        kind: ExtractorKind,
-        payload: ProcessOperationPayload,
+        kind: ExtractorKind?,
+        payload: ProcessOperationPayload?,
+        fetchRequest: ExtractorFetchRequest? = nil,
         filename: String,
         onProgress: (@Sendable (String) -> Void)?
     ) async throws -> ProcessPackageTerminalOutput {
@@ -858,11 +919,11 @@ public final class PreparedProcessOperation: Sendable {
         let requestCredentialPath = credentialFilePath
         let requestConfigurationPath = configurationFilePath
         // Operation-file requests stage exactly one input file inside the
-        // private operation root. Remote-url requests stage nothing: the
-        // request carries the validated source URL and the package fetches
-        // the source itself.
+        // private operation root. Remote-url and fetch requests stage
+        // nothing: the request carries the validated source URL and the
+        // package acquires the source itself.
         let stagedInputPath: String?
-        if case .bytes = payload {
+        if let payload, case .bytes = payload {
             stagedInputPath = "input/\(name)/source"
         } else {
             stagedInputPath = nil
@@ -880,6 +941,7 @@ public final class PreparedProcessOperation: Sendable {
             onProgress: onProgress
         ) {
             if let stagedInputPath,
+               let payload,
                case .bytes(let input) = payload {
                 let inputURL = self.directoryRoot.appendingPathComponent(stagedInputPath)
                 try FileManager.default.createDirectory(
@@ -889,54 +951,81 @@ public final class PreparedProcessOperation: Sendable {
                 try input.write(to: inputURL, options: [.atomic])
             }
 
-            // Explicit per-kind input MIME default: the registration's declared
-            // MIME types win; the fallback matches the kind's canonical input
-            // type. A docx package must never silently present `text/html`.
-            let fallbackMIMEType: String = switch kind {
-            case .pdf: MimeType.pdf
-            case .html: MimeType.html
-            case .docx: MimeType.docx
-            case .podcastTranscript: MimeType.audioPodcast
-            case .applePodcastTranscript: MimeType.audioApplePodcast
-            case .youtubeTranscript: MimeType.videoYouTube
-            case .zotero: ContentTypeRegistry.zoteroAttachment
+            // Explicit per-kind input MIME default: the registration's
+            // declared MIME types win; the fallback matches the kind's
+            // canonical input type. A docx package must never silently
+            // present `text/html`. A fetch request carries its claimed input
+            // MIME explicitly — the synthetic source MIME the selected
+            // registration declared — and needs no fallback.
+            let requestMIMEType: ExtractorMIMEType
+            if let fetchRequest {
+                requestMIMEType = fetchRequest.mimeType
+            } else {
+                let fallbackMIMEType: String = switch kind {
+                case .pdf: MimeType.pdf
+                case .html: MimeType.html
+                case .docx: MimeType.docx
+                case .podcastTranscript: MimeType.audioPodcast
+                case .applePodcastTranscript: MimeType.audioApplePodcast
+                case .youtubeTranscript: MimeType.videoYouTube
+                case nil: ContentTypeRegistry.zoteroAttachment
+                }
+                requestMIMEType = try ExtractorMIMEType(
+                    validating: self.mimeType(defaulting: fallbackMIMEType))
             }
-            let mimeType = try ExtractorMIMEType(
-                validating: self.mimeType(defaulting: fallbackMIMEType))
             let deadlineMillisecondsSince1970 = Int64(Date().timeIntervalSince1970 * 1_000)
                 + max(Int64(self.manifest.limits.maximumDurationMilliseconds), 1)
-            let request: ExtractorProtocolRequest
-            switch payload {
-            case .bytes:
-                request = try ExtractorProtocolRequest(
+            let request: ExtractorRequestEnvelope
+            if let fetchRequest {
+                request = .fetch(try ExtractorFetchRequest(
                     requestID: ExtractorRequestID(),
-                    protocolRevision: self.manifest.protocolRevision,
-                    kind: kind,
-                    mimeType: mimeType,
-                    originalFilename: filename,
-                    inputPath: ExtractorRelativePath(validating: stagedInputPath ?? ""),
+                    mimeType: fetchRequest.mimeType,
+                    originalFilename: fetchRequest.originalFilename,
+                    remoteURL: fetchRequest.remoteURL,
                     outputPath: ExtractorRelativePath(validating: outputPath),
                     deadlineMillisecondsSince1970: deadlineMillisecondsSince1970,
                     credentialFilePath: requestCredentialPath,
-                    operationConfigurationPath: requestConfigurationPath)
-            case .remoteURL(let sourceURL):
-                request = try ExtractorProtocolRequest(
-                    requestID: ExtractorRequestID(),
-                    protocolRevision: self.manifest.protocolRevision,
-                    kind: kind,
-                    mimeType: mimeType,
-                    originalFilename: filename,
-                    remoteURL: sourceURL,
-                    outputPath: ExtractorRelativePath(validating: outputPath),
-                    deadlineMillisecondsSince1970: deadlineMillisecondsSince1970,
-                    credentialFilePath: requestCredentialPath,
-                    operationConfigurationPath: requestConfigurationPath)
+                    operationConfigurationPath: requestConfigurationPath))
+            } else {
+                guard let operationKind = kind else {
+                    // Unreachable: a run without a fetch request always has
+                    // an extractor kind.
+                    throw ProcessPackageRunError.missingTerminalFrame
+                }
+                switch payload {
+                case .bytes:
+                    request = .extractor(try ExtractorProtocolRequest(
+                        requestID: ExtractorRequestID(),
+                        protocolRevision: self.manifest.protocolRevision,
+                        kind: operationKind,
+                        mimeType: requestMIMEType,
+                        originalFilename: filename,
+                        inputPath: ExtractorRelativePath(validating: stagedInputPath ?? ""),
+                        outputPath: ExtractorRelativePath(validating: outputPath),
+                        deadlineMillisecondsSince1970: deadlineMillisecondsSince1970,
+                        credentialFilePath: requestCredentialPath,
+                        operationConfigurationPath: requestConfigurationPath))
+                case .remoteURL(let sourceURL):
+                    request = .extractor(try ExtractorProtocolRequest(
+                        requestID: ExtractorRequestID(),
+                        protocolRevision: self.manifest.protocolRevision,
+                        kind: operationKind,
+                        mimeType: requestMIMEType,
+                        originalFilename: filename,
+                        remoteURL: sourceURL,
+                        outputPath: ExtractorRelativePath(validating: outputPath),
+                        deadlineMillisecondsSince1970: deadlineMillisecondsSince1970,
+                        credentialFilePath: requestCredentialPath,
+                        operationConfigurationPath: requestConfigurationPath))
+                case nil:
+                    throw ProcessPackageRunError.missingTerminalFrame
+                }
             }
 
             let managedRequest = ManagedExtractorProcessRequest(
                 revision: self.revision,
                 manifest: self.manifest,
-                protocolRequest: request,
+                request: request,
                 paths: ManagedExtractorProcessPaths(
                     operationRoot: self.directoryRoot,
                     packageRoot: self.packageRoot,
@@ -1074,7 +1163,12 @@ public final class PreparedProcessOperation: Sendable {
             warnings: frame.warnings.map(redactor.redact),
             metadata: redactedReported,
             articleMetadata: redactedMetadata,
-            resultMIMEType: frame.resultMIMEType)
+            resultMIMEType: frame.resultMIMEType,
+            // Revision 5 fetch fields survive redaction: the result tag is a
+            // closed enum with no text surface, and the display filename is
+            // package-controlled text like every other frame string.
+            resultType: frame.resultType,
+            originalFilename: frame.originalFilename.map(redactor.redact))
     }
 
     /// Creates a regular owner-read-only (0400) file at `url`. The file is
@@ -1526,14 +1620,70 @@ public struct ProcessPackageYouTubeTranscript: Sendable, ProcessPackageProvenanc
     }
 }
 
-/// The process-backed Zotero attachment adapter for one exact package
-/// revision. Accepts the validated attachment file URL and executes one
-/// prepared revision-4 `remote-url` operation against the pinned snapshot.
-/// The outcome is bytes-shaped for both result forms: a Markdown result's
-/// bytes ARE the Markdown; a bytes result's bytes are the source content
-/// named by `frame.resultMIMEType`, which the HOST routes to its own format
-/// extraction. The package never converts formats.
-public struct ProcessPackageZoteroAttachment: Sendable, ProcessPackageProvenanceProviding {
+/// The typed result of one revision-5 fetch acquisition. A closed enum: a
+/// fetcher states exactly one of these per request, and the host persists
+/// the case tag directly — never a MIME guess.
+public enum ProcessPackageFetchOutcome: Sendable, Hashable {
+    /// The acquired bytes are the finished Markdown product. No format job
+    /// runs after this result.
+    case markdown(ProcessPackageFetchMarkdown)
+    /// The acquired bytes are source content of the declared MIME; the host
+    /// queues the standard format route for it.
+    case sourceBytes(ProcessPackageFetchSourceBytes)
+}
+
+/// The `markdown` fetch result: valid UTF-8 plus the package-reported
+/// metadata (article metadata carries the acquisition-provenance fields —
+/// title, identifier, and so on).
+public struct ProcessPackageFetchMarkdown: Sendable, Hashable {
+    public let markdown: String
+    public let reportedMetadata: ExtractorReportedMetadata
+    public let articleMetadata: ExtractorArticleMetadata?
+
+    public init(
+        markdown: String,
+        reportedMetadata: ExtractorReportedMetadata,
+        articleMetadata: ExtractorArticleMetadata?
+    ) {
+        self.markdown = markdown
+        self.reportedMetadata = reportedMetadata
+        self.articleMetadata = articleMetadata
+    }
+}
+
+/// The `source-bytes` fetch result: the exact downloaded bytes, the concrete
+/// MIME the fetcher declared, and the optional validated display filename
+/// (stored as data, never resolved as a path).
+public struct ProcessPackageFetchSourceBytes: Sendable, Hashable {
+    public let bytes: Data
+    public let mimeType: ExtractorMIMEType
+    public let originalFilename: String?
+    public let reportedMetadata: ExtractorReportedMetadata
+    public let articleMetadata: ExtractorArticleMetadata?
+
+    public init(
+        bytes: Data,
+        mimeType: ExtractorMIMEType,
+        originalFilename: String?,
+        reportedMetadata: ExtractorReportedMetadata,
+        articleMetadata: ExtractorArticleMetadata?
+    ) {
+        self.bytes = bytes
+        self.mimeType = mimeType
+        self.originalFilename = originalFilename
+        self.reportedMetadata = reportedMetadata
+        self.articleMetadata = articleMetadata
+    }
+}
+
+/// The process-backed fetcher adapter for one exact package revision and
+/// its selected fetcher registration. Accepts the validated remote source
+/// URL and executes one prepared revision-5 fetch operation against the
+/// pinned snapshot. The outcome is a closed typed enum — `markdown` or
+/// `source-bytes` — validated before any persistence: a contradictory,
+/// byteless, or wrongly-encoded result fails the fetch instead of looping
+/// as a byteless source.
+public struct ProcessPackageFetcher: Sendable, ProcessPackageProvenanceProviding {
     public var displayName: String { operation.manifest.displayName }
     public var packageProvenance: ExtractorPackageExecutionProvenance {
         ExtractorPackageExecutionProvenance(
@@ -1548,47 +1698,52 @@ public struct ProcessPackageZoteroAttachment: Sendable, ProcessPackageProvenance
         self.operation = operation
     }
 
+    /// The claimed input MIME types of the selected fetcher registration —
+    /// the synthetic source routes this adapter may acquire.
+    public var claimedMIMETypes: [ExtractorMIMEType] {
+        operation.registration.mimeTypes.sorted()
+    }
+
+    /// True when the selected registration claims `mimeType` as an input.
+    public func claimsInputMIMEType(_ mimeType: ExtractorMIMEType) -> Bool {
+        operation.registration.mimeTypes.contains(mimeType)
+    }
+
     /// The shared operation-level readiness answer (runtime resolution,
-    /// entry-point presence). The Zotero package is `runtime`-launched
-    /// through `uv`, so a missing runtime surfaces here as setup guidance.
+    /// entry-point presence). A `runtime`-launched fetcher with a missing
+    /// runtime surfaces here as setup guidance.
     public func readiness() async -> ExtractionReadiness {
         operation.readiness()
     }
 
-    /// One outcome of one attachment fetch: the terminal frame plus the
-    /// output-file bytes. Interpret `frame.isMarkdownResult` /
-    /// `frame.resultMIMEType` and read `frame.articleMetadata` for the
-    /// provenance fields (title, author, published, `identifier` = the
-    /// Zotero parent item key).
-    public struct Outcome: Sendable {
-        public let frame: ExtractorResultFrame
-        public let outputBytes: Data
-
-        public var isMarkdownResult: Bool { frame.isMarkdownResult }
-        public var resultMIMEType: ExtractorMIMEType? { frame.resultMIMEType }
-        public var articleMetadata: ExtractorArticleMetadata? { frame.articleMetadata }
-        public var reportedMetadata: ExtractorReportedMetadata { frame.metadata }
-
-        public init(frame: ExtractorResultFrame, outputBytes: Data) {
-            self.frame = frame
-            self.outputBytes = outputBytes
-        }
-    }
-
-    /// Downloads the attachment at `sourceURL`. Progress lines are
-    /// package-controlled text already redacted by the operation.
-    public func attachment(
+    /// One acquisition of the source at `sourceURL`. The claimed MIME must
+    /// be one of the registration's declared inputs; the display filename is
+    /// bounded, path-free data derived from the sync item key. Progress
+    /// lines are package-controlled text already redacted by the operation.
+    public func fetch(
         for sourceURL: URL,
+        claimedMIMEType: ExtractorMIMEType,
+        displayFilename: String,
         onProgress: (@Sendable (String) -> Void)? = nil
-    ) async throws -> Outcome {
+    ) async throws -> ProcessPackageFetchOutcome {
+        guard claimsInputMIMEType(claimedMIMEType) else {
+            throw ProcessPackageRunError.unclaimedFetchMIMEType
+        }
         do {
-            let outcome = try await operation.executeSourceResult(
-                kind: .zotero,
+            let request = try ExtractorFetchRequest(
+                requestID: ExtractorRequestID(),
+                mimeType: claimedMIMEType,
+                originalFilename: displayFilename,
                 remoteURL: ExtractorRemoteSourceURL(
                     validating: sourceURL.absoluteString),
-                filename: "attachment",
+                outputPath: ExtractorRelativePath(validating: "output/fetch/result"),
+                deadlineMillisecondsSince1970: Int64(Date().timeIntervalSince1970 * 1_000)
+                    + max(Int64(operation.manifest.limits.maximumDurationMilliseconds), 1))
+            let output = try await operation.executeFetch(
+                request: request,
                 onProgress: onProgress)
-            return Outcome(frame: outcome.frame, outputBytes: outcome.sourceBytes)
+            return try Self.interpretedOutcome(
+                frame: output.frame, outputData: output.outputData)
         } catch is CancellationError {
             throw CancellationError()
         } catch ManagedExtractorProcessError.cancellation {
@@ -1596,6 +1751,50 @@ public struct ProcessPackageZoteroAttachment: Sendable, ProcessPackageProvenance
         } catch {
             throw ProcessPackageError(
                 message: ProcessPackageFailureMapper.message(error))
+        }
+    }
+
+    /// The fetch-result interpretation edge: enforces the explicit result
+    /// tag, the byte-count contract, valid UTF-8 for Markdown, and rejects
+    /// empty `source-bytes` before anything can persist.
+    static func interpretedOutcome(
+        frame: ExtractorResultFrame,
+        outputData: Data
+    ) throws -> ProcessPackageFetchOutcome {
+        guard outputData.count == frame.markdownByteCount else {
+            throw ProcessPackageRunError.declaredSizeMismatch
+        }
+        guard let resultType = frame.resultType else {
+            throw ProcessPackageRunError.fetcherResultTypeMissing
+        }
+        let articleMetadata = frame.articleMetadata
+        switch resultType {
+        case .markdown:
+            // Binary bytes are never decoded as Markdown: an invalid UTF-8
+            // result fails the fetch.
+            guard let markdown = String(data: outputData, encoding: .utf8) else {
+                throw ProcessPackageRunError.invalidOutputEncoding
+            }
+            return .markdown(ProcessPackageFetchMarkdown(
+                markdown: markdown,
+                reportedMetadata: frame.metadata,
+                articleMetadata: articleMetadata))
+        case .sourceBytes:
+            // An empty acquisition cannot become a byteless source: it would
+            // re-enter the fetch route and loop forever. Fail instead.
+            guard outputData.isEmpty == false else {
+                throw ProcessPackageRunError.emptyFetchResult
+            }
+            guard let mimeType = frame.resultMIMEType,
+                  mimeType.rawValue != ExtractorResultFrame.markdownResultMIMERawValue else {
+                throw ProcessPackageRunError.fetcherResultTypeMismatch
+            }
+            return .sourceBytes(ProcessPackageFetchSourceBytes(
+                bytes: outputData,
+                mimeType: mimeType,
+                originalFilename: frame.originalFilename,
+                reportedMetadata: frame.metadata,
+                articleMetadata: articleMetadata))
         }
     }
 }

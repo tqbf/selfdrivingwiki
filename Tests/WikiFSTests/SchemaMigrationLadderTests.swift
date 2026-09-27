@@ -26,7 +26,7 @@ import SQLite3
             #expect(store.scalarText(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='\(index)';") == "1")
         }
-        #expect(store.pragmaValue("user_version") == "54")
+        #expect(store.pragmaValue("user_version") == "55")
         // v54 (#1266): fresh `chat_transcript_items` carries the summary
         // trio; `chat_messages` is the compatibility projection without any
         // app-owned summary columns.
@@ -41,7 +41,7 @@ import SQLite3
     @Test func v51MigratesWithoutBackfillOrDataLoss() throws {
         let fixture = try v51Fixture()
         let migrated = try GRDBWikiStore(databaseURL: fixture.url)
-        #expect(migrated.pragmaValue("user_version") == "54")
+        #expect(migrated.pragmaValue("user_version") == "55")
         #expect(try migrated.getPage(id: fixture.pageID).title == "Historical page")
         #expect(try migrated.getSource(id: fixture.sourceID).filename == "historical.txt")
         #expect(migrated.scalarText("SELECT COUNT(*) FROM page_okf_metadata;") == "0")
@@ -68,7 +68,7 @@ import SQLite3
         """, at: pair.url)
 
         let migrated = try GRDBWikiStore(databaseURL: pair.url)
-        #expect(migrated.pragmaValue("user_version") == "54")
+        #expect(migrated.pragmaValue("user_version") == "55")
         #expect(migrated.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name IN ('summary', 'summary_at');") == "0")
         // The drop must not lose the rows the columns rode on (F12b).
@@ -134,7 +134,7 @@ import SQLite3
         """, at: pair.url)
 
         let migrated = try GRDBWikiStore(databaseURL: pair.url)
-        #expect(migrated.pragmaValue("user_version") == "54")
+        #expect(migrated.pragmaValue("user_version") == "55")
 
         // The `chat_messages` summary columns are gone; the transcript items
         // carry the trio.
@@ -209,7 +209,7 @@ import SQLite3
         store = nil
 
         let reopened = try GRDBWikiStore(databaseURL: fixture.url)
-        #expect(reopened.pragmaValue("user_version") == "54")
+        #expect(reopened.pragmaValue("user_version") == "55")
         #expect(try reopened.pageOKFMetadata(
             versionID: fixture.pageVersionID, includeCorrected: false)?.metadata.status == .stable)
     }

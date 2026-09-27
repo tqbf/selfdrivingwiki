@@ -124,6 +124,180 @@ public enum ExtractorRouteTableBuilder {
         }
     }
 
+    // MARK: - Fetcher routes
+
+    /// One selectable fetcher choice inside a fetcher route row. Parallel to
+    /// `ExtractorRouteChoice` with a `FetcherRouteID` key — the two choice
+    /// namespaces can never be confused.
+    public struct FetcherRouteChoice: Hashable, Sendable, Identifiable {
+        public let route: FetcherRouteID
+        public let reference: ExtractionBackendReference
+        public let displayName: String
+        public let category: ExtractorRouteSourceCategory
+        public let exactSummary: String?
+
+        public init(
+            route: FetcherRouteID,
+            reference: ExtractionBackendReference,
+            displayName: String,
+            category: ExtractorRouteSourceCategory,
+            exactSummary: String? = nil
+        ) {
+            self.route = route
+            self.reference = reference
+            self.displayName = displayName
+            self.category = category
+            self.exactSummary = exactSummary
+        }
+
+        public var id: String {
+            let referenceKey: String
+            switch reference {
+            case .none: referenceKey = "disable"
+            case .host(let host): referenceKey = "host/\(host.adapterID.rawValue)"
+            case .installed(let logical): referenceKey = "installed/\(logical)"
+            }
+            return "fetch/\(route.mimeType.rawValue)/\(referenceKey)"
+        }
+    }
+
+    /// One fetcher route row in Settings: the synthetic source MIME, the
+    /// saved and default-resolved selections, and the compatible choices.
+    public struct FetcherRouteSettingsRow: Hashable, Sendable, Identifiable {
+        public let route: FetcherRouteID
+        public let savedSelection: ExtractionBackendReference?
+        public let choices: [FetcherRouteChoice]
+        public let status: ExtractorRouteStatus
+
+        public init(
+            route: FetcherRouteID,
+            savedSelection: ExtractionBackendReference?,
+            choices: [FetcherRouteChoice],
+            status: ExtractorRouteStatus
+        ) {
+            self.route = route
+            self.savedSelection = savedSelection
+            self.choices = choices
+            self.status = status
+        }
+
+        public var id: String { "fetch/\(route.mimeType.rawValue)" }
+        /// The effective selection: stored record first, then the bundled
+        /// default (the same rule `prepareFetcher` applies).
+        public var resolvedSelection: ExtractionBackendReference? {
+            savedSelection ?? ExtractorRouteDefaults.bundled.fetcherDefault(for: route)
+        }
+    }
+
+    /// Builds the Settings fetcher route table: one deterministic row per
+    /// fetcher route, from the union of active/available fetcher
+    /// registration claims, saved selections, and the bundled defaults. A
+    /// same-MIME EXTRACTOR never contributes a fetcher row — only
+    /// `role == .fetcher` registrations claim fetcher routes.
+    public static func buildFetcherRows(
+        _ input: Input
+    ) -> [FetcherRouteSettingsRow] {
+        let fetcherRegistrations = input.availableRegistrations.filter { $0.role == .fetcher }
+        var routes: [FetcherRouteID] = []
+        func insert(_ route: FetcherRouteID) {
+            if routes.contains(route) == false { routes.append(route) }
+        }
+        for snapshot in fetcherRegistrations {
+            for mimeType in snapshot.mimeTypes {
+                insert(FetcherRouteID(mimeType: mimeType))
+            }
+        }
+        for record in input.configuration.routeFetchers {
+            insert(record.route)
+        }
+        for record in ExtractorRouteDefaults.bundled.routeFetchers {
+            insert(record.route)
+        }
+        return routes.sorted().map { route in
+            buildFetcherRow(route: route, input: input, fetchers: fetcherRegistrations)
+        }
+    }
+
+    private static func buildFetcherRow(
+        route: FetcherRouteID,
+        input: Input,
+        fetchers: [ExtractorRouteRegistrationSnapshot]
+    ) -> FetcherRouteSettingsRow {
+        let savedSelection = input.configuration.fetcherSelection(for: route)
+        // Choices: package fetchers claiming this MIME (deduped to the
+        // highest exact revision per lineage), preceded by the explicit
+        // disable record.
+        var choices: [FetcherRouteChoice] = [
+            FetcherRouteChoice(
+                route: route,
+                reference: .none,
+                displayName: "No default (disable this fetch route)",
+                category: .prompt)
+        ]
+        var highestByLogical: [LogicalExtractorReference: ExtractorRouteRegistrationSnapshot] = [:]
+        for snapshot in fetchers where snapshot.mimeTypes.contains(route.mimeType) {
+            let logical = LogicalExtractorReference(
+                packageID: snapshot.reference.revision.packageID,
+                registrationID: snapshot.reference.registrationID)
+            if let current = highestByLogical[logical],
+               snapshot.reference.revision <= current.reference.revision {
+                continue
+            }
+            highestByLogical[logical] = snapshot
+        }
+        choices.append(contentsOf: highestByLogical
+            .sorted { $0.key < $1.key }
+            .map { logical, snapshot in
+                FetcherRouteChoice(
+                    route: route,
+                    reference: .installed(logical),
+                    displayName: snapshot.displayName,
+                    category: snapshot.sourceCategory,
+                    exactSummary: exactSummary(snapshot.reference.revision))
+            })
+        // A saved installed selection with no active fetcher registration
+        // stays visible as unavailable (the same rule as extractor rows).
+        if case .installed(let logical)? = savedSelection,
+           choices.contains(where: { $0.reference == .installed(logical) }) == false {
+            choices.append(FetcherRouteChoice(
+                route: route,
+                reference: .installed(logical),
+                displayName: logical.packageID.rawValue,
+                category: .unavailable))
+        }
+        let status = buildFetcherStatus(
+            route: route, savedSelection: savedSelection, input: input)
+        return FetcherRouteSettingsRow(
+            route: route,
+            savedSelection: savedSelection,
+            choices: choices,
+            status: status)
+    }
+
+    private static func buildFetcherStatus(
+        route: FetcherRouteID,
+        savedSelection: ExtractionBackendReference?,
+        input: Input
+    ) -> ExtractorRouteStatus {
+        guard case .installed(let logical)? = savedSelection else { return .ready }
+        // The effective selection resolves when the exact lineage is active.
+        if input.registrations.contains(where: { snapshot in
+            snapshot.role == .fetcher
+                && snapshot.reference.registrationID == logical.registrationID
+                && snapshot.reference.revision.packageID == logical.packageID
+                && snapshot.mimeTypes.contains(route.mimeType)
+        }) {
+            return .ready
+        }
+        if input.waitingRevisionIDs.contains(where: { $0.packageID == logical.packageID }) {
+            return .waitingForHostActivation
+        }
+        if input.installedRevisionIDs.contains(where: { $0.packageID == logical.packageID }) {
+            return .unavailableSelection
+        }
+        return .packageNotInstalled
+    }
+
     // MARK: - Route collection
 
     private static func descriptors(for input: Input) -> [ExtractorRouteDescriptor] {

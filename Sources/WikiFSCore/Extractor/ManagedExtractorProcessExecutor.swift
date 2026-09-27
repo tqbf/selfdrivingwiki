@@ -44,7 +44,10 @@ public struct ManagedExtractorProcessPaths: Sendable {
 public struct ManagedExtractorProcessRequest: Sendable {
     public let revision: ExtractorPackageRevisionID
     public let manifest: ExtractorManifest
-    public let protocolRequest: ExtractorProtocolRequest
+    /// The tagged protocol request: a revision 1–5 extractor request or a
+    /// revision-5 fetch request. The envelope is the single encoding seam —
+    /// the child receives exactly one request JSON document.
+    public let request: ExtractorRequestEnvelope
     public let paths: ManagedExtractorProcessPaths
     /// The runtime resolution retained by the prepared operation. Required
     /// for a `runtime` launch: the host launches exactly this executable and
@@ -57,10 +60,47 @@ public struct ManagedExtractorProcessRequest: Sendable {
     public let durableTokenCacheRoot: URL?
     public let cancellationGracePeriod: Duration
 
+    /// The request's wire revision.
+    public var protocolRevision: ExtractorProtocolRevision {
+        switch request {
+        case .extractor(let value): return value.protocolRevision
+        case .fetch(let value): return value.protocolRevision
+        }
+    }
+
+    public var requestID: ExtractorRequestID {
+        switch request {
+        case .extractor(let value): return value.requestID
+        case .fetch(let value): return value.requestID
+        }
+    }
+
+    public var outputPath: ExtractorRelativePath {
+        switch request {
+        case .extractor(let value): return value.outputPath
+        case .fetch(let value): return value.outputPath
+        }
+    }
+
+    /// True when the managed run validates a revision-5 fetcher result
+    /// sequence (an explicit `source-bytes`/`markdown` result tag).
+    public var isFetcherRequest: Bool {
+        if case .fetch = request { return true }
+        return false
+    }
+
+    /// The request's wire deadline, in milliseconds since 1970.
+    public var deadlineMillisecondsSince1970: Int64 {
+        switch request {
+        case .extractor(let value): return value.deadlineMillisecondsSince1970
+        case .fetch(let value): return value.deadlineMillisecondsSince1970
+        }
+    }
+
     public init(
         revision: ExtractorPackageRevisionID,
         manifest: ExtractorManifest,
-        protocolRequest: ExtractorProtocolRequest,
+        request: ExtractorRequestEnvelope,
         paths: ManagedExtractorProcessPaths,
         runtimeResolution: RuntimeCommandResolution? = nil,
         durableTokenCacheRoot: URL? = nil,
@@ -68,7 +108,7 @@ public struct ManagedExtractorProcessRequest: Sendable {
     ) {
         self.revision = revision
         self.manifest = manifest
-        self.protocolRequest = protocolRequest
+        self.request = request
         self.paths = paths
         self.runtimeResolution = runtimeResolution
         self.durableTokenCacheRoot = durableTokenCacheRoot?.standardizedFileURL
@@ -204,7 +244,7 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         try validate(operation)
         let launch = try resolveLaunch(operation)
         let environment = try makeEnvironment(operation)
-        let input = try encodeRequest(operation.protocolRequest)
+        let input = try encodeRequest(operation.request)
         let cancellationSlot = ManagedProcessCancellationSlot(
             gracePeriod: operation.cancellationGracePeriod)
         // Terminal-frame completion latch: `onCompletion`/`onFailure` begin
@@ -226,10 +266,11 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             callerOnFrame(frame)
         }
         let protocolState = ManagedProtocolState(
-            requestID: operation.protocolRequest.requestID,
-            outputPath: operation.protocolRequest.outputPath,
+            requestID: operation.requestID,
+            outputPath: operation.outputPath,
             maximumProgressEventCount: operation.manifest.limits.maximumProgressEventCount,
-            protocolRevision: operation.protocolRequest.protocolRevision,
+            protocolRevision: operation.protocolRevision,
+            isFetcherRequest: operation.isFetcherRequest,
             onFrame: trackedOnFrame,
             onFailure: { cancellationSlot.requestTermination() },
             onCompletion: { cancellationSlot.requestTermination() })
@@ -394,7 +435,7 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
               try operation.manifest.packageDigest() == operation.revision.digest else {
             throw ManagedExtractorProcessError.revisionMismatch
         }
-        guard operation.protocolRequest.protocolRevision == operation.manifest.protocolRevision else {
+        guard operation.protocolRevision == operation.manifest.protocolRevision else {
             throw ManagedExtractorProcessError.requestMismatch
         }
         let root = operation.paths.operationRoot.standardizedFileURL
@@ -470,7 +511,7 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             "XDG_CACHE_HOME": operation.paths.privateCacheRoot.path,
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
-            "WIKI_EXTRACTOR_REQUEST_ID": operation.protocolRequest.requestID.rawValue.uuidString.lowercased(),
+            "WIKI_EXTRACTOR_REQUEST_ID": operation.requestID.rawValue.uuidString.lowercased(),
             "WIKI_EXTRACTOR_PROTOCOL_REVISION": String(operation.manifest.protocolRevision.rawValue),
         ]
         if operation.manifest.capabilities.contains(.sharedRuntimeCache),
@@ -497,8 +538,14 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         return environment
     }
 
-    private func encodeRequest(_ request: ExtractorProtocolRequest) throws -> Data {
-        var data = try JSONEncoder().encode(request)
+    private func encodeRequest(_ request: ExtractorRequestEnvelope) throws -> Data {
+        let encoder = JSONEncoder()
+        let payload: Data
+        switch request {
+        case .extractor(let value): payload = try encoder.encode(value)
+        case .fetch(let value): payload = try encoder.encode(value)
+        }
+        var data = payload
         guard data.count <= ExtractorHostLimits.maximumFrameByteCount else {
             throw ManagedExtractorProcessError.malformedProtocol
         }
@@ -510,7 +557,7 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         let manifestMilliseconds = operation.manifest.limits.maximumDurationMilliseconds
         let nowMilliseconds = Int64(Date().timeIntervalSince1970 * 1_000)
         let deadlineMilliseconds = max(
-            operation.protocolRequest.deadlineMillisecondsSince1970 - nowMilliseconds,
+            operation.deadlineMillisecondsSince1970 - nowMilliseconds,
             1)
         return .milliseconds(min(Int64(manifestMilliseconds), deadlineMilliseconds))
     }
@@ -713,6 +760,7 @@ private final class ManagedProtocolState: @unchecked Sendable {
         outputPath: ExtractorRelativePath,
         maximumProgressEventCount: Int,
         protocolRevision: ExtractorProtocolRevision,
+        isFetcherRequest: Bool = false,
         onFrame: @escaping @Sendable (ExtractorProtocolFrame) -> Void,
         onFailure: @escaping @Sendable () -> Void,
         onCompletion: @escaping @Sendable () -> Void
@@ -721,7 +769,8 @@ private final class ManagedProtocolState: @unchecked Sendable {
             requestID: requestID,
             expectedOutputPath: outputPath,
             maximumProgressEventCount: maximumProgressEventCount,
-            protocolRevision: protocolRevision)
+            protocolRevision: protocolRevision,
+            isFetcherRequest: isFetcherRequest)
         self.onFrame = onFrame
         self.onFailure = onFailure
         self.onCompletion = onCompletion

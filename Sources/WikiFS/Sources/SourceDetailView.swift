@@ -719,12 +719,16 @@ struct SourceDetailView: View {
                         metadataSeparator
                         Text("\(label) \(Self.compactDate(head.createdAt))")
                     }
-                    // Zotero provenance sits inline on the metadata line rather than
-                    // in its own row — the big title already names the item, so this
-                    // just needs the "Zotero" origin tag + a jump-back link.
-                    // Two-dimensional label (#644): "Zotero / PDF", "Zotero / Markdown",
-                    // or just "Zotero" when the content type is unknown.
-                    if let key = file.zoteroItemKey, !key.isEmpty {
+                    // Acquisition provenance sits inline on the metadata line
+                    // rather than in its own row — the big title already names
+                    // the item, so this just needs the "Zotero" origin tag + a
+                    // jump-back link. The Zotero name is the displayed origin
+                    // label only (`SourceProvider.zotero`); the stored key is
+                    // the provider-neutral external item key.
+                    // Two-dimensional label (#644): "Zotero / PDF", "Zotero /
+                    // Markdown", or just "Zotero" when the content type is
+                    // unknown.
+                    if let key = file.externalItemKey, !key.isEmpty {
                         metadataSeparator
                         let zoteroLabel = SourceProvenanceLabel.combine(
                             provider: "Zotero",

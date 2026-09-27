@@ -217,14 +217,16 @@ public extension ContentKind {
     /// as `.binary` BEFORE the `isText` / `hasPrefix("text/")` check, so
     /// neither is auto-ingested. Neither has a markdown extraction path.
     /// `application/zotero` classifies as its own acquisition kind BEFORE the
-    /// generic binary fallthrough, so a byteless Zotero source resolves by
-    /// MIME alone (the provider arm also covers it).
+    /// generic binary fallthrough, so a byteless fetcher source resolves by
+    /// MIME alone. Classification is display data only: whether a fetcher
+    /// actually runs is decided by active fetcher registration claims.
     static func fromMIME(_ mime: String?) -> ContentKind {
         guard let mime else { return .unknown }
         let lowered = mime.lowercased()
 
-        // Synthetic acquisition MIME first (§ zotero): provider-backed
-        // byteless sources classify as their acquisition kind.
+        // Synthetic acquisition MIME first (§ zotero): byteless sources
+        // carrying a fetcher's synthetic source MIME classify as their
+        // acquisition kind.
         if lowered == ContentTypeRegistry.zoteroAttachment {
             return .zoteroAttachment
         }
@@ -283,12 +285,11 @@ public extension ContentKind {
         case .youtube:         return .youtubeTranscript
         case .applePodcast:    return .podcastTranscript
         case .podcast:         return .podcastTranscript
-        case .zotero:          return .zoteroAttachment
         case .spotify:         return .audioEmbedNoTranscript
         case .soundcloud:      return .audioEmbedNoTranscript
         case .vimeo:           return .videoEmbedNoTranscript
         case .remoteMedia:     return .remoteMediaNoMarkdown
-        case .localFile, .website, .markdownFolder,
+        case .localFile, .website, .zotero, .markdownFolder,
              .legacyImport, .none:
             break // fall through to MIME classification
         }
@@ -342,7 +343,6 @@ public extension ContentKind {
         case .pdf:   return .pdf
         case .html:  return .html
         case .docx:  return .docx
-        case .zotero: return .zoteroAttachment
         case .podcastTranscript, .applePodcastTranscript, .youtubeTranscript:
             return .unknown
         }

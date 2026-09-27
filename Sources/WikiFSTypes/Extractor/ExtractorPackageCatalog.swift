@@ -161,13 +161,20 @@ public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
     /// a read-time observation, not durable state — the durable catalog
     /// file's bytes are unchanged by skipping.
     public let skippedUnknownRevisionRecordCount: Int
+    /// Records the decoder skipped because a registration declares the
+    /// RETIRED `zotero` extractor kind. The fetcher role replaced that
+    /// kind; old Zotero package records are invisible instead of fatal, and
+    /// their digest reservations survive untouched (the durable catalog
+    /// bytes are never rewritten by a read). Never encoded.
+    public let skippedRetiredKindRecordCount: Int
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
         generation: UInt64 = 0,
         records: [ExtractorPackageCatalogRecord] = [],
         reservations: [ExtractorPackageReservationRecord] = [],
-        skippedUnknownRevisionRecordCount: Int = 0
+        skippedUnknownRevisionRecordCount: Int = 0,
+        skippedRetiredKindRecordCount: Int = 0
     ) throws {
         guard schemaVersion == Self.currentSchemaVersion else {
             throw ExtractorPackageCatalogError.unsupportedSchemaVersion
@@ -203,7 +210,14 @@ public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
             ExtractorPackageReservationRecord(reservation: $0.key, digest: $0.value)
         }.sorted()
         self.skippedUnknownRevisionRecordCount = skippedUnknownRevisionRecordCount
+        self.skippedRetiredKindRecordCount = skippedRetiredKindRecordCount
     }
+
+    /// The registration kind raw value whose records are retired. The
+    /// fetcher role replaced the `zotero` extractor kind; that raw value no
+    /// longer decodes into `ExtractorKind`, so records carrying it are
+    /// probed and skipped at read time instead of failing the catalog.
+    static let retiredKindRawValue = "zotero"
 
     /// Probes one record element for its raw manifest revision, without
     /// decoding the whole record.
@@ -213,6 +227,39 @@ public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
         init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             manifestRevision = try container.decodeIfPresent(Int.self, forKey: .manifestRevision)
+        }
+    }
+
+    /// Probes one record element's raw `registrations[].kinds` strings
+    /// without decoding any registration: `true` when any registration
+    /// declares the retired kind. The two `try?` probes below are attempts
+    /// of the probe ladder, not error swallowing: a record whose shape does
+    /// not probe cleanly falls through to the full record decode, which
+    /// throws the proper typed error for the malformed data.
+    private struct RecordRetiredKindProbe: Decodable {
+        let declaresRetiredKind: Bool
+        private enum RegistrationKeys: String, CodingKey { case kinds }
+        private enum CodingKeys: String, CodingKey { case registrations }
+        init(from decoder: any Decoder) throws {
+            var declares = false
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            // swiftlint:disable:next silent_try_optional
+            if var registrations = try? container.nestedUnkeyedContainer(forKey: .registrations) {
+                loop: while registrations.isAtEnd == false {
+                    let registration = try registrations.superDecoder()
+                    let registrationContainer = try registration.container(keyedBy: RegistrationKeys.self)
+                    // swiftlint:disable:next silent_try_optional
+                    if var kinds = try? registrationContainer.nestedUnkeyedContainer(forKey: .kinds) {
+                        while kinds.isAtEnd == false {
+                            if try kinds.decode(String.self) == ExtractorPackageCatalog.retiredKindRawValue {
+                                declares = true
+                                break loop
+                            }
+                        }
+                    }
+                }
+            }
+            declaresRetiredKind = declares
         }
     }
 
@@ -227,6 +274,7 @@ public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
         var recordsContainer = try container.nestedUnkeyedContainer(forKey: .records)
         var records: [ExtractorPackageCatalogRecord] = []
         var skippedUnknownRevisionRecordCount = 0
+        var skippedRetiredKindRecordCount = 0
         while recordsContainer.isAtEnd == false {
             let element = try recordsContainer.superDecoder()
             // A probe decode failure is genuinely ignorable: it falls
@@ -239,6 +287,17 @@ public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
                 skippedUnknownRevisionRecordCount += 1
                 continue
             }
+            // A record whose registrations declare the retired `zotero`
+            // extractor kind is skipped whole — the kind no longer decodes,
+            // and the fetcher role replaced it. Every other record decodes
+            // strictly: unrelated malformed data remains fatal. The retired
+            // record's digest reservation survives in `reservations`.
+            // swiftlint:disable:next silent_try_optional
+            if let retiredProbe = try? RecordRetiredKindProbe(from: element),
+               retiredProbe.declaresRetiredKind {
+                skippedRetiredKindRecordCount += 1
+                continue
+            }
             records.append(try ExtractorPackageCatalogRecord(from: element))
         }
         try self.init(
@@ -248,7 +307,8 @@ public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
             reservations: container.decodeIfPresent(
                 [ExtractorPackageReservationRecord].self,
                 forKey: .reservations) ?? [],
-            skippedUnknownRevisionRecordCount: skippedUnknownRevisionRecordCount)
+            skippedUnknownRevisionRecordCount: skippedUnknownRevisionRecordCount,
+            skippedRetiredKindRecordCount: skippedRetiredKindRecordCount)
     }
 
     public func encode(to encoder: any Encoder) throws {

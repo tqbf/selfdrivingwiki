@@ -114,7 +114,7 @@ struct WikiStoreModelAddURLTests {
         let store = try tempStore()
         let existing = try store.addSource(
             filename: "existing.html", data: Data("first".utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: "text/html",
+            externalItemKey: nil, externalItemTitle: nil, mimeType: "text/html",
             provenance: SourceProvenance(
                 agentName: "website", activityKind: "fetch",
                 plan: "https://example.com/article", externalRef: "https://example.com/article#saved"))

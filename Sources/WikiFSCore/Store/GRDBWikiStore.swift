@@ -158,7 +158,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 54
+    private static let currentSchemaVersion = 55
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1587,6 +1587,50 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 return .commit
             }
             version = 54
+        }
+
+        // v54→v55: fetcher packages. Two changes, both metadata-preserving:
+        //   1. The retained Zotero-named provenance columns on `sources`
+        //      become the provider-neutral `external_item_key` /
+        //      `external_item_title` (a fetcher package is not a Zotero
+        //      concept; the values move with the rename, nothing drops).
+        //   2. The fetch lifecycle rides on the source: a nullable
+        //      `fetch_state` (`pending` → `formatJobPending` → `complete`)
+        //      plus the exact fetch producer (`fetch_producer` JSON). NULL
+        //      means "never a fetch source". Byteless `application/zotero`
+        //      rows the sync created before this schema are backfilled to
+        //      `pending` so they remain fetchable; no old package/selection
+        //      execution is implied.
+        //
+        // Chat-only fixtures (some tests build a DB with only the chat
+        // tables) have no `sources` table at all: every step is guarded on
+        // table existence, not just column existence.
+        if version < 55 {
+            try db.inTransaction(.immediate) {
+                let hasSources = try Self.tableExists("sources", in: db)
+                if hasSources, try Self.hasColumn("zotero_item_key", on: "sources", in: db) {
+                    try db.execute(sql: "ALTER TABLE sources RENAME COLUMN zotero_item_key TO external_item_key;")
+                }
+                if hasSources, try Self.hasColumn("zotero_item_title", on: "sources", in: db) {
+                    try db.execute(sql: "ALTER TABLE sources RENAME COLUMN zotero_item_title TO external_item_title;")
+                }
+                if hasSources, try Self.hasColumn("fetch_state", on: "sources", in: db) == false {
+                    try db.execute(sql: "ALTER TABLE sources ADD COLUMN fetch_state TEXT;")
+                }
+                if hasSources, try Self.hasColumn("fetch_producer", on: "sources", in: db) == false {
+                    try db.execute(sql: "ALTER TABLE sources ADD COLUMN fetch_producer TEXT;")
+                }
+                if hasSources {
+                    try db.execute(sql: """
+                    UPDATE sources SET fetch_state = 'pending'
+                    WHERE fetch_state IS NULL AND byte_size = 0 AND content_hash IS NULL
+                      AND mime_type = 'application/zotero';
+                    """)
+                }
+                try db.execute(sql: "PRAGMA user_version = 55;")
+                return .commit
+            }
+            version = 55
         }
 
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
@@ -3377,8 +3421,12 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         );
         """)
 
-        // Sources — final shape (v2 + v6 + v9 + v10 + v19 + v20).
+        // Sources — final shape (v2 + v6 + v9 + v10 + v19 + v20 + v55).
         // v20: the `content` column is GONE — bytes live in immutable `blobs`.
+        // v55: the Zotero-named provenance columns are the provider-neutral
+        // `external_item_key`/`external_item_title`, and the fetcher
+        // lifecycle (`fetch_state` + its exact `fetch_producer`) rides on
+        // the source row.
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS sources (
             id TEXT PRIMARY KEY,
@@ -3390,11 +3438,13 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             updated_at REAL NOT NULL,
             version INTEGER NOT NULL DEFAULT 1,
             ingested_at REAL,
-            zotero_item_key TEXT,
-            zotero_item_title TEXT,
+            external_item_key TEXT,
+            external_item_title TEXT,
             display_name TEXT,
             content_hash TEXT,
-            role TEXT NOT NULL DEFAULT 'primary'
+            role TEXT NOT NULL DEFAULT 'primary',
+            fetch_state TEXT,
+            fetch_producer TEXT
         );
         """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS ingested_files_created ON sources(created_at);")
@@ -4655,8 +4705,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         return try addSource(
             filename: filename,
             data: data,
-            zoteroItemKey: ingestMetadata?.externalItemID,
-            zoteroItemTitle: ingestMetadata?.externalItemTitle,
+            externalItemKey: ingestMetadata?.externalItemID,
+            externalItemTitle: ingestMetadata?.externalItemTitle,
             mimeType: detected.normalizedMIMEType,
             provenance: provenance,
             role: role,
@@ -4667,7 +4717,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
 
     public func addSource(
         filename: String, data: Data,
-        zoteroItemKey: String? = nil, zoteroItemTitle: String? = nil,
+        externalItemKey: String? = nil, externalItemTitle: String? = nil,
         mimeType: String? = nil, provenance: SourceProvenance? = nil,
         role: SourceRole = .primary, originalPath: String? = nil,
         activityID: String? = nil, resolvedDisplayName: String?? = nil
@@ -4701,7 +4751,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         let displayName: String?
         if let resolved = resolvedDisplayName ?? DisplayNameResolver.resolve(
             filename: filename, data: data, mimeType: mime,
-            zoteroItemTitle: zoteroItemTitle) {
+            externalItemTitle: externalItemTitle) {
             displayName = WikiNameRules.sanitized(resolved)
         } else if !WikiNameRules.isLinkable(filename) {
             displayName = WikiNameRules.sanitized(filename)
@@ -4724,7 +4774,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 db,
                 sql: """
                 SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-                       zotero_item_key, zotero_item_title, display_name, role
+                       external_item_key, external_item_title, display_name, role
                 FROM sources WHERE content_hash = ? LIMIT 1;
                 """,
                 arguments: [contentHash]
@@ -4743,11 +4793,11 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             try db.execute(sql: """
             INSERT INTO sources
               (id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-               zotero_item_key, zotero_item_title, display_name, content_hash, role)
+               external_item_key, external_item_title, display_name, content_hash, role)
             VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?);
             """, arguments: [sourceID, filename, ext, mime, Int64(data.count),
                             nowTS, nowTS,
-                            zoteroItemKey, zoteroItemTitle, displayName,
+                            externalItemKey, externalItemTitle, displayName,
                             contentHash, role.rawValue])
 
             // 1. Blob (identical bytes = one row, ever).
@@ -4806,7 +4856,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             return SourceSummary(
                 id: id, filename: filename, ext: ext, mimeType: mime,
                 byteSize: data.count, createdAt: now, updatedAt: now, version: 1,
-                zoteroItemKey: zoteroItemKey, zoteroItemTitle: zoteroItemTitle,
+                externalItemKey: externalItemKey, externalItemTitle: externalItemTitle,
                 displayName: displayName, role: role
             )
         }
@@ -4819,7 +4869,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     public func addSource(filename: String, data: Data) throws -> SourceSummary {
         try addSource(
             filename: filename, data: data,
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            externalItemKey: nil, externalItemTitle: nil, mimeType: nil,
             provenance: nil, role: .primary, originalPath: nil,
             activityID: nil, resolvedDisplayName: nil)
     }
@@ -4840,7 +4890,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                     sql: """
                     SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size,
                            s.created_at, s.updated_at, s.version,
-                           s.zotero_item_key, s.zotero_item_title, s.display_name, s.role
+                           s.external_item_key, s.external_item_title, s.display_name, s.role
                     FROM sources s
                     JOIN source_versions sv ON sv.source_id = s.id
                     WHERE sv.external_identity = ? AND sv.blob_hash IS NULL
@@ -4868,7 +4918,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             let displayName: String?
             if let resolved = DisplayNameResolver.resolve(
                 filename: filename, data: Data(), mimeType: mime,
-                zoteroItemTitle: nil) {
+                externalItemTitle: nil) {
                 displayName = WikiNameRules.sanitized(resolved)
             } else if !WikiNameRules.isLinkable(filename) {
                 displayName = WikiNameRules.sanitized(filename)
@@ -4879,13 +4929,15 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             let sourceID = id.rawValue
 
             // 0. The sources identity row FIRST (byte_size = 0, content_hash NULL).
+            //    A byteless sync source starts in the fetcher lifecycle as
+            //    `pending`: it is exactly the shape an active fetcher claims.
             try db.execute(sql: """
             INSERT INTO sources
               (id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-               zotero_item_key, zotero_item_title, display_name, content_hash, role)
-            VALUES (?, ?, ?, ?, 0, ?, ?, 1, NULL, NULL, ?, NULL, ?);
+               external_item_key, external_item_title, display_name, content_hash, role, fetch_state)
+            VALUES (?, ?, ?, ?, 0, ?, ?, 1, NULL, NULL, ?, NULL, ?, ?);
             """, arguments: [sourceID, filename, ext, mime, nowTS, nowTS,
-                            displayName, role.rawValue])
+                            displayName, role.rawValue, SourceFetchState.pending.rawValue])
 
             // 1. Fetch/import activity + real provider agent (provenance is
             //    required for byteless sources).
@@ -4921,7 +4973,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             return SourceSummary(
                 id: id, filename: filename, ext: ext, mimeType: mime,
                 byteSize: 0, createdAt: now, updatedAt: now, version: 1,
-                zoteroItemKey: nil, zoteroItemTitle: nil,
+                externalItemKey: nil, externalItemTitle: nil,
                 displayName: displayName, role: role
             )
         }
@@ -4932,7 +4984,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """
             SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at,
-                   version, ingested_at, zotero_item_key, zotero_item_title,
+                   version, ingested_at, external_item_key, external_item_title,
                    display_name, content_hash, role
             FROM sources ORDER BY updated_at DESC;
             """)
@@ -5618,7 +5670,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             let rows = try Row.fetchAll(db, sql: """
             SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size,
                    s.created_at, s.updated_at, s.version,
-                   s.zotero_item_key, s.zotero_item_title, s.display_name, s.role,
+                   s.external_item_key, s.external_item_title, s.display_name, s.role,
                    a.plan, a.external_ref, sv.external_identity
             FROM sources s
             JOIN refs r ON r.kind = 'source-content' AND r.owner_id = s.id
@@ -5873,17 +5925,33 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
-    /// The `attachAcquiredBytes` implementation: same single-`mutate()`
-    /// transaction as before the acquisition-neutral rename — blob, hash-diff
-    /// version, mirror refresh, retained external-provenance columns.
+    /// The `attachAcquiredBytes` implementation: one single-`mutate()`
+    /// transaction — blob, hash-diff version, mirror refresh (real MIME, ext,
+    /// byte size, validated display filename), the neutral external
+    /// provenance columns, and the typed fetch lifecycle advance to
+    /// `formatJobPending` with its exact fetch producer. Writing the marker
+    /// in THIS transaction is what makes a crash after the blob lands
+    /// recoverable: the queue startup scan can always find the stranded
+    /// format job.
     public func attachAcquiredBytes(
         sourceID: SourceID,
         bytes: Data,
         mimeType: String,
+        originalFilename: String?,
         externalItemKey: String?,
         externalItemTitle: String?,
-        displayName: String?
+        producer: ExtractionInstalledPackageProducer?
     ) throws -> SourceVersion {
+        // A returned display filename is DATA, never a path. Validation
+        // matches the wire contract (bounded, separator-free); it may become
+        // `sources.filename` so the source row names the acquired file.
+        let validatedFilename: String?
+        if let originalFilename {
+            try ExtractorFetchRequest.validateFilename(originalFilename)
+            validatedFilename = originalFilename
+        } else {
+            validatedFilename = nil
+        }
         // The declared MIME is authoritative data from the result frame; the
         // file extension derives from it. Detection stays out of this path:
         // the reviewed package reported the true content type.
@@ -5894,13 +5962,25 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             return nil
             #endif
         }() ?? ""
-        let sanitizedDisplayName = displayName.map { WikiNameRules.sanitized($0) }
+        let sanitizedDisplayName = externalItemTitle.map { WikiNameRules.sanitized($0) }
+        let producerJSON: Data?
+        if let producer {
+            producerJSON = try JSONEncoder().encode(producer)
+        } else {
+            producerJSON = nil
+        }
         return try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
             guard bytes.count <= Self.ingestByteCap else {
                 throw WikiStoreError.unexpected(
                     "source \(bytes.count) bytes exceeds cap \(Self.ingestByteCap)")
+            }
+            guard bytes.isEmpty == false else {
+                // An empty acquisition can never become a source blob: it
+                // would re-enter the fetch route and loop forever.
+                throw WikiStoreError.unexpected(
+                    "attachAcquiredBytes refuses empty bytes for \(sourceID.rawValue)")
             }
             let contentHash = portableSHA256( bytes)
                 .map { String(format: "%02x", $0) }.joined()
@@ -5938,10 +6018,9 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 try db.execute(sql: """
                 INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
                                              mime_type, activity_id, external_identity, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?);
                 """, arguments: [newVersionID.rawValue, sourceID.rawValue, parent?.id.rawValue,
-                                contentHash, mimeType, activityID,
-                                externalItemKey, nowTS])
+                                contentHash, mimeType, activityID, nowTS])
                 // 3. UPSERT the active ref (generation + 1).
                 let nextGeneration = (prevGeneration ?? 0) + 1
                 try db.execute(sql: """
@@ -5957,22 +6036,30 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             }
 
             // 4. Refresh the denormalized mirror: real MIME, ext from MIME,
-            //    byte size, hash, and the retained external-provenance
-            //    columns. The display name is replaced only when provided.
+            //    byte size, hash, the neutral external-provenance columns,
+            //    the validated display filename (when the fetcher supplied
+            //    one), and the format-job marker with its exact producer —
+            //    all in this one transaction.
             try db.execute(sql: """
             UPDATE sources SET
                 mime_type = ?,
                 ext = ?,
                 byte_size = ?,
                 content_hash = ?,
-                zotero_item_key = COALESCE(?, zotero_item_key),
-                zotero_item_title = COALESCE(?, zotero_item_title),
+                filename = COALESCE(?, filename),
+                external_item_key = COALESCE(?, external_item_key),
+                external_item_title = COALESCE(?, external_item_title),
                 display_name = COALESCE(?, display_name),
+                fetch_state = ?,
+                fetch_producer = ?,
                 updated_at = ?,
                 version = version + 1
             WHERE id = ?;
             """, arguments: [mimeType, ext, Int64(bytes.count), contentHash,
+                            validatedFilename,
                             externalItemKey, externalItemTitle, sanitizedDisplayName,
+                            SourceFetchState.formatJobPending.rawValue,
+                            producerJSON.map { String(decoding: $0, as: UTF8.self) },
                             nowTS, sourceID.rawValue])
 
             return SourceVersion(
@@ -5981,7 +6068,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 blobHash: contentHash,
                 mimeType: mimeType,
                 activityID: parent?.activityID,
-                externalIdentity: externalItemKey, fetchedAt: now
+                externalIdentity: nil, fetchedAt: now
             )
         }
     }
@@ -5998,13 +6085,51 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }) { db in
             try db.execute(sql: """
             UPDATE sources SET
-                zotero_item_key = COALESCE(?, zotero_item_key),
-                zotero_item_title = COALESCE(?, zotero_item_title),
+                external_item_key = COALESCE(?, external_item_key),
+                external_item_title = COALESCE(?, external_item_title),
                 display_name = COALESCE(?, display_name),
                 updated_at = ?
             WHERE id = ?;
             """, arguments: [externalItemKey, externalItemTitle, sanitizedDisplayName,
                             Date().timeIntervalSince1970, sourceID.rawValue])
+        }
+    }
+
+    /// Marks one fetch source `complete` — the acquisition pipeline is done
+    /// (Markdown derived, or the follow-on format job has finished). Idempotent.
+    public func markFetchComplete(sourceID: SourceID) throws {
+        try mutate(event: { _ in
+            self.localEvent(.source, id: sourceID.rawValue, change: .updated)
+        }) { db in
+            try db.execute(sql: """
+            UPDATE sources SET fetch_state = ?, updated_at = ? WHERE id = ?;
+            """, arguments: [SourceFetchState.complete.rawValue,
+                            Date().timeIntervalSince1970, sourceID.rawValue])
+        }
+    }
+
+    /// The typed fetch lifecycle state of one source. `nil` = never a fetch
+    /// source.
+    public func fetchState(sourceID: SourceID) throws -> SourceFetchState? {
+        try dbWriter.read { db in
+            let raw = try String.fetchOne(
+                db,
+                sql: "SELECT fetch_state FROM sources WHERE id = ?;",
+                arguments: [sourceID.rawValue])
+            return raw.flatMap(SourceFetchState.init(rawValue:))
+        }
+    }
+
+    /// Every source still holding a `formatJobPending` marker — the recovery
+    /// scan set. The queue startup path runs this per opened wiki and
+    /// re-derives the deduped follow-on item (or settles the marker when the
+    /// deduped item already completed).
+    public func sourcesWithPendingFormatJobs() throws -> [SourceID] {
+        try dbWriter.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT id FROM sources WHERE fetch_state = ? ORDER BY updated_at ASC;
+            """, arguments: [SourceFetchState.formatJobPending.rawValue])
+            return rows.map { SourceID(rawValue: $0["id"] ?? "") }
         }
     }
 
@@ -6212,7 +6337,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         Self.logContentTypeConflicts(detection, filename: filename)
         let displayName: String?
         if let resolved = DisplayNameResolver.resolve(
-            filename: filename, data: data, mimeType: mime, zoteroItemTitle: nil) {
+            filename: filename, data: data, mimeType: mime, externalItemTitle: nil) {
             displayName = WikiNameRules.sanitized(resolved)
         } else if !WikiNameRules.isLinkable(filename) {
             displayName = WikiNameRules.sanitized(filename)
@@ -6238,7 +6363,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             try db.execute(sql: """
             INSERT INTO sources
               (id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-               zotero_item_key, zotero_item_title, display_name, content_hash, role)
+               external_item_key, external_item_title, display_name, content_hash, role)
             VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?);
             """, arguments: [sourceID, filename, ext, mime, Int64(data.count),
                             nowTS, nowTS,
@@ -6272,7 +6397,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             return SourceSummary(
                 id: id, filename: filename, ext: ext, mimeType: mime,
                 byteSize: data.count, createdAt: now, updatedAt: now, version: 1,
-                zoteroItemKey: nil, zoteroItemTitle: nil,
+                externalItemKey: nil, externalItemTitle: nil,
                 displayName: displayName, role: role
             )
         }
@@ -8943,7 +9068,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 // from `searchSimilarSourcesNeverSelectsStar`.
                 let rows = try Row.fetchAll(db, sql: """
                     SELECT s.id, s.filename, s.ext, s.mime_type, s.byte_size, s.created_at, s.updated_at,
-                           s.version, s.zotero_item_key, s.zotero_item_title, s.display_name, s.role,
+                           s.version, s.external_item_key, s.external_item_title, s.display_name, s.role,
                            sc.embedding
                     FROM source_chunks sc
                     JOIN sources s ON s.id = sc.source_id;
@@ -10946,8 +11071,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         let createdAt: Double = row["created_at"]
         let updatedAt: Double = row["updated_at"]
         let version: Int = row["version"]
-        let zoteroKey: String? = row["zotero_item_key"]
-        let zoteroTitle: String? = row["zotero_item_title"]
+        let zoteroKey: String? = row["external_item_key"]
+        let zoteroTitle: String? = row["external_item_title"]
         let displayName: String? = row["display_name"]
         let roleRaw: String = row["role"]
 
@@ -10960,8 +11085,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             createdAt: Date(timeIntervalSince1970: createdAt),
             updatedAt: Date(timeIntervalSince1970: updatedAt),
             version: version,
-            zoteroItemKey: zoteroKey,
-            zoteroItemTitle: zoteroTitle,
+            externalItemKey: zoteroKey,
+            externalItemTitle: zoteroTitle,
             displayName: displayName,
             role: SourceRole(rawValue: roleRaw) ?? .primary
         )
@@ -11874,7 +11999,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             db,
             sql: """
             SELECT id, filename, ext, mime_type, byte_size, created_at, updated_at, version,
-                   zotero_item_key, zotero_item_title, display_name, role
+                   external_item_key, external_item_title, display_name, role
             FROM sources WHERE id = ?;
             """,
             arguments: [id.rawValue]

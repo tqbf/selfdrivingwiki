@@ -64,3 +64,59 @@ public extension Array where Element == ExtractorRouteSelectionRecord {
         return (result, dropped)
     }
 }
+
+/// One persisted fetcher route selection: the synthetic input MIME of the
+/// byteless sources a fetcher acquires, plus the version-free reference
+/// naming the fetcher package lineage chosen for it. Keys are distinct from
+/// `ExtractorRouteSelectionRecord` (`FetcherRouteID` has no kind), so a
+/// fetcher selection and an extractor selection can never collide or
+/// overwrite one another.
+public struct FetcherRouteSelectionRecord: Codable, Hashable, Sendable, Comparable {
+    public let route: FetcherRouteID
+    public let fetcher: ExtractionBackendReference
+
+    public init(route: FetcherRouteID, fetcher: ExtractionBackendReference) {
+        self.route = route
+        self.fetcher = fetcher
+    }
+
+    /// Total order: route first, then the canonical JSON encoding of the
+    /// fetcher reference as the tie-break, so two records for the same route
+    /// have a stable winner independent of their original array positions.
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.route != rhs.route { return lhs.route < rhs.route }
+        return Self.canonicalJSON(lhs) < Self.canonicalJSON(rhs)
+    }
+
+    /// Canonical JSON of one record — the deterministic tie-break for records
+    /// sharing a route. Encoding of this pure value type cannot fail; the empty
+    /// fallback is unreachable and exists only for totality.
+    fileprivate static func canonicalJSON(_ record: Self) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = DebugLog.trying("FetcherRouteSelectionRecord canonicalJSON", operation: { try encoder.encode(record) }) else {
+            return ""
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
+public extension Array where Element == FetcherRouteSelectionRecord {
+    /// Deterministic normalization for persisted fetcher route records: the
+    /// same canonically-greatest-wins rule as the extractor table.
+    func normalizedForPersistence() -> (records: Self, droppedDuplicates: Int) {
+        let sortedRecords = sorted()
+        var result: Self = []
+        result.reserveCapacity(sortedRecords.count)
+        var dropped = 0
+        for record in sortedRecords {
+            if let last = result.last, last.route == record.route {
+                result[result.count - 1] = record
+                dropped += 1
+            } else {
+                result.append(record)
+            }
+        }
+        return (result, dropped)
+    }
+}

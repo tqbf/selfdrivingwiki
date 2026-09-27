@@ -3,7 +3,9 @@ import Foundation
 import WikiFSCore
 
 /// The input domain handled by an extraction backend. The case tag keeps PDF,
-/// HTML, DOCX, and transcript backend identifiers in separate namespaces.
+/// HTML, DOCX, and transcript backend identifiers in separate namespaces. A
+/// fetcher is NOT a backend kind: it claims a synthetic source MIME route and
+/// lives in its own namespace (`ExtractionAdapterKey.installedFetcher`).
 public enum ExtractionBackendKind: String, Codable, Hashable, Sendable {
     case pdf
     case html
@@ -11,7 +13,6 @@ public enum ExtractionBackendKind: String, Codable, Hashable, Sendable {
     case youtubeTranscript
     case rssPodcastTranscript
     case applePodcastTranscript
-    case zotero
 }
 
 /// Stable registry identity for one extraction adapter.
@@ -46,11 +47,11 @@ public enum ExtractionBackendAdapter: Sendable {
     /// removed with the Apple TTML packaging (the former built-in adapter
     /// could not carry package provenance).
     case applePodcastTranscript(ProcessPackageApplePodcastTranscript)
-    /// The process-backed Zotero attachment adapter. Same prepared
-    /// operation shape as the transcript siblings (remote-url request); the
-    /// revision-4 bytes-capable outcome carries either Markdown or source
-    /// bytes plus `resultMIMEType` and article metadata.
-    case zotero(ProcessPackageZoteroAttachment)
+    /// The process-backed fetcher adapter. A fetcher needs no
+    /// `ExtractorKind` and no `ExtractionBackendKind`: its route is the
+    /// synthetic source MIME it claims, and one acquisition yields one
+    /// typed result (`source-bytes` or `markdown`).
+    case fetcher(ProcessPackageFetcher)
 }
 
 public struct RegisteredExtractionBackend: Sendable {
@@ -78,9 +79,12 @@ public enum ExtractionBackendRegistryError: Error, Equatable, Sendable {
 /// Exact registry identity domain. Built-in adapters keep their legacy string
 /// keys behind the `.builtIn` case; installed packages use exact revision and
 /// registration references that cannot collide across versions or lineages.
+/// A fetcher registration uses `.installedFetcher` — a kind-free namespace,
+/// so a fetcher can never collide with (or be resolved as) an extractor.
 public enum ExtractionAdapterKey: Hashable, Sendable, CustomStringConvertible {
     case builtIn(ExtractionBackendKey)
     case installed(kind: ExtractionBackendKind, reference: ExtractorReference)
+    case installedFetcher(reference: ExtractorReference)
 
     public var description: String {
         switch self {
@@ -89,6 +93,12 @@ public enum ExtractionAdapterKey: Hashable, Sendable, CustomStringConvertible {
         case .installed(let kind, let reference):
             return """
             \(kind.rawValue)/installed/\(reference.revision.packageID.rawValue)/\
+            \(reference.revision.version.rawValue)/\(reference.revision.digest.hex.prefix(12))/\
+            \(reference.registrationID.rawValue)
+            """
+        case .installedFetcher(let reference):
+            return """
+            fetcher/installed/\(reference.revision.packageID.rawValue)/\
             \(reference.revision.version.rawValue)/\(reference.revision.digest.hex.prefix(12))/\
             \(reference.registrationID.rawValue)
             """
@@ -138,9 +148,13 @@ public struct ExtractorRegistrationPresentation: Hashable, Sendable {
     public let displayName: String
     /// The package's user-facing name from the validated manifest.
     public let packageName: String
+    /// The registration's declared role (extractor or fetcher).
+    public let role: ExtractorPackageRole
     /// Declared operation kinds (already validated to the supported subset).
+    /// Always empty for fetchers.
     public let kinds: Set<ExtractorKind>
-    /// Declared input MIME types — the route dimension.
+    /// Declared input MIME types — the route dimension (extractor routes)
+    /// or the synthetic source-route claims (fetchers).
     public let mimeTypes: Set<ExtractorMIMEType>
     /// Declared filename extensions — matching hints only, never route identity.
     public let filenameExtensions: Set<ExtractorFileExtension>
@@ -151,6 +165,7 @@ public struct ExtractorRegistrationPresentation: Hashable, Sendable {
     public init(
         displayName: String,
         packageName: String,
+        role: ExtractorPackageRole = .extractor,
         kinds: Set<ExtractorKind>,
         mimeTypes: Set<ExtractorMIMEType>,
         filenameExtensions: Set<ExtractorFileExtension>,
@@ -158,6 +173,7 @@ public struct ExtractorRegistrationPresentation: Hashable, Sendable {
     ) {
         self.displayName = displayName
         self.packageName = packageName
+        self.role = role
         self.kinds = kinds
         self.mimeTypes = mimeTypes
         self.filenameExtensions = filenameExtensions
@@ -296,6 +312,29 @@ public actor ExtractionBackendRegistry {
         return InstalledExtractionMatch(key: bestKey, backend: bestBackend)
     }
 
+    /// Highest compatible active exact FETCHER registration for one logical
+    /// selection. Kind-free by construction: fetchers live in their own
+    /// registry namespace, so a same-MIME extractor can never satisfy a
+    /// fetcher selection or the reverse.
+    public func resolveInstalledFetcher(
+        _ logical: LogicalExtractorReference
+    ) -> InstalledExtractionMatch? {
+        var bestKey: ExtractionAdapterKey?
+        var bestReference: ExtractorReference?
+        var bestBackend: RegisteredExtractionBackend?
+        for (key, registration) in registrations {
+            guard case .installedFetcher(let reference) = key,
+                  reference.registrationID == logical.registrationID,
+                  reference.revision.packageID == logical.packageID else { continue }
+            if let current = bestReference, reference <= current { continue }
+            bestKey = key
+            bestReference = reference
+            bestBackend = registration.backend
+        }
+        guard let bestKey, let bestBackend else { return nil }
+        return InstalledExtractionMatch(key: bestKey, backend: bestBackend)
+    }
+
     /// Every active exact installed match for a kind, highest revision first.
     public func installedMatches(kind: ExtractionBackendKind) -> [InstalledExtractionMatch] {
         var matches: [(match: InstalledExtractionMatch, reference: ExtractorReference)] = []
@@ -314,12 +353,18 @@ public actor ExtractionBackendRegistry {
     }
 
     /// True when any active exact installation of this revision exists in
-    /// either the PDF or HTML namespace. This is the admission authority for
-    /// prepared operations: batch cleanup removes membership, so stale plugin
-    /// definitions cannot admit removed code.
+    /// either namespace (extractor kinds or the kind-free fetcher namespace).
+    /// This is the admission authority for prepared operations: batch cleanup
+    /// removes membership, so stale plugin definitions cannot admit removed
+    /// code.
     public func containsRevision(_ revision: ExtractorPackageRevisionID) async -> Bool {
         for key in registrations.keys {
-            guard case .installed(_, let reference) = key else { continue }
+            let reference: ExtractorReference
+            switch key {
+            case .installed(_, let installedReference): reference = installedReference
+            case .installedFetcher(let fetcherReference): reference = fetcherReference
+            case .builtIn: continue
+            }
             if reference.revision == revision { return true }
         }
         return false
@@ -362,9 +407,15 @@ public actor ExtractionBackendRegistry {
 /// One installed (exact) extraction package registration as shown in
 /// Settings → Extraction. A read-only lifecycle surface: the registry's active
 /// exact registrations presented with user-facing terms. Built-in adapters are
-/// not rows — the backend picker owns those.
+/// not rows — the backend picker owns those. The row carries the
+/// registration's explicit role, and its extraction kind only when the
+/// registration is an EXTRACTOR (a fetcher has no kind).
 public struct ExtractorPackageSettingsRow: Identifiable, Hashable, Sendable {
-    public let kind: ExtractionBackendKind
+    /// The registration's declared package role.
+    public let role: ExtractorPackageRole
+    /// The kind namespace this registration runs in — `nil` for fetchers,
+    /// which need no `ExtractionBackendKind`.
+    public let kind: ExtractionBackendKind?
     public let packageID: String
     public let version: String
     /// First 12 hex characters of the pinned revision digest — enough to
@@ -376,13 +427,15 @@ public struct ExtractorPackageSettingsRow: Identifiable, Hashable, Sendable {
     public let revision: ExtractorPackageRevisionID
 
     public init(
-        kind: ExtractionBackendKind,
+        role: ExtractorPackageRole,
+        kind: ExtractionBackendKind?,
         packageID: String,
         version: String,
         digestPrefix: String,
         registrationID: String,
         revision: ExtractorPackageRevisionID
     ) {
+        self.role = role
         self.kind = kind
         self.packageID = packageID
         self.version = version
@@ -392,7 +445,7 @@ public struct ExtractorPackageSettingsRow: Identifiable, Hashable, Sendable {
     }
 
     public var id: String {
-        "\(kind.rawValue)/\(packageID)/\(version)/\(digestPrefix)/\(registrationID)"
+        "\(role.rawValue)/\(kind?.rawValue ?? "none")/\(packageID)/\(version)/\(digestPrefix)/\(registrationID)"
     }
 }
 
@@ -421,18 +474,33 @@ public extension ExtractionBackendRegistry {
     /// live registration — derived from the registration map, not a
     /// hard-coded kind list, so a newly installed package kind appears
     /// without a host change. A package that stopped being admitted (removed,
-    /// failed activation) simply stops appearing.
+    /// failed activation) simply stops appearing. Fetcher registrations
+    /// appear with `role == .fetcher` and an empty kind set.
     func installedPackageRows() async -> [ExtractorPackageSettingsRow] {
         var rows: [ExtractorPackageSettingsRow] = []
         for (key, _) in registrations {
-            guard case .installed(let kind, let reference) = key else { continue }
-            rows.append(ExtractorPackageSettingsRow(
-                kind: kind,
-                packageID: reference.revision.packageID.rawValue,
-                version: reference.revision.version.rawValue,
-                digestPrefix: String(reference.revision.digest.hex.prefix(12)),
-                registrationID: reference.registrationID.rawValue,
-                revision: reference.revision))
+            switch key {
+            case .installed(let kind, let reference):
+                rows.append(ExtractorPackageSettingsRow(
+                    role: .extractor,
+                    kind: kind,
+                    packageID: reference.revision.packageID.rawValue,
+                    version: reference.revision.version.rawValue,
+                    digestPrefix: String(reference.revision.digest.hex.prefix(12)),
+                    registrationID: reference.registrationID.rawValue,
+                    revision: reference.revision))
+            case .installedFetcher(let reference):
+                rows.append(ExtractorPackageSettingsRow(
+                    role: .fetcher,
+                    kind: nil,
+                    packageID: reference.revision.packageID.rawValue,
+                    version: reference.revision.version.rawValue,
+                    digestPrefix: String(reference.revision.digest.hex.prefix(12)),
+                    registrationID: reference.registrationID.rawValue,
+                    revision: reference.revision))
+            case .builtIn:
+                continue
+            }
         }
         return rows.sorted { $0.id < $1.id }
     }
@@ -446,8 +514,13 @@ public extension ExtractionBackendRegistry {
     func installedRegistrationSnapshots() async -> [ExtractorRouteRegistrationSnapshot] {
         var byReference: [ExtractorReference: ExtractorRegistrationPresentation] = [:]
         for (key, registration) in registrations {
-            guard case .installed(_, let reference) = key,
-                  let presentation = registration.presentation else { continue }
+            let reference: ExtractorReference
+            switch key {
+            case .installed(_, let installedReference): reference = installedReference
+            case .installedFetcher(let fetcherReference): reference = fetcherReference
+            case .builtIn: continue
+            }
+            guard let presentation = registration.presentation else { continue }
             byReference[reference] = presentation
         }
         return byReference
@@ -457,6 +530,7 @@ public extension ExtractionBackendRegistry {
                     reference: reference,
                     displayName: presentation.displayName,
                     packageName: presentation.packageName,
+                    role: presentation.role,
                     kinds: presentation.kinds,
                     mimeTypes: presentation.mimeTypes,
                     filenameExtensions: presentation.filenameExtensions,

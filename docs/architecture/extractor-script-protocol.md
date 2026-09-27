@@ -1,6 +1,6 @@
 # Extractor script protocol
 
-This document is the normative reference for extractor protocol revisions 1, 2, 3, and 4. It defines how the host talks to an extractor package script in a separate process.
+This document is the normative reference for extractor protocol revisions 1, 2, 3, 4, and 5. It defines how the host talks to an extractor package script in a separate process.
 
 Sources of truth in code:
 
@@ -38,13 +38,16 @@ Packages do not run as Swift, do not load as modules, and never see a `CordisCon
 
 ## Request frame
 
-The host encodes one `ExtractorProtocolRequest` as JSON, appends a newline, writes it to standard input, and closes standard input.
+The host encodes one request as JSON, appends a newline, writes it to standard input, and closes standard input. The request is a tagged envelope: revisions 1 through 4 carry the extractor request only; revision 5 carries either an extractor request (with `role: "extractor"`) or a fetch request (with `role: "fetcher"`).
+
+### Extractor request (revisions 1–5)
 
 | Field | Type | Rules |
 | --- | --- | --- |
 | `requestID` | UUID string | Identifies the operation. Every frame must repeat it. |
-| `protocolRevision` | integer | `1`, `2`, `3`, or `4`. Must equal the manifest `protocolRevision`. |
-| `kind` | string | `pdf`, `html`, `docx`, `podcast-transcript`, `apple-podcast-transcript`, `youtube-transcript`, or `zotero`. |
+| `protocolRevision` | integer | `1`, `2`, `3`, `4`, or `5`. Must equal the manifest `protocolRevision`. |
+| `role` | string | Revision 5 only. Must be `extractor`. Older revisions reject the key. |
+| `kind` | string | `pdf`, `html`, `docx`, `podcast-transcript`, `apple-podcast-transcript`, or `youtube-transcript`. |
 | `mimeType` | string | Normalized lowercase MIME type. |
 | `originalFilename` | string | 1 to 1,024 bytes, no NUL. |
 | `inputTransport` | string | `operation-file` (all revisions) or `remote-url` (revision 3 and later). |
@@ -82,6 +85,31 @@ Content bytes never travel in JSON. With `operation-file`, the host puts the inp
 
 With `remote-url` (revision 3), the host stages no input bytes. The request carries one validated source URL, and the package fetches the source itself. The host validates the URL before launch and rejects anything that is not HTTP or HTTPS, that embeds credentials, that carries a fragment, that has no host, that contains NUL, or that exceeds 2,048 bytes. The stored URL is normalized: lowercase scheme and host, no default port. A remote-url package must keep source URLs out of its diagnostics.
 
+### Fetch request (revision 5)
+
+Revision 5 adds the fetcher role. A fetch request has NO `kind`, no `inputTransport`, and no `inputPath`: the fetcher acquires one remote source per request and states its result type (see the result frame).
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `requestID` | UUID string | Identifies the operation. Every frame must repeat it. |
+| `protocolRevision` | integer | Must be `5`. Must equal the manifest `protocolRevision`. |
+| `role` | string | Must be `fetcher`. |
+| `mimeType` | string | The claimed input MIME: one of the selected registration's declared input MIME types. Dispatch rejects a request outside the claims. |
+| `originalFilename` | string | 1 to 1,024 bytes, no NUL, no `/` or `\`, not `.` or `..`. A display name derived from the sync item key. The host stores it as data and never resolves it as a path. |
+| `remoteURL` | string | One normalized HTTP or HTTPS source URL, validated with the same rules as `remote-url`. |
+| `outputPath` | string | Package-relative path for the result file. |
+| `deadlineMillisecondsSince1970` | integer | Positive. |
+| `credentialFilePath` | string | Optional. Same rules as the extractor request. |
+| `operationConfigurationPath` | string | Optional. Same rules as the extractor request. |
+
+Example fetch request:
+
+```json
+{"requestID":"1b0d...","protocolRevision":5,"role":"fetcher","mimeType":"application/zotero","originalFilename":"ABCD1234","remoteURL":"https://api.zotero.org/users/1234/items/ABCD1234/file","outputPath":"output/result.md","deadlineMillisecondsSince1970":1735689600000,"credentialFilePath":"credentials/input.json"}
+```
+
+The host validates before launch that the request role, transport, and claimed MIME match the selected registration. A fetcher yields exactly ONE result per request.
+
 ## Package frames
 
 Every package frame uses one envelope:
@@ -117,6 +145,8 @@ Every package frame uses one envelope:
 | `metadata` | object, optional | Package-reported tool and model facts. |
 | `articleMetadata` | object, optional | Article facts for HTML packages. |
 | `resultMIMEType` | string, optional (revision 4) | A valid MIME type. Absent or `text/markdown`: the output file IS the Markdown result. Any other value: the output file holds source bytes of that MIME, and the host owns the format conversion. |
+| `resultType` | string, optional (revision 5, fetcher results) | `source-bytes` or `markdown`. A fetcher result MUST state exactly one. `source-bytes` requires a concrete non-Markdown `resultMIMEType`; `markdown` carries no competing source-byte MIME. Revision 4 and earlier reject the field. |
+| `originalFilename` | string, optional (revision 5, fetcher results) | A validated display filename for a `source-bytes` result: 1 to 1,024 bytes, no NUL, no path separators. The host stores it as data; it never resolves it as a path. |
 
 `markdownByteCount` is the output-file byte count for both result shapes.
 
@@ -158,8 +188,10 @@ Every package frame uses one envelope:
 3. The stream must contain exactly one terminal frame.
 4. A result frame must name the expected `outputPath`.
 5. A result frame against a request of revision 3 or lower must not carry `resultMIMEType` or `articleMetadata.identifier`. The host rejects the frame instead of silently dropping the new fields.
-6. No frame may follow the terminal frame.
-7. At end of stream, a terminal frame must exist. Otherwise the operation fails.
+6. A result frame against a request of revision 4 or lower must not carry `resultType` or `originalFilename`. The host rejects the frame instead of silently dropping the new fields.
+7. A fetcher's terminal result MUST state exactly one `resultType`. `source-bytes` requires a concrete non-Markdown `resultMIMEType`; `markdown` carries no competing source-byte MIME. Absent or contradictory tags are protocol failures.
+8. No frame may follow the terminal frame.
+9. At end of stream, a terminal frame must exist. Otherwise the operation fails.
 
 The host decodes standard output continuously with `ExtractorJSONLinesDecoder`. Malformed UTF-8 or malformed JSON is a protocol failure. When the host detects a protocol failure, it requests termination of the verified process group and fails the operation. A nonzero exit code or a signal after a valid terminal frame is still a `process-termination` failure. The host requires exit code 0.
 
@@ -200,14 +232,15 @@ The host fails the operation, and the package loses the selection, when any of t
 
 ## Compatibility
 
-Revisions 1, 2, 3, and 4 are supported. The manifest declares the revision the package speaks, and the request repeats it. A mismatch fails the operation before spawn. A revision-4 host serves revision 1-4 packages.
+Revisions 1, 2, 3, 4, and 5 are supported. The manifest declares the revision the package speaks, and the request repeats it. A mismatch fails the operation before spawn. A revision-5 host serves revision 1-5 packages.
 
 - Revision 1: operation-file requests only. No credential or operation-configuration paths.
 - Revision 2: adds the optional credential input file and operation-configuration file paths. The wire shape of the other fields is unchanged from revision 1.
 - Revision 3: adds the `remote-url` input transport and the `podcast-transcript`, `apple-podcast-transcript`, and `youtube-transcript` kinds. Revision 3 packages can use either input transport. Revisions 1 and 2 reject the `remoteURL` key and the `remote-url` transport; no revision accepts a mixed shape (both `inputPath` and `remoteURL`).
-- Revision 4: adds two optional result-frame fields — `resultMIMEType` and `articleMetadata.identifier`. Requests keep the exact revision-3 wire shape. When `resultMIMEType` is absent or `text/markdown`, the output file is the Markdown result, as in every earlier revision. When it names another MIME type, the output file holds source bytes of that MIME, and the host runs its own format route on those bytes. Kinds stay registration data: revision 4 adds the `zotero` kind only as a new registration value.
+- Revision 4: adds two optional result-frame fields — `resultMIMEType` and `articleMetadata.identifier`. Requests keep the exact revision-3 wire shape. When `resultMIMEType` is absent or `text/markdown`, the output file is the Markdown result, as in every earlier revision. When it names another MIME type, the output file holds source bytes of that MIME, and the host runs its own format route on those bytes.
+- Revision 5: adds the fetcher role. Revision-5 EXTRACTOR requests keep the revision-3 request shape and add only `role: "extractor"`. A revision-5 FETCH request carries `role: "fetcher"`, the claimed input MIME, a validated remote URL, and a bounded display filename — no `kind`, no `inputTransport`, no `inputPath`. Results add the explicit `resultType` tag (`source-bytes` or `markdown`) plus the optional validated `originalFilename`. A fetcher must state exactly one result type; `source-bytes` requires a concrete source MIME, and an empty `source-bytes` result fails the fetch so it can never loop as a byteless source.
 
-Migration note: a revision 3 or lower host rejects a result frame that carries `resultMIMEType` or `articleMetadata.identifier` — it fails closed. It never silently drops the new fields and treats the output as Markdown. A revision-4 host accepts revision 1-3 result frames unchanged, so old packages keep working.
+Migration note: a revision 3 or lower host rejects a result frame that carries `resultMIMEType` or `articleMetadata.identifier` — it fails closed. A revision 4 or lower host rejects a result frame that carries `resultType` or `originalFilename`, and a revision 4 or lower request decoder rejects the `role` key. No host ever silently drops a newer field and guesses. A revision-5 host accepts revision 1-4 extractor frames unchanged, so old packages keep working.
 
 A remote-url package is a registration and transport change, not a manifest-format change: the reviewed podcast transcript package keeps manifest revision 1 with protocol revision 3. An older host fails closed — it rejects the unknown kind at validation. Future revisions must keep this document updated with a migration note in `docs/architecture/extractor-package-manifest.md`.
 

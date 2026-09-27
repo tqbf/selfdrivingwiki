@@ -243,7 +243,7 @@ struct PodcastIngestRoutingTests {
         // A local-file source has no apple-podcast provenance.
         _ = try store.addSource(
             filename: "notes.txt", data: Data("hello".utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            externalItemKey: nil, externalItemTitle: nil, mimeType: nil,
             provenance: nil)
         let source = try #require(try store.listSources().first)
 

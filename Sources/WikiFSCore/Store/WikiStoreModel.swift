@@ -2221,7 +2221,7 @@ public final class WikiStoreModel {
     /// - `nil` → "resolve in-method" (non-PDF or caller chose not to pre-resolve)
     /// - `.some(result)` → use `result` as the ``DisplayNameResolver`` output
     private func preResolveDisplayName(
-        filename: String, data: Data, mimeType: String?, zoteroItemTitle: String?
+        filename: String, data: Data, mimeType: String?, externalItemTitle: String?
     ) async -> String?? {
         let ext = (filename as NSString).pathExtension.lowercased()
         let isPDF = ext == "pdf" || MimeType.isPDF(mimeType)
@@ -2229,7 +2229,7 @@ public final class WikiStoreModel {
         return await Task.detached(priority: .userInitiated) {
             DisplayNameResolver.resolve(
                 filename: filename, data: data, mimeType: mimeType,
-                zoteroItemTitle: zoteroItemTitle)
+                externalItemTitle: externalItemTitle)
         }.value
     }
 
@@ -2391,7 +2391,7 @@ public final class WikiStoreModel {
             let resolvedDisplayName = await preResolveDisplayName(
                 filename: materialized.filename, data: materialized.data,
                 mimeType: materialized.mimeType,
-                zoteroItemTitle: materialized.ingestMetadata?.externalItemTitle)
+                externalItemTitle: materialized.ingestMetadata?.externalItemTitle)
 
             do {
                 let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
@@ -2756,7 +2756,7 @@ public final class WikiStoreModel {
         let resolvedDisplayName = await preResolveDisplayName(
             filename: page.filename, data: page.data,
             mimeType: page.mimeType,
-            zoteroItemTitle: page.ingestMetadata?.externalItemTitle)
+            externalItemTitle: page.ingestMetadata?.externalItemTitle)
         var summary: SourceSummary
         if snapshot.plan.format == .html && !snapshot.images.isEmpty {
             summary = try storeSnapshot(snapshot)

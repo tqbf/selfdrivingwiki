@@ -95,7 +95,7 @@ struct BytelessEmbedIntegrationTests {
         // A byteful source (has bytes) — should NOT appear.
         _ = try store.addSource(
             filename: "pic.png", data: Data([0x89, 0x50, 0x4E, 0x47]),
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: "image/png",
+            externalItemKey: nil, externalItemTitle: nil, mimeType: "image/png",
             provenance: nil)
         // A byteless YouTube source — SHOULD appear with the right fields.
         let yt = try store.addBytelessSource(

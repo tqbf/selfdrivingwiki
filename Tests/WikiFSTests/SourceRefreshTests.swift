@@ -105,7 +105,7 @@ struct SourceRefreshTests {
         // A local-file source has no URL to re-fetch.
         _ = try store.addSource(
             filename: "notes.txt", data: Data("hello".utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            externalItemKey: nil, externalItemTitle: nil, mimeType: nil,
             provenance: nil)
         let source = try #require(try store.listSources().first)
 
@@ -171,7 +171,7 @@ struct SourceRefreshTests {
         // A local-file source has no URL to re-fetch.
         _ = try store.addSource(
             filename: "notes.txt", data: Data("hello".utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil, mimeType: nil,
+            externalItemKey: nil, externalItemTitle: nil, mimeType: nil,
             provenance: nil)
         let source = try #require(try store.listSources().first)
         #expect(model.isSourceRefreshable(for: source.id) == false)

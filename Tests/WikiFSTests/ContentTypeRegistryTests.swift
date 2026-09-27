@@ -233,18 +233,20 @@ struct ContentTypeRegistryTests {
         #expect(kind.capabilities.extractionPath == .youtubeTranscript)
     }
 
-    @Test("Zotero provider and synthetic mime resolve to zoteroAttachment")
+    @Test("Zotero synthetic mime resolves to zoteroAttachment; provider is a label only")
     func zoteroProviderAndMIMEResolve() {
-        // Provider-first: a byteless `.zotero` source resolves to its
-        // acquisition kind regardless of the synthetic MIME.
-        let byProvider = ContentKind.resolve(
-            mimeType: ContentTypeRegistry.zoteroAttachment, provider: .zotero)
-        #expect(byProvider == .zoteroAttachment)
-        // MIME-first too: the synthetic `application/zotero` classifies as
-        // its own kind, never as `.binary`.
+        // MIME-first: the synthetic `application/zotero` classifies as its
+        // own kind, never as `.binary`.
         let byMIME = ContentKind.fromMIME(ContentTypeRegistry.zoteroAttachment)
         #expect(byMIME == .zoteroAttachment)
-        #expect(ContentKind.resolve(mimeType: nil, provider: .zotero) == .zoteroAttachment)
+        // The provider is display data, not an acquisition gate: the
+        // provider arm no longer maps `.zotero` to the acquisition kind.
+        // Classification for a `.zotero` source comes from its MIME.
+        #expect(
+            ContentKind.resolve(
+                mimeType: ContentTypeRegistry.zoteroAttachment, provider: .zotero)
+                == .zoteroAttachment)
+        #expect(ContentKind.resolve(mimeType: nil, provider: .zotero) == .unknown)
     }
 
     @Test("Apple Podcast provider resolves to podcastTranscript") func applePodcastProvider() {

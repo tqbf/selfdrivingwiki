@@ -36,13 +36,16 @@ public struct SourceSummary: Identifiable, Hashable, Sendable {
     public let updatedAt: Date
     public let version: Int
 
-    /// The Zotero library item this source was ingested from — set ONLY via the
-    /// Zotero ingest seam (`ingestFromZotero`). `nil` for drag-drop, URL, and
-    /// Markdown-folder imports (no Zotero provenance). `key` is the item key
-    /// needed to build a "View in Zotero" link; `title` is the item's display
-    /// title captured at ingest time (the item could be renamed/deleted later).
-    public let zoteroItemKey: String?
-    public let zoteroItemTitle: String?
+    /// The external library item this source was ingested from — the
+    /// provider-neutral acquisition provenance (e.g. a Zotero item key plus
+    /// its captured title). Package-declared acquisition metadata, never a
+    /// host identity: the displayed origin label still comes from the
+    /// source's provider. `nil` for drag-drop, URL, and Markdown-folder
+    /// imports. `key` is the item key needed to build a "view in the origin
+    /// app" link; `title` is the item's display title captured at ingest
+    /// time (the item could be renamed/deleted later).
+    public let externalItemKey: String?
+    public let externalItemTitle: String?
 
     /// User-editable display name for this source. Defaults to the original
     /// filename at ingest time. Used for `[[source:display-name]]` link
@@ -77,8 +80,8 @@ public struct SourceSummary: Identifiable, Hashable, Sendable {
         createdAt: Date,
         updatedAt: Date,
         version: Int,
-        zoteroItemKey: String? = nil,
-        zoteroItemTitle: String? = nil,
+        externalItemKey: String? = nil,
+        externalItemTitle: String? = nil,
         displayName: String? = nil,
         role: SourceRole = .primary
     ) {
@@ -90,8 +93,8 @@ public struct SourceSummary: Identifiable, Hashable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.version = version
-        self.zoteroItemKey = zoteroItemKey
-        self.zoteroItemTitle = zoteroItemTitle
+        self.externalItemKey = externalItemKey
+        self.externalItemTitle = externalItemTitle
         self.displayName = displayName
         self.role = role
     }

@@ -136,7 +136,7 @@ struct AgentTranscriptRenderContextTests {
         let home = try store.createPage(title: "Home")
         let paper = try store.addSource(
             filename: "Paper.pdf", data: Data("%PDF".utf8),
-            zoteroItemKey: nil, zoteroItemTitle: nil,
+            externalItemKey: nil, externalItemTitle: nil,
             mimeType: "application/pdf", provenance: nil, role: .primary,
             originalPath: nil, activityID: nil)
         try store.renameSource(id: paper.id, to: "My Paper")

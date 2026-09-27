@@ -987,7 +987,9 @@ final class WikiDaemon: @unchecked Sendable {
             queueStore: queueStore,
             // Follow-on format routes enqueue through the engine so their
             // dispatch scan runs immediately (no wait for an unrelated
-            // engine event to notice the bare store row).
+            // engine event to notice the bare store row). The request's
+            // dedupe key rides the XPC payload unchanged, so a repeat insert
+            // converges on one row.
             engineEnqueue: { [weak self] request in
                 guard let self else {
                     // The daemon went away mid-follow-on; surface it as the

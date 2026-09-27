@@ -261,10 +261,22 @@ public struct QueueItemRequest: Codable, Sendable {
     public var queue: QueueKind
     public var wikiID: WikiID
     public var payload: QueueItemPayload
+    /// Optional typed dedupe key (fetcher follow-on format jobs). Absent
+    /// for plain enqueues; present, the store insert is idempotent — a
+    /// repeat insert returns the SAME item (any state). Rides the XPC
+    /// payload as an additive optional field, so app and daemon requests
+    /// carry the key without a protocol change.
+    public var dedupeKey: QueueItemDedupeKey?
 
-    public init(queue: QueueKind, wikiID: WikiID, payload: QueueItemPayload) {
+    public init(
+        queue: QueueKind,
+        wikiID: WikiID,
+        payload: QueueItemPayload,
+        dedupeKey: QueueItemDedupeKey? = nil
+    ) {
         self.queue = queue
         self.wikiID = wikiID
         self.payload = payload
+        self.dedupeKey = dedupeKey
     }
 }

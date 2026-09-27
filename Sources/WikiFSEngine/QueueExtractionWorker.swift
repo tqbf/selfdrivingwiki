@@ -74,9 +74,9 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         case .transcript(let transcript):
             // Transcript sources get their own (non-PDF) capacity bucket.
             return ProviderID(rawValue: transcript.capacityID)
-        case .attachment(let attachment):
-            // Attachment acquisition shares the transcript (non-PDF) bucket.
-            return ProviderID(rawValue: attachment.capacityID)
+        case .fetch(let fetch):
+            // Fetch acquisition shares the transcript (non-PDF) bucket.
+            return ProviderID(rawValue: fetch.capacityID)
         case .bytes(let bytes):
             // Map the backend to a provider ID that the engine's capacity
             // config can route: local → "local-pdf2md", remote → backend-specific.
@@ -270,30 +270,39 @@ struct QueueExtractionWorker: QueueWorker {
                     state: .succeeded,
                     result: outputReference.map { QueueTargetResult.outputReference($0) })]))
 
-        case .attachment(let attachment):
-            emitProgress(item.id, stamp("Acquiring attachment…"))
+        case .fetch(let fetch):
+            emitProgress(item.id, stamp("Fetching source…"))
             emitReport?(QueueReportMutation(phase: .running))
-            let outcome = try await attachment.fetch { [itemID = item.id] line in
+            let outcome = try await fetch.fetch { [itemID = item.id] line in
                 emitProgress(itemID, stamp(line))
             }
 
             emitReport?(QueueReportMutation(phase: .persisting))
-            let outputReference = try await provider.persistAttachmentExtraction(
+            let outputReference = try await provider.persistFetch(
                 wikiID: item.wikiID,
                 sourceID: sourceID,
-                resolution: attachment,
+                resolution: fetch,
                 outcome: outcome)
 
-            // Routing keys off the RESULT MIME (data), never the extractor
-            // kind: a Markdown result IS the product, while a bytes result
-            // gains a follow-on `.extraction` item so the standard PDF/HTML
-            // format route produces the Markdown version. The enqueue is a
-            // durable store write; the app or the daemon drains it on its
-            // next dispatch scan.
+            // Persistence keys off the TYPED result, never a MIME guess: a
+            // `markdown` result IS the product (the source is already
+            // complete), while a `source-bytes` result carries the acquired
+            // content-version ID this follow-on enqueue dedupes on. The
+            // enqueue is a durable, idempotent store write — a crash between
+            // blob and enqueue is recovered by the queue startup scan, and a
+            // repeat insert returns the SAME item.
             var followOnNote = ""
-            if outcome.isMarkdownResult == false {
+            if case .sourceBytes = outcome,
+               let versionIDRaw = outputReference?.versionID {
+                let versionID = SourceVersionID(rawValue: versionIDRaw)
                 try await provider.enqueueFollowOnExtraction(
-                    wikiID: item.wikiID, sourceID: sourceID)
+                    wikiID: item.wikiID,
+                    sourceID: sourceID,
+                    acquiredContentVersionID: versionID,
+                    dedupeKey: .followOnFormatExtraction(
+                        wikiID: item.wikiID,
+                        sourceID: sourceID,
+                        acquiredContentVersionID: versionID))
                 followOnNote = " (format route queued)"
             }
 

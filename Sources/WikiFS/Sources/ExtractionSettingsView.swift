@@ -500,6 +500,8 @@ struct ExtractionSettingsView: View {
     // package model's registration snapshots, and saved selections. Rebuilt
     // after config writes and package-snapshot refreshes.
     @State private var routeRows: [ExtractorRouteSettingsRow] = []
+    @State private var fetcherRows: [ExtractorRouteTableBuilder.FetcherRouteSettingsRow] = []
+    @State private var fetcherSelections: [String: ExtractionBackendReference] = [:]
     /// One route-scoped, typed selection per table row (`row.id`). The picker
     /// binding writes through `ExtractorRouteSettingsMapping`, which persists
     /// the generic route record.
@@ -797,18 +799,25 @@ struct ExtractionSettingsView: View {
     private var extractorRouteTable: some View {
         Table(defaultsRows) {
             TableColumn("Format") { (row: ExtractionDefaultsTableRow) in
-                if case .route(let routeRow) = row {
+                switch row {
+                case .route(let routeRow):
                     Label(routeRow.descriptor.displayName, systemImage: routeRow.descriptor.systemImage ?? "doc")
                         // Technical MIME identity lives in help text, not a column.
                         .help("MIME type: \(routeRow.route.mimeType.rawValue)")
+                case .fetcher(let fetcherRow):
+                    Label("Fetch: \(fetcherRow.route.mimeType.rawValue)", systemImage: "arrow.down.circle")
+                        .help("Fetcher route for MIME type \(fetcherRow.route.mimeType.rawValue)")
                 }
             }
             // Wide enough for the longest format name in the table, which is
             // the transcript row rather than one of the three-letter routes.
             .width(min: 110, ideal: 160)
             TableColumn("Default extractor") { (row: ExtractionDefaultsTableRow) in
-                if case .route(let routeRow) = row {
+                switch row {
+                case .route(let routeRow):
                     routePicker(routeRow)
+                case .fetcher(let fetcherRow):
+                    fetcherPicker(fetcherRow)
                 }
             }
             .width(Metrics.defaultExtractorColumnWidth)
@@ -820,6 +829,57 @@ struct ExtractionSettingsView: View {
             rowHeight: SettingsTableMetrics.controlRowHeight))
         .accessibilityIdentifier(RouteAccessibility.table)
         .accessibilityLabel("Default extractor routes")
+    }
+
+    /// A fetcher route's pop-up. The value shows the effective selection
+    /// (saved record first, then the bundled default); writing persists the
+    /// typed fetcher route record.
+    private func fetcherPicker(_ row: ExtractorRouteTableBuilder.FetcherRouteSettingsRow) -> some View {
+        Picker(selection: fetcherSelectionBinding(row)) {
+            ForEach(row.choices) { choice in
+                Text(choice.displayName).tag(choice.reference)
+            }
+        } label: {
+            EmptyView()
+        }
+        .labelsHidden()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .flexibleButtonSizing()
+        .accessibilityIdentifier("\(RouteAccessibility.pickerPrefix).fetch-\(row.route.mimeType.rawValue.replacing("/", with: "-"))")
+        .accessibilityLabel("Default fetcher for \(row.route.mimeType.rawValue)")
+        .accessibilityValue(row.resolvedSelection.map(fetcherSelectionLabel) ?? "None")
+    }
+
+    private func fetcherSelectionBinding(
+        _ row: ExtractorRouteTableBuilder.FetcherRouteSettingsRow
+    ) -> Binding<ExtractionBackendReference> {
+        Binding(
+            get: {
+                fetcherSelections[row.id]
+                    ?? row.resolvedSelection
+                    ?? ExtractionBackendReference.none
+            },
+            set: { writeFetcherSelection($0, for: row) })
+    }
+
+    private func fetcherSelectionLabel(_ reference: ExtractionBackendReference) -> String {
+        switch reference {
+        case .none: "Disabled"
+        case .host(let host): host.adapterID.rawValue
+        case .installed(let logical): "\(logical.packageID.rawValue)/\(logical.registrationID.rawValue)"
+        }
+    }
+
+    private func writeFetcherSelection(
+        _ selection: ExtractionBackendReference,
+        for row: ExtractorRouteTableBuilder.FetcherRouteSettingsRow
+    ) {
+        var config = ExtractionConfig.load(from: containerDirectory)
+        let value: ExtractionBackendReference? =
+            selection == .none ? .none : selection
+        config.setFetcherSelection(value, for: row.route)
+        DebugLog.trying("save extraction config", operation: { try config.save(to: containerDirectory) })
+        rebuildRouteRows()
     }
 
     /// The connected-service and package credential sheets. Both panes can
@@ -866,6 +926,7 @@ struct ExtractionSettingsView: View {
     /// package); the former bespoke Apple TTML backend row is gone.
     private var defaultsRows: [ExtractionDefaultsTableRow] {
         routeRows.map(ExtractionDefaultsTableRow.route)
+            + fetcherRows.map(ExtractionDefaultsTableRow.fetcher)
     }
 
     /// One row's pop-up. Tags are the typed `ExtractorRouteSettingsSelection`
@@ -1043,6 +1104,17 @@ struct ExtractionSettingsView: View {
                 route: row.route, config: config, row: row)
         }
         routeSelections = selections
+        fetcherRows = ExtractorRouteTableBuilder.buildFetcherRows(.init(
+            configuration: config,
+            registrations: packageModel.snapshot.registrationSnapshots,
+            availableRegistrations: packageModel.snapshot.routeChoiceRegistrationSnapshots,
+            installedRevisionIDs: Set(packageModel.snapshot.rows.map(\.revision)),
+            waitingRevisionIDs: packageModel.snapshot.waitingRevisionIDs))
+        var fetcherSelections: [String: ExtractionBackendReference] = [:]
+        for row in fetcherRows {
+            fetcherSelections[row.id] = row.resolvedSelection
+        }
+        self.fetcherSelections = fetcherSelections
     }
 
     /// Persists one route picker change: the mapping keeps the legacy
@@ -1406,7 +1478,11 @@ struct ExtractionSettingsView: View {
                 }
                 .width(min: 60, ideal: 70)
                 TableColumn("Handles") { (row: ExtractorPackageTableRow) in
-                    Text(row.kind.map(kindDisplayName) ?? "—")
+                    // Fetcher rows state their role instead of a kind — a
+                    // fetcher has no ExtractorKind.
+                    Text(row.role == .fetcher
+                        ? "Fetch"
+                        : row.kind.map(kindDisplayName) ?? "—")
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 100)
@@ -1553,6 +1629,9 @@ struct ExtractionSettingsView: View {
 
             if let kind = row.kind {
                 LabeledContent("Kind", value: kindDisplayName(kind))
+                    .font(.caption)
+            } else if row.role == .fetcher {
+                LabeledContent("Role", value: "Fetcher (acquires one source per request)")
                     .font(.caption)
             }
             LabeledContent("Digest", value: row.digestPrefix)
@@ -2605,10 +2684,12 @@ enum ExtractionSettingsPane: String, CaseIterable, Identifiable, Hashable, Senda
 /// table show both without either pretending to be the other.
 enum ExtractionDefaultsTableRow: Identifiable, Hashable, Sendable {
     case route(ExtractorRouteSettingsRow)
+    case fetcher(ExtractorRouteTableBuilder.FetcherRouteSettingsRow)
 
     var id: String {
         switch self {
         case .route(let row): "route/\(row.id)"
+        case .fetcher(let row): row.id
         }
     }
 }
@@ -2714,6 +2795,13 @@ struct ExtractorPackageTableRow: Identifiable, Hashable, Sendable {
         case .installed(let row): row.digestPrefix
         case .failed(let failure): failure.digestPrefix
         }
+    }
+
+    /// The registration's declared role. A failed revision reports
+    /// `.extractor` — it registered nothing, so no fetcher surface applies.
+    var role: ExtractorPackageRole {
+        guard case .installed(let row) = subject else { return .extractor }
+        return row.role
     }
 
     /// Only an active registration has one. A failed revision resolved to no

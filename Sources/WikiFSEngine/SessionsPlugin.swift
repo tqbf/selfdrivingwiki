@@ -182,6 +182,13 @@ extension AppProcessProfileOwner {
         model.importExtractorProvider = { [extractionCoordinator] kind in
             await extractionCoordinator.prepareImportExtractor(kind: kind)
         }
+        // Queue-startup recovery (fetcher packages): the wiki session open
+        // owns one stranded-format-job scan. App and daemon use the SAME
+        // dedupe keys, so a scan racing the other host converges on one item.
+        if let recovering = extractionProvider as? any FetchFormatJobRecovering {
+            await recovering.recoverStrandedFormatJobs(
+                wikiID: wikiID, store: childServices.store)
+        }
         return ProfileWikiSession(
             wikiID: wikiID,
             descriptor: descriptor,

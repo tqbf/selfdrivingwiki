@@ -9,9 +9,10 @@
 # ///
 """zotero — Zotero attachment acquisition for the extractor protocol.
 
-The reviewed extractor package serves ONE revision-4 `remote-url` request:
-a JSON request object on stdin, JSON Lines frames on stdout, and the
-attachment bytes (or Markdown) at the requested output path.
+The reviewed extractor package serves ONE revision-5 `remote-url` FETCH
+request (role `fetcher`): a JSON request object on stdin, JSON Lines frames
+on stdout, and the attachment bytes (or Markdown) at the requested output
+path.
 
 The package ACQUIRES only. It downloads one Zotero attachment file and its
 item metadata through the Zotero Web API and never converts formats. The
@@ -22,19 +23,22 @@ self-report are protocol properties `pyzotero`'s materializing `file()`
 cannot provide:
 
 - `text/markdown` / `text/plain` (or `.md`) attachments are written as-is;
-  the result frame declares no `resultMIMEType` because the output IS the
-  Markdown.
+  the result frame declares `resultType: "markdown"` because the output IS
+  the Markdown.
 - `application/pdf` (or `.pdf`) and `text/html` (or `.html`) attachments are
-  written as source bytes; the result frame carries `resultMIMEType` with the
-  true MIME, and the HOST owns the format conversion.
+  written as source bytes; the result frame carries
+  `resultType: "source-bytes"` with the true MIME as `resultMIMEType` plus
+  the attachment's display filename, and the HOST owns the format
+  conversion.
 - Anything else is a typed `unsupported-input` failure.
 
 The request URL must be exactly the canonical Zotero file endpoint
 (`https://api.zotero.org/users/<libraryID>/items/<attachmentKey>/file`).
-The API key arrives through the request-scoped credential file — never a
-request field, never an argument, never an environment variable. No frame
-message ever contains the source URL, the API key, or any credential
-material.
+The claimed input MIME must be exactly the synthetic `application/zotero`
+source MIME the registration declares. The API key arrives through the
+request-scoped credential file — never a request field, never an argument,
+never an environment variable. No frame message ever contains the source
+URL, the API key, or any credential material.
 """
 
 from __future__ import annotations
@@ -52,11 +56,11 @@ import requests
 from pyzotero import errors as zotero_errors
 from pyzotero.zotero import Zotero
 
-# ── Package protocol (revision 4) ──────────────────────────────────────────
+# ── Package protocol (revision 5, fetcher role) ────────────────────────────
 
-PROTOCOL_REVISION = 4
-PROTOCOL_KIND = "zotero"
-PROTOCOL_TRANSPORT = "remote-url"
+PROTOCOL_REVISION = 5
+PROTOCOL_ROLE = "fetcher"
+PROTOCOL_CLAIMED_MIME = "application/zotero"
 TOOL_METADATA = {"toolName": "zotero"}
 
 # Mirrors the manifest output limit (128 MiB). Tests fail if either side
@@ -415,16 +419,26 @@ def run_extractor_protocol(
 
     if request.get("protocolRevision") != PROTOCOL_REVISION:
         return _fail(request_id, "invalid-request", "unsupported protocol revision", out_stream)
-    if request.get("kind") != PROTOCOL_KIND:
+    if request.get("role") != PROTOCOL_ROLE:
         return _fail(
             request_id,
-            "unsupported-input",
-            "this package downloads Zotero attachments only",
+            "invalid-request",
+            "this package acquires sources as a fetcher only",
             out_stream,
         )
-    if request.get("inputTransport") != PROTOCOL_TRANSPORT:
+    if request.get("mimeType") != PROTOCOL_CLAIMED_MIME:
         return _fail(
-            request_id, "invalid-request", "this package accepts a remote URL only", out_stream
+            request_id,
+            "invalid-request",
+            "the claimed source MIME is not one this fetcher declares",
+            out_stream,
+        )
+    if "kind" in request or "inputTransport" in request or "inputPath" in request:
+        return _fail(
+            request_id,
+            "invalid-request",
+            "a fetch request carries no extractor kind or staged input",
+            out_stream,
         )
     if not isinstance(source_url, str) or not source_url:
         return _fail(request_id, "invalid-request", "request has no source URL", out_stream)
@@ -593,10 +607,17 @@ def run_extractor_protocol(
     }
     if article_metadata is not None:
         result_payload["articleMetadata"] = article_metadata
-    # A markdown result omits resultMIMEType: the output file IS the
-    # Markdown. A bytes result names the true MIME.
+    # The explicit revision-5 fetch result tag: a markdown result omits
+    # resultMIMEType (the output IS the Markdown); a source-bytes result
+    # names the true MIME plus the attachment's display filename.
     if output_kind == "bytes" and result_mime is not None:
+        result_payload["resultType"] = "source-bytes"
         result_payload["resultMIMEType"] = result_mime
+        display_name = (attachment_data.get("filename") or "").strip()
+        if display_name and not any(c in display_name for c in ("/", "\\", "\0")):
+            result_payload["originalFilename"] = display_name[:1024]
+    else:
+        result_payload["resultType"] = "markdown"
     _emit(build_protocol_frame("result", result_payload), out_stream)
     return 0
 

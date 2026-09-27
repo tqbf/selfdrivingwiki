@@ -8,17 +8,19 @@ import WikiFSTypes
 @testable import wikid
 @testable import WikiFS
 
-/// AC.4 + AC.7: BOTH process hosts route `.zotero` through the same package
-/// adapter, and a completed acquisition becomes source content:
+/// AC.4 + AC.7: BOTH process hosts route the `application/zotero` source
+/// MIME through the same package FETCHER adapter, and a completed
+/// acquisition becomes source content:
 ///
-/// - A bytes result (PDF) stores the blob with the real MIME/ext/byte size,
-///   populates the retained `zotero_item_key`/`zotero_item_title` columns
-///   from `articleMetadata`, and enqueues the follow-on format route.
-/// - A Markdown result appends a package-provenance Markdown version
+/// - A `source-bytes` result (PDF) stores the blob with the real MIME/ext/
+///   byte size, populates the retained `external_item_key`/
+///   `external_item_title` columns from `articleMetadata`, and the follow-on
+///   format route is enqueued under its typed dedupe key.
+/// - A `markdown` result appends a package-provenance Markdown version
 ///   (podcast-shaped) and still populates the provenance columns.
 ///
 /// The managed executor is faked, so this exercises the REAL provider arms
-/// (URL resolution, prepared-operation execution, provenance, persistence,
+/// (route decision, prepared-fetcher execution, provenance, persistence,
 /// follow-on enqueue) without `uv` or Zotero's network.
 @MainActor
 @Suite("Zotero queue extraction providers", .timeLimit(.minutes(2)))
@@ -27,15 +29,24 @@ struct ZoteroQueueExtractionProviderTests {
     private static let zoteroPackage = ReviewedExtractorPackages.zotero
     private static let fileURL = "https://api.zotero.org/users/12345/items/ABCD1234/file"
 
+    /// The claimed input MIME fixture: `application/zotero`, guaranteed
+    /// constructible without a throwing context (snapshots are non-throwing).
+    nonisolated private static let claimedInputMIME: ExtractorMIMEType = {
+        guard let mime = ExtractorMIMEType(rawValue: ContentTypeRegistry.zoteroAttachment) else {
+            preconditionFailure("application/zotero is a valid extractor MIME type")
+        }
+        return mime
+    }()
+
     // MARK: - Fixtures
 
     /// Writes the configured bytes at the requested output path and answers
-    /// with a revision-4 result frame; records the protocol request.
+    /// with a revision-5 typed fetch-result frame; records the fetch request.
     private final class FakeZoteroExecutor: ManagedProcessExecuting, @unchecked Sendable {
         let outputBytes: Data
         let resultMIMEType: ExtractorMIMEType?
         let identifier: String?
-        private(set) var lastRequest: ExtractorProtocolRequest?
+        private(set) var lastRequest: ExtractorFetchRequest?
 
         init(
             outputBytes: Data,
@@ -51,9 +62,12 @@ struct ZoteroQueueExtractionProviderTests {
             _ operation: ManagedExtractorProcessRequest,
             onFrame: @escaping @Sendable (ExtractorProtocolFrame) -> Void
         ) async throws -> ManagedExtractorProcessResult {
-            lastRequest = operation.protocolRequest
+            guard case .fetch(let request) = operation.request else {
+                throw ExtractionServicesError.unavailable
+            }
+            lastRequest = request
             let output = operation.paths.operationRoot
-                .appendingPathComponent(operation.protocolRequest.outputPath.rawValue)
+                .appendingPathComponent(request.outputPath.rawValue)
             try FileManager.default.createDirectory(
                 at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
             try outputBytes.write(to: output)
@@ -63,12 +77,14 @@ struct ZoteroQueueExtractionProviderTests {
                 published: "2024-05-01",
                 identifier: identifier)
             let frame = ExtractorProtocolFrame.result(try ExtractorResultFrame(
-                requestID: operation.protocolRequest.requestID,
-                outputPath: operation.protocolRequest.outputPath,
+                requestID: request.requestID,
+                outputPath: request.outputPath,
                 markdownByteCount: outputBytes.count,
                 metadata: ExtractorReportedMetadata(toolName: "zotero"),
                 articleMetadata: articleMetadata,
-                resultMIMEType: resultMIMEType))
+                resultMIMEType: resultMIMEType,
+                resultType: resultMIMEType == nil ? .markdown : .sourceBytes,
+                originalFilename: resultMIMEType == nil ? nil : "ABCD1234.bin"))
             return ManagedExtractorProcessResult(
                 terminationCause: .exited(code: 0),
                 terminalFrame: frame,
@@ -82,18 +98,19 @@ struct ZoteroQueueExtractionProviderTests {
     private static func manifest() throws -> ExtractorManifest {
         let json = """
         {
-          "manifestRevision": 2,
+          "manifestRevision": 4,
           "packageID": "org.selfdrivingwiki.zotero",
           "version": "1.0.0",
           "displayName": "Zotero Attachment",
-          "protocolRevision": 4,
+          "protocolRevision": 5,
           "entryPoint": "bin/zotero-extractor",
           "launch": {"mode": "runtime", "command": "uv", "arguments": ["run", "--script"]},
           "registrations": [
             {
               "id": "attachment",
               "displayName": "Zotero Attachment",
-              "kinds": ["zotero"],
+              "role": "fetcher",
+              "kinds": [],
               "mimeTypes": ["application/zotero"],
               "credentialRequirements": [
                 {
@@ -124,8 +141,9 @@ struct ZoteroQueueExtractionProviderTests {
         return try JSONDecoder().decode(ExtractorManifest.self, from: Data(json.utf8))
     }
 
-    /// Builds one prepared Zotero operation over a real (empty) operation
-    /// directory tree and registers it in a fresh extraction registry.
+    /// Builds one prepared Zotero fetcher operation over a real (empty)
+    /// operation directory tree and registers it in a fresh extraction
+    /// registry under the kind-free fetcher namespace.
     private func makeServices(
         executor: FakeZoteroExecutor,
         formatRoutePreparation: ExtractionPreparation? = nil
@@ -144,9 +162,10 @@ struct ZoteroQueueExtractionProviderTests {
         let registration = try ExtractorRegistration(
             id: registrationID,
             displayName: "Zotero Attachment",
-            kinds: [.zotero],
+            kinds: [],
             mimeTypes: [try ExtractorMIMEType(validating: ContentTypeRegistry.zoteroAttachment)],
-            filenameExtensions: [])
+            filenameExtensions: [],
+            role: .fetcher)
         let operation = PreparedProcessOperation(
             directoryRoot: root,
             packageRoot: root.appendingPathComponent("package", isDirectory: true),
@@ -159,7 +178,7 @@ struct ZoteroQueueExtractionProviderTests {
             manifest: manifest,
             registration: registration,
             registrationID: registrationID,
-            protocolRevision: .v4,
+            protocolRevision: .v5,
             mimeTypes: [ContentTypeRegistry.zoteroAttachment],
             executor: executor,
             launchGate: nil,
@@ -169,27 +188,30 @@ struct ZoteroQueueExtractionProviderTests {
 
         let registry = ExtractionBackendRegistry()
         let reference = ExtractorReference(revision: revision, registrationID: registrationID)
-        let adapterKey = ExtractionAdapterKey.installed(kind: .zotero, reference: reference)
+        let adapterKey = ExtractionAdapterKey.installedFetcher(reference: reference)
         _ = try await registry.register(
             RegisteredExtractionBackend(
-                key: ExtractionBackendKey(kind: .zotero, backendID: "placeholder")
+                key: ExtractionBackendKey(kind: .pdf, backendID: "placeholder")
             ) {
-                .zotero(ProcessPackageZoteroAttachment(operation: operation))
+                .fetcher(ProcessPackageFetcher(operation: operation))
             },
             key: adapterKey)
         return StubZoteroExtractionServices(
             registry: registry,
             adapterKey: adapterKey,
+            reference: reference,
             formatRoutePreparation: formatRoutePreparation)
     }
 
-    /// Only the Zotero prepare seam is overridden; everything else inherits
-    /// the protocol defaults (unavailable), which the zotero arm never calls.
+    /// Only the fetcher prepare seam and the active-claims snapshot are
+    /// overridden; everything else inherits the protocol defaults
+    /// (unavailable), which the fetch arm never calls.
     /// `formatRoutePreparation`, when set, is what the bytes (format) route's
     /// `prepare` returns instead of throwing unavailable.
     private struct StubZoteroExtractionServices: ExtractionServices {
         let registry: ExtractionBackendRegistry
         let adapterKey: ExtractionAdapterKey
+        let reference: ExtractorReference
         var formatRoutePreparation: ExtractionPreparation?
 
         func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
@@ -199,13 +221,13 @@ struct ZoteroQueueExtractionProviderTests {
             return formatRoutePreparation
         }
 
-        func prepareZoteroAttachment() async throws -> ProcessPackageZoteroAttachment {
+        func prepareFetcher(sourceMIMEType: ExtractorMIMEType) async throws -> ProcessPackageFetcher {
             // Resolve through the registry exactly like the process facade.
             guard let backend = await registry.resolve(adapterKey) else {
                 throw ExtractionServicesError.unavailable
             }
             let adapter = try await backend.make()
-            guard case .zotero(let prepared) = adapter else {
+            guard case .fetcher(let prepared) = adapter else {
                 throw ExtractionServicesError.unavailable
             }
             return prepared
@@ -213,6 +235,22 @@ struct ZoteroQueueExtractionProviderTests {
 
         func registeredExtractionInputs() async -> RegisteredExtractionInputs {
             .none
+        }
+
+        /// The fetch route decision reads the active fetcher claims, so the
+        /// stub reports exactly this registration: role fetcher, claiming
+        /// the synthetic `application/zotero` source MIME.
+        func activeRegistrationSnapshots() async -> [ExtractorRouteRegistrationSnapshot] {
+            [
+                ExtractorRouteRegistrationSnapshot(
+                    reference: reference,
+                    displayName: "Zotero Attachment",
+                    packageName: "Zotero",
+                    role: .fetcher,
+                    kinds: [],
+                    mimeTypes: [ZoteroQueueExtractionProviderTests.claimedInputMIME],
+                    filenameExtensions: [])
+            ]
         }
     }
 
@@ -243,7 +281,18 @@ struct ZoteroQueueExtractionProviderTests {
         return (try QueueStore(databaseURL: url), url)
     }
 
-    // MARK: - Bytes result (AC.7 pdf variant)
+    /// The typed dedupe key for one acquired fetch — the same construction
+    /// the worker and the recovery scan use.
+    private func followOnDedupeKey(
+        wikiID: WikiID, sourceID: SourceID, acquiredContentVersionID: SourceVersionID
+    ) -> QueueItemDedupeKey {
+        .followOnFormatExtraction(
+            wikiID: wikiID,
+            sourceID: sourceID,
+            acquiredContentVersionID: acquiredContentVersionID)
+    }
+
+    // MARK: - source-bytes result (AC.7 pdf variant)
 
     @Test func appProviderBytesResultStoresBlobAndProvenanceAndEnqueuesFollowOn() async throws {
         let store = try makeStore()
@@ -263,42 +312,55 @@ struct ZoteroQueueExtractionProviderTests {
             sessionBox: box,
             queueDatabaseURL: queueURL)
 
-        // Resolution runs the zotero arm with the stored file URL, revision-4.
+        // Resolution runs the fetch arm with the stored file URL, revision-5.
         let resolution = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil)
-        guard case .attachment(let attachment)? = resolution else {
-            Issue.record("expected an attachment resolution")
+        guard case .fetch(let fetcher)? = resolution else {
+            Issue.record("expected a fetch resolution")
             return
         }
-        #expect(attachment.producer.revision == Self.zoteroPackage.revision)
-        #expect(attachment.producer.protocolRevision == .v4)
-        let outcome = try await attachment.fetch { _ in }
-        #expect(executor.lastRequest?.remoteURL?.rawValue == Self.fileURL)
-        #expect(executor.lastRequest?.kind == .zotero)
-        #expect(executor.lastRequest?.protocolRevision == .v4)
-        #expect(outcome.isMarkdownResult == false)
-        #expect(outcome.articleMetadata?.identifier == "PARENT01")
+        #expect(fetcher.producer.revision == Self.zoteroPackage.revision)
+        #expect(fetcher.producer.protocolRevision == .v5)
+        let outcome = try await fetcher.fetch { _ in }
+        #expect(executor.lastRequest?.remoteURL.rawValue == Self.fileURL)
+        #expect(executor.lastRequest?.mimeType == Self.claimedInputMIME)
+        #expect(executor.lastRequest?.originalFilename == "ABCD1234")
+        #expect(executor.lastRequest?.protocolRevision == .v5)
+        guard case .sourceBytes(let bytesOutcome) = outcome else {
+            Issue.record("expected a source-bytes fetch outcome")
+            return
+        }
+        #expect(bytesOutcome.bytes == pdfBytes)
+        #expect(bytesOutcome.mimeType.rawValue == "application/pdf")
+        #expect(bytesOutcome.articleMetadata?.identifier == "PARENT01")
 
-        // Persistence: the blob IS the source content; the retained Zotero
-        // columns and the display name come from articleMetadata.
-        let reference = try await provider.persistAttachmentExtraction(
+        // Persistence: the blob IS the source content; the retained external
+        // provenance columns and the display name come from articleMetadata.
+        let reference = try await provider.persistFetch(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
-            resolution: attachment, outcome: outcome)
+            resolution: fetcher, outcome: outcome)
         #expect(reference != nil)
 
         let summary = try #require(try store.listSources().first(where: { $0.id == sourceID }))
         #expect(summary.byteSize == pdfBytes.count)
         #expect(summary.mimeType == "application/pdf")
         #expect(summary.ext == "pdf")
-        #expect(summary.zoteroItemKey == "PARENT01")
-        #expect(summary.zoteroItemTitle == "A Study of Extraction")
+        #expect(summary.externalItemKey == "PARENT01")
+        #expect(summary.externalItemTitle == "A Study of Extraction")
         #expect(summary.effectiveName == "A Study of Extraction")
         let bytes = try store.sourceContent(id: sourceID)
         #expect(bytes == pdfBytes)
 
-        // The follow-on format route is enqueued for a bytes result.
+        // The follow-on format route is enqueued for a bytes result, scoped
+        // to the acquired content version under the typed dedupe key.
+        let acquiredVersionID = SourceVersionID(
+            rawValue: try #require(reference?.versionID))
         try await provider.enqueueFollowOnExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID)
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
+            acquiredContentVersionID: acquiredVersionID,
+            dedupeKey: followOnDedupeKey(
+                wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
+                acquiredContentVersionID: acquiredVersionID))
         let active = try queueStore.loadActive(for: .extraction)
         #expect(active.count == 1)
         #expect(active.first?.payload.sourceIDs == [sourceID])
@@ -321,24 +383,28 @@ struct ZoteroQueueExtractionProviderTests {
             extractionServices: try await makeServices(executor: executor),
             sessionBox: box)
 
-        guard case .attachment(let attachment)? = try await provider.resolveExtraction(
+        guard case .fetch(let fetcher)? = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
-            Issue.record("expected an attachment resolution")
+            Issue.record("expected a fetch resolution")
             return
         }
-        let outcome = try await attachment.fetch { _ in }
-        #expect(outcome.isMarkdownResult)
+        let outcome = try await fetcher.fetch { _ in }
+        guard case .markdown(let markdownOutcome) = outcome else {
+            Issue.record("expected a markdown fetch outcome")
+            return
+        }
+        #expect(markdownOutcome.markdown == String(decoding: markdown, as: UTF8.self))
 
-        let reference = try await provider.persistAttachmentExtraction(
+        let reference = try await provider.persistFetch(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
-            resolution: attachment, outcome: outcome)
+            resolution: fetcher, outcome: outcome)
         #expect(reference != nil)
 
         let head = try #require(try store.processedMarkdownHead(sourceID: sourceID))
         #expect(head.content == String(decoding: markdown, as: UTF8.self))
         let summary = try #require(try store.listSources().first(where: { $0.id == sourceID }))
-        #expect(summary.zoteroItemKey == "PARENT02")
-        #expect(summary.zoteroItemTitle == "A Study of Extraction")
+        #expect(summary.externalItemKey == "PARENT02")
+        #expect(summary.externalItemTitle == "A Study of Extraction")
         #expect(summary.effectiveName == "A Study of Extraction")
     }
 
@@ -360,27 +426,33 @@ struct ZoteroQueueExtractionProviderTests {
             storeResolver: { _ in store },
             queueStore: queueStore)
 
-        guard case .attachment(let attachment)? = try await provider.resolveExtraction(
+        guard case .fetch(let fetcher)? = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
-            Issue.record("expected an attachment resolution")
+            Issue.record("expected a fetch resolution")
             return
         }
-        let outcome = try await attachment.fetch { _ in }
-        #expect(executor.lastRequest?.kind == .zotero)
-        try await provider.persistAttachmentExtraction(
+        let outcome = try await fetcher.fetch { _ in }
+        #expect(executor.lastRequest?.protocolRevision == .v5)
+        let reference = try await provider.persistFetch(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
-            resolution: attachment, outcome: outcome)
+            resolution: fetcher, outcome: outcome)
 
         let summary = try #require(try store.listSources().first(where: { $0.id == sourceID }))
         #expect(summary.byteSize == pdfBytes.count)
         #expect(summary.mimeType == "application/pdf")
-        #expect(summary.zoteroItemKey == "PARENT03")
+        #expect(summary.externalItemKey == "PARENT03")
         let bytes = try store.sourceContent(id: sourceID)
         #expect(bytes == pdfBytes)
 
         // The daemon's enqueue seam writes the durable follow-on item.
+        let acquiredVersionID = SourceVersionID(
+            rawValue: try #require(reference?.versionID))
         try await provider.enqueueFollowOnExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID)
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
+            acquiredContentVersionID: acquiredVersionID,
+            dedupeKey: followOnDedupeKey(
+                wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
+                acquiredContentVersionID: acquiredVersionID))
         let active = try queueStore.loadActive(for: .extraction)
         #expect(active.count == 1)
     }
@@ -412,7 +484,7 @@ struct ZoteroQueueExtractionProviderTests {
     /// Once a bytes result has landed, the source must resolve through the
     /// bytes (format) route — never another acquisition. The follow-on item a
     /// bytes result enqueues relies on this; before the guard it resolved as
-    /// `.attachment` again and re-fetched the same attachment forever
+    /// a fetch again and re-fetched the same attachment forever
     /// (observed live: one PDF re-acquired 200+ times, one queue item per
     /// fetch, no markdown ever produced).
     @Test func appProviderAcquiredBytesResolveThroughFormatRoute() async throws {
@@ -432,15 +504,15 @@ struct ZoteroQueueExtractionProviderTests {
             sessionBox: box)
 
         // First resolution (byteless source): the acquisition arm.
-        guard case .attachment(let attachment)? = try await provider.resolveExtraction(
+        guard case .fetch(let fetcher)? = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
-            Issue.record("expected an attachment resolution")
+            Issue.record("expected a fetch resolution")
             return
         }
-        let outcome = try await attachment.fetch { _ in }
-        _ = try await provider.persistAttachmentExtraction(
+        let outcome = try await fetcher.fetch { _ in }
+        _ = try await provider.persistFetch(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
-            resolution: attachment, outcome: outcome)
+            resolution: fetcher, outcome: outcome)
 
         // Second resolution (the follow-on format-route item): the acquired
         // bytes route the host's own format path, not another acquisition.
@@ -468,15 +540,15 @@ struct ZoteroQueueExtractionProviderTests {
                 formatRoutePreparation: Self.formatRoutePreparation),
             storeResolver: { _ in store })
 
-        guard case .attachment(let attachment)? = try await provider.resolveExtraction(
+        guard case .fetch(let fetcher)? = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
-            Issue.record("expected an attachment resolution")
+            Issue.record("expected a fetch resolution")
             return
         }
-        let outcome = try await attachment.fetch { _ in }
-        try await provider.persistAttachmentExtraction(
+        let outcome = try await fetcher.fetch { _ in }
+        try await provider.persistFetch(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
-            resolution: attachment, outcome: outcome)
+            resolution: fetcher, outcome: outcome)
 
         guard case .bytes(let bytes)? = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
@@ -513,14 +585,21 @@ struct ZoteroQueueExtractionProviderTests {
             })
 
         let sourceID = SourceID(rawValue: "01JWAKESOURCE00000000000")
+        let acquiredVersionID = SourceVersionID(rawValue: "01JWAKEVERSION00000000000")
+        let dedupeKey = followOnDedupeKey(
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
+            acquiredContentVersionID: acquiredVersionID)
         try await provider.enqueueFollowOnExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID)
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
+            acquiredContentVersionID: acquiredVersionID,
+            dedupeKey: dedupeKey)
 
         let requests = recorded.withLock { $0 }
         #expect(requests.count == 1)
         #expect(requests.first?.queue == QueueKind.extraction)
         #expect(requests.first?.wikiID == WikiID(rawValue: "w"))
         #expect(requests.first?.payload.sourceIDs == [sourceID])
+        #expect(requests.first?.dedupeKey == dedupeKey)
         // The engine route means the bare store row was never written.
         #expect(try queueStore.loadActive(for: .extraction).isEmpty)
     }

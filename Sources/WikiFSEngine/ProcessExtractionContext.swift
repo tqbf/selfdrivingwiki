@@ -192,6 +192,7 @@ public struct ProcessExtractionContext: Sendable {
                         ? .reviewedPackage : .installedPackage,
                     displayName: registration.displayName,
                     packageName: record.displayName,
+                    role: registration.role,
                     kinds: registration.kinds,
                     mimeTypes: registration.mimeTypes,
                     filenameExtensions: registration.filenameExtensions,

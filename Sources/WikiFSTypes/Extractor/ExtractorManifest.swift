@@ -385,6 +385,22 @@ public struct ExtractorSyncDeclaration: Codable, Hashable, Sendable {
     }
 }
 
+/// The explicit package role one registration declares (manifest revision
+/// 4). The tag is package data — never inferred from URL transport, MIME
+/// type, provider, or package ID — and decides which claim surface the
+/// registration owns:
+///
+/// - `extractor` converts content it is handed (staged bytes or a remote
+///   URL) into Markdown. Declares one or more operation `kinds`.
+/// - `fetcher` acquires ONE remote source per request and reports either
+///   exact `source-bytes` or the finished `markdown`. Declares no kinds;
+///   its `mimeTypes` are the synthetic input MIME types of the byteless
+///   sources it can acquire.
+public enum ExtractorPackageRole: String, Codable, CaseIterable, Hashable, Sendable {
+    case extractor
+    case fetcher
+}
+
 public struct ExtractorOperationLimits: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case maximumInputByteCount
@@ -502,6 +518,14 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         case id, displayName, kinds, mimeTypes, filenameExtensions, credentialRequirements, sync
     }
 
+    /// Revision-4 keys: adds the explicit registration `role`. Older
+    /// revisions reject this key, so only a revision-4 manifest can declare
+    /// a fetcher.
+    enum V4CodingKeys: String, CodingKey, CaseIterable {
+        case id, displayName, kinds, mimeTypes, filenameExtensions
+        case credentialRequirements, sync, role
+    }
+
     public let id: ExtractorRegistrationID
     public let displayName: String
     public let kinds: Set<ExtractorKind>
@@ -515,6 +539,12 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
     /// for every revision-1/2 registration and for revision-3 registrations
     /// that declare no sync surface.
     public let sync: ExtractorSyncDeclaration?
+    /// The explicit package role (revision 4): an `extractor` converts
+    /// content it is handed; a `fetcher` acquires one remote source per
+    /// request and states `source-bytes` or `markdown`. Every revision-1/2/3
+    /// registration is an extractor, and revision-4 registrations without an
+    /// encoded `role` key decode as extractors.
+    public let role: ExtractorPackageRole
 
     public init(
         id: ExtractorRegistrationID,
@@ -523,13 +553,30 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         mimeTypes: Set<ExtractorMIMEType>,
         filenameExtensions: Set<ExtractorFileExtension> = [],
         credentialRequirements: [ExtractorCredentialRequirement] = [],
-        sync: ExtractorSyncDeclaration? = nil
+        sync: ExtractorSyncDeclaration? = nil,
+        role: ExtractorPackageRole = .extractor
     ) throws {
         guard displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
               displayName.utf8.count <= 128 else {
             throw ExtractorValidationError.invalidManifest("registration display name")
         }
-        guard kinds.isEmpty == false else { throw ExtractorValidationError.invalidManifest("registration kind set is empty") }
+        // The role decides which claim surface the registration owns. An
+        // extractor claims operation kinds; a fetcher claims the synthetic
+        // input MIME types of the byteless sources it can acquire. Neither
+        // is inferred from URL transport, MIME, provider, or package ID.
+        switch role {
+        case .extractor:
+            guard kinds.isEmpty == false else { throw ExtractorValidationError.invalidManifest("registration kind set is empty") }
+        case .fetcher:
+            guard kinds.isEmpty else {
+                throw ExtractorValidationError.invalidManifest(
+                    "fetcher registration cannot declare operation kinds")
+            }
+            guard filenameExtensions.isEmpty else {
+                throw ExtractorValidationError.invalidManifest(
+                    "fetcher registration cannot declare filename extensions")
+            }
+        }
         guard mimeTypes.isEmpty == false else { throw ExtractorValidationError.invalidManifest("registration MIME type set is empty") }
         guard credentialRequirements.count <= ExtractorHostLimits.maximumRequirementsPerRegistration else {
             throw ExtractorValidationError.invalidManifest("too many credential requirements")
@@ -545,6 +592,19 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
             if sync.sourceMIMEType == nil, mimeTypes.count != 1 {
                 throw ExtractorValidationError.invalidManifest(
                     "sync declaration without a source MIME type requires exactly one registration MIME type")
+            }
+            // A FETCHER's sync must target a source the fetcher actually
+            // claims: the declared source MIME is one of its input MIME
+            // types, so the byteless sources the sync creates are exactly
+            // ones this registration can acquire. An EXTRACTOR's sync may
+            // declare a different source MIME — the sync creates the
+            // byteless source, and the extractor's own kinds govern the
+            // later conversion.
+            if role == .fetcher,
+               let sourceMIMEType = sync.sourceMIMEType,
+               mimeTypes.contains(sourceMIMEType) == false {
+                throw ExtractorValidationError.invalidManifest(
+                    "sync source MIME type is not one of the registration's claimed input MIME types")
             }
             // The sync credential gate operates on the registration's
             // required credential requirement; more than one required
@@ -563,6 +623,7 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         self.filenameExtensions = filenameExtensions
         self.credentialRequirements = credentialRequirements.sorted()
         self.sync = sync
+        self.role = role
     }
 
     /// The v1 decoder: strict, no credential key.
@@ -574,16 +635,20 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
     /// Revision-aware decoding. Revision 1 rejects the
     /// `credentialRequirements` key outright (unknown-field policy);
     /// revision 2 accepts it and validates every declaration. Revision 3
-    /// additionally accepts the `sync` key.
+    /// additionally accepts the `sync` key. Revision 4 additionally accepts
+    /// the `role` key; older revisions reject it, so only a revision-4
+    /// manifest can declare a fetcher.
     public init(from decoder: any Decoder, manifestRevision: ExtractorManifestRevision) throws {
-        if manifestRevision == .v3 {
+        if manifestRevision.rawValue >= 4 {
+            try rejectUnknownKeys(from: decoder, allowed: V4CodingKeys.self)
+        } else if manifestRevision == .v3 {
             try rejectUnknownKeys(from: decoder, allowed: V3CodingKeys.self)
         } else if manifestRevision == .v2 {
             try rejectUnknownKeys(from: decoder, allowed: V2CodingKeys.self)
         } else {
             try rejectUnknownKeys(from: decoder, allowed: CodingKeys.self)
         }
-        let container = try decoder.container(keyedBy: V3CodingKeys.self)
+        let container = try decoder.container(keyedBy: V4CodingKeys.self)
         try self.init(keyedContainer: container, manifestRevision: manifestRevision)
     }
 
@@ -591,17 +656,28 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
     /// record decoder uses this so a stored registration decodes under the
     /// record's own protocol revision — the plain `init(from:)` defaults to
     /// v1 semantics and would reject a v2 registration's credential key.
-    init(keyedContainer: KeyedDecodingContainer<V3CodingKeys>, manifestRevision: ExtractorManifestRevision) throws {
+    init(keyedContainer: KeyedDecodingContainer<V4CodingKeys>, manifestRevision: ExtractorManifestRevision) throws {
         let known: Set<String> = Set(
-            (manifestRevision == .v3
-                ? V3CodingKeys.allCases.map(\.stringValue)
-                : manifestRevision == .v2
-                    ? V2CodingKeys.allCases.map(\.stringValue)
-                    : CodingKeys.allCases.map(\.stringValue)))
+            (manifestRevision.rawValue >= 4
+                ? V4CodingKeys.allCases.map(\.stringValue)
+                : manifestRevision == .v3
+                    ? V3CodingKeys.allCases.map(\.stringValue)
+                    : manifestRevision == .v2
+                        ? V2CodingKeys.allCases.map(\.stringValue)
+                        : CodingKeys.allCases.map(\.stringValue)))
         if let unknown = keyedContainer.allKeys.first(where: { known.contains($0.stringValue) == false }) {
             throw ExtractorValidationError.invalidManifest("unknown field \(unknown.stringValue)")
         }
-        let kinds = try keyedContainer.decode([ExtractorKind].self, forKey: .kinds)
+        // Revision 4 makes `kinds` OPTIONAL: a fetcher registration declares
+        // no operation kinds at all (its claims are the input MIME types).
+        // Older revisions keep the key required — their canonical shape
+        // always carries it.
+        let kinds: [ExtractorKind]
+        if manifestRevision.rawValue >= 4 {
+            kinds = try keyedContainer.decodeIfPresent([ExtractorKind].self, forKey: .kinds) ?? []
+        } else {
+            kinds = try keyedContainer.decode([ExtractorKind].self, forKey: .kinds)
+        }
         let mimeTypes = try keyedContainer.decode([ExtractorMIMEType].self, forKey: .mimeTypes)
         let filenameExtensions = try keyedContainer.decodeIfPresent(
             [ExtractorFileExtension].self, forKey: .filenameExtensions) ?? []
@@ -612,18 +688,31 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         }
         let requirements: [ExtractorCredentialRequirement]
         let sync: ExtractorSyncDeclaration?
-        if manifestRevision == .v3 {
+        let role: ExtractorPackageRole
+        if manifestRevision.rawValue >= 4 {
             requirements = try keyedContainer.decodeIfPresent(
                 [ExtractorCredentialRequirement].self, forKey: .credentialRequirements) ?? []
             sync = try keyedContainer.decodeIfPresent(
                 ExtractorSyncDeclaration.self, forKey: .sync)
+            // A revision-4 registration without an encoded role decodes as
+            // an extractor — the older canonical shape stays readable.
+            role = try keyedContainer.decodeIfPresent(
+                ExtractorPackageRole.self, forKey: .role) ?? .extractor
+        } else if manifestRevision == .v3 {
+            requirements = try keyedContainer.decodeIfPresent(
+                [ExtractorCredentialRequirement].self, forKey: .credentialRequirements) ?? []
+            sync = try keyedContainer.decodeIfPresent(
+                ExtractorSyncDeclaration.self, forKey: .sync)
+            role = .extractor
         } else if manifestRevision == .v2 {
             requirements = try keyedContainer.decodeIfPresent(
                 [ExtractorCredentialRequirement].self, forKey: .credentialRequirements) ?? []
             sync = nil
+            role = .extractor
         } else {
             requirements = []
             sync = nil
+            role = .extractor
         }
         try self.init(
             id: keyedContainer.decode(ExtractorRegistrationID.self, forKey: .id),
@@ -632,7 +721,8 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
             mimeTypes: Set(mimeTypes),
             filenameExtensions: Set(filenameExtensions),
             credentialRequirements: requirements,
-            sync: sync)
+            sync: sync,
+            role: role)
     }
 
     /// Decodes a registration array element-by-element under the given
@@ -652,8 +742,14 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         return registrations
     }
 
+    /// The storage/catalog shape: byte-for-byte the pre-revision-4 encoding
+    /// for extractors. A fetcher registration must still state its role (an
+    /// empty-kinds registration without a role cannot decode), so the key is
+    /// written whenever the role is not the revision ≤ 3 default. Canonical
+    /// revision-4 manifest encoding — which ALWAYS writes `role` — goes
+    /// through `encode(to:manifestRevision:)`.
     public func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: V3CodingKeys.self)
+        var container = encoder.container(keyedBy: V4CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(displayName, forKey: .displayName)
         try container.encode(kinds.sorted { $0.rawValue < $1.rawValue }, forKey: .kinds)
@@ -668,6 +764,28 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         // unchanged bit-for-bit (the same rule the credential key follows).
         if let sync {
             try container.encode(sync, forKey: .sync)
+        }
+        // Older revisions never write the role; a fetcher cannot round-trip
+        // without it (its kind set is empty), so the key is written exactly
+        // when it carries information beyond the revision ≤ 3 default.
+        if role != .extractor {
+            try container.encode(role, forKey: .role)
+        }
+    }
+
+    /// Canonical manifest encoding: revision 4 ALWAYS writes `role`
+    /// (including plain extractors); older revisions never write it, so
+    /// their canonical bytes and package digests are unchanged.
+    func encode(
+        to encoder: any Encoder,
+        manifestRevision: ExtractorManifestRevision
+    ) throws {
+        try encode(to: encoder)
+        if manifestRevision.rawValue >= 4, role == .extractor {
+            // The storage shape already wrote a fetcher's role; a revision-4
+            // EXTRACTOR needs the explicit default added.
+            var container = encoder.container(keyedBy: V4CodingKeys.self)
+            try container.encode(role, forKey: .role)
         }
     }
 
@@ -730,7 +848,8 @@ public struct ExtractorManifest: Codable, Hashable, Sendable {
         files: [ExtractorPackageFile],
         limits: ExtractorOperationLimits
     ) throws {
-        guard manifestRevision == .v1 || manifestRevision == .v2 || manifestRevision == .v3 else {
+        guard manifestRevision == .v1 || manifestRevision == .v2 || manifestRevision == .v3
+            || manifestRevision == .v4 else {
             throw ExtractorValidationError.unsupportedManifestRevision(manifestRevision.rawValue)
         }
         guard displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
@@ -756,6 +875,26 @@ public struct ExtractorManifest: Codable, Hashable, Sendable {
            registrations.contains(where: { $0.sync != nil }) {
             throw ExtractorValidationError.invalidManifest(
                 "sync declarations require manifest revision 3")
+        }
+        // The fetcher role is a revision-4 feature, under the same guard.
+        if manifestRevision.rawValue < 4,
+           registrations.contains(where: { $0.role != .extractor }) {
+            throw ExtractorValidationError.invalidManifest(
+                "fetcher registrations require manifest revision 4")
+        }
+        // A fetcher speaks protocol revision 5 with the remote-url transport
+        // and the network capability, and its declared operation limits
+        // bound one acquisition. The one-result-per-request contract is the
+        // revision-5 wire shape itself.
+        if registrations.contains(where: { $0.role == .fetcher }) {
+            guard protocolRevision == .v5 else {
+                throw ExtractorValidationError.invalidManifest(
+                    "fetcher registrations require protocol revision 5")
+            }
+            guard capabilities.contains(.network) else {
+                throw ExtractorValidationError.invalidManifest(
+                    "fetcher registrations require the network capability")
+            }
         }
         // Manifest-wide uniqueness of requirement IDs makes package lineage +
         // requirement ID an unambiguous authorization identity (plan step 7).
@@ -837,7 +976,10 @@ public struct ExtractorManifest: Codable, Hashable, Sendable {
         try container.encode(protocolRevision, forKey: .protocolRevision)
         try container.encode(entryPoint, forKey: .entryPoint)
         try container.encode(launch, forKey: .launch)
-        try container.encode(registrations, forKey: .registrations)
+        try container.encode(registrations.map { registration in
+            RevisionedExtractorRegistration(
+                registration: registration, manifestRevision: manifestRevision)
+        }, forKey: .registrations)
         try container.encode(capabilities.sorted { $0.rawValue < $1.rawValue }, forKey: .capabilities)
         try container.encode(files, forKey: .files)
         try container.encode(limits, forKey: .limits)
@@ -846,7 +988,7 @@ public struct ExtractorManifest: Codable, Hashable, Sendable {
     public func canonicalJSON() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(CanonicalExtractorManifestV1(self))
+        return try encoder.encode(CanonicalExtractorManifest(self))
     }
 
     /// Digest namespace revision 1. Modes and installation paths are not inputs.
@@ -888,7 +1030,18 @@ where Key: CodingKey & CaseIterable, Key.AllCases: Sequence {
     throw ExtractorValidationError.invalidManifest("unknown field \(unknown.stringValue)")
 }
 
-private struct CanonicalExtractorManifestV1: Encodable {
+/// One registration encoded under its manifest revision's canonical key
+/// policy: revision 4 always writes `role`, older revisions never do.
+struct RevisionedExtractorRegistration: Encodable {
+    let registration: ExtractorRegistration
+    let manifestRevision: ExtractorManifestRevision
+
+    func encode(to encoder: any Encoder) throws {
+        try registration.encode(to: encoder, manifestRevision: manifestRevision)
+    }
+}
+
+private struct CanonicalExtractorManifest: Encodable {
     let manifestRevision: ExtractorManifestRevision
     let packageID: ExtractorPackageID
     let version: ExtractorPackageVersion
@@ -896,7 +1049,7 @@ private struct CanonicalExtractorManifestV1: Encodable {
     let protocolRevision: ExtractorProtocolRevision
     let entryPoint: ExtractorRelativePath
     let launch: ExtractorLaunch
-    let registrations: [ExtractorRegistration]
+    let registrations: [RevisionedExtractorRegistration]
     let capabilities: [ExtractorCapability]
     let files: [ExtractorRelativePath]
     let limits: ExtractorOperationLimits
@@ -909,7 +1062,10 @@ private struct CanonicalExtractorManifestV1: Encodable {
         protocolRevision = manifest.protocolRevision
         entryPoint = manifest.entryPoint
         launch = manifest.launch
-        registrations = manifest.registrations
+        registrations = manifest.registrations.map { registration in
+            RevisionedExtractorRegistration(
+                registration: registration, manifestRevision: manifest.manifestRevision)
+        }
         capabilities = manifest.capabilities.sorted { $0.rawValue < $1.rawValue }
         files = manifest.files.map(\.path)
         limits = manifest.limits
