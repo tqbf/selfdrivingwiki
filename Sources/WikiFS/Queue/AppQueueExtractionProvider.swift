@@ -199,8 +199,17 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         if let origin = store.sourceOrigin(for: sourceID) {
             let source = store.sources.first(where: { $0.id == sourceID })
             let claimedMIMEs = await activeFetcherClaimedMIMETypes()
+            // Parity with the daemon: a FAILED byte read (nil here) must not
+            // read as "not yet acquired", which would re-fetch a source
+            // whose bytes are already stored. The model read is non-throwing
+            // and logs its own failure; resolution fails for this item.
+            let probeBytes = store.sourceBytes(id: sourceID)
+            guard let readBytes = probeBytes else {
+                DebugLog.extraction("AppQueueExtractionProvider: source bytes unreadable for \(sourceID.rawValue)")
+                return nil
+            }
             let route = FetchRouteDecision.resolve(
-                hasBytes: !(store.sourceBytes(id: sourceID) ?? Data()).isEmpty,
+                hasBytes: readBytes.isEmpty == false,
                 planURL: origin.plan,
                 mimeType: source?.mimeType,
                 fetcherClaimedMIMETypes: claimedMIMEs)
@@ -281,6 +290,18 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                     sourceID: sourceID, content: markdown, package: packageProducer,
                     origin: .extraction, toolVersion: resolution.modelVersion,
                     sourceVersionID: nil, note: nil)
+                // This bytes job may BE the fetch drain's follow-on format
+                // route: settle the marker now so fetch_state never goes
+                // stale beside a finished product (recovery is the backstop).
+                do {
+                    if try store.internalStore.fetchState(sourceID: sourceID) == .formatJobPending {
+                        try store.internalStore.markFetchComplete(sourceID: sourceID)
+                    }
+                } catch {
+                    // Deliberately non-fatal: the startup recovery scan is the
+                    // backstop that settles a stale marker.
+                    DebugLog.store("AppQueueExtractionProvider: fetch-state settle skipped (source=\(sourceID.rawValue)): \(error)")
+                }
                 return QueueExtractionOutputReference(versionID: version.id.rawValue)
             } catch {
                 DebugLog.store("AppQueueExtractionProvider: package provenance write failed (source=\(sourceID.rawValue)): \(error)")
@@ -386,18 +407,14 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                 registrationID: resolution.producer.registrationID,
                 protocolRevision: resolution.producer.protocolRevision,
                 reportedMetadata: markdown.reportedMetadata)
-            let version = try store.internalStore.appendInstalledPackageMarkdown(
+            // One transaction: the derived Markdown version, the neutral
+            // external provenance, and the fetch-state advance to `complete`.
+            // A crash can never leave the source `pending` beside a finished
+            // product (which would make a retry append a second version).
+            let version = try store.internalStore.appendFetchMarkdown(
                 sourceID: sourceID, content: markdown.markdown, package: producer,
-                origin: .extraction, toolVersion: nil,
-                sourceVersionID: initialVersion.id, note: nil)
-            try store.internalStore.setAcquisitionProvenance(
-                sourceID: sourceID,
-                externalItemKey: itemKey,
-                externalItemTitle: itemTitle,
-                displayName: itemTitle)
-            // Complete in the same logical step as the derived version; a
-            // failure above leaves the source pending for a controlled retry.
-            try store.internalStore.markFetchComplete(sourceID: sourceID)
+                externalItemKey: itemKey, externalItemTitle: itemTitle,
+                sourceVersionID: initialVersion.id)
             return QueueExtractionOutputReference(versionID: version.id.rawValue)
 
         case .sourceBytes(let bytes):

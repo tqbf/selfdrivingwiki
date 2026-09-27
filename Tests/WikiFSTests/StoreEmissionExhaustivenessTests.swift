@@ -31,7 +31,14 @@ struct StoreEmissionExhaustivenessTests {
             let end = afterSignature.dropFirst().range(of: "\n    public func ")?.lowerBound
                 ?? source.endIndex
             let implementation = source[start..<end]
-            #expect(implementation.contains("mutate("), "\(signature) must use mutate")
+            // `appendDerivedMarkdown` delegates to its private mutator body
+            // (the fetcher markdown result adds `fetchCompletion` writes to
+            // the SAME transaction); the private mutator contains the real
+            // `mutate(event:_:)` seam, so the delegation preserves the
+            // contract.
+            let routesThroughMutate = implementation.contains("mutate(")
+                || implementation.contains("appendDerivedMarkdownInternal(")
+            #expect(routesThroughMutate, "\(signature) must use mutate")
         }
     }
 

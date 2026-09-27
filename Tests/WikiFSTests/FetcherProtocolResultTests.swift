@@ -352,4 +352,31 @@ struct FetcherProtocolResultTests {
             }
         }
     }
+
+    /// The execution boundary's redaction pass must carry the revision-5
+    /// fetch fields through: the result tag has no text surface, and the
+    /// display filename is package-controlled text that MUST be redacted.
+    /// A future edit dropping `resultType` here would fail every fetch with
+    /// fetcherResultTypeMissing; this test pins it.
+    @Test func redactedResultFrameCarriesFetchFieldsAndRedactsFilename() throws {
+        let redactor = ExtractorSecretRedactor(values: ["secret-value"])
+        let frame = try ExtractorResultFrame(
+            requestID: ExtractorRequestID(),
+            outputPath: ExtractorRelativePath(validating: "output/result.md"),
+            markdownByteCount: 3,
+            metadata: ExtractorReportedMetadata(toolName: "zotero"),
+            articleMetadata: ExtractorArticleMetadata(
+                title: "A Study of secret-value",
+                identifier: "PARENT01"),
+            resultMIMEType: try ExtractorMIMEType(validating: "application/pdf"),
+            resultType: .sourceBytes,
+            originalFilename: "secret-value.pdf")
+        let redacted = try PreparedProcessOperation.redactedResultFrame(
+            frame, redactor: redactor)
+        #expect(redacted.resultType == .sourceBytes)
+        #expect(redacted.resultMIMEType?.rawValue == "application/pdf")
+        #expect(redacted.originalFilename == "[redacted].pdf")
+        #expect(redacted.articleMetadata?.title == "A Study of [redacted]")
+        #expect(redacted.articleMetadata?.identifier == "PARENT01")
+    }
 }

@@ -263,6 +263,18 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
                     sourceID: sourceID, content: markdown, package: packageProducer,
                     origin: .extraction, toolVersion: resolution.modelVersion,
                     sourceVersionID: nil, note: nil)
+                // This bytes job may BE the fetch drain's follow-on format
+                // route: settle the marker now so fetch_state never goes
+                // stale beside a finished product (recovery is the backstop).
+                do {
+                    if try store.fetchState(sourceID: sourceID) == .formatJobPending {
+                        try store.markFetchComplete(sourceID: sourceID)
+                    }
+                } catch {
+                    // Deliberately non-fatal: the startup recovery scan is the
+                    // backstop that settles a stale marker.
+                    DebugLog.store("DaemonQueueExtractionProvider: fetch-state settle skipped (source=\(sourceID.rawValue)): \(error)")
+                }
                 DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
                 return QueueExtractionOutputReference(versionID: version.id.rawValue)
             } catch {
@@ -407,17 +419,13 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
                 DebugLog.store("DaemonQueueExtractionProvider: fetch markdown has no initial source version (source=\(sourceID.rawValue))")
                 throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
             }
-            let version = try store.appendInstalledPackageMarkdown(
+            // One transaction: the derived Markdown version, the neutral
+            // external provenance, and the fetch-state advance to `complete`.
+            let version = try store.appendFetchMarkdown(
                 sourceID: sourceID, content: markdown.markdown,
                 package: fetchProducer(resolution, outcome),
-                origin: .extraction, toolVersion: nil,
-                sourceVersionID: initialVersion.id, note: nil)
-            try store.setAcquisitionProvenance(
-                sourceID: sourceID,
-                externalItemKey: itemKey,
-                externalItemTitle: itemTitle,
-                displayName: itemTitle)
-            try store.markFetchComplete(sourceID: sourceID)
+                externalItemKey: itemKey, externalItemTitle: itemTitle,
+                sourceVersionID: initialVersion.id)
             DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
             return QueueExtractionOutputReference(versionID: version.id.rawValue)
 

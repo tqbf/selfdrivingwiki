@@ -535,6 +535,17 @@ public protocol WikiStore: AnyObject, Sendable {
         displayName: String?
     ) throws
 
+    /// The fetcher markdown result's single-transaction write: the derived
+    /// Markdown version, the neutral external provenance, and the
+    /// `complete` fetch-state advance commit together.
+    @discardableResult
+    func appendFetchMarkdown(
+        sourceID: SourceID, content: String,
+        package: ExtractionInstalledPackageProducer,
+        externalItemKey: String?, externalItemTitle: String?,
+        sourceVersionID: SourceVersionID
+    ) throws -> SourceMarkdownVersion
+
     /// Marks one fetch source `complete` — the pipeline is done. Idempotent.
     func markFetchComplete(sourceID: SourceID) throws
 

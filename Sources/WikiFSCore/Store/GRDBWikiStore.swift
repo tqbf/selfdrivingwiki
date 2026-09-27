@@ -154,10 +154,10 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
 
     /// The latest schema version stamped by `createFreshSchema()` (for a fresh
     /// DB) and by `migrateIfNeeded(_:in:)` after running the ladder (for an
-    /// existing DB). MUST match `SQLiteWikiStore.currentSchemaVersion`: existing
-    /// databases produced by that store carry `PRAGMA user_version` up to 37, and
-    /// this store must recognize them as already-current so the ladder is a no-op
-    /// on re-open (the proven `if version < N`)
+    /// existing DB). Databases produced by the removed `SQLiteWikiStore` carry
+    /// `PRAGMA user_version` up to 37, and this store must recognize them as
+    /// already-migratable so the ladder is a no-op on re-open (the proven
+    /// `if version < N`)
     private static let currentSchemaVersion = 55
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
@@ -6668,6 +6668,37 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         producer: ExtractionProducer?, providerID: ProviderID? = nil, modelID: ModelID? = nil,
         toolVersion: String? = nil, sourceVersionID: SourceVersionID? = nil, note: String? = nil
     ) throws -> SourceMarkdownVersion {
+        try appendDerivedMarkdownInternal(
+            sourceID: sourceID, content: content, origin: origin,
+            producer: producer, providerID: providerID, modelID: modelID,
+            toolVersion: toolVersion, sourceVersionID: sourceVersionID, note: note,
+            fetchCompletion: nil)
+    }
+
+    /// The fetcher markdown result's single-transaction write: the derived
+    /// Markdown version, the neutral external provenance, and the
+    /// `complete` fetch-state advance commit together, so a crash can never
+    /// leave the source `pending` beside a finished product (which would
+    /// make a controlled retry append a second Markdown version).
+    public func appendFetchMarkdown(
+        sourceID: SourceID, content: String,
+        package: ExtractionInstalledPackageProducer,
+        externalItemKey: String?, externalItemTitle: String?,
+        sourceVersionID: SourceVersionID
+    ) throws -> SourceMarkdownVersion {
+        try appendDerivedMarkdownInternal(
+            sourceID: sourceID, content: content, origin: .extraction,
+            producer: .installedPackage(package), providerID: nil, modelID: nil,
+            toolVersion: nil, sourceVersionID: sourceVersionID, note: nil,
+            fetchCompletion: (externalItemKey, externalItemTitle))
+    }
+
+    private func appendDerivedMarkdownInternal(
+        sourceID: SourceID, content: String, origin: SourceMarkdownOrigin,
+        producer: ExtractionProducer?, providerID: ProviderID?, modelID: ModelID?,
+        toolVersion: String?, sourceVersionID: SourceVersionID?, note: String?,
+        fetchCompletion: (externalItemKey: String?, externalItemTitle: String?)?
+    ) throws -> SourceMarkdownVersion {
         try Self.validateDerivedMarkdownRequest(
             origin: origin, producer: producer, providerID: providerID, modelID: modelID,
             toolVersion: toolVersion)
@@ -6733,6 +6764,29 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             """, arguments: [sourceVersionID?.rawValue, blobHash, id.rawValue])
             try self.upsertMarkdownDerivedRef(sourceID: sourceID, versionID: id, now: nowTS, on: db)
             self.upsertSourceSearch(sourceID: sourceID, body: content, on: db)
+
+            // Fetcher markdown results (fetchCompletion non-nil): the provenance
+            // columns and the `complete` fetch-state advance ride the SAME
+            // transaction as the derived version, so a crash can never leave
+            // the source `pending` beside a finished product (which would make
+            // a controlled retry append a second Markdown version).
+            if let fetchCompletion {
+                let sanitizedTitle = fetchCompletion.externalItemTitle
+                    .map { WikiNameRules.sanitized($0) }
+                try db.execute(sql: """
+                UPDATE sources SET
+                    external_item_key = COALESCE(?, external_item_key),
+                    external_item_title = COALESCE(?, external_item_title),
+                    display_name = COALESCE(?, display_name),
+                    fetch_state = ?,
+                    updated_at = ?
+                WHERE id = ?;
+                """, arguments: [
+                    fetchCompletion.externalItemKey, fetchCompletion.externalItemTitle,
+                    sanitizedTitle, SourceFetchState.complete.rawValue, nowTS,
+                    sourceID.rawValue,
+                ])
+            }
 
             return SourceMarkdownVersion(
                 id: id, sourceID: sourceID, parentID: parentID, content: content,
