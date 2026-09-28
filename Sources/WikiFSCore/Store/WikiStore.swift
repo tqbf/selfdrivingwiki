@@ -549,6 +549,16 @@ public protocol WikiStore: AnyObject, Sendable {
     /// Marks one fetch source `complete` — the pipeline is done. Idempotent.
     func markFetchComplete(sourceID: SourceID) throws
 
+    /// The recovery-scan settle: version-aware variant that only advances
+    /// `formatJobPending` → `complete` while `expectedContentVersionID` is
+    /// still the source's active content version. Returns `false` when the
+    /// active version moved on (a concurrent re-fetch owns the marker now).
+    @discardableResult
+    func markFetchComplete(
+        sourceID: SourceID,
+        expectedContentVersionID: SourceVersionID
+    ) throws -> Bool
+
     /// The typed fetch lifecycle state of one source (`nil` = never a fetch
     /// source).
     func fetchState(sourceID: SourceID) throws -> SourceFetchState?

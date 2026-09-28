@@ -97,8 +97,16 @@ public enum FetchFormatJobRecovery {
             case .completed:
                 // The format job already ran (including after a user retry):
                 // settle the marker instead of leaving a stale pending state.
+                // The settle is VERSION-AWARE: a concurrent re-fetch that
+                // committed a newer acquisition (re-marking formatJobPending)
+                // is never clobbered by this stale scan.
                 do {
-                    try store.markFetchComplete(sourceID: sourceID)
+                    let settled = try store.markFetchComplete(
+                        sourceID: sourceID,
+                        expectedContentVersionID: acquired.id)
+                    if settled == false {
+                        DebugLog.store("FetchFormatJobRecovery: settle skipped — active version moved past \(acquired.id.rawValue) for \(sourceID.rawValue)")
+                    }
                 } catch {
                     DebugLog.store("FetchFormatJobRecovery: settle failed for \(sourceID.rawValue): \(error)")
                 }

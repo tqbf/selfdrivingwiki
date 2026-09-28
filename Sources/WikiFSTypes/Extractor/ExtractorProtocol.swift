@@ -210,10 +210,10 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
             input = .operationFile(try container.decode(
                 ExtractorRelativePath.self, forKey: .inputPath))
         case .remoteURL:
-            // The remote-url transport is a revision-3 feature that revision 4
-            // carries forward unchanged (revision 4 only extends the RESULT
-            // frame). Revisions 1 and 2 keep their exact old wire contract.
-            guard revision == .v3 || revision == .v4 else {
+            // The remote-url transport is a revision-3 feature carried
+            // forward unchanged through revision 5: a revision-5 EXTRACTOR
+            // request keeps the revision-3 wire shape, remote-url included.
+            guard revision.rawValue >= 3 else {
                 throw ExtractorValidationError.invalidManifest(
                     "remote-url input requires protocol revision 3")
             }

@@ -6108,6 +6108,33 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    /// The recovery-scan variant: settles `formatJobPending` → `complete`
+    /// ONLY while the source's active content version is still the one the
+    /// completed format job was enqueued for. A concurrent re-fetch that
+    /// commits a NEWER version (re-marking `formatJobPending` for itself) is
+    /// never clobbered by a stale scan's settle — the method returns `false`
+    /// without writing, leaving the newer marker for its own scan.
+    @discardableResult
+    public func markFetchComplete(
+        sourceID: SourceID,
+        expectedContentVersionID: SourceVersionID
+    ) throws -> Bool {
+        try mutate(event: { _ in
+            self.localEvent(.source, id: sourceID.rawValue, change: .updated)
+        }) { db in
+            guard let active = try self.activeContentVersion(
+                sourceID: sourceID, on: db),
+                active.id == expectedContentVersionID else {
+                return false
+            }
+            try db.execute(sql: """
+            UPDATE sources SET fetch_state = ?, updated_at = ? WHERE id = ?;
+            """, arguments: [SourceFetchState.complete.rawValue,
+                            Date().timeIntervalSince1970, sourceID.rawValue])
+            return true
+        }
+    }
+
     /// The typed fetch lifecycle state of one source. `nil` = never a fetch
     /// source.
     public func fetchState(sourceID: SourceID) throws -> SourceFetchState? {

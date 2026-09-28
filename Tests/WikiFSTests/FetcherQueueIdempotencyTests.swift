@@ -187,4 +187,67 @@ struct FetcherQueueIdempotencyTests {
         #expect(try store.fetchState(sourceID: summary.id) == .complete)
         #expect(try store.sourcesWithPendingFormatJobs().isEmpty)
     }
+
+    /// The recovery settle is VERSION-AWARE: a stale scan whose deduped key
+    /// was derived from an older acquired version must never clobber the
+    /// `formatJobPending` marker a concurrent re-fetch wrote for a NEWER
+    /// version (the skeptic-review F1 counterexample). The marker stays with
+    /// the newer acquisition; only the matching version settles.
+    @Test func staleRecoverySettleDoesNotClobberNewerAcquisitionMarker() throws {
+        let (store, _) = try TestStoreFactory.fileBacked(prefix: "fetcher-settle-race")
+        defer { store.close() }
+
+        // Byteless fetcher source (V1 does not exist yet; marker is pending).
+        let summary = try store.addBytelessSource(
+            filename: "ABCD1234",
+            mimeType: "application/zotero",
+            provenance: SourceProvenance(
+                agentName: SourceProvider.zotero.rawValue,
+                activityKind: "fetch",
+                plan: "https://api.zotero.org/users/12345/items/ABCD1234/file",
+                externalRef: "https://api.zotero.org/users/12345/items/ABCD1234/file",
+                externalIdentity: "ABCD1234"),
+            role: .primary)
+        let sourceID = summary.id
+
+        // First acquisition commits V1 and marks formatJobPending (the
+        // production attach path).
+        let v1Bytes = Data("%PDF-1.4 first acquisition".utf8)
+        let v1 = try store.attachAcquiredBytes(
+            sourceID: sourceID,
+            bytes: v1Bytes,
+            mimeType: "application/pdf",
+            originalFilename: "first.pdf",
+            externalItemKey: "PARENT01",
+            externalItemTitle: "First",
+            producer: nil)
+        #expect(try store.fetchState(sourceID: sourceID) == .formatJobPending)
+
+        // A concurrent re-fetch commits V2 (different bytes) and re-marks
+        // formatJobPending for itself.
+        let v2Bytes = Data("%PDF-1.4 second acquisition".utf8)
+        let v2 = try store.attachAcquiredBytes(
+            sourceID: sourceID,
+            bytes: v2Bytes,
+            mimeType: "application/pdf",
+            originalFilename: "second.pdf",
+            externalItemKey: "PARENT01",
+            externalItemTitle: "Second",
+            producer: nil)
+        #expect(v2.id != v1.id)
+        #expect(try store.fetchState(sourceID: sourceID) == .formatJobPending)
+
+        // The STALE scan (key derived from V1) tries to settle: it must be a
+        // no-op — V2's marker survives.
+        #expect(try store.markFetchComplete(
+            sourceID: sourceID,
+            expectedContentVersionID: v1.id) == false)
+        #expect(try store.fetchState(sourceID: sourceID) == .formatJobPending)
+
+        // The CURRENT scan (key derived from V2) settles.
+        #expect(try store.markFetchComplete(
+            sourceID: sourceID,
+            expectedContentVersionID: v2.id) == true)
+        #expect(try store.fetchState(sourceID: sourceID) == .complete)
+    }
 }

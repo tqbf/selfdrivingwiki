@@ -353,6 +353,33 @@ struct FetcherProtocolResultTests {
         }
     }
 
+    /// A revision-5 EXTRACTOR request keeps the revision-3 wire shape —
+    /// `remote-url` included (skeptic-review F3): the JSON round-trip must
+    /// decode, and the envelope must route it to the extractor arm.
+    @Test func v5ExtractorRequestKeepsRemoteURLTransport() throws {
+        let request = try ExtractorProtocolRequest(
+            requestID: ExtractorRequestID(),
+            protocolRevision: .v5,
+            kind: .pdf,
+            mimeType: ExtractorMIMEType(validating: "application/pdf"),
+            originalFilename: "doc.pdf",
+            remoteURL: ExtractorRemoteSourceURL(
+                validating: "https://example.com/doc.pdf"),
+            outputPath: ExtractorRelativePath(validating: "output/result.md"),
+            deadlineMillisecondsSince1970: 9_999_999_999_999)
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(
+            ExtractorProtocolRequest.self, from: data)
+        #expect(decoded == request)
+        // The envelope routes it as an extractor request, not a fetch.
+        guard case .extractor(let envelope) = try ExtractorRequestEnvelope.decode(data) else {
+            Issue.record("expected the extractor arm")
+            return
+        }
+        #expect(envelope == request)
+        #expect(envelope.operationInput.transport == .remoteURL)
+    }
+
     /// The execution boundary's redaction pass must carry the revision-5
     /// fetch fields through: the result tag has no text surface, and the
     /// display filename is package-controlled text that MUST be redacted.
