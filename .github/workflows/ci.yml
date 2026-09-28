@@ -96,9 +96,16 @@ jobs:
         # Keep SwiftPM's worker count at one (#1003, #1021): the core suite
         # otherwise intermittently crashes its shared test helper under load.
         # timeout-minutes: 30 is a safety net for a cache-miss full rebuild.
+        #
+        # Two more suites are skipped for a different reason (#1338): both
+        # spawn real subprocesses under wall-clock deadlines, and full-suite
+        # load on the 3-vCPU runner starves the child past its deadline
+        # (zsh login startup > 10 s on main 2026-09-19; fixture startup
+        # > 30 s on 2026-09-28). They are not disabled — they stay required
+        # locally before every PR (`make test`).
         timeout-minutes: 30
         env:
-          SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteboardBridgeTests|SidebarSelectAllShortcutTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
+          SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteboardBridgeTests|SidebarSelectAllShortcutTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests|RuntimeCommandLocatorIntegrationTests|ManagedExtractorProcessExecutorTests'
         run: xcrun swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip "$SKIP"
       - name: Test serialized Cordis search suites
         # Real Tantivy and CLI search can starve a small cooperative pool when
