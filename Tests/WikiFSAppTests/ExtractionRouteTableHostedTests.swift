@@ -193,16 +193,16 @@ struct ExtractionRouteTableHostedTests {
         let window = mount(view)
 
         try await waitUntil {
-            self.tableViewRowCounts(window).contains(8)
+            self.tableViewRowCounts(window).contains(7)
         }
         // The hosted hierarchy contains a native table (row views) inside a
         // clip view — the scrollable, window-bounded layout.
         let content = try #require(window.contentView)
         #expect(containsDescendant(content) { $0 is NSClipView })
-        // Six canonical extractor routes plus the registration-derived
-        // EPUB route, plus the bundled fetcher route (application/zotero).
-        // The packages pane is not mounted on the default tab.
-        #expect(tableViewRowCounts(window) == [8])
+        // Six canonical extractor routes plus the registration-derived EPUB
+        // route. Fetcher routes live in the Fetch tab's own table; the
+        // packages pane is not mounted on the default tab.
+        #expect(tableViewRowCounts(window) == [7])
         // Under the metrics ceiling every row has to be visible, not merely
         // present. The transcript row is last, so a table sized one row short
         // hides exactly it.
@@ -494,6 +494,71 @@ struct ExtractionRouteTableHostedTests {
         // Both panes can raise the service configuration sheet, so it is
         // presented above the switcher rather than inside one pane.
         #expect(source.contains(".sheet(item: $serviceConfigurationDialog) { dialog in\n            serviceConfigurationSheet(dialog)"))
+    }
+
+    /// AC.5 source contract: the Fetch tab's identifier families are
+    /// complete literals with their own `fetch.*` namespace, the extractor
+    /// arm's `extraction.*` literals stay byte-identical, and the fetchers
+    /// focus renders its own route table (never the extractor table).
+    @Test("fetch focus keeps its own ids and the extractor ids stay pinned")
+    func fetchFocusIdFamiliesArePinned() throws {
+        let source = try sourceView()
+
+        // The fetch namespace: full literals, no interpolation with them.
+        let fetchLiterals = [
+            "fetch.pane.switcher",
+            "fetch.routes.table",
+            "fetch.routes.picker",
+            "fetch.packages.table",
+            "fetch.packages.refresh",
+            "fetch.packages.empty",
+            "fetch.packages.row",
+            "fetch.packages.status",
+            "fetch.packages.digest",
+            "fetch.packages.registration",
+            "fetch.packages.import.button",
+            "fetch.packages.configure",
+            "fetch.packages.remove",
+            "fetch.packages.progress",
+            "fetch.packages.diagnostic",
+            "fetch.packages.error",
+        ]
+        for literal in fetchLiterals {
+            #expect(source.contains(literal), "missing fetch id literal \(literal)")
+        }
+
+        // The extractor arm's literals stay exactly as the hosted contracts
+        // pin them (single-sourced in the FocusPresentation constant).
+        let extractorLiterals = [
+            "extraction.pane.switcher",
+            "extraction.routes.table",
+            "extraction.routes.picker",
+            "extraction.packages.table",
+            "extraction.packages.refresh",
+            "extraction.packages.empty",
+            "extraction.packages.row",
+            "extraction.packages.status",
+            "extraction.packages.digest",
+            "extraction.packages.registration",
+            "extraction.packages.import.button",
+            "extraction.packages.configure",
+            "extraction.packages.remove",
+            "extraction.packages.progress",
+            "extraction.packages.diagnostic",
+            "extraction.packages.error",
+        ]
+        for literal in extractorLiterals {
+            #expect(source.contains(literal), "lost extractor id literal \(literal)")
+        }
+
+        // The fetchers focus renders its own route table; the extractor
+        // table's pinned call sites stay byte-identical.
+        #expect(source.contains("private var fetcherRouteTable: some View"))
+        #expect(source.contains("TableColumn(\"Default fetcher\")"))
+        #expect(source.contains("TableColumn(\"Default extractor\")"))
+        #expect(source.contains("Table(defaultsRows)"))
+        // The ACP section is extractor-scope only.
+        #expect(source.contains("roleFocus == .extractors"))
     }
 
     @Test("table row identifiers are unique")

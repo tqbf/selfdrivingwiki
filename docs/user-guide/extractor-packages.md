@@ -104,7 +104,7 @@ formats.
 
 Configure two things:
 
-1. **API key** — **Settings → Extraction → Packages**, then **Configure…** on
+1. **API key** — **Settings → Fetch → Packages**, then **Configure…** on
    the Zotero Attachment row. Paste the key into the **Zotero API Key** value
    row. The key lives in your Keychain. It is resolved per download through
    the seeded authorization; it is never written to a config file, a queue
@@ -203,12 +203,16 @@ The capability list in a manifest (network, shared caches, model download) is a 
 
 ## Selection and route status
 
-Open **Settings** → **Extraction** and use the **Default Extractors** section. The table has one row for each extraction route. The current routes are PDF, HTML, Word (.docx), and Podcast transcript. A registration can add a row for a new format without an app update. A fetcher registration adds a fetch route row for each MIME type it claims, such as **Fetch: application/zotero**, with its own picker. Formats without a route do not have an extraction adapter yet.
+Settings has two tabs for package roles: **Extraction** for extractors and **Fetch** for fetchers.
+
+Open **Settings** → **Extraction** and use the **Default Extractors** section. The table has one row for each extraction route. The current routes are PDF, HTML, Word (.docx), and Podcast transcript. A registration can add a row for a new format without an app update. Formats without a route do not have an extraction adapter yet.
+
+Open **Settings** → **Fetch** and use the **Default Fetchers** section. The table has one row for each byteless source route a fetcher claims, such as **application/zotero**, with its own picker of compatible fetchers. The ACP provider choice never appears here; it belongs to the Extraction tab.
 
 Each row has four columns:
 
-- **Format** shows the route name, such as PDF or HTML. Help text shows the MIME type.
-- **Default extractor** lists reviewed packages, installed packages, connected services, and built-in extractors. HTML also has a no-default prompt choice.
+- **Format** (Extraction) or **Route** (Fetch) shows the route name, such as PDF or HTML, or the claimed source MIME type. Help text shows the MIME type.
+- **Default extractor** (Extraction) or **Default fetcher** (Fetch) lists reviewed packages, installed packages, connected services, and built-in extractors, as the role allows. HTML also has a no-default prompt choice.
 - **Status** shows **Ready**, **Needs setup**, **Not installed**, **Starting**, or **Failed**.
 - **Configuration** shows **Configure…** when the selected extractor has host settings.
 
@@ -222,7 +226,7 @@ Older package versions stay available while a newer version is installed. A fail
 
 ## Installed packages in Settings
 
-Use **Installed Extractor Packages** to manage exact revisions. This section does not contain another default picker or the local import workflow. The **Handles** column shows what a package serves: a format such as PDF or HTML for an extractor, or **Fetch** for a fetcher. Expand a row to see its version, digest prefix, and registration name. An expanded fetcher row adds the detail line **Role: Fetcher (acquires one source per request)**.
+Use **Installed Extractor Packages** (Settings → Extraction) and **Installed Fetcher Packages** (Settings → Fetch) to manage exact revisions. Each table lists only its own role: the Extraction tab shows extractors, the Fetch tab shows fetchers. This section does not contain another default picker or the local import workflow. The **Handles** column shows what a package serves: a format such as PDF or HTML for an extractor, or **Fetch** for a fetcher. Expand a row to see its version, digest prefix, and registration name. An expanded fetcher row adds the detail line **Role: Fetcher (acquires one source per request)**.
 
 Click the **Advanced Local Package Import** row to expand or contract it. Use the row's **Import Extractor Package…** button to add a local package folder. The app validates and copies the folder into the extractor store on this Mac.
 

@@ -65,7 +65,7 @@ reviewed `zotero` fetcher package acquires the attachments you name. The
 in-app library picker is not built yet; you list attachment keys in a config
 file.
 
-1. Store your API key: open **Settings → Extraction → Packages** and click
+1. Store your API key: open **Settings → Fetch → Packages** and click
    **Configure…** on the Zotero Attachment row. Paste the key into the
    **Zotero API Key** value row. The key lives in your Keychain.
 2. Name what to fetch: edit `zotero-config.json` in the App Group container

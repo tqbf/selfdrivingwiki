@@ -609,6 +609,179 @@ struct WikiFSApp: App {
         daemonTransportCoordinator.startIfNeeded()
     }
 
+
+    /// Builds the package settings view for one role focus. Both the
+    /// Extraction tab and the Fetch tab use this factory with IDENTICAL
+    /// snapshot, credential, import, and removal wiring — only the focus
+    /// differs, so the two tabs can never drift on lifecycle behavior.
+    private func packageSettingsView(
+        roleFocus: ExtractionSettingsRoleFocus
+    ) -> ExtractionSettingsView {
+        ExtractionSettingsView(
+
+                    containerDirectory: containerDirectory,
+                    launcher: settingsLauncher,
+                    packageSnapshot: { [processProfileOwner] in
+                        guard let services = await processProfileOwner.services else {
+                            return ExtractorPackageSettingsSnapshot.empty
+                        }
+                        var snapshot = ExtractorPackageSettingsSnapshot(
+                            rows: await services.extractionBackends.installedPackageRows())
+                        // Route presentation projection: exact registration
+                        // metadata for the route table builder.
+                        snapshot.registrationSnapshots = await services.extractionBackends.installedRegistrationSnapshots()
+                        if let context = services.extractionContext {
+                            let observation = await context.observationSnapshot()
+                            snapshot.availableRegistrationSnapshots = context.availableRegistrationSnapshots()
+                            snapshot.failedPackages = observation.retainedFailures.map {
+                                ExtractorPackageFailureSummary(
+                                    packageID: $0.packageID,
+                                    version: $0.version,
+                                    digestPrefix: $0.digestPrefix,
+                                    message: $0.message)
+                            }
+                             snapshot.appliedGeneration = observation.appliedGeneration
+                            snapshot.waitingRevisionIDs = observation.waitingRevisionIDs
+                        }
+                        // Credential requirement summaries (#1159): pure
+                        // composition over the registration projections, the
+                        // durable authorization snapshot, and UI-safe
+                        // descriptions. App + daemon read the same file;
+                        // only this app wiring can mutate it (below).
+                        snapshot.credentialRequirements = ExtractorCredentialSettingsSupport.summaries(
+                            registrationSnapshots: snapshot.registrationSnapshots,
+                            authorizationSnapshot: ExtractorCredentialAuthorizationReader(
+                                layout: ExtractorCredentialAuthorizationStoreLayout(
+                                    appGroupContainerRoot: containerDirectory)).snapshot(),
+                            credentials: KeychainCredentialService())
+                        return snapshot
+                    },
+                    // App-only authorization mutation (AC.9): only this
+                    // wiring constructs the writer (the role gate rejects
+                    // daemon/CLI construction). Grant pins the exact
+                    // requirement fingerprint; revoke keeps the record's
+                    // lineage identity for reinstall visibility.
+                    authorizeRequirement: { summary in
+                        do {
+                            let writer = try ExtractorCredentialAuthorizationWriter(
+                                layout: ExtractorCredentialAuthorizationStoreLayout(
+                                    appGroupContainerRoot: containerDirectory),
+                                processRole: .app)
+                            guard let reference = ExtractorCredentialSettingsSupport
+                                .bindingReference(for: summary)
+                            else {
+                                DebugLog.extraction(
+                                    "credentials: authorize closure found NO binding reference for \(summary.packageID)/\(summary.requirementID)")
+                                return .failed("This requirement could not be authorized.")
+                            }
+                            DebugLog.extraction(
+                                "credentials: authorize closure granting \(summary.packageID)/\(summary.requirementID) → \(reference.rawValue)")
+                            let requirement = try ExtractorCredentialRequirement(
+                                id: ExtractorCredentialRequirementID(
+                                    validating: summary.requirementID),
+                                kind: .secret,
+                                isOptional: summary.isOptional,
+                                label: summary.label,
+                                purpose: summary.purpose)
+                            let snapshot = try await writer.grant(
+                                packageID: ExtractorPackageID(
+                                    validating: summary.packageID),
+                                registrationID: ExtractorRegistrationID(
+                                    validating: summary.registrationID),
+                                kinds: summary.kinds,
+                                mimeTypes: summary.mimeTypes,
+                                requirement: requirement,
+                                credentialReference: reference)
+                            DebugLog.extraction(
+                                "credentials: grant written generation=\(snapshot.generation) records=\(snapshot.records.count)")
+                            return .succeeded(nil)
+                        } catch {
+                            DebugLog.extraction(
+                                "credentials: authorize closure FAILED for \(summary.packageID)/\(summary.requirementID): \(ExtractorPackageMutationMessage.describe(error))")
+                            return .failed(ExtractorPackageMutationMessage.describe(error))
+                        }
+                    },
+                    revokeRequirement: { summary in
+                        do {
+                            let writer = try ExtractorCredentialAuthorizationWriter(
+                                layout: ExtractorCredentialAuthorizationStoreLayout(
+                                    appGroupContainerRoot: containerDirectory),
+                                processRole: .app)
+                            DebugLog.extraction(
+                                "credentials: revoke closure revoking \(summary.packageID)/\(summary.requirementID)")
+                            let snapshot = try await writer.revoke(
+                                packageID: ExtractorPackageID(
+                                    validating: summary.packageID),
+                                requirementID: ExtractorCredentialRequirementID(
+                                    validating: summary.requirementID))
+                            DebugLog.extraction(
+                                "credentials: revoke written generation=\(snapshot.generation) records=\(snapshot.records.count)")
+                            return .succeeded(nil)
+                        } catch {
+                            DebugLog.extraction(
+                                "credentials: revoke closure FAILED for \(summary.packageID)/\(summary.requirementID): \(ExtractorPackageMutationMessage.describe(error))")
+                            return .failed(ExtractorPackageMutationMessage.describe(error))
+                        }
+                    },
+                    retryActivation: { [weak processProfileOwner] in
+                        guard let services = await processProfileOwner?.services else { return }
+                        let report = await services.extractionContext?.reconcileNow(force: true)
+                        // The refreshed snapshot is the user-visible signal;
+                        // this log keeps an incomplete forced retry visible in
+                        // Console. Counts only — no package messages here.
+                        if let report, report.appliedGeneration == nil
+                            || report.failedPackages.isEmpty == false {
+                            DebugLog.extraction(
+                                "forced extractor activation retry incomplete: applied=\(report.appliedGeneration.map(String.init) ?? "none"), failed=\(report.failedPackages.count)")
+                        }
+                    },
+                    // Package mutation is app-only: the catalog writer rejects
+                    // non-app roles, and only this Settings wiring constructs
+                    // one. A published generation wakes every process
+                    // reconciler through the catalog notifications; the
+                    // deterministic wake below just removes the latency so the
+                    // refreshed rows reflect the new generation.
+                    importPackage: { [weak processProfileOwner] directory in
+                        do {
+                            let writer = try ExtractorPackageCatalogWriter(
+                                appGroupContainerRoot: containerDirectory)
+                            _ = try await writer.importDirectory(
+                                directory,
+                                installedAt: RFC3339Timestamp(date: Date()))
+                            if let services = await processProfileOwner?.services {
+                                await services.extractionContext?.receiveCatalogWake()
+                                let inputs = await services.extraction
+                                    .registeredExtractionInputs()
+                                await MainActor.run {
+                                    sessionManager.refreshRegisteredExtractionInputsForLiveSessions(inputs)
+                                }
+                            }
+                            return .succeeded(nil)
+                        } catch {
+                            return .failed(ExtractorPackageMutationMessage.describe(error))
+                        }
+                    },
+                    removePackage: { [weak processProfileOwner] revision in
+                        do {
+                            let writer = try ExtractorPackageCatalogWriter(
+                                appGroupContainerRoot: containerDirectory)
+                            _ = try await writer.remove(revision: revision)
+                            if let services = await processProfileOwner?.services {
+                                await services.extractionContext?.receiveCatalogWake()
+                                let inputs = await services.extraction
+                                    .registeredExtractionInputs()
+                                await MainActor.run {
+                                    sessionManager.refreshRegisteredExtractionInputsForLiveSessions(inputs)
+                                }
+                            }
+                            return .succeeded(nil)
+                        } catch {
+                            return .failed(ExtractorPackageMutationMessage.describe(error))
+                        }
+                    },
+            roleFocus: roleFocus)
+    }
+
     var body: some Scene {
         // Main window: single-identity, opens on launch. Resolves the MRU
         // wiki via the `registry.activeWikiID` → `wikiID` adoption flow in
@@ -841,169 +1014,12 @@ struct WikiFSApp: App {
 
         Settings {
             TabView(selection: settingsSelectedTab) {
-                ExtractionSettingsView(
-                    containerDirectory: containerDirectory,
-                    launcher: settingsLauncher,
-                    packageSnapshot: { [processProfileOwner] in
-                        guard let services = await processProfileOwner.services else {
-                            return ExtractorPackageSettingsSnapshot.empty
-                        }
-                        var snapshot = ExtractorPackageSettingsSnapshot(
-                            rows: await services.extractionBackends.installedPackageRows())
-                        // Route presentation projection: exact registration
-                        // metadata for the route table builder.
-                        snapshot.registrationSnapshots = await services.extractionBackends.installedRegistrationSnapshots()
-                        if let context = services.extractionContext {
-                            let observation = await context.observationSnapshot()
-                            snapshot.availableRegistrationSnapshots = context.availableRegistrationSnapshots()
-                            snapshot.failedPackages = observation.retainedFailures.map {
-                                ExtractorPackageFailureSummary(
-                                    packageID: $0.packageID,
-                                    version: $0.version,
-                                    digestPrefix: $0.digestPrefix,
-                                    message: $0.message)
-                            }
-                             snapshot.appliedGeneration = observation.appliedGeneration
-                            snapshot.waitingRevisionIDs = observation.waitingRevisionIDs
-                        }
-                        // Credential requirement summaries (#1159): pure
-                        // composition over the registration projections, the
-                        // durable authorization snapshot, and UI-safe
-                        // descriptions. App + daemon read the same file;
-                        // only this app wiring can mutate it (below).
-                        snapshot.credentialRequirements = ExtractorCredentialSettingsSupport.summaries(
-                            registrationSnapshots: snapshot.registrationSnapshots,
-                            authorizationSnapshot: ExtractorCredentialAuthorizationReader(
-                                layout: ExtractorCredentialAuthorizationStoreLayout(
-                                    appGroupContainerRoot: containerDirectory)).snapshot(),
-                            credentials: KeychainCredentialService())
-                        return snapshot
-                    },
-                    // App-only authorization mutation (AC.9): only this
-                    // wiring constructs the writer (the role gate rejects
-                    // daemon/CLI construction). Grant pins the exact
-                    // requirement fingerprint; revoke keeps the record's
-                    // lineage identity for reinstall visibility.
-                    authorizeRequirement: { summary in
-                        do {
-                            let writer = try ExtractorCredentialAuthorizationWriter(
-                                layout: ExtractorCredentialAuthorizationStoreLayout(
-                                    appGroupContainerRoot: containerDirectory),
-                                processRole: .app)
-                            guard let reference = ExtractorCredentialSettingsSupport
-                                .bindingReference(for: summary)
-                            else {
-                                DebugLog.extraction(
-                                    "credentials: authorize closure found NO binding reference for \(summary.packageID)/\(summary.requirementID)")
-                                return .failed("This requirement could not be authorized.")
-                            }
-                            DebugLog.extraction(
-                                "credentials: authorize closure granting \(summary.packageID)/\(summary.requirementID) → \(reference.rawValue)")
-                            let requirement = try ExtractorCredentialRequirement(
-                                id: ExtractorCredentialRequirementID(
-                                    validating: summary.requirementID),
-                                kind: .secret,
-                                isOptional: summary.isOptional,
-                                label: summary.label,
-                                purpose: summary.purpose)
-                            let snapshot = try await writer.grant(
-                                packageID: ExtractorPackageID(
-                                    validating: summary.packageID),
-                                registrationID: ExtractorRegistrationID(
-                                    validating: summary.registrationID),
-                                kinds: summary.kinds,
-                                mimeTypes: summary.mimeTypes,
-                                requirement: requirement,
-                                credentialReference: reference)
-                            DebugLog.extraction(
-                                "credentials: grant written generation=\(snapshot.generation) records=\(snapshot.records.count)")
-                            return .succeeded(nil)
-                        } catch {
-                            DebugLog.extraction(
-                                "credentials: authorize closure FAILED for \(summary.packageID)/\(summary.requirementID): \(ExtractorPackageMutationMessage.describe(error))")
-                            return .failed(ExtractorPackageMutationMessage.describe(error))
-                        }
-                    },
-                    revokeRequirement: { summary in
-                        do {
-                            let writer = try ExtractorCredentialAuthorizationWriter(
-                                layout: ExtractorCredentialAuthorizationStoreLayout(
-                                    appGroupContainerRoot: containerDirectory),
-                                processRole: .app)
-                            DebugLog.extraction(
-                                "credentials: revoke closure revoking \(summary.packageID)/\(summary.requirementID)")
-                            let snapshot = try await writer.revoke(
-                                packageID: ExtractorPackageID(
-                                    validating: summary.packageID),
-                                requirementID: ExtractorCredentialRequirementID(
-                                    validating: summary.requirementID))
-                            DebugLog.extraction(
-                                "credentials: revoke written generation=\(snapshot.generation) records=\(snapshot.records.count)")
-                            return .succeeded(nil)
-                        } catch {
-                            DebugLog.extraction(
-                                "credentials: revoke closure FAILED for \(summary.packageID)/\(summary.requirementID): \(ExtractorPackageMutationMessage.describe(error))")
-                            return .failed(ExtractorPackageMutationMessage.describe(error))
-                        }
-                    },
-                    retryActivation: { [weak processProfileOwner] in
-                        guard let services = await processProfileOwner?.services else { return }
-                        let report = await services.extractionContext?.reconcileNow(force: true)
-                        // The refreshed snapshot is the user-visible signal;
-                        // this log keeps an incomplete forced retry visible in
-                        // Console. Counts only — no package messages here.
-                        if let report, report.appliedGeneration == nil
-                            || report.failedPackages.isEmpty == false {
-                            DebugLog.extraction(
-                                "forced extractor activation retry incomplete: applied=\(report.appliedGeneration.map(String.init) ?? "none"), failed=\(report.failedPackages.count)")
-                        }
-                    },
-                    // Package mutation is app-only: the catalog writer rejects
-                    // non-app roles, and only this Settings wiring constructs
-                    // one. A published generation wakes every process
-                    // reconciler through the catalog notifications; the
-                    // deterministic wake below just removes the latency so the
-                    // refreshed rows reflect the new generation.
-                    importPackage: { [weak processProfileOwner] directory in
-                        do {
-                            let writer = try ExtractorPackageCatalogWriter(
-                                appGroupContainerRoot: containerDirectory)
-                            _ = try await writer.importDirectory(
-                                directory,
-                                installedAt: RFC3339Timestamp(date: Date()))
-                            if let services = await processProfileOwner?.services {
-                                await services.extractionContext?.receiveCatalogWake()
-                                let inputs = await services.extraction
-                                    .registeredExtractionInputs()
-                                await MainActor.run {
-                                    sessionManager.refreshRegisteredExtractionInputsForLiveSessions(inputs)
-                                }
-                            }
-                            return .succeeded(nil)
-                        } catch {
-                            return .failed(ExtractorPackageMutationMessage.describe(error))
-                        }
-                    },
-                    removePackage: { [weak processProfileOwner] revision in
-                        do {
-                            let writer = try ExtractorPackageCatalogWriter(
-                                appGroupContainerRoot: containerDirectory)
-                            _ = try await writer.remove(revision: revision)
-                            if let services = await processProfileOwner?.services {
-                                await services.extractionContext?.receiveCatalogWake()
-                                let inputs = await services.extraction
-                                    .registeredExtractionInputs()
-                                await MainActor.run {
-                                    sessionManager.refreshRegisteredExtractionInputsForLiveSessions(inputs)
-                                }
-                            }
-                            return .succeeded(nil)
-                        } catch {
-                            return .failed(ExtractorPackageMutationMessage.describe(error))
-                        }
-                    })
+                packageSettingsView(roleFocus: .extractors)
                     .tag(SettingsTab.extraction)
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
+                packageSettingsView(roleFocus: .fetchers)
+                    .tag(SettingsTab.fetch)
+                    .tabItem { Label("Fetch", systemImage: "arrow.down.circle") }
                 AgentsSettingsView(
                     containerDirectory: containerDirectory,
                     providerServices: agentProviderServices)
@@ -1038,6 +1054,7 @@ struct WikiFSApp: App {
     /// zotero package's pane), not as its own tab.
     enum SettingsTab: String {
         case extraction
+        case fetch
         case agents
         case operations
         case appearance
