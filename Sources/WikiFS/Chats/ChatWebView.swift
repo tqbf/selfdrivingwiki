@@ -141,7 +141,18 @@ final class ChatTranscriptWebView: WKWebView {
                 || url.scheme == WikiLinkMarkdown.scheme
         else { return }
 
-        if resolvedKind != nil {
+        // A ghost link (`wiki://missing`) may have become navigable since it
+        // was rendered — an external source add or page create landed while
+        // this transcript kept its baked href. `selection` resolves the
+        // title live against the store, so until the heal re-render lands,
+        // the menu treats a live-resolvable ghost exactly like a resolved
+        // link (Open in New Tab / Open in Background / Add Bookmark…); only
+        // a genuinely dead link degrades to Suggest….
+        let liveResolvedGhost = resolvedKind == nil &&
+            url.host == WikiLinkMarkdown.unresolvedHost &&
+            linkMenuCapabilities.selection?(url) != nil
+
+        if resolvedKind != nil || liveResolvedGhost {
             // Insert directly after WebKit's "Open Link" (which routes the
             // plain click), mirroring where the reader places its custom
             // items. A trailing separator groups them apart from the rest.
@@ -403,17 +414,25 @@ struct ChatWebView: NSViewRepresentable {
         private func currentContext() -> WikiRenderContext? { renderContext?() }
 
         func reload(chatRows: [ChatDisplayRow], transcriptID: TranscriptID?) {
-            chatRenderExecutor.submit(ChatTranscriptRenderSnapshot(
-                context: ChatTranscriptRenderContext(transcriptID: transcriptID),
-                rows: chatRows
-            ))
+            chatRenderExecutor.submit(snapshot(chatRows: chatRows, transcriptID: transcriptID))
         }
 
         func apply(chatRows: [ChatDisplayRow], transcriptID: TranscriptID?) {
-            chatRenderExecutor.submit(ChatTranscriptRenderSnapshot(
-                context: ChatTranscriptRenderContext(transcriptID: transcriptID),
-                rows: chatRows
-            ))
+            chatRenderExecutor.submit(snapshot(chatRows: chatRows, transcriptID: transcriptID))
+        }
+
+        /// The desired snapshot, stamped with the CURRENT render-context
+        /// generation. The mutate closure renders each command's HTML with
+        /// `currentContext()` at execution time, so the snapshot's generation
+        /// tells the planner which rows were last link-resolved at which
+        /// generation — the input the heal pass needs (a ghost
+        /// `wiki://missing` link heals once the store's generation advances).
+        private func snapshot(chatRows: [ChatDisplayRow], transcriptID: TranscriptID?) -> ChatTranscriptRenderSnapshot {
+            ChatTranscriptRenderSnapshot(
+                context: ChatTranscriptRenderContext(
+                    transcriptID: transcriptID,
+                    renderGeneration: currentContext()?.generation ?? 0),
+                rows: chatRows)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

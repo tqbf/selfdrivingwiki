@@ -53,6 +53,31 @@ enum WikiLinkMenuNSItems {
             }
             return store.chatID(forTitle: target).map(WikiSelection.chat)
         case nil:
+            // A ghost link (`wiki://missing?title=…`) — one rendered before
+            // its target existed. The transcript heal pass re-renders such
+            // rows when the render-context generation advances, but until it
+            // runs (or for a view that never re-renders), the target may
+            // ALREADY exist: an external `wikictl source add` landed, or a
+            // page was created mid-chat. Resolve the title live before
+            // declaring the link dead — the menu's item gating, the
+            // open-in-background action, and the click router all consult
+            // this. The kind was lost when the ghost URL was baked, so try
+            // each namespace (page → source → chat, the bare-wikilink
+            // precedence); exact collisions across namespaces are vanishingly
+            // rare and the heal re-render restores full fidelity anyway.
+            guard url.scheme == WikiLinkMarkdown.scheme,
+                  url.host == WikiLinkMarkdown.unresolvedHost,
+                  let target = WikiLinkMarkdown.target(from: url)
+            else { return nil }
+            if let pageID = store.pageID(forTitle: target) {
+                return .page(pageID)
+            }
+            if let sourceID = store.sourceID(forDisplayName: target) {
+                return .source(sourceID)
+            }
+            if let chatID = store.chatID(forTitle: target) {
+                return .chat(chatID)
+            }
             return nil
         }
     }

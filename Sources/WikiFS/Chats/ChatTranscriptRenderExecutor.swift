@@ -136,7 +136,13 @@ final class ChatTranscriptRenderExecutor {
             acknowledgedSnapshot = reloadSnapshot ?? snapshot
             reloadSnapshot = nil
         default:
-            acknowledgedSnapshot = applying(expected.command, to: acknowledgedSnapshot)
+            acknowledgedSnapshot = applying(
+                expected.command,
+                to: acknowledgedSnapshot,
+                // Rows touched by an acknowledged command rendered at (at
+                // least) the desired generation — the heal pass relies on
+                // this stamp to stop once a row is re-rendered.
+                renderGeneration: desiredSnapshot?.context.renderGeneration ?? 0)
         }
         state = .idle
         observe(stage: .domAcknowledgement, outcome: .accepted, correlation: correlation)
@@ -232,26 +238,35 @@ final class ChatTranscriptRenderExecutor {
 
     private func applying(
         _ command: ChatTranscriptRenderCommand,
-        to snapshot: ChatTranscriptRenderSnapshot?
+        to snapshot: ChatTranscriptRenderSnapshot?,
+        renderGeneration: UInt64
     ) -> ChatTranscriptRenderSnapshot? {
         guard let snapshot else { return nil }
         var updatedRows = snapshot.rows
+        var stamps = snapshot.renderedRowGenerations
         switch command {
         case .reload(let replacement):
             return replacement
         case .append(let rows):
             updatedRows.append(contentsOf: rows)
+            for row in rows { stamps[row.id] = renderGeneration }
         case .insert(let row, let before):
             guard let index = updatedRows.firstIndex(where: { $0.id == before }) else { return nil }
             updatedRows.insert(row, at: index)
+            stamps[row.id] = renderGeneration
         case .replace(let row):
             guard let index = updatedRows.firstIndex(where: { $0.id == row.id }) else { return nil }
             updatedRows[index] = row
+            stamps[row.id] = renderGeneration
         case .remove(let rowID):
             guard let index = updatedRows.firstIndex(where: { $0.id == rowID }) else { return nil }
             updatedRows.remove(at: index)
+            stamps[rowID] = nil
         }
-        return ChatTranscriptRenderSnapshot(context: snapshot.context, rows: updatedRows)
+        return ChatTranscriptRenderSnapshot(
+            context: snapshot.context,
+            rows: updatedRows,
+            renderedRowGenerations: stamps)
     }
 }
 

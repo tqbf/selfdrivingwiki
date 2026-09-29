@@ -15,15 +15,34 @@ struct ChatTranscriptRenderContext: Hashable, Sendable {
     /// A caller increments this token for an explicit renderer reset even when
     /// the transcript identity has not changed.
     let resetToken: Int
+    /// The `WikiRenderContext.generation` the DOM's link resolution was baked
+    /// with. NOT part of transcript identity: a change alone never reloads —
+    /// it asks the planner to re-render only the wiki-link-bearing rows, so a
+    /// ghost `wiki://missing` link heals once the store learns its target
+    /// (e.g. an external `wikictl source add` lands mid-chat). `0` when no
+    /// render context backs the surface.
+    let renderGeneration: UInt64
 
     init(
         transcriptID: TranscriptID?,
         style: Style = .chat,
-        resetToken: Int = 0
+        resetToken: Int = 0,
+        renderGeneration: UInt64 = 0
     ) {
         self.transcriptID = transcriptID
         self.style = style
         self.resetToken = resetToken
+        self.renderGeneration = renderGeneration
+    }
+
+    /// Transcript identity: the aspects whose change means the existing DOM
+    /// belongs to a different surface (reload). Deliberately excludes
+    /// ``renderGeneration`` — a generation change alone is a heal request,
+    /// not a reset.
+    func isSameTranscript(_ other: ChatTranscriptRenderContext) -> Bool {
+        return transcriptID == other.transcriptID &&
+            style == other.style &&
+            resetToken == other.resetToken
     }
 }
 
@@ -31,6 +50,23 @@ struct ChatTranscriptRenderContext: Hashable, Sendable {
 struct ChatTranscriptRenderSnapshot: Hashable, Sendable {
     let context: ChatTranscriptRenderContext
     let rows: [ChatDisplayRow]
+    /// Per-row render-context generation: the generation each row's HTML was
+    /// (or will be) link-resolved at. Rows missing here default to the
+    /// snapshot context's ``ChatTranscriptRenderContext/renderGeneration``.
+    /// The executor stamps rows as their commands are acknowledged, so the
+    /// heal pass terminates: a replan after each ack skips rows already
+    /// re-rendered at the desired generation.
+    var renderedRowGenerations: [ChatDisplayRowID: UInt64]
+
+    init(
+        context: ChatTranscriptRenderContext,
+        rows: [ChatDisplayRow],
+        renderedRowGenerations: [ChatDisplayRowID: UInt64] = [:]
+    ) {
+        self.context = context
+        self.rows = rows
+        self.renderedRowGenerations = renderedRowGenerations
+    }
 }
 
 enum ChatTranscriptRenderCommand: Hashable, Sendable {
@@ -76,7 +112,7 @@ enum ChatTranscriptRenderPlanner {
         desired: ChatTranscriptRenderSnapshot
     ) -> [ChatTranscriptRenderCommand] {
         guard let previous else { return [.reload(desired)] }
-        guard previous.context == desired.context else { return [.reload(desired)] }
+        guard previous.context.isSameTranscript(desired.context) else { return [.reload(desired)] }
 
         let previousIDs = previous.rows.map(\.id)
         let desiredIDs = desired.rows.map(\.id)
@@ -101,6 +137,29 @@ enum ChatTranscriptRenderPlanner {
         var commands: [ChatTranscriptRenderCommand] = desired.rows.compactMap { row in
             guard let previousRow = previousRowsByID[row.id], previousRow != row else { return nil }
             return .replace(row)
+        }
+
+        // Heal pass: when the render-context generation advanced, the link
+        // resolution baked into existing rows is stale — a ghost
+        // `wiki://missing` href may now resolve (an external source add
+        // landed between renders). Only wiki-link-bearing rows can change
+        // under a new context, so replace exactly those whose last render
+        // predates the desired generation, skipping rows the value diff
+        // already replaced. Rows added by this diff render fresh under the
+        // new generation by construction. Per-row generation stamps make
+        // this idempotent under the executor's replan-after-each-ack loop.
+        if previous.context.renderGeneration != desired.context.renderGeneration {
+            let replacedIDs = Set(commands.compactMap(\.rowID))
+            commands += desired.rows.compactMap { row in
+                let lastRendered = previous.renderedRowGenerations[row.id]
+                    ?? previous.context.renderGeneration
+                guard row.wikiLinkBearing,
+                      previousIDSet.contains(row.id),
+                      lastRendered != desired.context.renderGeneration,
+                      !replacedIDs.contains(row.id)
+                else { return nil }
+                return .replace(row)
+            }
         }
 
         let desiredIDSet = Set(desiredIDs)

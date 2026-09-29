@@ -122,7 +122,11 @@ public final class WikiStoreModel {
     /// self-manage through these reloads (slice 2a), and `.external` bus events
     /// route through `reloadFromStore()` → the same reloads. Either way the
     /// generation bumps.
-    @ObservationIgnored private var renderContextGeneration: UInt64 = 0
+    ///
+    /// `private(set)` (module-internal read) so `WikiRenderContext.build(from:)`
+    /// can stamp it into the snapshot — consumers compare a context's
+    /// `generation` to detect stale link resolution without touching the model.
+    @ObservationIgnored private(set) var renderContextGeneration: UInt64 = 0
     /// The snapshot captured at ``cachedRenderContext`` build time, so a reload
     /// that leaves the generation unchanged (e.g. a bookmark-only change) doesn't
     /// spuriously rebuild. Compared against ``renderContextGeneration``.

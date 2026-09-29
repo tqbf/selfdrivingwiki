@@ -135,6 +135,41 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
         }
     }
 
+    /// Whether the row's rendered HTML can depend on the `WikiRenderContext`
+    /// (wiki-link existence, embed resolution). True when any of the row's
+    /// markdown payloads contains wiki-link syntax (`[[`). The transcript
+    /// renderer bakes link resolution into each row's HTML, so this gates the
+    /// heal pass: when the render-context generation advances, only these
+    /// rows need re-rendering. A conservative superset is safe — a row
+    /// falsely flagged just gets one unnecessary DOM replace.
+    var wikiLinkBearing: Bool {
+        /// A row's markdown strings, exactly those the row renderer passes
+        /// through markdown + linkify.
+        func linkSyntax(in text: String) -> Bool { text.contains("[[") }
+        switch self {
+        case .userMessage(_, _, let text, _),
+             .assistantMessage(_, _, let text, _, _),
+             .assistantInterim(_, _, let text, _, _),
+             .reasoning(_, _, let text, _, _):
+            return linkSyntax(in: text)
+        case .toolCall(let call):
+            // The single-tool row renders output verbatim (no context), but
+            // the group child path renders it with the context — scan both.
+            if let output = call.output, linkSyntax(in: output) { return true }
+            if let detail = call.detail, linkSyntax(in: detail) { return true }
+            return false
+        case .toolCallGroup(let group):
+            return group.calls.contains { call in
+                (call.output.map(linkSyntax(in:)) ?? false)
+                    || (call.detail.map(linkSyntax(in:)) ?? false)
+            } || group.reasoning.contains { entry in linkSyntax(in: entry.text) }
+        case .notice(_, _, _, _, let message, _):
+            return linkSyntax(in: message)
+        case .failure:
+            return false
+        }
+    }
+
     var isPrompt: Bool {
         if case .userMessage = self { return true }
         return false

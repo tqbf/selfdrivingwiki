@@ -92,6 +92,15 @@ public struct WikiRenderContext: Sendable {
     /// to the detached markdown conversion path.
     public let rendererEmbedProjection: RendererEmbedProjection
 
+    /// The store's render-context generation at build time. Chat transcripts
+    /// render rows incrementally and bake link resolution into each row's
+    /// HTML, so a later render pass must be able to tell whether the
+    /// resolution inputs moved since a row was rendered (see
+    /// `ChatTranscriptRenderContext.renderGeneration`): a ghost
+    /// `wiki://missing` link can heal once the store learns the target. `0`
+    /// for hand-built contexts (tests, fixtures) — no store backing.
+    public let generation: UInt64
+
     /// The `wiki-blob://` scheme string, captured on the main actor (the static
     /// property is main-actor-isolated; the detached task can't read it). Exposed
     /// so a transcript render (Phase A.2) can rewrite relative image srcs the same
@@ -115,7 +124,8 @@ public struct WikiRenderContext: Sendable {
         blobScheme: String,
         rendererFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment] = [:],
         unavailableFenceAliases: Set<RendererFenceAlias> = [],
-        sourceIDToExtension: [SourceID: String] = [:]
+        sourceIDToExtension: [SourceID: String] = [:],
+        generation: UInt64 = 0
     ) {
         self.pageTitles = pageTitles
         self.pageIDToName = pageIDToName
@@ -133,6 +143,7 @@ public struct WikiRenderContext: Sendable {
             richFenceClaims: rendererFenceClaims,
             unavailableFenceAliases: unavailableFenceAliases)
         self.blobScheme = blobScheme
+        self.generation = generation
     }
 
     // MARK: - Build (main actor)
@@ -246,7 +257,8 @@ public struct WikiRenderContext: Sendable {
             blobScheme: WikiLinkMarkdown.blobScheme,
             rendererFenceClaims: rendererFenceClaims,
             unavailableFenceAliases: unavailableFenceAliases,
-            sourceIDToExtension: sourceIDToExtension)
+            sourceIDToExtension: sourceIDToExtension,
+            generation: store.renderContextGeneration)
     }
 
     // MARK: - Render closures (pure — derived from captured data)

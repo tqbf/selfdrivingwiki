@@ -442,7 +442,26 @@ struct WikiReaderView: View {
             case .chat(let title, let id, let frag):
                 if let id, store.selectChat(byID: id, anchor: frag, openInNewTab: openInNewTab) { }
                 else { store.selectChat(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
-            case .samePageAnchor, .inert:      break
+            case .samePageAnchor:
+                break
+            case .inert:
+                // A ghost link (`wiki://missing`) whose target now exists —
+                // an external write landed after the row rendered — routes
+                // by live title resolution instead of no-op. Same lookup the
+                // link menu uses; the transcript heal re-render restores the
+                // canonical href shortly after.
+                if let selection = WikiLinkMenuNSItems.selection(for: url, store: store) {
+                    switch selection {
+                    case .page(let id):
+                        _ = store.selectPage(byID: id, openInNewTab: openInNewTab)
+                    case .source(let id):
+                        _ = store.selectSource(byID: id, openInNewTab: openInNewTab)
+                    case .chat(let id):
+                        _ = store.selectChat(byID: id, openInNewTab: openInNewTab)
+                    default:
+                        break
+                    }
+                }
             }
         }
     }

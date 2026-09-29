@@ -73,6 +73,73 @@ struct ChatTranscriptRenderPlannerTests {
         #expect(ChatTranscriptRenderPlanner.commands(previous: previous, desired: styleChange) == [.reload(styleChange)])
     }
 
+    // MARK: - Heal pass (render-generation advance)
+
+    /// A row whose text carries wiki-link syntax — only these rows' HTML can
+    /// change under a new render context.
+    private func linkRow(_ id: String) -> ChatDisplayRow {
+        row(id, text: "See [[source:Some Paper]] for details.")
+    }
+
+    private func snapshot(
+        generation: UInt64,
+        rows: [ChatDisplayRow],
+        stamps: [ChatDisplayRowID: UInt64] = [:]
+    ) -> ChatTranscriptRenderSnapshot {
+        .init(
+            context: .init(transcriptID: transcript, renderGeneration: generation),
+            rows: rows,
+            renderedRowGenerations: stamps)
+    }
+
+    @Test func generationAdvanceReplacesOnlyLinkBearingRows() {
+        let plain = row("plain", text: "No links here at all.")
+        let link = linkRow("link")
+        #expect(ChatTranscriptRenderPlanner.commands(
+            previous: snapshot(generation: 1, rows: [plain, link]),
+            desired: snapshot(generation: 2, rows: [plain, link])
+        ) == [.replace(link)])
+    }
+
+    @Test func rowsStampedAtTheDesiredGenerationAreNotReplacedAgain() {
+        // The executor stamps a row when its replace is acknowledged; the
+        // replan that follows must skip it — this is what terminates the
+        // heal under the executor's plan-one-run-one loop.
+        let link = linkRow("link")
+        #expect(ChatTranscriptRenderPlanner.commands(
+            previous: snapshot(generation: 1, rows: [link], stamps: [link.id: 2]),
+            desired: snapshot(generation: 2, rows: [link])
+        ).isEmpty)
+    }
+
+    @Test func generationAdvanceWithoutLinkBearingRowsPlansNothing() {
+        let plain = row("plain", text: "No links here at all.")
+        #expect(ChatTranscriptRenderPlanner.commands(
+            previous: snapshot(generation: 1, rows: [plain]),
+            desired: snapshot(generation: 2, rows: [plain])
+        ).isEmpty)
+    }
+
+    @Test func healReplacesDoNotDuplicateValueReplaces() {
+        let changed = row("link", text: "See [[source:Some Paper]] — updated text.")
+        #expect(ChatTranscriptRenderPlanner.commands(
+            previous: snapshot(generation: 1, rows: [linkRow("link")]),
+            desired: snapshot(generation: 2, rows: [changed])
+        ) == [.replace(changed)])
+    }
+
+    @Test func generationChangeAloneNeverReloads() {
+        // Identity is unchanged (same transcript, style, resetToken); only
+        // the render generation moved. The plan re-renders link-bearing
+        // rows — it must NOT discard the DOM with a reload.
+        let link = linkRow("link")
+        let commands = ChatTranscriptRenderPlanner.commands(
+            previous: snapshot(generation: 1, rows: [link]),
+            desired: snapshot(generation: 2, rows: [link])
+        )
+        #expect(commands == [.replace(link)])
+    }
+
     private func snapshot(rows: [ChatDisplayRow]) -> ChatTranscriptRenderSnapshot {
         .init(context: .init(transcriptID: transcript), rows: rows)
     }
