@@ -425,7 +425,11 @@ public enum ArgumentParser {
         // `--source` is the agent-asserted "this ingest completed" switch: it
         // stamps the file Ingested in the UI. It is only meaningful for an
         // ingest, so reject it up front on other kinds instead of silently
-        // ignoring a flag the caller believed had an effect.
+        // ignoring a flag the caller believed had an effect. An empty value
+        // fails the same way — the caller meant to name a file and did not.
+        if let rawSource = options.value("--source"), rawSource.isEmpty {
+            throw Failure.usage("log append: --source requires a file id")
+        }
         if source != nil, kind != .ingest {
             throw Failure.usage(
                 "log append: --source is only valid with --kind ingest — it marks that file Ingested. A \(kind.rawValue) entry names sources in its title/note instead.")

@@ -317,7 +317,7 @@ public enum CLIReference {
             summary: "append dated rows to the wiki log (log.md)",
             leaves: [
                 CLILeaf(
-                    "append", summary: "append one dated row to log.md; --source stamps that file \"Processed\"",
+                    "append", summary: "append one dated row to log.md; with --kind ingest, --source also marks that file Ingested",
                     commandLine: "append --kind ingest|query|lint --title X [--note N] [--source <file-id>]",
                     options: [
                         CLIOption("--kind <ingest|query|lint>", required: true, summary: "row kind"),

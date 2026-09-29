@@ -41,11 +41,26 @@ struct WikiCtlLogIndexTests {
     }
 
     /// `--source` is the completed-ingest switch; on any other kind it must
-    /// fail loudly instead of silently taking no effect.
-    @Test func logAppendRejectsSourceOnNonIngestKind() {
+    /// fail loudly instead of silently taking no effect. The message is the
+    /// agent-facing deliverable, so pin it too.
+    @Test func logAppendRejectsSourceOnNonIngestKind() throws {
+        for kind in ["query", "lint"] {
+            do {
+                _ = try ArgumentParser.parse(
+                    ["--wiki", "W", "log", "append", "--kind", kind, "--title", "T", "--source", "FILE123"],
+                    env: noEnv)
+                Issue.record("expected usage failure for --kind \(kind)")
+            } catch let failure as ArgumentParser.Failure {
+                #expect(
+                    String(describing: failure).contains("--source is only valid with --kind ingest"))
+            }
+        }
+    }
+
+    @Test func logAppendRejectsEmptySource() {
         #expect(throws: ArgumentParser.Failure.self) {
             try ArgumentParser.parse(
-                ["--wiki", "W", "log", "append", "--kind", "query", "--title", "T", "--source", "FILE123"],
+                ["--wiki", "W", "log", "append", "--kind", "ingest", "--title", "T", "--source", ""],
                 env: noEnv)
         }
     }
@@ -137,6 +152,7 @@ struct WikiCtlLogIndexTests {
     /// Defense-in-depth for the command-level gate (the parser rejects this
     /// shape first): a non-ingest entry that names a source must never flip
     /// its ingest state — the Ingested badge is the completed-ingest switch.
+    /// The gate suppresses the STAMP, not the entry: the log row still lands.
     @Test func logAppendWithSourceOnNonIngestKindDoesNotMark() throws {
         let store = try tempStore()
         let file = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
@@ -144,6 +160,22 @@ struct WikiCtlLogIndexTests {
         _ = try LogIndexCommand.run(
             .logAppend(kind: .query, title: "Cited paper.pdf", note: nil, source: file.id), in: store)
 
+        #expect(try store.markedSourceIDs().isEmpty)
+        #expect(try store.listAllLogEntriesOrderedByID().count == 1)
+    }
+
+    /// A typo'd or unknown --source must fail loudly BEFORE anything commits:
+    /// markSourceIngested is a no-op UPDATE on a missing id, so accepting it
+    /// would append the row, exit 0, and leave the file unmarked.
+    @Test func logAppendWithUnknownSourceFailsLoudlyAndCommitsNothing() throws {
+        let store = try tempStore()
+        let ghost = SourceID(rawValue: "DOESNOTEXIST")
+
+        #expect(throws: PageCommand.Failure.self) {
+            _ = try LogIndexCommand.run(
+                .logAppend(kind: .ingest, title: "Anything", note: nil, source: ghost), in: store)
+        }
+        #expect(try store.listAllLogEntriesOrderedByID().isEmpty)
         #expect(try store.markedSourceIDs().isEmpty)
     }
 
