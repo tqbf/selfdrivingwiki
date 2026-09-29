@@ -265,7 +265,7 @@ wikictl page add --title T --body-file ./body.md [--source <source-id[:role]> ..
 wikictl page delete --id I                 delete a page
 wikictl page search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
 wikictl index set --body-file ./index.md   rewrite index.md wholesale
-wikictl log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source marks an ingest done)
+wikictl log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source, ingest kind only, marks a COMPLETED ingest — never pass it for a plain import)
 wikictl source list [--json]               list all sources (TSV, or JSON lines)
 wikictl source cat --id I | --name N [--markdown]  write raw source bytes (or extracted markdown with --markdown) to stdout
 wikictl source export --id I | --name N [--out <path>] [--markdown]
@@ -414,7 +414,10 @@ directly and is always available.
    you just wrote (read the current set with `wikictl page list` first).
 6. Record it: `wikictl log append --kind ingest --source <file-id> --title "<source>" --note "…"`.
    The `--source <file-id>` (given in the ingest task as SOURCE_ID) marks the
-   file Ingested in the app — always pass it on a successful ingest.
+   file Ingested in the app — always pass it on a successful ingest, and
+   NEVER otherwise: it is the completed-ingest switch. Adding a source to
+   the wiki (`source add`) is an IMPORT, not an ingest — do not pass
+   `--source` (or use `--kind ingest`) when you only imported a file.
 
 **Query** — answer a question from the wiki:
 1. Search — internal first, web last:

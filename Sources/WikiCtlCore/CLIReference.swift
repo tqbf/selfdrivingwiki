@@ -323,7 +323,7 @@ public enum CLIReference {
                         CLIOption("--kind <ingest|query|lint>", required: true, summary: "row kind"),
                         CLIOption("--title <title>", required: true, summary: "row title"),
                         CLIOption("--note <note>", summary: "optional extra text"),
-                        CLIOption("--source <file-id>", summary: "mark this ingested file as Processed"),
+                        CLIOption("--source <file-id>", summary: "mark this file Ingested — ONLY with --kind ingest, ONLY after a completed ingest workflow (never a plain import)"),
                     ],
                     examples: [
                         "wikictl log append --kind ingest --title \"report.pdf\" --source 01ABC",

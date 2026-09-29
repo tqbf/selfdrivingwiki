@@ -40,6 +40,16 @@ struct WikiCtlLogIndexTests {
             == .logAppend(kind: .ingest, title: "T", note: nil, source: SourceID(rawValue: "FILE123")))
     }
 
+    /// `--source` is the completed-ingest switch; on any other kind it must
+    /// fail loudly instead of silently taking no effect.
+    @Test func logAppendRejectsSourceOnNonIngestKind() {
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(
+                ["--wiki", "W", "log", "append", "--kind", "query", "--title", "T", "--source", "FILE123"],
+                env: noEnv)
+        }
+    }
+
     @Test func logAppendRejectsBadKind() {
         #expect(throws: ArgumentParser.Failure.self) {
             try ArgumentParser.parse(
@@ -122,6 +132,19 @@ struct WikiCtlLogIndexTests {
 
         #expect(try store.markedSourceIDs().isEmpty)
         _ = file
+    }
+
+    /// Defense-in-depth for the command-level gate (the parser rejects this
+    /// shape first): a non-ingest entry that names a source must never flip
+    /// its ingest state — the Ingested badge is the completed-ingest switch.
+    @Test func logAppendWithSourceOnNonIngestKindDoesNotMark() throws {
+        let store = try tempStore()
+        let file = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
+
+        _ = try LogIndexCommand.run(
+            .logAppend(kind: .query, title: "Cited paper.pdf", note: nil, source: file.id), in: store)
+
+        #expect(try store.markedSourceIDs().isEmpty)
     }
 
     @Test func indexSetCommitsAndPersistsBody() throws {
