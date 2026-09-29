@@ -30,13 +30,18 @@ import WikiFSEngine
 /// instead of failing.
 public enum ExtractorSyncCommand {
 
-    /// The family's operations. One case per leaf: `list` (discovery) and
-    /// `sync` (acquisition).
+    /// The family's operations. One case per leaf: `list` (discovery),
+    /// `fetch` (one ad-hoc item), and `sync` (the configured watch list).
     public enum Action: Equatable, Sendable {
         /// List the machine's syncable acquisition packages from the
         /// catalog — the runtime discovery surface for what can be
         /// imported, through which package, with which credential.
         case list(json: Bool)
+        /// Acquire ONE item now through `<package>`'s fetcher — the ad-hoc
+        /// acquisition verb (an agent's "import this item I just found").
+        /// Both names stay raw strings: validity is catalog data, resolved
+        /// at execution.
+        case fetch(packageName: String, itemKey: String, force: Bool)
         /// The positional package name stays a raw string here: which names
         /// are valid is catalog data, resolved at execution — never a
         /// compiled set.
@@ -210,6 +215,72 @@ public enum ExtractorSyncCommand {
         credentials: any CredentialDescribing = KeychainCredentialService(),
         enqueueJob: (SourceID) async throws -> QueueItem.ID?
     ) async throws -> String {
+        // The shared acquisition front half: discovery, ambiguity, the
+        // credential gate, and the byteless source MIME. `fetch` runs the
+        // same resolution, so the two commands accept the same packages and
+        // fail with the same messages.
+        let resolved = try resolveAcquisition(
+            packageName: packageName, catalog: catalog, credentials: credentials)
+        let declaration = resolved.package.sync
+
+        // The declared config sidecar. A missing or corrupt file loads as no
+        // values, so validation names the first required field — the same
+        // fresh-install failure the config gate always had.
+        let config = try ExtractorSyncSidecar.load(
+            declaration: declaration, from: containerDirectory)
+
+        let outcomes = try await ExtractorPackageSync.syncItems(
+            store: store,
+            declaration: declaration,
+            packageIdentity: ExtractorSyncPackageIdentity(
+                packageID: resolved.package.record.revision.packageID,
+                displayName: resolved.package.record.displayName),
+            config: config,
+            sourceMIMEType: resolved.sourceMIMEType,
+            enqueueJob: { sourceID in
+                do {
+                    return try await enqueueJob(sourceID)
+                } catch {
+                    // Never silent: the source row is durable either way, so
+                    // the failure must say what exists and what retries it.
+                    throw Failure.enqueueRejected(
+                        sourceID: sourceID,
+                        packageName: packageName,
+                        detail: String(describing: error))
+                }
+            },
+            force: force)
+
+        return try renderOutcomes(
+            outcomes,
+            header: "\(resolved.package.record.displayName) sync",
+            credentialCheckDeferred: resolved.credentialCheckDeferred,
+            requiredCredentialLabel: resolved.requiredRequirement?.label,
+            extractionCompleted: { sourceID in
+                try store.processedMarkdownAlternatives(sourceID: sourceID).isEmpty == false
+            })
+    }
+
+    /// The resolved front half of an acquisition command: the discovered
+    /// package (registration + sync declaration), the byteless source MIME,
+    /// and the credential-gate outcome. Shared by `sync` (the configured
+    /// item list) and `fetch` (one ad-hoc item).
+    public struct ResolvedAcquisition {
+        public let package: DiscoveredSyncPackage
+        public let sourceMIMEType: ExtractorMIMEType
+        public let requiredRequirement: ExtractorCredentialRequirement?
+        public let credentialCheckDeferred: Bool
+    }
+
+    /// Discovery at execution time (the catalog says what is syncable), the
+    /// typed ambiguity guard, the describe-only credential gate, and the
+    /// byteless source MIME. Throws the same typed failures `sync` has
+    /// always thrown, with identical messages.
+    public static func resolveAcquisition(
+        packageName: String,
+        catalog: any ExtractorPackageCatalogReading,
+        credentials: any CredentialDescribing
+    ) throws -> ResolvedAcquisition {
         // Discovery at execution time: the catalog says what is syncable.
         let syncable = discoverSyncablePackages(in: try catalog.read())
         let matches = syncable.filter { $0.shortName == packageName }
@@ -230,7 +301,6 @@ public enum ExtractorSyncCommand {
             throw Failure.ambiguousPackage(
                 packageName, candidates: matches.map(\.candidateID))
         }
-        let declaration = package.sync
 
         // The required-credential gate. Manifest validation guarantees at
         // most one required requirement on a sync declaration; zero means
@@ -266,44 +336,35 @@ public enum ExtractorSyncCommand {
             }
         }
 
-        // The declared config sidecar. A missing or corrupt file loads as no
-        // values, so validation names the first required field — the same
-        // fresh-install failure the config gate always had.
-        let config = try ExtractorSyncSidecar.load(
-            declaration: declaration, from: containerDirectory)
-
         // The byteless source MIME: the declaration's explicit MIME, or the
         // registration's single declared MIME (manifest validation makes the
         // fallback total).
-        guard let sourceMIMEType = declaration.sourceMIMEType
+        guard let sourceMIMEType = package.sync.sourceMIMEType
             ?? package.registration.mimeTypes.sorted().first else {
             throw Failure.unknownPackage(packageName, discovered: [])
         }
 
-        let outcomes = try await ExtractorPackageSync.syncItems(
-            store: store,
-            declaration: declaration,
-            packageIdentity: ExtractorSyncPackageIdentity(
-                packageID: package.record.revision.packageID,
-                displayName: package.record.displayName),
-            config: config,
+        return ResolvedAcquisition(
+            package: package,
             sourceMIMEType: sourceMIMEType,
-            enqueueJob: { sourceID in
-                do {
-                    return try await enqueueJob(sourceID)
-                } catch {
-                    // Never silent: the source row is durable either way, so
-                    // the failure must say what exists and what retries it.
-                    throw Failure.enqueueRejected(
-                        sourceID: sourceID,
-                        packageName: packageName,
-                        detail: String(describing: error))
-                }
-            },
-            force: force)
+            requiredRequirement: requiredRequirement,
+            credentialCheckDeferred: credentialCheckDeferred)
+    }
 
+    /// Renders acquisition outcomes — one line per item plus the drain note
+    /// and (when applicable) the credential-deferral note. Shared by `sync`
+    /// and `fetch` so their output shapes cannot drift. `extractionCompleted`
+    /// is consulted only for skipped rows (an existing source): it reports
+    /// whether that source already has processed markdown.
+    static func renderOutcomes(
+        _ outcomes: [ExtractorSyncOutcome],
+        header: String,
+        credentialCheckDeferred: Bool,
+        requiredCredentialLabel: String?,
+        extractionCompleted: (SourceID) throws -> Bool
+    ) throws -> String {
         var lines: [String] = []
-        lines.append("\(package.record.displayName) sync: \(outcomes.count) item(s)")
+        lines.append("\(header): \(outcomes.count) item(s)")
         for outcome in outcomes {
             switch outcome.action {
             case .created:
@@ -315,8 +376,7 @@ public enum ExtractorSyncCommand {
                 lines.append(
                     "  re-enqueued  \(outcome.itemKey) → source \(outcome.sourceID.rawValue);\(job) request accepted; extraction is not complete")
             case .skipped:
-                let completed = try store.processedMarkdownAlternatives(
-                    sourceID: outcome.sourceID).isEmpty == false
+                let completed = try extractionCompleted(outcome.sourceID)
                 lines.append(
                     "  skipped  \(outcome.itemKey) → source \(outcome.sourceID.rawValue); source exists; extraction \(completed ? "completed" : "not completed")\(completed ? "" : " (use --force to enqueue extraction)")")
             }
@@ -325,7 +385,7 @@ public enum ExtractorSyncCommand {
             "Enqueued items drain when the app or the wikid daemon next runs its dispatch scan.")
         if credentialCheckDeferred {
             lines.append(
-                "Note: the \(requiredRequirement?.label ?? "required credential") could not be verified from this process; the host that drains these jobs will check it before downloading.")
+                "Note: the \(requiredCredentialLabel ?? "required credential") could not be verified from this process; the host that drains these jobs will check it before downloading.")
         }
         return lines.joined(separator: "\n")
     }

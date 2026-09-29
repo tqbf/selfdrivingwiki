@@ -87,7 +87,22 @@ public enum ExtractorSyncSidecar {
         from directory: URL
     ) throws -> ExtractorSyncSidecarValues {
         let values = rawValues(declaration: declaration, from: directory)
-        return try validated(declaration: declaration, raw: values)
+        let fieldValues = try validatedFieldValues(declaration: declaration, raw: values)
+        let items = try validatedItems(declaration: declaration, raw: values)
+        return ExtractorSyncSidecarValues(fieldValues: fieldValues, items: items)
+    }
+
+    /// Loads and validates ONLY the non-list field values — the ad-hoc
+    /// fetch variant (`wikictl extractor fetch --item <key>`): the item key
+    /// comes from the command line, so the sidecar's watch list may
+    /// legitimately be empty or absent; only the template fields (e.g.
+    /// `libraryID`) are required here.
+    public static func loadFieldValues(
+        declaration: ExtractorSyncDeclaration,
+        from directory: URL
+    ) throws -> [String: String] {
+        let values = rawValues(declaration: declaration, from: directory)
+        return try validatedFieldValues(declaration: declaration, raw: values)
     }
 
     /// The file's top-level object, or an empty object when the file is
@@ -112,11 +127,11 @@ public enum ExtractorSyncSidecar {
         return keyed
     }
 
-    /// Reads the declared fields out of the raw object and validates them
-    /// against the declaration.
-    private static func validated(
+    /// Reads the declared non-list fields out of the raw object and
+    /// validates them against the declaration.
+    private static func validatedFieldValues(
         declaration: ExtractorSyncDeclaration, raw: [String: Any]
-    ) throws -> ExtractorSyncSidecarValues {
+    ) throws -> [String: String] {
         var fieldValues: [String: String] = [:]
         for field in declaration.fields where field.isList == false {
             guard let rawValue = raw[field.name] else {
@@ -149,7 +164,14 @@ public enum ExtractorSyncSidecar {
             }
             fieldValues[field.name] = trimmed
         }
+        return fieldValues
+    }
 
+    /// Reads the list field's item keys out of the raw object and validates
+    /// them against the declaration's item validation.
+    private static func validatedItems(
+        declaration: ExtractorSyncDeclaration, raw: [String: Any]
+    ) throws -> [String] {
         let list = declaration.listField
         var items: [String] = []
         if let rawList = raw[list.name] {
@@ -190,6 +212,6 @@ public enum ExtractorSyncSidecar {
             throw ExtractorSyncSidecarError.requiredListIsEmpty(
                 field: list.name, configFileName: declaration.configFileName)
         }
-        return ExtractorSyncSidecarValues(fieldValues: fieldValues, items: items)
+        return items
     }
 }

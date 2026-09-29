@@ -592,6 +592,22 @@ public enum ArgumentParser {
             // reads the machine catalog and describes credentials.
             let options = try Options(rest, options: CLIReference.options(forFamily: "extractor"))
             return .extractor(.list(json: options.flag("--json")))
+        case "fetch":
+            // Ad-hoc acquisition: one item key now. Same positional package
+            // name contract as `sync`; `--item` names the key to acquire
+            // (validated against the declaration at execution).
+            let packageName = rest.first
+            guard let packageName, !packageName.hasPrefix("-") else {
+                throw Failure.usage("extractor fetch: name the acquisition package (see 'wikictl help extractor' for the grammar; `wikictl extractor list` shows the installed packages)")
+            }
+            let options = try Options(Array(rest.dropFirst()), options: CLIReference.options(forFamily: "extractor"))
+            guard let itemKey = options.value("--item"), !itemKey.isEmpty else {
+                throw Failure.usage("extractor fetch: --item <key> is required — the item key to acquire through the package (`wikictl extractor list` shows each package's key rules)")
+            }
+            return .extractor(.fetch(
+                packageName: packageName,
+                itemKey: itemKey,
+                force: options.flag("--force")))
         case "sync":
             // The leaf's positional argument: the acquisition package name. It
             // stays a RAW string here — which names are valid is catalog data

@@ -267,6 +267,10 @@ func execute(
         return try await runExtractorSync(
             packageName: packageName, force: force, in: store,
             wikiID: wikiID, containerDirectory: containerDirectory)
+    case .extractor(.fetch(let packageName, let itemKey, let force)):
+        return try await runExtractorFetch(
+            packageName: packageName, itemKey: itemKey, force: force, in: store,
+            wikiID: wikiID, containerDirectory: containerDirectory)
     case .extractor(.list):
         // Handled before wiki resolution in `run()` — unreachable here.
         return SourceCommand.Result(payload: .text(""), didCommit: false)
@@ -331,6 +335,40 @@ private func runExtractorSync(
         reviewedPackageRoot: reviewedRoot)
     let output = try await ExtractorSyncCommand.run(
         packageName: packageName,
+        force: force,
+        in: store,
+        containerDirectory: containerDirectory,
+        catalog: catalog,
+        enqueueJob: { sourceID in
+            try queueStore.enqueue(QueueItemRequest(
+                queue: .extraction,
+                wikiID: wikiID,
+                payload: QueueItemPayload(sourceIDs: [sourceID]))).id
+        })
+    return SourceCommand.Result(payload: .text(output), didCommit: true)
+}
+
+/// `wikictl extractor fetch <package> --item <key>` dispatch: the same
+/// enqueue-only wiring as `runExtractorSync` — durable queue write, no
+/// `QueueEngine`, no waiting (the daemon-side drain owns completion).
+private func runExtractorFetch(
+    packageName: String,
+    itemKey: String,
+    force: Bool,
+    in store: GRDBWikiStore,
+    wikiID: WikiID,
+    containerDirectory: URL
+) async throws -> SourceCommand.Result {
+    let queueStore = try QueueStore(
+        databaseURL: try DatabaseLocation.queueDatabaseURL())
+    defer { queueStore.close() }
+    let reviewedRoot = ExtractorSyncCommand.reviewedPackageRoot()
+    let catalog = try ExtractorSyncCommand.productionCatalogReader(
+        containerDirectory: containerDirectory,
+        reviewedPackageRoot: reviewedRoot)
+    let output = try await ExtractorFetchCommand.run(
+        packageName: packageName,
+        itemKey: itemKey,
         force: force,
         in: store,
         containerDirectory: containerDirectory,

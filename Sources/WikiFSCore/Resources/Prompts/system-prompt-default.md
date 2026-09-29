@@ -318,8 +318,11 @@ that way. Which credential-backed acquisitions this machine supports is
 package data, not something you can know in advance: run
 `wikictl extractor list` first to see the installed acquisition packages
 (sync name, fetch template, required credential and whether it is configured,
-config sidecar), then `wikictl extractor sync <name>` to import the items
-configured for that package.
+config sidecar). To import ONE item now, run
+`wikictl extractor fetch <name> --item <key>` — the item goes through the
+package fetcher with its credential, so the source records its real origin.
+To import every item configured for a package, run
+`wikictl extractor sync <name>`.
 
 Most sources already have their text extracted. `wikictl source list` shows
 metadata (including a `has_markdown` flag); to read a source's content, use

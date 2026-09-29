@@ -664,7 +664,7 @@ public enum CLIReference {
             ]),
         CLIFamily(
             name: "extractor",
-            summary: "list installed acquisition packages, or sync a package's configured items into sources",
+            summary: "list acquisition packages, fetch one item now, or sync a package's configured items",
             leaves: [
                 CLILeaf(
                     "list", summary: "list installed acquisition packages — sync names, fetch templates, credential state, config sidecars",
@@ -673,10 +673,27 @@ public enum CLIReference {
                     details: [
                         "Answers, at runtime, which sources this machine can acquire through",
                         "package fetchers (a Zotero library, another remote library): the name",
-                        "`extractor sync` accepts, the URL template the package fetches, the",
-                        "credential it needs and whether that credential is configured, and the",
-                        "config sidecar that names the items to sync. Package data is dynamic —",
-                        "this is where you discover it.",
+                        "`extractor fetch`/`extractor sync` accept, the URL template the package",
+                        "fetches, the credential it needs and whether that credential is",
+                        "configured, and the config sidecar that names the items to sync.",
+                        "Package data is dynamic — this is where you discover it.",
+                    ]),
+                CLILeaf(
+                    "fetch", summary: "acquire ONE item now through <package>'s fetcher — full provenance, no watch-list edit",
+                    commandLine: "fetch <package> --item <key> [--force]",
+                    options: [
+                        CLIOption("--item <key>", required: true, summary: "the item key to acquire (the sidecar's key rules apply)"),
+                        CLIOption("--force", summary: "re-enqueue extraction when the item's source already exists"),
+                    ],
+                    details: [
+                        "The ad-hoc acquisition verb: creates the byteless source with fetch",
+                        "provenance and enqueues its extraction. The queue's fetch route",
+                        "downloads through the package with its credential and records the",
+                        "external identity, so the source shows its real origin. Template",
+                        "fields (e.g. libraryID) come from the package's config sidecar; the",
+                        "sidecar's item list is not consulted and never modified. Enqueued",
+                        "items drain when the app or the wikid daemon next runs its",
+                        "dispatch scan — this command only writes them.",
                     ]),
                 CLILeaf(
                     "sync", summary: "import the items configured in <package>'s sidecar as sources and queue their extraction",
