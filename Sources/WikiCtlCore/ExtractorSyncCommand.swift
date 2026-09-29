@@ -30,8 +30,13 @@ import WikiFSEngine
 /// instead of failing.
 public enum ExtractorSyncCommand {
 
-    /// The family's operations. One case per leaf (`sync` today).
+    /// The family's operations. One case per leaf: `list` (discovery) and
+    /// `sync` (acquisition).
     public enum Action: Equatable, Sendable {
+        /// List the machine's syncable acquisition packages from the
+        /// catalog — the runtime discovery surface for what can be
+        /// imported, through which package, with which credential.
+        case list(json: Bool)
         /// The positional package name stays a raw string here: which names
         /// are valid is catalog data, resolved at execution — never a
         /// compiled set.
@@ -64,7 +69,7 @@ public enum ExtractorSyncCommand {
                 if discovered.isEmpty {
                     return "Unknown extraction package '\(name)'. No syncable packages are installed; launch the app once so reviewed packages publish, then retry."
                 }
-                return "Unknown extraction package '\(name)'. Syncable: \(discovered.joined(separator: ", "))."
+                return "Unknown extraction package '\(name)'. Syncable: \(discovered.joined(separator: ", ")). Run `wikictl extractor list` for details."
             case .ambiguousPackage(let name, let candidates):
                 return "The package name '\(name)' is ambiguous; it matches \(candidates.joined(separator: ", "))."
             case .requiredCredentialUnavailable(let name, let requirementID):

@@ -354,10 +354,17 @@ public enum CLIReference {
                     "add", summary: "fetch a URL or add raw file/stdin bytes; use --body-file - with a pipe or heredoc; --name is required for stdin",
                     commandLine: "add (--url URL [--allow-duplicate] | --body-file <path|-> [--name NAME])",
                     options: [
-                        CLIOption("--url <URL>", summary: "fetch a web page — exactly one of --url / --body-file"),
+                        CLIOption("--url <URL>", summary: "fetch a public web page — no credentials are sent — exactly one of --url / --body-file"),
                         CLIOption("--body-file <path|->", summary: "raw bytes from a file; `-` reads stdin — exactly one of --url / --body-file"),
                         CLIOption("--name <name>", summary: "display name; required when --body-file is -"),
                         CLIOption("--allow-duplicate", summary: "permit a URL already in the wiki (--url only)"),
+                    ],
+                    details: [
+                        "The --url fetcher sends no credentials — it is for public web pages",
+                        "only. A source behind a login or an API key (a Zotero library, any",
+                        "private-library URL) will not come back this way; run `wikictl",
+                        "extractor list` to see whether an installed acquisition package can",
+                        "fetch it instead.",
                     ],
                     examples: [
                         "wikictl source add --url https://example.com/article",
@@ -657,19 +664,31 @@ public enum CLIReference {
             ]),
         CLIFamily(
             name: "extractor",
-            summary: "sync extractor-package acquisitions into byteless sources",
+            summary: "list installed acquisition packages, or sync a package's configured items into sources",
             leaves: [
                 CLILeaf(
-                    "sync", summary: "create one byteless source per configured acquisition key of <package> and enqueue its extraction",
+                    "list", summary: "list installed acquisition packages — sync names, fetch templates, credential state, config sidecars",
+                    commandLine: "list [--json]",
+                    options: [CLIOption("--json", summary: "print JSON instead of text")],
+                    details: [
+                        "Answers, at runtime, which sources this machine can acquire through",
+                        "package fetchers (a Zotero library, another remote library): the name",
+                        "`extractor sync` accepts, the URL template the package fetches, the",
+                        "credential it needs and whether that credential is configured, and the",
+                        "config sidecar that names the items to sync. Package data is dynamic —",
+                        "this is where you discover it.",
+                    ]),
+                CLILeaf(
+                    "sync", summary: "import the items configured in <package>'s sidecar as sources and queue their extraction",
                     commandLine: "sync <package> [--force]",
                     options: [CLIOption("--force", summary: "re-enqueue extraction for already-synced sources")],
                     details: [
                         "Reads the package's declared config sidecar from the App Group",
-                        "container (the file name comes from the package manifest) and",
-                        "checks any required credential from Keychain (presence check",
-                        "only). The enqueued extraction items drain when the app or the",
-                        "wikid daemon next runs its dispatch scan — this command only",
-                        "writes them.",
+                        "container (the file name comes from the package manifest; `extractor",
+                        "list` shows it) and checks any required credential from Keychain",
+                        "(presence check only). The enqueued extraction items drain when the",
+                        "app or the wikid daemon next runs its dispatch scan — this command",
+                        "only writes them.",
                     ]),
             ]),
         CLIFamily(

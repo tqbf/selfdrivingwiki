@@ -312,6 +312,15 @@ $ wikictl page search --query "continuous profiling with JFR"
 
 ## Sources
 
+**Adding a source.** `wikictl source add --url` fetches a public web page and
+sends no credentials — a URL behind a login or an API key will not come back
+that way. Which credential-backed acquisitions this machine supports is
+package data, not something you can know in advance: run
+`wikictl extractor list` first to see the installed acquisition packages
+(sync name, fetch template, required credential and whether it is configured,
+config sidecar), then `wikictl extractor sync <name>` to import the items
+configured for that package.
+
 Most sources already have their text extracted. `wikictl source list` shows
 metadata (including a `has_markdown` flag); to read a source's content, use
 `wikictl source cat --id <id>` (or `--name <name>`) — it writes the source's

@@ -144,6 +144,15 @@ public enum ArgumentParser {
             if first == "wiki" {
                 return Invocation(wikiSelector: "", command: try parseWikiCommand(Array(args.dropFirst())))
             }
+            // `extractor list` is read-only discovery over the machine
+            // catalog (App Group container): it never needs a wiki, so it
+            // bypasses the selector requirement too. `extractor sync`
+            // still requires one.
+            if first == "extractor", args.dropFirst().first == "list" {
+                return Invocation(
+                    wikiSelector: "",
+                    command: try parseExtractorCommand(Array(args.dropFirst())))
+            }
         }
 
         // A leading `--wiki <id>` or `--wiki=<id>` is optional; otherwise fall back to WIKI_DB.
@@ -577,19 +586,24 @@ public enum ArgumentParser {
             throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "extractor", given: sub))
         }
         let rest = Array(args.dropFirst())
-        // The leaf's positional argument: the acquisition package name. It
-        // stays a RAW string here — which names are valid is catalog data
-        // (the sync declarations the machine has installed), resolved at
-        // execution time after wiki selection, never a compiled set. The
-        // remainder is flags; `--force` re-enqueues extraction for
-        // already-synced acquisition URLs.
-        let packageName = rest.first
-        guard let packageName, !packageName.hasPrefix("-") else {
-            throw Failure.usage("extractor sync: name the acquisition package to sync (see 'wikictl help extractor' for the grammar; syncable packages are the ones the catalog declares)")
-        }
-        let options = try Options(Array(rest.dropFirst()), options: CLIReference.options(forFamily: "extractor"))
         switch sub {
+        case "list":
+            // Discovery leaf: no positional, no wiki, no writes — it only
+            // reads the machine catalog and describes credentials.
+            let options = try Options(rest, options: CLIReference.options(forFamily: "extractor"))
+            return .extractor(.list(json: options.flag("--json")))
         case "sync":
+            // The leaf's positional argument: the acquisition package name. It
+            // stays a RAW string here — which names are valid is catalog data
+            // (the sync declarations the machine has installed), resolved at
+            // execution time after wiki selection, never a compiled set. The
+            // remainder is flags; `--force` re-enqueues extraction for
+            // already-synced acquisition URLs.
+            let packageName = rest.first
+            guard let packageName, !packageName.hasPrefix("-") else {
+                throw Failure.usage("extractor sync: name the acquisition package to sync (see 'wikictl help extractor' for the grammar; syncable packages are the ones the catalog declares)")
+            }
+            let options = try Options(Array(rest.dropFirst()), options: CLIReference.options(forFamily: "extractor"))
             return .extractor(.sync(packageName: packageName, force: options.flag("--force")))
         default:
             // Unreachable: recognition is the CLIReference leaf table above.

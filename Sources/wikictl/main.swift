@@ -129,6 +129,24 @@ func run() async -> Int32 {
         }
     }
 
+    // `extractor list` is read-only and wiki-independent: no store, no
+    // wiki selection — only the machine catalog (App Group container) and
+    // describe-only credential presence checks. Dispatching it before the
+    // writable runner keeps discovery available even with no wiki selected.
+    if case .extractor(.list(let json)) = invocation.command {
+        do {
+            let containerDirectory = try DatabaseLocation.appGroupContainerDirectory()
+            let catalog = try ExtractorSyncCommand.productionCatalogReader(
+                containerDirectory: containerDirectory,
+                reviewedPackageRoot: ExtractorSyncCommand.reviewedPackageRoot())
+            print(try ExtractorListCommand.run(catalog: catalog, json: json))
+            return 0
+        } catch {
+            FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
+            return 1
+        }
+    }
+
     do {
         let output = try await makeRunner().runOrdinary(
             command: invocation.command,
@@ -249,6 +267,9 @@ func execute(
         return try await runExtractorSync(
             packageName: packageName, force: force, in: store,
             wikiID: wikiID, containerDirectory: containerDirectory)
+    case .extractor(.list):
+        // Handled before wiki resolution in `run()` — unreachable here.
+        return SourceCommand.Result(payload: .text(""), didCommit: false)
     case .job:
         // Handled before the writable ordinary-command runner.
         return SourceCommand.Result(payload: .text(""), didCommit: false)
