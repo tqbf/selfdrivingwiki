@@ -5788,9 +5788,10 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// already stamped (#1344) — are no-ops that never rewrite the timestamp.
     ///
     /// The unconditional `mutate()` emission is deliberate: a no-op UPDATE
-    /// still emits one `sourceUpdated`, which is a harmless reload (the CLI
-    /// path validates existence first, so the only no-op case is "already
-    /// stamped").
+    /// still emits one `sourceUpdated`, which is a harmless reload. A no-op
+    /// means the row was already stamped, or the source row is gone (the
+    /// CLI path validates existence first; the host path does not need to —
+    /// there is nothing to stamp on a deleted row).
     public func markSourceIngested(id: SourceID) throws {
         try mutate(event: { _ in
             self.localEvent(.source, id: id.rawValue, change: .updated)
