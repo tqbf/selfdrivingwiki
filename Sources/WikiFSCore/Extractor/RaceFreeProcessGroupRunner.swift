@@ -132,18 +132,26 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
         stdoutAccumulator = BoundedProcessAccumulator(limit: request.stdoutLimit)
         stderrAccumulator = BoundedProcessAccumulator(limit: request.stderrLimit)
 
-        var stdinFDs = [Int32](repeating: -1, count: 2)
-        var stdoutFDs = [Int32](repeating: -1, count: 2)
-        var stderrFDs = [Int32](repeating: -1, count: 2)
-        guard pipe(&stdinFDs) == 0 else { throw RaceFreeProcessGroupError.pipeFailure(errno) }
-        guard pipe(&stdoutFDs) == 0 else {
-            close(stdinFDs[0]); close(stdinFDs[1])
-            throw RaceFreeProcessGroupError.pipeFailure(errno)
-        }
-        guard pipe(&stderrFDs) == 0 else {
-            close(stdinFDs[0]); close(stdinFDs[1])
-            close(stdoutFDs[0]); close(stdoutFDs[1])
-            throw RaceFreeProcessGroupError.pipeFailure(errno)
+        // Both ends of every pipe are close-on-exec (#1334). Without this,
+        // a launch whose posix_spawn overlaps another launch's pipe setup
+        // leaks its descriptors into that child: an inherited stdin write
+        // end keeps the other child's stdin open past this parent's close,
+        // so the child never sees EOF, and an inherited stdout or stderr
+        // write end delays this parent's own drain the same way.
+        let stdinPipe = try Self.makeCloseOnExecPipe()
+        let stdoutPipe: (readFD: Int32, writeFD: Int32)
+        let stderrPipe: (readFD: Int32, writeFD: Int32)
+        do {
+            stdoutPipe = try Self.makeCloseOnExecPipe()
+            do {
+                stderrPipe = try Self.makeCloseOnExecPipe()
+            } catch {
+                close(stdoutPipe.readFD); close(stdoutPipe.writeFD)
+                throw error
+            }
+        } catch {
+            close(stdinPipe.readFD); close(stdinPipe.writeFD)
+            throw error
         }
 
         var attributes: posix_spawnattr_t?
@@ -154,12 +162,23 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
             posix_spawnattr_destroy(&attributes)
             posix_spawn_file_actions_destroy(&actions)
         }
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        // CLOEXEC_DEFAULT closes, at the child's exec, every descriptor no
+        // file action mentions — including pipe ends another launch still
+        // holds inside its pipe() -> fcntl(F_SETFD) window, which the
+        // per-descriptor flag cannot yet cover. The dup2 actions below are
+        // exempt: dup2 clears close-on-exec on its target, so the child's
+        // stdio survives exec (#1334).
+        posix_spawnattr_setflags(
+            &attributes,
+            Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT))
         posix_spawnattr_setpgroup(&attributes, 0)
-        posix_spawn_file_actions_adddup2(&actions, stdinFDs[0], STDIN_FILENO)
-        posix_spawn_file_actions_adddup2(&actions, stdoutFDs[1], STDOUT_FILENO)
-        posix_spawn_file_actions_adddup2(&actions, stderrFDs[1], STDERR_FILENO)
-        for descriptor in [stdinFDs[1], stdoutFDs[0], stderrFDs[0]] {
+        posix_spawn_file_actions_adddup2(&actions, stdinPipe.readFD, STDIN_FILENO)
+        posix_spawn_file_actions_adddup2(&actions, stdoutPipe.writeFD, STDOUT_FILENO)
+        posix_spawn_file_actions_adddup2(&actions, stderrPipe.writeFD, STDERR_FILENO)
+        // Redundant with close-on-exec while both mechanisms above are in
+        // place, but kept explicit: the child never holds a parent-side
+        // end, even if one of those mechanisms is later removed.
+        for descriptor in [stdinPipe.writeFD, stdoutPipe.readFD, stderrPipe.readFD] {
             posix_spawn_file_actions_addclose(&actions, descriptor)
         }
         if let directory = request.currentDirectoryURL {
@@ -177,15 +196,15 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
             &attributes,
             argv.pointer,
             environment.pointer)
-        close(stdinFDs[0]); close(stdoutFDs[1]); close(stderrFDs[1])
+        close(stdinPipe.readFD); close(stdoutPipe.writeFD); close(stderrPipe.writeFD)
         guard spawnResult == 0 else {
-            close(stdinFDs[1]); close(stdoutFDs[0]); close(stderrFDs[0])
+            close(stdinPipe.writeFD); close(stdoutPipe.readFD); close(stderrPipe.readFD)
             throw RaceFreeProcessGroupError.spawnFailure(spawnResult)
         }
         processID = spawnedPID
-        standardInput = FileHandle(fileDescriptor: stdinFDs[1], closeOnDealloc: true)
-        stdoutReader = FileHandle(fileDescriptor: stdoutFDs[0], closeOnDealloc: true)
-        stderrReader = FileHandle(fileDescriptor: stderrFDs[0], closeOnDealloc: true)
+        standardInput = FileHandle(fileDescriptor: stdinPipe.writeFD, closeOnDealloc: true)
+        stdoutReader = FileHandle(fileDescriptor: stdoutPipe.readFD, closeOnDealloc: true)
+        stderrReader = FileHandle(fileDescriptor: stderrPipe.readFD, closeOnDealloc: true)
 
         guard let positivePID = ProcessSignalSafety.PositivePID(rawValue: spawnedPID),
               let identity = ProcessIdentityObservation.observe(processID: positivePID),
@@ -277,6 +296,22 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
         stdoutReader.readabilityHandler = nil
         stderrReader.readabilityHandler = nil
     }
+
+    #if os(macOS)
+    /// Creates a pipe with both descriptors marked close-on-exec (#1334).
+    private static func makeCloseOnExecPipe() throws -> (readFD: Int32, writeFD: Int32) {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        guard pipe(&descriptors) == 0 else {
+            throw RaceFreeProcessGroupError.pipeFailure(errno)
+        }
+        guard descriptors.allSatisfy({ fcntl($0, F_SETFD, FD_CLOEXEC) == 0 }) else {
+            let code = errno
+            close(descriptors[0]); close(descriptors[1])
+            throw RaceFreeProcessGroupError.pipeFailure(code)
+        }
+        return (descriptors[0], descriptors[1])
+    }
+    #endif
 
     public func terminateVerifiedGroup(gracePeriod: Duration = .milliseconds(250)) async throws {
         signalVerifiedGroupIfAlive(SIGTERM)

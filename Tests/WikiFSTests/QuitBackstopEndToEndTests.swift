@@ -17,13 +17,13 @@ import Darwin
 /// executor. The executor observing its own process die by signal is the
 /// in-band proof that the group really died.
 ///
-/// Spawn jitter and retry: a pre-existing pipe-inheritance race in
-/// `RaceFreeProcessGroupRunner.launch` can starve two concurrently-spawned
-/// operations of stdin EOF (each child inherits the other's stdin write
-/// end, because the pipe fds are not CLOEXEC). Parallel suites whose first
-/// fixture builds finish at the same moment — the shared `.build`
-/// enumeration synchronizes them — can hit it deterministically. The jitter
-/// desynchronizes this suite's spawn; the retry absorbs a collision without
+/// Spawn jitter and retry: a pipe-inheritance race in
+/// `RaceFreeProcessGroupRunner.launch` used to starve two
+/// concurrently-spawned operations of stdin EOF (each child inherited the
+/// other's stdin write end, because the pipe fds were not close-on-exec);
+/// #1334 marks every runner pipe descriptor close-on-exec and sets
+/// POSIX_SPAWN_CLOEXEC_DEFAULT. The jitter and retry stay: they cost
+/// little, and they absorb a future regression in the same window without
 /// weakening any assertion.
 @Suite("Quit backstop end-to-end", .serialized, .timeLimit(.minutes(2)))
 struct QuitBackstopEndToEndTests {

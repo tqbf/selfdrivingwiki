@@ -91,6 +91,45 @@ struct RaceFreeProcessGroupRunnerTests {
         #expect(await processIsGone(childPID))
     }
 
+    /// #1334 regression: two launches whose setups overlap must not inherit
+    /// one another's pipe ends. Before the close-on-exec fix, a child could
+    /// hold another launch's stdin write end open past that parent's own
+    /// close, so neither `/bin/cat` saw EOF and both results stalled until
+    /// a timeout killed one side. Both tasks sleep to one shared deadline
+    /// so the two spawns land in the same instant — the collision window.
+    @Test func concurrentLaunchesDoNotStarveEachOthersStdinEOF() async throws {
+        let clock = ContinuousClock()
+        for round in 0 ..< 10 {
+            let spawnDeadline = clock.now.advanced(by: .milliseconds(50))
+            let results = try await withThrowingTaskGroup(
+                of: ProcessGroupExecutionResult.self
+            ) { group in
+                for payload in ["alpha\n", "beta\n"] {
+                    group.addTask {
+                        try await Task.sleep(until: spawnDeadline, clock: clock)
+                        let handle = try RaceFreeProcessGroupRunner.launch(.init(
+                            executableURL: URL(fileURLWithPath: "/bin/cat"),
+                            standardInput: Data(payload.utf8),
+                            stdoutLimit: 16 * 1024,
+                            stderrLimit: 4 * 1024))
+                        return try await handle.result(timeout: .seconds(10))
+                    }
+                }
+                var collected: [ProcessGroupExecutionResult] = []
+                for try await result in group { collected.append(result) }
+                return collected
+            }
+            let echoed = Set(results.map { String(decoding: $0.stdout, as: UTF8.self) })
+            #expect(results.count == 2)
+            #expect(results.allSatisfy { $0.terminationCause == .exited(code: 0) })
+            #expect(echoed == ["alpha\n", "beta\n"])
+            let elapsed = clock.now - spawnDeadline
+            #expect(
+                elapsed < .seconds(5),
+                "round \(round) took \(elapsed): a concurrent child did not see stdin EOF promptly")
+        }
+    }
+
     /// Finds the fixture in either SwiftPM build layout: the native
     /// `.build/<triple>/debug/` and Swift Build's `.build/out/Products/Debug/`.
     private func fixtureExecutable() throws -> URL {
