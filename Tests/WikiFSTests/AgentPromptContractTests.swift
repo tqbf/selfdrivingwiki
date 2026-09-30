@@ -45,6 +45,9 @@ struct AgentPromptContractTests {
         "wiki-tree-render.md",
         "ingest-executor.md",
         "ingest-finalizer.md",
+        "ingest-single-task.md",
+        "ingest-curator-task.md",
+        "ingest-planner.md",
     ]
 
     // MARK: - Resource sync (AC.9)
@@ -151,22 +154,29 @@ struct AgentPromptContractTests {
     /// all: the host stamps Ingested at validated-successful job
     /// completion, so the agent log-append ritual is retired for pipeline
     /// ingests. (The page-write evidence flag lives in the write-rule and
-    /// executor prompts, which are not task prompts.)
+    /// executor prompts, which are not task prompts.) Asserted on BOTH the
+    /// canonical sources and the bundled copies the runtime actually loads.
     @Test func pipelineIngestPromptsDropTheSourceRitual() {
-        for name in [
+        let taskPromptNames = [
             "ingest-single-task.md",
             "ingest-curator-task.md",
             "ingest-finalizer.md",
             "ingest-planner.md",
-        ] {
-            guard let prompt = canonical(name) else {
-                Issue.record("missing canonical prompt: prompts/\(name)")
-                continue
+        ]
+        for name in taskPromptNames {
+            for (copy, origin) in [
+                (canonical(name), "prompts/\(name)"),
+                (bundled(name), "Sources/WikiFSCore/Resources/Prompts/\(name)"),
+            ] {
+                guard let prompt = copy else {
+                    Issue.record("missing prompt: \(origin)")
+                    continue
+                }
+                #expect(!prompt.contains("--source"),
+                        "\(origin): pipeline task prompts must not teach the --source ritual (#1344)")
+                #expect(!prompt.contains("REQUIRED — it marks"),
+                        "\(origin): the --source REQUIRED sentence is retired (#1344)")
             }
-            #expect(!prompt.contains("--source"),
-                    "\(name): pipeline task prompts must not teach the --source ritual (#1344)")
-            #expect(!prompt.contains("REQUIRED — it marks"),
-                    "\(name): the --source REQUIRED sentence is retired (#1344)")
         }
     }
 
@@ -204,6 +214,9 @@ struct PromptResourceSyncTests {
             "wiki-tree-render.md",
             "ingest-executor.md",
             "ingest-finalizer.md",
+            "ingest-single-task.md",
+            "ingest-curator-task.md",
+            "ingest-planner.md",
         ]
         for name in names {
             let source = read(canonicalDir.appendingPathComponent(name))
