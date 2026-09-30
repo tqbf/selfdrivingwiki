@@ -555,6 +555,80 @@ cat > "${DAEMON_XPC_CONTENTS}/Info.plist" <<PLIST
 PLIST
 
 # ---------------------------------------------------------------------------
+# Verify the bundled-helper contract (before codesign)
+# ---------------------------------------------------------------------------
+# Everything above assembles the bundle; this asserts the runtime contract the
+# host's HelpersLocation resolver and the agent prompts depend on. `set -e`
+# already fails a hard `cp` error, but nothing asserts the RESULT: a refactor
+# that makes a copy conditional (or drops it) would otherwise ship a bundle
+# where wikictlDirectory falls back to an empty Helpers dir, agent prompts
+# advertise a "trusted absolute invocation" that does not exist, and daemon-run
+# wikictl writes stop reaching the app. Fail the build instead.
+MISSING_BUNDLE_FILES=0
+require_bundled_file () {
+  # $1 = path inside the bundle, $2 = human label, $3 = "exec" to also require
+  # the executable bit. Compiled Mach-O helpers must be executable; PEP 723
+  # scripts (pdf2md, defuddle, …) are spawned via their interpreter and may
+  # legitimately be non-executable, so those pass existence only.
+  if [ ! -f "$1" ]; then
+    echo "❌ required bundle file missing: $2 ($1)"
+    MISSING_BUNDLE_FILES=1
+  elif [ "${3:-}" = "exec" ] && [ ! -x "$1" ]; then
+    echo "❌ required bundle file not executable: $2 ($1)"
+    MISSING_BUNDLE_FILES=1
+  fi
+}
+
+# Unconditional compiled helpers — the host spawns these by exact name from
+# Contents/Helpers (HelpersLocation candidate 1).
+require_bundled_file "${HELPERS_DIR}/${CTL_NAME}" "wikictl CLI" exec
+require_bundled_file "${HELPERS_DIR}/${RENDERER_ASSET_HELPER_NAME}" \
+  "renderer asset-reference-extractor helper" exec
+# The build/ wikictl copy is BOTH a live HelpersLocation candidate (resolved
+# cwd-relative by the daemon in dev runs) and the Phase A gate's direct
+# invocation target — same contract as the bundled copy.
+require_bundled_file "${BUILD_DIR}/${CTL_NAME}" "build/wikictl gate copy" exec
+# App-Group sidecars: wikictl (a bare CLI with no Info.plist) and the sandboxed
+# wikid.xpc resolve the App Group through these. A missing sidecar falls
+# through to the upstream author's default container — wrong registry, wrong
+# config (#887 follow-up).
+require_bundled_file "${RESOURCES_DIR}/wiki-identifiers.env" \
+  "app wiki-identifiers sidecar"
+require_bundled_file "${DAEMON_XPC_CONTENTS}/Resources/wiki-identifiers.env" \
+  "wikid.xpc wiki-identifiers sidecar"
+require_bundled_file "${BUILD_DIR}/wiki-identifiers.env" \
+  "build/ wiki-identifiers sidecar"
+
+# Optional-by-design helpers: each copy above is conditional on its source
+# existing (intentional degradation, announced with a notice). Mirror the SAME
+# condition here so a broken copy of an expected helper fails the build, while
+# an intentionally skipped helper stays a notice, never an error.
+if [ -x "${PODCAST_HELPER_BIN}" ]; then
+  require_bundled_file "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" \
+    "podcast-token-helper" exec
+fi
+if [ -f "${PDF2MD_SRC}" ]; then
+  require_bundled_file "${HELPERS_DIR}/${PDF2MD_NAME}" "pdf2md script"
+fi
+if [ -f "${DEFUDDLE_SRC}" ]; then
+  require_bundled_file "${HELPERS_DIR}/${DEFUDDLE_NAME}" "defuddle script"
+fi
+if [ -f "${YT_TRANSCRIPT_SRC}" ]; then
+  require_bundled_file "${HELPERS_DIR}/${YT_TRANSCRIPT_NAME}" \
+    "youtube-transcript script"
+fi
+if [ -f "${POD_TRANSCRIPT_SRC}" ]; then
+  require_bundled_file "${HELPERS_DIR}/${POD_TRANSCRIPT_NAME}" \
+    "podcast-transcript script"
+fi
+
+if [ "${MISSING_BUNDLE_FILES}" != "0" ]; then
+  echo "❌ bundle helper verification failed — refusing to sign an incomplete .app"
+  exit 1
+fi
+echo "✓ bundled helper contract verified (wikictl, helpers, sidecars)"
+
+# ---------------------------------------------------------------------------
 # Codesign
 # ---------------------------------------------------------------------------
 # Identity precedence (#746):
