@@ -362,6 +362,26 @@ struct SourcesTests {
         #expect(model.isSourceIngested(untouched) == false)
     }
 
+    /// #1344: the host's main-actor stamp path (pipeline-job completion)
+    /// flips the model's Ingested state, with the same explicit reload the
+    /// legacy log-entry test above uses.
+    @MainActor
+    @Test func modelStampMarksSourceIngested() throws {
+        let store = try tempStore()
+        let raw = try store.addSource(filename: "host.pdf", data: Data("%PDF".utf8))
+        let untouched = try store.addSource(filename: "untouched.txt", data: Data("x".utf8))
+
+        let model = WikiStoreModel(store: store)
+        #expect(model.isSourceIngested(raw) == false)
+
+        model.markSourceIngested(id: raw.id)
+        model.reloadFromStore()
+
+        #expect(model.isSourceIngested(raw) == true)
+        #expect(model.isSourceIngested(untouched) == false)
+        #expect(try store.markedSourceIDs() == [raw.id.rawValue])
+    }
+
     // MARK: - Stepwise migration (v1 DB with pages → v2, pages intact)
 
     @Test func migratesV1DatabaseToV2PreservingPages() throws {

@@ -3162,6 +3162,21 @@ public final class WikiStoreModel {
         sourceIngestedStatus[file.id] ?? false
     }
 
+    /// #1344: stamp one source Ingested (`sources.ingested_at`). Called by
+    /// the app queue ingestion host when a pipeline ingestion job completes
+    /// successfully; the first stamp wins, so a later agent
+    /// `wikictl log append --source` ritual cannot rewrite it. No manual
+    /// reload: the store's `mutate()` emits `sourceUpdated`, and
+    /// `subscribeToChanges()` reloads on every event, refreshing
+    /// `sourceIngestedStatus`.
+    public func markSourceIngested(id: SourceID) {
+        do {
+            try store.markSourceIngested(id: id)
+        } catch {
+            DebugLog.store("WikiStoreModel.markSourceIngested[\(id.rawValue)] failed: \(error)")
+        }
+    }
+
     /// The origin provenance of a source (provider agent + the activity that
     /// fetched/imported it). `nil` when the read fails or no version exists.
     /// Drives the "Origin" row in `SourceDetailView`.
@@ -4186,8 +4201,9 @@ public final class WikiStoreModel {
         // counter (#1179), so the bump must not depend on the array changing.
         sourcesVersion &+= 1
         sources = DebugLog.trying("listSources", operation: { try store.listSources() }) ?? []
-        // Authoritative source: the flag the agent stamps via
-        // `wikictl log append --kind ingest --source <id>` on success.
+        // Authoritative source: the `ingested_at` stamp — set by the host at
+        // pipeline-job completion (#1344) and by the agent's ad-hoc CLI path
+        // (`wikictl log append --kind ingest --source <id>`). First stamp wins.
         let markedIDs = DebugLog.trying("markedSourceIDs", operation: { try store.markedSourceIDs() }) ?? []
 
         // Legacy fallback: wikis ingested before the flag existed only have the

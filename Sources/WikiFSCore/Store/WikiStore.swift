@@ -479,9 +479,12 @@ public protocol WikiStore: AnyObject, Sendable {
     /// Set display_name without the link-rewrite/FTS overhead of renameSource.
     func setSourceDisplayName(id: SourceID, displayName: String) throws
 
-    /// Stamp a source as summarized-into-the-wiki. The agent calls this on
-    /// successful completion via `wikictl log append --kind ingest --source <id>`;
-    /// the UI reads it as the authoritative "Processed" status.
+    /// Stamp a source as summarized-into-the-wiki (`sources.ingested_at`).
+    /// Two stampers set it: the host, at validated-successful pipeline
+    /// ingestion-job completion (#1344), and the agent's ad-hoc chat path via
+    /// `wikictl log append --kind ingest --source <id>`. The first completed
+    /// ingest wins — see `markSourceIngested(id:)` for the no-rewrite rule.
+    /// The UI reads it as the authoritative "Processed" status.
     func markSourceIngested(id: SourceID) throws
 
     /// IDs of sources the agent has marked ingested — the deterministic

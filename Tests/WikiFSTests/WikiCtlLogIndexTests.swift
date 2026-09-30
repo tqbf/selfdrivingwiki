@@ -138,6 +138,29 @@ struct WikiCtlLogIndexTests {
         #expect(try store.markedSourceIDs() == [file.id.rawValue])
     }
 
+    /// #1344: the first stamp wins — `markSourceIngested` only touches rows
+    /// whose `ingested_at` is NULL, so a host re-drain or a late agent
+    /// `--source` ritual stamp never rewrites the timestamp. `ingested_at`
+    /// is not exposed on `SourceSummary`; `updatedAt` is the public-API
+    /// observable for "no rewrite" (the old unconditional UPDATE always
+    /// wrote a later `updated_at`).
+    @Test func markSourceIngestedKeepsFirstTimestamp() async throws {
+        let store = try tempStore()
+        let file = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
+        try store.markSourceIngested(id: file.id)
+        let firstStamp = try #require(try store.listSources().first { $0.id == file.id })
+
+        // Guarantee the wall clock advances so a rewrite would be observable
+        // (cooperative sleep — never Thread.sleep).
+        try await Task.sleep(for: .milliseconds(20))
+        try store.markSourceIngested(id: file.id)
+
+        let secondStamp = try #require(try store.listSources().first { $0.id == file.id })
+        #expect(try store.markedSourceIDs() == [file.id.rawValue])
+        #expect(secondStamp.updatedAt.timeIntervalSince1970
+            == firstStamp.updatedAt.timeIntervalSince1970)
+    }
+
     @Test func logAppendWithoutSourceLeavesFileUnmarked() throws {
         let store = try tempStore()
         let file = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
