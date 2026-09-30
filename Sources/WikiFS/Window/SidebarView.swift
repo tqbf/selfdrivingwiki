@@ -109,8 +109,15 @@ struct SidebarView: View {
                    !store.sourceSearchResults.contains(where: { $0.id == id }) {
                     store.sourceSearchQuery = ""
                 }
-            case .chat:
+            case .chat(let id):
                 selectedSection = .chats
+                // Same search-drop as pages/sources: a hidden row can't be
+                // revealed. (The date filter is AgentToolsView state; that
+                // view resets it on its own reveal observation.)
+                if !store.chatSearchQuery.isEmpty,
+                   !store.chatSearchResults.contains(where: { $0.id == id }) {
+                    store.chatSearchQuery = ""
+                }
             default:
                 break
             }

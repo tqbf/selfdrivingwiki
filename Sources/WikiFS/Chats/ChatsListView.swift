@@ -10,6 +10,10 @@ import WikiFSCore
 /// multi-selection (Shift / Cmd / right-click), drag-out, and batch context
 /// menus — matching `PagesListView` / `SourcesListView` structurally.
 ///
+/// The container (`AgentToolsView`) owns search, filtering, and sorting —
+/// this view stays dumb and just renders the computed `chats` array, the
+/// same contract as `SourcesListView.sources` / `PagesListView.pages`.
+///
 /// Single-click selects; double-click opens. The active tab's chat is
 /// reconciled into the highlight on every SwiftUI update (mirrors Pages).
 struct ChatsListView: NSViewControllerRepresentable {
@@ -18,6 +22,10 @@ struct ChatsListView: NSViewControllerRepresentable {
     /// on rows (Phase C4: chat is daemon-hosted). `nil` when the daemon is
     /// unavailable; rows then never show the live badge.
     let chatDaemon: ChatDaemonCoordinator?
+    /// The rows to render, in display order — the container's filter/sort/
+    /// search pipeline output. `store` stays for highlight reconciliation
+    /// and sidebar reveal, not for list contents.
+    let chats: [ChatSummary]
     let callbacks: ChatsListCallbacks
 
     func makeNSViewController(context: Context) -> ChatsListViewController {
@@ -32,7 +40,7 @@ struct ChatsListView: NSViewControllerRepresentable {
         vc.store = store
         vc.chatDaemon = chatDaemon
         vc.callbacks = callbacks
-        let visible = store.chatSearchQuery.isEmpty ? store.chats : store.chatSearchResults
+        let visible = chats
         let needs = vc.needsReload(visible)
         DebugLog.tabs("ChatsListView.updateNSVC: count=\(visible.count) needsReload=\(needs)")
         if needs {
