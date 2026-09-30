@@ -18,9 +18,8 @@ For each source, record the ingest in the log. The source files and their IDs ar
 
 3. For EACH source listed above, record the ingest in the log:
    ```
-   wikictl log append --kind ingest --title "<source file name>" --source <id>
+   wikictl log append --kind ingest --title "<source file name>"
    ```
-   The `--source` id is REQUIRED — it marks that file as Ingested in the app.
 
 ### Write rules
 

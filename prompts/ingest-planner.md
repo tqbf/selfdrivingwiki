@@ -9,7 +9,7 @@ Read it FIRST to see what pages already exist. This avoids creating duplicates o
 
 {{SOURCE_FILES}}
 
-## Source IDs (required for wikictl log --source)
+## Source IDs
 
 {{SOURCE_IDS}}
 
