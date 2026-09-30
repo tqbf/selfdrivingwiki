@@ -385,7 +385,7 @@ enum ExtractorRouteRecoveryPresenter {
             category: category,
             failureMessage: safeFailureMessage(
                 failure?.message
-                    ?? facts.connectionFailureMessage
+                    ?? (isDocling ? facts.connectionFailureMessage : nil)
                     ?? status.setupFailureMessage),
             acpProviderID: row.savedSelection == ExtractorRouteHostCatalog.acpReference ? facts.acpProviderID : nil,
             doclingEndpointOrigin: isDocling ? ExtractorRouteDiagnosticReport.endpointOrigin(facts.doclingEndpoint) : nil,

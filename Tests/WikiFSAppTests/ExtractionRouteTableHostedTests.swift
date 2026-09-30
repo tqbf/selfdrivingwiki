@@ -787,6 +787,55 @@ struct ExtractorRouteRecoveryPresenterTests {
         #expect(failedTest.primaryAction == .testConnection)
     }
 
+    @Test func connectionFailureMessageStaysScopedToDoclingRoutes() throws {
+        // A generic package route must not carry the view-global Docling
+        // connection-test message into its own diagnostics (#1306): the
+        // `Failure:` line reports this route's setup reason instead.
+        let package = try logical()
+        var packageFacts = ExtractorRouteRecoveryFacts()
+        packageFacts.credentialRequirements = [requirement(
+            logical: package,
+            configured: true,
+            authorization: .needsAuthorization)]
+        packageFacts.connectionTest = .failed
+        packageFacts.connectionFailureMessage = "Docling test canary: connection refused"
+        let unauthorized = ExtractorRouteRecoveryPresenter.present(
+            row: row(selection: .installed(package), status: .ready),
+            extractorName: "Example",
+            facts: packageFacts)
+        #expect(unauthorized.status == .needsSetup(.unauthorizedCredential))
+        #expect(unauthorized.diagnosticReport.contains("Failure: The package is not authorized to use the credential."))
+        #expect(unauthorized.diagnosticReport.contains("Docling test canary") == false)
+        #expect(unauthorized.diagnosticReport.contains("Connection test:") == false)
+
+        // The same connection state on the Docling route still surfaces the
+        // detailed failure message, unredacted.
+        let doclingLogical = ProcessExtractionServices.reviewedDoclingLogical
+        var doclingFacts = ExtractorRouteRecoveryFacts()
+        doclingFacts.doclingEndpoint = "https://docling.example.test/convert"
+        doclingFacts.doclingCredentialConfigured = true
+        doclingFacts.credentialRequirements = []
+        doclingFacts.connectionTest = .failed
+        doclingFacts.connectionFailureMessage = "Connection refused while contacting Docling"
+        let doclingRow = row(selection: .installed(doclingLogical), status: .ready)
+        let connectionFailed = ExtractorRouteRecoveryPresenter.present(
+            row: doclingRow, extractorName: "Docling Serve", facts: doclingFacts)
+        #expect(connectionFailed.status == .needsSetup(.doclingConnectionFailed))
+        #expect(connectionFailed.diagnosticReport.contains("Failure: Connection refused while contacting Docling"))
+
+        // A retained activation failure still outranks the connection message.
+        doclingFacts.retainedFailures = [ExtractorPackageFailureSummary(
+            packageID: doclingLogical.packageID.rawValue,
+            version: "1.0.0",
+            digestPrefix: "111111111111",
+            message: "activation failed canary")]
+        let activationFailed = ExtractorRouteRecoveryPresenter.present(
+            row: doclingRow, extractorName: "Docling Serve", facts: doclingFacts)
+        #expect(activationFailed.status == .activationFailed(message: "activation failed canary"))
+        #expect(activationFailed.diagnosticReport.contains("Failure: activation failed canary"))
+        #expect(activationFailed.diagnosticReport.contains("Connection refused while contacting Docling") == false)
+    }
+
     @Test func packageLifecycleMatrixUsesNewestApplicableFailure() throws {
         let selected = try logical()
         let selectedRow = row(selection: .installed(selected), status: .packageNotInstalled)
