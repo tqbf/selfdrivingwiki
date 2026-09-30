@@ -25,13 +25,17 @@ public enum LogIndexCommand {
     public static func run(_ action: Action, in store: WikiStore) throws -> PageCommand.Result {
         switch action {
         case .logAppend(let kind, let title, let note, let source):
-            // The Ingested stamp is agent-asserted, and the assertion is only
-            // meaningful for an ingest: on a completed ingest workflow the
-            // agent passes --source <file-id> so the UI shows the file as
-            // Ingested without guessing from the title. The parser already
-            // rejects --source on other kinds; this gate is defense-in-depth
-            // for programmatic Action construction (a query/lint entry that
-            // names a source must never flip its ingest state).
+            // The Ingested stamp is agent-asserted, and this CLI flag is the
+            // ad-hoc chat path — pipeline ingestion jobs are stamped by the
+            // host at validated-successful job completion (#1344), so a late
+            // ritual stamp after the host's is a no-op (first stamp wins).
+            // The assertion is only meaningful for an ingest: on a completed
+            // ingest workflow the agent passes --source <file-id> so the UI
+            // shows the file as Ingested without guessing from the title.
+            // The parser already rejects --source on other kinds; this gate
+            // is defense-in-depth for programmatic Action construction (a
+            // query/lint entry that names a source must never flip its
+            // ingest state).
             //
             // The stamp must also fail LOUDLY on a target that does not
             // exist: markSourceIngested is a no-op UPDATE on a missing id, so

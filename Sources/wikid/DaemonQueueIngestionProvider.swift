@@ -178,6 +178,25 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         // running phase with the job lifecycle carrying the failure — the
         // report never claims a completion that validate rejected.
         try validateLauncherResults(results)
+        // #1344: the validated-successful run is the authoritative completion
+        // fact for the sources this job staged — stamp them Ingested now.
+        // Report truth rules are separate: report targets still stay
+        // `.submitted` below (per-source completion is never inferred from
+        // agent exit there). Stamp failures are logged and never throw: the
+        // agent work succeeded and the item must still complete.
+        let stampIDs = QueueIngestionReporting.stampableSourceIDs(requested: stagingOutcomes)
+        for id in stampIDs {
+            do {
+                try store.markSourceIngested(id: id)
+            } catch {
+                DebugLog.store("DaemonQueueIngestionProvider.markSourceIngested[\(id.rawValue)] failed: \(error)")
+            }
+        }
+        // The `onUnlock` Darwin notification fired before the stamps; post
+        // once more so attached apps reload the new Ingested state.
+        if !stampIDs.isEmpty {
+            DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+        }
         // Snapshot the actual post-run citation evidence into the durable job.
         // A snapshot read failure is logged but does not rewrite the successful
         // agent outcome; nil remains distinguishable from a recorded empty set.

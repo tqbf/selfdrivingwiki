@@ -79,6 +79,34 @@ import WikiFSTypes
         }
     }
 
+    // MARK: - Host-stamped ingest state (#1344)
+
+    /// The validated-successful pipeline run stamps exactly the staged
+    /// sources. Placed beside the `validateLauncherOutcome` throw tests
+    /// above: both halves of the ordering contract (validate throws → stamp
+    /// unreachable; validate passes → stamp lands) live in one reviewed
+    /// file.
+    @MainActor
+    @Test("stampIngestedSources stamps only the staged sources (#1344)")
+    func stampIngestedSourcesStampsOnlyStagedSources() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-app-provider-stamp-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let staged = try store.addSource(filename: "staged.pdf", data: Data("%PDF staged".utf8))
+        let bytesUnavailable = try store.addSource(filename: "gone.pdf", data: Data("%PDF gone".utf8))
+        let model = WikiStoreModel(store: store)
+
+        AppQueueIngestionProvider.stampIngestedSources(
+            requested: [
+                (id: staged.id, outcome: .staged(name: "staged.pdf")),
+                (id: bytesUnavailable.id, outcome: .bytesUnavailable),
+            ],
+            store: model)
+
+        #expect(try store.markedSourceIDs() == [staged.id.rawValue])
+    }
+
     // MARK: - Fixtures
 
     private let sourceID = SourceID(rawValue: "01J00000000000000000000FX")

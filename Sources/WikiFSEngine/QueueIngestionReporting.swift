@@ -46,6 +46,21 @@ public enum QueueIngestionReporting {
             })
     }
 
+    /// #1344: the source IDs a validated-successful ingestion run should
+    /// stamp as Ingested — exactly the sources whose staging outcome was
+    /// `.staged`. `.bytesUnavailable` sources were never handed to the
+    /// agent; they stay unmarked so a retry stays honest (multi-source
+    /// batches stamp each successfully processed source, not
+    /// all-or-nothing).
+    public static func stampableSourceIDs(
+        requested: [(id: SourceID, outcome: StagingOutcome)]
+    ) -> [SourceID] {
+        requested.compactMap { request in
+            if case .staged = request.outcome { return request.id }
+            return nil
+        }
+    }
+
     /// The launch mutation: the ACTUAL selected provider at launch. The
     /// scheduler's capacity bucket (e.g. `default-ingest`) is never reported
     /// as the provider.

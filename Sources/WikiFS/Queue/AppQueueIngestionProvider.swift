@@ -312,6 +312,11 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
             runHadTurnFailure: launcher.runHadTurnFailure)
+        // #1344: the validated-successful run is the authoritative completion
+        // fact for the sources this job staged. Report truth rules are
+        // separate: report targets still stay `.submitted` (per-source
+        // completion is never inferred from agent exit there).
+        Self.stampIngestedSources(requested: stagingOutcomes, store: store)
         // Snapshot the actual post-run citation evidence. Workspace merging
         // has already completed (or logged its best-effort failure) before
         // `runAgent` returns, so this records only pages visible afterward.
@@ -489,6 +494,21 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         if exitStatus != 0, runHadTurnFailure {
             throw QueueIngestionError.spawnFailed(
                 "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(exitStatus)).")
+        }
+    }
+
+    /// #1344: stamp the staged sources Ingested after a validated-successful
+    /// run. Derives the stamp list from the shared helper so the daemon and
+    /// app hosts stamp identical facts from identical code. Stamp failures
+    /// are logged (in `WikiStoreModel.markSourceIngested`) and never throw —
+    /// the agent work succeeded and the item must still complete; an
+    /// unstamped source stays visibly unmarked, which is honest.
+    static func stampIngestedSources(
+        requested: [(id: SourceID, outcome: QueueIngestionReporting.StagingOutcome)],
+        store: WikiStoreModel
+    ) {
+        for id in QueueIngestionReporting.stampableSourceIDs(requested: requested) {
+            store.markSourceIngested(id: id)
         }
     }
 

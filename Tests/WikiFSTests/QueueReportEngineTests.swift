@@ -353,6 +353,19 @@ struct QueueReportEngineTests {
         #expect(mutation.targetUpserts.allSatisfy { !$0.state.isObservedOutcome || $0.state.countKey == .skipped })
     }
 
+    @Test("Stampable source IDs cover exactly the staged sources, in request order (#1344)")
+    func stampableSourceIDsCoverExactlyStagedSources() {
+        let ids = QueueIngestionReporting.stampableSourceIDs(requested: [
+            (id: SourceID(rawValue: "a"), outcome: .staged(name: "Alpha")),
+            (id: SourceID(rawValue: "b"), outcome: .bytesUnavailable),
+            (id: SourceID(rawValue: "c"), outcome: .staged(name: "Gamma")),
+        ])
+        // Request order, staged only: `b` was never handed to the agent, so a
+        // retry must still be able to re-run it honestly.
+        #expect(ids == [SourceID(rawValue: "a"), SourceID(rawValue: "c")])
+        #expect(QueueIngestionReporting.stampableSourceIDs(requested: []).isEmpty)
+    }
+
     @Test("Agent completion reports notReported availability; lint wording never claims page results")
     func agentCompletionDoesNotInventTargetResults() {
         let lintCompletion = QueueIngestionReporting.agentCompletionMutation(operation: .lint, usage: nil)
