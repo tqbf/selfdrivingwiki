@@ -292,6 +292,18 @@ change — code-only. **Phase gate met: 1653 tests green** (AC.1–AC.10). See
   claude process runs, unlocked during extraction. The Query page mounts the orange
   `AgentRunBanner` and scopes its debug cluster to active query runs only. 6 new
   `AgentSpawnSlotTests`.
+- **Host-stamped ingest state** — a completed pipeline ingestion job now marks
+  its staged sources Ingested itself (#1344). Both ingestion hosts
+  (`AppQueueIngestionProvider`, `DaemonQueueIngestionProvider`) stamp
+  `sources.ingested_at` right after their throwing validate gates, so a failed
+  or cancelled run marks nothing. One shared helper
+  (`QueueIngestionReporting.stampableSourceIDs`) picks the list: staged
+  sources only; `.bytesUnavailable` sources stay unmarked for an honest
+  retry. The store keeps the first stamp (`ingested_at IS NULL` guard), so
+  re-drains and late agent ritual stamps never rewrite it. The four ingest
+  task prompts no longer mention `--source`; the chat system prompt keeps the
+  ad-hoc `--source` path with the #1343 gates. Branch
+  `feature/host-stamped-ingest-state`.
 
 **Phase summary (newest first; see `progress/` for each gate's evidence):**
 - **Page body contract** ✅ `body_markdown` in SQLite now stores clean body only
