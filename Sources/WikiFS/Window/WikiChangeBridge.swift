@@ -68,6 +68,11 @@ final class WikiChangeBridge {
             removeObserver(forWikiID: removed)
         }
         observedWikiIDs = current
+        // Observability: the receive path is otherwise silent, and a bridge
+        // that never observed anything looks exactly like "writers stopped
+        // posting". One line per observation-set change.
+        DebugLog.store(
+            "WikiChangeBridge: observing \(current.count) wiki(s) for Darwin change notifications")
     }
 
     /// Update the explicitly observed machine scopes. App wiring owns the
@@ -151,6 +156,11 @@ final class WikiChangeBridge {
         guard let wikiID = observedWikiIDs.first(where: {
             posted == WikiChangeNotification.name(forWikiID: $0.rawValue)
         }) else { return }
+        // Observability: one line per received post. A wikictl/daemon write
+        // burst logs a handful of these; silence here means the post never
+        // arrived or the bridge was never observing.
+        DebugLog.store(
+            "WikiChangeBridge: Darwin change notification → wiki \(wikiID.rawValue.prefix(8))")
         coalescer?.noteChange(forWikiID: wikiID)
     }
 
@@ -199,7 +209,13 @@ final class WikiChangeBridge {
 
         // Poke ALL sessions whose wikiID matches — a wikictl write to wiki A
         // must update every window showing wiki A.
-        for session in sessionLookup(wikiID) {
+        let sessions = sessionLookup(wikiID)
+        // Observability: "poked 0 session(s)" is the smoking-gun signature of
+        // a post that arrived but matched no live session (window closed
+        // before the write, or a session-manager wiring regression).
+        DebugLog.store(
+            "WikiChangeBridge: flush wiki \(wikiID.rawValue.prefix(8)) — poked \(sessions.count) session(s)")
+        for session in sessions {
             session.store.eventBus?.emit(ResourceChangeEvent(
                 wikiID: wikiID, kind: nil, id: "", change: .updated))
         }

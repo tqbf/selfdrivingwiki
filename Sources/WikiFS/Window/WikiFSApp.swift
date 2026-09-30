@@ -467,14 +467,13 @@ struct WikiFSApp: App {
 
         // File Provider setup + change bridge (async).
         Task {
-            if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
-                fileProviderSetupWarning = warning
-                showingFileProviderSetupWarning = true
-            }
-            await fileProvider.migrateDomainsIfNeeded(
-                wikiIDs: registry.wikis.map(\.id))
-            await registry.registerAllDomains()
-
+            // Bridge FIRST, File Provider setup after: Darwin observation
+            // must start at launch. The setup awaits below
+            // (verifyAndRepair/migrateDomains/registerAllDomains) talk to the
+            // File Provider daemon and can stall indefinitely — a bridge that
+            // never gets created makes every cross-process wikictl/daemon
+            // write silently invisible to open sessions while all other
+            // subsystems look healthy.
             let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
             bridge.sessionLookup = { [sessionManager] wikiID in
                 sessionManager.allSessions.filter { $0.wikiID == wikiID }
@@ -482,6 +481,14 @@ struct WikiFSApp: App {
             bridge.refreshObservations()
             changeBridge = bridge
             appDelegate.sessionManager = sessionManager
+
+            if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
+                fileProviderSetupWarning = warning
+                showingFileProviderSetupWarning = true
+            }
+            await fileProvider.migrateDomainsIfNeeded(
+                wikiIDs: registry.wikis.map(\.id))
+            await registry.registerAllDomains()
         }
 
         // Wire the quit-confirmation closures onto AppDelegate (the single app
