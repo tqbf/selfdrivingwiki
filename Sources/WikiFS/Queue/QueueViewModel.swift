@@ -102,4 +102,17 @@ final class QueueViewModel {
             selectedReport = .unavailable(reason: reason)
         }
     }
+
+    /// The selected job's recorded output page IDs, when its loaded report
+    /// matches the item (right item, right attempt) and carries outputs.
+    /// Feeds the Activity tracker's read-only name planning so output rows
+    /// link even while the wiki's live session is stale after daemon-run
+    /// writes. `nil` for no match / no report / legacy reports without
+    /// outputs — callers treat that as "clear the note".
+    func recordedOutputPageIDs(for item: QueueItem) -> [PageID]? {
+        guard case .loaded(let report) = selectedReport,
+              report.attemptID.itemID == item.id,
+              report.attemptID.attempt == item.attempt else { return nil }
+        return report.outputs?.map(\.pageID)
+    }
 }

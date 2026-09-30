@@ -326,21 +326,29 @@ struct ActivityWindowView: View {
     private var closedWikiNamesKey: String {
         Self.closedWikiNamesKey(
             for: displayedItems,
-            openWikiIDs: Set((sessionManager?.sessions ?? [:]).keys))
+            openWikiIDs: Set((sessionManager?.sessions ?? [:]).keys),
+            recordedOutputPageIDs: activityTracker.recordedOutputPageIDs)
     }
 
     /// Pure `.task`-identity computation (value-level suite seam): the
     /// displayed items' `(wiki, targets)` composition prefixed by the
-    /// sorted open-wiki ID set.
+    /// sorted open-wiki ID set, plus each item's recorded output page IDs —
+    /// a report load that reveals outputs must re-run the read-only name
+    /// load even when the displayed set and open-wiki set are unchanged.
     nonisolated static func closedWikiNamesKey(
         for items: [QueueItem],
-        openWikiIDs: Set<WikiID>
+        openWikiIDs: Set<WikiID>,
+        recordedOutputPageIDs: [QueueItem.ID: [PageID]] = [:]
     ) -> String {
         let openWikiPart = openWikiIDs.map(\.rawValue).sorted().joined(separator: ",")
         let targetsPart = items.map { item -> String in
             let targets = item.payload.lintPageIDs?.map(\.rawValue)
                 ?? item.payload.sourceIDs.map(\.rawValue)
-            return "\(item.wikiID.rawValue)=\(targets.joined(separator: "+"))"
+            let outputs = (recordedOutputPageIDs[item.id] ?? [])
+                .map(\.rawValue)
+                .sorted()
+                .joined(separator: "+")
+            return "\(item.wikiID.rawValue)=\(targets.joined(separator: "+"))@\(outputs)"
         }
         .joined(separator: "|")
         return "\(openWikiPart)#\(targetsPart)"
@@ -1104,6 +1112,14 @@ struct ActivityWindowView: View {
                 await viewModel.loadReport(
                     for: item.id,
                     attempt: item.attempt)
+                // Feed the loaded report's recorded output pages into the
+                // tracker's read-only name planning. This is what lets output
+                // rows link while the wiki's live session is still stale
+                // after daemon-run writes; the note also changes
+                // `closedWikiNamesKey` so the read-only load re-runs now.
+                activityTracker.noteRecordedOutputs(
+                    itemID: item.id,
+                    pageIDs: viewModel.recordedOutputPageIDs(for: item))
             }
         } else if activeItems.isEmpty && recentItems.isEmpty {
             emptyState

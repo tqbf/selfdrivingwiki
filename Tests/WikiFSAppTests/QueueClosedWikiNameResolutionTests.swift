@@ -872,5 +872,136 @@ struct QueueClosedWikiNameResolutionTests {
         #expect(item.payload.recordedNames?[md.id.rawValue] == md.effectiveName)
         #expect(item.payload.recordedSourceName(for: md.id) == md.effectiveName)
     }
+
+    // MARK: - Recorded outputs: read-only resolution under a live session
+
+    /// The incident case (2026-09-29): an ingestion job's recorded output
+    /// pages must resolve through the read-only layer even while the wiki
+    /// has a LIVE session — a daemon-run write burst can leave the session's
+    /// summaries stale, and an output row's link rule is live-index
+    /// membership. The read-only answer fills beneath the live layer and the
+    /// row regains its Open Page action.
+    @Test func recordedOutputsResolveReadOnlyUnderALiveSession() async throws {
+        let wikiID = WikiID(rawValue: "open-wiki")
+        let item = QueueItem(
+            id: QueueItemID(rawValue: "ingest-1"),
+            queue: .ingestion,
+            wikiID: wikiID,
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src-1")]),
+            state: .completed,
+            orderingKey: 1,
+            attempt: 0,
+            createdAt: 0)
+        let outputPage = PageID(rawValue: "pg-new")
+        let tracker = QueueActivityTracker()
+        tracker.noteRecordedOutputs(itemID: item.id, pageIDs: [outputPage])
+
+        await tracker.refreshClosedWikiNames(
+            for: [item],
+            openWikiIDs: [wikiID],  // the wiki's window is OPEN
+            databaseURL: { _ in URL(fileURLWithPath: "/unused.sqlite") },
+            loader: { _, pageIDs, sourceIDs, _ in
+                #expect(pageIDs == [outputPage],
+                        "the noted output page ID is planned read-only")
+                #expect(sourceIDs.isEmpty,
+                        "a live wiki's payload targets stay live-index-only")
+                var index = QueueTargetNameIndex()
+                for id in pageIDs { index.recordPage(id, title: "ReadOnly Title") }
+                return index
+            })
+        #expect(tracker.closedWikiNameLoadStates[wikiID] == .loaded)
+        let cached = try #require(tracker.closedWikiNameIndexes[wikiID])
+        #expect(cached.pageTitle(outputPage) == "ReadOnly Title")
+
+        // The link rule end-to-end: the effective index (empty live layer +
+        // read-only cache) resolves the page, so the output row keeps its
+        // Open Page action instead of degrading to plain text.
+        let effective = QueueTargetNameIndex.effective(
+            live: QueueTargetNameIndex(),
+            readOnlyCache: cached,
+            payload: item.payload)
+        let row = QueueWorkspaceMapper.outputRow(
+            recorded: QueueRecordedOutputPage(pageID: outputPage, title: "Recorded Title"),
+            nameIndex: effective,
+            openPage: { _ in })
+        #expect(row.actions.map(\.label) == ["Open Page"])
+
+        // A second refresh: the output ID is served from the cache — the
+        // read-only database must not reopen.
+        await tracker.refreshClosedWikiNames(
+            for: [item], openWikiIDs: [wikiID],
+            databaseURL: { _ in URL(fileURLWithPath: "/unused.sqlite") },
+            loader: { _, _, _, _ in
+                Issue.record("cached output IDs must not reopen the read-only database")
+                return QueueTargetNameIndex()
+            })
+    }
+
+    /// Without noted outputs, an open wiki still plans nothing — the pre-fix
+    /// behavior for payload targets is unchanged (live index answers).
+    @Test func liveWikiWithoutNotedOutputsStillPlansNothing() async throws {
+        let wikiID = WikiID(rawValue: "open-wiki")
+        let item = QueueItem(
+            id: QueueItemID(rawValue: "ingest-1"),
+            queue: .ingestion,
+            wikiID: wikiID,
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src-1")]),
+            state: .completed,
+            orderingKey: 1,
+            attempt: 0,
+            createdAt: 0)
+        let tracker = QueueActivityTracker()
+        await tracker.refreshClosedWikiNames(
+            for: [item], openWikiIDs: [wikiID],
+            databaseURL: { _ in URL(fileURLWithPath: "/unused.sqlite") },
+            loader: { _, _, _, _ in
+                Issue.record("a live wiki without noted outputs must not plan a read-only load")
+                return QueueTargetNameIndex()
+            })
+        #expect(tracker.closedWikiNameLoadStates[wikiID] == nil)
+        #expect(tracker.closedWikiNameIndexes[wikiID] == nil)
+    }
+
+    /// `noteRecordedOutputs` and the `.task` identity track each other: the
+    /// key changes exactly when the note changes (report outputs land), is
+    /// stable for an unchanged note, and returns to the base key when the
+    /// note clears.
+    @Test func notedOutputsAndRefreshKeyIdentityTrackEachOther() {
+        let item = QueueItem(
+            id: QueueItemID(rawValue: "ingest-1"),
+            queue: .ingestion,
+            wikiID: WikiID(rawValue: "wiki"),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src-1")]),
+            state: .completed,
+            orderingKey: 1,
+            attempt: 0,
+            createdAt: 0)
+        let tracker = QueueActivityTracker()
+        let base = ActivityWindowView.closedWikiNamesKey(for: [item], openWikiIDs: [])
+        #expect(ActivityWindowView.closedWikiNamesKey(
+            for: [item], openWikiIDs: [], recordedOutputPageIDs: tracker.recordedOutputPageIDs)
+            == base,
+            "an empty note must not change the identity")
+
+        let pageA = PageID(rawValue: "pg-a")
+        tracker.noteRecordedOutputs(itemID: item.id, pageIDs: [pageA])
+        let withOutputs = ActivityWindowView.closedWikiNamesKey(
+            for: [item], openWikiIDs: [], recordedOutputPageIDs: tracker.recordedOutputPageIDs)
+        #expect(withOutputs != base,
+                "outputs landing must re-run the read-only name load")
+
+        tracker.noteRecordedOutputs(itemID: item.id, pageIDs: [pageA])
+        #expect(ActivityWindowView.closedWikiNamesKey(
+            for: [item], openWikiIDs: [], recordedOutputPageIDs: tracker.recordedOutputPageIDs)
+            == withOutputs,
+            "an unchanged note must not churn the identity")
+
+        tracker.noteRecordedOutputs(itemID: item.id, pageIDs: nil)
+        #expect(tracker.recordedOutputPageIDs[item.id] == nil,
+                "a nil note clears the entry")
+        #expect(ActivityWindowView.closedWikiNamesKey(
+            for: [item], openWikiIDs: [], recordedOutputPageIDs: tracker.recordedOutputPageIDs)
+            == base)
+    }
 }
 #endif

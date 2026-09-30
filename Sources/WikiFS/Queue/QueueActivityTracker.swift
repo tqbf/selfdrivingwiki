@@ -243,6 +243,29 @@ final class QueueActivityTracker {
     /// loading and unavailable after a failure (plan §"How summaries load").
     private(set) var reportSummaryStates: [QueueItem.ID: ReportSummaryState] = [:]
 
+    /// Recorded output page IDs per item, noted by the Activity windows when
+    /// a selected job's durable report loads (the full report — with its
+    /// `outputs` — is selected-item-only in the view model, not in the
+    /// summary cache above). Planning feeds these through the closed-wiki
+    /// read-only name load so output rows can link even while the wiki's
+    /// live session is stale after a daemon-run write burst. Bounded by the
+    /// report's own `QueueRecordedOutputLimits` cap; `nil`/empty notes
+    /// REMOVE the entry so the map tracks the viewed set, not history.
+    private(set) var recordedOutputPageIDs: [QueueItem.ID: [PageID]] = [:]
+
+    /// Note (or clear) one item's recorded output page IDs. No-op when the
+    /// value is unchanged so repeat report loads do not churn observable
+    /// state (the closed-wiki refresh key reads this map).
+    func noteRecordedOutputs(itemID: QueueItem.ID, pageIDs: [PageID]?) {
+        let next = pageIDs ?? []
+        if next.isEmpty {
+            guard recordedOutputPageIDs.removeValue(forKey: itemID) != nil else { return }
+        } else {
+            guard recordedOutputPageIDs[itemID] != next else { return }
+            recordedOutputPageIDs[itemID] = next
+        }
+    }
+
     /// In-flight batch load guard: a repeated request for the same not-yet-
     /// loaded set must not stack duplicate engine calls.
     private var inFlightSummaryLoad = false
@@ -302,12 +325,13 @@ final class QueueActivityTracker {
     private var closedWikiKnownMissingIDs: [WikiID: (pages: Set<PageID>, sources: Set<SourceID>)] = [:]
 
     /// Resolve display names for the given items' CLOSED wikis (open wikis
-    /// are skipped — the live session index already answers), bounded to
-    /// the target IDs that neither the payload's recorded names, the
-    /// existing cache, nor the known-missing negative cache can resolve.
-    /// Merges results into ``closedWikiNameIndexes`` and records per-wiki
-    /// load state; failures log via `DebugLog.store` and mark the wiki
-    /// unavailable instead of surfacing an error row. A load that is
+    /// are skipped for payload targets — the live session index already
+    /// answers — while recorded OUTPUT page IDs resolve read-only for open
+    /// wikis too), bounded to the IDs that neither the payload's recorded
+    /// names, the existing cache, nor the known-missing negative cache can
+    /// resolve. Merges results into ``closedWikiNameIndexes`` and records
+    /// per-wiki load state; failures log via `DebugLog.store` and mark the
+    /// wiki unavailable instead of surfacing an error row. A load that is
     /// CANCELLED restores `.loading` — cancellation says nothing about the
     /// wiki, and the next `.task(id:)` run retries it (review F5).
     ///
@@ -328,28 +352,57 @@ final class QueueActivityTracker {
         databaseURL: @escaping @Sendable (WikiID) -> URL?,
         loader: @escaping QueueClosedWikiNameLoader.Load = QueueClosedWikiNameLoader.load
     ) async {
+        await refreshClosedWikiNames(
+            for: items,
+            openWikiIDs: Set(sessions.keys),
+            databaseURL: databaseURL,
+            loader: loader)
+    }
+
+    /// The planning core behind ``refreshClosedWikiNames(for:sessions:…)``,
+    /// keyed by open-wiki membership instead of the session map (the map is
+    /// used for nothing else, and a `Set<WikiID>` is fakes-free to build).
+    func refreshClosedWikiNames(
+        for items: [QueueItem],
+        openWikiIDs: Set<WikiID>,
+        databaseURL: @escaping @Sendable (WikiID) -> URL?,
+        loader: @escaping QueueClosedWikiNameLoader.Load = QueueClosedWikiNameLoader.load
+    ) async {
         var batch = items
         while batch.isEmpty == false {
-            // Plan the per-wiki work: closed wikis only, and only the target
-            // IDs nothing above the read-only layer can resolve.
+            // Plan the per-wiki work: closed wikis' payload target IDs that
+            // nothing above the read-only layer can resolve, PLUS recorded
+            // output page IDs for every item — live wiki or not.
             var planned: [WikiID: (pages: Set<PageID>, sources: Set<SourceID>)] = [:]
             for item in batch {
                 let wikiID = item.wikiID
-                guard sessions[wikiID] == nil else { continue }
+                let wikiIsClosed = openWikiIDs.contains(wikiID) == false
+                // Output page IDs resolve read-only even when a live session
+                // exists: the outputs' link rule is live-index membership,
+                // and a live session can be stale after a daemon-run write
+                // burst (its reload may not have landed yet). The read-only
+                // answer fills the gap BENEATH the live layer — it can never
+                // override a fresh live title.
+                let outputPageIDs = recordedOutputPageIDs[item.id] ?? []
+                guard wikiIsClosed || !outputPageIDs.isEmpty else { continue }
                 guard closedWikiNameLoadsInFlight.contains(wikiID) == false else {
                     pendingClosedWikiNameRefreshItems.append(item)
                     continue
                 }
-                let payload = item.payload
-                if let pageIDs = payload.lintPageIDs {
-                    let wanted = pageIDs.filter { payload.recordedPageTitle(for: $0) == nil }
-                    guard !wanted.isEmpty else { continue }
-                    planned[wikiID, default: ([], [])].pages.formUnion(wanted)
-                } else {
-                    let wanted = payload.sourceIDs.filter { payload.recordedSourceName(for: $0) == nil }
-                    guard !wanted.isEmpty else { continue }
-                    planned[wikiID, default: ([], [])].sources.formUnion(wanted)
+                if wikiIsClosed {
+                    let payload = item.payload
+                    if let pageIDs = payload.lintPageIDs {
+                        let wanted = pageIDs.filter { payload.recordedPageTitle(for: $0) == nil }
+                        guard !wanted.isEmpty || !outputPageIDs.isEmpty else { continue }
+                        planned[wikiID, default: ([], [])].pages.formUnion(wanted)
+                    } else {
+                        let wanted = payload.sourceIDs.filter { payload.recordedSourceName(for: $0) == nil }
+                        guard !wanted.isEmpty || !outputPageIDs.isEmpty else { continue }
+                        planned[wikiID, default: ([], [])].sources.formUnion(wanted)
+                    }
                 }
+                guard !outputPageIDs.isEmpty else { continue }
+                planned[wikiID, default: ([], [])].pages.formUnion(outputPageIDs)
             }
             // IDs the cache already holds — or a prior load proved missing
             // (review F4) — need no re-read.
