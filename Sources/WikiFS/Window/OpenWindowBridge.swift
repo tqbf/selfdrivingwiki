@@ -56,8 +56,9 @@ final class OpenWindowBridge {
 
     /// Opens Settings on a specific tab. Sets the `@AppStorage` key that the
     /// Settings `TabView(selection:)` binds to, then calls `openSettings`.
-    /// `tabRawValue` is one of: "about", "zotero", "extraction", "fetch",
-    /// "agents". Used by the Activity window's "Configure…" call-to-action (#440).
+    /// `tabRawValue` is one of the `SettingsTab` raw values: "extraction",
+    /// "fetch", "agents", "operations", "appearance", "renderers". Used by
+    /// the Activity window's "Configure…" call-to-action (#440).
     func openSettings(tab tabRawValue: String) {
         UserDefaults.standard.set(tabRawValue, forKey: "settings.selectedTab")
         openSettings?()

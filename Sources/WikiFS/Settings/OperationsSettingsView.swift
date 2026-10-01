@@ -24,7 +24,7 @@ struct OperationsSettingsView: View {
 
     var body: some View {
         // A single grouped Form — the Settings window centers and insets it,
-        // matching the other tabs (Zotero/Extraction). The segmented operation
+        // matching the other tabs (e.g. Extraction). The segmented operation
         // switcher is the first section; the selected operation's pins follow.
         Form {
             Section {

@@ -31,8 +31,8 @@ enum WikiFilePanels {
         return panel.runModal() == .OK ? panel.url : nil
     }
 
-    /// A folder picker — used by Zotero settings to override the default
-    /// `~/Zotero` data directory.
+    /// A folder picker for choosing an arbitrary directory on disk (used by
+    /// the folder import).
     static func chooseDirectory(title: String, prompt: String) -> URL? {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
