@@ -27,12 +27,12 @@ struct MediaEmbedPlayerView: View {
     /// webview hugs the player.
     private static let audioPlayerHeight: CGFloat = 152
 
-    /// Height for native `<audio>`/`<video>` elements (direct-remote media).
-    private static let nativeMediaHeight: CGFloat = 220
+    /// Height for native `<audio>` elements (direct-remote audio).
+    private static let nativeAudioHeight: CGFloat = 220
 
     var body: some View {
-        if target.kind == .iframe,
-           MediaEmbedPlayerHTML.sizeClass(for: target.url) == .video {
+        switch target.kind {
+        case .iframe where MediaEmbedPlayerHTML.sizeClass(for: target.url) == .video:
             // Provider video iframes fill the pane with the largest box at the
             // video aspect ratio, so resizing the window grows the player
             // instead of centering a fixed-height band with empty gaps above
@@ -41,12 +41,21 @@ struct MediaEmbedPlayerView: View {
                 .aspectRatio(Self.videoAspect, contentMode: .fit)
                 .background(.regularMaterial)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            // Audio-player iframes and native audio/video elements keep their
+        case .video:
+            // Native <video> elements (direct-remote media) fill the pane; the
+            // element letterboxes the content to the video's own ratio
+            // (object-fit: contain), so any aspect ratio — not just 16:9 —
+            // renders as large as the window allows.
+            EmbedWebViewRep(target: target)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.regularMaterial)
+        case .iframe, .audio:
+            // Audio-player iframes and native audio elements keep their
             // compact fixed heights.
+            let height = target.kind == .iframe ? Self.audioPlayerHeight : Self.nativeAudioHeight
             EmbedWebViewRep(target: target)
                 .frame(maxWidth: .infinity)
-                .frame(height: target.kind == .iframe ? Self.audioPlayerHeight : Self.nativeMediaHeight)
+                .frame(height: height)
                 .background(.regularMaterial)
         }
     }
@@ -107,6 +116,7 @@ enum MediaEmbedPlayerHTML {
           .wiki-embed { width: 100%; border: none; border-radius: 8px; display: block; }
           iframe.wiki-embed-video { height: 100%; }
           iframe.wiki-embed-audio { height: 152px; }
+          video.wiki-embed { height: 100%; object-fit: contain; }
           .wiki-embed-fallback { padding: 16px; font: -apple-system-body; color: -apple-system-secondary-label; }
         </style></head>
         <body>\(body)</body></html>

@@ -278,6 +278,14 @@ struct MediaEmbedPlayerTests {
         #expect(html.contains("iframe.wiki-embed-audio { height: 152px; }"))
     }
 
+    @Test func nativeVideoElementFillsContainerWithContain() throws {
+        // Direct-remote <video>: the element fills the pane and letterboxes the
+        // content to the video's own ratio, instead of sitting in a fixed-height box.
+        let target = EmbedTarget(kind: .video, url: "https://x.example/v.mp4")
+        let html = MediaEmbedPlayerHTML.document(for: target)
+        #expect(html.contains("video.wiki-embed { height: 100%; object-fit: contain; }"))
+    }
+
     @Test func audioAndVideoTargetsUseNativeTags() {
         #expect(MediaEmbedPlayerHTML.element(for: EmbedTarget(kind: .audio, url: "https://x/a.mp3"))
                .hasPrefix("<audio"))
