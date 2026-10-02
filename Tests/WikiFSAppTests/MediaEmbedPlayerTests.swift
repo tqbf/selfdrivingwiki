@@ -271,11 +271,14 @@ struct MediaEmbedPlayerTests {
         #expect(!html.contains("aspect-ratio"))
     }
 
-    @Test func audioIframeKeepsFixedHeight() throws {
+    @Test func audioIframeFillsContainer() throws {
+        // Spotify/SoundCloud/Apple Podcasts widgets use the extra height for
+        // artwork, descriptions, and episode lists — they fill the pane instead
+        // of a centered compact band.
         let target = EmbedTarget(
             kind: .iframe, url: "https://open.spotify.com/embed/track/x")
         let html = MediaEmbedPlayerHTML.document(for: target)
-        #expect(html.contains("iframe.wiki-embed-audio { height: 152px; }"))
+        #expect(html.contains("iframe.wiki-embed-audio { height: 100%; }"))
     }
 
     @Test func nativeVideoElementFillsContainerWithContain() throws {

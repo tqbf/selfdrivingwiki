@@ -22,11 +22,6 @@ struct MediaEmbedPlayerView: View {
     /// exactly; `MediaEmbedPlayerHTML`'s video CSS fills the container in turn.
     private static let videoAspect: CGFloat = 16.0 / 9.0
 
-    /// Compact height for audio-player iframes (Spotify/SoundCloud/Apple
-    /// Podcasts). Matches the CSS `iframe.wiki-embed-audio` height so the
-    /// webview hugs the player.
-    private static let audioPlayerHeight: CGFloat = 152
-
     /// Height for native `<audio>` elements (direct-remote audio).
     private static let nativeAudioHeight: CGFloat = 220
 
@@ -41,6 +36,14 @@ struct MediaEmbedPlayerView: View {
                 .aspectRatio(Self.videoAspect, contentMode: .fit)
                 .background(.regularMaterial)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .iframe:
+            // Audio/podcast player iframes (Spotify, SoundCloud, Apple
+            // Podcasts) fill the pane too: their widgets use the extra height
+            // for artwork, descriptions, and episode lists instead of a
+            // centered compact band with empty gaps around it.
+            EmbedWebViewRep(target: target)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.regularMaterial)
         case .video:
             // Native <video> elements (direct-remote media) fill the pane; the
             // element letterboxes the content to the video's own ratio
@@ -49,13 +52,12 @@ struct MediaEmbedPlayerView: View {
             EmbedWebViewRep(target: target)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.regularMaterial)
-        case .iframe, .audio:
-            // Audio-player iframes and native audio elements keep their
-            // compact fixed heights.
-            let height = target.kind == .iframe ? Self.audioPlayerHeight : Self.nativeAudioHeight
+        case .audio:
+            // A native <audio> element is a bare controls bar — it stays
+            // compact instead of stretching empty space to the window height.
             EmbedWebViewRep(target: target)
                 .frame(maxWidth: .infinity)
-                .frame(height: height)
+                .frame(height: Self.nativeAudioHeight)
                 .background(.regularMaterial)
         }
     }
@@ -115,7 +117,7 @@ enum MediaEmbedPlayerHTML {
           html, body { margin: 0; padding: 0; height: 100%; background: transparent; }
           .wiki-embed { width: 100%; border: none; border-radius: 8px; display: block; }
           iframe.wiki-embed-video { height: 100%; }
-          iframe.wiki-embed-audio { height: 152px; }
+          iframe.wiki-embed-audio { height: 100%; }
           video.wiki-embed { height: 100%; object-fit: contain; }
           .wiki-embed-fallback { padding: 16px; font: -apple-system-body; color: -apple-system-secondary-label; }
         </style></head>
@@ -146,9 +148,10 @@ enum MediaEmbedPlayerHTML {
         }
     }
 
-    /// Video iframes fill their container (the native view is sized to the
-    /// video aspect ratio, so filling preserves 16:9 without letterboxing).
-    /// Audio-player iframes use a fixed height.
+    /// Player shape for an embed URL: video iframes are sized by the native
+    /// view to the video aspect ratio (16:9); audio-player iframes fill the
+    /// pane at full height. Selects the iframe's CSS class and the native
+    /// sizing branch.
     enum SizeClass: String {
         case video = "wiki-embed-video"
         case audio = "wiki-embed-audio"
