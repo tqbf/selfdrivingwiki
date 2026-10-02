@@ -253,11 +253,29 @@ struct MediaEmbedPlayerTests {
 
     @Test func sizeClassDistinguishesAudioFromVideo() {
         #expect(MediaEmbedPlayerHTML.sizeClass(for: "https://open.spotify.com/embed/track/x")
-               == "wiki-embed-audio")
+               == .audio)
         #expect(MediaEmbedPlayerHTML.sizeClass(for: "https://www.youtube-nocookie.com/embed/x")
-               == "wiki-embed-video")
+               == .video)
         #expect(MediaEmbedPlayerHTML.sizeClass(for: "https://player.vimeo.com/video/123")
-               == "wiki-embed-video")
+               == .video)
+    }
+
+    @Test func videoIframeFillsContainerInsteadOfLetterboxing() throws {
+        // The native view is sized to 16:9, so the iframe must fill it (height
+        // 100%) rather than re-imposing its own aspect ratio, which letterboxed
+        // the player inside the container.
+        let target = EmbedTarget(
+            kind: .iframe, url: "https://www.youtube-nocookie.com/embed/x")
+        let html = MediaEmbedPlayerHTML.document(for: target)
+        #expect(html.contains("iframe.wiki-embed-video { height: 100%; }"))
+        #expect(!html.contains("aspect-ratio"))
+    }
+
+    @Test func audioIframeKeepsFixedHeight() throws {
+        let target = EmbedTarget(
+            kind: .iframe, url: "https://open.spotify.com/embed/track/x")
+        let html = MediaEmbedPlayerHTML.document(for: target)
+        #expect(html.contains("iframe.wiki-embed-audio { height: 152px; }"))
     }
 
     @Test func audioAndVideoTargetsUseNativeTags() {
