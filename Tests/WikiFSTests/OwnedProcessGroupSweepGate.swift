@@ -16,48 +16,18 @@ import Testing
 /// deadline-bounded `Task.sleep` polling, so task cancellation and timeout
 /// both surface as a fast, diagnosed failure instead of a hang.
 enum OwnedProcessGroupSweepGate {
-    /// The process-global held flag. One instance per test process, shared by
-    /// every suite that imports this target.
-    private static let state = GateState()
+    /// The process-global gate shared by every sweeping suite. Holders keep
+    /// it legitimately for tens of seconds — the end-to-end sweep test waits
+    /// for parallel suites' groups to drain first — so the gate's own
+    /// selftest below must not race this instance; it uses a private one.
+    private static let global = SweepGate()
 
-    private final class GateState: @unchecked Sendable {
-        private let lock = NSLock()
-        private var held = false
-
-        func tryAcquire() -> Bool {
-            lock.withLock {
-                if held { return false }
-                held = true
-                return true
-            }
-        }
-
-        func release() {
-            lock.withLock { held = false }
-        }
-    }
-
-    struct GateTimeout: Error, CustomStringConvertible {
-        var description: String {
-            "another test still held the owned-process-group sweep gate past the timeout"
-        }
-    }
-
-    /// Acquires the gate, polling until the deadline. Whichever comes first
-    /// ends the wait: acquisition, the deadline, or cancellation of the
-    /// calling task (for example a suite `.timeLimit`), because `Task.sleep`
-    /// throws the moment the task is cancelled.
     static func acquire(timeout: Duration) async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while state.tryAcquire() == false {
-            if clock.now >= deadline { throw GateTimeout() }
-            try await Task.sleep(for: .milliseconds(25))
-        }
+        try await global.acquire(timeout: timeout)
     }
 
     static func release() {
-        state.release()
+        global.release()
     }
 
     /// Runs `body` while holding the gate, releasing it on every exit path.
@@ -65,6 +35,54 @@ enum OwnedProcessGroupSweepGate {
     /// end-to-end sweep test, which may wait for parallel suites' groups to
     /// drain first) while staying inside that suite's two-minute time limit.
     static func withExclusiveSweep<T: Sendable>(
+        timeout: Duration = .seconds(90),
+        _ body: @Sendable () async throws -> T
+    ) async throws -> T {
+        try await global.withExclusiveSweep(timeout: timeout, body)
+    }
+}
+
+/// One mutual-exclusion gate with deadline-bounded acquisition. The sweep
+/// suites share a single process-global instance through
+/// `OwnedProcessGroupSweepGate`; a test that only verifies the gate's own
+/// semantics allocates a private instance so its timings race no parallel
+/// suite's legitimate hold.
+private final class SweepGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held = false
+
+    struct GateTimeout: Error, CustomStringConvertible {
+        var description: String {
+            "another test still held the owned-process-group sweep gate past the timeout"
+        }
+    }
+
+    func tryAcquire() -> Bool {
+        lock.withLock {
+            if held { return false }
+            held = true
+            return true
+        }
+    }
+
+    func release() {
+        lock.withLock { held = false }
+    }
+
+    /// Acquires the gate, polling until the deadline. Whichever comes first
+    /// ends the wait: acquisition, the deadline, or cancellation of the
+    /// calling task (for example a suite `.timeLimit`), because `Task.sleep`
+    /// throws the moment the task is cancelled.
+    func acquire(timeout: Duration) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while tryAcquire() == false {
+            if clock.now >= deadline { throw GateTimeout() }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+    }
+
+    func withExclusiveSweep<T: Sendable>(
         timeout: Duration = .seconds(90),
         _ body: @Sendable () async throws -> T
     ) async throws -> T {
@@ -78,21 +96,27 @@ enum OwnedProcessGroupSweepGate {
 struct OwnedProcessGroupSweepGateTests {
     /// While the gate is held, a second acquire fails at its own deadline;
     /// after release, acquire succeeds again.
+    ///
+    /// Runs against a dedicated `SweepGate` instance, not the process-global
+    /// gate: parallel suites legitimately hold the global gate for tens of
+    /// seconds, so racing this test's 5 s acquires against them measures
+    /// cross-suite scheduling, not gate semantics.
     @Test func excludesASecondAcquirerUntilRelease() async throws {
-        try await OwnedProcessGroupSweepGate.acquire(timeout: .seconds(5))
+        let gate = SweepGate()
+        try await gate.acquire(timeout: .seconds(5))
 
         let secondAcquired = await Task { () -> Bool in
             do {
-                try await OwnedProcessGroupSweepGate.acquire(timeout: .milliseconds(100))
-                OwnedProcessGroupSweepGate.release()
+                try await gate.acquire(timeout: .milliseconds(100))
+                gate.release()
                 return true
             } catch { return false }
         }.value
-        OwnedProcessGroupSweepGate.release()
+        gate.release()
 
         #expect(secondAcquired == false)
 
-        try await OwnedProcessGroupSweepGate.acquire(timeout: .seconds(5))
-        OwnedProcessGroupSweepGate.release()
+        try await gate.acquire(timeout: .seconds(5))
+        gate.release()
     }
 }
