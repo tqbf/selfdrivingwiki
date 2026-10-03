@@ -102,10 +102,12 @@ struct WikiStrategyEditorView: View {
     ///
     /// Compact windows must not crowd the editor: `ViewThatFits` prefers the
     /// fixed-header layout, and when the headers cannot fit beside the
-    /// editor's minimum floor it falls back to scrolling the headers while
-    /// the editor keeps its floor and the footer stays anchored. (No
-    /// `layoutPriority` here — a greedy frame beside a prioritized sibling
-    /// can reduce the space available to the other controls.)
+    /// editor's minimum floor (the fit test measures the editor's pinned
+    /// IDEAL — see ``instructionsField(flexible:)``) it falls back to
+    /// scrolling the headers while the editor keeps its floor and the footer
+    /// stays anchored. (No `layoutPriority` here — a greedy frame beside a
+    /// prioritized sibling can reduce the space available to the other
+    /// controls.)
     private var editorForm: some View {
         VStack(spacing: 0) {
             ViewThatFits(in: .vertical) {
@@ -276,6 +278,11 @@ struct WikiStrategyEditorView: View {
     /// height (the roomy layout); `flexible: false` pins the box at its
     /// minimum floor so the compact layout's scrolling headers take every
     /// leftover point instead of splitting it with a greedy sibling.
+    ///
+    /// Use the minimum editor height as its ideal height for `ViewThatFits`.
+    /// Otherwise, a long draft can select the compact layout even when the
+    /// headers and minimum editor height fit. The header scroll view then
+    /// uses extra height as a gap instead of letting the editor grow.
     private func instructionsField(flexible: Bool) -> some View {
         VStack(alignment: .leading, spacing: WikiStrategyEditorMetrics.labelSpacing) {
             HStack {
@@ -291,6 +298,7 @@ struct WikiStrategyEditorView: View {
                 .font(.system(.body, design: .monospaced))
                 .frame(
                     minHeight: WikiStrategyEditorMetrics.instructionsMinHeight,
+                    idealHeight: WikiStrategyEditorMetrics.instructionsMinHeight,
                     maxHeight: flexible ? .infinity : WikiStrategyEditorMetrics.instructionsMinHeight,
                     alignment: .topLeading)
                 .overlay(

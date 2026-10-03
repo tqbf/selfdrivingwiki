@@ -1186,11 +1186,18 @@ struct WikiStrategyEditorScenarioTests {
         /// gives way to the roomy layout — either variant is legal here, so
         /// assertions at this height must hold under BOTH.
         static let compactHeight: CGFloat = 650
+        /// Between compact and roomy: the growing-gap regression moves the
+        /// name-field → Instructions gap across exactly this kind of step.
+        static let midHeight: CGFloat = 750
         /// Comfortably roomy (fixed headers + editor floor + footer fit with
         /// margin), so the growth check below compares two ROOMY layouts and
         /// is exact rather than spanning the variant switch.
         static let roomyHeight: CGFloat = 900
         static let tallHeight: CGFloat = 1050
+        /// Below headers + editor floor + footer: the compact fallback owns
+        /// the layout here (headers scroll), so the gap is BOUNDED, not
+        /// stable, and the editor holds its floor.
+        static let belowFitHeight: CGFloat = 480
         /// The controls row lives in a fixed-height footer: its bottom edge
         /// is never farther than this from the content view's bottom edge.
         static let footerBottomMaxDistance: CGFloat = 80
@@ -1201,6 +1208,10 @@ struct WikiStrategyEditorScenarioTests {
         /// Between two roomy heights, headers and footer are fixed, so the
         /// editor box absorbs the window delta exactly up to rounding.
         static let growthTolerance: CGFloat = 12
+        /// The name-field → Instructions gap is pure fixed chrome (padding +
+        /// the label row), so it must not move across window heights beyond
+        /// layout rounding.
+        static let gapStabilityTolerance: CGFloat = 2
     }
 
     /// One measurement of the mounted editor's real AppKit geometry, in
@@ -1212,15 +1223,30 @@ struct WikiStrategyEditorScenarioTests {
         let editorHeight: CGFloat
         /// Bottom edge of that box (distance from the content bottom).
         let editorBottomDistance: CGFloat
+        /// Top edge of the same box (distance from the content bottom). With
+        /// the name field's bottom edge this brackets the gap under test.
+        let editorTopDistance: CGFloat
+        /// Bottom edge of the display-name field (distance from the content
+        /// bottom), measured on the bridged `NSTextField`.
+        let nameFieldBottomDistance: CGFloat
         /// Top edge of the controls row, measured on the Save button.
         let controlsTopDistance: CGFloat
         /// Bottom edge of the controls row (distance from the content bottom).
         let controlsBottomDistance: CGFloat
+
+        /// The vertical distance between the display-name textbox and the
+        /// instructions editor. The "Instructions" label row itself is
+        /// SwiftUI-rendered text (no AppKit view to measure), but it sits at
+        /// a constant height (fixed fonts, fixed spacing) directly above the
+        /// editor box — so this measurement moves exactly when the gap the
+        /// user reported moves.
+        var nameToEditorGap: CGFloat { editorTopDistance - nameFieldBottomDistance }
     }
 
     /// Measured on the REAL mounted AppKit tree: the `NSScrollView` that
-    /// hosts the instructions `NSTextView`, and the Save button's real
-    /// rendered frame (either discovery layer, both report window space).
+    /// hosts the instructions `NSTextView`, the bridged `NSTextField` for the
+    /// display name, and the Save button's real rendered frame (either
+    /// discovery layer, both report window space).
     private func measureEditorLayout(in window: NSWindow) throws -> EditorLayout {
         let content = try #require(window.contentView, "hosted content view")
         let textView = try #require(
@@ -1230,11 +1256,17 @@ struct WikiStrategyEditorScenarioTests {
             textView.enclosingScrollView,
             "the instructions editor must own its scroll view")
         let editorFrame = editorBox.convert(editorBox.bounds, to: nil)
+        let nameFieldView = try #require(
+            nameField(in: content),
+            "the display-name NSTextField must be mounted")
+        let nameFieldFrame = nameFieldView.convert(nameFieldView.bounds, to: nil)
         let saveFrame = try requireLabelFrame(labeled: "Save", in: window)
         return EditorLayout(
             contentHeight: content.bounds.height,
             editorHeight: editorFrame.height,
             editorBottomDistance: editorFrame.minY,
+            editorTopDistance: editorFrame.maxY,
+            nameFieldBottomDistance: nameFieldFrame.maxY,
             controlsTopDistance: saveFrame.maxY,
             controlsBottomDistance: saveFrame.minY)
     }
@@ -1250,13 +1282,25 @@ struct WikiStrategyEditorScenarioTests {
         try await settle()
     }
 
-    /// The layout contract the user asked for: the instructions textbox
-    /// expands to fill the remaining window height (scrolling its own
-    /// content), and the action buttons stay anchored at the bottom behind a
-    /// divider. Asserted on the real mounted geometry at a compact height
-    /// (650), after a real resize to a roomy height (900), and between two
-    /// roomy heights (900 → 1050) where the editor must absorb the exact
-    /// window delta.
+    /// The layout contract the user asked for: the gap between the
+    /// display-name textbox and the Instructions label stays stable as the
+    /// window grows, the instructions textbox expands to fill the remaining
+    /// window height (scrolling its own content), and the action buttons
+    /// stay anchored at the bottom behind a divider. Asserted on the real
+    /// mounted geometry at a compact height (650), after real resizes to a
+    /// mid height (750) and the roomy height (900), between two roomy
+    /// heights (900 → 1050) where the editor must absorb the exact window
+    /// delta, and at a below-fit height (480) where the compact fallback
+    /// keeps the editor's floor and the anchored footer without growing the
+    /// gap.
+    ///
+    /// The mounted strategy carries REAL multi-line content on purpose: the
+    /// regression this test pins appeared only with content. The layout
+    /// switch (`ViewThatFits`) measures the editor's IDEAL height, and an
+    /// empty `TextEditor` reports a near-floor ideal while content inflates
+    /// it — with tall content the scrolling-header fallback rendered at
+    /// ordinary window sizes and absorbed every extra window point as empty
+    /// space between the name field and the Instructions label.
     @Test func instructionsEditorFillsWindowAndControlsStayAnchored() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
@@ -1264,6 +1308,11 @@ struct WikiStrategyEditorScenarioTests {
         let databaseURL = try tempDatabaseURL()
         defer { removeFixture(at: databaseURL.deletingLastPathComponent()) }
         let model = try makeModel(databaseURL: databaseURL)
+        let seededInstructions = (0..<40)
+            .map { "Instruction line \($0): editorial guidance for future runs." }
+            .joined(separator: "\n")
+        _ = try model.internalStore.saveWikiStrategy(
+            name: "Tall Strategy", instructions: seededInstructions, expectedRevision: nil)
         let window = try await host(
             WikiStrategyEditorView(store: model, wikiDisplayName: "Layout Wiki"),
             model: model,
@@ -1280,6 +1329,19 @@ struct WikiStrategyEditorScenarioTests {
         #expect(compact.editorBottomDistance >= compact.controlsTopDistance,
                 "the editor box must sit fully above the controls row")
 
+        // THE REGRESSION THIS TEST PINS: growing the window must grow the
+        // EDITOR, never the gap below the display-name field. Measured with
+        // real strategy content mounted (see above), across a real resize.
+        try await resize(
+            window,
+            to: NSSize(width: LayoutProbe.windowWidth, height: LayoutProbe.midHeight))
+        let mid = try measureEditorLayout(in: window)
+        #expect(abs(mid.nameToEditorGap - compact.nameToEditorGap)
+                    <= LayoutProbe.gapStabilityTolerance,
+                "the name-field → Instructions gap must not grow with the window height (moved \(abs(mid.nameToEditorGap - compact.nameToEditorGap))pt, from \(compact.nameToEditorGap) at \(Int(compact.contentHeight)) to \(mid.nameToEditorGap) at \(Int(mid.contentHeight)))")
+        #expect(mid.editorHeight >= WikiStrategyEditorMetrics.instructionsMinHeight,
+                "the instructions editor must keep its minimum floor at the mid height (got \(mid.editorHeight))")
+
         // A real resize to the roomy height: the footer stays anchored and
         // stable (it is outside the editor's layout, so a variant switch
         // between these heights must not move it).
@@ -1294,6 +1356,9 @@ struct WikiStrategyEditorScenarioTests {
                 "the fixed-height footer must not shift across a window-height change (bottom edge moved \(abs(roomy.controlsBottomDistance - compact.controlsBottomDistance))pt)")
         #expect(roomy.editorBottomDistance >= roomy.controlsTopDistance,
                 "the editor box must sit fully above the controls row after the resize")
+        #expect(abs(roomy.nameToEditorGap - compact.nameToEditorGap)
+                    <= LayoutProbe.gapStabilityTolerance,
+                "the name-field → Instructions gap must stay stable at the roomy height (was \(compact.nameToEditorGap), now \(roomy.nameToEditorGap))")
 
         // Between two roomy heights the headers and footer are fixed, so the
         // editor box absorbs the window delta exactly.
@@ -1308,6 +1373,27 @@ struct WikiStrategyEditorScenarioTests {
                 "the editor must absorb the window growth exactly (editor +\(editorGrowth), window +\(heightGrowth))")
         #expect(tall.controlsBottomDistance <= LayoutProbe.footerBottomMaxDistance,
                 "the controls row must stay anchored at the tall height too")
+        #expect(abs(tall.nameToEditorGap - roomy.nameToEditorGap)
+                    <= LayoutProbe.gapStabilityTolerance,
+                "the name-field → Instructions gap must stay stable between roomy heights (was \(roomy.nameToEditorGap), now \(tall.nameToEditorGap))")
+
+        // A below-fit height: the headers cannot fit beside the editor's
+        // floor, so the compact fallback owns the layout — the editor keeps
+        // its floor, the footer stays anchored, and the visible gap only
+        // SHRINKS (the fallback clips/scrolls the headers; it must never
+        // absorb leftover height below the name field, which is the growing
+        // gap this test pins). The gap is signed (editor top minus name-field
+        // bottom), so "never larger than the stable gap" is a lower bound.
+        try await resize(
+            window,
+            to: NSSize(width: LayoutProbe.windowWidth, height: LayoutProbe.belowFitHeight))
+        let belowFit = try measureEditorLayout(in: window)
+        #expect(belowFit.editorHeight >= WikiStrategyEditorMetrics.instructionsMinHeight,
+                "the instructions editor must keep its floor at a below-fit height (got \(belowFit.editorHeight))")
+        #expect(belowFit.controlsBottomDistance <= LayoutProbe.footerBottomMaxDistance,
+                "the controls row must stay anchored at a below-fit height too (got \(belowFit.controlsBottomDistance)pt above the content bottom)")
+        #expect(belowFit.nameToEditorGap >= tall.nameToEditorGap - LayoutProbe.gapStabilityTolerance,
+                "the compact fallback must not grow the gap beyond the roomy layout's stable gap (got \(belowFit.nameToEditorGap), stable \(tall.nameToEditorGap))")
     }
 
     // MARK: - Light and dark appearances
