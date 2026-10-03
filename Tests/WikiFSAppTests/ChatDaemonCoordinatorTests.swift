@@ -53,6 +53,228 @@ struct ChatDaemonCoordinatorTests {
         #expect(coordinator.anyChatGenerating)
     }
 
+    @Test func terminalToolCallStatusesFireExternalWriteHintOncePerCall() async {
+        let coordinator = makeCoordinator()
+        _ = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
+        var hintedWikiIDs: [WikiID] = []
+        coordinator.onSuspectedExternalWrite = { hintedWikiIDs.append($0) }
+
+        func ingestToolCall(id: String, status: ChatToolCallStatus, sequence: Int64) {
+            coordinator.ingestForTesting(
+                QueueEventEnvelope.chatSyncUpdate(
+                    chatID: ChatID(rawValue: "chat-1"),
+                    update: makeUpdate(
+                        sequence: sequence,
+                        activeTurn: makeActiveTurn(state: .responding),
+                        overlay: [
+                            .toolCall(
+                                ChatTranscriptToolCallItem(
+                                    toolCallID: ToolCallID(rawValue: id),
+                                    turnID: ChatTurnID(rawValue: "turn-1"),
+                                    toolName: "Bash",
+                                    status: status,
+                                    detail: "a shell command",
+                                    output: nil,
+                                    permissionRequestID: nil,
+                                    updatedAt: Date(timeIntervalSince1970: 30)))
+                        ])
+                )
+            )
+        }
+
+        // Non-terminal states mean nothing can have run yet — no hint.
+        ingestToolCall(id: "tool-1", status: .pending, sequence: 1)
+        ingestToolCall(id: "tool-1", status: .running, sequence: 2)
+        #expect(hintedWikiIDs.isEmpty)
+
+        // Every terminal state fires: a shell that committed and then exited
+        // non-zero (failed), or was stopped mid-run (cancelled), has still
+        // possibly written.
+        ingestToolCall(id: "tool-1", status: .completed, sequence: 3)
+        #expect(hintedWikiIDs == [fixtureWikiID])
+        ingestToolCall(id: "tool-2", status: .failed, sequence: 4)
+        ingestToolCall(id: "tool-3", status: .cancelled, sequence: 5)
+        #expect(hintedWikiIDs.count == 3)
+
+        // Later updates keep carrying the same terminal item — no repeats.
+        ingestToolCall(id: "tool-1", status: .completed, sequence: 6)
+        ingestToolCall(id: "tool-2", status: .failed, sequence: 7)
+        #expect(hintedWikiIDs.count == 3)
+    }
+
+    @Test func toolCallDedupIsNamespacedPerChat() async {
+        let coordinator = makeCoordinator()
+        // Two chats over DIFFERENT wikis, each reporting the SAME tool-call id.
+        _ = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
+        _ = coordinator.session(
+            wikiID: WikiID(rawValue: "coordinator-test-wiki-2"),
+            for: ChatID(rawValue: "chat-2"))
+        var hintedWikiIDs: [WikiID] = []
+        coordinator.onSuspectedExternalWrite = { hintedWikiIDs.append($0) }
+
+        func ingest(chat: String, wiki: WikiID, sequence: Int64) {
+            coordinator.ingestForTesting(
+                QueueEventEnvelope.chatSyncUpdate(
+                    chatID: ChatID(rawValue: chat),
+                    update: makeUpdate(
+                        sequence: sequence,
+                        overlay: [
+                            .toolCall(
+                                ChatTranscriptToolCallItem(
+                                    toolCallID: ToolCallID(rawValue: "shared-tool-id"),
+                                    turnID: ChatTurnID(rawValue: "turn-1"),
+                                    toolName: "Bash",
+                                    status: .completed,
+                                    detail: "a shell command",
+                                    output: nil,
+                                    permissionRequestID: nil,
+                                    updatedAt: Date(timeIntervalSince1970: 30)))
+                        ])
+                )
+            )
+        }
+
+        ingest(chat: "chat-1", wiki: fixtureWikiID, sequence: 1)
+        ingest(chat: "chat-2", wiki: WikiID(rawValue: "coordinator-test-wiki-2"), sequence: 1)
+        #expect(hintedWikiIDs == [fixtureWikiID, WikiID(rawValue: "coordinator-test-wiki-2")])
+
+        // The shared id does not suppress either chat's later repeats.
+        ingest(chat: "chat-1", wiki: fixtureWikiID, sequence: 2)
+        #expect(hintedWikiIDs.count == 2)
+    }
+
+    @Test func discardingChatClearsItsToolCallDedupState() async {
+        let coordinator = makeCoordinator()
+        let chatID = ChatID(rawValue: "chat-1")
+        _ = coordinator.session(wikiID: fixtureWikiID, for: chatID)
+        var hintCount = 0
+        coordinator.onSuspectedExternalWrite = { _ in hintCount += 1 }
+
+        let update = QueueEventEnvelope.chatSyncUpdate(
+            chatID: chatID,
+            update: makeUpdate(
+                sequence: 1,
+                overlay: [
+                    .toolCall(
+                        ChatTranscriptToolCallItem(
+                            toolCallID: ToolCallID(rawValue: "tool-1"),
+                            turnID: ChatTurnID(rawValue: "turn-1"),
+                            toolName: "Bash",
+                            status: .completed,
+                            detail: "a shell command",
+                            output: nil,
+                            permissionRequestID: nil,
+                            updatedAt: Date(timeIntervalSince1970: 30)))
+                ])
+        )
+
+        coordinator.ingestForTesting(update)
+        #expect(hintCount == 1)
+
+        // Discarding the chat's mirror clears its dedup set: a re-created
+        // mirror may replay the same terminal item, and the hint fires again
+        // (one idempotent reload) instead of being suppressed forever.
+        coordinator.discard(chatID: chatID)
+        _ = coordinator.session(wikiID: fixtureWikiID, for: chatID)
+        coordinator.ingestForTesting(update)
+        #expect(hintCount == 2)
+    }
+
+    /// The production seam end to end: a RECORDED-shape durable tool-call item
+    /// (the exact JSON the durable transcript stores — same keys, same date
+    /// encoding) decodes through the real `ChatTranscriptItem` Codable, rides
+    /// the versioned `ChatSyncUpdateEnvelope` wire, crosses the XPC envelope's
+    /// own JSON encode/decode roundtrip, and drives the hint on `route`.
+    /// Values are redacted; the SHAPE is the production one (verified against
+    /// recorded durable rows: terminal items omit `permissionRequestID`).
+    @Test func recordedWireEnvelopeDrivesHintThroughRealDecodeSeam() async throws {
+        let recordedItemJSON = """
+        {"toolCall":{"_0":{"toolName":"Bash","toolCallID":"recorded-tool-1","turnID":"recorded-turn-1","status":"failed","detail":"a shell command that exited non-zero after committing","output":"partial output","updatedAt":812753795.344805}}}
+        """
+        let item = try JSONDecoder().decode(ChatTranscriptItem.self, from: Data(recordedItemJSON.utf8))
+        guard case .toolCall(let call) = item else {
+            Issue.record("Recorded-shape JSON did not decode as a tool-call item")
+            return
+        }
+        #expect(call.status == .failed)
+
+        let coordinator = makeCoordinator()
+        _ = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
+        var hintedWikiIDs: [WikiID] = []
+        coordinator.onSuspectedExternalWrite = { hintedWikiIDs.append($0) }
+
+        let update = ChatSyncUpdate(
+            reason: .sessionEvent(.started(turnID: call.turnID)),
+            projection: makeSnapshot(
+                sequence: 1,
+                activeTurn: makeActiveTurn(state: .responding),
+                overlay: [item]).projection)
+
+        // The versioned wire hop the daemon performs…
+        let versioned = try ChatSyncUpdateEnvelope(update: update).encodedData()
+        // …and the XPC envelope's own JSON encode/decode roundtrip.
+        let envelope = QueueEventEnvelope(
+            kind: .chatSyncUpdate,
+            chatID: ChatID(rawValue: "chat-1"),
+            chatStateData: versioned)
+        let wireData = try JSONEncoder().encode(envelope)
+        let decodedEnvelope = try JSONDecoder().decode(QueueEventEnvelope.self, from: wireData)
+
+        coordinator.ingestForTesting(decodedEnvelope)
+
+        // The failed (terminal) recorded item fired the reload hint.
+        #expect(hintedWikiIDs == [fixtureWikiID])
+    }
+
+    @Test func messageOnlyUpdatesDoNotFireExternalWriteHint() {
+        let coordinator = makeCoordinator()
+        _ = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
+        var hintedWikiIDs: [WikiID] = []
+        coordinator.onSuspectedExternalWrite = { hintedWikiIDs.append($0) }
+
+        coordinator.ingestForTesting(
+            QueueEventEnvelope.chatSyncUpdate(
+                chatID: ChatID(rawValue: "chat-1"),
+                update: makeUpdate(
+                    sequence: 1,
+                    activeTurn: makeActiveTurn(state: .responding),
+                    overlay: [makeMessage(role: .assistant, text: "hello")])
+            )
+        )
+
+        #expect(hintedWikiIDs.isEmpty)
+    }
+
+    @Test func toolCallForChatWithoutKnownWikiDoesNotFireHint() {
+        let coordinator = makeCoordinator()
+        var hintedWikiIDs: [WikiID] = []
+        coordinator.onSuspectedExternalWrite = { hintedWikiIDs.append($0) }
+
+        // No session was ever created for chat-9 — the coordinator cannot know
+        // its wiki, so the hint must be skipped (not crashed on).
+        coordinator.ingestForTesting(
+            QueueEventEnvelope.chatSyncUpdate(
+                chatID: ChatID(rawValue: "chat-9"),
+                update: makeUpdate(
+                    sequence: 1,
+                    overlay: [
+                        .toolCall(
+                            ChatTranscriptToolCallItem(
+                                toolCallID: ToolCallID(rawValue: "tool-9"),
+                                turnID: ChatTurnID(rawValue: "turn-1"),
+                                toolName: "Bash",
+                                status: .completed,
+                                detail: "a read-only command",
+                                output: nil,
+                                permissionRequestID: nil,
+                                updatedAt: Date(timeIntervalSince1970: 30)))
+                    ])
+            )
+        )
+
+        #expect(hintedWikiIDs.isEmpty)
+    }
+
     @Test func runningStateTokenBumpsOnlyOnGeneratingMembershipChanges() {
         let coordinator = makeCoordinator()
         let before = coordinator.runningStateToken

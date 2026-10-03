@@ -88,6 +88,19 @@ public enum ChatToolCallStatus: String, Sendable, Codable, CaseIterable {
     case completed
     case failed
     case cancelled
+
+    /// True once the tool call can no longer change state. `completed`,
+    /// `failed`, and `cancelled` are all terminal: a shell tool that failed or
+    /// was cancelled may still have committed part of its work before
+    /// stopping, so consumers that react to "the tool stopped" (e.g. the
+    /// external-write refresh hint) must treat every terminal state alike.
+    /// Pending and running calls have not reached a terminal state.
+    public var isTerminal: Bool {
+        switch self {
+        case .pending, .running: return false
+        case .completed, .failed, .cancelled: return true
+        }
+    }
 }
 
 /// The message-role subset that is durable transcript content.

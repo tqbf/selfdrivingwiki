@@ -480,6 +480,14 @@ struct WikiFSApp: App {
             }
             bridge.refreshObservations()
             changeBridge = bridge
+            // Chat-driven external writes (an agent tool call completing a
+            // shell command that may have committed, e.g. `wikictl source
+            // add`) refresh through the SAME coalesced bridge path as a
+            // Darwin change notification. The sink setter re-applies to a
+            // coordinator the transport may already have published.
+            chatDaemonHolder.suspectedExternalWriteSink = { [weak bridge] wikiID in
+                bridge?.noteSuspectedExternalWrite(forWikiID: wikiID)
+            }
             appDelegate.sessionManager = sessionManager
 
             if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {

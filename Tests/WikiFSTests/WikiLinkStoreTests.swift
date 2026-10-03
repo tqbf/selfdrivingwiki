@@ -277,8 +277,26 @@ struct WikiLinkStoreTests {
         #expect(try store.resolveSourceByName("What is Malleable Software Now") == nil)
     }
 
-    // MARK: - LinkReconciler (startup self-heal)
+    @Test func chatCitationWithoutExtensionResolvesExtensionKeepingDisplayName() throws {
+        // A URL-fetched page whose filename carries a pipe (the wikilink alias
+        // delimiter). The write boundary sanitizes the pipe into the display
+        // name but KEEPS the file extension, while an assistant citing the
+        // source drops the extension (pipes cannot be written inside a
+        // wikilink at all). Extension-stripped resolution (pass 2) must bridge
+        // that gap so the citation navigates.
+        let store = try tempStore()
+        let src = try store.addSource(
+            filename: "002- Chapter Two (𒐀) - Sample Book | Site.html",
+            data: Data("<html><body><p>chapter text</p></body></html>".utf8))
+        // The stored display name keeps the extension (pipe → dash only).
+        #expect(src.displayName == "002- Chapter Two (𒐀) - Sample Book - Site.html")
+        // The citation spelling an assistant writes: pipe replaced, extension
+        // dropped.
+        let citation = "002- Chapter Two (𒐀) - Sample Book - Site"
+        #expect(try store.resolveSourceByName(citation) == src.id)
+    }
 
+    // MARK: - LinkReconciler (startup self-heal)
     @Test func reconcileHealsCitationSavedBeforeSourceExisted() async throws {
         let store = try tempStore()
         let page = try store.createPage(title: "P")

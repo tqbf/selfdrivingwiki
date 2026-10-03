@@ -13,10 +13,23 @@ import WikiFSCore
 final class ChatDaemonCoordinatorHolder {
     private(set) var coordinator: ChatDaemonCoordinator?
 
+    /// Where the coordinator forwards "a chat tool call completed — the agent
+    /// may have committed external writes" hints. Set by the app once the
+    /// change bridge exists; applied to every coordinator this holder
+    /// publishes (transport reconnects replace the instance).
+    var suspectedExternalWriteSink: (@MainActor (WikiID) -> Void)? {
+        didSet { applySuspectedExternalWriteSink() }
+    }
+
     func replace(with replacement: ChatDaemonCoordinator?) {
         coordinator?.stop()
         coordinator = replacement
         DebugLog.store("WikiFSApp: chat daemon coordinator \(replacement == nil ? "cleared" : "published")")
+        applySuspectedExternalWriteSink()
+    }
+
+    private func applySuspectedExternalWriteSink() {
+        coordinator?.onSuspectedExternalWrite = suspectedExternalWriteSink
     }
 }
 #endif

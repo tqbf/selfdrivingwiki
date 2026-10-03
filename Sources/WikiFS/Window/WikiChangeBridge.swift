@@ -145,6 +145,24 @@ final class WikiChangeBridge {
         )
     }
 
+    /// Feed an in-process hint about a suspected external write — e.g. an
+    /// agent chat tool call that just stopped, and whose shell command may
+    /// have committed to the wiki database (a CLI run) — through the SAME
+    /// coalesced path a cross-process change notification takes: reload the
+    /// on-screen session(s) + signal the File Provider after the ~250 ms
+    /// quiet window.
+    ///
+    /// This is the deterministic in-process companion to the Darwin
+    /// notification channel: when that channel delivers, both paths collapse
+    /// into the same coalesced reload; when it does not, this hint still
+    /// refreshes after chat-driven writes. The hint is heuristic (a tool call
+    /// MIGHT have written), so it costs at most one idempotent reload.
+    func noteSuspectedExternalWrite(forWikiID wikiID: WikiID) {
+        DebugLog.store(
+            "WikiChangeBridge: chat tool activity → wiki \(wikiID.rawValue.prefix(8)) (coalesced reload)")
+        coalescer?.noteChange(forWikiID: wikiID)
+    }
+
     /// Map a posted Darwin name back to its wiki id and feed the coalescer. The
     /// id is the suffix after the base name; we match against the wikis we observe
     /// rather than string-splitting, so a malformed name is simply ignored.

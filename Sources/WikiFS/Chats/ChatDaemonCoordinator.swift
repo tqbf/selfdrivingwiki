@@ -51,6 +51,32 @@ public final class ChatDaemonCoordinator {
     /// chat key → mirror session. The draft (.newChat) state uses `.draft`.
     private var sessions: [ChatSessionKey: RemoteChatSession] = [:]
 
+    /// chat id → owning wiki, recorded wherever the coordinator learns the
+    /// pairing (session creation, rehydration). `route(chatID:update:)` only
+    /// receives a chat id, so this map is how a tool-call completion reaches
+    /// the wiki whose store must reload.
+    private var chatWikiIDs: [ChatID: WikiID] = [:]
+
+    /// Fired when a chat update carries a tool call that just reached a
+    /// TERMINAL state for a chat whose owning wiki is known. An agent's shell
+    /// tool may have committed writes to the wiki database from OUTSIDE this
+    /// process (e.g. a `wikictl` run) — writes the app's own store events
+    /// cannot see. The app wires this through
+    /// ``WikiChangeBridge/noteSuspectedExternalWrite(forWikiID:)`` so the
+    /// on-screen model reloads exactly like a cross-process change
+    /// notification would have made it. Without this hint the sidebar and the
+    /// chat link resolver stay stale until the next launch.
+    var onSuspectedExternalWrite: (@MainActor (WikiID) -> Void)?
+
+    /// Tool-call ids whose TERMINAL state already fired the hint above, keyed
+    /// by chat (tool-call ids are unique per chat, not globally). One hint per
+    /// tool call — later updates keep carrying the same terminal item, and a
+    /// rehydrate replays committed rows, so the set collapses all repeats.
+    /// Bounded per chat; on overflow the chat's set resets, which can re-hint
+    /// at most once — a reload is idempotent.
+    private var notedTerminalToolCallIDs: [ChatID: Set<ToolCallID>] = [:]
+    private static let toolCallDedupCapacityPerChat = 512
+
     /// chatIDs the daemon currently reports as **generating** (from `chatState`
     /// envelopes), regardless of whether the app has an open session for them.
     /// Lets the sidebar badge a chat the daemon is answering (e.g. one started
@@ -103,6 +129,7 @@ public final class ChatDaemonCoordinator {
     /// returns the shared draft-state session (the `.newChat` composer).
     public func session(wikiID: WikiID, for chatID: ChatID?) -> RemoteChatSession {
         let key: ChatSessionKey = chatID.map(ChatSessionKey.chat) ?? .draft
+        if let chatID { chatWikiIDs[chatID] = wikiID }
         if let existing = sessions[key] { return existing }
         let session = providersConfigurationDirectory.map {
             RemoteChatSession(chatID: key, providersConfigurationDirectory: $0)
@@ -213,7 +240,13 @@ public final class ChatDaemonCoordinator {
     /// Drop the cached session for a chat (e.g. when retargeting the tab to a
     /// fresh draft). The daemon's own session is unaffected.
     public func discard(chatID: ChatID?) {
-        sessions.removeValue(forKey: chatID.map(ChatSessionKey.chat) ?? .draft)
+        let key = chatID.map(ChatSessionKey.chat) ?? .draft
+        sessions.removeValue(forKey: key)
+        if let chatID {
+            // The chat's tool-call dedup state dies with its mirror; a future
+            // mirror for the same chat rebuilds it from live updates.
+            notedTerminalToolCallIDs.removeValue(forKey: chatID)
+        }
     }
 
     /// Replace the draft session with a fresh one (used by "start new chat").
@@ -227,6 +260,9 @@ public final class ChatDaemonCoordinator {
         routerTask = nil
         providerConfigObserver?.stop()
         providerConfigObserver = nil
+        // The coordinator is being torn down (transport replacement or quit):
+        // drop every chat's dedup state along with it.
+        notedTerminalToolCallIDs.removeAll()
     }
 
     // MARK: - Event routing
@@ -247,6 +283,32 @@ public final class ChatDaemonCoordinator {
     private func route(chatID: ChatID, update: ChatSyncUpdate) {
         setChatGenerating(chatID, generating: update.projection.isAnswering)
         sessions[.chat(chatID)]?.ingest(update)
+        noteSuspectedExternalWriteIfNeeded(chatID: chatID, update: update)
+    }
+
+    /// Any terminal tool call can follow committed writes, including failure
+    /// or cancellation. Request a refresh once per call. Later updates and
+    /// rehydration can carry the same transcript item again.
+    private func noteSuspectedExternalWriteIfNeeded(chatID: ChatID, update: ChatSyncUpdate) {
+        guard let wikiID = chatWikiIDs[chatID] else { return }
+        var notedForChat = notedTerminalToolCallIDs[chatID] ?? []
+        if notedForChat.count >= Self.toolCallDedupCapacityPerChat {
+            // Overflow resets the chat's set rather than growing without
+            // bound; the worst case is one duplicate (idempotent) reload.
+            notedForChat = []
+        }
+        var didNoteTerminal = false
+        for item in update.projection.transcriptOverlay {
+            guard case .toolCall(let call) = item, call.status.isTerminal else { continue }
+            if notedForChat.insert(call.toolCallID).inserted {
+                didNoteTerminal = true
+            }
+        }
+        guard didNoteTerminal else { return }
+        notedTerminalToolCallIDs[chatID] = notedForChat
+        DebugLog.agent(
+            "ChatDaemonCoordinator: terminal tool call(s) in chat \(chatID.rawValue.prefix(8)) — suggesting wiki \(wikiID.rawValue.prefix(8)) refresh")
+        onSuspectedExternalWrite?(wikiID)
     }
 
     // MARK: - Sidebar liveness aggregate
@@ -364,6 +426,7 @@ public final class ChatDaemonCoordinator {
     /// and whenever the active chat changes so the mirror reflects the
     /// daemon's live controller (or the persisted rows once evicted).
     public func rehydrate(wikiID: WikiID, chatID: ChatID) async {
+        chatWikiIDs[chatID] = wikiID
         let session = self.session(wikiID: wikiID, for: chatID)
         do {
             let state = try await client.chatSessionState(wikiID: wikiID, chatID: chatID)

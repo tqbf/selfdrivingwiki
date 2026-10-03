@@ -114,6 +114,40 @@ struct WikiChangeBridgeTests {
         #expect(pokedSessions.count == 2)
     }
 
+    /// The chat-tool-call hint (`noteSuspectedExternalWrite`) flows through the
+    /// same coalescer as a Darwin notification: two hints inside the quiet
+    /// window produce ONE flush that pokes the matching session's bus.
+    @Test func testNoteSuspectedExternalWriteCoalescesIntoOneFlush() async throws {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let descriptor = registry.wikis.first!
+        let session = try makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
+
+        let fileProvider = FileProviderFacade()
+        let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
+        var flushLookups: [WikiID] = []
+        bridge.sessionLookup = { wikiID in
+            if wikiID == descriptor.id {
+                flushLookups.append(wikiID)
+                return [session]
+            }
+            return []
+        }
+        bridge.refreshObservations()
+
+        // Two completed-tool-call hints, microseconds apart — one flush.
+        bridge.noteSuspectedExternalWrite(forWikiID: descriptor.id)
+        bridge.noteSuspectedExternalWrite(forWikiID: descriptor.id)
+
+        // The real scheduler sleeps the ~250 ms coalesce window on the main
+        // actor; poll until the flush lands (bounded, never blocks the pool).
+        for _ in 0..<200 where flushLookups.isEmpty {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(flushLookups == [descriptor.id])
+    }
+
     /// A session with a DIFFERENT wiki ID is not poked.
     @Test func testFlushDoesNotPokeNonMatchingSessions() async throws {
         let dir = tempDirectory()
