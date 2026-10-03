@@ -22,6 +22,48 @@ The name can contain up to 120 characters. Instructions can contain up to 32 KiB
 The app rejects larger input. It does not silently shorten instructions.
 Empty instructions use Default.
 
+## Change a strategy from the terminal
+
+`wikictl` can read, save, and reset the strategy of one wiki. A chat agent uses
+these commands when you ask it to change the strategy.
+
+Read the committed state first:
+
+```sh
+wikictl --wiki <id> strategy read
+wikictl --wiki <id> strategy read --json
+```
+
+The read prints the revision. `revision: absent` means no strategy row has ever
+been written. A wiki that was reset to Default keeps its last revision number.
+The revision, not `absent`, is what the next save must expect after a reset.
+
+Save a new strategy with that revision as the compare-and-swap token:
+
+```sh
+wikictl --wiki <id> strategy save --name "Research wiki" \
+  --file strategy.md --expect-revision <n|absent>
+```
+
+Reset to Default the same way:
+
+```sh
+wikictl --wiki <id> strategy reset --expect-revision <n|absent>
+```
+
+A reset keeps the revision counter, and the next save expects that number.
+Whitespace-only instructions also reset the strategy to Default.
+The limits match the app: 120 characters for the name, 32 KiB for the instructions.
+Larger input fails with an error. The command never shortens it.
+
+Exit code 3 means another editor saved first. Nothing was written.
+Read the strategy again, apply your change once more, and retry once with the
+new revision. Exit code 0 prints the saved revision. In text mode, the next
+expected revision prints on stderr.
+
+A saved strategy applies from the next turn or run. The turn in progress keeps
+the strategy it captured at its start.
+
 ## Start from a template
 
 Select a template to copy its name and instructions into the draft.

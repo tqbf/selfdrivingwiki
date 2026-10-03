@@ -1,18 +1,21 @@
 ---
-date: 2026-10-03
+timestamp: 2026-10-03T181739Z
+title: Daemon registry refresh
+branch: feature/wiki-strategies-cumulative-ingestion
 status: implemented
-scope: daemon registry refresh and ingestion enqueue
 ---
 
 # Daemon registry refresh
 
-## Cause
+## Progress
+
+### Cause
 
 Debug logs showed that the Ingest button reached the enqueue path, but the daemon rejected the wiki.
 The app created the wiki after the daemon started. The daemon still used its startup registry.
 The custom strategy was not the cause. Strategy capture occurs after enqueue.
 
-## Changes
+### Changes
 
 Registry-dependent daemon operations now read the disk registry before they act.
 They adopt new and changed descriptors. They reject deleted wikis and release their cached services and chat hosts.

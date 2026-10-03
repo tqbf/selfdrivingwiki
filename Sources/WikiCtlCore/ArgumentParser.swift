@@ -82,6 +82,10 @@ public enum ArgumentParser {
         case queue(QueueCommand.Action)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
+        /// Strategy commands: read, save, reset for the per-wiki editorial
+        /// strategy singleton. Save/reset carry the REQUIRED CAS expectation
+        /// (`.absent` = no strategy row has ever been written).
+        case strategy(StrategyCommand.Action)
         /// Print scoped command usage (`wikictl [source [add]] --help`).
         /// Does not require a wiki selection (#1224).
         case help(CLIHelpScope)
@@ -234,6 +238,8 @@ public enum ArgumentParser {
             command = try parseQueueCommand(Array(args.dropFirst()))
         case "workspace":
             command = try parseWorkspaceCommand(Array(args.dropFirst()))
+        case "strategy":
+            command = try parseStrategyCommand(Array(args.dropFirst()))
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
@@ -1002,6 +1008,80 @@ public enum ArgumentParser {
             // Unreachable: recognition is the CLIReference leaf table above.
             throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "workspace", given: sub))
         }
+    }
+
+    private static func parseStrategyCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "strategy"))
+        }
+        guard CLIReference.leaf(family: "strategy", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "strategy", given: sub))
+        }
+        let options = try Options(Array(args.dropFirst()), options: CLIReference.options(forFamily: "strategy"))
+
+        switch sub {
+        case "read":
+            return .strategy(.read(json: options.flag("--json")))
+
+        case "save":
+            // `--content` is inline; `--file` defers to BodySource resolution
+            // (read at execution time, not parse time — the parser stays pure).
+            let contentValue = options.value("--content")
+            let fileValue = options.value("--file")
+            let content: BodySource
+            switch (contentValue, fileValue) {
+            case (.some, .some):
+                throw Failure.usage("strategy save: pass exactly one of --content / --file, not both")
+            case (.none, .none):
+                throw Failure.usage("strategy save: pass --content <text> or --file <path|->")
+            case (let inline?, nil):
+                content = .inline(inline)
+            case (nil, let file?):
+                content = .file(file)
+            }
+            let expect = try parseStrategyExpectation(options, sub: "save")
+            return .strategy(.save(
+                name: options.value("--name"),
+                content: content,
+                expect: expect,
+                json: options.flag("--json")))
+
+        case "reset":
+            let expect = try parseStrategyExpectation(options, sub: "reset")
+            return .strategy(.reset(expect: expect, json: options.flag("--json")))
+
+        default:
+            // Unreachable: recognition is the CLIReference leaf table above.
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "strategy", given: sub))
+        }
+    }
+
+    /// `--expect-revision` is REQUIRED for save/reset — the CAS token that
+    /// keeps a concurrent human/agent edit from being silently clobbered.
+    /// `absent` spells the never-written row (the store's `nil` expectation —
+    /// true absence, not a reset tombstone, which keeps a real revision); a
+    /// positive integer pins the committed revision. `0` is the floor no
+    /// committed row stores, so it is rejected with the `absent` spelling
+    /// pointed at rather than silently compared.
+    private static func parseStrategyExpectation(
+        _ options: Options, sub: String
+    ) throws -> StrategyCommand.ExpectedRevision {
+        guard let raw = options.value("--expect-revision"),
+              !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw Failure.usage("""
+                strategy \(sub): --expect-revision <n|absent> is required — \
+                read the committed revision first (`strategy read` prints it), \
+                then retry with it. `absent` means no strategy row has ever \
+                been written. On exit 3 (conflict), re-read, reapply once, \
+                and retry once.
+                """)
+        }
+        if raw == "absent" { return .absent }
+        guard let value = Int64(raw), value >= 1 else {
+            throw Failure.usage(
+                "strategy \(sub): --expect-revision must be a committed revision number (≥ 1) or `absent`, got \(raw.debugDescription)")
+        }
+        return .revision(WikiStrategyRevision(rawValue: value))
     }
 
     /// A tiny `--key value` / `--flag` option bag. Tolerates options in any

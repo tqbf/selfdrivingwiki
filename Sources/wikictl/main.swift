@@ -220,6 +220,26 @@ func run() async -> Int32 {
         """
         FileHandle.standardError.write(Data(message.utf8))
         return 3
+    } catch let conflict as WikiStrategyConflictError {
+        // CAS conflict on the strategy singleton — another editor committed
+        // since the caller's read (the app's strategy editor, another agent,
+        // another wikictl). Exit code 3 (same convention as the page/source
+        // CAS families) signals the agent to re-read, reapply once, and
+        // retry once — never loop. The write threw before any row change.
+        let expected = conflict.expectedRevision.map { "revision \($0.rawValue)" }
+            ?? "absent (no strategy row ever written)"
+        let current = conflict.currentRevision.map { "revision \($0.rawValue)" }
+            ?? "absent (no strategy row has ever been written)"
+        let message = """
+        wikictl: CAS conflict on strategy — \
+        expected \(expected), \
+        but the committed revision is \(current). \
+        Re-read (`strategy read`), reapply your edit, and retry once with the \
+        new revision. Nothing was written.
+
+        """
+        FileHandle.standardError.write(Data(message.utf8))
+        return 3
     } catch let failure as SourceCommand.Failure {
         FileHandle.standardError.write(Data("wikictl: \(failure)\n".utf8))
         return 1
@@ -324,6 +344,12 @@ func execute(
     case .workspace(let action):
         let r = try WorkspaceCommand.run(action, in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+    case .strategy(let action):
+        let r = try StrategyCommand.run(action, in: store)
+        return SourceCommand.Result(
+            payload: .text(r.output),
+            didCommit: r.didCommit,
+            stderrOutput: r.stderrOutput)
     case .help, .version, .dumpConfig:
         // Handled before wiki resolution in `run()` — unreachable here.
         return SourceCommand.Result(payload: .text(""), didCommit: false)

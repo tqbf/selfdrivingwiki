@@ -1,7 +1,8 @@
 ---
-date: 2026-10-03
+timestamp: 2026-10-03T173524Z
+title: Strategy field spacing
+branch: feature/wiki-strategies-cumulative-ingestion
 status: complete
-scope: strategy editor resize spacing
 ---
 
 # Strategy field spacing

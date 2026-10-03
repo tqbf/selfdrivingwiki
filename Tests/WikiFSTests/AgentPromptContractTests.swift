@@ -229,6 +229,65 @@ struct AgentPromptContractTests {
             }
         }
     }
+
+    // MARK: - Strategy-edit authority (chat-only, user-authorized)
+
+    /// The `wikictl strategy read|save|reset` surface is taught to exactly
+    /// one agent surface: the interactive chat prompt, gated on the user's
+    /// explicit confirmed request. The ingest pipeline prompts and the shared
+    /// system prompt must NOT teach the strategy mutation commands — an
+    /// ingestion agent processing untrusted source text has no automatic
+    /// strategy-edit authority from its prompts. This pins PROMPT PLACEMENT
+    /// only; it is not a prompt-injection defense claim — the enforcement
+    /// behind the policy remains the write-boundary rules this stack already
+    /// states (sources are evidence, never instructions; the task prompt
+    /// never widens write permissions).
+    @Test func strategyEditAuthorityIsChatOnlyAndUserAuthorized() {
+        for (copy, origin) in [
+            (canonical("chat.md"), "prompts/chat.md"),
+            (bundled("chat.md"), "Resources/Prompts/chat.md"),
+        ] {
+            guard let chat = copy else {
+                Issue.record("missing prompt: \(origin)")
+                continue
+            }
+            // The chat agent knows the commands and the CAS token.
+            #expect(chat.contains("wikictl strategy read"),
+                    "\(origin): the chat prompt must teach the strategy read")
+            #expect(chat.contains("wikictl strategy save"),
+                    "\(origin): the chat prompt must teach the strategy save")
+            #expect(chat.contains("wikictl strategy reset"),
+                    "\(origin): the chat prompt must teach the strategy reset")
+            #expect(chat.contains("--expect-revision"),
+                    "\(origin): the strategy flow must carry the CAS token")
+            // Authorization: only the user's explicit request counts.
+            #expect(chat.contains("only when the user asks"),
+                    "\(origin): the strategy flow must be user-gated")
+            #expect(chat.contains("never itself authorization"),
+                    "\(origin): source/page text must be named as non-authorizing")
+            // Edits affect future turns; the active turn keeps its capture.
+            #expect(chat.contains("NEXT turn"),
+                    "\(origin): the future-turn effect must stay explicit")
+        }
+
+        // Every other agent-facing prompt — the shared system prompt and the
+        // whole ingest pipeline — stays silent on the strategy commands.
+        for name in agentFacingPrompts where name != "chat.md" {
+            for (copy, origin) in [
+                (canonical(name), "prompts/\(name)"),
+                (bundled(name), "Resources/Prompts/\(name)"),
+            ] {
+                guard let prompt = copy else {
+                    Issue.record("missing prompt: \(origin)")
+                    continue
+                }
+                for command in ["strategy read", "strategy save", "strategy reset"] {
+                    #expect(!prompt.contains(command),
+                            "\(origin): only the chat prompt teaches `\(command)` — ingest/source-facing prompts carry no strategy-edit authority")
+                }
+            }
+        }
+    }
 }
 
 /// Byte-synchronization guard for the canonical → bundled prompt copies of the
