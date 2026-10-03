@@ -117,7 +117,7 @@ struct ContentView: View {
             switch newValue {
             case .page, .source, .chat:
                 break
-            case .none, .newChat, .changeLog, .bookmark:
+            case .none, .newChat, .changeLog, .bookmark, .strategy:
                 rightInspector.clearRegistration()
             }
         }

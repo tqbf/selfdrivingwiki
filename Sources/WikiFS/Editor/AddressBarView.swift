@@ -354,6 +354,8 @@ struct AddressBarView: View {
             return name.isEmpty ? "" : "[[source:\(name)]]"
         case .changeLog:
             return "[[log]]"
+        case .strategy:
+            return "[[strategy]]"
         case .newChat:
             return "[[chat]]"
         case .bookmark:

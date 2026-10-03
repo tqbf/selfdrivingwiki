@@ -68,6 +68,10 @@ struct SidebarView: View {
                 .padding(.top, 8)
             Divider()
             bookmarksOrList
+            Divider()
+            strategyFooterRow
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
         }
         .navigationTitle(activeWikiName)
         .navigationSplitViewColumnWidth(min: PageEditorMetrics.sidebarMinWidth,
@@ -180,6 +184,52 @@ struct SidebarView: View {
     /// name when no wiki is selected yet).
     private var activeWikiName: String {
         session.descriptor.displayName
+    }
+
+    /// The wiki-scoped Strategy entry: a pinned footer row below the section
+    /// lists. The row names the ACTIVE wiki — it edits that wiki's strategy,
+    /// not a global setting — and shows an "Edited" marker while a strategy
+    /// draft has unsaved changes, so the draft is visible from anywhere in
+    /// the sidebar. Opens (or focuses) the Strategy tab through the normal
+    /// `openTab` dedup.
+    private var strategyFooterRow: some View {
+        let isSelected = store.selection == .strategy
+        return Button {
+            store.openTab(.strategy)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "text.book.closed")
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Strategy")
+                        .font(.callout.weight(.medium))
+                    Text(activeWikiName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer()
+                if store.isStrategyDraftDirty {
+                    Text("Edited")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, WikiStrategyEditorMetrics.editedCapsuleHorizontalPadding)
+                        .padding(.vertical, WikiStrategyEditorMetrics.editedCapsuleVerticalPadding)
+                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .background(
+                isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Strategy for \(activeWikiName)")
+        .help("Edit the editorial strategy for \(activeWikiName)")
     }
 }
 

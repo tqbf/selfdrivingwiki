@@ -131,30 +131,26 @@ struct RootScene: View {
         // 1. Launch: activateMostRecent() sets activeWikiID → adopt it as
         //    our wikiID (this fires before scenePhase becomes .active, so
         //    we don't gate on isSceneActive for the nil→non-nil case).
-        // 2. Option+click in-window switch: WikiSwitcher calls
-        //    registry.select(id), setting activeWikiID. Only the frontmost
-        //    window (isSceneActive == true) responds — other windows ignore
-        //    it, preventing two windows from fighting over the same wiki.
+        // 2. In-window switch: ANY registry.select — the switcher's
+        //    option-click, a create/import cascade, or another window's
+        //    select while THIS window is frontmost — lands here. Only the
+        //    frontmost window (isSceneActive == true) swaps in place;
+        //    other windows ignore it. A dirty strategy draft defers the
+        //    swap behind the inline confirmation banner instead of
+        //    destroying the session (and the draft with it). New-window
+        //    opens never reach this branch, so nothing blocks them.
         .onChange(of: registry.activeWikiID) { _, newID in
             guard wikiID != newID else { return }
             if wikiID == nil {
                 // Launch path: main window adopts the MRU wiki.
                 wikiID = newID
             } else if isSceneActive, let newID {
-                // In-window switch (Option+click): release old session,
-                // adopt new ID, resolve new session.
-                if let oldID = wikiID {
-                    sessionManager.releaseSession(for: oldID)
-                    fileProvider.unsubscribeBus(for: oldID)
+                if let store = session?.store, store.deferInPlaceWikiSwitchIfNeeded(to: newID) {
+                    // Strategy draft protection: keep THIS session mounted
+                    // and let the confirmation banner drive the swap.
+                    return
                 }
-                wikiID = newID
-                session = nil
-                resolveSession(for: newID)
-                // Keep frontmost tracking accurate — scenePhase won't
-                // re-emit `.active` on an in-window content swap, so we
-                // must update it here. Without this, VacuumCommands
-                // resolves the released session and silently no-ops.
-                sessionManager.frontmostWikiID = newID
+                performInPlaceWikiSwitch(to: newID)
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -196,6 +192,23 @@ struct RootScene: View {
             registry: registry,
             fileProvider: fileProvider,
             installedRendererHost: installedRendererHost)
+            // Draft protection banner: pinned above the WHOLE session view
+            // (not just the editor) because a deferred in-place wiki switch
+            // can originate anywhere — the user may be on any tab when the
+            // switcher or a cascade changes the active wiki.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let target = session.store.pendingStrategyWikiSwitch {
+                    WikiStrategySwitchConfirmBanner(
+                        store: session.store,
+                        targetDisplayName: registry.wikis
+                            .first(where: { $0.id == target })?.displayName ?? "another wiki",
+                        onPerformSwitch: {
+                            if let target = session.store.applyPendingStrategyWikiSwitch() {
+                                performInPlaceWikiSwitch(to: target)
+                            }
+                        })
+                }
+            }
             .alert(
                 "Vacuum Orphaned Storage",
                 isPresented: Binding(
@@ -226,6 +239,27 @@ struct RootScene: View {
             sessionManager.frontmostWikiID = wikiID
         }
         if phase == .active { Task { await session?.upgradeSearchIndex() } }
+    }
+
+    /// Perform the in-place wiki swap: release the outgoing session (store +
+    /// File Provider bus), adopt the new wiki id, resolve the new session,
+    /// and keep frontmost tracking accurate. Called by the active-wiki
+    /// observation directly, or by the strategy-switch confirmation banner
+    /// after the user discards a dirty draft (the registry id already
+    /// changed when the guard deferred, so the confirmation drives the swap).
+    private func performInPlaceWikiSwitch(to newID: WikiID) {
+        if let oldID = wikiID {
+            sessionManager.releaseSession(for: oldID)
+            fileProvider.unsubscribeBus(for: oldID)
+        }
+        wikiID = newID
+        session = nil
+        resolveSession(for: newID)
+        // Keep frontmost tracking accurate — scenePhase won't re-emit
+        // `.active` on an in-window content swap, so we must update it here.
+        // Without this, VacuumCommands resolves the released session and
+        // silently no-ops.
+        sessionManager.frontmostWikiID = newID
     }
 
     /// Get-or-create the session for `wikiID` via the shared `SessionManager`,

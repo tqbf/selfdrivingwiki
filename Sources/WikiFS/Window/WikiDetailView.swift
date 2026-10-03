@@ -242,6 +242,10 @@ struct WikiDetailView: View {
             } description: {
                 Text("Bookmark folders are managed in the sidebar.")
             }
+        case .strategy:
+            WikiStrategyEditorView(
+                store: store,
+                wikiDisplayName: session.descriptor.displayName)
         case .chat(let id):
             // D2: unified surface. Chats are always write-capable, so the single
             // chat launcher was bound directly; after Phase C4 the daemon-hosted

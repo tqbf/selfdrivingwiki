@@ -42,7 +42,9 @@ struct WikiSwitcher: View {
                         // Option+click: switch THIS window's wiki in place
                         // (release old session, open new one in the same
                         // window). `registry.select` sets `activeWikiID`;
-                        // the frontmost `RootScene` observes it and swaps.
+                        // the frontmost `RootScene` observes it and swaps —
+                        // and defers behind the strategy-draft confirmation
+                        // banner when this window's draft is dirty.
                         registry.select(wiki.id)
                     } else {
                         // Default: open a new window (or focus existing —
