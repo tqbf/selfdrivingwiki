@@ -1177,6 +1177,139 @@ struct WikiStrategyEditorScenarioTests {
         #expect(logEntries.isEmpty, "a strategy save must not append activity-log entries")
     }
 
+    // MARK: - Layout: the editor fills the window, the controls stay anchored
+
+    /// Layout probe tuning (one owner, no magic numbers).
+    private enum LayoutProbe {
+        static let windowWidth: CGFloat = 720
+        /// Near the boundary where the compact layout (scrolling headers)
+        /// gives way to the roomy layout — either variant is legal here, so
+        /// assertions at this height must hold under BOTH.
+        static let compactHeight: CGFloat = 650
+        /// Comfortably roomy (fixed headers + editor floor + footer fit with
+        /// margin), so the growth check below compares two ROOMY layouts and
+        /// is exact rather than spanning the variant switch.
+        static let roomyHeight: CGFloat = 900
+        static let tallHeight: CGFloat = 1050
+        /// The controls row lives in a fixed-height footer: its bottom edge
+        /// is never farther than this from the content view's bottom edge.
+        static let footerBottomMaxDistance: CGFloat = 80
+        /// The footer is fixed-height and outside the layout variants, so
+        /// its bottom-edge distance must not shift across a window-height
+        /// change (or a variant switch) beyond layout rounding.
+        static let footerBottomStabilityTolerance: CGFloat = 4
+        /// Between two roomy heights, headers and footer are fixed, so the
+        /// editor box absorbs the window delta exactly up to rounding.
+        static let growthTolerance: CGFloat = 12
+    }
+
+    /// One measurement of the mounted editor's real AppKit geometry, in
+    /// window coordinates (origin at the content view's bottom-left corner).
+    private struct EditorLayout {
+        let contentHeight: CGFloat
+        /// The height of the instructions editor's own scroll view — the
+        /// box the user sees and scrolls inside.
+        let editorHeight: CGFloat
+        /// Bottom edge of that box (distance from the content bottom).
+        let editorBottomDistance: CGFloat
+        /// Top edge of the controls row, measured on the Save button.
+        let controlsTopDistance: CGFloat
+        /// Bottom edge of the controls row (distance from the content bottom).
+        let controlsBottomDistance: CGFloat
+    }
+
+    /// Measured on the REAL mounted AppKit tree: the `NSScrollView` that
+    /// hosts the instructions `NSTextView`, and the Save button's real
+    /// rendered frame (either discovery layer, both report window space).
+    private func measureEditorLayout(in window: NSWindow) throws -> EditorLayout {
+        let content = try #require(window.contentView, "hosted content view")
+        let textView = try #require(
+            instructionsTextView(in: content),
+            "the instructions NSTextView must be mounted")
+        let editorBox = try #require(
+            textView.enclosingScrollView,
+            "the instructions editor must own its scroll view")
+        let editorFrame = editorBox.convert(editorBox.bounds, to: nil)
+        let saveFrame = try requireLabelFrame(labeled: "Save", in: window)
+        return EditorLayout(
+            contentHeight: content.bounds.height,
+            editorHeight: editorFrame.height,
+            editorBottomDistance: editorFrame.minY,
+            controlsTopDistance: saveFrame.maxY,
+            controlsBottomDistance: saveFrame.minY)
+    }
+
+    /// A real resize: `setContentSize`, then force AppKit layout and give
+    /// SwiftUI's async update a moment to settle before measuring.
+    private func resize(_ window: NSWindow, to size: NSSize) async throws {
+        window.setContentSize(size)
+        window.layoutIfNeeded()
+        if let hosting = window.contentView {
+            hosting.layoutSubtreeIfNeeded()
+        }
+        try await settle()
+    }
+
+    /// The layout contract the user asked for: the instructions textbox
+    /// expands to fill the remaining window height (scrolling its own
+    /// content), and the action buttons stay anchored at the bottom behind a
+    /// divider. Asserted on the real mounted geometry at a compact height
+    /// (650), after a real resize to a roomy height (900), and between two
+    /// roomy heights (900 → 1050) where the editor must absorb the exact
+    /// window delta.
+    @Test func instructionsEditorFillsWindowAndControlsStayAnchored() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        _ = Self.app
+        let databaseURL = try tempDatabaseURL()
+        defer { removeFixture(at: databaseURL.deletingLastPathComponent()) }
+        let model = try makeModel(databaseURL: databaseURL)
+        let window = try await host(
+            WikiStrategyEditorView(store: model, wikiDisplayName: "Layout Wiki"),
+            model: model,
+            size: NSSize(width: LayoutProbe.windowWidth, height: LayoutProbe.compactHeight))
+        defer { window.orderOut(nil) }
+
+        // Compact height: the editor keeps its minimum floor, and the
+        // controls row sits in a bounded footer at the bottom of the window.
+        let compact = try measureEditorLayout(in: window)
+        #expect(compact.editorHeight >= WikiStrategyEditorMetrics.instructionsMinHeight,
+                "the instructions editor must keep its minimum floor at a compact height (got \(compact.editorHeight))")
+        #expect(compact.controlsBottomDistance <= LayoutProbe.footerBottomMaxDistance,
+                "the controls row must stay anchored near the content bottom, not scroll away (got \(compact.controlsBottomDistance)pt above it)")
+        #expect(compact.editorBottomDistance >= compact.controlsTopDistance,
+                "the editor box must sit fully above the controls row")
+
+        // A real resize to the roomy height: the footer stays anchored and
+        // stable (it is outside the editor's layout, so a variant switch
+        // between these heights must not move it).
+        try await resize(
+            window,
+            to: NSSize(width: LayoutProbe.windowWidth, height: LayoutProbe.roomyHeight))
+        let roomy = try measureEditorLayout(in: window)
+        #expect(roomy.controlsBottomDistance <= LayoutProbe.footerBottomMaxDistance,
+                "the controls row must stay anchored after growing the window (got \(roomy.controlsBottomDistance)pt above the content bottom)")
+        #expect(abs(roomy.controlsBottomDistance - compact.controlsBottomDistance)
+                    <= LayoutProbe.footerBottomStabilityTolerance,
+                "the fixed-height footer must not shift across a window-height change (bottom edge moved \(abs(roomy.controlsBottomDistance - compact.controlsBottomDistance))pt)")
+        #expect(roomy.editorBottomDistance >= roomy.controlsTopDistance,
+                "the editor box must sit fully above the controls row after the resize")
+
+        // Between two roomy heights the headers and footer are fixed, so the
+        // editor box absorbs the window delta exactly.
+        try await resize(
+            window,
+            to: NSSize(width: LayoutProbe.windowWidth, height: LayoutProbe.tallHeight))
+        let tall = try measureEditorLayout(in: window)
+        let heightGrowth = tall.contentHeight - roomy.contentHeight
+        #expect(heightGrowth > 0, "the resize must have grown the content view")
+        let editorGrowth = tall.editorHeight - roomy.editorHeight
+        #expect(abs(editorGrowth - heightGrowth) <= LayoutProbe.growthTolerance,
+                "the editor must absorb the window growth exactly (editor +\(editorGrowth), window +\(heightGrowth))")
+        #expect(tall.controlsBottomDistance <= LayoutProbe.footerBottomMaxDistance,
+                "the controls row must stay anchored at the tall height too")
+    }
+
     // MARK: - Light and dark appearances
 
     /// The real controls render and stay drivable under both appearances.

@@ -94,33 +94,75 @@ struct WikiStrategyEditorView: View {
 
     // MARK: - Form
 
+    /// The form fills the window instead of scrolling as one page: headers,
+    /// banners, and the name field sit above a monospaced instructions
+    /// editor that takes ALL remaining height (long drafts scroll inside the
+    /// editor's own scroll view), and the controls row is a bottom-anchored
+    /// footer separated by a native divider.
+    ///
+    /// Compact windows must not crowd the editor: `ViewThatFits` prefers the
+    /// fixed-header layout, and when the headers cannot fit beside the
+    /// editor's minimum floor it falls back to scrolling the headers while
+    /// the editor keeps its floor and the footer stays anchored. (No
+    /// `layoutPriority` here — a greedy frame beside a prioritized sibling
+    /// can reduce the space available to the other controls.)
     private var editorForm: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: WikiStrategyEditorMetrics.sectionSpacing) {
-                header
-                statusLine
-                explainer
-
-                if store.strategyConflict != nil && !store.isStrategyConflictDismissed {
-                    conflictBanner
+        VStack(spacing: 0) {
+            ViewThatFits(in: .vertical) {
+                VStack(spacing: 0) {
+                    headerFields
+                    instructionsField(flexible: true)
                 }
-                if let pendingAction {
-                    WikiStrategyInlineConfirmation(
-                        message: pendingAction.message,
-                        confirmTitle: pendingAction.confirmTitle,
-                        cancelTitle: WikiStrategyEditorPendingAction.cancelTitle,
-                        onConfirm: { perform(pendingAction) },
-                        onCancel: { self.pendingAction = nil })
+                VStack(spacing: 0) {
+                    ScrollView {
+                        headerFields
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                    instructionsField(flexible: false)
                 }
-
-                nameField
-                instructionsField
-                controlsRow
             }
-            .padding(WikiStrategyEditorMetrics.contentPadding)
-            .frame(maxWidth: WikiStrategyEditorMetrics.contentMaxWidth, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Divider()
+            controlsRow
+                .padding(EdgeInsets(
+                    top: WikiStrategyEditorMetrics.footerVerticalPadding,
+                    leading: WikiStrategyEditorMetrics.contentPadding,
+                    bottom: WikiStrategyEditorMetrics.footerVerticalPadding,
+                    trailing: WikiStrategyEditorMetrics.contentPadding))
+                .frame(maxWidth: WikiStrategyEditorMetrics.contentMaxWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Everything above the instructions editor: header, status line, scope
+    /// note, conflict banner, pending confirmation, and the name field.
+    private var headerFields: some View {
+        VStack(alignment: .leading, spacing: WikiStrategyEditorMetrics.sectionSpacing) {
+            header
+            statusLine
+            explainer
+
+            if store.strategyConflict != nil && !store.isStrategyConflictDismissed {
+                conflictBanner
+            }
+            if let pendingAction {
+                WikiStrategyInlineConfirmation(
+                    message: pendingAction.message,
+                    confirmTitle: pendingAction.confirmTitle,
+                    cancelTitle: WikiStrategyEditorPendingAction.cancelTitle,
+                    onConfirm: { perform(pendingAction) },
+                    onCancel: { self.pendingAction = nil })
+            }
+
+            nameField
+        }
+        .padding(EdgeInsets(
+            top: WikiStrategyEditorMetrics.contentPadding,
+            leading: WikiStrategyEditorMetrics.contentPadding,
+            bottom: WikiStrategyEditorMetrics.sectionSpacing,
+            trailing: WikiStrategyEditorMetrics.contentPadding))
+        .frame(maxWidth: WikiStrategyEditorMetrics.contentMaxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var header: some View {
@@ -228,7 +270,13 @@ struct WikiStrategyEditorView: View {
         }
     }
 
-    private var instructionsField: some View {
+    /// The instructions editor and its caption row. `TextEditor` owns its
+    /// scroll view, so long drafts scroll inside the box. Height flexibility
+    /// is the CALLER's choice: `flexible: true` grows to fill all offered
+    /// height (the roomy layout); `flexible: false` pins the box at its
+    /// minimum floor so the compact layout's scrolling headers take every
+    /// leftover point instead of splitting it with a greedy sibling.
+    private func instructionsField(flexible: Bool) -> some View {
         VStack(alignment: .leading, spacing: WikiStrategyEditorMetrics.labelSpacing) {
             HStack {
                 Text("Instructions")
@@ -241,7 +289,10 @@ struct WikiStrategyEditorView: View {
             }
             TextEditor(text: $store.strategyDraftInstructions)
                 .font(.system(.body, design: .monospaced))
-                .frame(minHeight: WikiStrategyEditorMetrics.instructionsMinHeight, alignment: .topLeading)
+                .frame(
+                    minHeight: WikiStrategyEditorMetrics.instructionsMinHeight,
+                    maxHeight: flexible ? .infinity : WikiStrategyEditorMetrics.instructionsMinHeight,
+                    alignment: .topLeading)
                 .overlay(
                     RoundedRectangle(cornerRadius: WikiStrategyEditorMetrics.cornerRadius)
                         .strokeBorder(Color.primary.opacity(0.15))
@@ -249,6 +300,10 @@ struct WikiStrategyEditorView: View {
                 .accessibilityLabel("Strategy instructions")
                 .accessibilityHint("Markdown editorial instructions for future runs")
         }
+        .padding(.horizontal, WikiStrategyEditorMetrics.contentPadding)
+        .padding(.bottom, WikiStrategyEditorMetrics.editorBottomPadding)
+        .frame(maxWidth: WikiStrategyEditorMetrics.contentMaxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var controlsRow: some View {
@@ -337,6 +392,11 @@ enum WikiStrategyEditorMetrics {
     static let contentMaxWidth: CGFloat = 680
     static let cornerRadius: CGFloat = 6
     static let instructionsMinHeight: CGFloat = 240
+    /// Breathing room between the editor box and the footer divider.
+    static let editorBottomPadding: CGFloat = 12
+    /// The controls row is a native bottom bar: divider above, tighter
+    /// vertical padding than the content's 20 (the macOS detail-footer idiom).
+    static let footerVerticalPadding: CGFloat = 10
     /// Start showing the live name counter above this character count.
     static let nameCountHintThreshold = 108
     /// Padding inside the conflict banner and the confirmation row.
