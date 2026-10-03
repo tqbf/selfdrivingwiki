@@ -365,6 +365,17 @@ agents, NOT Polytoken):
   output, and any other throwaway artifacts. The directory is gitignored
   (`.gitignore` line 24) so nothing lands in the tree.
 
+## Wiki strategy and cumulative writes
+
+* Store editorial instructions in the per-wiki strategy singleton, not a page or the compiled system prompt.
+  Strategy mutations must use `mutate(event:)` and emit `.strategy` only after a changed save commits.
+  Reset keeps the revision. Compare the expected revision inside the transaction.
+* Use `WikiStrategyRenderer` for captured strategy context and the mounted strategy document.
+  Orchestrated runs keep their captured strategy. Mounted standalone agents see the current strategy at read time.
+* Use the composed `WikiStore.upsertPage` seam for content, provenance, and parsed links.
+  Keep embedding work outside the transaction. A failed expectation or link write must not emit a page event.
+* Scripted ingestion tests check infrastructure, not model obedience. Live evaluation and human rubric decisions remain separate evidence.
+
 ## Agent prompts
 
 Agent-facing prompts (the system prompt, write rules, extraction prompts, the

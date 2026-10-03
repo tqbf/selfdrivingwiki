@@ -12,6 +12,7 @@ Use this guide to learn the Self Driving Wiki interface and its main workflows.
 
 - [Pages and links](pages-and-links.md)
 - [Sources and ingestion](sources-and-ingestion.md)
+- [Wiki strategy](wiki-strategy.md)
 - [Organizing and managing](organizing-and-managing.md)
 - [Chat](chat.md)
 
