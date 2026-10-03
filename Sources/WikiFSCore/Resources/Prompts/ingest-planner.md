@@ -32,7 +32,13 @@ Read it FIRST to see what pages already exist. This avoids creating duplicates o
       "title": "Page Title",
       "sourceFile": "Neuralwatt-Cloud-Platform--01KXYMP7J6HZ3E34ZZX02HKS1F.html",
       "sourceRanges": "lines 1-80",
-      "outline": "1-3 sentence description of what this page covers"
+      "outline": "1-3 sentence description of what this page covers",
+      "supportingSources": [
+        {
+          "sourceFile": "MCR-Protocol--01KXYMP7OTHERULID.html",
+          "sourceRanges": "section 'Handshake'"
+        }
+      ]
     }
   ],
   "sourceIDs": ["<id1>", "<id2>"]
@@ -42,10 +48,22 @@ Read it FIRST to see what pages already exist. This avoids creating duplicates o
 ### Field rules
 
 - `title`: the wiki page title (clear, specific, stable). Upserting an existing title updates it.
-- `sourceFile`: the actual filename in your working directory — copy it verbatim from the source list above (the descriptive `<stem>--<ulid>.<ext>` leaf).
+- `sourceFile`: the actual filename in your working directory — copy it verbatim from the source list above (the descriptive `<stem>--<ulid>.<ext>` leaf). This is the page's PRIMARY source: it names the one executor responsible for writing the page.
 - `sourceRanges`: a human-readable description of where in the source file the content for this page is (e.g. "lines 1-80" or "section 'Introduction'" or "entire file").
 - `outline`: a 1-3 sentence description of what the page will cover.
+- `supportingSources` (OPTIONAL): other staged sources whose content the writer needs as CONTEXT — e.g. a later chapter that corrects or extends the primary source's account, or an earlier page's underlying source that a retained claim still cites. Each entry repeats a staged filename verbatim from the source list above plus its own `sourceRanges`. A page still has exactly ONE primary `sourceFile`; supporting sources are reading material for the assigned writer, never co-writers. Omit the field entirely when a page needs none.
 - `sourceIDs`: the list of source IDs given above. Copy them verbatim.
+
+### Assignment ownership
+
+- ONE topic has ONE assigned writer. Never emit two pages that resolve to
+  the same page — the same existing title, or two new titles that differ
+  only by capitalization or stray leading/trailing spaces. The plan is
+  rejected before any executor launches.
+- If two sources discuss the same topic, assign the page to the source with
+  the most content on that topic, list the other source under
+  `supportingSources` when its material is needed to reconcile, and
+  cross-link from other pages using [[wiki links]].
 
 IMPORTANT:
 - Do NOT write any wiki pages in this phase. No `wikictl page add`.

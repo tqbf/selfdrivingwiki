@@ -12,9 +12,10 @@ import Foundation
 struct GeneratedPromptsParityTests {
 
     private func repoRoot() -> URL {
-        URL(fileURLWithPath: #file)
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // <name>.swift
             .deletingLastPathComponent()   // WikiFSTests/
-            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // Tests/ → repo root
     }
 
     private func md(_ name: String) -> String {
@@ -78,6 +79,22 @@ struct GeneratedPromptsParityTests {
 
     @Test func ingestCuratorTaskMatchesFile() {
         #expect(GeneratedPrompts.ingestCuratorTask == md("ingest-curator-task.md"))
+    }
+
+    // Wiki strategies phase 4: the multi-phase ingest prompts joined the
+    // parity surface — the cumulative-update rewrite of the planner,
+    // executor, and finalizer templates is pinned against the canonical
+    // sources exactly like every other generated prompt.
+    @Test func ingestPlannerMatchesFile() {
+        #expect(GeneratedPrompts.ingestPlanner == md("ingest-planner.md"))
+    }
+
+    @Test func ingestExecutorMatchesFile() {
+        #expect(GeneratedPrompts.ingestExecutor == md("ingest-executor.md"))
+    }
+
+    @Test func ingestFinalizerMatchesFile() {
+        #expect(GeneratedPrompts.ingestFinalizer == md("ingest-finalizer.md"))
     }
 
     @Test func queryTaskMatchesFile() {

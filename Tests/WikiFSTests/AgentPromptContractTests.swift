@@ -15,9 +15,10 @@ import Foundation
 struct AgentPromptContractTests {
 
     private func repoRoot() -> URL {
-        URL(fileURLWithPath: #file)
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // <name>.swift
             .deletingLastPathComponent()   // WikiFSTests/
-            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // Tests/ → repo root
     }
 
     private func canonical(_ name: String) -> String? {
@@ -190,6 +191,44 @@ struct AgentPromptContractTests {
         #expect(system.contains("--source <file-id>"))
         #expect(system.contains("completed-ingest switch"))
     }
+
+    // MARK: - Cumulative-update contract (wiki strategies phase 4)
+
+    /// The retired executor scope contradiction is gone, and every prompt
+    /// surface that writes pages teaches the create-only guard. Asserted on
+    /// BOTH the canonical sources and the bundled copies the runtime loads.
+    @Test func cumulativeUpdateContractIsConsistent() {
+        for (copy, origin) in [
+            (canonical("ingest-executor.md"), "prompts/ingest-executor.md"),
+            (bundled("ingest-executor.md"), "Resources/Prompts/ingest-executor.md"),
+        ] {
+            guard let executor = copy else {
+                Issue.record("missing prompt: \(origin)")
+                continue
+            }
+            // The blanket existing-page ban ("Do NOT update … or any existing
+            // page") contradicted cumulative reconciliation and is retired.
+            #expect(!executor.contains("or any existing page"),
+                    "\(origin): the blanket existing-page ban must stay retired")
+            #expect(executor.contains("--create-only"),
+                    "\(origin): the executor must teach the new-page race guard")
+            #expect(executor.contains("--expect-head"),
+                    "\(origin): the executor must teach the existing-page CAS expectation")
+        }
+        for name in ["ingest-write-rule.md", "ingest-single-task.md", "ingest-curator-task.md"] {
+            for (copy, origin) in [
+                (canonical(name), "prompts/\(name)"),
+                (bundled(name), "Resources/Prompts/\(name)"),
+            ] {
+                guard let prompt = copy else {
+                    Issue.record("missing prompt: \(origin)")
+                    continue
+                }
+                #expect(prompt.contains("--create-only"),
+                        "\(origin): the create-only guard is part of the write contract")
+            }
+        }
+    }
 }
 
 /// Byte-synchronization guard for the canonical → bundled prompt copies of the
@@ -201,9 +240,10 @@ struct PromptResourceSyncTests {
     }
 
     @Test func agentPromptsMatchBundledResources() {
-        let root = URL(fileURLWithPath: #file)
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // <name>.swift
             .deletingLastPathComponent()   // WikiFSTests/
-            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // Tests/ → repo root
         let canonicalDir = root.appendingPathComponent("prompts")
         let bundledDir = root
             .appendingPathComponent("Sources/WikiFSCore/Resources/Prompts")
