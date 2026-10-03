@@ -54,109 +54,120 @@ struct OwnedProcessGroupRegistryTests {
     /// process: it gets SIGTERM and then SIGKILL. A group that dies inside
     /// the grace period gets SIGTERM only. A group that already ended or was
     /// pid-replaced gets nothing.
+    ///
+    /// The sweep gate keeps this test's registrations and global sweep from
+    /// interleaving with the other gated suites' (#1330): `.serialized`
+    /// orders only this suite, and the registry is process-global.
     @Test func quitTerminationSignalsVerifiedGroupsInOrder() async throws {
-        let recorder = Recorder()
-        // 101 ignores SIGTERM. 102 dies during the grace window. 103 is
-        // already gone. 104's pid was recycled: the pinned identity says
-        // start time 1, the observation now reports start time 2.
-        let stubborn = entry(processID: 101)
-        let graceful = entry(processID: 102)
-        let ended = entry(processID: 103)
-        let replaced = entry(processID: 104)
-        for item in [stubborn, graceful, ended, replaced] {
-            OwnedProcessGroupRegistry.register(item)
-        }
-        defer {
+        try await OwnedProcessGroupSweepGate.withExclusiveSweep {
+            let recorder = Recorder()
+            // 101 ignores SIGTERM. 102 dies during the grace window. 103 is
+            // already gone. 104's pid was recycled: the pinned identity says
+            // start time 1, the observation now reports start time 2.
+            let stubborn = entry(processID: 101)
+            let graceful = entry(processID: 102)
+            let ended = entry(processID: 103)
+            let replaced = entry(processID: 104)
             for item in [stubborn, graceful, ended, replaced] {
-                OwnedProcessGroupRegistry.deregister(processID: item.processID)
+                OwnedProcessGroupRegistry.register(item)
             }
-        }
-
-        let outcome = OwnedProcessGroupRegistry.terminateAllOwnedGroups(
-            gracePeriod: .milliseconds(50),
-            observe: { pid in
-                switch pid.rawValue {
-                case 103: return nil
-                case 104:
-                    return ProcessSignalSafety.Identity(
-                        processID: pid,
-                        parentProcessID: replaced.identity.parentProcessID,
-                        startTime: .init(seconds: 2, microseconds: 0))
-                case 102 where recorder.sleepCount > 0:
-                    return nil
-                case 101, 102:
-                    return ProcessSignalSafety.Identity(
-                        processID: pid,
-                        parentProcessID: ProcessSignalSafety.PositivePID(rawValue: 99)!,
-                        startTime: .init(seconds: 1, microseconds: 0))
-                default:
-                    // A pid this test did not register (a parallel suite's
-                    // group in the process-global registry). Reporting it
-                    // unobservable keeps this test hermetic: it is counted
-                    // as ended and never signaled.
-                    return nil
+            defer {
+                for item in [stubborn, graceful, ended, replaced] {
+                    OwnedProcessGroupRegistry.deregister(processID: item.processID)
                 }
-            },
-            signalGroup: { pid, signalNumber in
-                recorder.recordSignal(processID: pid, signalNumber: signalNumber)
-                return 0
-            },
-            sleep: { duration in recorder.recordSleep(duration) })
+            }
 
-        #expect(outcome.terminatedGroupCount == 2)
-        // Foreign registrations from parallel suites also count as ended
-        // (the observe closure reports them unobservable), so only the
-        // lower bound is this test's to assert.
-        #expect(outcome.alreadyEndedGroupCount >= 1)
-        #expect(outcome.unverifiedGroupCount == 1)
-        #expect(recorder.sleeps == [.milliseconds(50)])
-        let signals = recorder.signals
-        #expect(signals.count == 3)
-        guard signals.count == 3 else { return }
-        #expect(signals[0].processID == 101 && signals[0].signalNumber == SIGTERM)
-        #expect(signals[1].processID == 102 && signals[1].signalNumber == SIGTERM)
-        #expect(signals[2].processID == 101 && signals[2].signalNumber == SIGKILL)
+            let outcome = OwnedProcessGroupRegistry.terminateAllOwnedGroups(
+                gracePeriod: .milliseconds(50),
+                observe: { pid in
+                    switch pid.rawValue {
+                    case 103: return nil
+                    case 104:
+                        return ProcessSignalSafety.Identity(
+                            processID: pid,
+                            parentProcessID: replaced.identity.parentProcessID,
+                            startTime: .init(seconds: 2, microseconds: 0))
+                    case 102 where recorder.sleepCount > 0:
+                        return nil
+                    case 101, 102:
+                        return ProcessSignalSafety.Identity(
+                            processID: pid,
+                            parentProcessID: ProcessSignalSafety.PositivePID(rawValue: 99)!,
+                            startTime: .init(seconds: 1, microseconds: 0))
+                    default:
+                        // A pid this test did not register (a parallel suite's
+                        // group in the process-global registry). Reporting it
+                        // unobservable keeps this test hermetic: it is counted
+                        // as ended and never signaled.
+                        return nil
+                    }
+                },
+                signalGroup: { pid, signalNumber in
+                    recorder.recordSignal(processID: pid, signalNumber: signalNumber)
+                    return 0
+                },
+                sleep: { duration in recorder.recordSleep(duration) })
+
+            #expect(outcome.terminatedGroupCount == 2)
+            // Foreign registrations from ungated parallel suites also count
+            // as ended (the observe closure reports them unobservable), so
+            // only the lower bound is this test's to assert.
+            #expect(outcome.alreadyEndedGroupCount >= 1)
+            #expect(outcome.unverifiedGroupCount == 1)
+            #expect(recorder.sleeps == [.milliseconds(50)])
+            let signals = recorder.signals
+            #expect(signals.count == 3)
+            guard signals.count == 3 else { return }
+            #expect(signals[0].processID == 101 && signals[0].signalNumber == SIGTERM)
+            #expect(signals[1].processID == 102 && signals[1].signalNumber == SIGTERM)
+            #expect(signals[2].processID == 101 && signals[2].signalNumber == SIGKILL)
+        }
     }
 
     /// An empty registry is the normal quit: no sleep, no signal.
-    @Test func quitTerminationWithNoGroupsSleepsNothing() {
-        let recorder = Recorder()
-        let outcome = OwnedProcessGroupRegistry.terminateAllOwnedGroups(
-            gracePeriod: .milliseconds(50),
-            observe: { _ in nil },
-            signalGroup: { pid, signalNumber in
-                recorder.recordSignal(processID: pid, signalNumber: signalNumber)
-                return 0
-            },
-            sleep: { duration in recorder.recordSleep(duration) })
+    @Test func quitTerminationWithNoGroupsSleepsNothing() async throws {
+        try await OwnedProcessGroupSweepGate.withExclusiveSweep {
+            let recorder = Recorder()
+            let outcome = OwnedProcessGroupRegistry.terminateAllOwnedGroups(
+                gracePeriod: .milliseconds(50),
+                observe: { _ in nil },
+                signalGroup: { pid, signalNumber in
+                    recorder.recordSignal(processID: pid, signalNumber: signalNumber)
+                    return 0
+                },
+                sleep: { duration in recorder.recordSleep(duration) })
 
-        // The registry is process-global: a parallel suite may hold a
-        // registration, which the nil observation counts as ended. Only the
-        // zero-signals, zero-sleeps behavior is this test's to assert.
-        #expect(outcome.terminatedGroupCount == 0)
-        #expect(recorder.sleeps.isEmpty)
-        #expect(recorder.signals.isEmpty)
+            // The registry is process-global: an ungated parallel suite may
+            // hold a registration, which the nil observation counts as
+            // ended. Only the zero-signals, zero-sleeps behavior is this
+            // test's to assert.
+            #expect(outcome.terminatedGroupCount == 0)
+            #expect(recorder.sleeps.isEmpty)
+            #expect(recorder.signals.isEmpty)
+        }
     }
 
     /// Deregistration removes a group from quit termination. This is the
     /// observed-exit path: a reaped leader can no longer be signaled.
-    @Test func deregisteredGroupsAreNotSignaled() {
-        let recorder = Recorder()
-        let group = entry(processID: 201)
-        OwnedProcessGroupRegistry.register(group)
-        OwnedProcessGroupRegistry.deregister(processID: 201)
+    @Test func deregisteredGroupsAreNotSignaled() async throws {
+        try await OwnedProcessGroupSweepGate.withExclusiveSweep {
+            let recorder = Recorder()
+            let group = entry(processID: 201)
+            OwnedProcessGroupRegistry.register(group)
+            OwnedProcessGroupRegistry.deregister(processID: 201)
 
-        let outcome = OwnedProcessGroupRegistry.terminateAllOwnedGroups(
-            gracePeriod: .milliseconds(1),
-            observe: { _ in identity(processID: 201) },
-            signalGroup: { pid, signalNumber in
-                recorder.recordSignal(processID: pid, signalNumber: signalNumber)
-                return 0
-            },
-            sleep: { duration in recorder.recordSleep(duration) })
+            let outcome = OwnedProcessGroupRegistry.terminateAllOwnedGroups(
+                gracePeriod: .milliseconds(1),
+                observe: { _ in identity(processID: 201) },
+                signalGroup: { pid, signalNumber in
+                    recorder.recordSignal(processID: pid, signalNumber: signalNumber)
+                    return 0
+                },
+                sleep: { duration in recorder.recordSleep(duration) })
 
-        #expect(outcome.terminatedGroupCount == 0)
-        #expect(recorder.signals.isEmpty)
+            #expect(outcome.terminatedGroupCount == 0)
+            #expect(recorder.signals.isEmpty)
+        }
     }
 
     /// A real launched group is registered, killed through the registry's
@@ -166,31 +177,35 @@ struct OwnedProcessGroupRegistryTests {
     ///
     /// This test deliberately does NOT call `terminateAllOwnedGroups()`: the
     /// registry is process-global, parallel suites in this target register
-    /// their own fixture groups, and a global sweep would kill them.
+    /// their own fixture groups, and a global sweep would kill them. It
+    /// still takes the sweep gate, because its real registration must not
+    /// be visible to a gated global sweep in another suite.
     @Test func launchedGroupIsRegisteredKilledAndDeregistered() async throws {
-        let handle = try RaceFreeProcessGroupRunner.launch(
-            .init(
-                executableURL: URL(fileURLWithPath: "/bin/sleep"),
-                arguments: ["30"],
-                environment: [:],
-                currentDirectoryURL: nil,
-                standardInput: Data(),
-                stdoutLimit: 1_024,
-                stderrLimit: 1_024))
-        #expect(OwnedProcessGroupRegistry.registeredProcessIDs.contains(handle.processID))
+        try await OwnedProcessGroupSweepGate.withExclusiveSweep {
+            let handle = try RaceFreeProcessGroupRunner.launch(
+                .init(
+                    executableURL: URL(fileURLWithPath: "/bin/sleep"),
+                    arguments: ["30"],
+                    environment: [:],
+                    currentDirectoryURL: nil,
+                    standardInput: Data(),
+                    stdoutLimit: 1_024,
+                    stderrLimit: 1_024))
+            #expect(OwnedProcessGroupRegistry.registeredProcessIDs.contains(handle.processID))
 
-        _ = OwnedProcessGroupRegistry.killVerifiedProcessGroup(
-            groupLeaderPID: handle.processID,
-            signalNumber: SIGKILL)
+            _ = OwnedProcessGroupRegistry.killVerifiedProcessGroup(
+                groupLeaderPID: handle.processID,
+                signalNumber: SIGKILL)
 
-        // The group died by signal. Bounded async wait: the runner reaps the
-        // leader on its exit source and deregisters right after.
-        let exited = await waitForDeregistration(of: handle.processID)
-        #expect(exited)
-        let result = try await handle.result(timeout: .seconds(10))
-        guard case .signaled = result.terminationCause else {
-            Issue.record("expected .signaled, got \(result.terminationCause)")
-            return
+            // The group died by signal. Bounded async wait: the runner reaps the
+            // leader on its exit source and deregisters right after.
+            let exited = await waitForDeregistration(of: handle.processID)
+            #expect(exited)
+            let result = try await handle.result(timeout: .seconds(10))
+            guard case .signaled = result.terminationCause else {
+                Issue.record("expected .signaled, got \(result.terminationCause)")
+                return
+            }
         }
     }
 

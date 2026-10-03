@@ -25,6 +25,11 @@ import Darwin
 /// POSIX_SPAWN_CLOEXEC_DEFAULT. The jitter and retry stay: they cost
 /// little, and they absorb a future regression in the same window without
 /// weakening any assertion.
+///
+/// This test runs a real global sweep of the process-global registry, so it
+/// takes `OwnedProcessGroupSweepGate` for its whole body: `.serialized`
+/// orders only this suite, while the registry suites in this target sweep
+/// the same global registry in parallel.
 @Suite("Quit backstop end-to-end", .serialized, .timeLimit(.minutes(2)))
 struct QuitBackstopEndToEndTests {
     /// The quit backstop kills a real in-flight managed operation (#1330).
@@ -34,30 +39,35 @@ struct QuitBackstopEndToEndTests {
     /// would stall for its full 60 s limit — the in-process shape of an
     /// orphaned `uv run` wrapper outliving its supervisor.
     @Test func quitBackstopKillsAnInFlightManagedOperation() async throws {
-        // Up to three spawn attempts; see the suite doc for why the first
-        // can starve on stdin EOF when a parallel suite spawns at the same
-        // instant. A retry costs one bounded wait and changes no assertion.
-        for attempt in 1...3 {
-            // Jitter before building the fixture: without it this suite's
-            // spawn lands in the same millisecond as a parallel suite's.
-            try await Task.sleep(for: .milliseconds(.random(in: 200...600)))
+        // The gate spans every attempt: the real global sweep below must not
+        // interleave with the other gated suites' registry registrations or
+        // sweeps.
+        try await OwnedProcessGroupSweepGate.withExclusiveSweep {
+            // Up to three spawn attempts; see the suite doc for why the first
+            // can starve on stdin EOF when a parallel suite spawns at the same
+            // instant. A retry costs one bounded wait and changes no assertion.
+            for attempt in 1...3 {
+                // Jitter before building the fixture: without it this suite's
+                // spawn lands in the same millisecond as a parallel suite's.
+                try await Task.sleep(for: .milliseconds(.random(in: 200...600)))
 
-            let operation = try startStalledOperation()
-            guard await operation.progress.waitForProgress(timeout: .seconds(8)) else {
-                await abandon(operation)
-                if attempt == 3 {
-                    Issue.record(
-                        """
-                        fixture never reported progress across 3 attempts; \
-                        spawn is colliding with a parallel suite's spawn (the \
-                        stdin-EOF starvation described in the suite doc) or \
-                        the fixture is not starting at all
-                        """)
+                let operation = try startStalledOperation()
+                guard await operation.progress.waitForProgress(timeout: .seconds(8)) else {
+                    await abandon(operation)
+                    if attempt == 3 {
+                        Issue.record(
+                            """
+                            fixture never reported progress across 3 attempts; \
+                            spawn is colliding with a parallel suite's spawn (the \
+                            stdin-EOF starvation described in the suite doc) or \
+                            the fixture is not starting at all
+                            """)
+                    }
+                    continue
                 }
-                continue
+                try await verifyQuitBackstopEnds(operation)
+                return
             }
-            try await verifyQuitBackstopEnds(operation)
-            return
         }
     }
 
