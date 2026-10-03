@@ -615,5 +615,72 @@ struct ACPIngestCollapsedRoutingTests {
         #expect(firstExecutor.environment["WIKI_INGEST_SOURCE_IDS"] == "a,b")
         #expect(secondExecutor.environment["WIKI_INGEST_SOURCE_IDS"] == "a,b")
     }
+
+    /// Wiki strategies phase 4: a plan whose assignment references a source
+    /// file that was never staged is REJECTED before any executor or
+    /// finalizer session launches. The run fails with the validation
+    /// problem visible in the transcript — never a silent single-session
+    /// fallback, never a silently chosen writer. The planner session is the
+    /// only session started (startCount == 1).
+    @Test func planValidationFailureRejectsPlanBeforeExecutorLaunch() async throws {
+        // The staged source is `Large-Source--01FAKE01KQ8HDDR3ZXK72XHG6R.md`
+        // (see largeSource()); the plan's assignment names a file that was
+        // never staged, so `ACPIngestPlanValidation` rejects it.
+        let planData = try JSONEncoder().encode(ACPIngestPlan(
+            pages: [ACPIngestPageAssignment(
+                title: "Ghost Page",
+                sourceFile: "Never-Staged--01MISSING00000000000.md",
+                sourceRanges: "1-10",
+                outline: "references a source file that was never staged")],
+            sourceIDs: ["01FAKE"]))
+        let fake = FakeAgentBackend(behaviors: [
+            // Planner — writes the invalid plan.json.
+            FakeSessionBehavior(events: [.messageStop], planJSON: planData),
+            // Executor + finalizer behaviors that must NEVER be consumed.
+            FakeSessionBehavior(events: [.messageStop]),
+            FakeSessionBehavior(events: [.messageStop]),
+        ])
+        let counter = ResolveBackendCallCounter()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-plan-validation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer {
+            do {
+                try FileManager.default.removeItem(at: tempDir)
+            } catch {
+                Issue.record("Failed to remove plan-validation fixture: \(error)")
+            }
+        }
+        let launcher = makeLauncher(backend: fake, counter: counter, tempDir: tempDir)
+
+        await launcher.run(
+            request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
+            wikiID: WikiID(rawValue: "test-wiki"),
+            wikiRoot: "/tmp",
+            systemPrompt: "sys",
+            wikictlDirectory: "/tmp",
+            ingestingSourceIDs: [],
+            onEvent: nil,
+            onLock: {},
+            onUnlock: {}
+        )
+
+        // Exactly one session started (the planner). Validation rejected
+        // the plan before the executor phase, and the run finished failed.
+        let startCount = await fake.startCount
+        #expect(startCount == 1, "plan validation must reject the plan before any executor or finalizer session starts")
+        #expect(launcher.isRunning == false)
+
+        // The rejection is actionable and visible in the transcript: the
+        // final event is an error result naming the unknown source file.
+        let finalEvent = try #require(launcher.events.last)
+        if case let .result(isError, text) = finalEvent {
+            #expect(isError)
+            #expect(text.contains("rejected"))
+            #expect(text.contains("Never-Staged--01MISSING00000000000.md"))
+        } else {
+            Issue.record("expected a terminal .result event carrying the validation failure, got: \(finalEvent)")
+        }
+    }
 }
 #endif

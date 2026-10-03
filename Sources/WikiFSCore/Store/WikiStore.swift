@@ -332,6 +332,32 @@ public protocol WikiStore: AnyObject, Sendable {
     /// are omitted (the schema forbids a NULL `to_page_id`). Self-links allowed.
     func replaceLinks(from pageID: PageID, parsedLinks: [ParsedLink]) throws
 
+    /// The composed page write (cumulative ingestion, plan phase 4 §9):
+    /// title/id resolution, the ``PageWriteExpectation`` check, body
+    /// canonicalization, the content/version/provenance write, and parsed-link
+    /// replacement — ONE operation from the caller's point of view.
+    ///
+    /// `GRDBWikiStore` implements this with a single `mutate(event:)`
+    /// transaction: a changed commit emits exactly ONE `ResourceChangeEvent`
+    /// (`.created` for a new page, `.updated` otherwise); CAS failures,
+    /// create-only conflicts (`PageCreateConflictError`), and link-write
+    /// failures roll back every content-bearing row and emit nothing. Body
+    /// canonicalization uses in-transaction resolvers so the canonical form
+    /// agrees with the committed title graph.
+    ///
+    /// Non-GRDB conformers get the documented sequential default below
+    /// (legacy multi-call semantics, NOT atomic). Tests that assert
+    /// atomicity/event guarantees must run against `GRDBWikiStore`.
+    @discardableResult
+    func upsertPage(
+        id: PageID?,
+        title: String,
+        rawBody: String,
+        expectation: PageWriteExpectation,
+        author: String?,
+        provenance: [PageVersionSourceInput]
+    ) throws -> PageUpsert.Outcome
+
     /// Pages whose bodies link TO `pageID` via `[[wiki-link]]` — the incoming
     /// edge set (issue #219). Used to warn before deleting a page that other
     /// pages still reference, and to rewrite those links to plain text.
@@ -399,6 +425,60 @@ public protocol WikiStore: AnyObject, Sendable {
 
     /// Source summaries (no content blob), most-recent-first.
     func listSources() throws -> [SourceSummary]
+
+    // MARK: - Wiki strategy (per-wiki editorial document)
+
+    /// One atomic snapshot of the committed strategy singleton — the strategy
+    /// document **and** its revision from a single read. This is the read an
+    /// editor loads before saving: two separate reads can straddle a write
+    /// and pair a stale body with a fresh revision, defeating the save's
+    /// compare-and-swap. Use `WikiStrategyState.saveExpectation` as the
+    /// save's `expectedRevision`. Read-only: emits nothing.
+    func getWikiStrategyState() throws -> WikiStrategyState
+
+    /// The committed strategy document for this wiki, or `nil` when the wiki
+    /// uses the **Default** strategy. Absence is the representation of Default
+    /// — no sentinel name, no special page, and a reset tombstone reads back
+    /// as `nil` exactly like a never-written wiki. Read-only: emits nothing
+    /// and returns a copied `Sendable` value.
+    func getWikiStrategy() throws -> WikiStrategy?
+
+    /// The committed revision counter, **including tombstones**: `nil` when
+    /// no strategy row has ever been written, otherwise the row's revision —
+    /// whether that row holds a live strategy or a Default tombstone kept
+    /// after a reset. An editor that read a Default wiki composes its
+    /// compare-and-swap expectation from this value (`nil` for true absence,
+    /// the tombstone revision otherwise). Read-only: emits nothing.
+    func wikiStrategyRevision() throws -> WikiStrategyRevision?
+
+    /// Compare-and-swap save of the strategy document. `expectedRevision`
+    /// must equal the committed row revision exactly — `nil` matches only a
+    /// wiki where no row has ever been written — checked in the same
+    /// transaction as the write, so a conflicting editor's work is never
+    /// overwritten. A mismatch throws `WikiStrategyConflictError` before any
+    /// row change.
+    ///
+    /// Limits are enforced at this boundary (`WikiStrategy.validatedInput`):
+    /// name ≤ `WikiStrategy.nameCharacterLimit` characters after trimming,
+    /// instructions ≤ `WikiStrategy.instructionsUTF8ByteLimit` UTF-8 bytes.
+    /// Oversized input throws `WikiStrategyTextError`; nothing is truncated.
+    /// Whitespace-only instructions reset the wiki to the Default strategy,
+    /// retaining a tombstone row so the revision stays monotonic across the
+    /// reset.
+    ///
+    /// A **changed** save advances the revision by exactly one and emits one
+    /// `ResourceChangeEvent` (kind `.strategy`, id `"wiki_strategy"`):
+    /// `.created` when Default became custom, `.updated` when a custom
+    /// strategy changed, `.deleted` when a custom strategy reset to Default.
+    /// An **unchanged** save writes nothing, does not advance the revision,
+    /// and emits nothing. Strategy saves never enqueue ingestion or rewrite
+    /// pages.
+    @discardableResult
+    func saveWikiStrategy(
+        name: String,
+        instructions: String,
+        expectedRevision: WikiStrategyRevision?
+    ) throws -> WikiStrategySaveOutcome
 
     // MARK: - Renderer settings (dynamic renderers Phase 3)
 
@@ -1364,6 +1444,26 @@ extension WikiStore {
             pageID: pageID, title: title, body: body,
             expectedHeadVersionID: expectedHeadVersionID,
             lastEditedBy: lastEditedBy, provenance: [])
+    }
+
+    /// DOCUMENTED SEQUENTIAL DEFAULT — NOT ATOMIC. The protocol-extension
+    /// fallback for ``WikiStore/upsertPage(id:title:rawBody:expectation:author:provenance:)``
+    /// on non-GRDB conformers (test doubles): it runs the legacy multi-call
+    /// sequence — resolve, write page, replace links — as SEPARATE store calls,
+    /// each with its own transaction and event, exactly as `PageUpsert` did
+    /// before the composed method existed. `GRDBWikiStore` overrides this
+    /// requirement with the real one-transaction implementation; atomicity and
+    /// single-event guarantees are only promised (and tested) on that store.
+    @discardableResult
+    func upsertPage(
+        id: PageID?, title: String, rawBody: String,
+        expectation: PageWriteExpectation,
+        author: String? = nil,
+        provenance: [PageVersionSourceInput] = []
+    ) throws -> PageUpsert.Outcome {
+        try PageUpsert.upsertSequential(
+            in: self, id: id, title: title, rawBody: rawBody,
+            expectation: expectation, author: author, provenance: provenance)
     }
     /// Legacy 2-arg entry point — `nil` bm25Leg means NO BM25 leg post-#634.
     /// See `searchSimilar(query:limit:bm25Leg:)`.

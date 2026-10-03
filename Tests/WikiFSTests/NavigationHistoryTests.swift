@@ -182,7 +182,7 @@ struct NavigationHistoryTests {
         model.pageSortOrder = .titleAZ
 
         // Snapshot must still report titles most-recently-edited first.
-        let snapshot = model.currentStateSnapshot()
+        let snapshot = try model.currentStateSnapshot()
         // A was edited last, so it should sort first in the snapshot
         // regardless of the sidebar's titleAZ preference.
         #expect(snapshot.pageTitles.first == "A")

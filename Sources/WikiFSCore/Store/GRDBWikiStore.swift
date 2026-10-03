@@ -158,7 +158,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// `PRAGMA user_version` up to 37, and this store must recognize them as
     /// already-migratable so the ladder is a no-op on re-open (the proven
     /// `if version < N`)
-    private static let currentSchemaVersion = 55
+    private static let currentSchemaVersion = 56
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -475,13 +475,19 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// - (d) No event on throw — `dbWriter.write` rethrows; the emit code
     ///   after it is unreachable on throw.
     ///
-    /// **Nesting (c):** `dbWriter.write` is NOT reentrant — calling
-    /// `dbWriter.write` from inside `dbWriter.write` deadlocks. Public methods
-    /// that compose (call other public mutating methods) must pass the
-    /// `Database` handle to internal helpers rather than re-entering `mutate`.
-    /// This matches design doc Approach A for composing methods; Approach B's
-    /// `pendingEvent` buffer is used for the non-composing case (the common
-    /// case). For this pilot, all implemented methods are non-composing.
+    /// **Nesting (c):** `mutate` IS reentrant — implemented with
+    /// `unsafeReentrantWrite` + `db.inSavepoint` (see the implementation
+    /// comment below), so a call from inside another `mutate` body nests as a
+    /// SAVEPOINT instead of deadlocking. BUT composing public mutators this
+    /// way is still FORBIDDEN for event correctness: a nested `mutate` emits
+    /// its event as soon as ITS write returns — while the OUTER savepoint has
+    /// not committed yet — so an outer rollback cannot suppress the already
+    /// emitted inner event, and each nested mutator adds a duplicate event.
+    /// Public methods that compose MUST run one top-level `mutate` whose body
+    /// uses the non-emitting `*Locked` helpers (they take the in-transaction
+    /// `Database` and never wrap `mutate`); the outer `mutate` is then the
+    /// single emit site, and its event is emitted only after the one
+    /// transaction commits (design doc Approach A).
     private final class MutationResultBox<Value> {
         var value: Value?
     }
@@ -1631,6 +1637,25 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 return .commit
             }
             version = 55
+        }
+
+        // v55→v56: the per-wiki strategy document (`wiki_strategy`) — the
+        // wiki-specific editorial instructions singleton. Modeled on the
+        // historical `system_prompt`/`wiki_index` singletons (one row pinned
+        // to `id = 1` by a CHECK), with two deliberate differences:
+        //   1. NO seed row — **absence of a row is the Default strategy**.
+        //      The first save (or first reset) creates the row at revision 1.
+        //   2. A reset never deletes the row: it writes a tombstone
+        //      (`name`/`instructions` NULL) so the revision stays monotonic
+        //      across reset. Reads treat a tombstone exactly like absence.
+        // The revision column doubles as the change-token fold input.
+        if version < 56 {
+            try db.inTransaction(.immediate) {
+                try Self.createWikiStrategyTableV56(in: db)
+                try db.execute(sql: "PRAGMA user_version = 56;")
+                return .commit
+            }
+            version = 56
         }
 
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
@@ -3513,6 +3538,10 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         VALUES (1, ?, ?, 1);
         """, arguments: [WikiIndex.defaultBody, now])
 
+        // Wiki strategy (v56) — the per-wiki editorial instructions singleton.
+        // Deliberately NOT seeded: absence of a row is the Default strategy.
+        try Self.createWikiStrategyTableV56(in: db)
+
         // Per-chunk embeddings (v14).
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS page_chunks (
@@ -3998,6 +4027,185 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    // MARK: - Wiki strategy (per-wiki editorial document, v56)
+
+    /// The `ResourceChangeEvent.id` for the strategy singleton. The strategy
+    /// is one row per wiki, so a stable constant name — not an id from any
+    /// other namespace — identifies it in event payloads.
+    private static let wikiStrategyEventID = "wiki_strategy"
+
+    /// v56 DDL, shared by the migration step and `createFreshSchema` so a
+    /// migrated DB and a fresh DB are byte-identical. `IF NOT EXISTS`-guarded
+    /// like every other fresh-schema table.
+    static func createWikiStrategyTableV56(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS wiki_strategy (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            name TEXT,
+            instructions TEXT,
+            revision INTEGER NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        """)
+    }
+
+    /// The stored row, exactly as persisted. `instructions == nil` is a
+    /// Default tombstone (or, with `row == nil`, the wiki was never written).
+    private struct WikiStrategyRow {
+        var name: String?
+        var instructions: String?
+        var revision: WikiStrategyRevision
+        var updatedAt: Date
+
+        var strategy: WikiStrategy? {
+            guard let instructions else { return nil }
+            return WikiStrategy(
+                name: name ?? "",
+                instructions: instructions,
+                revision: revision,
+                updatedAt: updatedAt
+            )
+        }
+    }
+
+    private func wikiStrategyRow(on db: Database) throws -> WikiStrategyRow? {
+        try Row.fetchOne(
+            db,
+            sql: "SELECT name, instructions, revision, updated_at FROM wiki_strategy WHERE id = 1;"
+        ).map { row in
+            WikiStrategyRow(
+                name: row["name"],
+                instructions: row["instructions"],
+                revision: WikiStrategyRevision(rawValue: row["revision"]),
+                updatedAt: Date(timeIntervalSince1970: row["updated_at"])
+            )
+        }
+    }
+
+    public func getWikiStrategy() throws -> WikiStrategy? {
+        try dbWriter.read { db in
+            try wikiStrategyRow(on: db)?.strategy
+        }
+    }
+
+    /// Both values from ONE committed row (`dbWriter.read` serializes reads
+    /// against writes), so the strategy body and the revision can never be
+    /// observed from different commits.
+    public func getWikiStrategyState() throws -> WikiStrategyState {
+        try dbWriter.read { db in
+            let row = try wikiStrategyRow(on: db)
+            return WikiStrategyState(strategy: row?.strategy, revision: row?.revision)
+        }
+    }
+
+    public func wikiStrategyRevision() throws -> WikiStrategyRevision? {
+        try dbWriter.read { db in
+            try wikiStrategyRow(on: db)?.revision
+        }
+    }
+
+    /// What one save actually did, for the event seam: the protocol outcome
+    /// plus the `ChangeKind` a changed write emits (`nil` when nothing was
+    /// written, so `mutate` skips the emit).
+    private struct WikiStrategyWriteResult {
+        var outcome: WikiStrategySaveOutcome
+        var change: ChangeKind?
+    }
+
+    @discardableResult
+    public func saveWikiStrategy(
+        name: String,
+        instructions: String,
+        expectedRevision: WikiStrategyRevision?
+    ) throws -> WikiStrategySaveOutcome {
+        // Validate + normalize BEFORE opening the write: limits are rejected
+        // visibly and never truncate; whitespace-only instructions normalize
+        // to a reset request (nil).
+        let input = try WikiStrategy.validatedInput(name: name, instructions: instructions)
+        let result: WikiStrategyWriteResult = try mutate(event: { result in
+            guard let change = result.change else { return nil }
+            return self.localEvent(.strategy, id: Self.wikiStrategyEventID, change: change)
+        }) { db in
+            let row = try wikiStrategyRow(on: db)
+            let rowRevision = row?.revision
+
+            // CAS — compare the editor's expected revision (including
+            // absence as nil) against the committed row, inside the same
+            // transaction as the write. A mismatch leaves no trace.
+            guard rowRevision == expectedRevision else {
+                throw WikiStrategyConflictError(
+                    expectedRevision: expectedRevision,
+                    currentRevision: rowRevision,
+                    currentStrategy: row?.strategy
+                )
+            }
+
+            let currentStrategy = row?.strategy
+
+            if let newInstructions = input.instructions {
+                // A live strategy request. Unchanged (same normalized name
+                // and instructions) is a no-op: no write, no revision
+                // advance, no event.
+                if let currentStrategy,
+                   currentStrategy.name == input.name,
+                   currentStrategy.instructions == newInstructions {
+                    return WikiStrategyWriteResult(outcome: .unchanged, change: nil)
+                }
+                let newRevision = (rowRevision ?? .absent).next
+                // Return the same timestamp representation that the persisted
+                // Unix-epoch value decodes to on the next read.
+                let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
+                let strategy = WikiStrategy(
+                    name: input.name,
+                    instructions: newInstructions,
+                    revision: newRevision,
+                    updatedAt: now
+                )
+                try db.execute(sql: """
+                INSERT INTO wiki_strategy (id, name, instructions, revision, updated_at)
+                VALUES (1, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    instructions = excluded.instructions,
+                    revision = excluded.revision,
+                    updated_at = excluded.updated_at;
+                """, arguments: [
+                    input.name,
+                    newInstructions,
+                    newRevision.rawValue,
+                    now.timeIntervalSince1970,
+                ])
+                return WikiStrategyWriteResult(
+                    outcome: .saved(revision: newRevision, strategy: strategy),
+                    change: currentStrategy == nil ? .created : .updated
+                )
+            }
+
+            // A reset request (whitespace-only instructions). Resetting a
+            // wiki already at Default is a no-op; resetting a live strategy
+            // writes a tombstone so the revision stays monotonic.
+            guard currentStrategy != nil else {
+                return WikiStrategyWriteResult(outcome: .unchanged, change: nil)
+            }
+            let newRevision = (rowRevision ?? .absent).next
+            let now = Date()
+            try db.execute(sql: """
+            INSERT INTO wiki_strategy (id, name, instructions, revision, updated_at)
+            VALUES (1, NULL, NULL, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = NULL,
+                instructions = NULL,
+                revision = excluded.revision,
+                updated_at = excluded.updated_at;
+            """, arguments: [newRevision.rawValue, now.timeIntervalSince1970])
+            return WikiStrategyWriteResult(
+                outcome: .saved(revision: newRevision, strategy: nil),
+                change: .deleted
+            )
+        }
+        return result.outcome
+    }
+
     private func mutateRendererSettings(
         event: RendererSettingsChangeEvent,
         _ body: (Database, RFC3339Timestamp) throws -> Void
@@ -4207,6 +4415,9 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
           + COALESCE((SELECT SUM(projection_revision) FROM source_markdown_okf_metadata), 0);
         """, on: db)
     }
+    internal func wikiStrategyRevisionValue(on db: Database) -> Int64 {
+        resilientScalar("SELECT COALESCE((SELECT revision FROM wiki_strategy WHERE id = 1), 0);", on: db)
+    }
 
     // MARK: - changeToken contributors (slice 2b)
 
@@ -4228,6 +4439,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         BookmarkTokenContributor(),
         ChatTokenContributor(),
         OKFMetadataTokenContributor(),
+        StrategyTokenContributor(),
     ]
 
     internal struct PagesTokenContributor: ChangeTokenContributor {
@@ -4317,6 +4529,17 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    /// The strategy fold (v56, appended last): the `wiki_strategy` row's
+    /// revision, `0` when no row exists. The revision advances on every
+    /// changed save — including a reset, whose tombstone keeps it — so any
+    /// strategy change moves the whole-wiki token.
+    internal struct StrategyTokenContributor: ChangeTokenContributor {
+        let kind: ResourceKind = .strategy
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            .strategy(revision: store.wikiStrategyRevisionValue(on: db))
+        }
+    }
+
     // MARK: - WikiStore protocol: Pages
 
     public func listPages(sortBy: PageSortOrder) throws -> [WikiPageSummary] {
@@ -4380,35 +4603,48 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         try mutate(event: { page in
             self.localEvent(.page, id: page.id.rawValue, change: .created)
         }) { db in
-            let title = WikiNameRules.sanitized(title)
-            let id = PageID(rawValue: ULID.generate())
-            let slug = try self.uniqueSlug(from: title, id: id, on: db)
-            let now = Date()
-            let nowTS = now.timeIntervalSince1970
-            let normalizedProvenance = try self.normalizedPageVersionProvenance(provenance, on: db)
-
-            try db.execute(sql: """
-            INSERT INTO pages (id, title, slug, body_markdown, created_at, updated_at, version, created_by, last_edited_by)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?);
-            """, arguments: [id.rawValue, title, slug, body, nowTS, nowTS,
-                            createdBy, createdBy])
-
-            let bodyData = Data(body.utf8)
-            let hash = portableSHA256( bodyData)
-                .map { String(format: "%02x", $0) }.joined()
-            _ = try self.createPageVersionWithProvenance(on: db, request: .init(
-                pageID: id, head: nil, mergeParentID: nil, title: title, body: body,
-                bodyData: bodyData, hash: hash, activityAgent: .pageAuthor(createdBy),
-                activityKind: "import", now: now, nowTS: nowTS,
-                provenance: normalizedProvenance,
-                publication: .main(slug: slug, mirrorMutation: .seed)))
-
-            return WikiPage(
-                id: id, title: title, slug: slug, bodyMarkdown: body,
-                createdAt: now, updatedAt: now, version: 1,
-                createdBy: createdBy, lastEditedBy: createdBy
-            )
+            try self.createPageLocked(title: title, body: body, createdBy: createdBy, provenance: provenance, on: db)
         }
+    }
+
+    /// The db-handle core of `createPage(title:body:createdBy:provenance:)`:
+    /// page-row insert + first immutable version (with provenance) + slug
+    /// mirror seed. NOT a `mutate(event:)` wrapper — no transaction of its
+    /// own, no event. `createPage` (public creator) and the composed
+    /// `upsertPage(id:title:rawBody:expectation:author:provenance:)` wrap
+    /// their own `mutate` around this so each emits exactly one event.
+    private func createPageLocked(
+        title: String, body: String, createdBy: String?,
+        provenance: [PageVersionSourceInput], on db: Database
+    ) throws -> WikiPage {
+        let title = WikiNameRules.sanitized(title)
+        let id = PageID(rawValue: ULID.generate())
+        let slug = try self.uniqueSlug(from: title, id: id, on: db)
+        let now = Date()
+        let nowTS = now.timeIntervalSince1970
+        let normalizedProvenance = try self.normalizedPageVersionProvenance(provenance, on: db)
+
+        try db.execute(sql: """
+        INSERT INTO pages (id, title, slug, body_markdown, created_at, updated_at, version, created_by, last_edited_by)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?);
+        """, arguments: [id.rawValue, title, slug, body, nowTS, nowTS,
+                        createdBy, createdBy])
+
+        let bodyData = Data(body.utf8)
+        let hash = portableSHA256( bodyData)
+            .map { String(format: "%02x", $0) }.joined()
+        _ = try self.createPageVersionWithProvenance(on: db, request: .init(
+            pageID: id, head: nil, mergeParentID: nil, title: title, body: body,
+            bodyData: bodyData, hash: hash, activityAgent: .pageAuthor(createdBy),
+            activityKind: "import", now: now, nowTS: nowTS,
+            provenance: normalizedProvenance,
+            publication: .main(slug: slug, mirrorMutation: .seed)))
+
+        return WikiPage(
+            id: id, title: title, slug: slug, bodyMarkdown: body,
+            createdAt: now, updatedAt: now, version: 1,
+            createdBy: createdBy, lastEditedBy: createdBy
+        )
     }
 
     public func createPage(
@@ -4523,10 +4759,181 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     }
 
     public func replaceLinks(from pageID: PageID, parsedLinks: [ParsedLink]) throws {
-        try mutate(event: { _ in
+        // The locked helper now reports whether rows changed (the composed
+        // upsert's didWrite needs it); this public mutator keeps its own
+        // unconditional `.updated` event, so the Bool is discarded here.
+        _ = try mutate(event: { _ in
             self.localEvent(.page, id: pageID.rawValue, change: .updated)
         }) { db in
             try self.replaceLinksLocked(from: pageID, parsedLinks: parsedLinks, on: db)
+        }
+    }
+
+    // MARK: - Composed page upsert (cumulative ingestion, plan phase 4 §9)
+
+    /// Result payload for the composed upsert: the caller-facing outcome plus
+    /// whether the write changed anything — the version write OR the link
+    /// rows (a link-graph change alone, e.g. a stale row swept by a no-op
+    /// body save, still emits; an unchanged save emits nothing).
+    private struct ComposedUpsertResult {
+        let outcome: PageUpsert.Outcome
+        let didWrite: Bool
+    }
+
+    /// The composed page write: title/id resolution, the
+    /// `PageWriteExpectation` check, body canonicalization, the
+    /// version/provenance write, and link-graph replacement — ONE
+    /// `mutate(event:)` transaction, ONE event.
+    ///
+    /// Event contract (plan phase 4 §9): a changed commit (content OR link
+    /// rows) emits exactly one `ResourceChangeEvent` — `.created` for a new
+    /// page, `.updated` otherwise — after the transaction commits; a CAS
+    /// conflict (`PageConflictError`), a create-only conflict
+    /// (`PageCreateConflictError`), a missing expected target
+    /// (`PageExpectedTargetMissingError`), a link-write failure, or any other
+    /// throw rolls back every content-bearing row (the savepoint) and emits
+    /// NOTHING. The body calls only non-emitting `*Locked` helpers — never a
+    /// nested public mutator, which would emit before this transaction
+    /// commits and could not be suppressed on rollback (see the `mutate()`
+    /// seam doc).
+    @discardableResult
+    public func upsertPage(
+        id: PageID?, title: String, rawBody: String,
+        expectation: PageWriteExpectation,
+        author: String? = nil,
+        provenance: [PageVersionSourceInput] = []
+    ) throws -> PageUpsert.Outcome {
+        let result = try mutate(event: { (result: ComposedUpsertResult) in
+            guard result.didWrite else { return nil }
+            return self.localEvent(
+                .page, id: result.outcome.id.rawValue,
+                change: result.outcome.didCreate ? .created : .updated)
+        }) { db in
+            try self.upsertPageLocked(
+                id: id, title: title, rawBody: rawBody, expectation: expectation,
+                author: author, provenance: provenance, on: db)
+        }
+        return result.outcome
+    }
+
+    /// The db-handle core of `upsertPage`. Runs entirely inside the caller's
+    /// `mutate` savepoint via non-emitting helpers; never opens a
+    /// transaction, never emits.
+    private func upsertPageLocked(
+        id: PageID?, title: String, rawBody: String,
+        expectation: PageWriteExpectation,
+        author: String?, provenance: [PageVersionSourceInput],
+        on db: Database
+    ) throws -> ComposedUpsertResult {
+        // 1. Sanitize BEFORE resolving (the same rule as the sequential seam):
+        //    the raw title would never match a sanitized stored title, so an
+        //    unsanitized upsert of the same unlinkable title would otherwise
+        //    create a duplicate page on every save.
+        let title = WikiNameRules.sanitized(title)
+
+        // 2. Canonicalize the body's `[[…]]` spans with IN-TRANSACTION
+        //    resolvers, so the canonical form agrees with the title graph as
+        //    of THIS write (a title that resolves here cannot be un-resolved
+        //    by a concurrent write before the commit). Same rewriter and
+        //    resolution rules as the sequential seam; the PUBLIC resolvers
+        //    would re-enter the writer queue (see `replaceLinksLocked`).
+        let canonicalBody = (try WikiLinkRewriter.canonicalize(
+            in: rawBody,
+            resolvePage: { try self.resolveTitleToIDLocked($0, in: db) },
+            resolveSource: { try self.resolveSourceByNameLocked($0, in: db) },
+            resolveChat: { try self.resolveChatByTitleLocked($0, in: db) })) ?? rawBody
+
+        // 3. Resolve the target INSIDE the transaction: an explicit id wins
+        //    (existence-checked); otherwise the title resolves against
+        //    committed pages (lowest ULID on a duplicate-title collision).
+        let targetID: PageID?
+        if let id {
+            let exists = try Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM pages WHERE id = ?;",
+                arguments: [id.rawValue]
+            ) ?? 0
+            guard exists == 1 else {
+                // Legacy unrestricted updates threw `.notFound` (and still
+                // do). An expected-head write is different: the caller PINNED
+                // this page by id, so its absence since the read is an
+                // expected-state conflict (exit 3), never a notFound and
+                // never a silent create.
+                if case .expectedHead(let expected) = expectation {
+                    throw PageExpectedTargetMissingError(
+                        pageID: id, expectedHead: expected, title: title)
+                }
+                throw WikiStoreError.notFound(id)
+            }
+            targetID = id
+        } else {
+            targetID = try resolveTitleToIDLocked(title, in: db)
+        }
+
+        // Shared tail for both create paths: page row + first version, then
+        // the canonical body's links, all in this savepoint.
+        func createAndLink() throws -> ComposedUpsertResult {
+            let page = try self.createPageLocked(
+                title: title, body: canonicalBody, createdBy: author,
+                provenance: provenance, on: db)
+            _ = try self.replaceLinksLocked(
+                from: page.id, parsedLinks: WikiLinkParser.parse(canonicalBody), on: db)
+            return ComposedUpsertResult(
+                outcome: PageUpsert.Outcome(id: page.id, didCreate: true), didWrite: true)
+        }
+
+        // 4. Expected-state gate + content write.
+        var expectedHead: PageVersionID?
+        if case .expectedHead(let expected) = expectation { expectedHead = expected }
+        switch expectation {
+        case .expectedAbsence:
+            if let id {
+                throw WikiStoreError.unexpected(
+                    "create-only write (expectedAbsence) cannot target an explicit page id: \(id.rawValue)")
+            }
+            if let targetID {
+                // The create-only race lost: a page appeared under this title
+                // since the caller's missing-page read. Report the conflict
+                // carrying the existing page's current head so the agent can
+                // re-read and reconcile; the savepoint rolls back (nothing
+                // content-bearing was written yet on this path).
+                let head = try Self.pageHeadVersionIDLocked(pageID: targetID, on: db)
+                throw PageCreateConflictError(pageID: targetID, title: title, actualVersionID: head)
+            }
+            return try createAndLink()
+        case .expectedHead, .unrestricted:
+            guard let targetID else {
+                if let expectedHead {
+                    // The title the caller read no longer resolves to ANY
+                    // page — deleted or renamed away since the read. Conflict,
+                    // never a silent create: an expected-head write pins an
+                    // existing page, and only `.unrestricted` keeps the
+                    // legacy create-if-missing behavior.
+                    throw PageExpectedTargetMissingError(
+                        pageID: nil, expectedHead: expectedHead, title: title)
+                }
+                // Unrestricted + no target: the legacy create.
+                return try createAndLink()
+            }
+            // Existing page: append a version — CAS for `.expectedHead`,
+            // blind legacy write for `.unrestricted`. Both route through
+            // `appendPageVersionLocked`, whose body IS `updatePage`'s locked
+            // body (slug/hash → CAS check → amend-coalescing → append), so
+            // unrestricted semantics — including the autosave amendment —
+            // are preserved verbatim; only the transaction scope changed.
+            // Then replace the canonical body's links in the SAME savepoint
+            // so a link failure rolls the version write back. `didWrite`
+            // includes the link delta: a link-graph change alone (a stale
+            // row swept, a target that stopped resolving) still emits.
+            let version = try appendPageVersionLocked(
+                pageID: targetID, title: title, body: canonicalBody,
+                expectedHeadVersionID: expectedHead,
+                lastEditedBy: author, provenance: provenance, on: db)
+            let linksChanged = try replaceLinksLocked(
+                from: targetID, parsedLinks: WikiLinkParser.parse(canonicalBody), on: db)
+            return ComposedUpsertResult(
+                outcome: PageUpsert.Outcome(id: targetID, didCreate: false),
+                didWrite: version.didWrite || linksChanged)
         }
     }
 
@@ -4534,9 +4941,16 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// transaction, no event. Callers already inside a write transaction (the
     /// protected deletion's unlink rewrites) route through this instead of the
     /// public mutator, which would re-enter the writer queue and deadlock.
+    ///
+    /// Returns whether the persisted link rows CHANGED (the resolved row set
+    /// after the rewrite differs from the set before it). The composed upsert
+    /// ORs this into its `didWrite` so a link-graph change alone — a stale
+    /// row swept away, a target that stopped resolving — still emits exactly
+    /// one event even though the version write was a no-op.
+    @discardableResult
     private func replaceLinksLocked(
         from pageID: PageID, parsedLinks: [ParsedLink], on db: Database
-    ) throws {
+    ) throws -> Bool {
         // Delete all existing outgoing page + source links, then insert the
         // resolved subset. Faithful port of `SQLiteWikiStore.replaceLinks`:
         // canonical-ULID targets validate by id (direct row fetch); legacy
@@ -4546,6 +4960,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         // `resolveSourceByName` open their own `dbWriter.read`, which would
         // re-enter the DatabasePool's serial queue and hit GRDB's fatal
         // "Database methods are not reentrant".
+        let before = try Self.outgoingLinkRowsLocked(pageID, on: db)
         try db.execute(sql: "DELETE FROM page_links WHERE from_page_id = ?;",
                        arguments: [pageID.rawValue])
         try db.execute(sql: "DELETE FROM source_links WHERE from_page_id = ?;",
@@ -4595,6 +5010,29 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 continue
             }
         }
+        return try Self.outgoingLinkRowsLocked(pageID, on: db) != before
+    }
+
+    /// Ordered, comparable dump of a page's outgoing `page_links` +
+    /// `source_links` rows (every persisted column) — the change fingerprint
+    /// `replaceLinksLocked` compares so a composed upsert can emit when the
+    /// LINK GRAPH changed even though the body (and therefore the version
+    /// write) did not.
+    private static func outgoingLinkRowsLocked(
+        _ pageID: PageID, on db: Database
+    ) throws -> [String] {
+        var rows = try String.fetchAll(db, sql: """
+            SELECT from_page_id || ':' || to_page_id || ':' || link_text
+            FROM page_links WHERE from_page_id = ?
+            ORDER BY to_page_id, link_text
+            """, arguments: [pageID.rawValue])
+        rows += try String.fetchAll(db, sql: """
+            SELECT from_page_id || ':' || to_source_id || ':' || link_text
+                   || ':' || role || ':' || COALESCE(pinned_version_id, '')
+            FROM source_links WHERE from_page_id = ?
+            ORDER BY to_source_id, link_text, role
+            """, arguments: [pageID.rawValue])
+        return rows
     }
 
     // MARK: - WikiStore protocol: Sources
@@ -7001,48 +7439,80 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         let result = try mutate(event: { result in
             result.didWrite ? self.localEvent(.page, id: pageID.rawValue, change: .updated) : nil
         }) { db in
-            let title = WikiNameRules.sanitized(title)
-            let slug = try self.uniqueSlug(from: title, id: pageID, on: db)
-            let bodyData = Data(body.utf8)
-            let hash = portableSHA256( bodyData)
-                .map { String(format: "%02x", $0) }.joined()
-            let now = Date()
-            let nowTS = now.timeIntervalSince1970
-            let normalizedProvenance = try self.normalizedPageVersionProvenance(provenance, on: db)
-
-            // 1. CAS check: resolve current head (ref → version_id, or MAX(id)).
-            let head = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
-            if let expected = expectedHeadVersionID, expected != head {
-                throw PageConflictError(
-                    pageID: pageID, expectedVersionID: expected, actualVersionID: head)
-            }
-
-            // 1b. Amend check (autosave coalescing). Same-actor saves within a
-            //     short coalescing window amend the head version in place.
-            if let amendVersionID = try self.tryAmendPageVersion(
-                db: db, pageID: pageID, head: head, title: title, slug: slug,
-                body: body, bodyData: bodyData, hash: hash,
-                lastEditedBy: lastEditedBy, provenance: normalizedProvenance, now: now, nowTS: nowTS)
-            {
-                return PageVersionProvenanceResult(versionID: amendVersionID, didWrite: true)
-            }
-
-            // 2–6. Append the new version row (blob + activity + version +
-            //      mirror + ref). Extracted to `appendPageVersionLocked` so
-            //      `updatePage` (CAS-off) can share the same write seam
-            //      WITHOUT re-entering `mutate(event:)` (the HIGH hazard
-            //      called out in `plans/page-provenance.md` §5.3 — public
-            //      mutators that compose must pass the `Database` to internal
-            //      helpers, not re-call `mutate`). This helper does NOT emit;
-            //      this method's `mutate` wrapper is the single emit site.
-            return try self.createPageVersionWithProvenance(on: db, request: .init(
-                pageID: pageID, head: head, mergeParentID: nil, title: title, body: body,
-                bodyData: bodyData, hash: hash, activityAgent: .pageAuthor(lastEditedBy),
-                activityKind: "edit", now: now, nowTS: nowTS,
-                provenance: normalizedProvenance,
-                publication: .main(slug: slug, mirrorMutation: .append)))
+            try self.appendPageVersionLocked(
+                pageID: pageID, title: title, body: body,
+                expectedHeadVersionID: expectedHeadVersionID,
+                lastEditedBy: lastEditedBy, provenance: provenance, on: db)
         }
         return result.versionID
+    }
+
+    /// The db-handle core of `appendPageVersion` — CAS check, amend
+    /// (autosave-coalescing) check, and the six-step version append.
+    /// NOT a `mutate(event:)` wrapper — no transaction of its own, no event.
+    /// `appendPageVersion` (public CAS append) and the composed
+    /// `upsertPage(id:title:rawBody:expectation:author:provenance:)` wrap
+    /// their own `mutate` around this so each emits exactly one event
+    /// (Approach-A composition — see the `mutate()` seam doc above).
+    private func appendPageVersionLocked(
+        pageID: PageID, title: String, body: String,
+        expectedHeadVersionID: PageVersionID?,
+        lastEditedBy: String?, provenance: [PageVersionSourceInput],
+        on db: Database
+    ) throws -> PageVersionProvenanceResult {
+        let title = WikiNameRules.sanitized(title)
+        let slug = try self.uniqueSlug(from: title, id: pageID, on: db)
+        let bodyData = Data(body.utf8)
+        let hash = portableSHA256( bodyData)
+            .map { String(format: "%02x", $0) }.joined()
+        let now = Date()
+        let nowTS = now.timeIntervalSince1970
+        let normalizedProvenance = try self.normalizedPageVersionProvenance(provenance, on: db)
+
+        // 1. CAS check: resolve current head (ref → version_id, or MAX(id)).
+        let head = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
+        if let expected = expectedHeadVersionID, expected != head {
+            throw PageConflictError(
+                pageID: pageID, expectedVersionID: expected, actualVersionID: head)
+        }
+
+        // An identical same-author write must not enter autosave amendment:
+        // that path updates the mirror and ref even when the content is unchanged.
+        if let head,
+           let row = try Row.fetchOne(db, sql: """
+               SELECT pv.blob_hash, pv.title, p.last_edited_by, p.body_markdown
+               FROM page_versions pv JOIN pages p ON p.id = pv.page_id
+               WHERE pv.id = ?;
+               """, arguments: [head.rawValue]) {
+            let headHash: String = row["blob_hash"]
+            let headTitle: String = row["title"]
+            let actor: String? = row["last_edited_by"]
+            let mirrorBody: String = row["body_markdown"]
+            if headHash == hash, headTitle == title, actor == lastEditedBy,
+               mirrorBody == body,
+               try self.pageVersionSourceInputs(versionID: head, on: db) == normalizedProvenance {
+                return PageVersionProvenanceResult(versionID: head, didWrite: false)
+            }
+        }
+
+        // 1b. Amend check (autosave coalescing). Same-actor saves within a
+        //     short coalescing window amend the head version in place.
+        if let amendVersionID = try self.tryAmendPageVersion(
+            db: db, pageID: pageID, head: head, title: title, slug: slug,
+            body: body, bodyData: bodyData, hash: hash,
+            lastEditedBy: lastEditedBy, provenance: normalizedProvenance, now: now, nowTS: nowTS)
+        {
+            return PageVersionProvenanceResult(versionID: amendVersionID, didWrite: true)
+        }
+
+        // 2–6. Append the new version row (blob + activity + version +
+        //      mirror + ref) via the shared non-emitting helper.
+        return try self.createPageVersionWithProvenance(on: db, request: .init(
+            pageID: pageID, head: head, mergeParentID: nil, title: title, body: body,
+            bodyData: bodyData, hash: hash, activityAgent: .pageAuthor(lastEditedBy),
+            activityKind: "edit", now: now, nowTS: nowTS,
+            provenance: normalizedProvenance,
+            publication: .main(slug: slug, mirrorMutation: .append)))
     }
 
     /// Shared version-append logic for `appendPageVersion` (CAS path) and

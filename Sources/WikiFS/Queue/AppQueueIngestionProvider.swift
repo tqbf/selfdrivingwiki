@@ -161,7 +161,16 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // Stage sources — reuse already-extracted markdown for PDFs (the
         // extraction item ran before this ingestion item in the chained path,
         // or the user ran "Extract Markdown" manually).
-        let stateMarkdown = store.currentStateSnapshot().renderStateFile()
+        // A strategy read failure must not launch a run under invented Default
+        // instructions — fail the item instead. `beginIngest` above is paired
+        // with `endIngest` before rethrowing so the edit lock is not left held.
+        let stateMarkdown: String
+        do {
+            stateMarkdown = try store.currentStateSnapshot().renderStateFile()
+        } catch {
+            store.endIngest()
+            throw error
+        }
         var sources: [OperationRequest.StagedSource] = []
         var stagingOutcomes: [(id: SourceID, outcome: QueueIngestionReporting.StagingOutcome)] = []
         stagingOutcomes.reserveCapacity(sourceIDs.count)
@@ -366,6 +375,10 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
 
         DebugLog.ingest("AppQueueIngestionProvider.runLint: begin wikiID=\(wikiID)")
 
+        // Capture the state before the running reports: a strategy read
+        // failure fails the item without ever reporting a launch.
+        let stateMarkdown = try store.currentStateSnapshot().renderStateFile()
+
         // The ACTUAL selected provider at launch — never the scheduler's
         // capacity bucket (`default-ingest`).
         let selectedProvider = resolveSelectedProvider()
@@ -373,7 +386,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onReport?(QueueIngestionReporting.runningMutation())
 
         await runLintAgent(
-            request: .lint(stateMarkdown: store.currentStateSnapshot().renderStateFile()),
+            request: .lint(stateMarkdown: stateMarkdown),
             launcher: launcher,
             store: store,
             wikiID: wikiID,
@@ -436,6 +449,10 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             resolved: pages,
             requested: pageIDs))
 
+        // Capture the state before the running reports: a strategy read
+        // failure fails the item without ever reporting a launch.
+        let stateMarkdown = try store.currentStateSnapshot().renderStateFile()
+
         // The ACTUAL selected provider at launch — never the scheduler's
         // capacity bucket (`default-ingest`).
         let selectedProvider = resolveSelectedProvider()
@@ -458,7 +475,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             request: .lintPage(
                 pageTitle: combinedTitle,
                 brokenLinks: combinedBroken,
-                stateMarkdown: store.currentStateSnapshot().renderStateFile()),
+                stateMarkdown: stateMarkdown),
             launcher: launcher,
             store: store,
             wikiID: wikiID,

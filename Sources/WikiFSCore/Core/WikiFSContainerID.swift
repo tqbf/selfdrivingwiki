@@ -55,6 +55,14 @@ public enum WikiFSContainerID {
     public static let treeMD = "tree-md"
     public static let wikiStructureMD = "wiki-structure-md"
 
+    // The saved wiki strategy. A root-level read-only doc rendered by the shared
+    // `WikiStrategyRenderer`: the saved editorial strategy when one is committed,
+    // the Default description otherwise. A child of the root, refreshed by
+    // `signalChange()` signaling `.rootContainer` (+ the working set), exactly as
+    // for `log.md`/`index.md`/`WIKI-STRUCTURE.md`. Unlike `CLAUDE.md`/`AGENTS.md`
+    // (identical compiled bytes), this doc renders live from the store.
+    public static let wikiStrategyMD = "wiki-strategy-md"
+
     /// Prefix for a single source's `by-id` LEAF identifier (carries the
     /// full ULID, never the filename — INITIAL §6). Shared so the extension's
     /// `Projection.Identity.sourceByID(_:)` and the app's "open this source"

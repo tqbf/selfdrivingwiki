@@ -281,6 +281,18 @@ public enum PerWikiRuntimePlugin {
                         extractionCoordinator: ExtractionCoordinator(services: extractionServices),
                         providerServices: providerServices,
                         agentLoopService: agentLoopService)
+                    // Wiki strategies phase 4 — mandatory production wiring:
+                    // pre-launch plan validation resolves assignment titles
+                    // through THIS wiki's store (`resolveTitleToID`), so
+                    // duplicate resolved page targets are rejected before any
+                    // executor launches. The live evaluation harness overrides
+                    // this seam with its disposable database. A resolver
+                    // FAILURE surfaces as an actionable plan-validation
+                    // failure inside `ACPIngestPlanValidation` — never a
+                    // silent degrade to new-title folding.
+                    launcher.planValidationResolveTitle = { title in
+                        try store.resolveTitleToID(title)
+                    }
                     // No pdf2md script-path resolver here: production launches
                     // no legacy pdf2md subprocess for the agent seatbelt to
                     // deny (extraction runs through the registry's reviewed
@@ -297,6 +309,173 @@ public enum PerWikiRuntimePlugin {
                 _ = try await activation.supply(PerWikiRuntimeServiceKeys.searchFactory, value: searchFactory)
                 _ = try await activation.supply(LauncherServiceKeys.factory, value: launcherFactory)
             }
+        }
+    }
+}
+
+// MARK: - Headless agent-loop runtime composition
+
+/// Observation-only callbacks over the plain agent-loop lifecycle values.
+/// Consumers receive the same `AgentTurnStarted` / `AgentStepCompleted` /
+/// `AgentTurnCompleted` payloads the loop emits; the observer carries no
+/// context and no Cordis surface. The live semantic evaluation harness uses
+/// these callbacks to retain per-turn loop-traversal evidence.
+public struct AgentLoopTraceObserver: Sendable {
+    public typealias TurnStartedHandler = @Sendable (AgentTurnStarted) async -> Void
+    public typealias StepCompletedHandler = @Sendable (AgentStepCompleted) async -> Void
+    public typealias TurnCompletedHandler = @Sendable (AgentTurnCompleted) async -> Void
+
+    public let onTurnStarted: TurnStartedHandler?
+    public let onStepCompleted: StepCompletedHandler?
+    public let onTurnCompleted: TurnCompletedHandler?
+
+    public init(
+        onTurnStarted: TurnStartedHandler? = nil,
+        onStepCompleted: StepCompletedHandler? = nil,
+        onTurnCompleted: TurnCompletedHandler? = nil
+    ) {
+        self.onTurnStarted = onTurnStarted
+        self.onStepCompleted = onStepCompleted
+        self.onTurnCompleted = onTurnCompleted
+    }
+}
+
+/// Sendable per-run launcher construction over one booted agent-loop
+/// service. Mirrors the daemon provider's launcher configuration — the real
+/// loop service plus the caller's provider services — with admission and
+/// disposables owned by the caller.
+public struct AgentLoopLauncherFactory: Sendable {
+    private let agentLoopService: AgentLoopService
+
+    fileprivate init(agentLoopService: AgentLoopService) {
+        self.agentLoopService = agentLoopService
+    }
+
+    @MainActor
+    public func callAsFunction(providerServices: any AgentProviderServices) -> AgentLauncher {
+        AgentLauncher(providerServices: providerServices, agentLoopService: agentLoopService)
+    }
+}
+
+public enum AgentLoopRuntimeError: Error, Equatable, Sendable {
+    /// A composition service did not resolve after boot. The boot cleans the
+    /// failed profile up before this is thrown.
+    case serviceUnavailable(String)
+}
+
+/// Boots the headless production agent-loop composition for one explicit
+/// database: StorePlugin → SessionsPlugin → ChatsPersistencePlugin →
+/// AgentLoopPlugin, plus an optional observation-only trace plugin. This is
+/// the same plugin stack the daemon profile boots, exposed as one engine
+/// composition seam so non-app hosts (the live evaluation harness, future
+/// headless runners) run every agent turn through the production loop
+/// without touching the composition machinery themselves.
+public enum AgentLoopRuntimeFactory {
+    public static func boot(
+        databaseURL: URL,
+        wikiID: WikiID,
+        trace: AgentLoopTraceObserver = AgentLoopTraceObserver()
+    ) async throws -> AgentLoopRuntimeHandle {
+        let tracePluginID = PluginID("wiki.agent-loop-trace")
+        let tracePlugin = PluginDefinition(
+            id: tracePluginID,
+            dependencies: [ServiceDependency(AgentLoopServiceKeys.agentLoop)]
+        ) {
+            try ComponentDefinition(
+                label: "wiki.agent-loop-trace",
+                dependencies: [ServiceDependency(AgentLoopServiceKeys.agentLoop)]
+            ) { activation in
+                if let onTurnStarted = trace.onTurnStarted {
+                    _ = try await activation.on(AgentLoopEventKeys.turnStarted) { event in
+                        await onTurnStarted(event)
+                    }
+                }
+                if let onStepCompleted = trace.onStepCompleted {
+                    _ = try await activation.on(AgentLoopEventKeys.stepCompleted) { event in
+                        await onStepCompleted(event)
+                    }
+                }
+                if let onTurnCompleted = trace.onTurnCompleted {
+                    _ = try await activation.on(AgentLoopEventKeys.turnCompleted) { event in
+                        await onTurnCompleted(event)
+                    }
+                }
+            }
+        }
+        let booted = try await CordisBoot.boot(.init(
+            catalog: try PluginCatalog([
+                StorePlugin.definition,
+                SessionsPlugin.definition,
+                ChatsPersistencePlugin.definition,
+                AgentLoopPlugin.definition,
+                tracePlugin,
+            ]),
+            layers: [PatchFile(entries: [
+                Entry(
+                    id: EntryID("store"),
+                    plugin: StorePlugin.id,
+                    config: [
+                        "databasePath": .string(databaseURL.path),
+                        "wikiID": .string(wikiID.rawValue),
+                    ]),
+                Entry(id: EntryID("sessions"), plugin: SessionsPlugin.id),
+                Entry(id: EntryID("persistence"), plugin: ChatsPersistencePlugin.id),
+                Entry(id: EntryID("agent-loop"), plugin: AgentLoopPlugin.id),
+                Entry(id: EntryID("trace"), plugin: tracePluginID),
+            ])]))
+        do {
+            return AgentLoopRuntimeHandle(
+                wikiID: wikiID,
+                store: try await booted.context.require(StoreServiceKeys.store),
+                agentLoopService: try await booted.context.require(AgentLoopServiceKeys.agentLoop),
+                profile: booted)
+        } catch {
+            do { try await booted.shutdown() } catch {
+                DebugLog.store("Agent-loop runtime cleanup after resolution failure failed: \(error)")
+            }
+            throw AgentLoopRuntimeError.serviceUnavailable(String(describing: error))
+        }
+    }
+}
+
+/// Opaque ownership of one booted headless agent-loop runtime. The public
+/// surface is plain typed values — the booted loop service, the composed
+/// store, a per-run launcher factory, and lifecycle — never a context.
+public actor AgentLoopRuntimeHandle {
+    public nonisolated let wikiID: WikiID
+    /// The REAL `AgentLoopPlugin` service: pre-step gates, request
+    /// waterfalls, and turn lifecycle events all traverse the production
+    /// path.
+    public nonisolated let agentLoopService: AgentLoopService
+    /// The store the composition opened on the explicit database.
+    public nonisolated let store: any WikiStore
+    /// Per-run launcher construction over the booted loop service.
+    public nonisolated let launcherFactory: AgentLoopLauncherFactory
+    private let profile: BootedProfile
+    private var didShutdown = false
+
+    fileprivate init(
+        wikiID: WikiID,
+        store: any WikiStore,
+        agentLoopService: AgentLoopService,
+        profile: BootedProfile
+    ) {
+        self.wikiID = wikiID
+        self.store = store
+        self.agentLoopService = agentLoopService
+        self.launcherFactory = AgentLoopLauncherFactory(agentLoopService: agentLoopService)
+        self.profile = profile
+    }
+
+    /// Retires the composition. Safe to call more than once.
+    public func shutdown() async throws {
+        guard !didShutdown else { return }
+        didShutdown = true
+        do {
+            try await profile.shutdown()
+        } catch {
+            didShutdown = false
+            throw error
         }
     }
 }

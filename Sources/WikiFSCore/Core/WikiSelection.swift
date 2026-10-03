@@ -17,6 +17,9 @@ public enum WikiSelection: Hashable, Sendable {
     /// A bookmark node (folder, page ref, source ref) — by node id. Selecting
     /// a bookmark folder highlights it but does not open a tab.
     case bookmark(String)
+    /// The wiki-scoped editorial Strategy document (`WIKI-STRATEGY.md`'s
+    /// editor). One per wiki — not a page, not global settings.
+    case strategy
     /// A persisted agent chat, by id (issue #119).
     case chat(ChatID)
 }

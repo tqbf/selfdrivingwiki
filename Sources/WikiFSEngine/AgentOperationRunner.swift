@@ -19,10 +19,11 @@ public enum AgentOperationRunner {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
+        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
         await run(
             request: .query(
                 question: trimmed,
-                stateMarkdown: store.currentStateSnapshot().renderStateFile()),
+                stateMarkdown: stateMarkdown),
             launcher: launcher,
             store: store,
             wikiID: wikiID,
@@ -57,6 +58,12 @@ public enum AgentOperationRunner {
             return
         }
 
+        // Capture the wiki state BEFORE the mount signal or the chat row: a
+        // strategy read failure refuses the run entirely (no chat created, no
+        // session started) rather than launching under invented Default
+        // instructions.
+        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
+
         await changeSignaler.signalChange()
         // The mount is reference-only (the agent reads via `wikictl`); proceed even
         // when it isn't mounted, passing an empty WIKI_ROOT. The prompt tells the
@@ -83,7 +90,7 @@ public enum AgentOperationRunner {
         DebugLog.agent("startChat: calling launcher.startInteractiveQuery wikiID=\(wikiID.rawValue) chatID=\(chat?.id.rawValue ?? "nil")")
         await launcher.startInteractiveQuery(
             firstMessage: trimmed,
-            stateMarkdown: store.currentStateSnapshot().renderStateFile(),
+            stateMarkdown: stateMarkdown,
             wikiID: wikiID,
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
@@ -417,6 +424,11 @@ public enum AgentOperationRunner {
             return
         }
 
+        // Capture the wiki state BEFORE the mount signal: a strategy read
+        // failure refuses the run (no session takeover) rather than launching
+        // under invented Default instructions.
+        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
+
         await changeSignaler.signalChange()
         let root = changeSignaler.path ?? ""
         DebugLog.agent("continueChat: chatID=\(chatID.rawValue) wikiRoot=\(root.isEmpty ? "<mount unavailable>" : root)")
@@ -453,7 +465,7 @@ public enum AgentOperationRunner {
         await launcher.startInteractiveQuery(
             firstMessage: firstMessage,
             firstMessageDisplay: trimmed,
-            stateMarkdown: store.currentStateSnapshot().renderStateFile(),
+            stateMarkdown: stateMarkdown,
             wikiID: wikiID,
             wikiRoot: root,
             systemPrompt: store.currentSystemPromptBody(),
@@ -486,8 +498,9 @@ public enum AgentOperationRunner {
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
+        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
         await run(
-            request: .lint(stateMarkdown: store.currentStateSnapshot().renderStateFile()),
+            request: .lint(stateMarkdown: stateMarkdown),
             launcher: launcher,
             store: store,
             wikiID: wikiID,
@@ -518,16 +531,36 @@ public enum AgentOperationRunner {
         }
         let combinedTitle = pages.map(\.title).joined(separator: ", ")
         let combinedBroken = preflights.flatMap(\.brokenLinks)
+        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
         await run(
             request: .lintPage(
                 pageTitle: combinedTitle,
                 brokenLinks: combinedBroken,
-                stateMarkdown: store.currentStateSnapshot().renderStateFile()),
+                stateMarkdown: stateMarkdown),
             launcher: launcher,
             store: store,
             wikiID: wikiID,
             changeSignaler: changeSignaler,
             wikictlDirectory: wikictlDirectory)
+    }
+
+    /// Render the `WIKI_STATE.md` for one operation request, or surface the
+    /// failure as the launcher's preflight error and return nil so NO request
+    /// is built. A strategy read failure must never degrade to the Default
+    /// strategy: authoritative editorial instructions cannot be invented from
+    /// a store error (the same contract as the daemon chat's per-turn strategy
+    /// read).
+    private static func stateMarkdownForRequest(
+        store: WikiStoreModel,
+        launcher: AgentLauncher
+    ) -> String? {
+        do {
+            return try store.currentStateSnapshot().renderStateFile()
+        } catch {
+            DebugLog.agent("operation preflight: wiki state capture failed — no request: \(error)")
+            launcher.preflightError = error.localizedDescription
+            return nil
+        }
     }
 
     private static func run(

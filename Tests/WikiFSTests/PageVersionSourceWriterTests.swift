@@ -399,7 +399,7 @@ struct PageVersionSourceWriterTests {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "test", "page", "add", "--title", "Test", "--body-file", "-",
              "--source", "source-a", "--source", "source-b:quoted"], env: { _ in nil })
-        guard case .page(.add(_, _, _, _, _, _, let provenance)) = invocation.command else {
+        guard case .page(.add(_, _, _, _, _, _, _, let provenance)) = invocation.command else {
             Issue.record("expected page add invocation")
             return
         }

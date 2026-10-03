@@ -112,6 +112,12 @@ struct Projection {
         static let wikiStructureMD = NSFileProviderItemIdentifier(WikiFSContainerID.wikiStructureMD)
         static let treeMD = NSFileProviderItemIdentifier(WikiFSContainerID.treeMD)
 
+        // The saved wiki strategy: a root-level read-only doc rendered by the
+        // shared `WikiStrategyRenderer`. Always present on a readable store —
+        // no saved strategy renders the Default description. An UNREADABLE
+        // strategy row is explicit absence, never a Default stand-in.
+        static let wikiStrategyMD = NSFileProviderItemIdentifier(WikiFSContainerID.wikiStrategyMD)
+
         static let byIDPrefix = "page-by-id:"
         static let byTitlePrefix = "page-by-title:"
         // Shared with the app (which resolves a per-file user-visible URL to open
@@ -240,6 +246,7 @@ struct Projection {
     - `log.md` (the append-only chronological log)
     - `WIKI-STRUCTURE.md` (the layout/orientation map)
     - `TREE.md` (legacy alias for `WIKI-STRUCTURE.md`)
+    - `WIKI-STRATEGY.md` (the saved editorial strategy; the Default description when unset)
     - `pages/by-id/`
     - `pages/by-title/`
     - `sources/by-id/`
@@ -595,6 +602,69 @@ struct Projection {
         return .file(id: id, parent: .rootContainer, name: name, size: body.count,
                      version: version, metadataVersion: version,
                      created: nil, modified: nil)
+    }
+
+    // MARK: - WIKI-STRATEGY.md (saved editorial strategy)
+
+    /// The outcome of one strategy read. Default (rendering the Default
+    /// description) is reserved for a SUCCESSFUL read of true absence: a
+    /// failed read is NEVER masked with the Default document, because an
+    /// unreadable strategy might be a custom one and the Default prose would
+    /// authoritatively deny it (plan-001 AC.3 / phase 2.4 — always project
+    /// when the store is readable; absence is the projection's explicit
+    /// failure convention, as for `manifest.json` when its rows can't read).
+    private enum StrategyRead {
+        /// The wiki DB itself could not be opened.
+        case storeUnavailable
+        /// The store opened but the strategy row could not be read (e.g. a
+        /// read connection against a pre-v56 DB where `wiki_strategy` does
+        /// not exist yet).
+        case readFailed
+        /// Successful read. `nil` = no strategy committed — true Default.
+        case strategy(WikiStrategy?)
+    }
+
+    private func readStrategy() -> StrategyRead {
+        guard let store = openReadStore() else { return .storeUnavailable }
+        do {
+            return .strategy(try store.getWikiStrategy())
+        } catch {
+            DebugLog.fileprovider("getWikiStrategy read failed, omitting WIKI-STRATEGY.md: \(error)")
+            return .readFailed
+        }
+    }
+
+    /// The rendered `WIKI-STRATEGY.md` body, or nil when the strategy could
+    /// not be read (doc explicitly absent — see `StrategyRead`). On success
+    /// the body is byte-exact the shared renderer's document: the saved
+    /// strategy, or the Default description when none is committed.
+    private func wikiStrategyBody() -> Data? {
+        switch readStrategy() {
+        case .strategy(let strategy):
+            return Data(WikiStrategyRenderer.render(strategy).utf8)
+        case .storeUnavailable, .readFailed:
+            return nil
+        }
+    }
+
+    /// Build the root-level `WIKI-STRATEGY.md` file node, or nil when the
+    /// strategy could not be read (the doc is then absent from enumeration —
+    /// never a Default stand-in for an unreadable row). Versioned by the
+    /// change token (like `log.md`/`WIKI-STRUCTURE.md`): a changed strategy
+    /// save advances the store's strategy fold (v56), so the daemon re-fetches
+    /// after a save. `modified` carries the saved strategy's `updatedAt`
+    /// (nil for the Default doc, like `log.md`).
+    private func wikiStrategyNode(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
+        let strategy: WikiStrategy?
+        switch readStrategy() {
+        case .strategy(let value): strategy = value
+        case .storeUnavailable, .readFailed: return nil
+        }
+        let body = Data(WikiStrategyRenderer.render(strategy).utf8)
+        let version = Data(changeToken().utf8)
+        return .file(id: id, parent: .rootContainer, name: "WIKI-STRATEGY.md", size: body.count,
+                     version: version, metadataVersion: version,
+                     created: nil, modified: strategy?.updatedAt)
     }
 
     // MARK: - Change token (sync anchor)
@@ -1094,10 +1164,25 @@ struct Projection {
         participatesInWorkingSet: true
     )
 
+    /// The saved editorial strategy as `WIKI-STRATEGY.md`. Always projected on
+    /// a readable store: with no saved strategy it serves the Default
+    /// description. An unreadable strategy row omits the doc (explicit
+    /// failure) rather than masking it with Default prose. Unlike the system
+    /// prompt (`CLAUDE.md`/`AGENTS.md` serve identical COMPILED bytes), this
+    /// doc renders live from the store through the shared `WikiStrategyRenderer`
+    /// — the same renderer the app uses, so the mounted doc and the captured
+    /// run strategy can never drift in format.
+    static let strategyDoc = SingletonDoc(
+        entries: [.init(id: Identity.wikiStrategyMD, name: "WIKI-STRATEGY.md")],
+        nodeFor: { projection, id, _ in projection.wikiStrategyNode(for: id) },
+        contentFor: { $0.wikiStrategyBody() },
+        participatesInWorkingSet: true
+    )
+
     /// Singleton docs in root-tree order (README first, matching the historical
     /// layout). `node`/`children`/`contents`/working-set iterate this.
     static let singletonDocs: [SingletonDoc] = [
-        readmeDoc, systemPromptDoc, wikiIndexDoc, logDoc, wikiStructureDoc
+        readmeDoc, systemPromptDoc, wikiIndexDoc, logDoc, wikiStructureDoc, strategyDoc
     ]
 
     // --- Generated-index instances ---

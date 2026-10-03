@@ -122,7 +122,7 @@ struct AgentCASTests {
             ["--wiki", "test", "page", "add", "--title", "Test",
              "--body-file", "-", "--expect-head", "01ABC123"],
             env: { _ in nil })
-        guard case .page(.add(_, let title, _, let expectHead, _, _, _)) = invocation.command else {
+        guard case .page(.add(_, let title, _, let expectHead, _, _, _, _)) = invocation.command else {
             Issue.record("expected .page(.add)")
             return
         }
@@ -157,7 +157,7 @@ struct AgentCASTests {
             ["--wiki", "test", "page", "add", "--title", "Test",
              "--body-file", "-"],
             env: { _ in nil })
-        guard case .page(.add(_, _, _, let expectHead, _, _, _)) = invocation.command else {
+        guard case .page(.add(_, _, _, let expectHead, _, _, _, _)) = invocation.command else {
             Issue.record("expected .page(.add)")
             return
         }
@@ -170,7 +170,7 @@ struct AgentCASTests {
              "--source", "source-a", "--source", "source-b:quoted"],
             env: { _ in nil })
 
-        guard case .page(.add(_, _, _, _, _, _, let provenance)) = invocation.command else {
+        guard case .page(.add(_, _, _, _, _, _, _, let provenance)) = invocation.command else {
             Issue.record("expected .page(.add)")
             return
         }
@@ -187,5 +187,91 @@ struct AgentCASTests {
                  "--source", "source-a:"],
                 env: { _ in nil })
         }
+    }
+
+    // MARK: - Create-only writes (cumulative ingestion, phase 4 §4)
+
+    /// `page add --create-only` on an absent title creates the page (the
+    /// create-versus-create race's happy path).
+    @Test func createOnlyCreatesAbsentPage() throws {
+        let store = try tempStore()
+        #expect(try store.resolveTitleToID("Fresh Page") == nil)
+
+        let result = try PageCommand.run(
+            .add(id: nil, title: "Fresh Page", body: .inline("first body"),
+                 createOnly: true),
+            in: store)
+        #expect(result.didCommit == true)
+
+        let readBack = try store.getPage(id: PageID(rawValue: result.output))
+        #expect(readBack.bodyMarkdown == "first body")
+        #expect(try store.resolveTitleToID("Fresh Page") != nil)
+    }
+
+    /// `page add --create-only` on an EXISTING title conflicts (exit 3 at the
+    /// process layer via `PageCreateConflictError`) and must not overwrite the
+    /// existing page's body, links, or add a version.
+    @Test func createOnlyConflictDoesNotOverwrite() throws {
+        let store = try tempStore()
+        let page = try store.createPage(title: "Existing Page", body: "original body")
+        let headBefore = try store.pageHeadVersionID(pageID: page.id)
+
+        do {
+            _ = try PageCommand.run(
+                .add(id: nil, title: "Existing Page", body: .inline("intruder body"),
+                     createOnly: true),
+                in: store)
+            Issue.record("expected PageCreateConflictError")
+        } catch let error as PageCreateConflictError {
+            #expect(error.pageID == page.id)
+            #expect(error.actualVersionID == headBefore)
+        }
+
+        // Byte-identical page, same head, no second version.
+        let readBack = try store.getPage(id: page.id)
+        #expect(readBack.bodyMarkdown == "original body")
+        #expect(try store.pageHeadVersionID(pageID: page.id) == headBefore)
+        #expect(try store.pageVersionHistory(pageID: page.id).count == 1)
+    }
+
+    /// `--create-only` and `--expect-head` state contradictory preconditions;
+    /// the parser rejects them together as a usage error (and `--create-only`
+    /// cannot combine with `--id` or `--workspace` either).
+    @Test func mutuallyExclusiveExpectationsRejected() throws {
+        func firstUsageMessage(_ arguments: [String]) throws -> String {
+            do {
+                _ = try ArgumentParser.parse(["--wiki", "test"] + arguments, env: { _ in nil })
+                throw ArgumentParser.Failure.usage("expected a usage failure")
+            } catch let failure as ArgumentParser.Failure {
+                return failure.description
+            }
+        }
+        #expect(try firstUsageMessage(
+            ["page", "add", "--title", "Test", "--body-file", "-",
+             "--create-only", "--expect-head", "01ABC123"]
+        ).contains("mutually exclusive"))
+        #expect(try firstUsageMessage(
+            ["page", "add", "--title", "Test", "--body-file", "-",
+             "--create-only", "--id", "01ABC"]
+        ).contains("cannot be combined with --id"))
+        #expect(try firstUsageMessage(
+            ["page", "add", "--title", "Test", "--body-file", "-",
+             "--create-only", "--workspace", "ws"]
+        ).contains("cannot be combined with --workspace"))
+    }
+
+    /// The parser binds `--create-only` onto the action (the flag survives
+    /// env application, not just the parse).
+    @Test func parserParsesCreateOnly() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "test", "page", "add", "--title", "Test",
+             "--body-file", "-", "--create-only"],
+            env: { _ in nil })
+        guard case .page(.add(_, _, _, let expectHead, let createOnly, _, _, _)) = invocation.command else {
+            Issue.record("expected .page(.add)")
+            return
+        }
+        #expect(createOnly == true)
+        #expect(expectHead == nil)
     }
 }

@@ -439,7 +439,7 @@ import SQLite3
         raw = nil
 
         let migrated = try GRDBWikiStore(databaseURL: url)
-        #expect(migrated.pragmaValue("user_version") == "55")
+        #expect(migrated.pragmaValue("user_version") == "56")
         let existing = try migrated.getChat(id: ChatID(rawValue: "existing-chat"))
         #expect(existing.configuredThinkingOptionID == nil)
         #expect(existing.effectiveThinkingOptionID == nil)

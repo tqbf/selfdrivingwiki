@@ -295,8 +295,10 @@ public final class AgentLauncher {
 
     /// Constructs the per-run quota fallback coordinator. Production retains
     /// durable App Group quota state; tests inject a fixture-local state file
-    /// so an integration run never reads or writes developer state.
-    @ObservationIgnored var makeQuotaFallbackCoordinator: () -> QuotaFallbackCoordinator = {
+    /// so an integration run never reads or writes developer state. The live
+    /// semantic evaluation harness injects a disposable state file under its
+    /// own output directory for the same reason.
+    @ObservationIgnored public var makeQuotaFallbackCoordinator: () -> QuotaFallbackCoordinator = {
         QuotaFallbackCoordinator()
     }
 
@@ -307,6 +309,21 @@ public final class AgentLauncher {
     /// time; tests/the daemon default to nil (no deny rule emitted).
     @ObservationIgnored public var pdf2mdScriptPathResolver: () -> String? = { nil }
 
+    /// Wiki strategies phase 4 — title resolver for pre-launch plan
+    /// validation (`ACPIngestPlanValidation`). Resolves a SANITIZED page
+    /// title to an existing page id using the store's `resolveTitleToID`
+    /// semantics. The launcher NEVER derives a wiki database path itself:
+    /// the host that owns a store injects the closure — the shared
+    /// production LauncherFactory wires the wiki's own store (app and
+    /// daemon), and the daemon provider re-wires its store as a backstop;
+    /// the pipeline tests inject an in-memory store and the live evaluation
+    /// harness its disposable database. The default `nil` (an uninjected
+    /// test harness) limits duplicate detection to new-title ASCII folding
+    /// inside the validator. An INJECTED resolver that throws is an
+    /// actionable plan-validation failure, never a silent degrade;
+    /// staged-source reference checks always run.
+    @ObservationIgnored public var planValidationResolveTitle: ((String) throws -> PageID?)?
+
     /// The user-environment `PATH` for run contexts, resolved through the
     /// account's configured login shell (shell-NEUTRAL — `$SHELL`/passwd
     /// record, never a hard-coded zsh). Falls back to the inherited process
@@ -316,6 +333,40 @@ public final class AgentLauncher {
         await UserEnvironmentPath.userPATH()
             ?? ProcessInfo.processInfo.environment["PATH"]
             ?? "/usr/bin:/bin"
+    }
+
+    /// The EXPLICIT wiki database this launcher's runs read and write, when a
+    /// run targets a database outside the standard App Group container layout.
+    /// nil (every production launch today) keeps the default: the container
+    /// layout `<container>/<wikiID>.sqlite`.
+    ///
+    /// The live semantic evaluation harness sets this to a disposable fixture
+    /// database under project `tmp/` (see
+    /// `plans/wiki-strategy-evaluation-harness.md`). EVERY place the launcher
+    /// derives a wiki database URL from a wiki id MUST go through
+    /// ``wikiDatabaseURL(for:container:)`` — run contexts (trusted prompts +
+    /// child env), the seatbelt write fence, and in-plan title validation —
+    /// so all of them target the same database.
+    ///
+    /// Safety: an explicit value must point OUTSIDE the App Group container
+    /// (mirroring `WikiResolver`'s boundary guard); the eval harness
+    /// constructs it under a disposable `tmp/` directory by construction.
+    @ObservationIgnored public var wikiDatabaseOverride: URL?
+
+    /// The single wiki-database derivation for this launcher: the explicit
+    /// override when set, else the container layout
+    /// `<containerDirectory>/<wikiID>.sqlite` (mirrors
+    /// `WikiResolver.databaseURL(for:)`). MainActor like every caller (run
+    /// context, seatbelt fence, in-plan title validation).
+    public func wikiDatabaseURL(
+        for wikiID: WikiID,
+        container containerDirectory: URL
+    ) -> URL {
+        if let wikiDatabaseOverride {
+            return wikiDatabaseOverride
+        }
+        return containerDirectory
+            .appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
     }
 
     /// Build the run context for one spawn: resolves the user environment
@@ -336,7 +387,8 @@ public final class AgentLauncher {
             wikictlDirectory: wikictlDirectory,
             userPATH: userPath,
             stateFilePath: operation?.stateFilePath,
-            stagedSourcePaths: operation?.stagedSourcePaths ?? [])
+            stagedSourcePaths: operation?.stagedSourcePaths ?? [],
+            databasePath: wikiDatabaseOverride)
         context.createTempDirectories()
         return context
     }
@@ -2178,6 +2230,29 @@ public final class AgentLauncher {
         }
         DebugLog.agent("runACPIngest: plan loaded — \(plan.pages.count) pages across \(plan.distinctSourceFiles.count) source file(s)")
 
+        // Wiki strategies phase 4: validate the planner's assignments BEFORE
+        // any executor session launches. Unknown source references (primary
+        // or supporting) and duplicate resolved page targets fail the run
+        // with an actionable message — never a silently chosen winner, never
+        // two executors told to write the same page. Duplicate detection
+        // resolves titles through the injected `planValidationResolveTitle`
+        // seam (production wires the wiki's store in the LauncherFactory); a
+        // resolver FAILURE is itself an actionable problem inside
+        // `ACPIngestPlanValidation`, never a silent degrade.
+        let validationProblems = ACPIngestPlanValidation.problems(
+            in: plan,
+            stagedSourceFiles: sourceFileNames,
+            resolveTitleToPageID: planValidationResolveTitle ?? { _ in nil })
+        guard validationProblems.isEmpty else {
+            let details = validationProblems.map(\.description).joined(separator: "\n")
+            DebugLog.agent("runACPIngest: plan rejected by validation — launching no executors:\n\(details)")
+            events.append(.result(
+                isError: true,
+                text: "Ingest plan rejected before executor launch — no pages were written. Fix the plan:\n\(details)"))
+            finish(status: -1)
+            return
+        }
+
         // --- Phase 2: Executors (one per source file) ---
         // All executors share the SAME `.executor` stage model id — no per-file
         // differentiation. The per-session `applyModelIfNeeded` call after each
@@ -3429,6 +3504,14 @@ public final class AgentLauncher {
         firstMessage: String,
         firstMessageDisplay: String? = nil,
         stateMarkdown: String,
+        /// Per-turn strategy authority for a RESUMED provider session (nil on
+        /// fresh sessions, whose authority is the staged `WIKI_STATE.md`). The
+        /// resumed conversation may retain an earlier strategy revision —
+        /// including a custom strategy since reset to Default — so the host
+        /// passes the CURRENT committed revision's rendered document here and
+        /// only an explicit document supersedes the stale one. Nil keeps the
+        /// composed message byte-identical to the pre-strategy behavior.
+        turnStrategyMarkdown: String? = nil,
         wikiID: WikiID,
         wikiRoot: String,
         systemPrompt: String,
@@ -3821,13 +3904,35 @@ public final class AgentLauncher {
                 // authoritative paths. Prepend a RUN ENVIRONMENT refresh so the
                 // model's scratch/state/tool paths match THIS run's context and
                 // sandbox; the displayed text stays the raw user message.
+                //
+                // Per-turn strategy authority (`turnStrategyMarkdown`) rides
+                // here too: the resumed session's context can carry an earlier
+                // strategy revision, and only an explicit current-revision
+                // document — custom or Default — supersedes it.
+                let turnStrategySection: String
+                if let turnStrategyMarkdown {
+                    let document = turnStrategyMarkdown
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    turnStrategySection = """
+
+                    \(document)
+
+                    (The strategy above is the CURRENT committed revision for this turn. \
+                    It supersedes any strategy text from earlier sessions in this conversation.)
+
+                    """
+                } else {
+                    // Byte-identical to the pre-strategy composition: the
+                    // original had exactly one blank line before the user
+                    // message header.
+                    turnStrategySection = "\n"
+                }
                 composedFirstMessage = """
                 \(runContext.promptContextSection())
 
                 (This RUN ENVIRONMENT block is CURRENT and supersedes any paths \
                 from earlier sessions in this conversation.)
-
-                # USER MESSAGE
+                \(turnStrategySection)# USER MESSAGE
                 \(firstMessageDisplay ?? firstMessage)
                 """
             } else {
@@ -4048,8 +4153,11 @@ public final class AgentLauncher {
     /// Terminate EVERYTHING — extraction + agent process. Convenience for the
     /// few surfaces that don't distinguish (e.g. app termination cleanup).
     /// Extraction is now managed by `QueueActivityTracker` + `QueueEngine` —
-    /// `stop()` only needs to stop the agent.
-    func stop() {
+    /// `stop()` only needs to stop the agent. Public so the live semantic
+    /// evaluation harness can force-stop the agent when a run's time budget
+    /// expires and cooperative cancellation alone would leave the drain
+    /// waiting on an unresponsive subprocess.
+    public func stop() {
         stopAgent()
     }
 
@@ -4721,12 +4829,19 @@ public final class AgentLauncher {
         // and debugging; the current whitelist profile does not reference it.
         let homePath = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 
-        // The active wiki's SQLite DB path mirrors `WikiResolver.databaseURL(for:)`:
-        // `<container>/<ulid>.sqlite`. `dir` is the App Group container the DB lives in.
+        // The active wiki's SQLite DB path — the launcher's single derivation
+        // (`wikiDatabaseURL`): the explicit override when set (isolated
+        // fixture database), else `<container>/<ulid>.sqlite`.
         // Symlink resolution is performed inside `SandboxProfile.invocation` (the
         // tested core layer) so the canonical path reaches the seatbelt profile.
-        let dbPath = dir.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false).path
-        let queueDBPath = dir.appendingPathComponent("queue.sqlite", isDirectory: false).path
+        let dbPath = wikiDatabaseURL(for: wikiID, container: dir).path
+        // The central queue database is a container artifact; an isolated
+        // fixture run has no queue store, so its fence targets the (absent,
+        // harmless) sibling file next to the fixture database.
+        let queueDBPath = wikiDatabaseOverride.map {
+            $0.deletingLastPathComponent()
+                .appendingPathComponent("queue.sqlite", isDirectory: false).path
+        } ?? dir.appendingPathComponent("queue.sqlite", isDirectory: false).path
 
         // Fail-open if any required path is empty/relative (misconfiguration).
         guard !scratch.path.isEmpty, scratch.path.hasPrefix("/"),

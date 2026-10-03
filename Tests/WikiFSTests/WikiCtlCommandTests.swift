@@ -125,7 +125,7 @@ struct WikiCtlCommandTests {
             ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-",
              "--author", "chat:01ABC"],
             env: noEnv)
-        guard case .page(.add(_, _, _, _, _, let author, _)) = inv.command else {
+        guard case .page(.add(_, _, _, _, _, _, let author, _)) = inv.command else {
             Issue.record("expected .page(.add)")
             return
         }
@@ -140,7 +140,7 @@ struct WikiCtlCommandTests {
             env: { _ in nil })
         let applied = ArgumentParser.applyEnv(
             inv.command, env: ["WIKI_AUTHOR": "chat:01DEF"])
-        guard case .page(.add(_, _, _, _, _, let author, _)) = applied else {
+        guard case .page(.add(_, _, _, _, _, _, let author, _)) = applied else {
             Issue.record("expected .page(.add)")
             return
         }
@@ -154,7 +154,7 @@ struct WikiCtlCommandTests {
             env: { _ in nil })
         let applied = ArgumentParser.applyEnv(
             inv.command, env: ["WIKI_AUTHOR": "chat:01DEF"])
-        guard case .page(.add(_, _, _, _, _, let author, _)) = applied else {
+        guard case .page(.add(_, _, _, _, _, _, let author, _)) = applied else {
             Issue.record("expected .page(.add)")
             return
         }
@@ -166,7 +166,7 @@ struct WikiCtlCommandTests {
             ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-"],
             env: { _ in nil })
         let applied = ArgumentParser.applyEnv(inv.command, env: [:])
-        guard case .page(.add(_, _, _, _, _, let author, _)) = applied else {
+        guard case .page(.add(_, _, _, _, _, _, let author, _)) = applied else {
             Issue.record("expected .page(.add)")
             return
         }

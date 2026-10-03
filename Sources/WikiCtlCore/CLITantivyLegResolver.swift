@@ -139,30 +139,35 @@ public struct WikiCtlRunner {
     public func runOrdinary(
         command: ArgumentParser.Command,
         wikiSelector: String,
+        databasePath: String = "",
         environment: [String: String]
     ) async throws -> Output {
         let resolvedCommand = ArgumentParser.applyEnv(command, env: environment)
         let resolver = try resolveContainer()
-        guard let descriptor = resolver.descriptor(forSelector: wikiSelector) else {
-            throw PageCommand.Failure.message(
-                "no wiki matching \(wikiSelector.debugDescription) in the registry")
-        }
+        // Raw selector strings become a typed WikiSelection HERE — the single
+        // boundary where an explicit database path is validated (absolute,
+        // .sqlite, outside the App Group container) and mixed selector forms
+        // are rejected.
+        let selection = try WikiResolver.selection(
+            wikiSelector: wikiSelector.isEmpty ? nil : wikiSelector,
+            databasePath: databasePath.isEmpty ? nil : databasePath)
+        let target = try resolver.resolve(selection: selection)
         let result = try await storeProfile.withStore(request: CLIStoreProfile.Request(
-            databaseURL: resolver.databaseURL(for: descriptor),
-            wikiID: descriptor.id,
-            containerDirectory: resolver.containerDirectory
+            databaseURL: target.databaseURL,
+            wikiID: target.wikiID,
+            containerDirectory: target.containerDirectory
         )) { store in
             try await execute(
                 resolvedCommand,
                 store,
-                descriptor.id,
-                resolver.containerDirectory)
+                target.wikiID,
+                target.containerDirectory)
         }
 
         return Self.output(
             for: result,
             command: resolvedCommand,
-            changedWikiID: result.didCommit ? descriptor.id : nil)
+            changedWikiID: result.didCommit ? target.wikiID : nil)
     }
 
     static func output(

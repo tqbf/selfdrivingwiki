@@ -18,6 +18,7 @@ public enum ChangeTokenFold: Sendable {
     case bookmarks(count: Int64)
     case chat(count: Int64, messageCount: Int64)
     case okfMetadata(revisionSum: Int64)
+    case strategy(revision: Int64)
 }
 
 /// A structured view over the whole-wiki change token — the File Provider sync
@@ -67,15 +68,18 @@ public struct ChangeToken: Sendable, Equatable {
     public var bookmarks: Int64 = 0
     public var chat = Chat()
     public var okfMetadataRevisionSum: Int64 = 0
+    public var strategyRevision: Int64 = 0
 
     /// Colon-joined form reproducing the historical positional token, for the
-    /// File Provider sync anchor. Append-only (never reorder fields).
+    /// File Provider sync anchor. Append-only (never reorder fields) — the
+    /// strategy fold (v56) is field 16, appended after the OKF sum.
     public var rawString: String {
         "\(pages.count):\(pages.versionSum):"
         + "\(sourceTable.count):\(sourceTable.versionSum):"
         + "\(systemPrompt):\(log):\(wikiIndex):\(sourceMarkdownVersions):"
         + "\(sourceGraph.versionCount):\(sourceGraph.refsGenerationSum):\(sourceGraph.activitiesCount):"
         + "\(bookmarks):\(chat.count):\(chat.messageCount):\(okfMetadataRevisionSum)"
+        + ":\(strategyRevision)"
     }
 
     /// Applies one fold's values into the matching named field.
@@ -103,6 +107,8 @@ public struct ChangeToken: Sendable, Equatable {
             chat = Chat(count: count, messageCount: messageCount)
         case let .okfMetadata(revisionSum):
             okfMetadataRevisionSum = revisionSum
+        case let .strategy(revision):
+            strategyRevision = revision
         }
     }
 }

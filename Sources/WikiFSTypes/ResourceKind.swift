@@ -13,7 +13,7 @@ import Foundation
 /// (`ParsedLink.LinkType.resourceKind`) and the store/event-bus can reference it
 /// without a circular dependency (module restructuring Phase 1, #532).
 public enum ResourceKind: String, Codable, Sendable, CaseIterable {
-    case page, source, systemPrompt, wikiIndex, log, bookmark, chat
+    case page, source, systemPrompt, wikiIndex, log, bookmark, chat, strategy
 
     /// The SF Symbol name used for this resource kind across every UI surface:
     /// sidebar sections, detail-view headers, the omnibox icon, bookmark row
@@ -28,6 +28,7 @@ public enum ResourceKind: String, Codable, Sendable, CaseIterable {
         case .systemPrompt: "doc.text"
         case .wikiIndex:   "book.closed"
         case .log:         "clock.arrow.circlepath"
+        case .strategy:    "doc.plaintext"
         }
     }
 
@@ -35,13 +36,13 @@ public enum ResourceKind: String, Codable, Sendable, CaseIterable {
     /// `"page:"`, `"source:"`, `"chat:"`, `"bookmark:"`.
     ///
     /// Returns `nil` for non-linkable kinds (`systemPrompt`, `wikiIndex`,
-    /// `log`) that have no wiki-link syntax. This is the single source of
-    /// truth for link-kind prefix strings — inline literals should never be
+    /// `log`, `strategy`) that have no wiki-link syntax. This is the single source
+    /// of truth for link-kind prefix strings — inline literals should never be
     /// re-derived at call sites (#489).
     public var linkPrefix: String? {
         switch self {
         case .page, .source, .chat, .bookmark: return "\(rawValue):"
-        case .systemPrompt, .wikiIndex, .log: return nil
+        case .systemPrompt, .wikiIndex, .log, .strategy: return nil
         }
     }
 }

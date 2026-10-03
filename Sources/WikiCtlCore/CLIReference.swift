@@ -243,19 +243,21 @@ public enum CLIReference {
                     ]),
                 CLILeaf(
                     "add",
-                    summary: "create-or-update a page; --expect-head enables CAS (exit 3 on conflict)",
-                    commandLine: "add --title X [--id Y] --body-file <path|-> [--expect-head <ver>] [--workspace W] [--author <who>] [--source <source-id[:role]> …]",
+                    summary: "create-or-update a page; --expect-head enables CAS, --create-only requires absence (exit 3 on conflict)",
+                    commandLine: "add --title X [--id Y] --body-file <path|-> [--expect-head <ver> | --create-only] [--workspace W] [--author <who>] [--source <source-id[:role]> …]",
                     options: [
                         CLIOption("--title <title>", required: true, summary: "page title; the create-or-update key"),
                         CLIOption("--id <page-id>", summary: "target an existing page by id instead of by title"),
                         CLIOption("--body-file <path|->", required: true, summary: "markdown body; `-` reads stdin — use a pipe or heredoc"),
                         CLIOption("--expect-head <ver>", summary: "CAS: fail with exit 3 if HEAD moved since your read"),
+                        CLIOption("--create-only", summary: "create-only: fail with exit 3 if the title already exists (closes the create-vs-create race); mutually exclusive with --expect-head, --id, and --workspace"),
                         CLIOption("--workspace <name>", summary: "write into workspace W instead of main"),
                         CLIOption("--author <who>", summary: "stamp created_by/last_edited_by (default: WIKI_AUTHOR env)"),
                         CLIOption("--source <source-id[:role]>", repeated: true, summary: "provenance stamp; repeatable, role defaults to primary"),
                     ],
                     details: [
                         "CAS discipline: read head_version_id first (`page get --json`, or the stderr line in text mode), pass it as --expect-head; on exit 3 re-read, reapply, and retry once.",
+                        "Create-only discipline: use --create-only when your page read found NO page under the title. Exit 3 means another writer created it since — re-read that page, reconcile against its head, and write with --expect-head. Never retry --create-only blindly.",
                         "On success the write echoes the new head_version_id on stderr, so the next CAS write needs no extra read.",
                         "--author accepts `chat:<id>`, `agent:<kind>`, or a plain name; the WIKI_AUTHOR env fills it when omitted.",
                     ],
@@ -263,6 +265,7 @@ public enum CLIReference {
                         "wikictl page add --title \"Meeting Notes\" --body-file notes.md",
                         "cat draft.md | wikictl page add --title Draft --body-file -",
                         "wikictl page add --title Draft --body-file - --expect-head 01ABC --author chat:01XYZ",
+                        "wikictl page add --title Fresh --body-file - --create-only --author agent:executor",
                     ]),
                 CLILeaf(
                     "delete", summary: "delete a page (removes bookmarks targeting it)",

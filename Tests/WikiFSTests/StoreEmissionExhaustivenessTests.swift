@@ -107,6 +107,23 @@ struct StoreEmissionExhaustivenessTests {
         #expect(source[start..<end].contains("mutate("))
     }
 
+    /// The strategy CAS save routes through `mutate(event:_:)`: a changed
+    /// save emits exactly one `.strategy` event post-commit, an unchanged
+    /// save's conditional `nil` emits nothing, and a CAS/validation throw
+    /// inside the savepoint rolls back without emitting.
+    @Test func wikiStrategySavePublicMutatorRoutesThroughMutate() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Store/GRDBWikiStore.swift"),
+            encoding: .utf8)
+        let signature = "public func saveWikiStrategy("
+        let start = try #require(source.range(of: signature)?.lowerBound)
+        let tail = source[start...]
+        let end = tail.dropFirst().range(of: "\n    public func ")?.lowerBound ?? source.endIndex
+        #expect(source[start..<end].contains("mutate("))
+    }
+
     /// The first-send title write MUST route through `mutate(event:_:)`: the
     /// conditional `false` result emits nothing, `true` emits exactly one
     /// `.chat .updated`, and a missing chat throws inside the savepoint so the

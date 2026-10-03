@@ -182,7 +182,7 @@ public actor SearchRuntime: SearchServices {
         case .page: .page
         case .source: .source
         case .chat: .chat
-        case .bookmark, .systemPrompt, .wikiIndex, .log: nil
+        case .bookmark, .systemPrompt, .wikiIndex, .log, .strategy: nil
         }
     }
 }

@@ -100,7 +100,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
         let launcher = try await makeLauncher(wikiID: wikiID)
 
-        let stateMarkdown = daemonStateMarkdown(from: store)
+        let stateMarkdown = try daemonStateMarkdown(from: store)
 
         var sources: [OperationRequest.StagedSource] = []
         var stagingOutcomes: [(id: SourceID, outcome: QueueIngestionReporting.StagingOutcome)] = []
@@ -238,7 +238,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
         DebugLog.ingest("DaemonQueueIngestionProvider.runLint: begin wikiID=\(wikiID.rawValue)")
 
-        let stateMarkdown = daemonStateMarkdown(from: store)
+        let stateMarkdown = try daemonStateMarkdown(from: store)
         let selectedProvider = resolveSelectedProvider()
         let providerLabel = selectedProvider.label
         onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
@@ -295,7 +295,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             requested: pageIDs))
 
         let combinedTitle = pages.map(\.title).joined(separator: ", ")
-        let stateMarkdown = daemonStateMarkdown(from: store)
+        let stateMarkdown = try daemonStateMarkdown(from: store)
         let selectedProvider = resolveSelectedProvider()
         let providerLabel = selectedProvider.label
         onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
@@ -328,7 +328,23 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
     private func makeLauncher(wikiID: WikiID) async throws -> AgentLauncher {
         let factory = try await launcherFactoryResolver(wikiID)
-        return await MainActor.run { factory(wikiID: wikiID).launcher }
+        return await MainActor.run {
+            let launcher = factory(wikiID: wikiID).launcher
+            // Wiki strategies phase 4: the shared production LauncherFactory
+            // already wires the store-backed plan-validation resolver; this
+            // backstop guarantees the daemon ingest path resolves titles
+            // through the daemon's own store for THIS wiki even when a test
+            // substitutes the factory. Idempotent with the factory wiring
+            // (both use `resolveTitleToID`). An unresolvable store leaves the
+            // seam as the factory set it — validation never silently selects
+            // a winner.
+            if let store = storeResolver(wikiID) {
+                launcher.planValidationResolveTitle = { title in
+                    try store.resolveTitleToID(title)
+                }
+            }
+            return launcher
+        }
     }
 
     private struct LauncherResults {
@@ -392,8 +408,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         await launcher.awaitProviderRelease()
     }
 
-    private func daemonStateMarkdown(from store: GRDBWikiStore) -> String {
-        DaemonWikiState.stateMarkdown(from: store)
+    private func daemonStateMarkdown(from store: GRDBWikiStore) throws -> String {
+        try DaemonWikiState.stateMarkdown(from: store)
     }
 
     private func ingestSourcePath(for source: SourceSummary) -> String {

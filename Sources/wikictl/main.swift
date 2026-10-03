@@ -151,6 +151,7 @@ func run() async -> Int32 {
         let output = try await makeRunner().runOrdinary(
             command: invocation.command,
             wikiSelector: invocation.wikiSelector,
+            databasePath: invocation.databasePath,
             environment: ProcessInfo.processInfo.environment)
         write(output)
         return 0
@@ -166,6 +167,37 @@ func run() async -> Int32 {
         expected head \(conflict.expectedVersionID), \
         but actual head is \(actual). \
         Re-read the page, reapply your edit, and retry once.
+
+        """
+        FileHandle.standardError.write(Data(message.utf8))
+        return 3
+    } catch let conflict as PageCreateConflictError {
+        // Create-only conflict (cumulative ingestion, phase 4 §4): the caller's
+        // read found no page under the title, but one exists now. Same exit
+        // code 3 as the CAS conflict — the agent re-reads the page, reconciles
+        // against its head, and writes with --expect-head. Nothing was written.
+        let actual = conflict.actualVersionID?.rawValue ?? "(none)"
+        let message = """
+        wikictl: create-only conflict on page \(conflict.pageID.rawValue) — \
+        --create-only requires the title to be absent, \
+        but a page now exists under \(conflict.title) (head \(actual)). \
+        Read that page, reconcile against its head, and write with --expect-head. \
+        Nothing was written.
+
+        """
+        FileHandle.standardError.write(Data(message.utf8))
+        return 3
+    } catch let conflict as PageExpectedTargetMissingError {
+        // Expected-head write whose target no longer exists (deleted or
+        // renamed away since the caller's read) — same exit code 3 family:
+        // re-read, reconcile, write again. Nothing was written, and no page
+        // was silently created.
+        let target = conflict.pageID?.rawValue ?? "title \(conflict.title)"
+        let message = """
+        wikictl: expected-head conflict — the page you pinned (\(target)) \
+        does not exist anymore (deleted or renamed since your read). \
+        Re-read (`page list` / `page get`), reconcile, and write again. \
+        Nothing was written.
 
         """
         FileHandle.standardError.write(Data(message.utf8))

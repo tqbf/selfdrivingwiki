@@ -11,19 +11,19 @@ import Foundation
 /// agent the current state up front lets it skip rediscovery and go straight to
 /// the task.
 ///
-/// **The static/dynamic split (do NOT duplicate).** STATIC structure & conventions
-/// — the layout map, page-shape conventions, the `wikictl` reference, and the
-/// Ingest/Query/Lint workflows — live in the maintainer schema
-/// (`SystemPrompt.defaultBody`, delivered every run via `--append-system-prompt`),
-/// the single user-evolvable source of truth for HOW the wiki is shaped. This
-/// snapshot carries only DYNAMIC state — what is actually in THIS wiki right now —
-/// so it can never drift from the schema (it's derived from the DB at click time).
+/// Compiled application rules define safety and write contracts in
+/// `SystemPrompt.defaultBody`. This snapshot captures wiki-specific editorial
+/// instructions and the dynamic inventory when the execution request is built.
+/// A queued operation captures at execution, not enqueue time. An active run
+/// keeps its captured strategy even when the user saves a newer revision.
 ///
 /// PURE value type: it carries the gathered facts and knows how to `render()`
 /// itself into the prompt's `CURRENT WIKI STATE` block. Gathering it from the
 /// store lives in the app/model layer (`WikiStoreModel.currentStateSnapshot()`);
 /// keeping the rendering here keeps it unit-testable without a live store.
 public struct WikiStateSnapshot: Equatable, Sendable {
+  /// The committed editorial strategy captured for this execution request.
+  public let strategy: WikiStrategy?
   /// Existing page titles, most-recently-updated first. Capped to
   /// `maxListedTitles` for large wikis (see `truncatedPageCount`).
   public let pageTitles: [String]
@@ -54,8 +54,10 @@ public struct WikiStateSnapshot: Equatable, Sendable {
     truncatedPageCount: Int,
     indexBody: String,
     recentLog: [String],
-    bookmarkNodes: [BookmarkNode] = []
+    bookmarkNodes: [BookmarkNode] = [],
+    strategy: WikiStrategy? = nil
   ) {
+    self.strategy = strategy
     self.pageTitles = pageTitles
     self.truncatedPageCount = truncatedPageCount
     self.indexBody = indexBody
@@ -73,7 +75,8 @@ public struct WikiStateSnapshot: Equatable, Sendable {
     allTitles: [String],
     indexBody: String,
     logLines: [String],
-    bookmarkNodes: [BookmarkNode] = []
+    bookmarkNodes: [BookmarkNode] = [],
+    strategy: WikiStrategy? = nil
   ) -> WikiStateSnapshot {
     let listed = Array(allTitles.prefix(maxListedTitles))
     let dropped = max(0, allTitles.count - listed.count)
@@ -82,7 +85,8 @@ public struct WikiStateSnapshot: Equatable, Sendable {
       truncatedPageCount: dropped,
       indexBody: indexBody,
       recentLog: logLines,
-      bookmarkNodes: bookmarkNodes
+      bookmarkNodes: bookmarkNodes,
+      strategy: strategy
     )
   }
 
@@ -100,6 +104,12 @@ public struct WikiStateSnapshot: Equatable, Sendable {
       "Live snapshot of this wiki, authoritative as of run start. This is staged for "
         + "you so you do NOT need to run `wikictl page list` or re-read "
         + "`index.md`/`log.md` to learn the structure.")
+
+    // Default preserves the existing snapshot bytes.
+    if let strategy {
+      lines.append("")
+      lines.append(WikiStrategyRenderer.render(strategy).trimmingCharacters(in: .newlines))
+    }
 
     // Existing pages.
     lines.append("")
@@ -195,5 +205,22 @@ public struct WikiStateSnapshot: Equatable, Sendable {
     }
     renderChildren(of: nil, depth: 0)
     return lines.joined(separator: "\n")
+  }
+}
+
+/// The committed strategy could not be read while gathering a state snapshot.
+/// Never degraded to the Default strategy: authoritative editorial
+/// instructions must not be invented from a store failure. Hosts surface this
+/// as a visible failure and build no execution request (the same contract the
+/// daemon chat's per-turn strategy read enforces via
+/// `LauncherChatAgentRuntime.readTurnStrategy`).
+public enum WikiStateSnapshotError: Error, LocalizedError {
+  case strategyReadFailed(String)
+
+  public var errorDescription: String? {
+    switch self {
+    case .strategyReadFailed(let message):
+      return "Could not read the wiki's strategy for this run: \(message)"
+    }
   }
 }

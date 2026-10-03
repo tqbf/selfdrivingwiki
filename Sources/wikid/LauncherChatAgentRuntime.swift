@@ -13,6 +13,11 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         case unknownHandle
         case duplicateSubscriber
         case preflight(String)
+        /// The wiki's committed strategy could not be read for this turn. Never
+        /// degraded to Default: authoritative instructions must not be invented
+        /// from a store failure. `submitTurn` throws this as a visible turn
+        /// failure.
+        case strategyReadFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -22,6 +27,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 return "Duplicate chat runtime subscriber."
             case .preflight(let message):
                 return message
+            case .strategyReadFailed(let message):
+                return "Could not read the wiki's strategy for this turn: \(message)"
             }
         }
     }
@@ -203,7 +210,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             let request = state.request
             let history = try store.chatMessages(chatID: chatID)
             let historySeed = history.map(\.event)
-            let stateMarkdown = DaemonWikiState.stateMarkdown(from: store)
+            let stateMarkdown = try DaemonWikiState.stateMarkdown(from: store)
             let systemPrompt = request.systemPrompt
             let priorSessionID = request.existingProviderSessionID
             let providerID = request.providerID
@@ -230,10 +237,28 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             state.providerPreparation = nil
             runtimeState = state
 
+            // A resumed provider session may retain an earlier strategy
+            // revision in its context — including a custom strategy since
+            // reset to Default — so the first turn carries the CURRENT
+            // committed revision as explicit per-request authority. A fresh
+            // session's authority is the staged `WIKI_STATE.md` (nil here). A
+            // failed resume falls back to the fresh-session compose, which
+            // ignores the parameter and re-establishes authority from the
+            // staged state file. Read failures throw (visible turn failure),
+            // never degrade to an authoritative Default.
+            let turnStrategyMarkdown: String?
+            if priorSessionID != nil {
+                turnStrategyMarkdown = Self.turnStrategyMarkdown(
+                    try Self.readTurnStrategy(from: store))
+            } else {
+                turnStrategyMarkdown = nil
+            }
+
             await state.launcher.startInteractiveQuery(
                 firstMessage: firstMessage,
                 firstMessageDisplay: submission.userText,
                 stateMarkdown: stateMarkdown,
+                turnStrategyMarkdown: turnStrategyMarkdown,
                 wikiID: wikiID,
                 wikiRoot: "",
                 systemPrompt: systemPrompt,
@@ -319,10 +344,68 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             return
         }
 
+        // Warm follow-up: the session already carries the staged `WIKI_STATE.md`
+        // from its first turn, so this turn re-sends no state file. The one thing
+        // a warm turn DOES carry is explicit strategy authority — the latest
+        // committed revision at submission, custom OR an explicit Default.
+        // Silence is not neutral here: after a reset, the session's context
+        // still holds the previous custom strategy, and only an explicit
+        // Default document supersedes it. The composed prompt is immutable for
+        // the turn: a strategy saved mid-turn cannot change this turn's
+        // instructions; the NEXT turn captures the newer revision.
+        // `displayText` keeps the transcript on the user's raw message — the
+        // same preamble/display split the continue path uses.
+        //
+        // A strategy READ failure throws rather than degrading to Default:
+        // masking a store failure as authoritative Default instructions would
+        // silently strip editorial guidance. `submitTurn` already throws, so
+        // the failure surfaces as a visible turn failure.
+        let warmStrategy = try Self.readTurnStrategy(from: store)
+        let warmPrompt = Self.turnPrompt(
+            strategyMarkdown: Self.turnStrategyMarkdown(warmStrategy),
+            userText: submission.userText)
         await MainActor.run {
-            state.launcher.sendInteractiveMessage(submission.userText)
+            state.launcher.sendInteractiveMessage(
+                warmPrompt,
+                displayText: submission.userText)
         }
         runtimeState = state
+    }
+
+    /// Read the strategy this turn captures: the latest committed revision at
+    /// submission. `nil` is the **Default strategy** — a real read result,
+    /// never a failure fallback. A read failure throws
+    /// `RuntimeError.strategyReadFailed`: this boundary must not mask a store
+    /// failure as authoritative Default instructions.
+    static func readTurnStrategy(from store: GRDBWikiStore) throws -> WikiStrategy? {
+        do {
+            return try store.getWikiStrategy()
+        } catch {
+            throw RuntimeError.strategyReadFailed("\(error)")
+        }
+    }
+
+    /// One turn's explicit strategy authority: the custom strategy document,
+    /// or the Default document when the wiki is at Default. Every warm or
+    /// resumed turn carries this even under Default — the session's context
+    /// may retain an earlier custom strategy that only an explicit Default
+    /// supersedes. Page inventory is never included.
+    static func turnStrategyMarkdown(_ strategy: WikiStrategy?) -> String {
+        WikiStrategyRenderer.render(strategy)
+    }
+
+    /// Compose a turn prompt: the strategy authority above the user's
+    /// message, using the same `--- new message ---` split as
+    /// `AgentOperationRunner.continuationPreamble`.
+    static func turnPrompt(strategyMarkdown: String, userText: String) -> String {
+        """
+        The wiki's committed editorial strategy, captured for this turn:
+
+        \(strategyMarkdown.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        --- new message ---
+        \(userText)
+        """
     }
 
     func cancelTurn(_ turnID: ChatTurnID?, in handle: ChatRuntimeHandle) async throws {

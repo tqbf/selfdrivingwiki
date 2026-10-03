@@ -1384,6 +1384,11 @@ public final class WikiStoreModel {
         tabs[index].pendingDraftTitle = nil
         tabs[index].pendingDraftBody = nil
         tabs[index].pendingChatDraft = nil
+        // A closing strategy tab takes its model-held draft with it — the
+        // user just confirmed the discard (pendingCloseTabID pattern).
+        if case .strategy = tabs[index].selection {
+            discardStrategyDraftForClosedTab()
+        }
         pendingCloseTabID = nil
         applyCloseTab(id: id, at: index)
     }
@@ -1516,7 +1521,7 @@ public final class WikiStoreModel {
         markdownWarningTask = nil
         var restoredFromPendingDraft = false
         switch newValue {
-        case .newChat, .bookmark, .chat:
+        case .newChat, .bookmark, .chat, .strategy:
             draftTitle = ""
             draftBody = ""
             loadedPage = nil
@@ -3072,10 +3077,20 @@ public final class WikiStoreModel {
     /// orientation turns (`page list`, re-reading `index.md`/`log.md`, pulling a
     /// sample page) it would otherwise spend rediscovering what the app already
     /// knows. Read directly from the store (not the cached `summaries`) so it can't
-    /// lag a concurrent external write. All reads are `try?`-guarded so a transient
-    /// read failure degrades to an emptier-but-valid snapshot rather than blocking
-    /// the run.
-    public func currentStateSnapshot() -> WikiStateSnapshot {
+    /// lag a concurrent external write. Inventory reads (titles, index, log tail,
+    /// bookmarks) are `try?`-guarded so a transient read failure degrades to an
+    /// emptier-but-valid snapshot rather than blocking the run.
+    ///
+    /// The committed editorial strategy is captured here with the rest of the
+    /// state, at execution-request construction: every snapshot-bearing path
+    /// (ingest, query, lint, page-lint, chat session start) carries it through
+    /// the rendered `WIKI_STATE.md`. `nil` (the Default strategy) captures as
+    /// absence, so a Default wiki renders byte-identically to before strategies
+    /// existed. A strategy READ failure throws
+    /// `WikiStateSnapshotError.strategyReadFailed` instead: callers must fail
+    /// visibly and build no request, never launch a run that silently invented
+    /// the Default instructions.
+    public func currentStateSnapshot() throws -> WikiStateSnapshot {
         let titles = (DebugLog.trying("listPages", operation: { try store.listPages(sortBy: .lastUpdated) }) ?? []).map(\.title)
         let indexBody = DebugLog.trying("getWikiIndex", operation: { try store.getWikiIndex() })?.body ?? WikiIndex.defaultBody
         let logEntries = DebugLog.trying("recentLogEntries", operation: { try store.recentLogEntries(limit: WikiStateSnapshot.maxLogEntries) }) ?? []
@@ -3085,9 +3100,20 @@ public final class WikiStoreModel {
         let logLines = logEntries.map { LogRenderer.line(for: $0) }
         // Include the bookmark tree so the agent can see the user's organization (#239).
         let bookmarks = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }) ?? []
+        // Capture the committed strategy with the rest of the state. Unlike the
+        // inventory reads above, a failure here THROWS: authoritative editorial
+        // instructions cannot be invented from a store error, so a failed read
+        // fails the request instead of degrading to the Default strategy.
+        let strategy: WikiStrategy?
+        do {
+            strategy = try store.getWikiStrategy()
+        } catch {
+            throw WikiStateSnapshotError.strategyReadFailed("\(error)")
+        }
         return WikiStateSnapshot.make(
             allTitles: titles, indexBody: indexBody, logLines: logLines,
-            bookmarkNodes: bookmarks
+            bookmarkNodes: bookmarks,
+            strategy: strategy
         )
     }
 
@@ -4371,9 +4397,269 @@ public final class WikiStoreModel {
             sourceIDs.contains(id)
         case .chat(let id):
             chatIDs.contains(id)
-        case .newChat, .changeLog, .bookmark:
+        case .newChat, .changeLog, .bookmark, .strategy:
             true
         }
+    }
+
+    // MARK: - Wiki strategy editor (wiki strategies plan, phase 3)
+
+    /// The committed editorial strategy as last read from the store. `nil`
+    /// means this wiki uses the Default strategy. This is the editor's
+    /// display + cancel/reload base — never a live store handle.
+    public private(set) var committedStrategy: WikiStrategy?
+    /// The revision the last strategy read captured, **including tombstones**
+    /// (`WikiStore.wikiStrategyRevision()`): `nil` when no strategy row has
+    /// ever been written, otherwise the row's revision whether it holds a
+    /// live strategy or a Default tombstone. Every editor save passes this as
+    /// its compare-and-swap expectation.
+    public private(set) var strategyExpectedRevision: WikiStrategyRevision?
+    /// `true` once the first strategy read completed — distinguishes "Default"
+    /// (loaded, `committedStrategy == nil`) from "not read yet".
+    public private(set) var strategyDidLoad = false
+    /// `true` when the last strategy read failed — the editor shows a
+    /// retryable unavailable state instead of an endless spinner.
+    /// Cleared by the next successful read.
+    public private(set) var strategyLoadFailed = false
+    /// The editor's local draft. Written directly by the view (the §3.5
+    /// draftTitle/draftBody pattern: drafts live on the model so they survive
+    /// view identity changes and are read at save time).
+    public var strategyDraftName: String = ""
+    public var strategyDraftInstructions: String = ""
+    /// `true` while a draft session is open (seeded from the committed
+    /// strategy). The draft persists across navigation within this wiki
+    /// session — moving to another tab and back loses nothing.
+    public private(set) var strategyDraftActive = false
+    /// Non-nil after a save collided with another editor's commit. Carries
+    /// the committed winner so the editor can offer Reload. **The draft is
+    /// preserved** — the conflict never overwrites it. The pair
+    /// (``strategyConflict``, ``isStrategyConflictDismissed``) stays
+    /// "unresolved" until an explicit adoption clears it.
+    public private(set) var strategyConflict: WikiStrategyConflictError?
+    /// `true` while the user dismissed the conflict banner with "Keep Draft".
+    /// The conflict itself is still unresolved: the compare-and-swap
+    /// expectation stays stale, so a re-mounted editor cannot silently
+    /// re-authorize an overwrite by re-reading. A new conflict (or an
+    /// adoption: Reload / Cancel / successful save) resets this.
+    public private(set) var isStrategyConflictDismissed = false
+    /// Non-nil while an in-place wiki switch waits on the draft-protection
+    /// confirmation. The view shows the banner, then calls
+    /// ``applyPendingStrategyWikiSwitch()`` or
+    /// ``cancelPendingStrategyWikiSwitch()`` (the `pendingCloseTabID`
+    /// pattern applied to the session-swap boundary).
+    public private(set) var pendingStrategyWikiSwitch: WikiID?
+
+    /// `true` when the draft differs from the committed strategy (or from
+    /// empty, when the wiki is Default). Drives Save/Cancel enabling, the
+    /// tab's edit marker, and both protection confirms.
+    public var isStrategyDraftDirty: Bool {
+        guard strategyDraftActive else { return false }
+        return strategyDraftName != strategyDraftBaseName
+            || strategyDraftInstructions != strategyDraftBaseInstructions
+    }
+
+    private var strategyDraftBaseName: String { committedStrategy?.name ?? "" }
+    private var strategyDraftBaseInstructions: String { committedStrategy?.instructions ?? "" }
+
+    /// Read the committed strategy + revision from the store. Seeds the draft
+    /// from the committed value when no draft session is open, so a fresh
+    /// editor mount starts non-dirty. A read failure surfaces as a visible
+    /// store error (and `strategyLoadFailed`, which the editor turns into a
+    /// retryable state) and leaves the previous state alone.
+    ///
+    /// Coherence: one ``WikiStore.getWikiStrategyState()`` read returns the
+    /// strategy and its revision from the same committed row, and
+    /// `saveExpectation` derives the exact compare-and-swap value. Two
+    /// separate reads could straddle a concurrent write and pair a stale
+    /// body with a fresh revision — an expectation too HIGH, which would let
+    /// a later save silently overwrite a commit the editor never saw.
+    ///
+    /// While a conflict is UNRESOLVED the stale expectation is preserved
+    /// (see the conflict branch of ``saveStrategyDraft()``): only an explicit
+    /// adoption — Reload, Cancel, or a successful save — advances it.
+    public func loadWikiStrategy() {
+        do {
+            let state = try store.getWikiStrategyState()
+            committedStrategy = state.strategy
+            if strategyConflict == nil {
+                strategyExpectedRevision = state.saveExpectation
+            }
+        } catch {
+            DebugLog.store("loadWikiStrategy failed: \(error)")
+            strategyLoadFailed = true
+            storeError = StoreError(
+                title: "Strategy Load Failed",
+                message: "The saved strategy could not be read. Try again.")
+            return
+        }
+        strategyLoadFailed = false
+        strategyDidLoad = true
+        if !strategyDraftActive {
+            seedStrategyDraft()
+        }
+    }
+
+    /// Replace the draft's contents with the committed strategy (or empty for
+    /// Default). Used on load, save, cancel, and reload — never while the
+    /// user is mid-edit unless they asked for it (Cancel / Reload).
+    private func seedStrategyDraft() {
+        strategyDraftName = strategyDraftBaseName
+        strategyDraftInstructions = strategyDraftBaseInstructions
+        strategyDraftActive = true
+    }
+
+    /// Save the draft through the store's compare-and-swap boundary.
+    ///
+    /// On success the committed value and CAS expectation advance, the draft
+    /// reseeds from the new committed value (clean state), and any stale
+    /// conflict clears. On a revision conflict the draft is **preserved** and
+    /// ``strategyConflict`` holds the committed winner. Oversized or blank
+    /// input surfaces as a visible store error (``storeError``); nothing is
+    /// truncated. Blank instructions reset the wiki to the Default strategy
+    /// (tombstone) — that is the same store-side rule, not a second one here.
+    ///
+    /// Strategy saves never enqueue ingestion and never rewrite pages.
+    public func saveStrategyDraft() {
+        do {
+            let input = try WikiStrategy.validatedInput(
+                name: strategyDraftName,
+                instructions: strategyDraftInstructions)
+            let outcome = try store.saveWikiStrategy(
+                name: input.name,
+                instructions: input.instructions ?? "",
+                expectedRevision: strategyExpectedRevision)
+            switch outcome {
+            case .saved(let revision, let strategy):
+                strategyExpectedRevision = revision
+                committedStrategy = strategy
+            case .unchanged:
+                break
+            }
+            strategyConflict = nil
+            isStrategyConflictDismissed = false
+            seedStrategyDraft()
+        } catch let conflict as WikiStrategyConflictError {
+            // Someone else committed first. Keep the draft exactly as it is;
+            // the banner offers Reload against the committed winner. The
+            // display value adopts the winner so status/Reload show the real
+            // committed content, but the compare-and-swap expectation stays
+            // at the STALE revision the user read: a later "keep editing"
+            // save must conflict AGAIN (not overwrite the unseen commit)
+            // until the user adopts the winner through Reload or Cancel.
+            strategyConflict = conflict
+            isStrategyConflictDismissed = false
+            committedStrategy = conflict.currentStrategy
+        } catch let textError as WikiStrategyTextError {
+            storeError = StoreError(title: "Strategy Not Saved", message: textError.description)
+        } catch {
+            DebugLog.store("saveStrategyDraft failed: \(error)")
+            storeError = StoreError(
+                title: "Strategy Not Saved",
+                message: "The strategy could not be saved. Try again.")
+        }
+    }
+
+    /// Discard the draft and reseed it from the committed strategy. The view
+    /// confirms first when the draft is dirty. After a conflict this is an
+    /// explicit ADOPTION of the winner: the draft shows the committed
+    /// content, so the expectation advances to the winner's revision and
+    /// future saves are authorized against what the user is looking at.
+    public func cancelStrategyDraft() {
+        if let conflict = strategyConflict {
+            strategyExpectedRevision = conflict.currentRevision
+        }
+        strategyConflict = nil
+        seedStrategyDraft()
+    }
+
+    /// Reset the wiki to the Default strategy. Implemented as a save of blank
+    /// instructions — the store's own whitespace-reset rule — so the CAS
+    /// expectation, the tombstone revision, and the change event all flow
+    /// through one write boundary. The view confirms first.
+    public func resetStrategyToDefault() {
+        strategyDraftName = ""
+        strategyDraftInstructions = ""
+        saveStrategyDraft()
+    }
+
+    /// Copy a starter template's name and instructions into the draft. This
+    /// is a value copy into the local draft only: it does not save, does not
+    /// link the wiki to the template, and never touches pages. The view
+    /// confirms first when the draft already holds text.
+    public func applyStrategyTemplate(_ template: WikiStrategyTemplate) {
+        strategyDraftName = template.name
+        strategyDraftInstructions = template.markdown
+        strategyDraftActive = true
+    }
+
+    /// Resolve a conflict by adopting the committed winner: reseed the draft
+    /// from the committed strategy, advance the compare-and-swap expectation
+    /// to the winner's revision (the user is now editing the content they
+    /// see), and clear the banner. The view confirms that this replaces the
+    /// unsaved draft.
+    public func discardStrategyDraftAndReload() {
+        if let conflict = strategyConflict {
+            strategyExpectedRevision = conflict.currentRevision
+        }
+        strategyConflict = nil
+        isStrategyConflictDismissed = false
+        seedStrategyDraft()
+    }
+
+    /// Dismiss the conflict banner and keep editing the untouched draft.
+    /// The conflict stays UNRESOLVED: the expectation stays at the STALE
+    /// revision (so the user's next save conflicts again — safe), and a
+    /// later editor re-mount cannot re-read its way past it. Keeping a draft
+    /// never authorizes overwriting a commit the user has not adopted.
+    public func dismissStrategyConflict() {
+        isStrategyConflictDismissed = true
+    }
+
+    /// Defer an in-place wiki switch when a dirty strategy draft would be
+    /// lost with the session. Returns `true` when deferred (the caller must
+    /// NOT switch yet — the confirmation alert owns the switch); `false` when
+    /// there is nothing to protect and the caller may switch immediately.
+    /// Opening a wiki in a NEW window never passes through here: the session
+    /// (and the draft with it) survives, so no protection is needed.
+    @discardableResult
+    public func deferInPlaceWikiSwitchIfNeeded(to target: WikiID) -> Bool {
+        guard isStrategyDraftDirty else { return false }
+        pendingStrategyWikiSwitch = target
+        return true
+    }
+
+    /// Apply the deferred switch after the user chose to discard the draft:
+    /// clear the draft + pending state and return the target so the HOSTING
+    /// SCENE can perform the actual session swap. The registry's active id
+    /// already changed when the guard deferred, so the scene cannot wait for
+    /// another change notification — the confirmation drives the swap.
+    @discardableResult
+    public func applyPendingStrategyWikiSwitch() -> WikiID? {
+        guard let target = pendingStrategyWikiSwitch else { return nil }
+        pendingStrategyWikiSwitch = nil
+        strategyConflict = nil
+        isStrategyConflictDismissed = false
+        strategyDraftActive = false
+        strategyDraftName = ""
+        strategyDraftInstructions = ""
+        return target
+    }
+
+    /// Keep the draft: cancel the deferred switch. The user stays on this
+    /// wiki with the draft intact.
+    public func cancelPendingStrategyWikiSwitch() {
+        pendingStrategyWikiSwitch = nil
+    }
+
+    /// Drop all editor state for a closing strategy tab. Called from the tab
+    /// close confirmation (the user chose to discard); there is no tab left
+    /// to reseed, so the draft simply ends.
+    public func discardStrategyDraftForClosedTab() {
+        strategyConflict = nil
+        strategyDraftActive = false
+        strategyDraftName = ""
+        strategyDraftInstructions = ""
+        pendingStrategyWikiSwitch = nil
     }
 
     // MARK: - Persisted chats (issue #119)

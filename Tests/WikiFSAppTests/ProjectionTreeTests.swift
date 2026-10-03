@@ -278,7 +278,7 @@ struct ProjectionTreeTests {
         let names = s.projection.children(of: .rootContainer).map(\.name)
         #expect(names == [
             "README.md", "CLAUDE.md", "AGENTS.md",
-            "index.md", "log.md", "WIKI-STRUCTURE.md", "TREE.md",
+            "index.md", "log.md", "WIKI-STRUCTURE.md", "TREE.md", "WIKI-STRATEGY.md",
             "manifest.json",
             "pages", "sources", "chats", "bookmarks", "indexes"
         ])

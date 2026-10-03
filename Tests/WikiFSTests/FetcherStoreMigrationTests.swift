@@ -50,8 +50,8 @@ struct FetcherStoreMigrationTests {
         """, at: pair.url)
 
         let migrated = try GRDBWikiStore(databaseURL: pair.url)
-        #expect(migrated.pragmaValue("user_version") == "55")
-        #expect(GRDBWikiStore.schemaVersion == 55)
+        #expect(migrated.pragmaValue("user_version") == "56")
+        #expect(GRDBWikiStore.schemaVersion == 56)
 
         // The neutral columns exist; the Zotero-named ones are gone.
         #expect(migrated.scalarText(
@@ -82,7 +82,7 @@ struct FetcherStoreMigrationTests {
         // Idempotent: close and reopen — still 55, values unchanged.
         migrated.close()
         let reopened = try GRDBWikiStore(databaseURL: pair.url)
-        #expect(reopened.pragmaValue("user_version") == "55")
+        #expect(reopened.pragmaValue("user_version") == "56")
         let reopenedZotero = try #require(try reopened.listSources().first {
             $0.filename == "ABCD1234"
         })
@@ -97,7 +97,7 @@ struct FetcherStoreMigrationTests {
     /// writes `formatJobPending`, and settlement writes `complete`.
     @Test func freshSchemaFetchLifecycleAdvances() throws {
         let store = try TestStoreFactory.inMemory()
-        #expect(store.pragmaValue("user_version") == "55")
+        #expect(store.pragmaValue("user_version") == "56")
 
         let summary = try store.addBytelessSource(
             filename: "ABCD1234",

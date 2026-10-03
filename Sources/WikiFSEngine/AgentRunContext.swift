@@ -148,6 +148,21 @@ public struct AgentRunContext: Sendable, Equatable {
     public let stateFilePath: String?
     /// Absolute scratch paths of the staged raw source(s), when any.
     public let stagedSourcePaths: [String]
+    /// The EXPLICIT absolute wiki database file this run targets, when the run
+    /// does not use the standard App Group container layout. nil on every
+    /// production launch today: `--wiki`/`WIKI_DB` then carry ``wikiID`` and
+    /// `wikictl` resolves `<container>/<wikiID>.sqlite` through the registry.
+    ///
+    /// When set, every trusted selector rendered from this context (env, prompt
+    /// invocations, RUN ENVIRONMENT block) carries the TYPED explicit form —
+    /// the `--database-path <file>` flag — never an overloaded `--wiki`
+    /// string, so an explicit database can never silently masquerade as a wiki
+    /// id. `wikictl` accepts the same flag (`WikiResolver.resolve(selection:)`)
+    /// and refuses explicit paths inside the real App Group container. The live
+    /// semantic evaluation harness (disposable fixture database under project
+    /// `tmp/`) is the first caller; see
+    /// `plans/wiki-strategy-evaluation-harness.md`.
+    public let databasePath: URL?
 
     /// The scratch-relative leaf the temp roots live under.
     public static let tempRelocationLeaf = ".tmp"
@@ -160,7 +175,8 @@ public struct AgentRunContext: Sendable, Equatable {
         wikictlDirectory: String,
         userPATH: String,
         stateFilePath: String? = nil,
-        stagedSourcePaths: [String] = []
+        stagedSourcePaths: [String] = [],
+        databasePath: URL? = nil
     ) {
         self.scratchDirectory = scratchDirectory
         self.tempDirectory = scratchDirectory
@@ -174,12 +190,30 @@ public struct AgentRunContext: Sendable, Equatable {
         self.userPATH = userPATH
         self.stateFilePath = stateFilePath
         self.stagedSourcePaths = stagedSourcePaths
+        self.databasePath = databasePath
     }
 
     /// The directory holding the trusted helper (the PATH head).
     public var wikictlDirectory: String {
         (wikictlPath as NSString).deletingLastPathComponent
     }
+
+    /// The `--wiki`-family selector arguments trusted invocations carry: the
+    /// TYPED explicit form (`--database-path <file>`) when ``databasePath`` is
+    /// set, else `--wiki <wiki-id>`. One argument list feeds the exported
+    /// environment, the trusted prompt invocations, and the agent-facing RUN
+    /// ENVIRONMENT block — the two forms never mix.
+    public var wikiSelectorArguments: [String] {
+        if let databasePath {
+            return [Self.databasePathFlag, databasePath.path]
+        }
+        return ["--wiki", wikiID.rawValue]
+    }
+
+    /// The flag spelling `wikictl` accepts for the typed explicit-database
+    /// selector. Declared here so the prompt renderer and the CLI agree on
+    /// exactly one spelling.
+    public static let databasePathFlag = "--database-path"
 
     // MARK: - PATH assembly
 
@@ -209,20 +243,29 @@ public struct AgentRunContext: Sendable, Equatable {
     /// the scratch, or temp relocation. Order in the returned array is the
     /// overwrite order (irrelevant — the keys are disjoint).
     public var protectedEnvironment: [String: String] {
-        [
-            EnvironmentKey.wikiDB: wikiID.rawValue,
+        var keys: [String: String] = [
             EnvironmentKey.wikictl: wikictlPath,
             EnvironmentKey.wikiScratch: scratchDirectory.path,
             EnvironmentKey.path: effectivePATH,
             EnvironmentKey.tmpDir: tempDirectory.path,
             EnvironmentKey.tmpPrefix: zshTempPrefix.path,
         ]
+        // The two selector forms are mutually exclusive by construction: an
+        // explicit database run exports WIKI_DB_PATH only, a registry run
+        // exports WIKI_DB only. `wikictl` rejects a request that carries both.
+        if let databasePath {
+            keys[EnvironmentKey.wikiDatabasePath] = databasePath.path
+        } else {
+            keys[EnvironmentKey.wikiDB] = wikiID.rawValue
+        }
+        return keys
     }
 
     /// Named constants for the env keys this type owns. Same pattern as
     /// `HintKey` — the raw literals live in exactly one place.
     public enum EnvironmentKey {
         public static let wikiDB = "WIKI_DB"
+        public static let wikiDatabasePath = "WIKI_DB_PATH"
         public static let wikictl = "WIKICTL"
         public static let wikiScratch = "WIKI_SCRATCH"
         public static let path = "PATH"
@@ -251,23 +294,32 @@ public struct AgentRunContext: Sendable, Equatable {
 
     // MARK: - Trusted wiki command
 
-    /// The structured trusted wiki command head: absolute helper + `--wiki`
-    /// + the typed id. Callers append their subcommand arguments; render a
+    /// The structured trusted wiki command head: absolute helper + the typed
+    /// selector arguments. Callers append their subcommand arguments; render a
     /// shell-safe string only at the prompt boundary (`renderedWikiCommand`).
     public func wikiCommand(_ arguments: [String]) -> [String] {
-        [wikictlPath, "--wiki", wikiID.rawValue] + arguments
+        [wikictlPath] + wikiSelectorArguments + arguments
     }
 
     /// The trusted wiki invocation rendered as ONE shell-safe command line for
     /// prompt injection (paths with spaces survive — `ShellQuoting`).
     public func renderedWikiCommand(_ arguments: [String]) -> String {
-        ShellQuoting.commandLine(executable: wikictlPath, arguments: ["--wiki", wikiID.rawValue] + arguments)
+        ShellQuoting.commandLine(
+            executable: wikictlPath,
+            arguments: wikiSelectorArguments + arguments)
     }
 
-    /// The bare trusted invocation prefix (helper + `--wiki <id>`), rendered
-    /// shell-safe — the form prompts splice subcommands onto.
+    /// The bare trusted invocation prefix (helper + selector arguments),
+    /// rendered shell-safe — the form prompts splice subcommands onto.
     public var renderedWikiInvocation: String {
-        ShellQuoting.commandLine(executable: wikictlPath, arguments: ["--wiki", wikiID.rawValue])
+        ShellQuoting.commandLine(executable: wikictlPath, arguments: wikiSelectorArguments)
+    }
+
+    /// The selector, rendered as the agent types it at the start of a
+    /// `wikictl` command line (e.g. `` `--wiki <id>` `` or
+    /// `` `--database-path '/abs/file.sqlite'` ``).
+    public var renderedWikiSelector: String {
+        wikiSelectorArguments.map { ShellQuoting.quote($0) }.joined(separator: " ")
     }
 
     // MARK: - Prompt injection
@@ -291,8 +343,10 @@ public struct AgentRunContext: Sendable, Equatable {
         }
         lines.append("""
         - Wiki tool (PREFERRED FORM — bare `wikictl` is FIRST on your PATH): \
-        `wikictl --wiki \(wikiID.rawValue) <subcommand> …`. `--wiki <id>` goes \
-        BEFORE the subcommand. The alternate `--wiki=<id>` spelling is also accepted.
+        `wikictl \(renderedWikiSelector) <subcommand> …`. The selector goes \
+        BEFORE the subcommand; use it exactly as rendered (it is either \
+        `--wiki <id>` or `--database-path <file>` for this run). The alternate \
+        `--wiki=<id>` spelling is also accepted when the selector is an id.
         """)
         lines.append("""
         - Wiki tool (GUARANTEED FALLBACK — TRUSTED ABSOLUTE INVOCATION; use it \
@@ -301,8 +355,8 @@ public struct AgentRunContext: Sendable, Equatable {
         contains a SPACE — keep the single quotes exactly as rendered.
         """)
         lines.append("""
-          Bare `wikictl`, `$WIKICTL`, `$WIKI_DB`, and your PATH are conveniences that \
-          an adapter may drop — the absolute form above always works. Never generate \
+          Bare `wikictl`, `$WIKICTL`, `$WIKI_DB`/`$WIKI_DB_PATH`, and your PATH are \
+          conveniences that an adapter may drop — the absolute form above always works. Never generate \
           or execute a script stored inside the scratch workspace as if the app vouched for it.
         """)
         return lines.joined(separator: "\n")
@@ -311,7 +365,11 @@ public struct AgentRunContext: Sendable, Equatable {
     /// Non-secret diagnostics: requested session cwd + capability paths. Never
     /// the whole environment, never credentials.
     public var diagnosticDescription: String {
-        "runContext cwd=\(scratchDirectory.path) tmp=\(tempDirectory.path) wiki=\(wikiID.rawValue) wikictl=\(wikictlPath)"
+        var text = "runContext cwd=\(scratchDirectory.path) tmp=\(tempDirectory.path) wiki=\(wikiID.rawValue) wikictl=\(wikictlPath)"
+        if let databasePath {
+            text += " db=\(databasePath.path)"
+        }
+        return text
     }
 
     /// A copy of this context re-rooted at a derived scratch directory (the
@@ -326,7 +384,8 @@ public struct AgentRunContext: Sendable, Equatable {
             wikictlDirectory: wikictlDirectory,
             userPATH: userPATH,
             stateFilePath: stateFilePath,
-            stagedSourcePaths: stagedSourcePaths)
+            stagedSourcePaths: stagedSourcePaths,
+            databasePath: databasePath)
     }
 
     /// Create the scratch temp directories the relocated `TMPDIR` (and the

@@ -40,6 +40,7 @@ extension WikiStoreModel {
         switch selection {
         case .newChat: return "New Chat"
         case .changeLog: return "Activity"
+        case .strategy: return "Strategy"
         case .page(let id):
             return summaries.first { $0.id == id }?.title
                 .nonEmpty ?? "Untitled"
@@ -60,6 +61,7 @@ extension WikiStoreModel {
         switch selection {
         case .newChat: return "bubble.left.and.bubble.right"
         case .changeLog: return "clock.arrow.circlepath"
+        case .strategy: return "text.book.closed"
         case .page: return "doc.text"
         case .source(let id):
             guard let source = sources.first(where: { $0.id == id }) else {

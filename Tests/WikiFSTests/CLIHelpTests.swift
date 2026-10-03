@@ -245,7 +245,7 @@ struct CLIHelpTests {
         let provenance = try ArgumentParser.parse(
             ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-",
              "--source", "01A", "--source", "01B:supporting"], env: noEnv)
-        guard case .page(.add(_, _, _, _, _, _, let provenanceSources)) = provenance.command else {
+        guard case .page(.add(_, _, _, _, _, _, _, let provenanceSources)) = provenance.command else {
             Issue.record("expected .page(.add)")
             return
         }

@@ -19,6 +19,15 @@ import WikiFSCore
 /// subcommand recognition and option validation (#1224).
 ///
 /// `--wiki` may be omitted when the `WIKI_DB` env var supplies the selector.
+///
+/// An EXPLICIT database file may replace the registry selector:
+/// `wikictl --database-path /abs/<ulid>.sqlite page list`. The flag and the
+/// `WIKI_DB_PATH` env var are mutually exclusive with `--wiki`/`WIKI_DB`
+/// (mixed forms are a usage error), the path must be an absolute `.sqlite`
+/// file outside the App Group container, and the two raw strings are typed
+/// into a `WikiSelection` at the runner boundary — never inside the parser.
+/// This form exists for disposable fixture databases (the live semantic
+/// evaluation harness); ordinary invocations are unchanged.
 public enum ArgumentParser {
 
     /// A fully-parsed invocation: which wiki, what to do, and — for `page add`
@@ -27,10 +36,15 @@ public enum ArgumentParser {
     /// reads it.
     public struct Invocation: Equatable {
         public var wikiSelector: String
+        /// Raw `--database-path`/`WIKI_DB_PATH` value, empty when the ordinary
+        /// `--wiki` selector form was used. Exactly one of `wikiSelector` /
+        /// `databasePath` is non-empty once parsing succeeds.
+        public var databasePath: String
         public var command: Command
 
-        public init(wikiSelector: String, command: Command) {
+        public init(wikiSelector: String, databasePath: String = "", command: Command) {
             self.wikiSelector = wikiSelector
+            self.databasePath = databasePath
             self.command = command
         }
     }
@@ -155,7 +169,11 @@ public enum ArgumentParser {
             }
         }
 
-        // A leading `--wiki <id>` or `--wiki=<id>` is optional; otherwise fall back to WIKI_DB.
+        // A leading `--wiki <id>`/`--wiki=<id>`, `--database-path <file>`/
+        // `--database-path=<file>`, or their `WIKI_DB`/`WIKI_DB_PATH` env
+        // fallbacks. The parser records the raw winning form(s); typed
+        // conversion and mutual-exclusion checks live in
+        // `WikiResolver.selection(wikiSelector:databasePath:)`.
         var wikiSelector: String?
         if args.first == "--wiki" {
             guard args.count >= 2 else { throw Failure.usage("--wiki requires a value") }
@@ -169,8 +187,27 @@ public enum ArgumentParser {
         } else if let envValue = env("WIKI_DB"), !envValue.isEmpty {
             wikiSelector = envValue
         }
-        guard let selector = wikiSelector else {
-            throw Failure.usage("no wiki selected — pass --wiki <id> (or --wiki=<id>) or set WIKI_DB")
+        var databasePath: String?
+        if args.first == "--database-path" {
+            guard args.count >= 2 else { throw Failure.usage("--database-path requires a value") }
+            databasePath = args[1]
+            args.removeFirst(2)
+        } else if let first = args.first, first.hasPrefix("--database-path=") {
+            let value = String(first.dropFirst("--database-path=".count))
+            guard !value.isEmpty else { throw Failure.usage("--database-path requires a value") }
+            databasePath = value
+            args.removeFirst()
+        } else if databasePath == nil, let envValue = env("WIKI_DB_PATH"), !envValue.isEmpty {
+            // Env fallback only when no --database-path FLAG was given. Both
+            // env vars set, or flag+env mixing, reaches the typed conflict
+            // check in `WikiResolver.selection` — never a silent winner.
+            databasePath = envValue
+        }
+        let selectedWikiSelector = wikiSelector ?? ""
+        let selectedDatabasePath = databasePath ?? ""
+        guard !selectedWikiSelector.isEmpty || !selectedDatabasePath.isEmpty else {
+            throw Failure.usage(
+                "no wiki selected — pass --wiki <id> (or --wiki=<id>), --database-path <file>, or set WIKI_DB/WIKI_DB_PATH")
         }
 
         let command: Command
@@ -200,7 +237,10 @@ public enum ArgumentParser {
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
-        return Invocation(wikiSelector: selector, command: command)
+        return Invocation(
+            wikiSelector: selectedWikiSelector,
+            databasePath: selectedDatabasePath,
+            command: command)
     }
 
     private static func parsePageCommand(_ args: [String]) throws -> Command {
@@ -235,10 +275,37 @@ public enum ArgumentParser {
             }
             let id = options.value("--id").map { PageID(rawValue: $0) }
             let expectHead = options.value("--expect-head").map(PageVersionID.init(rawValue:))
+            let createOnly = options.flag("--create-only")
             let workspace = options.value("--workspace")
+            // Expected-state gate (cumulative ingestion, plan phase 4 §4):
+            // `--create-only` and `--expect-head` state contradictory
+            // preconditions (page must NOT exist vs. page must exist at the
+            // given head), so combining them is a usage error, not a
+            // resolution order question. `--create-only` also cannot target
+            // an explicit id (an id IS an existing-page target) or stage into
+            // a workspace (staging resolves absence itself).
+            if createOnly, expectHead != nil {
+                throw Failure.usage(
+                    "page add: --create-only and --expect-head are mutually exclusive — "
+                    + "--create-only writes a page that must NOT exist, --expect-head "
+                    + "writes a page that must. Pick one."
+                )
+            }
+            if createOnly, id != nil {
+                throw Failure.usage(
+                    "page add: --create-only cannot be combined with --id — an explicit "
+                    + "id targets an existing page; drop --create-only or --id."
+                )
+            }
+            if createOnly, workspace != nil {
+                throw Failure.usage(
+                    "page add: --create-only cannot be combined with --workspace — "
+                    + "workspace staging resolves page absence itself."
+                )
+            }
             let author = options.value("--author")
             let provenance = try decodePageVersionSources(options.values("--source"))
-            return .page(.add(id: id, title: title, body: .file(bodyFile), expectHead: expectHead, workspace: workspace, author: author, provenance: provenance))
+            return .page(.add(id: id, title: title, body: .file(bodyFile), expectHead: expectHead, createOnly: createOnly, workspace: workspace, author: author, provenance: provenance))
 
         case "delete":
             guard let id = options.value("--id") else {
@@ -1080,15 +1147,15 @@ public enum ArgumentParser {
         case .page(.get(let selector, let json, let workspace))
             where workspace == nil && workspaceID?.isEmpty == false:
             return .page(.get(selector, json: json, workspace: workspaceID))
-        case .page(.add(let id, let title, let bodySource, let expectHead, let workspace, let existingAuthor, let provenance))
+        case .page(.add(let id, let title, let bodySource, let expectHead, let createOnly, let workspace, let existingAuthor, let provenance))
             where workspace == nil && workspaceID?.isEmpty == false:
             return .page(.add(id: id, title: title, body: bodySource,
-                             expectHead: expectHead, workspace: workspaceID,
+                             expectHead: expectHead, createOnly: createOnly, workspace: workspaceID,
                              author: existingAuthor ?? author, provenance: provenance))
-        case .page(.add(let id, let title, let bodySource, let expectHead, let workspace, let existingAuthor, let provenance))
+        case .page(.add(let id, let title, let bodySource, let expectHead, let createOnly, let workspace, let existingAuthor, let provenance))
             where existingAuthor == nil && author?.isEmpty == false:
             return .page(.add(id: id, title: title, body: bodySource,
-                             expectHead: expectHead, workspace: workspace,
+                             expectHead: expectHead, createOnly: createOnly, workspace: workspace,
                              author: author, provenance: provenance))
         case .indexSet(let bodyFile, let workspace)
             where workspace == nil && workspaceID?.isEmpty == false:

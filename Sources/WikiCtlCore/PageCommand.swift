@@ -38,8 +38,14 @@ public enum PageCommand {
         /// `expectHead` carries the CAS expectation (the `head_version_id` the
         /// caller read before editing); when non-nil, the upsert routes through
         /// `appendPageVersion` and a mismatch throws `PageConflictError`
-        /// (Phase 1: agent CAS writes).
-        case add(id: PageID?, title: String, body: BodySource, expectHead: PageVersionID? = nil, workspace: String? = nil, author: String? = nil, provenance: [PageVersionSourceInput] = [])
+        /// (Phase 1: agent CAS writes). `createOnly` closes the
+        /// create-versus-create race (cumulative ingestion, plan phase 4 §4):
+        /// the write succeeds only when the title resolves to NO existing
+        /// page — a page that appeared since the caller's missing-page read
+        /// throws `PageCreateConflictError` (exit 3) without a version or
+        /// link mutation. `createOnly` and `expectHead` are mutually
+        /// exclusive; the parser rejects them together.
+        case add(id: PageID?, title: String, body: BodySource, expectHead: PageVersionID? = nil, createOnly: Bool = false, workspace: String? = nil, author: String? = nil, provenance: [PageVersionSourceInput] = [])
         /// Delete the page through the store's protected contract (issue #219
         /// hardening): bookmarks targeting the page are ALWAYS removed, and
         /// `unlinkIncoming` picks whether incoming `[[link]]` spans become
@@ -103,9 +109,9 @@ public enum PageCommand {
             return try list(in: store, json: json)
         case .get(let selector, let json, let workspace):
             return try get(selector, in: store, json: json, workspace: workspace)
-        case .add(let id, let title, let bodySource, let expectHead, let workspace, let author, let provenance):
+        case .add(let id, let title, let bodySource, let expectHead, let createOnly, let workspace, let author, let provenance):
             let body = try resolveBodySource(bodySource)
-            return try upsert(id: id, title: title, body: body, expectHead: expectHead, workspace: workspace, author: author,
+            return try upsert(id: id, title: title, body: body, expectHead: expectHead, createOnly: createOnly, workspace: workspace, author: author,
                               provenance: mergedAgentIngestProvenance(provenance), in: store, validator: validator, linter: linter)
         case .delete(let id, let unlinkIncoming):
             return try delete(id: id, unlinkIncoming: unlinkIncoming, in: store)
@@ -303,6 +309,7 @@ public enum PageCommand {
         title: String,
         body: String,
         expectHead: PageVersionID? = nil,
+        createOnly: Bool = false,
         workspace: String? = nil,
         author: String? = nil,
         provenance: [PageVersionSourceInput] = [],
@@ -329,6 +336,32 @@ public enum PageCommand {
         //    declares the fence's alias, the save proceeds with a stderr
         //    notice instead of a silent pass.
         let notice = try abortOnInvalidFence(fixed, validator: validator)
+
+        // Expected-state gate (plan phase 4 §4), BEFORE the workspace routing
+        // so a create-only write can never silently stage: `--create-only` and
+        // `--expect-head` state contradictory preconditions, and `--create-only`
+        // has no meaning inside workspace staging (staging resolves page
+        // absence itself). The parser rejects these; re-checked here so no
+        // caller dispatching `.add` directly can combine them either.
+        if createOnly, expectHead != nil {
+            throw Failure.message(
+                "page add: --create-only and --expect-head are mutually exclusive — "
+                + "--create-only writes a page that must NOT exist, --expect-head "
+                + "writes a page that must. Pick one."
+            )
+        }
+        if createOnly, workspace != nil {
+            throw Failure.message(
+                "page add: --create-only cannot be combined with --workspace — "
+                + "workspace staging resolves page absence itself."
+            )
+        }
+        if createOnly, id != nil {
+            throw Failure.message(
+                "page add: --create-only cannot be combined with --id — an explicit "
+                + "id targets an existing page; drop --create-only or --id."
+            )
+        }
 
         // Phase 7: workspace routing. When --workspace is set, route to
         // workspaceWritePage (main is untouched until merge). The page ID is
@@ -360,10 +393,19 @@ public enum PageCommand {
 
         // 3. The SHARED seam: identical create-or-update + `[[link]]` reparse as
         //    the in-app editor, so the link graph stays consistent across both
-        //    writers.
-        let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: fixed,
-                                             expectedHeadVersionID: expectHead, author: author,
-                                             provenance: provenance)
+        //    writers, under the expected-state contract validated above.
+        let expectation: PageWriteExpectation
+        if createOnly {
+            expectation = .expectedAbsence
+        } else if let expectHead {
+            expectation = .expectedHead(expectHead)
+        } else {
+            expectation = .unrestricted
+        }
+        let outcome = try PageUpsert.upsert(
+            in: store, id: id, title: title, body: fixed,
+            expectation: expectation, author: author,
+            provenance: provenance)
         // #1228: echo the new head so the agent's CAS loop can chain the next
         // --expect-head write without a separate `page get`. Same stderr
         // convention as `get`; stdout stays the page id (compatibility contract).
