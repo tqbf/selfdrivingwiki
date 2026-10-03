@@ -370,6 +370,8 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
                 sendableReply.reply(Self.encodeQueueEnvelope(
                     .success(result.value, epoch: result.epoch, hostState: result.hostState)))
             } catch {
+                // Record the underlying daemon error before converting it to a wire response.
+                DebugLog.store("wikid: queue operation failed: \(error)")
                 let status = await daemon.queueHostStatus()
                 let envelope = QueueRPCEnvelope<Payload>.failure(
                     Self.queueRPCError(from: error),

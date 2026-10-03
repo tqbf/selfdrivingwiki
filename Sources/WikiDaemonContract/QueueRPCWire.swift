@@ -61,6 +61,19 @@ public struct QueueRPCError: Error, Equatable, Codable, Sendable {
     }
 }
 
+extension QueueRPCError: CustomStringConvertible {
+    /// Include the code + message so log sites that interpolate the error show
+    /// the real failure. Without this, NSError bridging renders the struct as
+    /// an opaque "QueueRPCError error 1", which hid the daemon's rejection
+    /// reason from the ingest enqueue diagnostics.
+    public var description: String {
+        if let ownership {
+            return "QueueRPCError(\(code.rawValue): \(message), ownership: \(ownership))"
+        }
+        return "QueueRPCError(\(code.rawValue): \(message))"
+    }
+}
+
 public struct QueueRPCEnvelope<Payload: Codable & Sendable>: Codable, Sendable {
     public static var currentVersion: UInt16 { 1 }
 

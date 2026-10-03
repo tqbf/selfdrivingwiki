@@ -53,6 +53,10 @@ private actor ChatHostCreationGate {
 enum DaemonStoreResolutionError: Error, Equatable, LocalizedError {
     case notPrepared(WikiID)
     case unavailable(WikiID)
+    /// The on-disk registry could not be read/decoded. Distinct from
+    /// `unavailable` (unknown wiki) and from a valid empty registry: callers
+    /// must not treat corruption as "no wikis" (mass deletion).
+    case registryUnreadable(String)
 
     var errorDescription: String? {
         switch self {
@@ -60,6 +64,8 @@ enum DaemonStoreResolutionError: Error, Equatable, LocalizedError {
             return "daemon-store-not-prepared: \(wikiID.rawValue)"
         case .unavailable(let wikiID):
             return "daemon-store-unavailable: \(wikiID.rawValue)"
+        case .registryUnreadable(let reason):
+            return "daemon-registry-unreadable: \(reason)"
         }
     }
 }
@@ -365,6 +371,12 @@ final class WikiDaemon: @unchecked Sendable {
 
     @discardableResult
     func prepareAndResolveWikiServices(wikiID: WikiID) async throws -> AppServices {
+        // Coherence gate BEFORE any profile boot or store open — both create
+        // the database file, so a deleted wiki must be refused (and evicted)
+        // here, not just at the RPC boundary. Callers that reach this
+        // directly (chat-host creation, the wiki-creation coordinator) get
+        // the same guarantee as `prepareWiki`.
+        try await reconcileForOperation(wikiID)
         let admission = queue.sync { () -> (AppServices?, UInt64) in
             (preparedServices[wikiID], preparationEpochs[wikiID, default: 0])
         }
@@ -373,26 +385,54 @@ final class WikiDaemon: @unchecked Sendable {
             throw DaemonStoreResolutionError.notPrepared(wikiID)
         }
         let services = try await profileOwner.wiki(wikiID: wikiID)
+        // Narrow test seam: the window between boot completion and admission
+        // publish is exactly where an app-side delete can land. Nil in
+        // production; set by tests to make the race deterministic.
+        if let testPreAdmissionHook {
+            await testPreAdmissionHook(wikiID)
+        }
         guard let store = services.store as? GRDBWikiStore else {
             throw DaemonStoreResolutionError.unavailable(wikiID)
         }
-        return try publishPreparedServices(
+        guard let admitted = try publishPreparedServices(
             services,
             store: store,
             wikiID: wikiID,
-            admissionEpoch: admission.1)
+            admissionEpoch: admission.1) else {
+            // Admission rejected — the wiki was deleted on disk while the
+            // profile booted. Clean up NOW (booted profile + any recreated
+            // database are ours alone; nothing was admitted) instead of
+            // leaving them for a hypothetical next operation.
+            await evictDeletedWiki(wikiID)
+            throw DaemonStoreResolutionError.unavailable(wikiID)
+        }
+        return admitted
     }
 
+    /// Publish freshly booted services into the daemon's caches. Returns
+    /// `nil` when admission is rejected (the wiki is gone from a successful
+    /// disk read) — the caller owns immediate cleanup. Still THROWS on epoch
+    /// loss (a concurrent removal/eviction owns that cleanup).
     private func publishPreparedServices(
         _ services: AppServices,
         store: GRDBWikiStore,
         wikiID: WikiID,
         admissionEpoch: UInt64
-    ) throws -> AppServices {
-        try queue.sync {
-            guard preparationEpochs[wikiID, default: 0] == admissionEpoch,
-                  registry.descriptor(id: wikiID) != nil else {
+    ) throws -> AppServices? {
+        try queue.sync { () -> AppServices? in
+            guard preparationEpochs[wikiID, default: 0] == admissionEpoch else {
                 throw DaemonStoreResolutionError.unavailable(wikiID)
+            }
+            // Admission re-check: the coherence gate above ran BEFORE the
+            // profile boot, and the app can delete the wiki on disk while
+            // that boot is in flight. A disk read that SUCCEEDS without the
+            // id rejects admission; an unreadable file proves nothing about
+            // deletion, so admission proceeds on the memory view.
+            switch reconcileRegistry(wikiID) {
+            case .deleted, .missing:
+                return nil
+            case .present, .adopted, .unreadable:
+                break
             }
             if let existing = preparedServices[wikiID] { return existing }
             wireEventBus(on: store, wikiID: wikiID)
@@ -402,7 +442,206 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
+    // MARK: - Registry coherence (cross-process create/rename/delete)
+    //
+    // The app owns `wikis.json` and rewrites it out-of-process on every
+    // create/rename/delete (`WikiRegistryClient` — no daemon RPC, no
+    // registry-level Darwin notification), while this daemon loads its
+    // registry once at init. Invariant: every registry-consulting daemon
+    // boundary reflects the on-disk registry before acting — create/rename
+    // are adopted (disk wins; the app is the primary writer), a deletion
+    // proven by a successful read evicts all daemon-held resources for the
+    // id before any store open can recreate the database, and an unreadable
+    // registry is distinct from a valid empty one (corruption never
+    // masquerades as deletion or emptiness; already-serving wikis keep
+    // serving). A MISSING file is a fresh install only while the daemon
+    // knows no wikis; after that it is unreadable — the app's delete path
+    // rewrites the file without the row rather than removing it, so a
+    // vanished file must never read as "all wikis deleted".
+    //
+    // Honest window: the check-then-act against a file another process
+    // rewrites is NOT atomic, and no global read/open filesystem lock is
+    // taken. A deletion that lands while a profile boots is caught by the
+    // admission re-check and cleaned up immediately; one that lands between
+    // service publish and chat-host install is caught by the install fence
+    // (admission epoch + disk recheck) and torn down; one that lands after
+    // admission leaves a serving wiki that the next registry-consulting
+    // operation evicts. What remains is only the instant between any fence's
+    // disk read and its action — it settles at the next boundary without
+    // operator action.
+
+    /// Id-scoped reconcile of the in-memory registry against the on-disk one.
+    /// Must be called on the daemon queue. Never awaits, never evicts — the
+    /// caller owns the consequence.
+    private func reconcileRegistry(_ wikiID: WikiID) -> RegistryCoherence {
+        let disk: WikiRegistry
+        switch readDiskRegistry() {
+        case .loaded(let loaded):
+            disk = loaded
+        case .unreadable(let reason):
+            DebugLog.store("wikid: registry unreadable — keeping in-memory view: \(reason)")
+            return .unreadable(reason)
+        }
+        guard let diskDescriptor = disk.descriptor(id: wikiID) else {
+            // Deletion detection must not depend on the in-memory registry
+            // alone: the read views (listWikis/resolveWiki) adopt the on-disk
+            // registry and drop deleted descriptors without being able to
+            // await eviction. The daemon's own lifecycle caches are the
+            // durable witness — services or a chat host would not exist for
+            // a wiki that never registered.
+            let daemonHoldsResources = registry.descriptor(id: wikiID) != nil
+                || preparedServices[wikiID] != nil
+                || openStores[wikiID] != nil
+                || chatHosts[wikiID] != nil
+            return daemonHoldsResources ? .deleted : .missing
+        }
+        guard let memoryDescriptor = registry.descriptor(id: wikiID) else {
+            registry.add(diskDescriptor)
+            DebugLog.store(
+                "wikid: registry adopted late-registered wiki \(wikiID.rawValue) (\(disk.wikis.count) wiki(s) on disk)")
+            return .adopted
+        }
+        if memoryDescriptor != diskDescriptor {
+            registry.add(diskDescriptor)
+            DebugLog.store(
+                "wikid: registry adopted updated descriptor for \(wikiID.rawValue) "
+                + "('\(memoryDescriptor.displayName)' → '\(diskDescriptor.displayName)')")
+            return .adopted
+        }
+        return .present
+    }
+
+    private enum RegistryCoherence: Sendable, Equatable {
+        /// Memory already matches disk for this id.
+        case present
+        /// Memory was created or refreshed from disk (create/rename adopt).
+        case adopted
+        /// Disk (read successfully) no longer lists an id memory knows.
+        case deleted
+        /// Neither memory nor disk knows the id.
+        case missing
+        /// wikis.json could not be read/decoded — memory untouched. The
+        /// payload is the failure description for logging/diagnostics.
+        case unreadable(String)
+    }
+
+    /// Read-view helper: replace the in-memory registry with the on-disk one
+    /// when it reads successfully (serving the app's create/rename/delete
+    /// truth), or keep memory and log when unreadable. Never evicts services —
+    /// deletion teardown happens at the async operation boundaries, not in a
+    /// list lookup. Must be called on the daemon queue.
+    private func adoptDiskRegistryIfReadable(reason: String) {
+        switch readDiskRegistry() {
+        case .loaded(let disk):
+            if disk != registry {
+                DebugLog.store("wikid: \(reason) — adopted on-disk registry (\(disk.wikis.count) wiki(s))")
+                registry = disk
+            }
+        case .unreadable(let why):
+            DebugLog.store("wikid: \(reason) — registry unreadable (\(why)), serving in-memory view")
+        }
+    }
+
+    private enum DiskRegistryRead {
+        case loaded(WikiRegistry)
+        case unreadable(String)
+    }
+
+    /// Read the on-disk registry for reconcile/adoption. A MISSING file is a
+    /// valid empty registry only while the daemon knows no wikis (fresh
+    /// install). Once the daemon holds descriptors or serving state, a
+    /// missing file is UNREADABLE instead: the app's deletion path rewrites
+    /// the file WITHOUT the row (the file still exists) before touching
+    /// database files, so a vanished file is never the app deleting wikis —
+    /// reading it as "all wikis deleted" would mass-evict serving wikis and
+    /// destroy their databases over what may be a transient loss (failed
+    /// save, backup tooling). Must be called on the daemon queue.
+    private func readDiskRegistry() -> DiskRegistryRead {
+        let loaded: WikiRegistry
+        do {
+            loaded = try WikiRegistry.loadStrictly(from: containerDirectory)
+        } catch {
+            return .unreadable(String(describing: error))
+        }
+        if loaded.isEmpty, (!registry.isEmpty || holdsAnyWikiResources()) {
+            let path = containerDirectory.appendingPathComponent(WikiRegistry.fileName, isDirectory: false).path
+            if !FileManager.default.fileExists(atPath: path) {
+                return .unreadable(
+                    "registry file missing while the daemon knows \(registry.wikis.count) wiki(s)")
+            }
+        }
+        return .loaded(loaded)
+    }
+
+    private func holdsAnyWikiResources() -> Bool {
+        !preparedServices.isEmpty || !openStores.isEmpty || !chatHosts.isEmpty
+    }
+
+    /// Tear down every daemon-held resource for a wiki a successful disk read
+    /// proves deleted: epoch bump (fences concurrent admissions), chat-host
+    /// removal + shutdown, prepared/open service release, child profile
+    /// removal, registry memory row, and any database files a racing boot
+    /// recreated (ULIDs are never reused, so an id's artifacts can never
+    /// belong to a future wiki). Idempotent; safe from any boundary.
+    ///
+    /// GATE-FREE BY DESIGN: callers can run under the chat-host creation gate
+    /// (chat-host creation reaches this through `prepareAndResolveWikiServices`
+    /// and the rejected-install path), and the gate cannot distinguish its
+    /// own creator — waiting on it there would self-deadlock. The epoch bump
+    /// is the fence instead: an in-flight creation whose admission predates
+    /// the bump fails at publish or at the install fence and never installs a
+    /// chat host, so no zombie host can outlive a deletion.
+    private func evictDeletedWiki(_ wikiID: WikiID) async {
+        let chatHost = queue.sync { () -> DaemonChatHost? in
+            preparationEpochs[wikiID, default: 0] &+= 1
+            return chatHosts.removeValue(forKey: wikiID)
+        }
+        await chatHost?.shutdown()
+        queue.sync {
+            preparedServices.removeValue(forKey: wikiID)
+            openStores.removeValue(forKey: wikiID)
+            registry.remove(id: wikiID)
+        }
+        await profileOwner?.removeWiki(wikiID)
+        do {
+            try deleteDatabaseArtifacts(wikiID: wikiID)
+        } catch {
+            DebugLog.store("wikid: artifact cleanup for deleted wiki \(wikiID.rawValue) failed: \(error)")
+        }
+        DebugLog.store("wikid: evicted services for deleted wiki \(wikiID.rawValue)")
+    }
+
+    /// Boundary reconcile for the throwing async seams: `prepareWiki` and
+    /// `prepareAndResolveWikiServices` (chat-host creation and the
+    /// wiki-creation coordinator reach the latter directly, so the gate lives
+    /// in both). Adopts create/rename, fails unknown wikis, evicts deleted
+    /// ones, and fails distinctly on an unreadable registry — while leaving
+    /// already-admitted services serving through an unreadable registry
+    /// (corruption must not disturb live wikis).
+    private func reconcileForOperation(_ wikiID: WikiID) async throws {
+        let outcome = queue.sync { reconcileRegistry(wikiID) }
+        switch outcome {
+        case .present, .adopted:
+            return
+        case .missing:
+            throw DaemonStoreResolutionError.unavailable(wikiID)
+        case .deleted:
+            await evictDeletedWiki(wikiID)
+            throw DaemonStoreResolutionError.unavailable(wikiID)
+        case .unreadable(let reason):
+            let alreadyServing = queue.sync {
+                preparedServices[wikiID] != nil || openStores[wikiID] != nil || chatHosts[wikiID] != nil
+            }
+            if alreadyServing { return }
+            throw DaemonStoreResolutionError.registryUnreadable(reason)
+        }
+    }
+
     func prepareWiki(_ wikiID: WikiID) async throws {
+        // Coherence gate FIRST: a deleted wiki must fail before any profile
+        // boot or store open (both create the database file), and an
+        // app-created/renamed wiki must be visible before resolution.
+        try await reconcileForOperation(wikiID)
         if profileOwner != nil {
             _ = try await prepareAndResolveWikiServices(wikiID: wikiID)
         } else {
@@ -495,6 +734,17 @@ final class WikiDaemon: @unchecked Sendable {
     var heartbeatInterval: UInt64 = 60_000_000_000
     #endif
 
+    /// Narrow test seam for the deletion-during-prepare race: invoked after
+    /// the wiki profile boot completes and before admission is published —
+    /// the exact window an app-side delete can land in. Nil in production;
+    /// set only by tests (see `WikiDaemonWorkloadHostTests`).
+    var testPreAdmissionHook: (@Sendable (WikiID) async -> Void)?
+
+    /// Narrow test seam for the deletion-after-publish race: invoked after
+    /// services are admitted and the chat host is constructed, immediately
+    /// before the fenced install. Nil in production.
+    var testPreInstallHook: (@Sendable (WikiID) async -> Void)?
+
     /// Start a recurring liveness heartbeat that logs every 60 s:
     /// `wikid: heartbeat — active sessions=N, queue items=M`.
     ///
@@ -568,7 +818,10 @@ final class WikiDaemon: @unchecked Sendable {
 
     func listWikis() -> Data {
         queue.sync {
-            (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(registry.wikis) })) ?? Data()
+            // Read view: serve the app's on-disk truth (fresh wikis + renames
+            // done app-side appear without a daemon restart).
+            adoptDiskRegistryIfReadable(reason: "listWikis")
+            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(registry.wikis) })) ?? Data()
         }
     }
 
@@ -702,7 +955,19 @@ final class WikiDaemon: @unchecked Sendable {
         queue.sync { () -> Bool in
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return false }
-            guard registry.descriptor(id: wikiID) != nil else { return false }
+            switch reconcileRegistry(wikiID) {
+            case .missing, .deleted:
+                // Sync seam — it cannot await the deletion teardown; the async
+                // boundaries (prepare/open) own eviction. Refuse the rename.
+                return false
+            case .unreadable(let reason):
+                // Renaming from memory then saving would overwrite the corrupt
+                // file with an unverified view — refuse instead.
+                DebugLog.store("wikid: renameWiki \(wikiID.rawValue) — registry unreadable, refusing: \(reason)")
+                return false
+            case .present, .adopted:
+                break
+            }
             registry.rename(id: wikiID, to: trimmed)
             DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })
             return true
@@ -711,6 +976,9 @@ final class WikiDaemon: @unchecked Sendable {
 
     func resolveWiki(selector: String) -> Data? {
         queue.sync {
+            // Read view: resolve against the app's on-disk truth so both ULID
+            // and display-name selectors see app-side renames/creations.
+            adoptDiskRegistryIfReadable(reason: "resolveWiki")
             // Mirrors WikiResolver.descriptor(forSelector:): ULID first, then displayName
             let descriptor = registry.descriptor(id: WikiID(rawValue: selector))
                 ?? registry.wikis.first { $0.displayName == selector }
@@ -721,9 +989,6 @@ final class WikiDaemon: @unchecked Sendable {
     // MARK: - Store lifecycle
 
     func openStore(wikiID: WikiID) async -> Bool {
-        guard queue.sync(execute: { registry.descriptor(id: wikiID) != nil }) else {
-            return false
-        }
         do {
             try await prepareWiki(wikiID)
             _ = try resolvePreparedStore(wikiID: wikiID)
@@ -794,8 +1059,24 @@ final class WikiDaemon: @unchecked Sendable {
     static let errorTokenSentinel = "<<changeToken-read-error>>"
 
     func changeToken(wikiID: WikiID) async -> String {
-        guard queue.sync(execute: { registry.descriptor(id: wikiID) != nil }) else {
+        switch queue.sync(execute: { reconcileRegistry(wikiID) }) {
+        case .deleted:
+            await evictDeletedWiki(wikiID)
             return ""
+        case .missing:
+            return ""
+        case .unreadable(let reason):
+            // Keep live wikis serving; only report the sentinel when nothing
+            // is admitted (the File Provider treats it as "changed").
+            let alreadyServing = queue.sync {
+                preparedServices[wikiID] != nil || openStores[wikiID] != nil
+            }
+            if !alreadyServing {
+                DebugLog.store("wikid: changeToken for \(wikiID.rawValue) — registry unreadable: \(reason)")
+                return Self.errorTokenSentinel
+            }
+        case .present, .adopted:
+            break
         }
         do {
             try await prepareWiki(wikiID)
@@ -1113,6 +1394,10 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     func ensureChatHost(wikiID: WikiID) async throws -> DaemonChatHost {
+        // Registry coherence BEFORE the cached-host return: without it, a
+        // wiki deleted on disk keeps serving chat operations from its cached
+        // host until daemon shutdown.
+        try await reconcileForOperation(wikiID)
         if let host = queue.sync(execute: { chatHosts[wikiID] }) {
             return host
         }
@@ -1159,15 +1444,49 @@ final class WikiDaemon: @unchecked Sendable {
         }
         try Task.checkCancellation()
 
-        let inserted = queue.sync { () -> Bool in
-            if chatHosts[wikiID] != nil {
-                return false
+        // Fence the admission epoch captured at service admission (the value
+        // `publishPreparedServices` verified): any eviction that ran while the
+        // host constructed bumps it and must reject this install.
+        let admissionEpoch = queue.sync { preparationEpochs[wikiID, default: 0] }
+        // Narrow test seam: the window between service publish and host
+        // install is where an app-side delete can land. Nil in production.
+        if let testPreInstallHook {
+            await testPreInstallHook(wikiID)
+        }
+
+        enum InstallOutcome {
+            case installed
+            case duplicate
+            case rejected
+        }
+        let outcome = queue.sync { () -> InstallOutcome in
+            if chatHosts[wikiID] != nil { return .duplicate }
+            guard preparationEpochs[wikiID, default: 0] == admissionEpoch else {
+                return .rejected
+            }
+            switch reconcileRegistry(wikiID) {
+            case .deleted, .missing:
+                return .rejected
+            case .present, .adopted, .unreadable:
+                break
             }
             chatHosts[wikiID] = host
-            return true
+            return .installed
         }
-        if !inserted {
+        switch outcome {
+        case .installed:
+            break
+        case .duplicate:
+            // Another task won the slot; it owns the installed host.
             await host.shutdown()
+        case .rejected:
+            // The wiki was deleted (or its admission fenced out) while the
+            // host constructed. Shut the new host down and run the full
+            // gate-free eviction — safe under the creation gate this path
+            // runs within.
+            await host.shutdown()
+            await evictDeletedWiki(wikiID)
+            throw DaemonStoreResolutionError.unavailable(wikiID)
         }
     }
     #endif

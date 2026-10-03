@@ -156,6 +156,10 @@ func enqueueIngestion(
                 recordedNames: ingestionSourceNames.isEmpty ? nil : ingestionSourceNames))
         _ = try await queueEngine.enqueue(request)
     } catch {
-        DebugLog.ingest("enqueueIngestion: enqueue failed — \(error.localizedDescription)")
+        // Interpolate the error itself, not `localizedDescription`: a
+        // `QueueRPCError` bridges to an opaque "error 1" through
+        // `localizedDescription`, which hid the daemon's rejection reason
+        // while live ingestion silently no-oped.
+        DebugLog.ingest("enqueueIngestion: enqueue failed — \(error)")
     }
 }

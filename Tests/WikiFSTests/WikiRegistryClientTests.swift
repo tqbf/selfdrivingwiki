@@ -30,6 +30,46 @@ struct WikiRegistryClientTests {
         #expect(registry.activeWikiID != nil)
     }
 
+    // MARK: - Strict registry loading (unreadable vs. valid empty)
+
+    /// A missing registry file is a VALID empty registry (fresh install) —
+    /// `loadStrictly` returns empty rather than throwing.
+    @Test func loadStrictlyTreatsMissingFileAsValidEmptyRegistry() throws {
+        let dir = tempDirectory()  // no wikis.json written
+        let registry = try WikiRegistry.loadStrictly(from: dir)
+        #expect(registry.isEmpty)
+    }
+
+    /// A corrupt registry file THROWS from `loadStrictly` — distinct from a
+    /// valid empty registry — while `load` keeps its launch-safe
+    /// degrade-to-empty behavior over the same file.
+    @Test func loadStrictlyThrowsOnCorruptRegistryWhileLoadDegradesToEmpty() throws {
+        let dir = tempDirectory()
+        try Data("definitely not json".utf8).write(to: dir.appendingPathComponent(WikiRegistry.fileName))
+
+        #expect(throws: WikiRegistryReadError.self) {
+            _ = try WikiRegistry.loadStrictly(from: dir)
+        }
+        #expect(WikiRegistry.load(from: dir).isEmpty)
+    }
+
+    /// A valid file round-trips through `loadStrictly` with the same contents
+    /// as `load`.
+    @Test func loadStrictlyDecodesAValidRegistryLikeLoad() throws {
+        let dir = tempDirectory()
+        var saved = WikiRegistry()
+        saved.add(WikiDescriptor(
+            id: WikiID(rawValue: "strict-roundtrip"),
+            displayName: "Strict Roundtrip",
+            createdAt: Date(timeIntervalSince1970: 1),
+            lastUsedAt: Date(timeIntervalSince1970: 1)))
+        try saved.save(to: dir)
+
+        let strict = try WikiRegistry.loadStrictly(from: dir)
+        #expect(strict == saved)
+        #expect(strict.descriptor(id: WikiID(rawValue: "strict-roundtrip"))?.displayName == "Strict Roundtrip")
+    }
+
     // MARK: - Deferred activation (launch reentrancy sequencing)
 
     /// Guards the macOS-26 launch sequencing: `App.init()` calls

@@ -134,6 +134,385 @@ struct WikiDaemonWorkloadHostTests {
         #expect(first.epoch == second.epoch)
     }
 
+    /// Regression: the app creates wikis out-of-process (`WikiRegistryClient`
+    /// writes `wikis.json` + the `<ulid>.sqlite` directly), while the daemon
+    /// loads its registry once at init. A wiki created after the daemon started
+    /// must still be enqueueable — the live bug: user creates a wiki, customizes
+    /// its strategy, imports a source, presses Ingest, and the enqueue RPC fails
+    /// with `DaemonStoreResolutionError.unavailable` (surfaced in Console.app
+    /// only as a useless `QueueRPCError error 1`), so nothing happens.
+    ///
+    /// Mirrors the exact `enqueueItem` seam (`Sources/wikid/main.swift`):
+    /// `prepareWiki` first, then the engine enqueue.
+    @Test func enqueueSucceedsForWikiRegisteredAfterDaemonStart() async throws {
+        let dir = makeTempDir()
+        // Daemon starts first — its in-memory registry snapshot predates the wiki.
+        let daemon = WikiDaemon(containerDirectory: dir)
+
+        // Then the app-side flow: registry row + database appear on disk.
+        let wikiID = WikiID(rawValue: "late-created-wiki")
+        var registry = WikiRegistry()
+        registry.add(WikiDescriptor(
+            id: wikiID,
+            displayName: "Late Created Wiki",
+            createdAt: Date(timeIntervalSince1970: 1),
+            lastUsedAt: Date(timeIntervalSince1970: 1)))
+        try registry.save(to: dir)
+        _ = try GRDBWikiStore(
+            databaseURL: dir.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false))
+
+        // The enqueue the Ingest button performs. Must not throw.
+        try await daemon.prepareWiki(wikiID)
+        let result = try await daemon.daemonQueueHost.perform { engine in
+            try await engine.enqueue(
+                QueueItemRequest(
+                    queue: .ingestion,
+                    wikiID: wikiID,
+                    payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")])))
+        }
+        #expect(!result.value.rawValue.isEmpty)
+
+        // The item is durably queued for the late-created wiki.
+        let snapshot = try await daemon.daemonQueueHost.perform { engine in
+            await engine.snapshot()
+        }
+        #expect(snapshot.value.activeItems.contains { $0.wikiID == wikiID })
+    }
+
+    /// Registry coherence — rename: an app-side rename (the app rewrites
+    /// `wikis.json` out-of-process) must surface in the daemon's read views
+    /// (`listWikis`, `resolveWiki`) without a daemon restart.
+    @Test func listAndResolveReflectAppSideRenameAfterDaemonStart() async throws {
+        let dir = makeTempDir()
+        let wikiID = WikiID(rawValue: "rename-wiki")
+        let daemon = try await makePreparedDaemon(directory: dir, wikiID: wikiID)
+
+        // Pre-rename sanity: the daemon serves the original name.
+        let before = try JSONDecoder().decode([WikiDescriptor].self, from: daemon.listWikis())
+        #expect(before.contains { $0.id == wikiID && $0.displayName == wikiID.rawValue })
+
+        // App-side rename: load-modify-save wikis.json, identity untouched.
+        var registry = WikiRegistry.load(from: dir)
+        registry.rename(id: wikiID, to: "Renamed By App")
+        try registry.save(to: dir)
+
+        let after = try JSONDecoder().decode([WikiDescriptor].self, from: daemon.listWikis())
+        #expect(after.contains { $0.id == wikiID && $0.displayName == "Renamed By App" })
+
+        // Display-name selectors resolve to the fresh name too.
+        let resolvedData = try #require(daemon.resolveWiki(selector: "Renamed By App"))
+        let resolved = try JSONDecoder().decode(WikiDescriptor.self, from: resolvedData)
+        #expect(resolved.id == wikiID)
+    }
+
+    /// Registry coherence — delete: after the app deletes a wiki whose
+    /// services the daemon already cached, the wiki must be evicted (cannot
+    /// enqueue, cannot reopen) and its database must NOT be recreated by the
+    /// failed operations.
+    @Test func deletedWikiIsEvictedCannotReopenAndDoesNotRecreateDatabase() async throws {
+        let dir = makeTempDir()
+        let wikiID = WikiID(rawValue: "deleted-wiki")
+        let daemon = try await makePreparedDaemon(directory: dir, wikiID: wikiID)
+        let databaseURL = dir.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
+        #expect(FileManager.default.fileExists(atPath: databaseURL.path))
+
+        // App-side delete: registry row removed + DB files removed.
+        var registry = WikiRegistry.load(from: dir)
+        registry.remove(id: wikiID)
+        try registry.save(to: dir)
+        let fileManager = FileManager.default
+        for suffix in ["", "-wal", "-shm"] {
+            let path = databaseURL.path + suffix
+            guard fileManager.fileExists(atPath: path) else { continue }
+            try fileManager.removeItem(atPath: path)
+        }
+
+        // The enqueue gateway (prepareWiki) refuses and evicts.
+        await #expect(throws: DaemonStoreResolutionError.self) {
+            try await daemon.prepareWiki(wikiID)
+        }
+        #expect(await daemon.openStore(wikiID: wikiID) == false)
+        // Repeated attempts keep failing without recreating the database.
+        #expect(await daemon.openStore(wikiID: wikiID) == false)
+        await #expect(throws: DaemonStoreResolutionError.self) {
+            try await daemon.prepareWiki(wikiID)
+        }
+        #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+    }
+
+    /// Registry coherence — deletion masked by read-view adoption: a wiki the
+    /// daemon already serves gets deleted app-side, then `listWikis` /
+    /// `resolveWiki` adopt the on-disk registry and drop the deleted
+    /// descriptor WITHOUT eviction. The subsequent prepare/open/changeToken
+    /// boundaries must still detect the deletion (via the daemon's held
+    /// lifecycle state, not just the memory registry), evict for real —
+    /// prepared services, open store, chat host, child profile — and leave no
+    /// recreated database behind.
+    @Test func readViewAdoptionDoesNotMaskDeletionAndTearsDownHeldServices() async throws {
+        let dir = makeTempDir()
+        let daemon = try await WikiDaemon.profileBackedForTesting(containerDirectory: dir)
+        let created = try #require(await daemon.createWiki(name: "Adopted Delete Wiki"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let databaseURL = dir.appendingPathComponent("\(wiki.id.rawValue).sqlite", isDirectory: false)
+
+        // Daemon holds services + an open store + a chat host for the wiki.
+        try await daemon.prepareWiki(wiki.id)
+        let chatHost = try await daemon.ensureChatHost(wikiID: wiki.id)
+        _ = try daemon.resolvePreparedStore(wikiID: wiki.id)  // cache present pre-eviction
+
+        // App-side delete: registry row + DB files.
+        var registry = WikiRegistry.load(from: dir)
+        registry.remove(id: wiki.id)
+        try registry.save(to: dir)
+        let fileManager = FileManager.default
+        for suffix in ["", "-wal", "-shm"] {
+            let path = databaseURL.path + suffix
+            guard fileManager.fileExists(atPath: path) else { continue }
+            try fileManager.removeItem(atPath: path)
+        }
+
+        // THE BUG TRIGGER: the read views adopt the on-disk registry, wiping
+        // the deleted descriptor from the daemon's in-memory registry
+        // without any eviction.
+        _ = daemon.listWikis()
+        _ = daemon.resolveWiki(selector: wiki.id.rawValue)
+
+        // The async boundaries must refuse AND evict.
+        await #expect(throws: DaemonStoreResolutionError.self) {
+            try await daemon.prepareWiki(wiki.id)
+        }
+        #expect(await daemon.openStore(wikiID: wiki.id) == false)
+        #expect(await daemon.changeToken(wikiID: wiki.id) == "")
+
+        // ACTUAL teardown, not just refusal:
+        // - the open-store cache is gone (internal resolution seam throws)
+        #expect(throws: DaemonStoreResolutionError.self) {
+            _ = try daemon.resolvePreparedStore(wikiID: wiki.id)
+        }
+        // - the previously handed-out chat host was shut down
+        #expect(await chatHost.liveControllerCountForTesting() == 0)
+        // - no chat host can be recreated for the deleted wiki
+        await #expect(throws: (any Error).self) {
+            _ = try await daemon.ensureChatHost(wikiID: wiki.id)
+        }
+        // - no database file was recreated by the refused operations
+        #expect(!fileManager.fileExists(atPath: databaseURL.path))
+    }
+
+    /// Registry coherence — deletion DURING the profile boot (the prepare
+    /// race): the coherence gate passes, the wiki is deleted on disk while
+    /// `profileOwner.wiki` boots, and the admission re-check must reject the
+    /// boot AND clean it up immediately — booted profile, recreated database —
+    /// not leave them for a hypothetical next operation. Deterministic via
+    /// the narrow `testPreAdmissionHook` seam (nil in production).
+    @Test func midBootDeletionRejectsAdmissionAndCleansUpImmediately() async throws {
+        let dir = makeTempDir()
+        let daemon = try await WikiDaemon.profileBackedForTesting(containerDirectory: dir)
+        let created = try #require(await daemon.createWiki(name: "Race Wiki"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let databaseURL = dir.appendingPathComponent("\(wiki.id.rawValue).sqlite", isDirectory: false)
+
+        // Drop the daemon's held services WITHOUT touching the registry row
+        // or files, so the next prepare actually boots a profile.
+        await daemon.removeWikiProfile(wiki.id)
+        #expect(FileManager.default.fileExists(atPath: databaseURL.path))
+
+        // The app deletes the registry row exactly between boot completion
+        // and admission publish (the app deletes the row first, files after).
+        daemon.testPreAdmissionHook = { deletedWikiID in
+            var registry = WikiRegistry.load(from: dir)
+            registry.remove(id: deletedWikiID)
+            do {
+                try registry.save(to: dir)
+            } catch {
+                Issue.record("test hook could not rewrite the registry: \(error)")
+            }
+        }
+        defer { daemon.testPreAdmissionHook = nil }
+
+        // Prepare must reject the boot…
+        await #expect(throws: DaemonStoreResolutionError.self) {
+            try await daemon.prepareWiki(wiki.id)
+        }
+        // …and clean up IMMEDIATELY: the recreated database file is gone
+        // (nothing else ran between the throw and this check)…
+        #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+        // …nothing was admitted…
+        #expect(throws: DaemonStoreResolutionError.self) {
+            _ = try daemon.resolvePreparedStore(wikiID: wiki.id)
+        }
+        // …and later boundaries keep refusing without recreating anything.
+        #expect(await daemon.openStore(wikiID: wiki.id) == false)
+        #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+    }
+
+    /// Registry coherence — a registry file that VANISHES while the daemon
+    /// serves wikis is unreadable, not "all wikis deleted": new admissions
+    /// fail distinctly, serving wikis keep serving, and no database is
+    /// destroyed. (The app's real deletion rewrites the file without the row;
+    /// it never removes the file first.)
+    @Test func vanishedRegistryFileIsUnreadableNotMassDeletion() async throws {
+        let dir = makeTempDir()
+        let daemon = try await WikiDaemon.profileBackedForTesting(containerDirectory: dir)
+        let created = try #require(await daemon.createWiki(name: "Serving Wiki"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        try await daemon.prepareWiki(wiki.id)
+        let databaseURL = dir.appendingPathComponent("\(wiki.id.rawValue).sqlite", isDirectory: false)
+        #expect(FileManager.default.fileExists(atPath: databaseURL.path))
+
+        // The registry file disappears (failed save, backup tooling — never
+        // the app's deletion path).
+        try FileManager.default.removeItem(
+            at: dir.appendingPathComponent(WikiRegistry.fileName, isDirectory: false))
+
+        // New admissions fail with the DISTINCT unreadable error — not
+        // `unavailable`, and not a silent empty-registry adoption.
+        do {
+            try await daemon.prepareWiki(WikiID(rawValue: "some-other-wiki"))
+            Issue.record("prepareWiki unexpectedly succeeded with a vanished registry file")
+        } catch let error as DaemonStoreResolutionError {
+            switch error {
+            case .registryUnreadable: break
+            default: Issue.record("expected registryUnreadable, got \(error)")
+            }
+        }
+
+        // The serving wiki keeps serving, and its database survives — no
+        // mass eviction, no artifact destruction.
+        #expect(await daemon.openStore(wikiID: wiki.id) == true)
+        #expect(FileManager.default.fileExists(atPath: databaseURL.path))
+
+        // Read views serve the in-memory view rather than an empty list.
+        let stale = try JSONDecoder().decode([WikiDescriptor].self, from: daemon.listWikis())
+        #expect(stale.contains { $0.id == wiki.id })
+    }
+
+    /// Registry coherence — deletion AFTER service publish, BEFORE chat-host
+    /// install: the install fence (admission epoch + disk recheck) must
+    /// reject the newly constructed host, shut it down, and run the full
+    /// gate-free eviction. Deterministic via the narrow `testPreInstallHook`
+    /// seam (nil in production).
+    @Test func deletionAfterPublishBeforeInstallRejectsAndTearsDownHost() async throws {
+        let dir = makeTempDir()
+        let daemon = try await WikiDaemon.profileBackedForTesting(containerDirectory: dir)
+        let created = try #require(await daemon.createWiki(name: "Install Fence Wiki"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let databaseURL = dir.appendingPathComponent("\(wiki.id.rawValue).sqlite", isDirectory: false)
+
+        // The app deletes the registry row exactly between service publish
+        // and host install (row first, files after — files still exist here,
+        // which is what makes this the sharpest form of the race).
+        daemon.testPreInstallHook = { deletedWikiID in
+            var registry = WikiRegistry.load(from: dir)
+            registry.remove(id: deletedWikiID)
+            do {
+                try registry.save(to: dir)
+            } catch {
+                Issue.record("test hook could not rewrite the registry: \(error)")
+            }
+        }
+        defer { daemon.testPreInstallHook = nil }
+
+        // Host creation must reject…
+        await #expect(throws: DaemonStoreResolutionError.self) {
+            _ = try await daemon.ensureChatHost(wikiID: wiki.id)
+        }
+        // …and tear down: nothing admitted, nothing cached…
+        #expect(throws: DaemonStoreResolutionError.self) {
+            _ = try daemon.resolvePreparedStore(wikiID: wiki.id)
+        }
+        // …the database file is gone (eviction cleaned the app's leftover
+        // files too — deletion semantics, not just refusal)…
+        #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+        // …and repeated host creation keeps refusing without recreating.
+        await #expect(throws: DaemonStoreResolutionError.self) {
+            _ = try await daemon.ensureChatHost(wikiID: wiki.id)
+        }
+        #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+    }
+
+    /// Registry coherence — a CACHED chat host for a wiki deleted on disk
+    /// must be rejected directly by the next `ensureChatHost` (no prior
+    /// prepare/open call) and evicted: the coherence gate runs before the
+    /// cache return, so the deleted wiki cannot keep chat operations alive.
+    @Test func cachedEnsureChatHostRejectsDirectlyAfterDiskDeletion() async throws {
+        let dir = makeTempDir()
+        let daemon = try await WikiDaemon.profileBackedForTesting(containerDirectory: dir)
+        let created = try #require(await daemon.createWiki(name: "Cached Host Wiki"))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let databaseURL = dir.appendingPathComponent("\(wiki.id.rawValue).sqlite", isDirectory: false)
+
+        // Host cached and held by the test.
+        let chatHost = try await daemon.ensureChatHost(wikiID: wiki.id)
+
+        // App-side delete: registry row + files.
+        var registry = WikiRegistry.load(from: dir)
+        registry.remove(id: wiki.id)
+        try registry.save(to: dir)
+        let fileManager = FileManager.default
+        for suffix in ["", "-wal", "-shm"] {
+            let path = databaseURL.path + suffix
+            guard fileManager.fileExists(atPath: path) else { continue }
+            try fileManager.removeItem(atPath: path)
+        }
+
+        // The very next ensureChatHost — with NO intervening prepare/open —
+        // must reject directly and evict the cached host.
+        await #expect(throws: DaemonStoreResolutionError.self) {
+            _ = try await daemon.ensureChatHost(wikiID: wiki.id)
+        }
+        #expect(await chatHost.liveControllerCountForTesting() == 0)
+        #expect(throws: DaemonStoreResolutionError.self) {
+            _ = try daemon.resolvePreparedStore(wikiID: wiki.id)
+        }
+        #expect(!fileManager.fileExists(atPath: databaseURL.path))
+    }
+
+    /// Registry coherence — unreadable: a corrupt `wikis.json` fails DISTINCTLY
+    /// from a valid empty registry, keeps the in-memory view and live services,
+    /// and recovers once the file is readable again.
+    @Test func unreadableRegistryFailsDistinctlyAndPreservesServingWikis() async throws {
+        let dir = makeTempDir()
+        let wikiID = WikiID(rawValue: "serving-wiki")
+        let daemon = try await makePreparedDaemon(directory: dir, wikiID: wikiID)
+        try await daemon.prepareWiki(wikiID)  // daemon now holds services
+
+        let registryURL = dir.appendingPathComponent(WikiRegistry.fileName, isDirectory: false)
+        try Data("not a registry".utf8).write(to: registryURL)
+
+        // An already-SERVING wiki keeps serving through corruption — the
+        // daemon's admitted state is trusted evidence the wiki exists, and a
+        // corrupt file must not tear down live wikis.
+        try await daemon.prepareWiki(wikiID)
+        #expect(await daemon.openStore(wikiID: wikiID) == true)
+
+        // Read views serve the stale in-memory view rather than an empty list.
+        let stale = try JSONDecoder().decode([WikiDescriptor].self, from: daemon.listWikis())
+        #expect(stale.contains { $0.id == wikiID })
+
+        // Contrast: an UNKNOWN wiki with an unreadable registry is still the
+        // unreadable error — corruption never masquerades as "no such wiki".
+        do {
+            try await daemon.prepareWiki(WikiID(rawValue: "other-wiki"))
+            Issue.record("prepareWiki unexpectedly succeeded with a corrupt registry")
+        } catch let error as DaemonStoreResolutionError {
+            switch error {
+            case .registryUnreadable: break
+            default: Issue.record("expected registryUnreadable, got \(error)")
+            }
+        }
+
+        // Repair the file: normal service resumes.
+        var registry = WikiRegistry()
+        registry.add(WikiDescriptor(
+            id: wikiID,
+            displayName: wikiID.rawValue,
+            createdAt: Date(timeIntervalSince1970: 1),
+            lastUsedAt: Date(timeIntervalSince1970: 1)))
+        try registry.save(to: dir)
+        try await daemon.prepareWiki(wikiID)
+    }
+
     @Test func daemonForwardingIsSubscribedBeforeEnginePublication() async throws {
         let dir = makeTempDir()
         let daemon = WikiDaemon(containerDirectory: dir)

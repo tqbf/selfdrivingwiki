@@ -75,15 +75,38 @@ public struct WikiRegistry: Codable, Equatable, Sendable {
     /// fresh install → an empty registry (NOT an error). A corrupt file also
     /// degrades to empty rather than crashing the app on launch.
     public static func load(from directory: URL) -> WikiRegistry {
-        let url = directory.appendingPathComponent(fileName, isDirectory: false)
-        guard let data = DebugLog.trying("load", operation: { try Data(contentsOf: url) }) else { return WikiRegistry() }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let registry = DebugLog.trying("load decode", operation: { try decoder.decode(WikiRegistry.self, from: data) }) else {
+        do {
+            return try loadStrictly(from: directory)
+        } catch {
             DebugLog.config("WikiRegistry: corrupt \(fileName), starting empty")
             return WikiRegistry()
         }
-        return registry
+    }
+
+    /// Strict variant of ``load(from:)``: a missing file is still a valid empty
+    /// registry, but an unreadable or undecodable file THROWS instead of
+    /// degrading to empty. Callers that must not mistake "the registry file is
+    /// corrupt" for "the user has no wikis" (the daemon's registry coherence,
+    /// which would otherwise treat corruption as mass deletion) need this
+    /// distinction; launch paths keep the degrade-to-empty behavior of `load`.
+    public static func loadStrictly(from directory: URL) throws -> WikiRegistry {
+        let url = directory.appendingPathComponent(fileName, isDirectory: false)
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as CocoaError
+        where error.code == .fileReadNoSuchFile {
+            return WikiRegistry()
+        } catch {
+            throw WikiRegistryReadError.unreadable(path: url.path, reason: String(describing: error))
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do {
+            return try decoder.decode(WikiRegistry.self, from: data)
+        } catch {
+            throw WikiRegistryReadError.unreadable(path: url.path, reason: String(describing: error))
+        }
     }
 
     /// Persist the registry to `wikis.json` in `directory` (pretty-printed +
@@ -97,4 +120,15 @@ public struct WikiRegistry: Codable, Equatable, Sendable {
         let data = try encoder.encode(self)
         try data.write(to: url, options: .atomic)
     }
+}
+
+/// Failure when `wikis.json` exists but cannot be read or decoded. Distinct
+/// from a missing file (which is a valid empty registry — a fresh install) so
+/// a caller can tell "no wikis" from "the registry is unreadable" instead of
+/// both degrading to the same empty result. See
+/// ``WikiRegistry/loadStrictly(from:)``.
+public enum WikiRegistryReadError: Error, Equatable, Sendable {
+    /// The registry file at `path` could not be read or decoded (`reason`
+    /// describes the failure).
+    case unreadable(path: String, reason: String)
 }
