@@ -27,9 +27,10 @@ Persistence, atomicity, scripted pipeline, capture, projection, renderer, and ev
 Pre-commit lint passed with zero violations after 17 initial findings were corrected.
 `make build` and `make test` passed. Bare `swift build` passed.
 The full bare test run after narrow descriptor and test-isolation fixes passed.
-A later handoff `make build` passed, but `make test` failed two tests.
-`launcherPositiveFixturesCompile` timed out. `bunRuntimeCompletesTerminalFrameAndReapsChild` reported an inconsistent elapsed-time timeout.
-The final gate is not green. Earlier passing runs do not replace this failure.
+A later handoff `make build` passed, but `make test` failed two tests during a confirmed 905-second thermal system sleep.
+Production wall-clock timeout semantics remain unchanged. The proposed awake-time changes were reverted.
+Final `caffeinate -i make test` and `caffeinate -i swift test` each passed 4,343 tests across 450 suites.
+The sweep-gate mechanics self-test now uses an isolated instance. Commit: `c3badb43`.
 The earlier guarded-descriptor crash cause remains unproven. A clean run does not establish causality.
 
 The hosted editor now passes five of six scenarios, with real controls and events:
@@ -55,12 +56,17 @@ This is evidence from these fixtures, not a guarantee of model obedience.
 
 ## Remaining work
 
-1. Collect UI cleanup and compile/test results.
-2. Commit the UI/templates and documentation with the template blocker stated explicitly.
-3. Rerun final gates after cleanup and lint-only changes as needed.
-4. Obtain an eligible independent review family or an explicit operator waiver.
-5. Obtain human rubric decisions and resolve the template-menu runtime workflow.
-6. Push and prepare a draft PR only with all unresolved acceptance criteria visible.
+UI cleanup and documentation are committed as `b6b9d917` and `1344300f`.
+The final keyboard and supported accessibility picker probes were inert. Their patches were removed.
+The committed hosted suite preserves five passes and one explicit template-menu failure.
+A read-only adversarial completion check confirmed the remaining external gates.
+
+1. Obtain an eligible independent review family or an explicit operator waiver.
+2. Obtain human rubric decisions.
+3. Provide a supported real-menu host or perform and record manual production template workflow checks.
+4. Push and prepare a PR after the required gates are resolved. Keep any earlier draft explicitly incomplete.
+
+The operator was unavailable when asked to choose these paths. The goal is blocked, not complete.
 
 The review-family question remains unanswered because the operator was unavailable.
 Both OpenAI and GLM authored code. Do not call a GLM review independent for GLM-authored portions.
