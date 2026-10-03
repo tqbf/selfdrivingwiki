@@ -468,6 +468,32 @@ let package = Package(
             path: "Sources/wikictl",
             swiftSettings: strictSwiftSettings
         ),
+        // The live semantic evaluation harness (plan Phase 5.3-5.5, AC.7):
+        // scenario fixtures, the deterministic structural evaluator, the
+        // budgeted live runner over the real launcher/provider seams, and the
+        // reports. Library so WikiFSCoreTests exercises the evaluator's
+        // negative controls without spawning anything live. The live half is
+        // macOS-only (#if canImport(WikiFSEngine) && os(macOS)); it boots
+        // the real agent-loop composition through WikiFSEngine's
+        // AgentLoopRuntimeFactory, so it needs no direct Cordis dependency.
+        .target(
+            name: "WikiStrategyEval",
+            dependencies: [
+                "WikiFSCore",
+                .target(name: "WikiFSEngine",
+                        condition: .when(platforms: [.macOS])),
+            ],
+            path: "Sources/WikiStrategyEval",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Opt-in CLI over the harness. NEVER wired into CI: a live run spends
+        // real provider quota. `run` refuses without an explicit --live.
+        .executableTarget(
+            name: "WikiStrategyEvalRunner",
+            dependencies: ["WikiFSCore", "WikiStrategyEval"],
+            path: "Sources/WikiStrategyEvalRunner",
+            swiftSettings: strictSwiftSettings
+        ),
         // Test-only process helper for kernel-lock integration coverage. It is
         // not bundled into the app or daemon.
         .executableTarget(
@@ -565,7 +591,7 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiFSExtractorStore", "WikiCtlCore", "ProviderConfigMutationHelper", "ExtractorPackageStoreProcessHelper",
+            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiFSExtractorStore", "WikiCtlCore", "ProviderConfigMutationHelper", "ExtractorPackageStoreProcessHelper", "WikiStrategyEval",
                            // WikiFSEngine is macOS-only at build time because it
                            // depends on the `ACP` product (macOS-only). On Linux
                            // the test target still builds — the ACP-backed tests
@@ -624,6 +650,7 @@ let package = Package(
                 .product(name: "TantivySwift", package: "tantivy.swift",
                          condition: .when(platforms: [.macOS])),
                 .product(name: "ACPModel", package: "swift-acp"),
+                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Tests/WikiFSAppTests",
             // The deterministic benchmark corpus is read through #filePath so
