@@ -75,6 +75,19 @@ public struct StructuralEvaluator: Sendable {
         return ScenarioEvaluation(scenarioID: scenario.id, outcomes: outcomes)
     }
 
+    /// Re-evaluate one AFTER-ONLY check against a single post-run snapshot —
+    /// the offline-recheck seam. Recorded live runs do not persist their
+    /// per-batch before snapshots, so a check that compares snapshots
+    /// (``StructuralCheck/requiresBeforeSnapshot``) cannot be re-derived
+    /// offline: it returns nil, and the caller carries the recorded outcome
+    /// forward. For the after-only kinds the `before` slot of the input below
+    /// is plumbing the existing implementations share; the dispatch guarantees
+    /// no before-reading code path runs for them.
+    public func evaluate(check: StructuralCheck, after: WikiObservation) -> CheckOutcome? {
+        guard !check.requiresBeforeSnapshot else { return nil }
+        return outcome(for: check, input: EvaluationInput(before: after, after: after))
+    }
+
     // MARK: - Per-check evaluation
 
     func outcome(for check: StructuralCheck, input: EvaluationInput) -> CheckOutcome {

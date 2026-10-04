@@ -106,6 +106,24 @@ public enum StructuralCheck: Sendable, Equatable, Codable {
     /// under different strategies (normalized whitespace/case compare) — a
     /// strategy that changed nothing observable.
     case differentOutputShape(pageTitle: String)
+
+    /// Whether this check compares the run's before and after snapshots.
+    /// After-only checks re-derive from one final-state snapshot. A check
+    /// that needs both cannot be re-derived from a final-state artifact:
+    /// the recorded runs do not persist their before snapshots, so an
+    /// offline recheck carries the recorded outcome forward instead of
+    /// inventing a before snapshot.
+    public var requiresBeforeSnapshot: Bool {
+        switch self {
+        case .retainedFact, .unsupportedClaim, .supersededInterpretation,
+             .citationsPresent, .historyDepth, .provenanceIncludes:
+            false
+        case .stablePageIdentity, .noUnrelatedPageEdits, .differentOutputShape:
+            true
+        case .strategyShape(_, _, _, let firstLeg):
+            firstLeg
+        }
+    }
 }
 
 /// A question a human answers against the produced page; machine results never
