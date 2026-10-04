@@ -137,21 +137,49 @@ final class QueueActivityTracker {
         return nil
     }
 
-    /// Returns the queue item ID of the extraction job currently running
-    /// for `sourceID`, or `nil` if no extraction is in flight. Used by
-    /// `SourceDetailView`'s Transcribe button to navigate to the specific job
-    /// in the Activity window when a transcription is already running (#842
-    /// PR2 C5). Since transcription merged into `.extraction`, transcript
-    /// items are tracked in `itemToSourceIDs` alongside PDF extractions.
-    /// Mirrors `lintItemID(for:wikiID:)` (#837). Source IDs are
-    /// ULIDs (globally unique), so no wiki-scoping is needed.
-    func transcriptionItemID(for sourceID: SourceID) -> QueueItem.ID? {
-        for (itemID, sourceIDs) in itemToSourceIDs {
-            if sourceIDs.contains(sourceID) {
+    /// Returns the queue item ID of the in-flight `queue`-lane job that
+    /// processes `sourceID`, or `nil` when none is. Powers the "go to the
+    /// running job" affordances on a source — the detail view's Extract and
+    /// Ingest buttons and the sidebar context menu (#837/#842 pattern
+    /// generalized beyond lint and transcription). The lookup is lane-aware:
+    /// a source can be tracked by an extraction AND an ingestion item at the
+    /// same time, so the caller names the lane and `itemToQueue`
+    /// disambiguates. `.transcription` matches the extraction lane
+    /// (transcription merged into `.extraction`; the legacy kind is kept
+    /// only for persisted rows). Source IDs are ULIDs (globally unique), so
+    /// no wiki-scoping is needed. Mirrors `lintItemID(for:wikiID:)` (#837).
+    func runningItemID(for sourceID: SourceID, queue: QueueKind) -> QueueItem.ID? {
+        let wanted = queue.canonical
+        for (itemID, sourceIDs) in itemToSourceIDs where sourceIDs.contains(sourceID) {
+            if itemToQueue[itemID]?.canonical == wanted {
                 return itemID
             }
         }
         return nil
+    }
+
+    /// Stage the pending-selection seam for a source's running job: resolve
+    /// ``runningItemID(for:queue:)`` and, when found, set
+    /// ``pendingSelectionItemID`` / ``pendingSelectionQueue`` so the Activity
+    /// window opens focused on that job. Returns the item ID (callers log
+    /// it), or `nil` when no job is in flight — the caller then just opens
+    /// the Activity window without a selection.
+    @discardableResult
+    func stagePendingSelectionForRunningJob(of sourceID: SourceID, queue: QueueKind) -> QueueItem.ID? {
+        guard let itemID = runningItemID(for: sourceID, queue: queue) else { return nil }
+        pendingSelectionItemID = itemID
+        pendingSelectionQueue = queue.canonical
+        return itemID
+    }
+
+    /// Returns the queue item ID of the extraction job currently running
+    /// for `sourceID`, or `nil` if no extraction is in flight. Used by
+    /// `SourceDetailView`'s Transcribe button to navigate to the specific job
+    /// in the Activity window when a transcription is already running (#842
+    /// PR2 C5). Thin wrapper over the lane-aware
+    /// ``runningItemID(for:queue:)``.
+    func transcriptionItemID(for sourceID: SourceID) -> QueueItem.ID? {
+        runningItemID(for: sourceID, queue: .extraction)
     }
     /// Bounded — pruned only when items are pruned from history (not on
     /// terminal state, so users can view completed/failed/cancelled transcripts).

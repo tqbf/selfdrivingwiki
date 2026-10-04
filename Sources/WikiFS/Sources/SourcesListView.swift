@@ -85,6 +85,13 @@ struct SourcesListCallbacks {
     /// Again?" confirmation. `names` lists the already-ingested sources.
     var onIngestNeedsConfirmation: (_ ids: [SourceID], _ names: [String]) -> Void
     var onExtract: ([SourceExtractItem]) -> Void
+    /// Navigate to the running job for a source in the given queue's Activity
+    /// window ("View in Agent Queue…" / "View in Extraction Queue…" context
+    /// items). The container owns the tracker and the Activity-window opener,
+    /// so the AppKit side stays queue-engine-free. The queue item is resolved
+    /// at tap time — a job that finished between menu build and click opens
+    /// the window without a selection.
+    var onShowRunningJob: (SourceID, QueueKind) -> Void
     var onRename: (SourceSummary) -> Void
     var onDelete: ([SourceID]) -> Void
     /// Bookmark a multi-row selection (or a single row) into a folder the user
@@ -489,6 +496,21 @@ extension SourcesListViewController {
                               action: #selector(extractAction(_:)), payload: payload))
         }
 
+        // "Go to the running job" — single selection only (a running job is
+        // one item; a multi-selection has no single destination). Offered per
+        // lane, exactly when that lane's spinner set contains the clicked
+        // source, so the item never appears for an idle source.
+        if !isMulti {
+            if ingestingIDs.contains(clicked.id) {
+                menu.addItem(item(title: "View in Agent Queue…", systemImage: "text.badge.plus",
+                                  action: #selector(showRunningIngestJobAction(_:)), payload: payload))
+            }
+            if extractingIDs.contains(clicked.id) {
+                menu.addItem(item(title: "View in Extraction Queue…", systemImage: "doc.plaintext",
+                                  action: #selector(showRunningExtractJobAction(_:)), payload: payload))
+            }
+        }
+
         menu.addItem(.separator())
         if !isMulti {
             menu.addItem(item(title: "Rename", systemImage: "pencil",
@@ -596,6 +618,16 @@ extension SourcesListViewController {
         }
         guard !toExtract.isEmpty else { return }
         callbacks?.onExtract(toExtract)
+    }
+    @objc private func showRunningIngestJobAction(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? SourcesMenuPayload {
+            callbacks?.onShowRunningJob(p.clicked.id, .ingestion)
+        }
+    }
+    @objc private func showRunningExtractJobAction(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? SourcesMenuPayload {
+            callbacks?.onShowRunningJob(p.clicked.id, .extraction)
+        }
     }
     @objc private func renameAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? SourcesMenuPayload { callbacks?.onRename(p.clicked) }

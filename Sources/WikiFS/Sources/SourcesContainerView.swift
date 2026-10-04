@@ -14,6 +14,10 @@ struct SourcesContainerView: View {
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: any WikiSessionProtocol
     @Environment(QueueActivityTracker.self) private var tracker
+    /// Opens the Activity window for a queue kind — the same environment
+    /// closure the detail views use (#745/#842). Backs the sidebar context
+    /// menu's "View in … Queue…" items.
+    @Environment(\.openActivityWindow) private var openActivityWindow
     let launcher: AgentLauncher
     let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
@@ -341,6 +345,14 @@ struct SourcesContainerView: View {
                         }
                     }
                 }
+            },
+            onShowRunningJob: { sourceID, queue in
+                if tracker.stagePendingSelectionForRunningJob(of: sourceID, queue: queue) != nil {
+                    DebugLog.ingest("Sources context menu: navigating to running \(queue.rawValue) job for source \(sourceID.rawValue)")
+                } else {
+                    DebugLog.ingest("Sources context menu: no running \(queue.rawValue) job for source \(sourceID.rawValue); opening Activity window")
+                }
+                openActivityWindow?(queue)
             },
             onRename: { source in beginRename(source) },
             onDelete: { ids in

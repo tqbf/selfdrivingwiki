@@ -1280,4 +1280,100 @@ struct QueueActivityTrackerLintItemIDTests {
         #expect(tracker.transcriptionItemID(for: src1) == QueueItemID(rawValue: "ext-1"))
     }
 }
+
+// MARK: - Running item ID resolution (source → running-job navigation)
+
+@Suite("QueueActivityTracker running item ID resolution")
+struct QueueActivityTrackerRunningItemIDTests {
+
+    private func makeSourceItem(
+        id: String,
+        queue: QueueKind,
+        sourceIDs: [SourceID],
+        state: QueueItemState = .running
+    ) -> QueueItem {
+        QueueItem(
+            id: QueueItemID(rawValue: id), queue: queue, wikiID: WikiID(rawValue: "w1"),
+            payload: QueueItemPayload(sourceIDs: sourceIDs),
+            state: state, orderingKey: 1000, attempt: 0,
+            createdAt: 0)
+    }
+
+    @MainActor
+    @Test("Extraction job resolves on the extraction lane only")
+    func extractionJobResolvesOnExtractionLane() {
+        let tracker = QueueActivityTracker()
+        let src = SourceID(rawValue: "src-1")
+        tracker.handleForTesting(.started(makeSourceItem(id: "ext-1", queue: .extraction, sourceIDs: [src])))
+
+        #expect(tracker.runningItemID(for: src, queue: .extraction) == QueueItemID(rawValue: "ext-1"))
+        #expect(tracker.runningItemID(for: src, queue: .ingestion) == nil)
+    }
+
+    @MainActor
+    @Test("Ingestion job resolves on the ingestion lane only")
+    func ingestionJobResolvesOnIngestionLane() {
+        let tracker = QueueActivityTracker()
+        let src = SourceID(rawValue: "src-1")
+        tracker.handleForTesting(.started(makeSourceItem(id: "ing-1", queue: .ingestion, sourceIDs: [src])))
+
+        #expect(tracker.runningItemID(for: src, queue: .ingestion) == QueueItemID(rawValue: "ing-1"))
+        #expect(tracker.runningItemID(for: src, queue: .extraction) == nil)
+    }
+
+    @MainActor
+    @Test("Both lanes running for one source resolve to their own items")
+    func bothLanesDisambiguate() {
+        let tracker = QueueActivityTracker()
+        let src = SourceID(rawValue: "shared")
+        tracker.handleForTesting(.started(makeSourceItem(id: "ext-1", queue: .extraction, sourceIDs: [src])))
+        tracker.handleForTesting(.started(makeSourceItem(id: "ing-1", queue: .ingestion, sourceIDs: [src])))
+
+        #expect(tracker.runningItemID(for: src, queue: .extraction) == QueueItemID(rawValue: "ext-1"))
+        #expect(tracker.runningItemID(for: src, queue: .ingestion) == QueueItemID(rawValue: "ing-1"))
+        // The transcription wrapper stays on the extraction lane.
+        #expect(tracker.transcriptionItemID(for: src) == QueueItemID(rawValue: "ext-1"))
+    }
+
+    @MainActor
+    @Test("Queued items resolve; terminal items stop resolving")
+    func terminalClearsResolution() {
+        let tracker = QueueActivityTracker()
+        let src = SourceID(rawValue: "src-1")
+        let item = makeSourceItem(id: "ing-1", queue: .ingestion, sourceIDs: [src], state: .queued)
+        tracker.handleForTesting(.enqueued(item))
+        #expect(tracker.runningItemID(for: src, queue: .ingestion) == QueueItemID(rawValue: "ing-1"))
+
+        tracker.handleForTesting(.completed(makeSourceItem(id: "ing-1", queue: .ingestion, sourceIDs: [src])))
+        #expect(tracker.runningItemID(for: src, queue: .ingestion) == nil)
+    }
+
+    @MainActor
+    @Test("Staging a pending selection sets the seam; a miss leaves it untouched")
+    func stagePendingSelectionSetsSeam() {
+        let tracker = QueueActivityTracker()
+        let src = SourceID(rawValue: "src-1")
+        tracker.handleForTesting(.started(makeSourceItem(id: "ext-1", queue: .extraction, sourceIDs: [src])))
+
+        let staged = tracker.stagePendingSelectionForRunningJob(of: src, queue: .extraction)
+        #expect(staged == QueueItemID(rawValue: "ext-1"))
+        #expect(tracker.pendingSelectionItemID == QueueItemID(rawValue: "ext-1"))
+        #expect(tracker.pendingSelectionQueue == .extraction)
+
+        // No job in flight → nil, and the staged seam keeps its value.
+        let other = SourceID(rawValue: "no-job")
+        #expect(tracker.stagePendingSelectionForRunningJob(of: other, queue: .ingestion) == nil)
+        #expect(tracker.pendingSelectionItemID == QueueItemID(rawValue: "ext-1"))
+    }
+
+    @MainActor
+    @Test("Legacy .transcription items resolve on the extraction lane")
+    func legacyTranscriptionCanonicalizes() {
+        let tracker = QueueActivityTracker()
+        let src = SourceID(rawValue: "src-1")
+        tracker.handleForTesting(.started(makeSourceItem(id: "tr-1", queue: .transcription, sourceIDs: [src])))
+
+        #expect(tracker.runningItemID(for: src, queue: .extraction) == QueueItemID(rawValue: "tr-1"))
+    }
+}
 #endif
