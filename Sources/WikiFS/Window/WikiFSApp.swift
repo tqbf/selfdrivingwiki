@@ -88,7 +88,8 @@ struct WikiFSApp: App {
     @AppStorage(AppearanceSettingsView.storageKey) private var appearanceModeRaw = AppearanceMode.system.rawValue
     /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
     /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
-    @State private var changeBridge: WikiChangeBridge?
+    /// Retained by `AppDelegate.changeBridge` (AppKit-owned storage) — see the
+    /// comment there for why it must not live in App `@State`.
     /// Bridges SwiftUI's `@Environment(\.openWindow)` to AppKit (menu bar,
     /// app delegate) so wiki windows can be reopened from the status item
     /// when no windows are visible (accessory mode). Wired by
@@ -479,7 +480,11 @@ struct WikiFSApp: App {
                 sessionManager.allSessions.filter { $0.wikiID == wikiID }
             }
             bridge.refreshObservations()
-            changeBridge = bridge
+            // Retain on the AppDelegate (AppKit-owned, app-lifetime), NOT in
+            // App `@State`: this Task runs from the `bootstrap` closure's copy
+            // of the App struct captured before SwiftUI installed `@State`
+            // storage (see the property's comment for the full failure mode).
+            appDelegate.changeBridge = bridge
             // Chat-driven external writes (an agent tool call completing a
             // shell command that may have committed, e.g. `wikictl source
             // add`) refresh through the SAME coalesced bridge path as a
@@ -876,7 +881,7 @@ struct WikiFSApp: App {
             // set: a freshly-created wiki's CLI writes must be heard; a
             // deleted wiki's notification name released.
             .onChange(of: registry.wikis) { _, _ in
-                changeBridge?.refreshObservations()
+                appDelegate.changeBridge?.refreshObservations()
             }
             .onChange(of: appearanceModeRaw) { _, _ in
                 applyAppKitAppearance()
@@ -1126,6 +1131,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// so without a strong owner it deallocates the moment `start()` returns
     /// (same pattern as `menuBarItemController`).
     @MainActor var operationNotifier: OperationNotifier?
+    /// Strong on purpose — same lifetime trap as `menuBarItemController` and
+    /// `operationNotifier`: the bridge must outlive `startStatusItem()`.
+    /// It is the app's ONLY subscriber to the per-wiki Darwin change
+    /// notifications (`org.sockpuppet.wiki.changed.<id>`) that cross-process
+    /// writers (`wikictl`, the `wikid` daemon and its ingestion agents) post
+    /// after committing; its `deinit` unregisters every observer. Storing it
+    /// in App-struct `@State` is NOT enough: `startStatusItem()` is reached
+    /// through the `bootstrap` closure, which captures a copy of the App
+    /// struct taken during `init()` — before SwiftUI installs `@State`
+    /// storage — so a `@State` write from that copy can land in throwaway
+    /// storage, the bridge deallocates, and every daemon/CLI write becomes
+    /// invisible to open windows (stale sidebar lists) until relaunch.
+    @MainActor var changeBridge: WikiChangeBridge?
     /// Window-independent launch work (status item, appearance sync, daemon
     /// connect) — wired in `WikiFSApp.init()`, invoked from
     /// `applicationDidFinishLaunching` below. This is the ONE call site

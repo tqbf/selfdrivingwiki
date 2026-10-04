@@ -103,7 +103,17 @@ final class WikiChangeBridge {
                 guard let observer, let name else { return }
                 let bridge = Unmanaged<WikiChangeBridge>.fromOpaque(observer).takeUnretainedValue()
                 let posted = name.rawValue as String
-                Task { @MainActor in bridge.didReceiveDarwinNotification(named: posted) }
+                Task { @MainActor in
+                    // Observability: raw CF-level receipt, BEFORE any name
+                    // matching. If a post never produces this line, the
+                    // observer itself is dead (bridge deallocated and its
+                    // deinit removed every registration, or the registration
+                    // landed on a run loop that never runs) — silence here is
+                    // a delivery failure, not a filtering failure.
+                    DebugLog.store(
+                        "WikiChangeBridge: CF callback fired — name=\(posted)")
+                    bridge.didReceiveDarwinNotification(named: posted)
+                }
             },
             name.rawValue,
             nil,
@@ -240,6 +250,13 @@ final class WikiChangeBridge {
     }
 
     deinit {
+        // Observability: a deallocated bridge silently unregisters every
+        // Darwin observer (below), and from the outside that looks exactly
+        // like "writers stopped posting" — the app never reloads again. This
+        // line makes the death visible in Console.app. (No property reads
+        // here: deinit is nonisolated and the bridge is @MainActor.)
+        DebugLog.store(
+            "WikiChangeBridge: deinit — dropping all Darwin wiki observers")
         // Drop every Darwin observer this bridge registered. `CFNotification…`
         // observers are keyed by the observer pointer; removing with a nil name
         // unregisters them all for this observer.
