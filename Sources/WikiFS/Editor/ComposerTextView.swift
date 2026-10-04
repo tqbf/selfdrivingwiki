@@ -300,6 +300,10 @@ struct ComposerTextView: NSViewRepresentable {
         var parent: ComposerTextView
         private var frameObserver: NSObjectProtocol?
         private var lastObservedWidth: CGFloat?
+        /// The height value of the deferred write task currently in flight
+        /// (nil when none). Suppresses duplicate spawns while a write for the
+        /// same value has not drained yet.
+        private var pendingHeightWrite: CGFloat?
 
         // MARK: - Autocomplete (#436 / #638 / #680)
 
@@ -406,16 +410,36 @@ struct ComposerTextView: NSViewRepresentable {
         /// Measures content height and writes the clamped result back to the
         /// binding — deferred to the next main-actor turn (must never write
         /// synchronously, since this also runs from inside `updateNSView`).
+        ///
+        /// Only one deferred write per distinct value may be in flight. The
+        /// initial height can disagree with the in-situ layout manager (the
+        /// `@State` seed is computed from a detached `NSLayoutManager`), so
+        /// `updateNSView` may recompute a differing height every frame; an
+        /// unbounded spawn of never-drained write tasks on each of those
+        /// frames was observed in the 2026-10-03 live beachball.
         func recomputeHeight(for textView: NSTextView) {
             guard let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
             layoutManager.ensureLayout(for: container)
             let contentHeight = layoutManager.usedRect(for: container).height + textView.textContainerInset.height * 2
             let lineHeight = layoutManager.defaultLineHeight(for: parent.font)
             let clamped = ComposerTextView.clampedHeight(contentHeight: contentHeight, lineHeight: lineHeight)
-            guard clamped != parent.measuredHeight else { return }
+            guard clamped != parent.measuredHeight else {
+                // The published height already matches the fresh measurement.
+                // Any in-flight deferred write for a DIFFERENT value is stale
+                // — the desired height changed and came back — so drop it
+                // instead of letting a superseded value land (one visible
+                // bounce frame).
+                pendingHeightWrite = nil
+                return
+            }
+            guard pendingHeightWrite != clamped else { return }
+            pendingHeightWrite = clamped
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.parent.measuredHeight = clamped
+                let value = self.pendingHeightWrite
+                self.pendingHeightWrite = nil
+                guard let value, value != self.parent.measuredHeight else { return }
+                self.parent.measuredHeight = value
             }
         }
 

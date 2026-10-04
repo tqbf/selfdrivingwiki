@@ -127,6 +127,176 @@ struct ComposerTextViewTests {
         #expect(heightBinding.wrappedValue == expectedMax)
     }
 
+    // MARK: - Pending height write lifecycle (2026-10-03 beachball follow-up)
+
+    /// Counts every `measuredHeight` binding set so tests can tell the
+    /// coordinator's deferred writes from external writes (zoom resets).
+    @MainActor
+    private final class HeightBox {
+        var value: CGFloat
+        private(set) var setCount = 0
+
+        init(_ value: CGFloat) {
+            self.value = value
+        }
+
+        var binding: Binding<CGFloat> {
+            Binding { self.value } set: {
+                self.value = $0
+                self.setCount += 1
+            }
+        }
+    }
+
+    private func makePendingWriteFixture() async -> (
+        lease: HostedAppKitTestGate.Lease, window: NSWindow, textView: NSTextView,
+        coordinator: ComposerTextView.Coordinator, height: HeightBox
+    ) {
+        let height = HeightBox(ComposerTextView.oneLineHeight(for: bodyFont))
+        let text = ""
+        let textBinding = Binding(get: { text }, set: { _ in })
+        let (lease, window, textView, coordinator) = await makeHostedComposer(
+            text: textBinding, isEditable: true, measuredHeight: height.binding)
+        return (lease, window, textView, coordinator, height)
+    }
+
+    private var pastedLongText: String {
+        Array(repeating: "Line of pasted markdown text.", count: 150).joined(separator: "\n")
+    }
+
+    private var expectedMaxHeight: CGFloat {
+        ComposerTextView.clampedHeight(
+            contentHeight: .greatestFiniteMagnitude,
+            lineHeight: NSLayoutManager().defaultLineHeight(for: bodyFont))
+    }
+
+    private var expectedMinHeight: CGFloat {
+        ComposerTextView.clampedHeight(
+            contentHeight: 0,
+            lineHeight: NSLayoutManager().defaultLineHeight(for: bodyFont))
+    }
+
+    /// The same measured height must not spawn a second deferred write while
+    /// one for that value is still in flight (the pre-fix loop spawned a task
+    /// on every frame; measured live at ~75 spawns/second against the
+    /// 2026-10-03 beachball). Five recomputes before any drain must produce
+    /// exactly one binding write.
+    @Test func repeatedRecomputeWithSameHeightWritesOnce() async {
+        let (lease, window, textView, coordinator, height) = await makePendingWriteFixture()
+        defer { window.orderOut(nil); lease.release() }
+
+        textView.string = pastedLongText
+        for _ in 0..<5 {
+            coordinator.recomputeHeight(for: textView)
+        }
+        await Task.yield()
+        await Task.yield()
+
+        #expect(height.value == expectedMaxHeight)
+        #expect(height.setCount == 1)
+
+        // After the drain, the same layout must stay silent (the measurement
+        // now equals the published height).
+        coordinator.recomputeHeight(for: textView)
+        await Task.yield()
+        await Task.yield()
+        #expect(height.setCount == 1)
+    }
+
+    /// A newer measurement while a write is still pending must win. Here the
+    /// text clears back to the already-published height: the pending
+    /// max-height write is superseded (dropped, not landed), so the binding
+    /// never receives a stale value.
+    @Test func desiredHeightChangeWhilePendingWritesLatestValueOnly() async {
+        let (lease, window, textView, coordinator, height) = await makePendingWriteFixture()
+        defer { window.orderOut(nil); lease.release() }
+        let seedHeight = height.value
+
+        textView.string = pastedLongText
+        coordinator.recomputeHeight(for: textView)
+        // No yields: the max-height write is still pending when the text
+        // clears and the measurement returns to the published height.
+        textView.string = ""
+        coordinator.recomputeHeight(for: textView)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(height.value == seedHeight)
+        #expect(height.setCount == 0)
+    }
+
+    /// When the binding already equals the pending value by the time the
+    /// deferred task drains (e.g. an external reset converged it), the task
+    /// must skip the redundant write instead of publishing again.
+    @Test func stalePendingValueSkipsWriteWhenAlreadyConverged() async {
+        let (lease, window, textView, coordinator, height) = await makePendingWriteFixture()
+        defer { window.orderOut(nil); lease.release() }
+
+        textView.string = pastedLongText
+        coordinator.recomputeHeight(for: textView)
+        // External convergence (zoom reset writes the same clamped value)
+        // before the coordinator's deferred task drains.
+        height.binding.wrappedValue = expectedMaxHeight
+        let externalWrites = height.setCount
+
+        await Task.yield()
+        await Task.yield()
+
+        #expect(height.value == expectedMaxHeight)
+        #expect(height.setCount == externalWrites)
+    }
+
+    /// The in-flight dedupe keys on the pending value, not on "a write ever
+    /// happened": after a completed cycle for height H, an external change
+    /// away from H followed by the same measurement H must write again.
+    @Test func futureSameHeightUpdateIsNotLostAfterConvergedWrite() async {
+        let (lease, window, textView, coordinator, height) = await makePendingWriteFixture()
+        defer { window.orderOut(nil); lease.release() }
+
+        textView.string = pastedLongText
+        coordinator.recomputeHeight(for: textView)
+        await Task.yield()
+        await Task.yield()
+        #expect(height.value == expectedMaxHeight)
+        #expect(height.setCount == 1)
+
+        // External reset to a different height (chat zoom change reseeds the
+        // @State), then the same layout measures max again.
+        height.binding.wrappedValue = expectedMinHeight
+        coordinator.recomputeHeight(for: textView)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(height.value == expectedMaxHeight)
+        // 1 = first drain, 2 = external reset, 3 = coordinator's repeat write.
+        #expect(height.setCount == 3)
+    }
+
+    /// The deferred task holds the coordinator weakly: a coordinator released
+    /// before its write drains must not crash and must not write through a
+    /// stale binding.
+    @Test func coordinatorDeallocationBeforeDrainSkipsWrite() async {
+        let height = HeightBox(ComposerTextView.oneLineHeight(for: bodyFont))
+        let parent = ComposerTextView(
+            text: .constant(""),
+            isEditable: true,
+            font: bodyFont,
+            onSubmit: {},
+            measuredHeight: height.binding)
+        var coordinator: ComposerTextView.Coordinator? = ComposerTextView.Coordinator(parent)
+        let textView = ComposerTextView.makeConfiguredTextView(font: bodyFont)
+        textView.string = pastedLongText
+        coordinator?.recomputeHeight(for: textView)
+
+        // Release the only strong reference while the write is still pending.
+        coordinator = nil
+
+        await Task.yield()
+        await Task.yield()
+
+        #expect(height.setCount == 0)
+    }
+
     @Test func editPropagatesToBoundText() async {
         var text = "initial"
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)

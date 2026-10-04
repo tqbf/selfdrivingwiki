@@ -55,7 +55,11 @@ public final class ChatDaemonCoordinator {
     /// pairing (session creation, rehydration). `route(chatID:update:)` only
     /// receives a chat id, so this map is how a tool-call completion reaches
     /// the wiki whose store must reload.
-    private var chatWikiIDs: [ChatID: WikiID] = [:]
+    ///
+    /// Internal (not private) so tests can register an Observation tracker on
+    /// it: `session(wikiID:for:)` runs inside view bodies, and a test must be
+    /// able to prove a repeated lookup does not publish a mutation here.
+    var chatWikiIDs: [ChatID: WikiID] = [:]
 
     /// Fired when a chat update carries a tool call that just reached a
     /// TERMINAL state for a chat whose owning wiki is known. An agent's shell
@@ -127,9 +131,18 @@ public final class ChatDaemonCoordinator {
 
     /// Get-or-create the `RemoteChatSession` for a chat id. `nil` chatID
     /// returns the shared draft-state session (the `.newChat` composer).
+    ///
+    /// Called from view bodies (`WikiDetailView.chatSurface`), so it must not
+    /// mutate observable state when nothing changed: an unconditional
+    /// `chatWikiIDs[chatID] = wikiID` fired a mutation notification on every
+    /// body evaluation, which invalidated the calling view each frame and
+    /// pegged the main thread re-rendering the chat surface (2026-10-03
+    /// live regression). Write only when the pairing actually changes.
     public func session(wikiID: WikiID, for chatID: ChatID?) -> RemoteChatSession {
         let key: ChatSessionKey = chatID.map(ChatSessionKey.chat) ?? .draft
-        if let chatID { chatWikiIDs[chatID] = wikiID }
+        if let chatID, chatWikiIDs[chatID] != wikiID {
+            chatWikiIDs[chatID] = wikiID
+        }
         if let existing = sessions[key] { return existing }
         let session = providersConfigurationDirectory.map {
             RemoteChatSession(chatID: key, providersConfigurationDirectory: $0)

@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import Observation
 import Testing
 @testable import WikiFS
 @testable import WikiFSCore
@@ -18,6 +19,80 @@ struct ChatDaemonCoordinatorTests {
 
         #expect(first === second)
         #expect(draft.chatID == .draft)
+    }
+
+    /// `session(wikiID:for:)` runs inside view bodies
+    /// (`WikiDetailView.chatSurface`), so a repeated lookup for a chat whose
+    /// wiki pairing is already recorded must not publish an Observation
+    /// mutation. The pre-fix code wrote `chatWikiIDs[chatID] = wikiID`
+    /// unconditionally — an observable mutation on every body evaluation
+    /// (measured at ~78 calls/second against the 2026-10-03 live beachball).
+    ///
+    /// Toolchain caveat: dictionary subscript mutation takes the `_modify`
+    /// path, which does not notify observers on this toolchain. The contract
+    /// this pins is that a repeated lookup performs NO observable write at
+    /// all, so any observer path (setter, future toolchain semantics) stays
+    /// quiet. Whether the live loop was driven by such notifications is
+    /// unconfirmed — see progress/ 2026-10-03 beachball record.
+    @Test func repeatedSessionLookupEmitsNoObservationInvalidation() {
+        let coordinator = makeCoordinator()
+        let chat = ChatID(rawValue: "chat-1")
+        _ = coordinator.session(wikiID: fixtureWikiID, for: chat)
+
+        // `onChange` is @Sendable and nonisolated; the flag is only mutated
+        // synchronously on the main actor inside this test, so the unsafe
+        // local is scoped and race-free here.
+        nonisolated(unsafe) var invalidated = false
+        withObservationTracking {
+            _ = coordinator.chatWikiIDs
+            _ = coordinator.session(wikiID: fixtureWikiID, for: chat)
+        } onChange: {
+            invalidated = true
+        }
+
+        #expect(invalidated == false)
+    }
+
+    /// The guard must not over-correct: when the pairing genuinely changes,
+    /// the write still lands so `route(chatID:update:)` can resolve the
+    /// owning wiki. Asserted by value, not by onChange: dictionary subscript
+    /// mutation goes through the `_modify` path, which does not notify
+    /// observers on this toolchain (see
+    /// `observationTrackingDetectsWholePropertyWrites` for the machinery
+    /// positive control).
+    @Test func sessionLookupStillPublishesWhenPairingChanges() {
+        let coordinator = makeCoordinator()
+        let chat = ChatID(rawValue: "chat-1")
+        _ = coordinator.session(wikiID: fixtureWikiID, for: chat)
+        #expect(coordinator.chatWikiIDs[chat] == fixtureWikiID)
+
+        _ = coordinator.session(
+            wikiID: WikiID(rawValue: "coordinator-test-wiki-b"),
+            for: chat)
+
+        #expect(coordinator.chatWikiIDs[chat] == WikiID(rawValue: "coordinator-test-wiki-b"))
+    }
+
+    /// Machinery positive control for the two tests above: a whole-property
+    /// assignment through the generated setter DOES publish a mutation to a
+    /// registered `withObservationTracking` observer. This proves the silence
+    /// result in `repeatedSessionLookupEmitsNoObservationInvalidation` is a
+    /// property of the code under test, not of a broken tracking setup.
+    @Test func observationTrackingDetectsWholePropertyWrites() {
+        let coordinator = makeCoordinator()
+        let chat = ChatID(rawValue: "chat-1")
+        _ = coordinator.session(wikiID: fixtureWikiID, for: chat)
+
+        nonisolated(unsafe) var invalidated = false
+        withObservationTracking {
+            _ = coordinator.chatWikiIDs
+        } onChange: {
+            invalidated = true
+        }
+
+        coordinator.chatWikiIDs = [:]
+
+        #expect(invalidated)
     }
 
     @Test func resetDraftReplacesDraftSession() {
