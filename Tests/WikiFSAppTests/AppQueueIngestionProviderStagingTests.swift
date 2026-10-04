@@ -53,6 +53,50 @@ import WikiFSTypes
         }
     }
 
+    /// #1354: the observed failure shape — the multi-phase orchestrator's
+    /// abort paths call `finish(status: -1)` AFTER recording the launch
+    /// diagnostic, so the outcome carries an exit status, a preflight error,
+    /// and zero agent turns. The old validator only rejected a nonzero exit
+    /// when a turn had failed, so this tuple sailed through as success and
+    /// stamped sources ingested.
+    @MainActor
+    @Test("launch failure with exit status -1 and zero turns cannot complete (#1354)")
+    func launchFailureWithExitStatusCannotComplete() {
+        do {
+            try AppQueueIngestionProvider.validateLauncherOutcome(
+                exitStatus: -1,
+                preflightError: "Failed to launch codex-acp. stderr: env: node: No such file or directory",
+                runHadTurnFailure: false)
+            Issue.record("Expected launch-failure rejection")
+        } catch QueueIngestionError.spawnFailed(let message) {
+            // The launch diagnostic must survive into the queue error so the
+            // job view shows the actionable stderr, not a generic message.
+            #expect(message.contains("env: node: No such file or directory"))
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    /// #1354: belt-and-suspenders — an abort that reaches `finish(status:-1)`
+    /// WITHOUT a recorded preflight diagnostic (safety-net teardown, user
+    /// stop, a future abort path that forgets to set `preflightError`) must
+    /// still fail. Every successful completion path finishes with status 0.
+    @MainActor
+    @Test("nonzero exit with zero turns fails even without a preflight diagnostic (#1354)")
+    func nonzeroExitWithoutTurnFailureStillFails() {
+        do {
+            try AppQueueIngestionProvider.validateLauncherOutcome(
+                exitStatus: -1,
+                preflightError: nil,
+                runHadTurnFailure: false)
+            Issue.record("Expected abort rejection")
+        } catch QueueIngestionError.spawnFailed(let message) {
+            #expect(message == "The agent run aborted before completing (exit status -1).")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
     @MainActor
     @Test("successful launcher outcome is accepted")
     func successfulLauncherOutcomeIsAccepted() throws {

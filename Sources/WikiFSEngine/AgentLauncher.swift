@@ -155,6 +155,16 @@ public final class AgentLauncher {
     /// successful run. Settable from `AgentOperationRunner` for silent-failure
     /// paths where no agent process is spawned.
     public var preflightError: String?
+    /// #1354: the last non-quota phase failure diagnostic (recorded by
+    /// `runPhase`'s catch — e.g. `ACPBackendError.launchFailed`'s stderr
+    /// payload). Copied into `preflightError` at the terminal abort points
+    /// (`runACPIngestFallback`'s failure branch) so the queue error carries
+    /// the actual launch diagnostic instead of a generic "did not start"
+    /// message. Never read by validators directly — only the abort-point
+    /// copy is load-bearing — so a quota-fallback attempt that later
+    /// succeeds cannot poison a successful run. Cleared per run in
+    /// `resetRunArtifacts()`.
+    @ObservationIgnored public private(set) var lastPhaseFailureMessage: String?
     /// The kind of the operation currently running (drives the UI title / spinner).
     ///
     /// Exposed without `private(set)` so tests can simulate "a non-query run is
@@ -2983,6 +2993,11 @@ public final class AgentLauncher {
                 return .quotaExhausted(signal)
             }
             DebugLog.agent("runACPIngest[\(phaseName)]: FAILED: \(error.localizedDescription)")
+            // #1354: retain the diagnostic so the abort points (e.g.
+            // `runACPIngestFallback`'s failure branch) can surface it as the
+            // run's `preflightError` — the queue error then shows the actual
+            // launch failure (stderr included) instead of a generic message.
+            lastPhaseFailureMessage = error.localizedDescription
             return .failed
         }
     }
@@ -3034,6 +3049,15 @@ public final class AgentLauncher {
             // #765: respect turn-ceiling failures from the fallback session.
             finish(status: runHadTurnFailure ? -1 : 0)
         } else {
+            // #1354: both the planner phase AND the single-session fallback
+            // failed to launch. Record the captured phase diagnostic (e.g.
+            // `launchFailed`'s stderr: "env: node: No such file or directory")
+            // BEFORE finish() so the queue validator sees a preflight failure
+            // with an actionable message — not a bare exit status -1 that the
+            // old nonzero+turn-failure conjunction silently accepted as
+            // success.
+            preflightError = lastPhaseFailureMessage
+                ?? "The agent failed to launch. Check the run log for details."
             finish(status: -1)
         }
     }
@@ -4498,6 +4522,9 @@ public final class AgentLauncher {
         stderr = ""
         exitStatus = nil
         runHadTurnFailure = false
+        // #1354: a stale prior-run phase diagnostic must never leak into the
+        // next run's abort-point copy.
+        lastPhaseFailureMessage = nil
         isInteractiveSession = false
         setGenerating(false)
         runningKind = nil

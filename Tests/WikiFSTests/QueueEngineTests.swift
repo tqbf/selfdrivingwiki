@@ -434,6 +434,49 @@ struct QueueEngineTests {
 
     // MARK: - Failed item records error, frees slot (AC3.7)
 
+    /// #1354: full queue outcome for a failed agent launch. The fixed
+    /// ingestion provider throws `QueueIngestionError.spawnFailed(...)` when
+    /// the launcher records a launch/preflight failure (exit status -1, zero
+    /// agent turns) — this pins the settlement: the item must end `.failed`
+    /// (never `.completed`) and the launch diagnostic must survive verbatim
+    /// into the stored error so the job view shows the actionable stderr
+    /// (here: the wrapper's "env: node: No such file or directory").
+    @Test func testLaunchFailureSettlesFailedWithDiagnostic() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+
+        let diagnostic =
+            "Failed to launch codex-acp. stderr: env: node: No such file or directory"
+        let recorder = FakeWorkerRecorder()
+        let factory = FakeWorkerFactory(
+            providerID: { _ in ProviderID(rawValue: "codex-acp") },
+            worker: { item in
+                recorder.record(item.id)
+                // Simulates the fixed provider path: the launcher aborted at
+                // launch (finish(status: -1), zero turns) and the validator
+                // rejected the outcome with the captured diagnostic.
+                throw QueueIngestionError.spawnFailed(diagnostic)
+            })
+        let engine = QueueEngine(store: store, config: QueueEngineConfig(), workerFactory: factory)
+
+        let id = try await engine.enqueue(
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
+        await engine.start()
+
+        // Await settlement deterministically (bounded wait) instead of a sleep.
+        let result = await engine.waitForCompletion(of: id)
+        guard case .failure = result else {
+            Issue.record("Expected launch failure to settle as failure, got success")
+            store.close()
+            return
+        }
+
+        let item = try store.getItem(id)
+        #expect(item?.state == .failed)
+        #expect(item?.error?.contains("env: node: No such file or directory") == true)
+
+        store.close()
+    }
+
     @Test func testFailedItemRecordsErrorAndFreesSlot() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 

@@ -487,13 +487,28 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         preflightError: String?,
         runHadTurnFailure: Bool
     ) throws {
-        guard let exitStatus else {
-            throw QueueIngestionError.spawnFailed(
-                preflightError ?? "The agent did not start.")
+        // #1354: a recorded preflight/launch failure is terminal REGARDLESS of
+        // the exit status. The multi-phase orchestrator's abort paths record
+        // the diagnostic and then call `finish(status: -1)` — so exitStatus
+        // exists and no turn ran (`runHadTurnFailure == false`), a combination
+        // the old "nonzero AND turn-failure" conjunction could never reject.
+        // This mirrors the daemon host's `validateLauncherResults` ordering:
+        // preflight first, exit status second.
+        if let preflightError {
+            throw QueueIngestionError.spawnFailed(preflightError)
         }
-        if exitStatus != 0, runHadTurnFailure {
+        guard let exitStatus else {
+            throw QueueIngestionError.spawnFailed("The agent did not start.")
+        }
+        // #1354: every successful completion path finishes with status 0;
+        // nonzero ALWAYS means an abort (user stop, safety-net teardown, or
+        // spawn failure), even when no `.turnFailed` event was observed.
+        // `runHadTurnFailure` only selects the message.
+        if exitStatus != 0 {
             throw QueueIngestionError.spawnFailed(
-                "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(exitStatus)).")
+                runHadTurnFailure
+                ? "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(exitStatus))."
+                : "The agent run aborted before completing (exit status \(exitStatus)).")
         }
     }
 
