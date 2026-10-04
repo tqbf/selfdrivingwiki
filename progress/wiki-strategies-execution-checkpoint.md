@@ -43,6 +43,15 @@ The parent timeout killed the child and preserved a full six-test summary. That 
 `general-purpose:glm-ui-cleanup` removes the failed child approach and restores the concise explicit template blocker.
 Do not add a skip or expected issue to hide this required workflow.
 
+A 2026-10-04 in-repo investigation (`tmp/f2-template-menu-investigation.md`, scratch probe `tmp/probepicker/`) sharpened the blocker into a host capability boundary.
+In a plain executable host the full supported menu workflow runs: `Picker` + the app's `.menuStyle(.borderlessButton)` idiom bridges to a real `SwiftUIPopupButton` whose `NSMenu` is eagerly populated with the prompt row plus the six templates, every item carries SwiftUI's real `PickerOptionTarget` (`menuAction:`), and `NSMenu.performActionForItem(at:)` dispatches the selection synchronously — no tracking session, no events.
+In the `swift test` CLI host the same views never mount that bridge (SwiftUI-native ring-only rendering), and the one variant that does mount (`Menu` + borderlessButton) keeps its menu empty outside a tracking session (`menuNeedsUpdate`, `NSMenu.update()`, `itemTitles` all empty), which this host cannot survive.
+Run-loop pumping, activation state, ActivityWindow-style mounts, async-runtime driving, and interop presence were each tried and falsified in-run.
+
+A same-day dedicated-executable-host attempt (public init seam on `WikiStrategyEditorView`, a `WikiStrategyEditorMenuHelper` target following the `ProviderConfigMutationHelper` pattern, a bounded terminate-on-deadline subprocess wait in the suite) compiled the helper against the WikiFS module but SwiftPM linked no WikiFS objects into the dependent executable (`Undefined symbols: WikiStrategyEditorView.init/metadata` from `main.o`; the unconditional dependency behaves the same; the WikiFSAppTests test target links fine because test targets receive executable-dependency objects).
+The house remedy is the wikictl/WikiCtlCore split — moving the editor UI into a library target — which is a production-target redesign beyond this fix's scope; the attempt was reverted whole (no code churn remains).
+Remaining routes: that library split, or the operator recording the manual template-menu verification as the AC.4 acceptance evidence.
+
 ### Live evidence
 
 Artifacts remain under project-local `tmp/wiki-strategy-eval/`.
