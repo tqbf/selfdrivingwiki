@@ -101,3 +101,25 @@ Darwin notification root cause is unproven; stranded `running` tool-call
 items and per-body presentation recompute remain follow-ups. The rows above
 add observed live-wiki evidence and operator acceptance on top of those
 records. They do not replace them.
+
+## Verification
+
+Verified, as recorded above:
+
+1. Operator statements, taken 2026-10-04: the live chat and source workflow
+   works, the real Strategy template menu workflow works, and semantic
+   evaluation is done as an operator decision.
+2. Read-only inspection (`sqlite3`, `mode=ro`) of the live Flower wiki: the
+   strategy row, page versions with successive-source provenance, current
+   citations, strategy-shaped sections, the chat row, and the totals.
+3. This task ran no live database write, no paid model call, and no restart
+   or retry.
+
+Not claimed, unchanged: this entry records no `WikiStrategyEvalRunner` live
+run, assigns no rubric score, and treats the wiki rows as incidental
+evidence, not a fixture runner result.
+
+This entry shipped without the `## Verification` heading this contract
+requires, and the full-suite gate caught it
+(`progress/2026-10-04T125722Z-final-gates-red-phase0-blocked.md`). This
+section restores the heading and changes no recorded evidence.

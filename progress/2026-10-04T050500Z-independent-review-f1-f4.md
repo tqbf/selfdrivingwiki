@@ -99,3 +99,23 @@ in 1 suite passed, exit code 0.
 Full gates (`make build`, `caffeinate -i make test`, bare `swift build`, bare
 `swift test`) are held for the parent. They run after the F2 and F3 delegate
 work lands, so one run covers the final branch state.
+
+## Verification
+
+Verified, as recorded above:
+
+1. F1 fix: `swift test --filter WikiStrategyStoreTests` — 7 tests in 1 suite
+   passed, exit code 0. The change is representation consistency. No public
+   API returns the reset-path timestamp, so no observable behavior changed.
+2. F4: read-only git and GitHub inspection. Pull request #1355 is MERGED with
+   merge commit `afb692d9`, the `origin/main` tip in local refs. Issue #1354
+   is CLOSED as COMPLETED. The review's cited SHAs are the pull-request
+   branch commits, not main commits.
+
+Not verified, unchanged: F2 and F3 stay open and owned by other delegates.
+This entry closes neither.
+
+This entry shipped without the `## Verification` heading this contract
+requires, and the full-suite gate caught it
+(`progress/2026-10-04T125722Z-final-gates-red-phase0-blocked.md`). This
+section restores the heading and changes no recorded evidence.

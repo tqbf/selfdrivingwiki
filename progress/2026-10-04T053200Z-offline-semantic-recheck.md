@@ -90,3 +90,33 @@ outcomes is corroborated by the row-level evidence above.
   whether a fresh live run is required.
 - Full gates (`make build`, `make test`, bare `swift build`, bare `swift
   test`) run with the parent after the F2 delegate work lands.
+
+## Verification
+
+Verified, as recorded above:
+
+1. Offline recheck against the recorded `2026-10-03T002006Z` artifact: exit
+   code 0, combined structural verdict PASS, 7 checks re-evaluated offline,
+   2 carried from the recorded live run. Output:
+   `tmp/wiki-strategy-eval-recheck/2026-10-04T052548Z-supersededRepositoryDecision/`.
+2. Recorded-run integrity: checksums of every file under the recorded run
+   directory were identical before and after the recheck. No paid call ran.
+   No live wiki database was touched.
+3. Targeted gates: `swift test --filter WikiStrategyOfflineRecheckTests` — 7
+   tests passed. `swift test --filter WikiStrategyEvaluationHarnessTests` —
+   24 tests passed.
+4. The reviewer provenance claim was reverified with read-only database
+   queries, as recorded above.
+
+Not claimed, unchanged: a structural pass is not a semantic pass. No rubric
+score was assigned. This work does not close F3, and the operator decision on
+closing evidence stays open.
+
+This entry shipped without the `## Verification` heading this contract
+requires, and the full-suite gate caught it. The same gate also caught a
+Cordis boundary violation in `Sources/WikiStrategyEval/OfflineRecheck.swift`
+from this commit (`progress/2026-10-04T125722Z-final-gates-red-phase0-blocked.md`).
+The follow-up fix routes the store through
+`StoreBackend.makeReadOnlyStore(readOnlyURL:)`; the read-only guarantee is
+unchanged. This section restores the heading and changes no recorded
+evidence.

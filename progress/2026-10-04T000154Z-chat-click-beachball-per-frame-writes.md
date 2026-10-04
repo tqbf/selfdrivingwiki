@@ -92,3 +92,25 @@ terminalize stranded `running` tool-call items in daemon bootstrap.
   full suite.
 - The live app was never stopped, restarted, or rebuilt onto. No paid calls
   ran. Live databases were read only with `mode=ro`.
+
+## Verification
+
+Verified at the fix commit `d520923e`, as recorded above:
+
+1. Targeted opt-in suite (`WIKIFS_APP_TESTS=1`, filter
+   `ComposerTextViewTests|ChatDaemonCoordinatorTests|ChatStuckRunningBeachballReproTests`):
+   46 tests in 3 suites passed.
+2. `make build` produced a signed app.
+3. `caffeinate -i make test` passed the full suite at that commit.
+
+Those runs happened before this entry was written. The entry then shipped
+without the `## Verification` heading this contract requires, and the later
+full-suite gate caught it
+(`progress/2026-10-04T125722Z-final-gates-red-phase0-blocked.md`). This
+section restores the heading and changes no recorded evidence.
+
+Still unverified, unchanged: the live cure. The hosted harness did not
+reproduce the loop, the invalidation edge stays unproven on this toolchain,
+and the cure needs the operator restart and click. The closeout record
+(`progress/2026-10-04T045018Z-wiki-strategy-live-closeout.md`) states the
+operator confirmed the live chat and source workflow in the running app.

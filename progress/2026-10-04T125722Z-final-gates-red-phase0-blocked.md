@@ -1,4 +1,13 @@
+---
+timestamp: 2026-10-04T125722Z
+title: Final gates red at 1b50f781 — conceptual-audit Phase 0 blocked
+branch: feature/wiki-strategies-cumulative-ingestion
+status: complete
+---
+
 # Final gates red at 1b50f781 — conceptual-audit Phase 0 blocked
+
+## Progress
 
 Date: 2026-10-04T12:57:22Z
 Branch: `feature/wiki-strategies-cumulative-ingestion`
@@ -96,3 +105,20 @@ family as Claude. The parent agent will launch the Claude reviewer through
 Paseo after Phase 0 passes. The user authorized zai/glm-5.3 execution. The
 other background delegates had finished before these gates ran, and no
 conflicting SwiftPM process was active.
+
+## Verification
+
+This entry reports direct command output. It verifies:
+
+1. All five gate commands ran in sequence on
+   `feature/wiki-strategies-cumulative-ingestion` at `1b50f781`, with the
+   exact outcomes and counts recorded above. Logs sit in `tmp/gates/`
+   (gitignored).
+2. `git status --porcelain` was empty before and after every gate: no
+   foreign edits appeared, and nothing was stashed or deleted.
+3. The provenance of both failure classes came from `git log -- <path>` on
+   the exact files the failures named.
+
+The suite outcome itself was a failure, and nothing in this entry relabels
+it. The failure evidence commit is `716c3ef2`. Both failure classes were
+fixed later the same day; the follow-up gate record carries that result.
