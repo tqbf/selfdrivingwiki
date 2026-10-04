@@ -2,11 +2,12 @@ import SwiftUI
 import AppKit
 import WikiFSCore
 
-/// The wiki switcher: a sidebar header `Menu` showing the active wiki's name
-/// (like Notes' account header), listing every wiki to select between them, with
-/// "New Wiki…", Rename, and Delete affordances. Each wiki is an independent
-/// knowledge base (its own DB + File Provider domain), so this is the top-level
-/// container switch — placed above navigation, per the macOS layout formula.
+/// The wiki switcher: a footer `Menu` pill showing the active wiki's name,
+/// listing every wiki to select between them, with "New Wiki…", Rename,
+/// Export, Delete, and Import affordances. Each wiki is an independent
+/// knowledge base (its own DB + File Provider domain), so this is the
+/// top-level container switch — hosted in the sidebar footer directly above
+/// the Strategy row (`SidebarView.wikiSwitcherRow`).
 ///
 /// `.headline` gives the active name prominence over the `.caption`-styled
 /// section headers and `.body` rows below it, without hardcoding sizes.
@@ -92,7 +93,7 @@ struct WikiSwitcher: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            .frame(maxWidth: WikiSwitcherMetrics.toolbarLabelMaxWidth, alignment: .leading)
+            .frame(maxWidth: WikiSwitcherMetrics.labelMaxWidth, alignment: .leading)
         }
         .menuStyle(.button)
         .buttonStyle(.borderless)
@@ -188,7 +189,9 @@ struct WikiSwitcher: View {
 }
 
 private enum WikiSwitcherMetrics {
-    static let toolbarLabelMaxWidth: CGFloat = 168
+    /// Caps the pill's label so a long wiki name cannot blow out the sidebar
+    /// footer; longer names truncate.
+    static let labelMaxWidth: CGFloat = 168
 }
 
 /// A small sheet to name a new wiki. Kept separate so the create flow has a

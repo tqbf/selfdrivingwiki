@@ -69,6 +69,9 @@ struct SidebarView: View {
             Divider()
             bookmarksOrList
             Divider()
+            wikiSwitcherRow
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
             strategyFooterRow
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
@@ -191,6 +194,15 @@ struct SidebarView: View {
     /// name when no wiki is selected yet).
     private var activeWikiName: String {
         session.descriptor.displayName
+    }
+
+    /// The wiki switcher pill — the top-level container switch (each wiki is
+    /// its own DB + File Provider domain). Sits directly above the Strategy
+    /// row so the sidebar footer reads as one cluster: which wiki you are in,
+    /// then that wiki's editorial strategy.
+    private var wikiSwitcherRow: some View {
+        WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The wiki-scoped Strategy entry: a pinned footer row below the section

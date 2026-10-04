@@ -318,7 +318,6 @@ struct ContentView: View {
             }
             ToolbarSpacer(.flexible)
             ToolbarItemGroup(placement: .automatic) {
-                WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
                 Button {
                     rightInspector.toggle()
                 } label: {
@@ -330,8 +329,8 @@ struct ContentView: View {
         }
         // Suppress the window title so the omnibox owns the toolbar. `.navigationTitle("")`
         // alone only empties the *text* — the toolbar still reserves ~160pt for the
-        // title item, dead space between the omnibox and the switcher that (with a long
-        // wiki name) shoves the whole omnibox group into the `»` overflow. `.toolbar(
+        // title item, dead space between the omnibox and the trailing controls
+        // that shoves the whole omnibox group into the `»` overflow. `.toolbar(
         // removing: .title)` drops the title item itself, reclaiming that width — the
         // supported API for this, unlike the fragile `titleVisibility = .hidden` hack
         // (which doesn't reclaim the slot here and can't be applied once the omnibox is
