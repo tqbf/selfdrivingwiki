@@ -19,8 +19,12 @@ struct ReingestConfirmation: Identifiable, Equatable {
 /// with its own scrollbar. The former `.confirmationDialog` inlined every
 /// already-ingested name into its message `Text`, so a large selection (85
 /// sources) grew the dialog past the screen and the buttons fell out of
-/// reach. This sheet bounds the name list to a fixed maximum height — the
-/// `List` scrolls independently — and keeps the buttons visible below it.
+/// reach. This sheet bounds the name table to a fixed height range — it
+/// scrolls independently — and keeps the buttons visible below it.
+///
+/// The table is a `ScrollView` + `LazyVStack` (the `ExtractionCompareSheet`
+/// pattern), not a `List`: `List` reports no content height inside a sheet,
+/// so it collapsed to zero and rendered no rows.
 ///
 /// Follows `StoreErrorSheet`'s metrics-enum + fixed-width pattern; type roles
 /// match the app's other utility sheets (`.headline` title, `.body` secondary
@@ -38,13 +42,9 @@ struct ReingestConfirmationSheet: View {
             Text(alreadyIngestedHeadline)
                 .font(.body)
                 .foregroundStyle(.secondary)
-            List {
-                ForEach(Array(confirmation.alreadyIngestedNames.enumerated()), id: \.offset) { _, name in
-                    Text(name)
-                }
+            if !confirmation.alreadyIngestedNames.isEmpty {
+                table
             }
-            .listStyle(.bordered)
-            .frame(maxHeight: Metrics.maxListHeight)
             Text("Running ingest again may create duplicate pages.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -62,6 +62,36 @@ struct ReingestConfirmationSheet: View {
         .onExitCommand { onCancel() }
     }
 
+    /// The bounded, self-scrolling table of already-ingested names.
+    private var table: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(
+                    Array(confirmation.alreadyIngestedNames.enumerated()),
+                    id: \.offset
+                ) { _, name in
+                    row(name)
+                }
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.tableCornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: Metrics.tableCornerRadius)
+                .strokeBorder(Color(nsColor: .separatorColor))
+        )
+        .frame(minHeight: Metrics.minTableHeight, maxHeight: Metrics.maxTableHeight)
+    }
+
+    private func row(_ name: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(name)
+                .padding(.horizontal, Metrics.rowPadding)
+                .padding(.vertical, Metrics.rowPadding / 2)
+            Divider().opacity(0.4)
+        }
+    }
+
     /// "The following 3 sources have already been ingested:" — the count is
     /// the summary; the names live in the table, not the prose.
     private var alreadyIngestedHeadline: String {
@@ -74,6 +104,11 @@ struct ReingestConfirmationSheet: View {
         static let width: CGFloat = 480
         static let padding: CGFloat = 20
         static let sectionSpacing: CGFloat = 14
-        static let maxListHeight: CGFloat = 320
+        static let tableCornerRadius: CGFloat = 6
+        static let rowPadding: CGFloat = 12
+        /// The table always shows as a table: short lists get a visible
+        /// area, long lists stop at the cap and scroll.
+        static let minTableHeight: CGFloat = 96
+        static let maxTableHeight: CGFloat = 320
     }
 }

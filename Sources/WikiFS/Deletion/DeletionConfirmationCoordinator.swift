@@ -403,40 +403,62 @@ private struct DeletionOutcomeSheet: View {
         }
     }
 
-    /// The bounded, self-scrolling list of referenced names.
+    /// The bounded, self-scrolling table of referenced names. A
+    /// `ScrollView` + `LazyVStack` (the `ExtractionCompareSheet` pattern),
+    /// not a `List`: `List` reports no content height inside a sheet, so it
+    /// collapsed to zero and rendered no rows.
     private var table: some View {
-        List {
-            switch outcome {
-            case .confirm(let p):
-                ForEach(p.linkingPages, id: \.pageID) { page in
-                    Label(page.title ?? page.pageID.rawValue, systemImage: "doc.text")
-                }
-                ForEach(p.bookmarkFolderPaths, id: \.self) { path in
-                    Label(path, systemImage: "folder")
-                }
-            case .blocked(let p):
-                // The blocking pages as clickable rows: opening one dismisses
-                // the sheet so the user can remove the reference, then retry.
-                ForEach(p.blockingPages, id: \.pageID) { page in
-                    Button {
-                        onOpenPage(page.pageID)
-                    } label: {
-                        HStack {
-                            Text(page.title ?? page.pageID.rawValue)
-                            Spacer()
-                            Image(systemName: "arrow.up.right.square")
-                                .foregroundStyle(.secondary)
-                        }
-                        .contentShape(Rectangle())
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                switch outcome {
+                case .confirm(let p):
+                    ForEach(p.linkingPages, id: \.pageID) { page in
+                        row(Label(page.title ?? page.pageID.rawValue, systemImage: "doc.text"))
                     }
-                    .buttonStyle(.plain)
+                    ForEach(p.bookmarkFolderPaths, id: \.self) { path in
+                        row(Label(path, systemImage: "folder"))
+                    }
+                case .blocked(let p):
+                    // The blocking pages as clickable rows: opening one dismisses
+                    // the sheet so the user can remove the reference, then retry.
+                    ForEach(p.blockingPages, id: \.pageID) { page in
+                        row(
+                            Button {
+                                onOpenPage(page.pageID)
+                            } label: {
+                                HStack {
+                                    Text(page.title ?? page.pageID.rawValue)
+                                    Spacer()
+                                    Image(systemName: "arrow.up.right.square")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        )
+                    }
+                case .failed, .deleteImmediately:
+                    EmptyView()
                 }
-            case .failed, .deleteImmediately:
-                EmptyView()
             }
         }
-        .listStyle(.bordered)
-        .frame(maxHeight: Metrics.maxTableHeight)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.tableCornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: Metrics.tableCornerRadius)
+                .strokeBorder(Color(nsColor: .separatorColor))
+        )
+        .frame(minHeight: Metrics.minTableHeight, maxHeight: Metrics.maxTableHeight)
+    }
+
+    /// One table row with its trailing separator.
+    private func row(_ content: some View) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content
+                .padding(.horizontal, Metrics.rowPadding)
+                .padding(.vertical, Metrics.rowPadding / 2)
+            Divider().opacity(0.4)
+        }
     }
 
     @ViewBuilder
@@ -474,6 +496,11 @@ private struct DeletionOutcomeSheet: View {
         static let width: CGFloat = 480
         static let padding: CGFloat = 20
         static let sectionSpacing: CGFloat = 14
+        static let tableCornerRadius: CGFloat = 6
+        static let rowPadding: CGFloat = 12
+        /// The table always shows as a table: short lists get a visible
+        /// area, long lists stop at the cap and scroll.
+        static let minTableHeight: CGFloat = 96
         static let maxTableHeight: CGFloat = 320
     }
 }
