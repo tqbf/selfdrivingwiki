@@ -35,8 +35,10 @@ wikictl --wiki <id> strategy read --json
 ```
 
 The read prints the revision. `revision: absent` means no strategy row has ever
-been written. A wiki that was reset to Default keeps its last revision number.
-The revision, not `absent`, is what the next save must expect after a reset.
+been written. A reset that removes custom instructions advances the revision by
+one and keeps the revision record. A reset of a wiki already at Default is a
+no-op and does not advance the revision. The revision, not `absent`, is what
+the next save must expect after a reset.
 
 Save a new strategy with that revision as the compare-and-swap token:
 
@@ -51,7 +53,9 @@ Reset to Default the same way:
 wikictl --wiki <id> strategy reset --expect-revision <n|absent>
 ```
 
-A reset keeps the revision counter, and the next save expects that number.
+A reset that removes custom instructions advances the revision by one and keeps
+the revision record. A reset of a wiki already at Default is a no-op. The next
+save expects that revision, not `absent`.
 Whitespace-only instructions also reset the strategy to Default.
 The limits match the app: 120 characters for the name, 32 KiB for the instructions.
 Larger input fails with an error. The command never shortens it.
