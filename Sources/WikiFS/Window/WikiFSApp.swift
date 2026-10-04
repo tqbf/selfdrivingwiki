@@ -70,8 +70,11 @@ struct WikiFSApp: App {
     @State private var showingLaunchLocationWarning: Bool
     @State private var optionalRuntimeSetupModel = OptionalRuntimeSetupModel()
     @State private var showingOptionalRuntimeSetup = false
-    @State private var fileProviderSetupWarning: FileProviderSetupWarning?
-    @State private var showingFileProviderSetupWarning = false
+    /// Reference-type alert model, not `@State` values: the launch Task that
+    /// presents this warning runs through a pre-install copy of the App
+    /// struct (see the model's doc comment). `@State` writes from that copy
+    /// are silently lost; mutations of this shared instance always land.
+    @State private var fileProviderSetupAlert = FileProviderSetupAlertModel()
     /// Issue #881: user-visible error shown when the local `queue.sqlite`
     /// could not be opened at launch (no silent `:memory:` fallback). Drives
     /// an alert over the main window so the user understands ingestion /
@@ -496,8 +499,10 @@ struct WikiFSApp: App {
             appDelegate.sessionManager = sessionManager
 
             if let warning = await FileProviderSetupVerifier.verifyAndRepairInstalledProvider() {
-                fileProviderSetupWarning = warning
-                showingFileProviderSetupWarning = true
+                // Mutate the shared model, not `@State` — this Task runs from
+                // a pre-install copy of the App struct (see the model's doc
+                // comment); a `@State` write here would be silently lost.
+                fileProviderSetupAlert.present(warning)
             }
             await fileProvider.migrateDomainsIfNeeded(
                 wikiIDs: registry.wikis.map(\.id))
@@ -848,8 +853,11 @@ struct WikiFSApp: App {
             }
             .alert(
                 "File Provider Setup Needs Attention",
-                isPresented: $showingFileProviderSetupWarning,
-                presenting: fileProviderSetupWarning
+                isPresented: Binding(
+                    get: { fileProviderSetupAlert.isPresented },
+                    set: { if !$0 { fileProviderSetupAlert.dismiss() } }
+                ),
+                presenting: fileProviderSetupAlert.warning
             ) { warning in
                 Button("Open Installed Copy") {
                     NSWorkspace.shared.open(warning.expectedAppURL)
@@ -1114,6 +1122,30 @@ struct WikiFSApp: App {
 /// Minimal app delegate: drains ALL sessions' pending saves on app background
 /// (the R3 safety net from `plans/multi-window-ui.md`). Per-window `scenePhase`
 /// in `RootScene` only flushes the active window's session; this catches the
+/// Presents the launch-time File Provider setup warning from alert state that
+/// lives OUTSIDE `@State` value writes. The launch Task that produces the
+/// warning runs through the `AppDelegate.bootstrap` closure's copy of the App
+/// struct — captured during `init()`, before SwiftUI installs `@State`
+/// storage — so `@State` writes from it are silently lost (the same trap that
+/// silently killed `WikiChangeBridge`; see `AppDelegate.changeBridge`). A
+/// reference-type model created at init is shared by every copy of the App
+/// struct, so mutations always land.
+@MainActor
+@Observable
+final class FileProviderSetupAlertModel {
+    var warning: FileProviderSetupWarning?
+    var isPresented = false
+
+    func present(_ warning: FileProviderSetupWarning) {
+        self.warning = warning
+        isPresented = true
+    }
+
+    func dismiss() {
+        isPresented = false
+    }
+}
+
 /// case where `onDisappear` didn't fire on window close and a session is
 /// lingering in the `SessionManager` cache with unflushed editor drafts.
 /// `applicationWillResignActive` fires when the app loses keyboard focus / is

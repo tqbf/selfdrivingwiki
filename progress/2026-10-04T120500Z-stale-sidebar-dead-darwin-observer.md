@@ -55,6 +55,16 @@ The same lifetime trap already hit `menuBarItemController` and
   that property. The `@State` property is gone.
 - Added two observability lines to `WikiChangeBridge`: raw CF receipt before
   name matching, and `deinit`. A dead bridge now leaves a trace.
+- Audited every other `@State` property on `WikiFSApp` for the same trap.
+  One more instance: the launch Task wrote
+  `fileProviderSetupWarning`/`showingFileProviderSetupWarning` through the
+  same pre-install copy, so the "File Provider Setup Needs Attention" alert
+  could silently never present. Replaced both with
+  `FileProviderSetupAlertModel`, a reference-type `@Observable` model created
+  at init and mutated through the shared instance (the same shape as the
+  queue-database alert below it). All other properties are safe: they use
+  `State(initialValue:)`, are written only from `.task`, or hold reference
+  types whose mutations propagate through every copy.
 
 ## Verification
 
