@@ -89,10 +89,6 @@ struct WikiFSApp: App {
     /// scene + `NSApp.appearance` for AppKit surfaces (NSAlert, menu bar).
     @AppStorage("backgroundIngestEnabled") private var backgroundIngestEnabled = false
     @AppStorage(AppearanceSettingsView.storageKey) private var appearanceModeRaw = AppearanceMode.system.rawValue
-    /// Built lazily after `bootstrap` (it needs the registered wikis) — see the
-    /// `.task` below. The change bridge observes `wikictl`'s Darwin notifications.
-    /// Retained by `AppDelegate.changeBridge` (AppKit-owned storage) — see the
-    /// comment there for why it must not live in App `@State`.
     /// Bridges SwiftUI's `@Environment(\.openWindow)` to AppKit (menu bar,
     /// app delegate) so wiki windows can be reopened from the status item
     /// when no windows are visible (accessory mode). Wired by
@@ -1119,9 +1115,6 @@ struct WikiFSApp: App {
     }
 }
 
-/// Minimal app delegate: drains ALL sessions' pending saves on app background
-/// (the R3 safety net from `plans/multi-window-ui.md`). Per-window `scenePhase`
-/// in `RootScene` only flushes the active window's session; this catches the
 /// Presents the launch-time File Provider setup warning from alert state that
 /// lives OUTSIDE `@State` value writes. The launch Task that produces the
 /// warning runs through the `AppDelegate.bootstrap` closure's copy of the App
@@ -1146,6 +1139,9 @@ final class FileProviderSetupAlertModel {
     }
 }
 
+/// Minimal app delegate: drains ALL sessions' pending saves on app background
+/// (the R3 safety net from `plans/multi-window-ui.md`). Per-window `scenePhase`
+/// in `RootScene` only flushes the active window's session; this catches the
 /// case where `onDisappear` didn't fire on window close and a session is
 /// lingering in the `SessionManager` cache with unflushed editor drafts.
 /// `applicationWillResignActive` fires when the app loses keyboard focus / is
