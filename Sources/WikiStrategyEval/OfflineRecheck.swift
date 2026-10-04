@@ -215,7 +215,9 @@ public struct OfflineRecheckRecord: Sendable, Codable {
 /// Runs a bounded offline recheck of one recorded live scenario against its
 /// retained artifact database. Deterministic and free: no provider, no
 /// model, no network, and no write to the artifact or to any live wiki. The
-/// store is opened read-only (``GRDBWikiStore/init(readOnlyURL:)``).
+/// store opens read-only through the store factory seam
+/// (``StoreBackend/makeReadOnlyStore(readOnlyURL:)``), so this file never
+/// constructs the concrete store.
 ///
 /// What a recheck is FOR: a corrected evaluator must be able to re-derive
 /// the after-only checks from the recorded artifact without a fresh paid
@@ -239,7 +241,9 @@ public struct OfflineRecheckRunner: Sendable {
         recordedResults: EvaluationResultsFile,
         recordedResultsPath: String,
         artifactDatabaseURL: URL,
-        openStore: (URL) throws -> any WikiStore = { try GRDBWikiStore(readOnlyURL: $0) }
+        openStore: (URL) throws -> any WikiStore = { url in
+            try StoreBackend.current.makeReadOnlyStore(readOnlyURL: url)
+        }
     ) throws -> OfflineRecheckRecord {
         // 1. The recorded file must be a live run.
         guard recordedResults.runKind == .live else {
