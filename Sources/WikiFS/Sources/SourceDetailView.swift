@@ -931,19 +931,6 @@ struct SourceDetailView: View {
                                  ? "Fetch this video's transcript via YouTube captions"
                                  : "Fetch this episode's transcript via Apple Podcasts"))
                     }
-                    // An already-derived source being re-extracted (or having
-                    // its transcript refreshed) shows no Extract button — the
-                    // re-extract actions live in the derivation menu. Keep the
-                    // running job reachable from the action bar with the same
-                    // navigation affordance the first-run Extract swaps to.
-                    if !needsExtraction, !needsTranscription,
-                       runningExtractionJobItemID != nil {
-                        Button("View Extraction", systemImage: "checkmark.seal.fill") {
-                            navigateToRunningExtractionJob()
-                        }
-                        .buttonStyle(.bordered)
-                        .help("View the running extraction job in the Activity window")
-                    }
                     ingestButton
                     // The source's content affordance is one-per-source: an
                     // unextracted PDF or HTML source shows Extract (above) to
@@ -2091,8 +2078,11 @@ struct SourceDetailView: View {
     /// action are one thing: a not-yet-ingested source shows a prominent
     /// call-to-action; a processed one reads as a green "Ingested" affordance
     /// (still clickable to re-ingest, behind the existing confirmation); mid-run
-    /// it shows a spinner. This replaces the separate "Ready to ingest / Processed"
-    /// status tag that used to sit in the metadata row.
+    /// it swaps IN PLACE to a "View Ingestion" affordance that opens the Agent
+    /// Queue focused on the running job — the same replacement pattern as the
+    /// Extract and Transcribe buttons (#837/#842). This replaces the separate
+    /// "Ready to ingest / Processed" status tag that used to sit in the
+    /// metadata row.
     @ViewBuilder
     private var ingestButton: some View {
         let button = Button {
@@ -2113,11 +2103,12 @@ struct SourceDetailView: View {
                 }
             }
         } label: {
+            // Mid-run, the control becomes the navigation affordance in place —
+            // the same replacement as the Extract/Transcribe swaps. The sidebar
+            // row spinner and the Activity window carry the progress signal;
+            // the button names its new action.
             if isIngesting {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Ingesting…")
-                }
+                Label("View Ingestion", systemImage: "checkmark.seal.fill")
             } else if hasBeenIngested {
                 Label("Ingested", systemImage: "checkmark.circle.fill")
             } else {
@@ -2161,7 +2152,12 @@ struct SourceDetailView: View {
         // Ingest is a real next step; a source that can't be ingested at all
         // (byteless with no processed markdown — e.g. a video whose transcript
         // never arrived) stays secondary and is disabled above.
-        if hasBeenIngested {
+        if isIngesting {
+            // Mid-run the control navigates — keep the prominent action
+            // styling. The green tint reads "done", which mid-run would
+            // misstate.
+            button.buttonStyle(.borderedProminent)
+        } else if hasBeenIngested {
             button.tint(.green)
         } else if !canIngest {
             button
