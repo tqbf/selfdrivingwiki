@@ -4188,7 +4188,9 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 return WikiStrategyWriteResult(outcome: .unchanged, change: nil)
             }
             let newRevision = (rowRevision ?? .absent).next
-            let now = Date()
+            // Epoch round-trip, matching the save path above. Both write
+            // paths keep one representation for the updated_at column.
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
             try db.execute(sql: """
             INSERT INTO wiki_strategy (id, name, instructions, revision, updated_at)
             VALUES (1, NULL, NULL, ?, ?)
