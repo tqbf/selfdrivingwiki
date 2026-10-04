@@ -30,6 +30,13 @@ enum DeletionDialogAction: Hashable, CaseIterable {
 struct DeletionDialogPresentation: Equatable {
     let title: String
     let message: String
+    /// The distinct pages linking to / citing the selection — rendered as
+    /// rows in the confirmation sheet's table (a dialog that takes a list
+    /// keeps it in a bounded, self-scrolling table, never inline prose).
+    let linkingPages: [DeletionLinkingPage]
+    /// The distinct bookmark folder paths the deletion empties — table rows,
+    /// like `linkingPages`.
+    let bookmarkFolderPaths: [String]
     /// True when incoming links exist, so Unlink and Delete is offered.
     let offersUnlink: Bool
 
@@ -209,21 +216,18 @@ struct DeletionConfirmationCoordinator {
         switch kind {
         case .page:
             if !impact.linkingPages.isEmpty {
-                let names = impact.linkingPages.compactMap(\.title).joined(separator: ", ")
                 let noun = impact.linkingPages.count == 1 ? "page" : "pages"
-                lines.append("Linked from \(impact.linkingPages.count) \(noun): \(names).")
+                lines.append("Linked from \(impact.linkingPages.count) \(noun):")
             }
         case .source:
             if !impact.linkingPages.isEmpty {
-                let names = impact.linkingPages.compactMap(\.title).joined(separator: ", ")
                 let noun = impact.linkingPages.count == 1 ? "page" : "pages"
-                lines.append("Cited by \(impact.linkingPages.count) \(noun): \(names).")
+                lines.append("Cited by \(impact.linkingPages.count) \(noun):")
             }
         }
         if !impact.bookmarks.isEmpty {
             let noun = impact.bookmarks.count == 1 ? "bookmark" : "bookmarks"
-            let paths = Set(impact.bookmarks.map(\.folderPath)).sorted().joined(separator: ", ")
-            lines.append("\(impact.bookmarks.count) \(noun) point to this and will be removed (\(paths)).")
+            lines.append("\(impact.bookmarks.count) \(noun) point to this and will be removed:")
         }
         if !impact.linkingPages.isEmpty {
             let noun = kind == .page ? "links" : "citations"
@@ -232,6 +236,8 @@ struct DeletionConfirmationCoordinator {
         return DeletionDialogPresentation(
             title: kind.dialogTitle(count: selectionCount),
             message: lines.joined(separator: "\n"),
+            linkingPages: impact.linkingPages,
+            bookmarkFolderPaths: Set(impact.bookmarks.map(\.folderPath)).sorted(),
             offersUnlink: !impact.linkingPages.isEmpty)
     }
 
@@ -311,61 +317,164 @@ struct DeletionOutcomeDialog: ViewModifier {
     var onOpenPage: ((PageID) -> Void)? = nil
 
     func body(content: Content) -> some View {
-        content.confirmationDialog(
-            outcome?.dialogTitle ?? "",
+        content.sheet(
             isPresented: Binding(
                 get: { outcome?.isDialogVisible ?? false },
-                set: { if !$0 { outcome = nil } }
-            ),
-            titleVisibility: (outcome?.dialogTitle.isEmpty == false) ? .visible : .automatic
+                set: { if !$0 { cancel() } }
+            )
         ) {
-            dialogActions
-        } message: {
-            if let message = outcome?.dialogMessage, !message.isEmpty {
-                Text(message)
+            if let outcome {
+                DeletionOutcomeSheet(
+                    outcome: outcome,
+                    onAction: fire,
+                    onOpenPage: openPage,
+                    onDismiss: cancel)
             }
         }
     }
 
-    @ViewBuilder
-    private var dialogActions: some View {
-        switch outcome {
-        case .confirm(let presentation):
-            ForEach(presentation.actions, id: \.self) { action in
-                actionButton(action)
-            }
-        case .blocked(let presentation):
-            // The blocking pages as clickable entries: opening one dismisses
-            // the dialog so the user can remove the reference, then retry.
-            ForEach(presentation.blockingPages, id: \.pageID) { page in
-                Button("Open “\(page.title ?? page.pageID.rawValue)”") {
-                    onOpenPage?(page.pageID)
-                    outcome = nil
-                }
-            }
-            Button("Cancel", role: .cancel) { outcome = nil }
-        case .failed:
-            Button("OK", role: .cancel) { outcome = nil }
-        case .deleteImmediately, .none:
-            EmptyView()
-        }
+    private func openPage(_ pageID: PageID) {
+        onOpenPage?(pageID)
+        outcome = nil
     }
 
-    @ViewBuilder
-    private func actionButton(_ action: DeletionDialogAction) -> some View {
-        switch action {
-        case .unlinkAndDelete:
-            Button("Unlink and Delete", role: .destructive) { fire(action) }
-        case .delete:
-            Button("Delete", role: .destructive) { fire(action) }
-        case .cancel:
-            Button("Cancel", role: .cancel) { fire(action) }
+    /// Esc / programmatic dismissal mirrors the state's own cancel affordance:
+    /// only `.confirm` offers a typed cancel action; blocked and failed states
+    /// have nothing to cancel and just clear.
+    private func cancel() {
+        if case .confirm = outcome {
+            fire(.cancel)
+        } else {
+            outcome = nil
         }
     }
 
     private func fire(_ action: DeletionDialogAction) {
         onAction(action)
         outcome = nil
+    }
+}
+
+/// The sheet rendering of one coordinator outcome. House rule: a dialog that
+/// takes a list renders it in a table with its own scrollbar — the former
+/// `.confirmationDialog` inlined linking-page names into its message and gave
+/// every blocking page its own action button, so a long reference list grew
+/// the dialog past the screen and pushed its buttons out of reach. Here the
+/// message carries only the counts, the names live in a bounded `List` that
+/// scrolls independently, and the action buttons stay visible below it.
+///
+/// Type roles match the app's other utility sheets (`.headline` title,
+/// `.body` secondary message) — see `StoreErrorSheet`.
+private struct DeletionOutcomeSheet: View {
+    let outcome: DeletionConfirmationOutcome
+    let onAction: (DeletionDialogAction) -> Void
+    let onOpenPage: (PageID) -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
+            Label(outcome.dialogTitle, systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(.orange)
+            if !message.isEmpty {
+                Text(message)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if hasTableRows {
+                table
+            }
+            buttons
+        }
+        .padding(Metrics.padding)
+        .frame(width: Metrics.width)
+        .onExitCommand { onDismiss() }
+    }
+
+    private var message: String { outcome.dialogMessage }
+
+    /// True when this outcome carries list rows for the table.
+    private var hasTableRows: Bool {
+        switch outcome {
+        case .confirm(let p): return !p.linkingPages.isEmpty || !p.bookmarkFolderPaths.isEmpty
+        case .blocked(let p): return !p.blockingPages.isEmpty
+        case .failed, .deleteImmediately: return false
+        }
+    }
+
+    /// The bounded, self-scrolling list of referenced names.
+    private var table: some View {
+        List {
+            switch outcome {
+            case .confirm(let p):
+                ForEach(p.linkingPages, id: \.pageID) { page in
+                    Label(page.title ?? page.pageID.rawValue, systemImage: "doc.text")
+                }
+                ForEach(p.bookmarkFolderPaths, id: \.self) { path in
+                    Label(path, systemImage: "folder")
+                }
+            case .blocked(let p):
+                // The blocking pages as clickable rows: opening one dismisses
+                // the sheet so the user can remove the reference, then retry.
+                ForEach(p.blockingPages, id: \.pageID) { page in
+                    Button {
+                        onOpenPage(page.pageID)
+                    } label: {
+                        HStack {
+                            Text(page.title ?? page.pageID.rawValue)
+                            Spacer()
+                            Image(systemName: "arrow.up.right.square")
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            case .failed, .deleteImmediately:
+                EmptyView()
+            }
+        }
+        .listStyle(.bordered)
+        .frame(maxHeight: Metrics.maxTableHeight)
+    }
+
+    @ViewBuilder
+    private var buttons: some View {
+        HStack {
+            Spacer()
+            switch outcome {
+            case .confirm(let p):
+                Button("Cancel", role: .cancel) { onDismiss() }
+                    .keyboardShortcut(.cancelAction)
+                if p.offersUnlink {
+                    Button("Delete", role: .destructive) { onAction(.delete) }
+                    Button("Unlink and Delete", role: .destructive) { onAction(.unlinkAndDelete) }
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Delete", role: .destructive) { onAction(.delete) }
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                }
+            case .blocked:
+                Button("Cancel", role: .cancel) { onDismiss() }
+                    .keyboardShortcut(.cancelAction)
+            case .failed:
+                Button("OK") { onDismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            case .deleteImmediately:
+                EmptyView()
+            }
+        }
+    }
+
+    private enum Metrics {
+        static let width: CGFloat = 480
+        static let padding: CGFloat = 20
+        static let sectionSpacing: CGFloat = 14
+        static let maxTableHeight: CGFloat = 320
     }
 }
 

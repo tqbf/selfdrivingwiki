@@ -28,9 +28,10 @@ struct SourcesContainerView: View {
     @State private var sourceSort: SourceSortOrder = .lastUpdated
     @State private var renameTarget: SourceSummary?
     @State private var renameText = ""
-    @State private var showBatchReingestConfirmation = false
-    @State private var pendingBatchIngestIDs: [SourceID] = []
-    @State private var pendingReingestNames: [String] = []
+    /// Non-nil while the re-ingest confirmation sheet is up for a batch that
+    /// contains already-ingested sources (their names render in the sheet's
+    /// bounded, self-scrolling table — see `ReingestConfirmationSheet`).
+    @State private var reingestConfirmation: ReingestConfirmation?
     /// Non-nil while the bookmark-target picker is open for a source selection.
     @State private var addToBookmarksContext: BookmarkTargetPickerContext?
     /// Non-nil while a delete-confirmation surface is on screen (issue #219
@@ -131,24 +132,22 @@ struct SourcesContainerView: View {
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Rename") { commitRename() }
         }
-        .confirmationDialog(
-            "Ingest Again?",
-            isPresented: $showBatchReingestConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Ingest Again", role: .destructive) {
-                Task {
-                    store.flushPendingSaves()
-                    await enqueueIngestion(
-                        sourceIDs: pendingBatchIngestIDs,
-                        store: store,
-                        wikiID: session.wikiID,
-                        queueEngine: queueEngine)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The following sources have already been ingested:\n\(pendingReingestNames.joined(separator: "\n"))\n\nRunning ingest again may create duplicate pages.")
+        .sheet(item: $reingestConfirmation) { pending in
+            ReingestConfirmationSheet(
+                confirmation: pending,
+                onConfirm: {
+                    let sourceIDs = pending.sourceIDs
+                    reingestConfirmation = nil
+                    Task {
+                        store.flushPendingSaves()
+                        await enqueueIngestion(
+                            sourceIDs: sourceIDs,
+                            store: store,
+                            wikiID: session.wikiID,
+                            queueEngine: queueEngine)
+                    }
+                },
+                onCancel: { reingestConfirmation = nil })
         }
         .sheet(item: $addToBookmarksContext) { ctx in
             BookmarkTargetPickerSheet(
@@ -323,9 +322,9 @@ struct SourcesContainerView: View {
                 }
             },
             onIngestNeedsConfirmation: { ids, names in
-                pendingBatchIngestIDs = ids
-                pendingReingestNames = names
-                showBatchReingestConfirmation = true
+                reingestConfirmation = ReingestConfirmation(
+                    sourceIDs: ids,
+                    alreadyIngestedNames: names)
             },
             onExtract: { items in
                 Task {

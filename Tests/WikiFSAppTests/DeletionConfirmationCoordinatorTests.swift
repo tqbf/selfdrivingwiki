@@ -220,9 +220,9 @@ struct DeletionConfirmationCoordinatorTests {
         #expect(presentation.message.contains("Cited by 2 pages"))
         // Total bookmark count across the batch (2 + 2 distinct nodes).
         #expect(presentation.message.contains("4 bookmarks"))
-        // Distinct folder paths only, sorted.
-        #expect(presentation.message.contains("Bookmarks, Research"))
-        #expect(!presentation.message.contains("Bookmarks, Research, Bookmarks"))
+        // Distinct folder paths only, sorted — table rows, not message prose.
+        #expect(presentation.bookmarkFolderPaths == ["Bookmarks", "Research"])
+        #expect(presentation.linkingPages.map(\.pageID) == [p1, p2])
     }
 
     // MARK: - Impact-read failure can never delete (AC.10)
