@@ -434,13 +434,18 @@ struct QueueEngineTests {
 
     // MARK: - Failed item records error, frees slot (AC3.7)
 
-    /// #1354: full queue outcome for a failed agent launch. The fixed
-    /// ingestion provider throws `QueueIngestionError.spawnFailed(...)` when
-    /// the launcher records a launch/preflight failure (exit status -1, zero
-    /// agent turns) — this pins the settlement: the item must end `.failed`
-    /// (never `.completed`) and the launch diagnostic must survive verbatim
-    /// into the stored error so the job view shows the actionable stderr
-    /// (here: the wrapper's "env: node: No such file or directory").
+    /// #1354: the queue-ENGINE half of the launch-failure outcome. The
+    /// worker below honors the provider contract the validator suites pin
+    /// (throw `QueueIngestionError.spawnFailed(...)` when the launcher
+    /// records a launch/preflight failure — exit status -1, zero agent
+    /// turns); what THIS test pins is the settlement under the provider:
+    /// the item must end `.failed` (never `.completed`) and the launch
+    /// diagnostic must survive verbatim into the stored error so the job
+    /// view shows the actionable stderr (here: the wrapper's
+    /// "env: node: No such file or directory"). The provider-side rejection
+    /// of the real launch-failure tuple is pinned separately in
+    /// `AgentLauncherLaunchFailureCompletionTests` and the two host
+    /// validator suites.
     @Test func testLaunchFailureSettlesFailedWithDiagnostic() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 

@@ -161,6 +161,40 @@ public enum QueueIngestionError: Error, LocalizedError {
     }
 }
 
+// MARK: - Ingestion outcome validation (#1354)
+
+/// The host-agnostic launcher-outcome contract, defined ONCE for every
+/// `QueueIngestionProvider` host (app + daemon); each host keeps a thin
+/// static seam that delegates here, so its tests pin that the host actually
+/// routes through this contract.
+///
+/// Ordering: preflight first — a recorded launch failure is terminal
+/// REGARDLESS of the exit status. Then a strict nonzero-exit rejection:
+/// every successful completion path finishes with status 0, so nonzero
+/// always means an abort (user stop, safety-net teardown, spawn failure),
+/// even when no `.turnFailed` event was observed. `hadTurnFailure` only
+/// selects the message.
+public enum QueueIngestionOutcomeValidator {
+    public static func validate(
+        exitStatus: Int32?,
+        preflightError: String?,
+        hadTurnFailure: Bool
+    ) throws {
+        if let preflightError {
+            throw QueueIngestionError.spawnFailed(preflightError)
+        }
+        guard let exitStatus else {
+            throw QueueIngestionError.spawnFailed("The agent did not start.")
+        }
+        if exitStatus != 0 {
+            throw QueueIngestionError.spawnFailed(
+                hadTurnFailure
+                ? "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(exitStatus))."
+                : "The agent run aborted before completing (exit status \(exitStatus)).")
+        }
+    }
+}
+
 // MARK: - QueueIngestionWorkerFactory
 
 /// A `QueueWorkerFactory` that creates `QueueIngestionWorker` instances.

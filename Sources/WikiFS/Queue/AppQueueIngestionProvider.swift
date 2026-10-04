@@ -482,34 +482,20 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             usage: launcher.runTotalUsage))
     }
 
+    /// The app host's seam over the shared #1354 contract
+    /// (`QueueIngestionOutcomeValidator`): preflight first — a recorded
+    /// launch failure is terminal regardless of the exit status — then a
+    /// strict nonzero-exit rejection. Kept as a host-level static so tests
+    /// pin that THIS host routes through the contract.
     static func validateLauncherOutcome(
         exitStatus: Int32?,
         preflightError: String?,
         runHadTurnFailure: Bool
     ) throws {
-        // #1354: a recorded preflight/launch failure is terminal REGARDLESS of
-        // the exit status. The multi-phase orchestrator's abort paths record
-        // the diagnostic and then call `finish(status: -1)` — so exitStatus
-        // exists and no turn ran (`runHadTurnFailure == false`), a combination
-        // the old "nonzero AND turn-failure" conjunction could never reject.
-        // This mirrors the daemon host's `validateLauncherResults` ordering:
-        // preflight first, exit status second.
-        if let preflightError {
-            throw QueueIngestionError.spawnFailed(preflightError)
-        }
-        guard let exitStatus else {
-            throw QueueIngestionError.spawnFailed("The agent did not start.")
-        }
-        // #1354: every successful completion path finishes with status 0;
-        // nonzero ALWAYS means an abort (user stop, safety-net teardown, or
-        // spawn failure), even when no `.turnFailed` event was observed.
-        // `runHadTurnFailure` only selects the message.
-        if exitStatus != 0 {
-            throw QueueIngestionError.spawnFailed(
-                runHadTurnFailure
-                ? "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(exitStatus))."
-                : "The agent run aborted before completing (exit status \(exitStatus)).")
-        }
+        try QueueIngestionOutcomeValidator.validate(
+            exitStatus: exitStatus,
+            preflightError: preflightError,
+            hadTurnFailure: runHadTurnFailure)
     }
 
     /// #1344: stamp the staged sources Ingested after a validated-successful

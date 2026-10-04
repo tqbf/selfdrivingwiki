@@ -359,32 +359,19 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             hadTurnFailure: results.hadTurnFailure)
     }
 
-    /// #1354: the pure outcome validator — same host contract as the app
-    /// host's `AppQueueIngestionProvider.validateLauncherOutcome`. Preflight
-    /// first (a recorded launch failure is terminal regardless of exit
-    /// status), then a strict nonzero-exit rejection: every successful
-    /// completion path finishes with status 0, so nonzero ALWAYS means an
-    /// abort (user stop, safety-net teardown, spawn failure), even when no
-    /// `.turnFailed` event was observed. `hadTurnFailure` only selects the
-    /// message. Static + internal so tests pin the daemon host contract
-    /// without standing up the full provider.
+    /// The daemon host's seam over the shared #1354 contract
+    /// (`QueueIngestionOutcomeValidator`). Static + internal so tests pin
+    /// that THIS host routes through the contract without standing up the
+    /// full provider.
     static func validateLauncherOutcome(
         exitStatus: Int32?,
         preflightError: String?,
         hadTurnFailure: Bool
     ) throws {
-        if let preflightError {
-            throw QueueIngestionError.spawnFailed(preflightError)
-        }
-        guard let exitStatus else {
-            throw QueueIngestionError.spawnFailed("The agent did not start.")
-        }
-        if exitStatus != 0 {
-            throw QueueIngestionError.spawnFailed(
-                hadTurnFailure
-                ? "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(exitStatus))."
-                : "The agent run aborted before completing (exit status \(exitStatus)).")
-        }
+        try QueueIngestionOutcomeValidator.validate(
+            exitStatus: exitStatus,
+            preflightError: preflightError,
+            hadTurnFailure: hadTurnFailure)
     }
 
     private func runLintAgent(

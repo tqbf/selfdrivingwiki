@@ -155,15 +155,16 @@ public final class AgentLauncher {
     /// successful run. Settable from `AgentOperationRunner` for silent-failure
     /// paths where no agent process is spawned.
     public var preflightError: String?
-    /// #1354: the last non-quota phase failure diagnostic (recorded by
-    /// `runPhase`'s catch — e.g. `ACPBackendError.launchFailed`'s stderr
-    /// payload). Copied into `preflightError` at the terminal abort points
-    /// (`runACPIngestFallback`'s failure branch) so the queue error carries
-    /// the actual launch diagnostic instead of a generic "did not start"
-    /// message. Never read by validators directly — only the abort-point
-    /// copy is load-bearing — so a quota-fallback attempt that later
-    /// succeeds cannot poison a successful run. Cleared per run in
-    /// `resetRunArtifacts()`.
+    /// #1354: the last non-quota phase failure diagnostic — ANY error
+    /// `runPhase`'s catch observes, not just launch failures (e.g.
+    /// `ACPBackendError.launchFailed`'s stderr payload, or a turn/spawn
+    /// error from a later phase). Copied into `preflightError` at the
+    /// terminal abort point (`runACPIngestFallback`'s failure branch) so
+    /// the queue error carries an actual phase diagnostic instead of a
+    /// generic "did not start" message. Never read by validators directly
+    /// — only the abort-point copy is load-bearing — so a phase failure
+    /// followed by a successful fallback or later phase cannot poison a
+    /// good run. Cleared per run in `resetRunArtifacts()`.
     @ObservationIgnored public private(set) var lastPhaseFailureMessage: String?
     /// The kind of the operation currently running (drives the UI title / spinner).
     ///
