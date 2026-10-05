@@ -74,6 +74,39 @@ struct QueueWorkerOutputChannelTests {
         channel.finishTranscript(attempt)
     }
 
+    /// #1370: the ingest plan-rejection reason is carried by
+    /// `.result(isError: true, text:)`. The queue transcript must persist it —
+    /// before the translator mapped a standalone result to a transcript item,
+    /// `flushTranscript` reported a `result` kind in its tail while no row
+    /// reached `queue_item_transcript_items`, so the Activity transcript
+    /// stopped short and the user saw only the generic queue error.
+    @Test("standalone result persists to the queue transcript")
+    func standaloneResultPersistsToTranscript() async throws {
+        let persisted = LockedLog<QueueTranscriptUpdate>()
+        let channel = makeChannel(
+            order: LockedLog<String>(),
+            persistTranscript: { update in persisted.append(update) })
+        let attempt = QueueAttemptID(
+            itemID: QueueItem.ID(rawValue: "plan-rejection-item"),
+            attempt: 0)
+        channel.beginTranscript(attempt)
+
+        channel.emitTranscript(
+            attemptID: attempt,
+            event: .result(isError: true, text: "Ingest plan rejected before executor launch: bad source"))
+
+        let updates = persisted.values
+        #expect(updates.count == 1, "the result event must reach transcript persistence")
+        let items = try #require(updates.first?.changedItems)
+        #expect(items.count == 1)
+        guard case .message(let message)? = items.first else {
+            Issue.record("expected the persisted result to be a message item, got: \(items)")
+            return
+        }
+        #expect(message.text == "Ingest plan rejected before executor launch: bad source")
+        channel.finishTranscript(attempt)
+    }
+
     @Test("final usage publishes before persistence")
     func finalUsagePublishesBeforePersistence() async throws {
         let order = LockedLog<String>()

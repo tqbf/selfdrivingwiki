@@ -31,6 +31,12 @@ public struct AgentEventTranscriptTranslator: Sendable {
     private var nextContentBlockOrdinal = 0
     private var nextToolCallOrdinal = 0
     private var runningToolCalls: [RunningToolCallState] = []
+    /// The assistant text most recently produced for a turn — the full text of
+    /// an `.assistantText` event, or the accumulated stream for
+    /// `.assistantTextDelta`. A terminal `.result` usually repeats it verbatim
+    /// (see `result(_:turnID:)`), so the translator needs the text itself, not
+    /// the content block: `.assistantText` closes the block.
+    private var lastAssistantText: (turnID: ChatTurnID, text: String)?
 
     public init() {}
 
@@ -60,6 +66,7 @@ public struct AgentEventTranscriptTranslator: Sendable {
                 )))
             case .assistantText(let text):
                 let delta = replacement(text, role: .assistant, turnID: turnID)
+                lastAssistantText = (turnID, text)
                 closeContentBlock()
                 return delta
             case .thinking(let text):
@@ -67,7 +74,11 @@ public struct AgentEventTranscriptTranslator: Sendable {
                 closeContentBlock()
                 return delta
             case .assistantTextDelta(let delta):
-                return appending(delta, role: .assistant, turnID: turnID)
+                let translated = appending(delta, role: .assistant, turnID: turnID)
+                if case .open(let block) = contentBlock {
+                    lastAssistantText = (turnID, block.text)
+                }
+                return translated
             case .thinkingDelta(let delta):
                 return appending(delta, role: .reasoning, turnID: turnID)
             case .toolUse(let name, let inputSummary):
@@ -118,7 +129,9 @@ public struct AgentEventTranscriptTranslator: Sendable {
                     message: reason.description,
                     createdAt: Date()
                 )))
-            case .systemInit, .subagent, .result, .messageStop, .raw:
+            case .result(_, let text):
+                return result(text, turnID: turnID)
+            case .systemInit, .subagent, .messageStop, .raw:
                 closeContentBlock()
                 return nil
             }
@@ -134,6 +147,47 @@ public struct AgentEventTranscriptTranslator: Sendable {
         case .quotaExhausted:
             .transportError
         }
+    }
+
+    /// Translate the terminal `{"type":"result"}` event — the run's final
+    /// answer/report.
+    ///
+    /// When the result text duplicates the assistant text already produced for
+    /// the turn (the common case: `.result` follows `.assistantText` with
+    /// identical text) it adds no new content and is skipped. The comparison is
+    /// against the turn's last assistant text, not the open content block —
+    /// `.assistantText` closes the block it just wrote.
+    ///
+    /// A STANDALONE result — no matching assistant text, as when a run fails
+    /// before it writes any prose — is real content, so it becomes its own
+    /// assistant message. Treating every result as a duplicate silently
+    /// truncated the queue transcript: the rejection reason on a failed
+    /// ingest plan is carried by `.result(isError: true, text:)`, and no row
+    /// reached `queue_item_transcript_items` for the user to read.
+    ///
+    /// The block is left CLOSED. A result is terminal (`endsGeneration`), so
+    /// the next turn's assistant text must start its own block instead of
+    /// replacing this text through `compatibleOpenBlock`.
+    private mutating func result(_ text: String, turnID: ChatTurnID) -> ChatTranscriptDelta? {
+        let duplicatesAssistantText = lastAssistantText.map { $0.turnID == turnID && $0.text == text } ?? false
+        closeContentBlock()
+        guard text.isEmpty == false, duplicatesAssistantText == false else { return nil }
+        let block = OpenContentBlock(
+            messageID: ChatMessageID(
+                rawValue: "result-\(turnID.rawValue)-block-\(nextContentBlockOrdinal)"),
+            turnID: turnID,
+            role: .assistant,
+            createdAt: Date(),
+            text: text
+        )
+        nextContentBlockOrdinal += 1
+        return .messageReplacement(
+            messageID: block.messageID,
+            turnID: turnID,
+            role: .assistant,
+            text: text,
+            createdAt: block.createdAt
+        )
     }
 
     private mutating func appending(

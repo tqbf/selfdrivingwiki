@@ -433,4 +433,51 @@ struct CumulativeIngestContractTests {
         #expect(problems.first!.description.contains("check the wiki store"),
                 "the failure must tell the operator what to check")
     }
+
+    // MARK: - Queue-visible rejection summary (#1370)
+
+    /// The queue error string is short, so the summary names the FIRST problem
+    /// verbatim and counts the rest. The full multi-line detail stays in the
+    /// run log and the transcript event.
+    @Test func rejectionSummaryNamesFirstProblemOnly() throws {
+        let staged = ["Chapter-01--01AAA.md"]
+        let problems = validate([
+            ACPIngestPageAssignment(
+                title: "Alpha", sourceFile: "Never-Staged--01MISSING.md",
+                sourceRanges: "1-10", outline: "a"),
+            ACPIngestPageAssignment(
+                title: "Beta", sourceFile: staged[0],
+                sourceRanges: "1-10", outline: "b",
+                supportingSources: [ACPIngestSupportingSource(
+                    sourceFile: "Earlier-Batch--01EARLIER.md", sourceRanges: "1-5")]),
+        ], staged: staged, resolver: RecorderResolver())
+
+        let summary = try #require(ACPIngestPlanValidation.failureSummary(problems))
+        #expect(summary.hasPrefix("Ingest plan rejected before executor launch: "))
+        #expect(summary.contains("Never-Staged--01MISSING.md"),
+                "the first problem must be named verbatim")
+        #expect(summary.contains("(+1 more)"),
+                "the remaining problem count must be stated")
+        #expect(!summary.contains("\n"), "the queue error is a single line")
+        #expect(!summary.contains("Earlier-Batch--01EARLIER.md"),
+                "the queue error must not dump the whole multi-line detail")
+    }
+
+    /// One problem needs no counter suffix.
+    @Test func rejectionSummaryOmitsCounterForSingleProblem() throws {
+        let problems = validate([
+            ACPIngestPageAssignment(
+                title: "Alpha", sourceFile: "Never-Staged--01MISSING.md",
+                sourceRanges: "1-10", outline: "a"),
+        ], staged: ["Chapter-01--01AAA.md"], resolver: RecorderResolver())
+
+        let summary = try #require(ACPIngestPlanValidation.failureSummary(problems))
+        #expect(summary.contains("Never-Staged--01MISSING.md"))
+        #expect(!summary.contains("more"), "a single problem carries no counter")
+    }
+
+    /// A plan with no problems is not a rejection, so there is nothing to say.
+    @Test func rejectionSummaryIsNilWithoutProblems() {
+        #expect(ACPIngestPlanValidation.failureSummary([]) == nil)
+    }
 }

@@ -177,13 +177,73 @@ struct AgentEventTranscriptTranslatorTests {
         let deltas = translator.translate([
             .systemInit(model: "model"),
             .subagent(subagentType: "worker", description: "work", isCompletion: false),
-            .result(isError: false, text: "complete"),
             .messageStop,
             .raw("wire"),
         ], turnID: turnID)
 
         #expect(deltas.isEmpty)
         #expect(translator.activeContentBlock == nil)
+    }
+
+    /// #1370: a result that duplicates the assistant block it follows adds no
+    /// content, so it is skipped — the documented preamble dedup rule.
+    @Test func resultMatchingOpenAssistantBlockProducesNoDelta() {
+        let turnID = ChatTurnID(rawValue: "turn-result-dedup")
+        var translator = AgentEventTranscriptTranslator()
+        _ = translator.translate([.assistantText("Done.")], turnID: turnID)
+        let deltas = translator.translate([.result(isError: false, text: "Done.")], turnID: turnID)
+
+        #expect(deltas.isEmpty)
+    }
+
+    /// #1370: a STANDALONE result is the run's only prose — the ingest
+    /// plan-rejection reason arrives this way. It must become a transcript
+    /// item, or the queue transcript shows nothing and the user sees only the
+    /// generic "aborted before completing" queue error.
+    @Test func standaloneResultBecomesPersistableAssistantMessage() {
+        let turnID = ChatTurnID(rawValue: "turn-result-standalone")
+        var translator = AgentEventTranscriptTranslator()
+        let deltas = translator.translate(
+            [.result(isError: true, text: "Ingest plan rejected before executor launch: bad source")],
+            turnID: turnID)
+        let items = ChatTranscriptReducer.reducing(items: [], with: deltas)
+
+        guard items.count == 1, case .message(let message)? = items.first else {
+            Issue.record("expected the standalone result to become one transcript message")
+            return
+        }
+        #expect(message.messageID == ChatMessageID(rawValue: "result-\(turnID.rawValue)-block-0"))
+        #expect(message.role == .assistant)
+        #expect(message.text == "Ingest plan rejected before executor launch: bad source")
+    }
+
+    /// A result closes its block, so the next turn's assistant text starts a
+    /// new block instead of replacing the result's text.
+    @Test func resultClosesBlockSoNextTurnStartsFresh() {
+        let turnID = ChatTurnID(rawValue: "turn-result-then-text")
+        var translator = AgentEventTranscriptTranslator()
+        let resultDeltas = translator.translate([.result(isError: false, text: "first")], turnID: turnID)
+        let nextDeltas = translator.translate([.assistantText("second")], turnID: turnID)
+        let items = ChatTranscriptReducer.reducing(items: [], with: resultDeltas + nextDeltas)
+
+        guard items.count == 2,
+              case .message(let first)? = items.first,
+              case .message(let second)? = items.last else {
+            Issue.record("expected two distinct messages, got \(items.count)")
+            return
+        }
+        #expect(first.text == "first")
+        #expect(second.text == "second")
+        #expect(first.messageID != second.messageID)
+    }
+
+    /// An empty result carries no text, so it adds no empty row.
+    @Test func emptyResultProducesNoDelta() {
+        let turnID = ChatTurnID(rawValue: "turn-result-empty")
+        var translator = AgentEventTranscriptTranslator()
+        let deltas = translator.translate([.result(isError: false, text: "")], turnID: turnID)
+
+        #expect(deltas.isEmpty)
     }
 
     @Test func queueAttemptCreatesDeterministicDistinctIdentities() {

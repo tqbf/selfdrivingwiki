@@ -239,6 +239,19 @@ public enum ACPIngestPlanValidation {
         }
     }
 
+    /// One-line summary of a rejected plan, for a queue-visible failure string.
+    ///
+    /// The queue error is short, so this names the FIRST problem verbatim and
+    /// counts the rest. The full multi-line detail stays in the run log and
+    /// the transcript event. Returns `nil` for an empty list — a plan with no
+    /// problems is not a rejection.
+    public static func failureSummary(_ problems: [Problem]) -> String? {
+        guard let first = problems.first else { return nil }
+        let summary = "Ingest plan rejected before executor launch: \(first.description)"
+        guard problems.count > 1 else { return summary }
+        return "\(summary) (+\(problems.count - 1) more)"
+    }
+
     /// All problems found in `plan`, in first-occurrence order. An empty
     /// result means the plan may launch.
     ///

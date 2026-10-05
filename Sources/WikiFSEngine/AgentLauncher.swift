@@ -2318,6 +2318,13 @@ public final class AgentLauncher {
         guard validationProblems.isEmpty else {
             let details = validationProblems.map(\.description).joined(separator: "\n")
             DebugLog.agent("runACPIngest: plan rejected by validation — launching no executors:\n\(details)")
+            // #1370: copy the COMPACT reason into the failure the queue
+            // validator reads, mirroring the #1354 abort-point copy. Without
+            // it the queue item failed with only the generic "aborted before
+            // completing (exit status -1)" — the reason lived in the log and
+            // the transcript event alone, and neither reaches the queue error.
+            // The full multi-line detail stays in the log and the event below.
+            preflightError = ACPIngestPlanValidation.failureSummary(validationProblems)
             events.append(.result(
                 isError: true,
                 text: "Ingest plan rejected before executor launch — no pages were written. Fix the plan:\n\(details)"))

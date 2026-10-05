@@ -292,6 +292,37 @@ struct AgentPromptContractTests {
         }
     }
 
+    // MARK: - Job-local supporting sources (#1370)
+
+    /// The planner may name ONLY this task's staged files in
+    /// `supportingSources`. The operator kept strict job locality: an
+    /// already-ingested source from an earlier batch is not admissible, and
+    /// validation rejects the WHOLE plan — no executor runs, so one
+    /// cross-batch citation wastes the entire job. The rule is stated at the
+    /// schema field where the planner writes the value. Asserted on BOTH the
+    /// canonical source and the bundled copy the runtime loads.
+    @Test func plannerSupportingSourcesAreJobLocal() {
+        for (copy, origin) in [
+            (canonical("ingest-planner.md"), "prompts/ingest-planner.md"),
+            (bundled("ingest-planner.md"), "Sources/WikiFSCore/Resources/Prompts/ingest-planner.md"),
+        ] {
+            guard let planner = copy else {
+                Issue.record("missing prompt: \(origin)")
+                continue
+            }
+            #expect(planner.contains("supportingSources"),
+                    "\(origin): the rule must sit at the supportingSources field")
+            #expect(planner.contains("A source from an EARLIER batch is NOT admissible"),
+                    "\(origin): the cross-batch failure mode must be named explicitly (#1370)")
+            #expect(planner.contains("Name only this task's staged files"),
+                    "\(origin): admissibility must be scoped to this task's staged files (#1370)")
+            #expect(planner.contains("validation rejects the WHOLE plan"),
+                    "\(origin): the whole-plan rejection consequence must stay explicit (#1370)")
+            #expect(planner.contains("wastes the entire job"),
+                    "\(origin): the wasted-job consequence must stay explicit (#1370)")
+        }
+    }
+
     // MARK: - Strategy-edit authority (chat-only, user-authorized)
 
     /// The `wikictl strategy read|save|reset` surface is taught to exactly

@@ -681,6 +681,76 @@ struct ACPIngestCollapsedRoutingTests {
         } else {
             Issue.record("expected a terminal .result event carrying the validation failure, got: \(finalEvent)")
         }
+
+        // #1370: the reason must ALSO reach the failure the queue validator
+        // reads (`preflightError`), or the queue item fails with only the
+        // generic "aborted before completing (exit status -1)". The compact
+        // form names the first problem and stays one line.
+        let preflightError = try #require(
+            launcher.preflightError,
+            "the plan rejection must copy a reason into preflightError (#1370)")
+        #expect(preflightError.hasPrefix("Ingest plan rejected before executor launch: "))
+        #expect(preflightError.contains("Never-Staged--01MISSING00000000000.md"))
+        #expect(!preflightError.contains("\n"), "the queue error is a single line")
+    }
+
+    /// #1370: a plan with several problems yields the compact first-problem
+    /// form plus the "(+N more)" counter — never the whole multi-line dump.
+    @Test func planValidationFailureSummarizesMultipleProblems() async throws {
+        // Both assignments name files that were never staged, so validation
+        // reports two problems.
+        let planData = try JSONEncoder().encode(ACPIngestPlan(
+            pages: [
+                ACPIngestPageAssignment(
+                    title: "Ghost Page",
+                    sourceFile: "Never-Staged--01MISSING00000000000.md",
+                    sourceRanges: "1-10",
+                    outline: "first invalid assignment"),
+                ACPIngestPageAssignment(
+                    title: "Other Ghost",
+                    sourceFile: "Also-Missing--01MISSING00000000001.md",
+                    sourceRanges: "11-20",
+                    outline: "second invalid assignment"),
+            ],
+            sourceIDs: ["01FAKE"]))
+        let fake = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [.messageStop], planJSON: planData),
+            FakeSessionBehavior(events: [.messageStop]),
+            FakeSessionBehavior(events: [.messageStop]),
+        ])
+        let counter = ResolveBackendCallCounter()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-plan-validation-multi-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer {
+            do {
+                try FileManager.default.removeItem(at: tempDir)
+            } catch {
+                Issue.record("Failed to remove plan-validation fixture: \(error)")
+            }
+        }
+        let launcher = makeLauncher(backend: fake, counter: counter, tempDir: tempDir)
+
+        await launcher.run(
+            request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
+            wikiID: WikiID(rawValue: "test-wiki"),
+            wikiRoot: "/tmp",
+            systemPrompt: "sys",
+            wikictlDirectory: "/tmp",
+            ingestingSourceIDs: [],
+            onEvent: nil,
+            onLock: {},
+            onUnlock: {}
+        )
+
+        let startCount = await fake.startCount
+        #expect(startCount == 1, "no executor may launch on a rejected plan")
+        let preflightError = try #require(launcher.preflightError)
+        #expect(preflightError.contains("Never-Staged--01MISSING00000000000.md"),
+                "the first problem is named")
+        #expect(preflightError.contains("(+1 more)"), "the remaining count is stated")
+        #expect(!preflightError.contains("Also-Missing--01MISSING00000000001.md"),
+                "the queue error does not dump every problem")
     }
 }
 #endif
