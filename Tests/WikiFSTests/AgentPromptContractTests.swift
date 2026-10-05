@@ -244,6 +244,13 @@ struct AgentPromptContractTests {
                     "\(origin): the explicit --source prohibition must stay (#1367)")
             #expect(system.contains("the app marks sources Ingested itself"),
                     "\(origin): the prohibition must say who really stamps (#1367)")
+            // #1367 review (PR #1369): the affirmative rule is now SCOPED to
+            // interactive chat ingests — an unscoped "always pass it" taught
+            // the same step the prohibition forbids.
+            #expect(system.contains("In an interactive chat ingest, pass `--source`"),
+                    "\(origin): the affirmative rule must be scoped to interactive chat ingests (#1367)")
+            #expect(!system.contains("always pass it on a successful ingest"),
+                    "\(origin): the unscoped affirmative wording must not come back (#1367)")
         }
     }
 

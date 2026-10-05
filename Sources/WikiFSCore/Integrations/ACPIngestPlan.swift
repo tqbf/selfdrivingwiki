@@ -84,14 +84,18 @@ public struct ACPIngestPageAssignment: Codable, Equatable, Sendable {
     }
 }
 
-/// The full plan: all page assignments + the source IDs (for `wikictl log append
-/// --source`).
+/// The full plan: all page assignments + the source IDs of the queued payload.
 public struct ACPIngestPlan: Codable, Equatable, Sendable {
     /// All page assignments. Executors are grouped by `sourceFile` and each
     /// executor receives its subset.
     public let pages: [ACPIngestPageAssignment]
-    /// The source IDs (ULIDs) for `wikictl log append --kind ingest --source <id>`.
-    /// Echoed from the planner prompt; copied verbatim to `plan.json`.
+    /// The source IDs (ULIDs) of the queued payload, echoed to the phase
+    /// prompts so each phase knows the payload's source identity. The agent
+    /// does NOT use them to mark sources Ingested: pipeline prompts dropped
+    /// the `log append --source` ritual (#1347) and `wikictl` refuses it for
+    /// agent-authored runs (#1367) — the host marks sources Ingested at
+    /// validated-successful job completion. Echoed from the planner prompt;
+    /// copied verbatim to `plan.json`.
     public let sourceIDs: [String]
 
     public init(pages: [ACPIngestPageAssignment], sourceIDs: [String]) {

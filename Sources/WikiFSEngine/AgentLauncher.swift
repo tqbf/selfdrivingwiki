@@ -1822,17 +1822,26 @@ public final class AgentLauncher {
         if let workspaceID {
             providerHints[HintKey.env("WIKI_WORKSPACE")] = workspaceID.rawValue
         }
+        // Page provenance is built from the ordered queue payload, not merely
+        // from an executor remembering to spell `--source`. The CLI decodes
+        // this external-format boundary into typed PageVersionSourceInput values.
+        // #397: for ingest runs this seam ALSO stamps WIKI_AUTHOR
+        // (`agent:ingest`) — the SAME seam the large-source
+        // planner/executor/finalizer phases compose through — so the value
+        // cannot drift between the two spawn paths and the #1367 stamp gate
+        // refuses the Ingested stamp on every phase shape. Non-ingest one-shot
+        // kinds (lint, query) set the author below instead.
+        providerHints = Self.ingestProvenanceProviderHints(
+            for: request,
+            addingTo: providerHints)
         // #397: inject the author provenance into the child env so agent-written
         // pages carry created_by/last_edited_by "for free" — no agent action needed.
         // The launcher resolves it from the operation kind (one-shot runs) or the
         // chatID (interactive runs). An explicit `--author` on wikictl still wins.
-        providerHints[HintKey.env("WIKI_AUTHOR")] = Self.authorForRun(kind: operation.kind, chatID: nil)
-        // Page provenance is built from the ordered queue payload, not merely
-        // from an executor remembering to spell `--source`. The CLI decodes
-        // this external-format boundary into typed PageVersionSourceInput values.
-        providerHints = Self.ingestProvenanceProviderHints(
-            for: request,
-            addingTo: providerHints)
+        if providerHints[HintKey.env(Self.wikiAuthorEnvironmentKey)] == nil {
+            providerHints[HintKey.env(Self.wikiAuthorEnvironmentKey)] =
+                Self.authorForRun(kind: operation.kind, chatID: nil)
+        }
         let profile = BackendProfile(
             providerHints: providerHints,
             scratchDirectory: scratch,
@@ -3490,8 +3499,11 @@ public final class AgentLauncher {
     ///
     /// Routes through `PageAuthor` (#797) — the single source of truth for the
     /// `agents.name` convention — so the builder and the parse sites
-    /// (`GRDBWikiStore.authorKind`, `ProvenancePanel`) can't drift.
-    static func authorForRun(kind: WikiOperation.Kind, chatID: ChatID?) -> String {
+    /// (`GRDBWikiStore.authorKind`, `ProvenancePanel`) can't drift. PURE +
+    /// `nonisolated` (like the other provenance helpers below) so the ingest
+    /// env seam can call it from any isolation and tests can call it without
+    /// the main actor.
+    nonisolated static func authorForRun(kind: WikiOperation.Kind, chatID: ChatID?) -> String {
         if let chatID { return PageAuthor.chat(chatID.rawValue).rawValue }
         return PageAuthor.agent(kind.rawValue).rawValue
     }
@@ -3513,14 +3525,33 @@ public final class AgentLauncher {
         }
     }
 
-    /// Serializes the ordered ingest queue payload for the `wikictl` process.
-    /// This is the sole raw-ID environment boundary; the CLI immediately
-    /// converts it into typed primary/supporting provenance inputs.
+    /// The child-env key carrying the resolved run author (a `PageAuthor`
+    /// raw value: `chat:<id>`, `agent:<kind>`, or a plain name) into the
+    /// agent subprocess. `wikictl` reads the same key at its own process
+    /// boundary (`ArgumentParser.applyEnv`), so each side keeps its own
+    /// constant. One name for every injector site — one-shot runs, the
+    /// ingest pipeline phases, interactive chats — so the literal lives in
+    /// exactly one place. `nonisolated` (a Sendable immutable) so the
+    /// `nonisolated` ingest env seam below can reference it.
+    nonisolated static let wikiAuthorEnvironmentKey = "WIKI_AUTHOR"
+
+    /// Serializes the ordered ingest queue payload — and the run author —
+    /// into the raw child environment for the `wikictl` process. This is the
+    /// sole raw-ID environment boundary; the CLI immediately converts the
+    /// source ids into typed primary/supporting provenance inputs. The author
+    /// rides the same boundary so EVERY ingest spawn shape — the
+    /// single-session run, the planner/executor/finalizer orchestrator
+    /// (including quota-fallback attempts and the parallel-executor profile)
+    /// — stamps the same `agent:ingest` identity (#397), and the #1367 stamp
+    /// gate in `wikictl log append` sees it on each phase.
     nonisolated static func ingestProvenanceEnvironment(
         for request: OperationRequest
     ) -> [String: String] {
         guard case .ingest(let sources, _) = request else { return [:] }
-        return ["WIKI_INGEST_SOURCE_IDS": sources.map(\.sourceID.rawValue).joined(separator: ",")]
+        return [
+            "WIKI_INGEST_SOURCE_IDS": sources.map(\.sourceID.rawValue).joined(separator: ","),
+            wikiAuthorEnvironmentKey: authorForRun(kind: .ingest, chatID: nil)
+        ]
     }
 
     /// Converts the queue-derived provenance environment into the `env.`-prefixed
@@ -3857,7 +3888,7 @@ public final class AgentLauncher {
                 // prefix can't drift from the `ResourceKind.chat.linkPrefix`
                 // value the link resolver honours.
                 if let chatID {
-                    hints[HintKey.env("WIKI_AUTHOR")] = PageAuthor.chat(chatID.rawValue).rawValue
+                    hints[HintKey.env(Self.wikiAuthorEnvironmentKey)] = PageAuthor.chat(chatID.rawValue).rawValue
                 }
                 return hints
             }(),

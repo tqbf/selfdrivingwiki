@@ -328,6 +328,65 @@ struct WikiCtlLogIndexTests {
         #expect(try store.listAllLogEntriesOrderedByID().count == 1)
         #expect(try store.markedSourceIDs().isEmpty)
     }
+
+    /// #1367 review (PR #1369): a `chat:` author through the REAL parse →
+    /// `applyEnv` → run seam keeps the ad-hoc path — the stamp applies and no
+    /// notice prints. Pins the env shape interactive chats actually run with
+    /// (`AgentLauncher.startInteractiveQuery` sets `chat:<chatULID>`).
+    @Test func scriptedChatAuthorStillStampsThroughRealParseSeam() throws {
+        let store = try tempStore()
+        let file = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
+
+        let outcome = ScriptedWikiCtl.dispatch(
+            ["--wiki", ScriptedWikiCtl.wikiSelector,
+             "log", "append", "--kind", "ingest", "--title", "Ingested paper.pdf",
+             "--source", file.id.rawValue],
+            in: store,
+            env: ["WIKI_AUTHOR": "chat:01JGYZXQATP4H8Z5C9R2M3N6B0"])
+
+        #expect(outcome.exitCode == ScriptedCLIOutcome.Code.success)
+        #expect(!outcome.stdout.contains("note:"), "chat authors keep the ad-hoc stamp")
+        #expect(try store.markedSourceIDs() == [file.id.rawValue])
+    }
+
+    /// #1367 review (PR #1369): the typed parse is case-sensitive at the real
+    /// seam — `AGENT:ingest` does not parse as `.agent` (it is `.other`), so
+    /// the stamp applies. A case-insensitive prefix check here would refuse
+    /// legitimate non-agent authors.
+    @Test func scriptedUppercaseAgentAuthorStillStampsThroughRealParseSeam() throws {
+        let store = try tempStore()
+        let file = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
+
+        let outcome = ScriptedWikiCtl.dispatch(
+            ["--wiki", ScriptedWikiCtl.wikiSelector,
+             "log", "append", "--kind", "ingest", "--title", "Ingested paper.pdf",
+             "--source", file.id.rawValue],
+            in: store,
+            env: ["WIKI_AUTHOR": "AGENT:ingest"])
+
+        #expect(outcome.exitCode == ScriptedCLIOutcome.Code.success)
+        #expect(!outcome.stdout.contains("note:"), "an .other author is not an agent run")
+        #expect(try store.markedSourceIDs() == [file.id.rawValue])
+    }
+
+    /// #1367 review (PR #1369): a plain username (human shell use) is `.other`
+    /// — the stamp applies through the real seam. Only the typed `.agent`
+    /// (and only the lowercase `agent:` prefix) trips the refusal.
+    @Test func scriptedPlainUsernameAuthorStillStampsThroughRealParseSeam() throws {
+        let store = try tempStore()
+        let file = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
+
+        let outcome = ScriptedWikiCtl.dispatch(
+            ["--wiki", ScriptedWikiCtl.wikiSelector,
+             "log", "append", "--kind", "ingest", "--title", "Ingested paper.pdf",
+             "--source", file.id.rawValue],
+            in: store,
+            env: ["WIKI_AUTHOR": "wsargent"])
+
+        #expect(outcome.exitCode == ScriptedCLIOutcome.Code.success)
+        #expect(!outcome.stdout.contains("note:"))
+        #expect(try store.markedSourceIDs() == [file.id.rawValue])
+    }
 #endif
 
     @Test func indexSetCommitsAndPersistsBody() throws {

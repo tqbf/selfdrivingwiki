@@ -57,6 +57,25 @@ The `pipelineIngestPromptsDropTheSourceRitual` guard now distinguishes
 teaching from prohibiting: `--source` may appear in a task prompt only inside
 the prohibition sentence. A new guard pins the system prompt's rule.
 
+Review follow-up (PR #1369) closed a gap in layer 1's coverage and tightened
+layer 2's wording. The gate keys on `WIKI_AUTHOR`, but the launcher injected
+the env var only on the single-session spawn path — the large-source pipeline
+(planner, executors, finalizer, and every quota-fallback spawn) composed its
+phase environments without it, so those `wikictl` runs resolved
+`.legacyImport` and the stamp applied: the incident path was still open. The
+injection now lives in `AgentLauncher.ingestProvenanceEnvironment` — the one
+seam every ingest spawn composes through (the one-shot profile, the
+orchestrator's `hints(for:)`, and `runPhaseWithFallback`) — and stamps the
+same `agent:ingest` identity the one-shot path resolved. One named constant
+(`wikiAuthorEnvironmentKey`) replaces the per-site key literals. Step 6 of the
+system prompt was reworded in the same pass: the affirmative `--source` rule
+is now scoped to interactive chat ingests, so it can no longer be read
+against the queued-pipeline NEVER three sentences later. `make prompts`
+synced the bundled copy, and the refusal now also leaves a `DebugLog.ingest`
+trace (Console.app) beside its stdout notice, which names the trust boundary:
+the gate reads the host-set run author — it covers the taught workflow, not
+an adversarial process that strips or overrides its own env.
+
 ## Verification
 
 - `make build` passed (app built and signed).
@@ -69,3 +88,13 @@ the prohibition sentence. A new guard pins the system prompt's rule.
   (reworked ritual guard + new system-prompt prohibition guard),
   `GeneratedPromptsParityTests`, `CumulativeIngestContractTests`,
   `DocumentationContractTests`.
+- Review-fix pins: `ACPWiringTests` asserts every phase shape — planner,
+  executor, finalizer, plus the single-session and parallel-executor
+  composites — resolves `WIKI_AUTHOR=agent:ingest` through the real
+  `resolveSpawnConfig`; `AgentLauncherStageKeyDispatchTests` pins the seam's
+  exact env dict and that non-ingest requests leave the author to the
+  one-shot site; `WikiCtlLogIndexTests` adds three scripted end-to-end pins
+  (`chat:<id>`, uppercase `AGENT:ingest`, plain username — each keeps the
+  ad-hoc stamp through the real parse → `applyEnv` → run path);
+  `AgentPromptContractTests` pins the scoped interactive-chat wording and
+  rejects the unscoped "always pass it" coming back.

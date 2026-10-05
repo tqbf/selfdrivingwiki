@@ -38,7 +38,31 @@ struct AgentLauncherStageKeyDispatchTests {
         let environment = AgentLauncher.ingestProvenanceEnvironment(
             for: .ingest(sources: [first, second], stateMarkdown: ""))
 
-        #expect(environment == ["WIKI_INGEST_SOURCE_IDS": "a,b"])
+        #expect(environment == [
+            "WIKI_INGEST_SOURCE_IDS": "a,b",
+            "WIKI_AUTHOR": "agent:ingest",
+        ])
+    }
+
+    /// #1367 review (PR #1369): the ingest env seam is the ONE place the run
+    /// author enters the pipeline — every planner/executor/finalizer spawn
+    /// composes through `ingestProvenanceProviderHints`. Pin the exact value
+    /// (`PageAuthor.agent("ingest")`, matching what the one-shot path stamps)
+    /// so the seam can never stamp a divergent or missing author, and pin
+    /// that non-ingest requests leave the author to the one-shot site.
+    @Test func ingestEnvironmentStampsRunAuthorForEveryPhaseShape() {
+        let source = OperationRequest.StagedSource(
+            bytes: Data(), ext: "md", displayPath: "x.md", name: "x",
+            sourceID: SourceID(rawValue: "ulid"))
+
+        let ingest = AgentLauncher.ingestProvenanceEnvironment(
+            for: .ingest(sources: [source], stateMarkdown: ""))
+        #expect(ingest[AgentLauncher.wikiAuthorEnvironmentKey]
+                == PageAuthor.agent("ingest").rawValue)
+
+        let lint = AgentLauncher.ingestProvenanceEnvironment(
+            for: .lint(stateMarkdown: ""))
+        #expect(lint.isEmpty, "non-ingest requests stamp neither source ids nor author here")
     }
 
     @Test func lintMapsToLint() {

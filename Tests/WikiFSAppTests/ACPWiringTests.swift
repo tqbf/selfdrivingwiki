@@ -141,6 +141,9 @@ import ACPModel
         let spawn = try #require(ACPBackend.resolveSpawnConfig(from: BackendProfile(providerHints: hints)))
 
         #expect(spawn.environment["WIKI_INGEST_SOURCE_IDS"] == "a,b")
+        // #1367 review (PR #1369): the ingest env seam also stamps the run
+        // author — the single-session path composes through this same helper.
+        #expect(spawn.environment["WIKI_AUTHOR"] == "agent:ingest")
     }
 
     /// Large-source executor profiles are built independently from the
@@ -166,6 +169,54 @@ import ACPModel
 
         #expect(executorHints[HintKey.acpSelectedModelId.rawValue] == "executor-model")
         #expect(spawn.environment["WIKI_INGEST_SOURCE_IDS"] == "a,b")
+        // #1367 review (PR #1369): every executor spawn (serial via
+        // runPhaseWithFallback, parallel via the prebuilt executorProfile)
+        // composes through this helper — the stamp gate must see the author.
+        #expect(spawn.environment["WIKI_AUTHOR"] == "agent:ingest")
+    }
+
+    /// #1367 review (PR #1369, blocker): EVERY phase shape of the
+    /// large-source pipeline — planner, executor, finalizer — must compose
+    /// `WIKI_AUTHOR` into the spawn environment. The orchestrator builds
+    /// per-phase hints exactly this way: base provider hints, the phase's
+    /// resolved stage model id, then `ingestProvenanceProviderHints`
+    /// (`hints(for:)` for the planner-fallback/parallel-executor profiles,
+    /// `runPhaseWithFallback` for planner/serial-executor/finalizer and
+    /// every quota-fallback attempt). A phase that ran `wikictl` with the
+    /// author unset fell back to `.legacyImport` in the stamp gate and the
+    /// #1367 incident path stayed open. Pin each stage's composed hints
+    /// through the real `resolveSpawnConfig` so a raw hint key cannot be
+    /// silently dropped from the child environment.
+    @Test func largeSourcePhaseHintsStampRunAuthorForPlannerExecutorFinalizer() throws {
+        let first = OperationRequest.StagedSource(
+            bytes: Data(), ext: "md", displayPath: "first.md", name: "first",
+            sourceID: SourceID(rawValue: "a"))
+        let second = OperationRequest.StagedSource(
+            bytes: Data(), ext: "md", displayPath: "second.md", name: "second",
+            sourceID: SourceID(rawValue: "b"))
+        let request = OperationRequest.ingest(sources: [first, second], stateMarkdown: "")
+        let baseHints = [HintKey.acpAgentPath.rawValue: "/bin/agent"]
+
+        let stageModels: [(stage: String, model: String)] = [
+            ("planner", "planner-model"),
+            ("executor", "executor-model"),
+            ("finalizer", "finalizer-model"),
+        ]
+        for (stage, model) in stageModels {
+            // Same composition the orchestrator performs per phase: base +
+            // the stage's resolved model id + the shared ingest env seam.
+            var hints = baseHints
+            hints[HintKey.acpSelectedModelId.rawValue] = model
+            hints = AgentLauncher.ingestProvenanceProviderHints(
+                for: request, addingTo: hints)
+            let spawn = try #require(
+                ACPBackend.resolveSpawnConfig(from: BackendProfile(providerHints: hints)))
+
+            #expect(spawn.environment["WIKI_AUTHOR"] == "agent:ingest",
+                    "\(stage): the phase spawn env must carry the run author (#1367)")
+            #expect(spawn.environment[HintKey.acpSelectedModelId.rawValue] == nil,
+                    "\(stage): model ids are hints, not child env vars")
+        }
     }
 
     // MARK: - buildAgentEnv (issue #441: WIKI_ROOT no longer exported)

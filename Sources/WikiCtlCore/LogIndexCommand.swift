@@ -57,6 +57,11 @@ public enum LogIndexCommand {
             // a file, and an agent-authored run never stamps — the notice
             // already says the stamp did not apply, so the row must land.
             if kind == .ingest, let source, case .agent = author {
+                // Console.app visibility (#1367 issue: "log the refusal") —
+                // stdout reaches the calling agent only; the trace also
+                // reaches a human reading the run logs.
+                DebugLog.ingest(
+                    "log append: refused agent-authored (\(author.rawValue)) Ingested stamp for source \(source.rawValue) — the app records completion at job success")
                 let entry = try store.appendLog(kind: kind, title: title, note: note)
                 return PageCommand.Result(
                     output: entry.id.rawValue + "\n" + Self.agentStampRefusalNotice(source: source),
@@ -116,9 +121,13 @@ public enum LogIndexCommand {
     /// The stdout notice printed when an agent-authored run's `--source`
     /// stamp is refused (#1367). Real CLI stdout: the caller's script sees
     /// the new entry's id on the first line and this explanation on the
-    /// second, so a refused stamp is never mistaken for an applied one.
+    /// second, so a refused stamp is never mistaken for an applied one. The
+    /// final clause names the trust boundary (PR #1369 review): the gate
+    /// reads the host-set run author, so it covers the taught workflow — an
+    /// adversarial process that strips or overrides its own env is outside
+    /// what the gate can see.
     public static func agentStampRefusalNotice(source: SourceID) -> String {
         "note: source \(source.rawValue) not marked Ingested — agent-authored runs cannot flip the ingest stamp; "
-            + "the app records completion at job success"
+            + "the app records completion at job success (the gate reads the host-set run author, not agent input)"
     }
 }

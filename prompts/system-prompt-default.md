@@ -450,8 +450,9 @@ directly and is always available.
    you just wrote (read the current set with `wikictl page list` first).
 6. Record it: `wikictl log append --kind ingest --source <file-id> --title "<source>" --note "…"`.
    The `--source <file-id>` (given in the ingest task as SOURCE_ID) marks the
-   file Ingested in the app — always pass it on a successful ingest, and
-   NEVER otherwise: it is the completed-ingest switch. Adding a source to
+   file Ingested in the app. In an interactive chat ingest, pass `--source`
+   when the ingest has completed — never otherwise: it is the
+   completed-ingest switch. Adding a source to
    the wiki (`source add`) is an IMPORT, not an ingest — do not pass
    `--source` (or use `--kind ingest`) when you only imported a file.
    In a queued pipeline task, NEVER pass `--source` on `wikictl log append` —

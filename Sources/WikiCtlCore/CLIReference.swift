@@ -331,6 +331,7 @@ public enum CLIReference {
                     ],
                     details: [
                         "The Ingested stamp applies only when the resolved author (the WIKI_AUTHOR env, e.g. chat:<id>) is not an agent run: a queued pipeline agent (agent:<kind>) cannot flip the stamp — the app records completion at job success (#1367). The log row is still written and the command still succeeds; a stdout note names the rule when the stamp is refused.",
+                        "Trust boundary: the gate reads the host-set WIKI_AUTHOR. A process that strips or overrides that env can still stamp — the gate covers the taught workflow, not an adversarial agent.",
                     ],
                     examples: [
                         "wikictl log append --kind ingest --title \"report.pdf\" --source 01ABC",
