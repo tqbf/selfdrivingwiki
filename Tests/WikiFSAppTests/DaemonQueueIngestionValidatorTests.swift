@@ -12,6 +12,11 @@ import WikiFSCore
 /// conjunction silently accepted it and the job settled `.completed`.
 /// These tests pin the shared host contract (preflight first, strict
 /// nonzero exit second) without standing up the full daemon provider.
+///
+/// #1364: the message is selected by the launcher's STATED turn-failure fact
+/// (`QueueIngestionTurnFailureFact`), never inferred from the exit-status
+/// sign — every negative status is synthesized by the launcher, so the
+/// validator cannot know a "process death" and must not claim one.
 @Suite struct DaemonQueueIngestionValidatorTests {
 
     @Test("launch failure with exit status -1 and zero turns cannot complete (#1354)")
@@ -20,7 +25,7 @@ import WikiFSCore
             try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
                 preflightError: "Failed to launch codex-acp. stderr: env: node: No such file or directory",
-                unrecoveredTurnFailure: false)
+                turnFailure: .none)
             Issue.record("Expected launch-failure rejection")
         } catch QueueIngestionError.spawnFailed(let message) {
             #expect(message.contains("env: node: No such file or directory"))
@@ -29,18 +34,20 @@ import WikiFSCore
         }
     }
 
-    @Test("nonzero negative exit with zero turns reports process death (#1364)")
+    /// No turn failure was observed and the status is negative (synthesized
+    /// by the launcher's abort paths). The validator reports the abort; it
+    /// never claims a process death it cannot know (#1364).
+    @Test("no turn failure with negative exit reports an abort, not a death (#1364)")
     func nonzeroExitWithoutTurnFailureStillFails() {
         do {
             try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
                 preflightError: nil,
-                unrecoveredTurnFailure: false)
+                turnFailure: .none)
             Issue.record("Expected abort rejection")
         } catch QueueIngestionError.spawnFailed(let message) {
-            // #1364: a negative status is a synthesized/signal death — named
-            // honestly instead of "aborted before completing".
-            #expect(message == "The agent process died unexpectedly (exit status -1).")
+            #expect(message.contains("aborted before completing"))
+            #expect(!message.contains("died"))
         } catch {
             Issue.record("Unexpected error: \(error)")
         }
@@ -52,7 +59,7 @@ import WikiFSCore
             try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: 1,
                 preflightError: nil,
-                unrecoveredTurnFailure: false)
+                turnFailure: .none)
             Issue.record("Expected abort rejection")
         } catch QueueIngestionError.spawnFailed(let message) {
             #expect(message == "The agent run aborted before completing (exit status 1).")
@@ -62,18 +69,19 @@ import WikiFSCore
     }
 
     /// The #1364 incident shape: turn 1 hit the ceiling (recovered — a later
-    /// turn completed), then a phase process died (exit -1). The failure is
-    /// the process death, NOT the long-gone ceiling — the message must say so.
-    @Test("recovered turn failure + process death blames the death (#1364)")
+    /// turn completed), then the run still failed. The failure happened after
+    /// the recovery — the message must say so instead of blaming the
+    /// long-gone ceiling.
+    @Test("run failing after a recovered turn failure names the recovery (#1364)")
     func recoveredTurnFailureWithProcessDeathBlamesDeath() {
         do {
             try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
                 preflightError: nil,
-                unrecoveredTurnFailure: false)
+                turnFailure: .recovered)
             Issue.record("Expected rejection")
         } catch QueueIngestionError.spawnFailed(let message) {
-            #expect(message == "The agent process died unexpectedly (exit status -1).")
+            #expect(message.contains("after recovering from an earlier turn failure"))
             #expect(!message.contains("time ceiling"))
         } catch {
             Issue.record("Unexpected error: \(error)")
@@ -86,7 +94,7 @@ import WikiFSCore
             try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: nil,
                 preflightError: nil,
-                unrecoveredTurnFailure: false)
+                turnFailure: .none)
             Issue.record("Expected did-not-start rejection")
         } catch QueueIngestionError.spawnFailed(let message) {
             #expect(message == "The agent did not start.")
@@ -100,7 +108,7 @@ import WikiFSCore
         try DaemonQueueIngestionProvider.validateLauncherOutcome(
             exitStatus: 0,
             preflightError: nil,
-            unrecoveredTurnFailure: false)
+            turnFailure: .none)
     }
 
     @Test("unrecovered turn failure remains a queue failure with the ceiling message")
@@ -109,7 +117,7 @@ import WikiFSCore
             try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
                 preflightError: nil,
-                unrecoveredTurnFailure: true)
+                turnFailure: .unrecovered)
             Issue.record("Expected turn failure")
         } catch QueueIngestionError.spawnFailed(let message) {
             #expect(message ==

@@ -147,19 +147,26 @@ public final class AgentLauncher {
     /// and the provider throws so the queue item transitions to `.failed`
     /// instead of `.completed`. Cleared in `resetRunArtifacts()`.
     @ObservationIgnored public var runHadTurnFailure = false
-    /// #1364: a successful turn end was observed AFTER a `.turnFailed` in the
-    /// same run (e.g. turn 1 hit the ceiling, turn 2 completed). Distinguishes
-    /// a recovered failure from the run's terminal cause — the sticky
-    /// `runHadTurnFailure` alone mislabels a later process death as "exceeded
-    /// the time ceiling or failed unexpectedly". Cleared wherever
-    /// `runHadTurnFailure` is cleared (`resetRunArtifacts()`).
+    /// #1364: a successful turn end was observed AFTER the most recent
+    /// `.turnFailed` in the same run (e.g. turn 1 hit the ceiling, turn 2
+    /// completed). Set when a clean turn end follows the most recent
+    /// `.turnFailed`; reset by each new `.turnFailed` — the latch describes
+    /// only the LAST failure, so fail→clean→fail reads unrecovered. Cleared
+    /// wherever `runHadTurnFailure` is cleared (`resetRunArtifacts()`).
     @ObservationIgnored public private(set) var runRecoveredAfterTurnFailure = false
     /// #1364 derived signal: the run's last observed turn failure was never
-    /// recovered from — no clean turn end followed it. This is the honest
-    /// "the turn failed" fact the queue validator's message selection reads;
-    /// `runHadTurnFailure` stays sticky for pass/fail (#765).
+    /// recovered from — no clean turn end followed it. `runHadTurnFailure`
+    /// stays sticky for pass/fail (#765); tests pin this boolean directly.
     public var runTerminalTurnFailure: Bool {
         runHadTurnFailure && !runRecoveredAfterTurnFailure
+    }
+    /// #1364: the validator-facing form of the turn-failure fact — the
+    /// launcher's one-word statement of what it observed (`none` /
+    /// `recovered` / `unrecovered`). The queue validator's message selection
+    /// reads this; it never infers a cause from the exit-status sign.
+    public var runTurnFailureFact: QueueIngestionTurnFailureFact {
+        if !runHadTurnFailure { return .none }
+        return runRecoveredAfterTurnFailure ? .recovered : .unrecovered
     }
     /// Ceiling-kill forensic context inherited from the most recent prior run
     /// of this queue item. Nil for first attempts and non-queue runs.
@@ -4486,6 +4493,9 @@ public final class AgentLauncher {
         // orphans the queue item in .running/.completed instead of .failed).
         if case .turnFailed = event {
             runHadTurnFailure = true
+            // A new turn failure un-recovers the run — the latch describes
+            // only the LAST failure (#1364: fail→clean→fail is unrecovered).
+            runRecoveredAfterTurnFailure = false
         }
 
         // The live pending-permission row clears during terminal teardown. Keep

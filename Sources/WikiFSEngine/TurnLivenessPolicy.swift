@@ -106,9 +106,14 @@ public enum TurnLivenessPolicy {
     /// Queued-lane idle-stall timeout: 5 minutes. A queued ingest phase that
     /// produces no ACP notifications for 5 minutes is dead or wedged (issue
     /// #1364: a fresh-start executor froze at events=32 for minutes under a
-    /// 600s turn ceiling); 300s sits above legitimate long tool executions
-    /// but well below the 600s flat ceiling, bounding a stall to one
-    /// ceiling-worth of dead time.
+    /// 600s turn ceiling). Tool calls, text deltas, and every other activity
+    /// emit `session/update` notifications, which keep the fanout's activity
+    /// timestamp fresh — so the bound does not trip on legitimate long tool
+    /// executions. The accepted risk is a healthy model thinking SILENTLY
+    /// (zero notifications) for over 300s in a queued phase: that false kill
+    /// recovers like a ceiling kill (a wasted retry), which is preferred to
+    /// an unbounded stall. 300s sits well below the 600s flat ceiling,
+    /// bounding a stall to one ceiling-worth of dead time.
     static let queuedIdleStallTimeout: TimeInterval = 300
 
     /// Watchdog poll interval: 15 seconds. Balances responsiveness (a ceiling

@@ -163,6 +163,16 @@ public enum QueueIngestionError: Error, LocalizedError {
 
 // MARK: - Ingestion outcome validation (#1354)
 
+/// The terminal turn-failure fact a validated run carries: no turn failure
+/// observed; one observed but a later clean turn end recovered it; or one
+/// observed and never recovered (#1364). The validator reports only what
+/// this states — it never infers a cause from the exit-status sign.
+public enum QueueIngestionTurnFailureFact: Sendable, Equatable {
+    case none
+    case recovered
+    case unrecovered
+}
+
 /// The host-agnostic launcher-outcome contract, defined ONCE for every
 /// `QueueIngestionProvider` host (app + daemon); each host keeps a thin
 /// static seam that delegates here, so its tests pin that the host actually
@@ -172,17 +182,19 @@ public enum QueueIngestionError: Error, LocalizedError {
 /// REGARDLESS of the exit status. Then a strict nonzero-exit rejection:
 /// every successful completion path finishes with status 0, so nonzero
 /// always means an abort (user stop, safety-net teardown, spawn failure),
-/// even when no `.turnFailed` event was observed. `unrecoveredTurnFailure`
-/// only selects the message; it never changes pass/fail.
+/// even when no `.turnFailed` event was observed. `turnFailure` only
+/// selects the message; it never changes pass/fail.
 public enum QueueIngestionOutcomeValidator {
-    /// - Parameter unrecoveredTurnFailure: a `.turnFailed` event was observed
-    ///   with NO subsequent successful turn end in the same run (the
-    ///   launcher's `runTerminalTurnFailure`). A turn failure that a later
-    ///   clean turn recovered from is not the run's terminal cause (#1364).
+    /// - Parameter turnFailure: the run's turn-failure fact (the launcher's
+    ///   `runTurnFailureFact`). A turn failure that a later clean turn end
+    ///   recovered from is not the run's terminal cause (#1364). Message
+    ///   selection only — the fact is stated by the launcher, never inferred
+    ///   from the exit-status sign (negative statuses are synthesized by the
+    ///   launcher, not observed signal deaths).
     public static func validate(
         exitStatus: Int32?,
         preflightError: String?,
-        unrecoveredTurnFailure: Bool
+        turnFailure: QueueIngestionTurnFailureFact
     ) throws {
         if let preflightError {
             throw QueueIngestionError.spawnFailed(preflightError)
@@ -194,14 +206,12 @@ public enum QueueIngestionOutcomeValidator {
             // Message selection only — every branch throws (pass/fail is
             // decided by the exit status; #765/#1354).
             let message: String
-            if unrecoveredTurnFailure {
+            switch turnFailure {
+            case .unrecovered:
                 message = "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(exitStatus))."
-            } else if exitStatus < 0 {
-                // Negative statuses are synthesized (launcher `finish(status:
-                // -1)`) or signal deaths — the process is gone, not "aborted
-                // mid-run". Name it honestly (#1364).
-                message = "The agent process died unexpectedly (exit status \(exitStatus))."
-            } else {
+            case .recovered:
+                message = "The agent run failed after recovering from an earlier turn failure (exit status \(exitStatus))."
+            case .none:
                 message = "The agent run aborted before completing (exit status \(exitStatus))."
             }
             throw QueueIngestionError.spawnFailed(message)
