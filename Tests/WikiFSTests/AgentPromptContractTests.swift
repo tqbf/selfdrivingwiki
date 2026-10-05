@@ -149,22 +149,25 @@ struct AgentPromptContractTests {
         #expect(writeRule.contains("--wiki"))
     }
 
-    // MARK: - Host-stamped ingest state (#1344)
+    // MARK: - Host-stamped ingest state (#1344 / #1367)
 
-    /// The pipeline ingest task prompts no longer mention `--source` at
-    /// all: the host stamps Ingested at validated-successful job
-    /// completion, so the agent log-append ritual is retired for pipeline
-    /// ingests. (The page-write evidence flag lives in the write-rule and
-    /// executor prompts, which are not task prompts.) Asserted on BOTH the
+    /// The pipeline ingest task prompts no longer TEACH the `--source`
+    /// ritual: the host stamps Ingested at validated-successful job
+    /// completion (#1344). Since #1367 each recording step carries one
+    /// explicit PROHIBITION line that names the flag — explicit beats
+    /// silence, because the mounted system prompt taught `--source` for the
+    /// ad-hoc path and task-prompt silence lost to it (issue #1367: 62
+    /// mid-run stamps survived a failed job). `--source` may therefore
+    /// appear ONLY inside that prohibition sentence. Asserted on BOTH the
     /// canonical sources and the bundled copies the runtime actually loads.
     @Test func pipelineIngestPromptsDropTheSourceRitual() {
-        let taskPromptNames = [
+        let prohibition = "Never pass `--source` on `wikictl log append`"
+        let recordingTaskPromptNames = [
             "ingest-single-task.md",
             "ingest-curator-task.md",
             "ingest-finalizer.md",
-            "ingest-planner.md",
         ]
-        for name in taskPromptNames {
+        for name in recordingTaskPromptNames {
             for (copy, origin) in [
                 (canonical(name), "prompts/\(name)"),
                 (bundled(name), "Sources/WikiFSCore/Resources/Prompts/\(name)"),
@@ -173,11 +176,41 @@ struct AgentPromptContractTests {
                     Issue.record("missing prompt: \(origin)")
                     continue
                 }
-                #expect(!prompt.contains("--source"),
-                        "\(origin): pipeline task prompts must not teach the --source ritual (#1344)")
+                #expect(prompt.contains(prohibition),
+                        "\(origin): the recording step must carry the explicit --source prohibition (#1367)")
                 #expect(!prompt.contains("REQUIRED — it marks"),
                         "\(origin): the --source REQUIRED sentence is retired (#1344)")
+                let outsideProhibition = prompt.replacingOccurrences(of: prohibition, with: "")
+                #expect(!outsideProhibition.contains("--source"),
+                        "\(origin): --source may appear only inside the prohibition line (#1344/#1367)")
             }
+        }
+        // The planner records nothing (it writes only plan.json), so it keeps
+        // #1344's absolute ban: no `--source` mention at all.
+        for (copy, origin) in [
+            (canonical("ingest-planner.md"), "prompts/ingest-planner.md"),
+            (bundled("ingest-planner.md"), "Sources/WikiFSCore/Resources/Prompts/ingest-planner.md"),
+        ] {
+            guard let planner = copy else {
+                Issue.record("missing prompt: \(origin)")
+                continue
+            }
+            #expect(!planner.contains("--source"),
+                    "\(origin): the planner never records; --source stays absent (#1344)")
+        }
+        // The shared write-rule prompt carries the same prohibition at its
+        // log-append write list. It also legitimately uses `--source` for
+        // `page add` provenance, so only the prohibition itself is pinned.
+        for (copy, origin) in [
+            (canonical("ingest-write-rule.md"), "prompts/ingest-write-rule.md"),
+            (bundled("ingest-write-rule.md"), "Sources/WikiFSCore/Resources/Prompts/ingest-write-rule.md"),
+        ] {
+            guard let writeRule = copy else {
+                Issue.record("missing prompt: \(origin)")
+                continue
+            }
+            #expect(writeRule.contains(prohibition),
+                    "\(origin): the write list must carry the explicit --source prohibition (#1367)")
         }
     }
 
@@ -190,6 +223,28 @@ struct AgentPromptContractTests {
         }
         #expect(system.contains("--source <file-id>"))
         #expect(system.contains("completed-ingest switch"))
+    }
+
+    /// #1367: the mounted system prompt keeps the ad-hoc chat allowance but
+    /// adds the explicit queued-pipeline prohibition at the same step — the
+    /// counter-rule must be as explicit as the teaching it overrides.
+    /// Asserted on BOTH the canonical source and the bundled copy.
+    @Test func systemPromptProhibitsSourceFlagInQueuedPipelineTasks() {
+        for (copy, origin) in [
+            (canonical("system-prompt-default.md"), "prompts/system-prompt-default.md"),
+            (bundled("system-prompt-default.md"), "Sources/WikiFSCore/Resources/Prompts/system-prompt-default.md"),
+        ] {
+            guard let system = copy else {
+                Issue.record("missing prompt: \(origin)")
+                continue
+            }
+            #expect(system.contains("queued pipeline task"),
+                    "\(origin): the prohibition must name the queued pipeline case (#1367)")
+            #expect(system.contains("NEVER pass `--source` on `wikictl log append`"),
+                    "\(origin): the explicit --source prohibition must stay (#1367)")
+            #expect(system.contains("the app marks sources Ingested itself"),
+                    "\(origin): the prohibition must say who really stamps (#1367)")
+        }
     }
 
     // MARK: - Cumulative-update contract (wiki strategies phase 4)

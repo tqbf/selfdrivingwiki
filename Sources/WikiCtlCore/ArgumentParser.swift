@@ -57,7 +57,12 @@ public enum ArgumentParser {
         /// Phase B: append one dated log row. Carries its values directly (no
         /// deferred I/O) — the note is optional. `source` is the ingested-file
         /// id to stamp as ingested (only meaningful with `--kind ingest`).
-        case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: SourceID?)
+        /// `author` is the run's resolved identity in its raw stored form
+        /// (`agent:<kind>` / `chat:<id>` / a plain name): nil from the parser
+        /// (`log append` takes no `--author` flag), filled from `WIKI_AUTHOR`
+        /// by ``applyEnv(_:env:)`` so `LogIndexCommand` can refuse
+        /// agent-authored `--source` stamps (#1367).
+        case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: SourceID?, author: String? = nil)
         /// Phase B: rewrite the singleton wiki-index body. The body source is
         /// `-` for stdin or a file path; `main` reads it.
         case indexSet(bodyFile: String, workspace: String? = nil)
@@ -1218,6 +1223,10 @@ public enum ArgumentParser {
     ///   so agent-written pages are distinguishable from human-written ones. The
     ///   launcher injects `chat:<chatID>` (chat-driven) or `agent:<kind>` (one-shot
     ///   ingest/lint/query). An explicit `--author` flag always wins over the env.
+    ///   For `log append` (which takes no `--author` flag) the env value rides
+    ///   along as the row's author identity so `LogIndexCommand` can refuse an
+    ///   agent-authored `--source` Ingested stamp (#1367); the stamp gate keys
+    ///   on the typed `PageAuthor` parse of this value.
     public static func applyEnv(
         _ command: Command, env: [String: String]
     ) -> Command {
@@ -1240,6 +1249,14 @@ public enum ArgumentParser {
         case .indexSet(let bodyFile, let workspace)
             where workspace == nil && workspaceID?.isEmpty == false:
             return .indexSet(bodyFile: bodyFile, workspace: workspaceID)
+        case .logAppend(let kind, let title, let note, let source, let existingAuthor)
+            where existingAuthor == nil && author?.isEmpty == false:
+            // #1367: route the resolved run author onto `log append` so the
+            // stamp gate in `LogIndexCommand` can tell an agent-authored run
+            // (`agent:<kind>`) from the ad-hoc chat/shell path. `log append`
+            // takes no `--author` flag, so the env is the only source; the
+            // guard keeps the precedence shape (flag > env) if one is added.
+            return .logAppend(kind: kind, title: title, note: note, source: source, author: author)
         default:
             return command
         }

@@ -36,9 +36,13 @@ struct ScriptedCLIOutcome: Sendable, Equatable {
 ///
 /// Fidelity notes (deliberate deltas from the executable, each inert for the
 /// command families the scripted pipelines use):
-/// - `WIKI_WORKSPACE` / `WIKI_AUTHOR` env application (`applyEnv`) is not
-///   mirrored: the test process has no per-spawn env, and scripts pass every
-///   option explicitly.
+/// - `WIKI_WORKSPACE` env application (`applyEnv`) is not mirrored by
+///   default: the test process has no per-spawn env, and scripts pass every
+///   option explicitly. `WIKI_AUTHOR` IS applied — `dispatch(_:in:env:)`
+///   routes it through the same `applyEnv` the real entry path uses (#1367),
+///   so the log-append stamp gate sees the same resolved author the
+///   production CLI would; the default empty env keeps the pre-#1367
+///   behavior (unset author).
 /// - The Tantivy BM25 search leg and the package fence validator are not
 ///   resolved: scripted pipelines use no `page search` and `validator: nil`
 ///   is the documented dev/`swift test` semantic of `PageCommand.run`.
@@ -50,8 +54,13 @@ enum ScriptedWikiCtl {
     static let wikiSelector = "cumulative-ingest-test"
 
     /// Dispatch `argv` (without the executable name, exactly as the process
-    /// layer receives `CommandLine.arguments.dropFirst()`).
-    static func dispatch(_ argv: [String], in store: GRDBWikiStore) -> ScriptedCLIOutcome {
+    /// layer receives `CommandLine.arguments.dropFirst()`). `env` mirrors the
+    /// per-spawn environment the real entry path applies via `applyEnv`
+    /// (`WIKI_AUTHOR` reaches `log append` through it, #1367); it defaults to
+    /// the empty env.
+    static func dispatch(
+        _ argv: [String], in store: GRDBWikiStore, env: [String: String] = [:]
+    ) -> ScriptedCLIOutcome {
         let invocation: ArgumentParser.Invocation
         do {
             invocation = try ArgumentParser.parse(argv, env: { _ in nil })
@@ -68,13 +77,19 @@ enum ScriptedWikiCtl {
         }
 
         do {
-            switch invocation.command {
+            // Same order as `WikiCtlRunner.runOrdinary`: env application
+            // happens on the PARSED command, before dispatch.
+            let command = ArgumentParser.applyEnv(invocation.command, env: env)
+            switch command {
             case .page(let action):
                 let result = try PageCommand.run(action, in: store)
                 return committed(result)
-            case .logAppend(let kind, let title, let note, let source):
+            case .logAppend(let kind, let title, let note, let source, let author):
+                // The author is parsed through the typed seam exactly like
+                // the real executor does — never a bare string check.
                 let result = try LogIndexCommand.run(
-                    .logAppend(kind: kind, title: title, note: note, source: source),
+                    .logAppend(kind: kind, title: title, note: note, source: source,
+                               author: PageAuthor(rawValue: author)),
                     in: store)
                 return committed(result)
             default:

@@ -454,6 +454,9 @@ directly and is always available.
    NEVER otherwise: it is the completed-ingest switch. Adding a source to
    the wiki (`source add`) is an IMPORT, not an ingest — do not pass
    `--source` (or use `--kind ingest`) when you only imported a file.
+   In a queued pipeline task, NEVER pass `--source` on `wikictl log append` —
+   the app marks sources Ingested itself when the ingestion job completes
+   successfully.
 
 **Query** — answer a question from the wiki:
 1. Search — internal first, web last:

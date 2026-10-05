@@ -11,7 +11,10 @@ public enum LogIndexCommand {
         /// Append one dated row to the chronological log. `source` (valid only
         /// with kind `ingest`) is the ingested-file id to additionally stamp as
         /// ingested — the agent-asserted "this ingest completed" switch.
-        case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: SourceID?)
+        /// `author` is the run's resolved identity, typed via `PageAuthor` at
+        /// the CLI boundary (flag > env, then `WIKI_AUTHOR`): an `.agent` run
+        /// cannot flip the ingest stamp (#1367) — see ``run(_:in:)``.
+        case logAppend(kind: LogEntry.Kind, title: String, note: String?, source: SourceID?, author: PageAuthor = .legacyImport)
         /// Replace the singleton wiki-index body wholesale (UPSERT, version + 1).
         /// When `workspace` is set (Phase 7), stage into the workspace instead of
         /// writing to main — the caller provides the current main body as the
@@ -20,11 +23,13 @@ public enum LogIndexCommand {
     }
 
     /// Run one action against `store`. Both actions COMMIT (the caller posts the
-    /// change notification). `logAppend` echoes the new entry's id; `indexSet`
-    /// produces no output (the body is wholesale-replaced).
+    /// change notification). `logAppend` echoes the new entry's id — plus a
+    /// one-line notice on stdout when an agent-authored run's `--source`
+    /// stamp was refused (#1367); `indexSet` produces no output (the body is
+    /// wholesale-replaced).
     public static func run(_ action: Action, in store: WikiStore) throws -> PageCommand.Result {
         switch action {
-        case .logAppend(let kind, let title, let note, let source):
+        case .logAppend(let kind, let title, let note, let source, let author):
             // The Ingested stamp is agent-asserted, and this CLI flag is the
             // ad-hoc chat path — pipeline ingestion jobs are stamped by the
             // host at validated-successful job completion (#1344), so a late
@@ -36,6 +41,27 @@ public enum LogIndexCommand {
             // is defense-in-depth for programmatic Action construction (a
             // query/lint entry that names a source must never flip its
             // ingest state).
+            //
+            // #1367: a QUEUED pipeline agent (WIKI_AUTHOR=agent:<kind>) can
+            // still pass --source mid-run — the mounted system prompt taught
+            // the flag for the ad-hoc path, and a job that later fails left
+            // its sources marked Ingested. The host's validated-successful
+            // completion is the only legitimate stamp for agent-authored
+            // runs, so refuse the stamp there: the log row still lands (the
+            // record is harmless and useful), the command still succeeds,
+            // and one notice line names the rule. `chat:`, user, and unset
+            // authors keep the ad-hoc path exactly.
+            //
+            // The refusal also skips the existence check below: that check
+            // exists to keep a typo'd --source from LOOKING like it stamped
+            // a file, and an agent-authored run never stamps — the notice
+            // already says the stamp did not apply, so the row must land.
+            if kind == .ingest, let source, case .agent = author {
+                let entry = try store.appendLog(kind: kind, title: title, note: note)
+                return PageCommand.Result(
+                    output: entry.id.rawValue + "\n" + Self.agentStampRefusalNotice(source: source),
+                    didCommit: true)
+            }
             //
             // The stamp must also fail LOUDLY on a target that does not
             // exist: markSourceIngested is a no-op UPDATE on a missing id, so
@@ -85,5 +111,14 @@ public enum LogIndexCommand {
             try store.updateWikiIndex(body: body)
             return PageCommand.Result(output: "", didCommit: true)
         }
+    }
+
+    /// The stdout notice printed when an agent-authored run's `--source`
+    /// stamp is refused (#1367). Real CLI stdout: the caller's script sees
+    /// the new entry's id on the first line and this explanation on the
+    /// second, so a refused stamp is never mistaken for an applied one.
+    public static func agentStampRefusalNotice(source: SourceID) -> String {
+        "note: source \(source.rawValue) not marked Ingested — agent-authored runs cannot flip the ingest stamp; "
+            + "the app records completion at job success"
     }
 }

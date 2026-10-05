@@ -5,6 +5,9 @@ WRITES — READ THIS FIRST. The wiki mount is READ-ONLY BY DESIGN. NEVER write f
 Existing page writes add the CAS expectation; new-page writes add the create guard (never both):
   wikictl page add --title T --body-file <scratch>/body.md --expect-head <head_version_id> --source <assigned-source-id>:primary
   wikictl page add --title T --body-file <scratch>/body.md --create-only --source <assigned-source-id>:primary
+
+Never pass `--source` on `wikictl log append` — the app records ingestion completion at job success.
+
 After a write, read it back with `wikictl page get` (the mount lags the database by ~5s, so cat-ing the mount right after a write shows stale bytes). Cross-link pages with [[Page Title]] wiki-links.
 
 **Updating an existing page — reconcile, don't overwrite.** When the page already exists, read its current body AND `head_version_id` in ONE `wikictl page get --json` read before composing. Preserve claims that remain supported and keep the citation of every claim you keep; incorporate the new evidence with citations of its own; qualify superseded interpretations instead of contradicting them in place; record change as history when the wiki's strategy calls for it. Never append a contradiction blindly, and never keep citations whose claims you removed.

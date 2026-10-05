@@ -321,13 +321,16 @@ public enum CLIReference {
             summary: "append dated rows to the wiki log (log.md)",
             leaves: [
                 CLILeaf(
-                    "append", summary: "append one dated row to log.md; with --kind ingest, --source also marks that file Ingested",
+                    "append", summary: "append one dated row to log.md; with --kind ingest, --source also marks that file Ingested (agent runs excepted)",
                     commandLine: "append --kind ingest|query|lint --title X [--note N] [--source <file-id>]",
                     options: [
                         CLIOption("--kind <ingest|query|lint>", required: true, summary: "row kind"),
                         CLIOption("--title <title>", required: true, summary: "row title"),
                         CLIOption("--note <note>", summary: "optional extra text"),
-                        CLIOption("--source <file-id>", summary: "mark this file Ingested — ONLY with --kind ingest, ONLY after a completed ingest workflow (never a plain import)"),
+                        CLIOption("--source <file-id>", summary: "mark this file Ingested — ONLY with --kind ingest, ONLY after a completed ingest workflow (never a plain import); refused for agent-authored runs"),
+                    ],
+                    details: [
+                        "The Ingested stamp applies only when the resolved author (the WIKI_AUTHOR env, e.g. chat:<id>) is not an agent run: a queued pipeline agent (agent:<kind>) cannot flip the stamp — the app records completion at job success (#1367). The log row is still written and the command still succeeds; a stdout note names the rule when the stamp is refused.",
                     ],
                     examples: [
                         "wikictl log append --kind ingest --title \"report.pdf\" --source 01ABC",

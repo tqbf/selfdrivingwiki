@@ -20,6 +20,7 @@ For each source, record the ingest in the log. The source files and their IDs ar
    ```
    wikictl log append --kind ingest --title "<source file name>"
    ```
+   Never pass `--source` on `wikictl log append` — the app records ingestion completion at job success.
 
 ### Write rules
 

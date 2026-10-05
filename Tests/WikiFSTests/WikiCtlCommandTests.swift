@@ -173,6 +173,35 @@ struct WikiCtlCommandTests {
         #expect(author == nil)
     }
 
+    /// #1367: `log append` takes no `--author` flag, so `WIKI_AUTHOR` is the
+    /// author's only source — `applyEnv` routes it onto the command so the
+    /// stamp gate in `LogIndexCommand` can tell an agent-authored run from
+    /// the ad-hoc chat/shell path.
+    @Test func wikiAuthorEnvRoutesOntoLogAppend() throws {
+        let inv = try ArgumentParser.parse(
+            ["--wiki", "W", "log", "append", "--kind", "ingest", "--title", "T"],
+            env: { _ in nil })
+        let applied = ArgumentParser.applyEnv(
+            inv.command, env: ["WIKI_AUTHOR": "agent:ingest"])
+        guard case .logAppend(_, _, _, _, let author) = applied else {
+            Issue.record("expected .logAppend")
+            return
+        }
+        #expect(author == "agent:ingest")
+    }
+
+    @Test func wikiAuthorEnvLeavesLogAppendAloneWhenAbsent() throws {
+        let inv = try ArgumentParser.parse(
+            ["--wiki", "W", "log", "append", "--kind", "ingest", "--title", "T"],
+            env: { _ in nil })
+        let applied = ArgumentParser.applyEnv(inv.command, env: [:])
+        guard case .logAppend(_, _, _, _, let author) = applied else {
+            Issue.record("expected .logAppend")
+            return
+        }
+        #expect(author == nil)
+    }
+
     @Test func parsesDelete() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "page", "delete", "--id", "01Z"], env: noEnv)

@@ -286,8 +286,16 @@ func execute(
             didCommit: r.didCommit,
             stderrOutput: r.stderrOutput
         )
-    case .logAppend(let kind, let title, let note, let source):
-        let r = try LogIndexCommand.run(.logAppend(kind: kind, title: title, note: note, source: source), in: store)
+    case .logAppend(let kind, let title, let note, let source, let author):
+        // The author arrived resolved (flag > env) via `applyEnv` in
+        // `WikiCtlRunner.runOrdinary`. Parse it through the typed `PageAuthor`
+        // seam HERE — the single boundary between parse-land strings and
+        // command-land types — so the #1367 stamp gate in `LogIndexCommand`
+        // never string-matches the author.
+        let r = try LogIndexCommand.run(
+            .logAppend(kind: kind, title: title, note: note, source: source,
+                       author: PageAuthor(rawValue: author)),
+            in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .indexSet(let bodyFile, let workspace):
         let body = try readBodyFile(from: bodyFile)
