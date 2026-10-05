@@ -156,7 +156,10 @@ public protocol AgentProviderServices: Sendable {
         configuredThinkingOptionID: ChatConfigurationValueID?,
         priorEffectiveThinkingOptionID: ChatConfigurationValueID?
     ) async throws -> AgentInteractivePreparation
-    func prepare(_ operation: AgentProviderOperationKind, providerOverride: ProviderID?, modelOverride: ModelID?, thinkingOverride: String?) async throws -> AgentOperationPreparation
+    /// `queuedWorkUnits` makes the resolved backend's turn ceiling
+    /// batch-aware for queued lanes (`TurnLivenessPolicy.ceiling(for:workUnits:)`);
+    /// `nil` keeps the flat per-kind ceiling.
+    func prepare(_ operation: AgentProviderOperationKind, providerOverride: ProviderID?, modelOverride: ModelID?, thinkingOverride: String?, queuedWorkUnits: Int?) async throws -> AgentOperationPreparation
     func preparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage) async throws -> AgentOperationPreparation
     func fallbackPreparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage, fallbackProviderID: ProviderID) async throws -> AgentOperationPreparation
     func prepareSummarization() async throws -> AgentProviderSummaryPreparation
@@ -215,14 +218,15 @@ public extension AgentProviderServices {
             .interactive,
             providerOverride: providerOverride,
             modelOverride: modelOverride,
-            thinkingOverride: configuredThinkingOptionID?.rawValue)
+            thinkingOverride: configuredThinkingOptionID?.rawValue,
+            queuedWorkUnits: nil)
         return AgentInteractivePreparation(
             operation: operation,
             thinkingConfiguration: nil)
     }
 
     func prepare(_ operation: AgentProviderOperationKind) async throws -> AgentOperationPreparation {
-        try await prepare(operation, providerOverride: nil, modelOverride: nil, thinkingOverride: nil)
+        try await prepare(operation, providerOverride: nil, modelOverride: nil, thinkingOverride: nil, queuedWorkUnits: nil)
     }
 }
 
@@ -271,13 +275,15 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
         _ operation: AgentProviderOperationKind,
         providerOverride: ProviderID?,
         modelOverride: ModelID?,
-        thinkingOverride: String?
+        thinkingOverride: String?,
+        queuedWorkUnits: Int?
     ) async throws -> AgentOperationPreparation {
         try await installed.prepare(
             operation,
             providerOverride: providerOverride,
             modelOverride: modelOverride,
-            thinkingOverride: thinkingOverride)
+            thinkingOverride: thinkingOverride,
+            queuedWorkUnits: queuedWorkUnits)
     }
 
     public func preparation(
@@ -368,7 +374,7 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
 public struct UnavailableAgentProviderServices: AgentProviderServices {
     public init() {}
     public func prepareInteractive(providerOverride: ProviderID?, modelOverride: ModelID?, configuredThinkingOptionID: ChatConfigurationValueID?, priorEffectiveThinkingOptionID: ChatConfigurationValueID?) async throws -> AgentInteractivePreparation { throw AgentProviderRuntimeError.unavailable }
-    public func prepare(_ operation: AgentProviderOperationKind, providerOverride: ProviderID?, modelOverride: ModelID?, thinkingOverride: String?) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
+    public func prepare(_ operation: AgentProviderOperationKind, providerOverride: ProviderID?, modelOverride: ModelID?, thinkingOverride: String?, queuedWorkUnits: Int?) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
     public func preparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
     public func fallbackPreparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage, fallbackProviderID: ProviderID) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
     public func prepareSummarization() async throws -> AgentProviderSummaryPreparation { throw AgentProviderRuntimeError.unavailable }
@@ -644,7 +650,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             thinkingConfiguration: thinkingConfiguration)
     }
 
-    public func prepare(_ operation: AgentProviderOperationKind, providerOverride: ProviderID? = nil, modelOverride: ModelID? = nil, thinkingOverride: String? = nil) async throws -> AgentOperationPreparation {
+    public func prepare(_ operation: AgentProviderOperationKind, providerOverride: ProviderID? = nil, modelOverride: ModelID? = nil, thinkingOverride: String? = nil, queuedWorkUnits: Int? = nil) async throws -> AgentOperationPreparation {
         try requireAvailable()
         let configuration = try readConfiguration()
         let snapshotID = UUID()
@@ -654,7 +660,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             providerOverride: providerOverride,
             modelOverride: modelOverride,
             thinkingOverride: thinkingOverride,
-            stages: operation.stages)
+            stages: operation.stages,
+            queuedWorkUnits: queuedWorkUnits)
         snapshots[snapshotID] = snapshot
         return try makePreparation(snapshotID: snapshotID, stage: operation.primaryStage, providerID: nil, isOriginal: true)
     }
@@ -993,13 +1000,14 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         thinkingOverride: String?,
         stages: [AgentProviderStage],
         policyOverride: AgentOperationPolicy? = nil,
-        summarizerScratch: LLMSandboxScratch? = nil
+        summarizerScratch: LLMSandboxScratch? = nil,
+        queuedWorkUnits: Int? = nil
     ) async throws -> Snapshot {
         let policy = policyOverride ?? AgentOperationPolicy(
             kind: operation,
             permissionPolicy: resolvePermissionPolicy(operation.permissionKind),
             permissionBudget: operation == .interactive ? nil : .seconds(60),
-            turnCeiling: TurnLivenessPolicy.ceiling(for: operation.permissionKind))
+            turnCeiling: TurnLivenessPolicy.ceiling(for: operation.permissionKind, workUnits: queuedWorkUnits))
         var chains: [AgentProviderStage: [SpawnRecord]] = [:]
         var models: [AgentProviderStage: ModelID?] = [:]
         var stageProviders: [AgentProviderStage: [AgentProvider]] = [:]

@@ -768,13 +768,15 @@ private struct ThrowingModelSummaryServices: AgentProviderServices {
         _ operation: AgentProviderOperationKind,
         providerOverride: ProviderID?,
         modelOverride: ModelID?,
-        thinkingOverride: String?
+        thinkingOverride: String?,
+        queuedWorkUnits: Int?
     ) async throws -> AgentOperationPreparation {
         try await runtime.prepare(
             operation,
             providerOverride: providerOverride,
             modelOverride: modelOverride,
-            thinkingOverride: thinkingOverride)
+            thinkingOverride: thinkingOverride,
+            queuedWorkUnits: queuedWorkUnits)
     }
 
     func preparation(

@@ -1310,7 +1310,8 @@ public final class AgentLauncher {
         for operation: AgentProviderOperationKind,
         providerOverride: ProviderID? = nil,
         modelOverride: ModelID? = nil,
-        thinkingOverride: String? = nil
+        thinkingOverride: String? = nil,
+        queuedWorkUnits: Int? = nil
     ) async throws -> (AgentOperationPreparation, AgentProviderPreparedBackend)? {
         await awaitProviderRelease()
         guard let services = privateProviderServices else { return nil }
@@ -1318,7 +1319,8 @@ public final class AgentLauncher {
             operation,
             providerOverride: providerOverride,
             modelOverride: modelOverride,
-            thinkingOverride: thinkingOverride)
+            thinkingOverride: thinkingOverride,
+            queuedWorkUnits: queuedWorkUnits)
         providerOperationToken = preparation.selection.token
         let prepared = try await services.preparedBackend(
             from: preparation.selection.token,
@@ -1546,9 +1548,16 @@ public final class AgentLauncher {
         case .lint, .lintPage: .lint
         case .query: .interactive
         }
+        // Batch-aware queued ceiling (2026-10-04, job 01M44Q63RG…): a
+        // 61-source ingest legitimately needs more than one flat 600s turn,
+        // so the queued turn ceiling scales with the batch (10 units flat,
+        // +20s per unit, capped at 1h —
+        // `TurnLivenessPolicy.queuedCeiling(workUnits:)`). Lint and query
+        // keep the flat per-kind ceiling.
+        let queuedWorkUnits: Int? = if case .ingest(let sources, _) = request { sources.count } else { nil }
         let servicePreparation: (AgentOperationPreparation, AgentProviderPreparedBackend)?
         do {
-            servicePreparation = try await preparedProvider(for: operationKind)
+            servicePreparation = try await preparedProvider(for: operationKind, queuedWorkUnits: queuedWorkUnits)
         } catch {
             preflightError = error.localizedDescription
             isRunning = false

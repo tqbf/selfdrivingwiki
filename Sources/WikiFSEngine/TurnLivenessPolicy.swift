@@ -84,14 +84,50 @@ public enum TurnLivenessPolicy {
     /// - `.ingest` / `.lint` — the queued-ingestion 600s ceiling (unattended
     ///   batch pipelines that must not burn 30 minutes on a stall).
     ///
+    // MARK: - Batch-aware queued ceiling
+
+    /// Work units covered by the flat ``queuedIngestCeiling`` before per-unit
+    /// scaling begins. Batches at or below this size keep the 600s stall
+    /// bound exactly as #609 set it (its scenario was a 4-source ingest).
+    static let queuedCeilingBaseWorkUnits = 10
+
+    /// Ceiling seconds added per work unit beyond
+    /// ``queuedCeilingBaseWorkUnits``. Calibrated against the 2026-10-04
+    /// 61-source ingestion (job 01M44Q63RG…): the planner staged ~72 chapter
+    /// files in 603s ≈ 10s per source, so 20s per source leaves headroom for
+    /// slower sources without unbounding a stall.
+    static let queuedCeilingSecondsPerWorkUnit: TimeInterval = 20
+
+    /// Hard cap on the scaled ceiling so even a very large batch keeps a
+    /// bounded stall backstop — one hour.
+    static let queuedCeilingCap: TimeInterval = 3600
+
+    /// The queued-lane ceiling for a batch of `workUnits` sources: the flat
+    /// 600s up to ``queuedCeilingBaseWorkUnits``, then
+    /// ``queuedCeilingSecondsPerWorkUnit`` per additional unit, capped at
+    /// ``queuedCeilingCap``. A 61-source batch resolves to 1620s (27 min) —
+    /// enough for the observed staging pace instead of a mid-work kill at
+    /// 603s.
+    static func queuedCeiling(workUnits: Int) -> TimeInterval {
+        guard workUnits > queuedCeilingBaseWorkUnits else { return queuedIngestCeiling }
+        let scaled = queuedIngestCeiling
+            + TimeInterval(workUnits - queuedCeilingBaseWorkUnits) * queuedCeilingSecondsPerWorkUnit
+        return min(scaled, queuedCeilingCap)
+    }
+
     /// Single decision point the launcher consults at backend construction.
     /// Mirrors the `permissionBudget` split (`nil` for chat, `.seconds(60)`
     /// for ingest/lint) at the symmetric call site — same rationale:
     /// unattended pipelines need tighter backstops than interactive chat.
-    static func ceiling(for kind: PermissionOperationKind) -> TimeInterval {
+    ///
+    /// `workUnits` makes the queued lane batch-aware: a large ingest batch
+    /// legitimately needs more than one flat 600s turn of work, so the
+    /// ceiling scales (see ``queuedCeiling(workUnits:)``). `nil` keeps the
+    /// flat ceiling; `.chat` ignores it (interactive runs have no batch).
+    static func ceiling(for kind: PermissionOperationKind, workUnits: Int? = nil) -> TimeInterval {
         switch kind {
         case .chat:                return defaultCeilingTimeout
-        case .ingest, .lint:       return queuedIngestCeiling
+        case .ingest, .lint:       return workUnits.map { queuedCeiling(workUnits: $0) } ?? queuedIngestCeiling
         }
     }
 }

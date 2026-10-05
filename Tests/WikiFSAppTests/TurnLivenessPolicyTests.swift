@@ -143,5 +143,41 @@ import WikiFSEngine
     @Test func queuedCeilingIsLowerThanInteractive() {
         #expect(TurnLivenessPolicy.queuedIngestCeiling < TurnLivenessPolicy.defaultCeilingTimeout)
     }
+
+    // MARK: - Batch-aware queued ceiling (2026-10-04, job 01M44Q63RG…)
+
+    /// Batches at or below the base keep the flat #609 ceiling exactly.
+    @Test func queuedCeilingFlatUpToBaseWorkUnits() {
+        #expect(TurnLivenessPolicy.queuedCeiling(workUnits: 0) == TurnLivenessPolicy.queuedIngestCeiling)
+        #expect(TurnLivenessPolicy.queuedCeiling(workUnits: 1) == TurnLivenessPolicy.queuedIngestCeiling)
+        #expect(TurnLivenessPolicy.queuedCeiling(workUnits: TurnLivenessPolicy.queuedCeilingBaseWorkUnits)
+                == TurnLivenessPolicy.queuedIngestCeiling)
+    }
+
+    /// Above the base the ceiling grows linearly by the per-unit allowance.
+    @Test func queuedCeilingScalesPerWorkUnit() {
+        #expect(TurnLivenessPolicy.queuedCeiling(workUnits: TurnLivenessPolicy.queuedCeilingBaseWorkUnits + 1)
+                == TurnLivenessPolicy.queuedIngestCeiling + TurnLivenessPolicy.queuedCeilingSecondsPerWorkUnit)
+        // The diagnosed 61-source batch: 600 + 51×20 = 1620s (27 min).
+        #expect(TurnLivenessPolicy.queuedCeiling(workUnits: 61) == 1620)
+    }
+
+    /// Very large batches stay bounded by the cap — the stall backstop must
+    /// never disappear, only stretch.
+    @Test func queuedCeilingIsCapped() {
+        #expect(TurnLivenessPolicy.queuedCeiling(workUnits: 10_000) == TurnLivenessPolicy.queuedCeilingCap)
+        #expect(TurnLivenessPolicy.queuedCeilingCap >= TurnLivenessPolicy.defaultCeilingTimeout)
+    }
+
+    /// The ceiling(for:) decision point threads work units through: nil keeps
+    /// the flat ceiling, .chat ignores the batch, and the queued lanes scale.
+    @Test func ceilingForKindRespectsWorkUnits() {
+        #expect(TurnLivenessPolicy.ceiling(for: .ingest) == TurnLivenessPolicy.queuedIngestCeiling)
+        #expect(TurnLivenessPolicy.ceiling(for: .ingest, workUnits: nil) == TurnLivenessPolicy.queuedIngestCeiling)
+        #expect(TurnLivenessPolicy.ceiling(for: .ingest, workUnits: 61) == 1620)
+        #expect(TurnLivenessPolicy.ceiling(for: .lint, workUnits: 61) == 1620)
+        #expect(TurnLivenessPolicy.ceiling(for: .chat, workUnits: 61)
+                == TurnLivenessPolicy.defaultCeilingTimeout)
+    }
 }
 #endif
