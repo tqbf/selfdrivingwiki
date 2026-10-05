@@ -62,6 +62,40 @@ YT_TRANSCRIPT_NAME="youtube-transcript"
 YT_TRANSCRIPT_SRC="tools/youtube-transcript/youtube-transcript"
 POD_TRANSCRIPT_NAME="podcast-transcript"
 POD_TRANSCRIPT_SRC="tools/podcast-transcript/podcast-transcript"
+# bun runtime — ACP JS-adapter providers (claude-acp via bunx) launch through
+# it, and WikiFSApp's launch check expects Contents/Helpers/bun. The runtime
+# login-shell locator (ACPBackend.defaultResolveBunRuntime) is a dev
+# convenience; the shipped bundle must be self-contained.
+BUN_NAME="bun"
+
+# ---------------------------------------------------------------------------
+# Resolve the bun runtime (hard requirement — see BUN_NAME above)
+# ---------------------------------------------------------------------------
+# Order: explicit BUN_BIN override, the mise-pinned bun (mise.toml pins the
+# version this repo develops against), then PATH. A mise SHIM must not be
+# bundled: shims re-exec the real binary through the user's mise install, so
+# the "self-contained bundle" property would be a lie. Modern mise shims are
+# COMPILED Mach-O binaries, so `file` cannot tell shim from runtime — a path
+# under a shims directory is rejected explicitly. This gate is what the
+# WikiFSApp launch-check comment calls "build.sh hard-fails when bun is
+# absent". It runs BEFORE swift build so a machine without bun fails in
+# seconds, not after a full compile.
+BUN_BIN="${BUN_BIN:-}"
+if [ -z "${BUN_BIN}" ] && command -v mise >/dev/null 2>&1; then
+  BUN_BIN="$(mise which bun 2>/dev/null || true)"
+fi
+if [ -z "${BUN_BIN}" ] && command -v bun >/dev/null 2>&1; then
+  BUN_BIN="$(command -v bun)"
+fi
+if [ -z "${BUN_BIN}" ] || [ ! -f "${BUN_BIN}" ]; then
+  echo "✗ bun not found — required helper for ACP ingestion. Install the pinned runtime (mise install) or set BUN_BIN=<path-to-bun>." >&2
+  exit 1
+fi
+if file "${BUN_BIN}" | grep -qi "script" || [[ "${BUN_BIN}" == */shims/* ]]; then
+  echo "✗ ${BUN_BIN} is a shim, not the bun runtime — set BUN_BIN to the real path (mise which bun prints it)." >&2
+  exit 1
+fi
+echo "→ bun runtime: ${BUN_BIN}"
 BUNDLE_ID="${BUNDLE_ID:-org.sockpuppet.WikiFS}"
 EXT_BUNDLE_ID="${EXT_BUNDLE_ID:-org.sockpuppet.WikiFS.FileProvider}"
 APP_GROUP="${APP_GROUP:-group.org.sockpuppet.wiki}"
@@ -183,6 +217,10 @@ if [ -x "${PODCAST_HELPER_BIN}" ]; then
 else
   echo "  (${PODCAST_HELPER_NAME} not found at ${PODCAST_HELPER_BIN} — Apple Podcasts transcript ingest will be unavailable)"
 fi
+# bun runtime (resolved + validated above) — a nested Mach-O like
+# podcast-token-helper, signed inside-out before the outer app.
+cp "${BUN_BIN}" "${HELPERS_DIR}/${BUN_NAME}"
+chmod +x "${HELPERS_DIR}/${BUN_NAME}"
 # wikictl is a plain CLI with no Info.plist, so it can't read the App Group id
 # the way the .app/.appex do. Drop a sidecar that WikiIdentifiers reads. It must
 # NOT live in Contents/Helpers (a code location — codesign rejects unsigned
@@ -584,6 +622,9 @@ require_bundled_file () {
 require_bundled_file "${HELPERS_DIR}/${CTL_NAME}" "wikictl CLI" exec
 require_bundled_file "${HELPERS_DIR}/${RENDERER_ASSET_HELPER_NAME}" \
   "renderer asset-reference-extractor helper" exec
+# bun is an unconditional compiled helper: ACP JS-adapter ingestion is broken
+# without it, so the copy is unconditional and so is this assertion.
+require_bundled_file "${HELPERS_DIR}/${BUN_NAME}" "bun runtime (ACP ingestion)" exec
 # The build/ wikictl copy is BOTH a live HelpersLocation candidate (resolved
 # cwd-relative by the daemon in dev runs) and the Phase A gate's direct
 # invocation target — same contract as the bundled copy.
@@ -879,6 +920,9 @@ PLIST
     codesign --force --timestamp=none --sign "${IDENTITY}" \
       "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
   fi
+  # bun runtime — nested Mach-O, signed inside-out (same discipline).
+  codesign --force --timestamp=none --sign "${IDENTITY}" \
+    "${HELPERS_DIR}/${BUN_NAME}"
   echo "→ codesign appex (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     --entitlements "${EXT_ENTITLEMENTS}" \
@@ -907,6 +951,7 @@ else
   if [ -f "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
   fi
+  codesign --force --sign - "${HELPERS_DIR}/${BUN_NAME}"
   codesign --force --sign - "${APPEX}"
   codesign --force --sign - "${APP_BUNDLE}"
   echo "✓ built ${APP_BUNDLE} (${CONFIG}, v${VERSION} (${BUILD_VERSION}), ad-hoc)"
