@@ -143,6 +143,16 @@ public struct BackendProfile: Sendable {
     /// temp — and snapshot teardown removes it. nil everywhere else
     /// (extraction, probes, chat: `<scratch>/.tmp` behavior unchanged).
     public var packageRunnerTempURL: URL?
+    /// The ALREADY-RESOLVED login-shell `PATH` for this launch (issue
+    /// #1368) — trusted launch data, deliberately NOT a `providerHints`
+    /// entry, so untrusted provider configuration can never forge it.
+    /// `ACPBackend.resolveSpawnConfig` copies it into the spawn
+    /// environment's `PATH` (replacing the daemon's inherited one) unless
+    /// the provider configured `env.PATH` itself — explicit user config
+    /// beats host injection. nil when no login-shell resolution happened on
+    /// the launch path; the child then inherits whatever `PATH` the
+    /// environment composition produces (no invented default).
+    public var loginShellPATH: String?
 
     public init(
         model: String? = nil,
@@ -154,7 +164,8 @@ public struct BackendProfile: Sendable {
         debugLogURL: URL? = nil,
         sandbox: SandboxProfile.SandboxInvocation? = nil,
         runContext: AgentRunContext? = nil,
-        packageRunnerTempURL: URL? = nil
+        packageRunnerTempURL: URL? = nil,
+        loginShellPATH: String? = nil
     ) {
         self.model = model
         self.providerHints = providerHints
@@ -166,6 +177,7 @@ public struct BackendProfile: Sendable {
         self.sandbox = sandbox
         self.runContext = runContext
         self.packageRunnerTempURL = packageRunnerTempURL
+        self.loginShellPATH = loginShellPATH
     }
 }
 

@@ -63,6 +63,15 @@ public struct ACPProviderModelProbe: Sendable {
     /// The Keychain-backed API key (nil when none is configured — many agents
     /// self-authenticate, e.g. Claude via OAuth, Hermes via ~/.hermes).
     public let apiKey: String?
+    /// The ALREADY-RESOLVED login-shell `PATH` for this probe launch (issue
+    /// #1368). The probe composes its own child environment (process env
+    /// merged with the spawn env), so without this value the probe child
+    /// inherits the daemon's minimal PATH and dies on `#!/usr/bin/env node`
+    /// package bins exactly like a chat launch. Rides the profile into
+    /// `ACPBackend.resolveSpawnConfig`, which injects it as the spawn
+    /// environment's `PATH` unless the provider configured `env.PATH`.
+    /// nil (the default) keeps the probe's environment exactly as before.
+    public let loginShellPATH: String?
     /// #1276 injectable seam: the seatbelt front-end usability check
     /// (production default pins `ACPBackend.sandboxExecutableIsUsable`).
     let sandboxUsability: @Sendable (String) -> Bool
@@ -112,6 +121,7 @@ public struct ACPProviderModelProbe: Sendable {
         provider: AgentProvider,
         resolvedCommand: [String],
         apiKey: String?,
+        loginShellPATH: String? = nil,
         sandboxUsability: @escaping @Sendable (String) -> Bool = ACPProviderModelProbe.defaultSandboxUsability,
         resolveBunRuntime: @escaping @Sendable () async -> RuntimeCommandResolution? = ACPProviderModelProbe.defaultBunResolver,
         makeClient: @escaping @Sendable () -> Client = { Client() },
@@ -120,6 +130,7 @@ public struct ACPProviderModelProbe: Sendable {
         self.provider = provider
         self.resolvedCommand = resolvedCommand
         self.apiKey = apiKey
+        self.loginShellPATH = loginShellPATH
         self.sandboxUsability = sandboxUsability
         self.resolveBunRuntime = resolveBunRuntime
         self.makeClient = makeClient
@@ -175,7 +186,7 @@ public struct ACPProviderModelProbe: Sendable {
             DebugLog.agent("ACPProviderModelProbe: FAIL notConfigured provider=\(provider.id)")
             throw ACPProviderModelProbeError.notConfigured
         }
-        let profile = BackendProfile(providerHints: hints)
+        let profile = BackendProfile(providerHints: hints, loginShellPATH: loginShellPATH)
         guard let configuredSpawn = ACPBackend.resolveSpawnConfig(from: profile) else {
             DebugLog.agent("ACPProviderModelProbe: FAIL resolveSpawnConfig nil provider=\(provider.id)")
             throw ACPProviderModelProbeError.notConfigured

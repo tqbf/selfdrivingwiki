@@ -142,7 +142,7 @@ struct LLMSpawnSandboxExhaustivenessTests {
         ),
         (
             "ACPProviderModelProbe.swift",
-            "BackendProfile(providerHints: hints)",
+            "BackendProfile(providerHints: hints, loginShellPATH: loginShellPATH)",
             // Configuration-only: the profile exists so
             // ACPBackend.resolveSpawnConfig can extract the adapter path/args/
             // env. The probe launch itself consumes the typed sandboxed launch

@@ -364,13 +364,14 @@ public final class AgentLauncher {
 
     /// The user-environment `PATH` for run contexts, resolved through the
     /// account's configured login shell (shell-NEUTRAL — `$SHELL`/passwd
-    /// record, never a hard-coded zsh). Falls back to the inherited process
-    /// PATH when the login-shell hop fails. Injectable so tests pin the value
-    /// without spawning a shell.
-    @ObservationIgnored var resolveUserEnvironmentPath: () async -> String = {
+    /// record, never a hard-coded zsh). Returns the RAW resolution — nil
+    /// when the login-shell hop failed — so #1368's spawn seam can leave the
+    /// child `PATH` unset instead of inventing a default; `makeRunContext`
+    /// applies the inherited-process fallback for `AgentRunContext.userPATH`
+    /// (the prompt's "bare wikictl is on your PATH" promise needs a value).
+    /// Injectable so tests pin the value without spawning a shell.
+    @ObservationIgnored var resolveUserEnvironmentPath: () async -> String? = {
         await UserEnvironmentPath.userPATH()
-            ?? ProcessInfo.processInfo.environment["PATH"]
-            ?? "/usr/bin:/bin"
     }
 
     /// The EXPLICIT wiki database this launcher's runs read and write, when a
@@ -418,12 +419,20 @@ public final class AgentLauncher {
         wikictlDirectory: String,
         operation: WikiOperation? = nil
     ) async -> AgentRunContext {
-        let userPath = await resolveUserEnvironmentPath()
+        // #1368: keep the RAW login-shell resolution on the context — the
+        // ACP spawn seam (`ACPBackend.resolveSpawnConfig`) injects the
+        // child's `PATH` from it — while `userPATH` keeps its
+        // inherited-process fallback (a value `effectivePATH` can promise).
+        let resolvedLoginShellPATH = await resolveUserEnvironmentPath()
+        let userPath = resolvedLoginShellPATH
+            ?? ProcessInfo.processInfo.environment["PATH"]
+            ?? "/usr/bin:/bin"
         let context = AgentRunContext(
             scratchDirectory: scratch,
             wikiID: wikiID,
             wikictlDirectory: wikictlDirectory,
             userPATH: userPath,
+            resolvedLoginShellPATH: resolvedLoginShellPATH,
             stateFilePath: operation?.stateFilePath,
             stagedSourcePaths: operation?.stagedSourcePaths ?? [],
             databasePath: wikiDatabaseOverride)
@@ -1954,7 +1963,9 @@ public final class AgentLauncher {
             }
         } catch {
             DebugLog.agent("run: spawn FAILED: \(error.localizedDescription)")
-            preflightError = "Failed to launch claude: \(error.localizedDescription)"
+            // #1368: name the ACTUAL provider — a hardcoded agent name sent
+            // users of every other provider down the wrong debugging path.
+            preflightError = "Failed to launch \(provider.label): \(error.localizedDescription)"
             closeLogFiles()
             DebugLog.trying("remove scratch on spawn failure", operation: { try FileManager.default.removeItem(at: scratch) })
             runningKind = nil
@@ -4049,7 +4060,9 @@ public final class AgentLauncher {
             startCompletionWatchdog()
         } catch {
             DebugLog.agent("startInteractiveQuery: backend.start FAILED provider=\(provider.id): \(error)")
-            preflightError = "Failed to launch claude: \(error.localizedDescription)"
+            // #1368: name the ACTUAL provider — the interactive failure banner
+            // must not claim a hardcoded agent name the user never selected.
+            preflightError = "Failed to launch \(provider.label): \(error.localizedDescription)"
             closeLogFiles()
             DebugLog.trying("remove scratch on backend.start failure", operation: { try FileManager.default.removeItem(at: scratch) })
             isInteractiveSession = false

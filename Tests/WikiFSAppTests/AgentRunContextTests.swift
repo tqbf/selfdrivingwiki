@@ -82,12 +82,12 @@ struct AgentRunContextTests {
     @Test func providerEnvironmentCannotOverrideProtectedRunKeys() {
         let context = makeContext(scratch: URL(fileURLWithPath: "/cache/run"))
         let providerEnvironment = [
-            // A provider config trying to redirect routing, scratch, PATH,
-            // and temp relocation — every one of these MUST lose.
+            // A provider config trying to redirect routing, scratch, and
+            // temp relocation — every one of these MUST lose. (`PATH` has a
+            // #1368 carve-out covered by its own tests below.)
             "WIKI_DB": "01EVIL",
             "WIKICTL": "/tmp/evil/wikictl",
             "WIKI_SCRATCH": "/tmp/evil",
-            "PATH": "/tmp/evil/bin",
             "TMPDIR": "/tmp/evil-tmp",
             "TMPPREFIX": "/tmp/evil-tmp/zsh",
             // A benign provider hint that must survive.
@@ -105,6 +105,46 @@ struct AgentRunContextTests {
         #expect(env["TMPPREFIX"] == "/cache/run/.tmp/zsh")
         #expect(env["ACP_PROVIDER_KEY"] == "abc123", "benign provider env survives")
         #expect(env["HOME"] == "/users/dev", "base env survives")
+    }
+
+    // MARK: - Explicit PATH precedence (issue #1368)
+
+    /// #1368: an EXPLICIT `PATH` in the provider's spawn environment — a
+    /// user-configured `env.PATH` in agent-providers.json, or the
+    /// login-shell `PATH` the ACP spawn seam injected — keeps every entry it
+    /// named: it becomes the tail under the trusted helper head instead of
+    /// being discarded by the protected-key overwrite. Explicit
+    /// configuration beats host injection.
+    @Test func explicitProviderPATHBecomesTailUnderTrustedHelperHead() {
+        let context = makeContext(scratch: URL(fileURLWithPath: "/cache/run"))
+        let env = context.environment(
+            providerEnvironment: ["PATH": "/users/me/.local/bin:/opt/homebrew/bin"],
+            baseEnvironment: ["PATH": "/usr/bin:/bin"])
+
+        #expect(env["PATH"] == "/Applications/Self Driving Wiki.app/Contents/Helpers:/users/me/.local/bin:/opt/homebrew/bin")
+        // The inherited (daemon) PATH entries are GONE — the explicit PATH
+        // replaced them; only the trusted helper head rides on top.
+        #expect(env["PATH"]?.contains("/usr/bin") == false)
+    }
+
+    /// Without an explicit PATH from the provider, the protected
+    /// `effectivePATH` (helper head + the run's `userPATH`) stands unchanged
+    /// — the #1368 carve-out only fires for an explicitly supplied PATH.
+    @Test func noExplicitProviderPATHKeepsEffectivePATH() {
+        let context = makeContext(scratch: URL(fileURLWithPath: "/cache/run"))
+        let env = context.environment(
+            providerEnvironment: ["OTHER_KEY": "value"],
+            baseEnvironment: ["PATH": "/usr/bin:/bin"])
+        #expect(env["PATH"] == context.effectivePATH)
+    }
+
+    /// The raw login-shell resolution survives scratch re-rooting
+    /// (`withScratch`) — a derived phase run injects the same PATH its
+    /// parent resolved.
+    @Test func withScratchPreservesResolvedLoginShellPATH() {
+        let context = makeContext(scratch: URL(fileURLWithPath: "/cache/run"))
+        let derived = context.withScratch(URL(fileURLWithPath: "/cache/run/fallback"))
+        #expect(derived.resolvedLoginShellPATH == context.resolvedLoginShellPATH)
     }
 
     // MARK: - Trusted command rendering

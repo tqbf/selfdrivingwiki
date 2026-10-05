@@ -602,7 +602,12 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             try await ACPProviderModelProbe(
                 provider: provider,
                 resolvedCommand: resolvedCommand,
-                apiKey: apiKey)
+                apiKey: apiKey,
+                // #1368: probe launches see the same login-shell PATH chat
+                // launches do — the probe composes its own child environment,
+                // and without this its child inherits the daemon's minimal
+                // PATH and dies on `#!/usr/bin/env node` package bins.
+                loginShellPATH: await PathPreflight.loginShellPATH())
                 .discoverObservation()
         },
         sandboxUsability: @escaping SandboxUsabilityCheck = AgentProviderRuntime.defaultSandboxUsability,

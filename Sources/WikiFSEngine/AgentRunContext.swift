@@ -143,6 +143,15 @@ public struct AgentRunContext: Sendable, Equatable {
     /// The user-environment PATH this run resolved (already falls back to the
     /// inherited process PATH when the login-shell hop fails).
     public let userPATH: String
+    /// The RAW login-shell PATH resolution for this run — nil when the
+    /// login-shell hop failed (issue #1368). Unlike ``userPATH`` (which bakes
+    /// in the inherited-process fallback so ``effectivePATH`` always has a
+    /// value), this keeps the failed hop distinguishable: the ACP spawn seam
+    /// (`ACPBackend.resolveSpawnConfig`) injects `PATH` into the child
+    /// environment from THIS value only, so an absent resolution leaves the
+    /// child's `PATH` unset rather than silently inheriting the daemon's
+    /// minimal one.
+    public let resolvedLoginShellPATH: String?
     /// Absolute scratch path of the staged `WIKI_STATE.md` snapshot, when the
     /// operation stages one.
     public let stateFilePath: String?
@@ -174,6 +183,7 @@ public struct AgentRunContext: Sendable, Equatable {
         wikiID: WikiID,
         wikictlDirectory: String,
         userPATH: String,
+        resolvedLoginShellPATH: String? = nil,
         stateFilePath: String? = nil,
         stagedSourcePaths: [String] = [],
         databasePath: URL? = nil
@@ -188,6 +198,7 @@ public struct AgentRunContext: Sendable, Equatable {
         self.wikictlPath = URL(fileURLWithPath: wikictlDirectory, isDirectory: true)
             .appendingPathComponent("wikictl", isDirectory: false).path
         self.userPATH = userPATH
+        self.resolvedLoginShellPATH = resolvedLoginShellPATH
         self.stateFilePath = stateFilePath
         self.stagedSourcePaths = stagedSourcePaths
         self.databasePath = databasePath
@@ -276,8 +287,18 @@ public struct AgentRunContext: Sendable, Equatable {
     /// The full child environment for one spawn: the base (inherited process)
     /// environment, merged with the provider's hints LAST (provider wins
     /// inside its own namespace), then the protected run keys overwrite
-    /// everything — so `env.PATH`, `env.WIKI_DB`, … in provider config cannot
-    /// redirect the run. Pure; injectable `baseEnvironment` for tests.
+    /// everything — so `env.WIKI_DB`, `env.WIKI_SCRATCH`, … in provider
+    /// config cannot redirect the run. Pure; injectable `baseEnvironment`
+    /// for tests.
+    ///
+    /// `PATH` is the one protected key with a carve-out (issue #1368): an
+    /// EXPLICIT `PATH` in the provider's spawn environment — a
+    /// user-configured `env.PATH` in agent-providers.json, or the
+    /// login-shell `PATH` the spawn seam injected from
+    /// ``resolvedLoginShellPATH`` — keeps every entry it named; it becomes
+    /// the tail under the trusted helper head (`assemblePATH`) instead of
+    /// being discarded. Explicit configuration beats host injection, and the
+    /// injected login-shell `PATH` replaces the daemon's inherited one.
     public func environment(
         providerEnvironment: [String: String],
         baseEnvironment: [String: String]
@@ -288,6 +309,16 @@ public struct AgentRunContext: Sendable, Equatable {
         }
         for (key, value) in protectedEnvironment {
             env[key] = value
+        }
+        // #1368: an explicit `PATH` from the provider's spawn environment
+        // (user `env.PATH`, or the seam-injected login-shell `PATH`) keeps
+        // every entry it named — it becomes the tail under the trusted
+        // helper head instead of being discarded by the protected-key
+        // overwrite above.
+        if let explicitPATH = providerEnvironment[EnvironmentKey.path] {
+            env[EnvironmentKey.path] = Self.assemblePATH(
+                helperDirectory: wikictlDirectory,
+                userPath: explicitPATH)
         }
         return env
     }
@@ -374,15 +405,16 @@ public struct AgentRunContext: Sendable, Equatable {
 
     /// A copy of this context re-rooted at a derived scratch directory (the
     /// fallback-provider sub-scratch). Everything else — wiki id, trusted
-    /// helper, resolved user PATH — is inherited so the derived run keeps the
-    /// same capability contract. Fallback run directories get INDEPENDENT
-    /// temp roots under their own scratch.
+    /// helper, resolved user PATH (raw and fallback-applied) — is inherited
+    /// so the derived run keeps the same capability contract. Fallback run
+    /// directories get INDEPENDENT temp roots under their own scratch.
     public func withScratch(_ newScratch: URL) -> AgentRunContext {
         AgentRunContext(
             scratchDirectory: newScratch,
             wikiID: wikiID,
             wikictlDirectory: wikictlDirectory,
             userPATH: userPATH,
+            resolvedLoginShellPATH: resolvedLoginShellPATH,
             stateFilePath: stateFilePath,
             stagedSourcePaths: stagedSourcePaths,
             databasePath: databasePath)

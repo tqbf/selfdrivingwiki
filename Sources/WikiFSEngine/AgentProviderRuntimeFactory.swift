@@ -58,7 +58,10 @@ public struct AgentProviderRuntimeFactory: Sendable {
             try await ACPProviderModelProbe(
                 provider: provider,
                 resolvedCommand: resolvedCommand,
-                apiKey: apiKey)
+                apiKey: apiKey,
+                // #1368: probe launches see the same login-shell PATH chat
+                // launches do (see AgentProviderRuntime's default).
+                loginShellPATH: await PathPreflight.loginShellPATH())
                 .discoverObservation()
         }
     ) {

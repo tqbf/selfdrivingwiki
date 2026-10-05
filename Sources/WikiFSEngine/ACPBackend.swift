@@ -2142,6 +2142,17 @@ public actor ACPBackend: AgentBackend {
     /// `AgentBackendFactory`, and the key is the Keychain-backed secret. NOT
     /// hardcoded to the Zed adapter — the user points at any ACP agent. Returns
     /// nil if no path is configured (→ `noAgentConfigured`).
+    ///
+    /// Issue #1368: the child environment gets `PATH` from the launch's
+    /// already-resolved login-shell `PATH` — `profile.loginShellPATH`, or the
+    /// run context's raw per-run resolution when the profile itself carries
+    /// none — REPLACING the daemon's inherited PATH (whose minimal
+    /// `/usr/bin:/bin`-shape is why `bun x` packages died on
+    /// `#!/usr/bin/env node` bins). A provider-configured `env.PATH` still
+    /// wins: explicit user config beats host injection, so the injection only
+    /// lands when the environment has no `PATH` of its own. No resolution and
+    /// no `env.PATH` → `PATH` stays unset (no invented default).
+    ///
     /// Internal (not `private`) so `resolveSpawnConfig` — including the Phase 2
     /// `environment` merge from `env.`-prefixed `providerHints` — is directly
     /// unit-testable from `@testable import WikiFSEngine` without spawning a
@@ -2158,6 +2169,13 @@ public actor ACPBackend: AgentBackend {
             if let envKey = HintKey.envKey(from: key) {
                 environment[envKey] = value
             }
+        }
+        // #1368: thread the login-shell PATH into the spawn environment —
+        // only when the provider did not configure `env.PATH` itself.
+        if environment[AgentEnvKey.path] == nil,
+           let loginShellPATH = profile.loginShellPATH
+               ?? profile.runContext?.resolvedLoginShellPATH {
+            environment[AgentEnvKey.path] = loginShellPATH
         }
         return AgentSpawnConfig(
             executablePath: path, arguments: args, workingDirectory: cwd, apiKey: apiKey,
@@ -2525,6 +2543,12 @@ public actor ACPBackend: AgentBackend {
     /// exported — the mount is optional; wikictl is the primary read surface
     /// (issue #441). The task-prompt path (`WikiOperation.wikiRootLine`) still
     /// gives the agent the resolved mount path inline when available.
+    ///
+    /// Issue #1368: a `PATH` in the spawn environment (the provider's
+    /// `env.PATH`, or the login-shell `PATH` the spawn seam injected)
+    /// REPLACES the inherited base PATH before the wikictl head is prepended
+    /// — the daemon's minimal PATH is never the tail when a real resolution
+    /// exists.
     /// Extracted from `start()` so it is unit-testable without a subprocess.
     static func buildAgentEnv(
         from cli: CLIProfile,
@@ -2535,9 +2559,14 @@ public actor ACPBackend: AgentBackend {
         env[AgentEnvKey.wikiDB] = cli.wikiID.rawValue
         // WIKI_ROOT is intentionally NOT exported — mount is optional; wikictl is the primary read surface (#441).
         env[AgentEnvKey.wikictl] = cli.wikictlDirectory + "/wikictl"
-        let existingPath = env[AgentEnvKey.path] ?? AgentEnvKey.defaultPath
-        env[AgentEnvKey.path] = cli.wikictlDirectory + AgentEnvKey.pathSeparator + existingPath
-        for (key, value) in spawnEnvironment {
+        // #1368: an explicit spawn-environment PATH (provider `env.PATH` or
+        // the seam-injected login-shell PATH) replaces the inherited PATH
+        // before the helper head lands on top of it.
+        let pathBase = spawnEnvironment[AgentEnvKey.path]
+            ?? env[AgentEnvKey.path]
+            ?? AgentEnvKey.defaultPath
+        env[AgentEnvKey.path] = cli.wikictlDirectory + AgentEnvKey.pathSeparator + pathBase
+        for (key, value) in spawnEnvironment where key != AgentEnvKey.path {
             env[key] = value
         }
         return env

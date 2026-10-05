@@ -254,6 +254,136 @@ import ACPModel
         #expect(env["WIKI_ROOT"] == nil)
     }
 
+    // MARK: - Login-shell PATH in the spawn environment (issue #1368)
+
+    /// #1368: the daemon resolves a login-shell PATH to FIND the agent
+    /// executable, but the spawned child never saw it — `resolveSpawnConfig`
+    /// built the environment from `env.`-prefixed provider hints only, so the
+    /// child inherited the daemon's minimal PATH and `bun x` packages died on
+    /// `#!/usr/bin/env node` bins ("env: node: No such file or directory").
+    /// The seam ALL ACP launches traverse must set `PATH` from the launch's
+    /// already-resolved login-shell PATH, replacing the inherited one.
+    @Test func resolveSpawnConfigInjectsProfileLoginShellPATHAsChildPATH() {
+        let profile = BackendProfile(
+            providerHints: [HintKey.acpAgentPath.rawValue: "/opt/agent/bin/agent"],
+            loginShellPATH: "/users/me/.local/bin:/opt/homebrew/bin:/usr/bin:/bin")
+        let spawn = ACPBackend.resolveSpawnConfig(from: profile)
+        #expect(spawn?.environment["PATH"] == "/users/me/.local/bin:/opt/homebrew/bin:/usr/bin:/bin")
+    }
+
+    /// The launcher-set `BackendProfile.loginShellPATH` outranks the run
+    /// context's per-run resolution (the discovery PATH is the value the
+    /// daemon demonstrably resolved the executable with).
+    @Test func resolveSpawnConfigProfileLoginShellPATHOutranksRunContextResolution() {
+        let context = AgentRunContext(
+            scratchDirectory: URL(fileURLWithPath: "/tmp/run"),
+            wikiID: WikiID(rawValue: "01WIKI"),
+            wikictlDirectory: "/app/Helpers",
+            userPATH: "/fallback/path",
+            resolvedLoginShellPATH: "/run/context/path")
+        let profile = BackendProfile(
+            providerHints: [HintKey.acpAgentPath.rawValue: "/bin/agent"],
+            runContext: context,
+            loginShellPATH: "/profile/discovery/path")
+        let spawn = ACPBackend.resolveSpawnConfig(from: profile)
+        #expect(spawn?.environment["PATH"] == "/profile/discovery/path")
+    }
+
+    /// Launcher profiles that carry no explicit value still inject the run
+    /// context's RAW login-shell resolution — the per-run value
+    /// `makeRunContext` already resolved (no new login-shell spawn per
+    /// launch).
+    @Test func resolveSpawnConfigFallsBackToRunContextLoginShellPATH() {
+        let context = AgentRunContext(
+            scratchDirectory: URL(fileURLWithPath: "/tmp/run"),
+            wikiID: WikiID(rawValue: "01WIKI"),
+            wikictlDirectory: "/app/Helpers",
+            userPATH: "/run/context/path",
+            resolvedLoginShellPATH: "/run/context/path")
+        let profile = BackendProfile(
+            providerHints: [HintKey.acpAgentPath.rawValue: "/bin/agent"],
+            runContext: context)
+        let spawn = ACPBackend.resolveSpawnConfig(from: profile)
+        #expect(spawn?.environment["PATH"] == "/run/context/path")
+    }
+
+    /// Explicit user config beats host injection: a provider-configured
+    /// `env.PATH` (from `agent-providers.json`) must still WIN over the
+    /// injected login-shell PATH.
+    @Test func resolveSpawnConfigProviderEnvPATHWinsOverInjectedLoginShellPATH() {
+        let context = AgentRunContext(
+            scratchDirectory: URL(fileURLWithPath: "/tmp/run"),
+            wikiID: WikiID(rawValue: "01WIKI"),
+            wikictlDirectory: "/app/Helpers",
+            userPATH: "/run/context/path",
+            resolvedLoginShellPATH: "/run/context/path")
+        let profile = BackendProfile(
+            providerHints: [
+                HintKey.acpAgentPath.rawValue: "/bin/agent",
+                HintKey.env("PATH"): "/user/configured/bin",
+            ],
+            runContext: context,
+            loginShellPATH: "/profile/discovery/path")
+        let spawn = ACPBackend.resolveSpawnConfig(from: profile)
+        #expect(spawn?.environment["PATH"] == "/user/configured/bin")
+    }
+
+    /// No login-shell resolution and no `env.PATH` → `PATH` stays unset in
+    /// the spawn environment. No invented default: the composition layers
+    /// decide what the child inherits, and a failed resolution must not
+    /// silently fabricate a PATH.
+    @Test func resolveSpawnConfigLeavesPATHUnsetWithoutResolution() {
+        let context = AgentRunContext(
+            scratchDirectory: URL(fileURLWithPath: "/tmp/run"),
+            wikiID: WikiID(rawValue: "01WIKI"),
+            wikictlDirectory: "/app/Helpers",
+            userPATH: "/inherited/fallback",
+            resolvedLoginShellPATH: nil)
+        let profile = BackendProfile(
+            providerHints: [HintKey.acpAgentPath.rawValue: "/bin/agent"],
+            runContext: context)
+        let spawn = ACPBackend.resolveSpawnConfig(from: profile)
+        #expect(spawn?.environment["PATH"] == nil)
+    }
+
+    /// The sandbox launch plan (#1251) passes the injected PATH through
+    /// UNCHANGED — the seatbelt wrapper relocates TMPDIR only; PATH must
+    /// survive so the wrapped child (and its `#!/usr/bin/env node` package
+    /// bins) still resolve user-local runtimes.
+    @Test func sandboxedSpawnPlanPassesPATHThroughUnchanged() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let injectedPATH = "/users/me/.local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/opt/agent/bin/agent",
+            arguments: ["acp"],
+            environment: ["PATH": injectedPATH, "WIKI_DB": "01WIKI"],
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch"))
+        #expect(plan.environment["PATH"] == injectedPATH)
+        #expect(plan.environment["WIKI_DB"] == "01WIKI")
+        // The only key the plan owns is TMPDIR relocation.
+        #expect(plan.environment["TMPDIR"] == "/tmp/scratch/.tmp")
+    }
+
+    /// The legacy `cli`-only composition prepends the helper head ON TOP of
+    /// a spawn-environment PATH instead of letting the inherited (daemon)
+    /// PATH ride through underneath it (#1368).
+    @Test func buildAgentEnvPrependsHelperHeadToSpawnEnvironmentPATH() {
+        let cli = CLIProfile(
+            operation: .queryChat(stateFilePath: "/tmp/state.md"),
+            wikiRoot: "/tmp/fake-mount",
+            wikiID: WikiID(rawValue: "FAKEWIKIID"),
+            wikictlDirectory: "/tmp/wikictl-bin")
+        let env = ACPBackend.buildAgentEnv(
+            from: cli,
+            baseEnv: ["PATH": "/usr/bin:/bin"],
+            spawnEnvironment: ["PATH": "/login/shell/bin"])
+        #expect(env["PATH"] == "/tmp/wikictl-bin:/login/shell/bin")
+    }
+
     // MARK: - Turn-end synthesis (extracted from ACPBackend.send)
 
     /// A successful prompt completion synthesizes exactly `.messageStop` (the

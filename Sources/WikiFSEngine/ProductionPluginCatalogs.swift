@@ -64,7 +64,10 @@ public struct AgentProviderProcessInput: Sendable {
             AgentBackendFactory.makeBackend(policy: policy, budget: budget, turnCeilingTimeout: ceiling, idleStallTimeout: idleStall)
         },
         probeCatalog: @escaping AgentProviderRuntime.CatalogProbe = { provider, command, apiKey in
-            try await ACPProviderModelProbe(provider: provider, resolvedCommand: command, apiKey: apiKey)
+            try await ACPProviderModelProbe(provider: provider, resolvedCommand: command, apiKey: apiKey,
+                                            // #1368: probe launches see the same login-shell PATH chat
+                                            // launches do (see AgentProviderRuntime's default).
+                                            loginShellPATH: await PathPreflight.loginShellPATH())
                 .discoverObservation()
         }
     ) {
