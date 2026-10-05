@@ -1202,6 +1202,10 @@ public actor QueueEngine {
         case .success:
             do {
                 try store.markCompleted(id: item.id)
+                // #1364: log the terminal transition at the exact write point —
+                // an item that settles .completed (or .failed below) without a
+                // log line leaves no audit trail of WHEN it settled.
+                DebugLog.store("QueueEngine: item \(item.id.rawValue) -> completed")
                 if let updated = try store.getItem(item.id) {
                     emit(.completed(updated))
                 }
@@ -1254,6 +1258,9 @@ public actor QueueEngine {
                     ?? String(describing: error)
                 do {
                     try store.markFailed(id: item.id, error: errorMsg)
+                    // #1364: log the terminal transition at the exact write
+                    // point — one line, with the cause that committed it.
+                    DebugLog.store("QueueEngine: item \(item.id.rawValue) -> failed: \(errorMsg)")
                     if let updated = try store.getItem(item.id) {
                         emit(.failed(updated, error: errorMsg))
                     }

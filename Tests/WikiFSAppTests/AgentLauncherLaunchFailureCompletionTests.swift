@@ -34,7 +34,7 @@ struct AgentLauncherLaunchFailureCompletionTests {
         tempDir: URL
     ) -> AgentLauncher {
         let launcher = AgentLauncher()
-        launcher.resolveBackend = { _, _, _ in backend }
+        launcher.resolveBackend = { _, _, _, _ in backend }
         launcher.acpCredentialStore = InMemoryACPCredentialStore()
         launcher.resolveSelectedProvider = {
             AgentProvider(
@@ -125,7 +125,7 @@ struct AgentLauncherLaunchFailureCompletionTests {
             try AppQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: launcher.exitStatus,
                 preflightError: launcher.preflightError,
-                runHadTurnFailure: launcher.runHadTurnFailure)
+                unrecoveredTurnFailure: launcher.runHadTurnFailure)
             Issue.record("Expected the launch-failure outcome to be rejected")
         } catch QueueIngestionError.spawnFailed(let message) {
             #expect(message == launcher.preflightError)
@@ -173,7 +173,134 @@ struct AgentLauncherLaunchFailureCompletionTests {
         try AppQueueIngestionProvider.validateLauncherOutcome(
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
-            runHadTurnFailure: launcher.runHadTurnFailure)
+            unrecoveredTurnFailure: launcher.runHadTurnFailure)
+    }
+
+    // MARK: - #1364: honest recovery signal (runTerminalTurnFailure)
+
+    /// The #1364 incident shape, driven through the REAL `run()` event loop
+    /// (`mergeOrAppend`): turn 1 hits the ceiling (`.turnFailed` +
+    /// `.messageStop` — the backend's failed-turn tail), then a later turn in
+    /// the same run completes cleanly (`.assistantText` + `.messageStop` NOT
+    /// preceded by `.turnFailed`). The run must read as recovered: the sticky
+    /// `runHadTurnFailure` stays true (#765 pass/fail), but the derived
+    /// `runTerminalTurnFailure` is false — a later process death is no longer
+    /// mislabeled as the ceiling failure.
+    @Test("turn failure followed by a clean turn end marks the run recovered (#1364)")
+    func recoveredTurnFailureIsNotTerminal() async throws {
+        let fake = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [
+                .turnFailed(reason: .ceilingExceeded(totalSeconds: 600)),
+                .messageStop,
+                .assistantText("recovered — next turn completed"),
+                .messageStop,
+            ]),
+        ])
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("turn-recover-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let launcher = makeFailingLauncher(backend: fake, tempDir: tempDir)
+
+        await launcher.run(
+            request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
+            wikiID: WikiID(rawValue: "test-wiki"),
+            wikiRoot: "/tmp",
+            systemPrompt: "sys",
+            wikictlDirectory: "/tmp",
+            ingestingSourceIDs: [],
+            onEvent: nil,
+            onLock: {},
+            onUnlock: {}
+        )
+
+        // Sticky failure still fails the run (#765)…
+        #expect(launcher.runHadTurnFailure)
+        // …but the run is recovered: the validator's message selection must
+        // not blame the long-gone ceiling.
+        #expect(launcher.runRecoveredAfterTurnFailure)
+        #expect(!launcher.runTerminalTurnFailure)
+    }
+
+    /// A turn failure with NO subsequent clean turn end stays terminal —
+    /// `runTerminalTurnFailure` is the honest "the turn failed" signal. Both
+    /// phases (planner, then the single-session fallback) fail their turns:
+    /// every `.messageStop` in the run is the tail of a `.turnFailed`.
+    @Test("unrecovered turn failure stays terminal (#1364)")
+    func unrecoveredTurnFailureIsTerminal() async throws {
+        let fake = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [
+                .turnFailed(reason: .ceilingExceeded(totalSeconds: 600)),
+                .messageStop,
+            ]),
+            FakeSessionBehavior(events: [
+                .turnFailed(reason: .agentError("fallback also failed")),
+                .messageStop,
+            ]),
+        ])
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("turn-terminal-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let launcher = makeFailingLauncher(backend: fake, tempDir: tempDir)
+
+        await launcher.run(
+            request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
+            wikiID: WikiID(rawValue: "test-wiki"),
+            wikiRoot: "/tmp",
+            systemPrompt: "sys",
+            wikictlDirectory: "/tmp",
+            ingestingSourceIDs: [],
+            onEvent: nil,
+            onLock: {},
+            onUnlock: {}
+        )
+
+        #expect(launcher.runHadTurnFailure)
+        #expect(!launcher.runRecoveredAfterTurnFailure)
+        #expect(launcher.runTerminalTurnFailure)
+    }
+
+    /// The failed-turn tail itself must NOT read as recovery: the
+    /// `.messageStop` that follows `.turnFailed` (turnEndEvents' sequence)
+    /// is the failing turn's own boundary, not a clean turn end. Drives two
+    /// consecutive failed turns (planner, then the single-session fallback) —
+    /// the second `.messageStop` still sees a preceding `.turnFailed`.
+    @Test("consecutive failed turns do not mark recovery (#1364)")
+    func consecutiveFailedTurnsStayTerminal() async throws {
+        let fake = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [
+                .turnFailed(reason: .ceilingExceeded(totalSeconds: 600)),
+                .messageStop,
+                .turnFailed(reason: .agentError("still failing")),
+                .messageStop,
+            ]),
+            FakeSessionBehavior(events: [
+                .turnFailed(reason: .agentError("fallback still failing")),
+                .messageStop,
+            ]),
+        ])
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("turn-consec-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let launcher = makeFailingLauncher(backend: fake, tempDir: tempDir)
+
+        await launcher.run(
+            request: .ingest(sources: [largeSource()], stateMarkdown: "# State"),
+            wikiID: WikiID(rawValue: "test-wiki"),
+            wikiRoot: "/tmp",
+            systemPrompt: "sys",
+            wikictlDirectory: "/tmp",
+            ingestingSourceIDs: [],
+            onEvent: nil,
+            onLock: {},
+            onUnlock: {}
+        )
+
+        #expect(launcher.runHadTurnFailure)
+        #expect(!launcher.runRecoveredAfterTurnFailure)
+        #expect(launcher.runTerminalTurnFailure)
     }
 }
 #endif

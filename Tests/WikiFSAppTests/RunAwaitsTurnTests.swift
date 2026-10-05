@@ -30,7 +30,7 @@ struct RunAwaitsTurnTests {
         // (the fake backend ignores permission policy + budget).
         // #609: closure now also takes turnCeilingTimeout — ignore (the fake
         // backend doesn't enforce the ceiling either).
-        launcher.resolveBackend = { _, _, _ in backend }
+        launcher.resolveBackend = { _, _, _, _ in backend }
         launcher.resolveClaude = { .found(path: "/usr/bin/true") }
         launcher.acpCredentialStore = InMemoryACPCredentialStore()
         launcher.resolveSelectedProvider = {
@@ -164,7 +164,7 @@ struct RunAwaitsTurnTests {
         let backend2 = FakeAgentBackend(behaviors: [
             FakeSessionBehavior(events: [.messageStop])
         ])
-        launcher.resolveBackend = { _, _, _ in backend2 }
+        launcher.resolveBackend = { _, _, _, _ in backend2 }
 
         await runOneShot(launcher: launcher)
         #expect(launcher.isRunning == false)

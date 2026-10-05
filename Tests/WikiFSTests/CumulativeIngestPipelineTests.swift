@@ -225,7 +225,7 @@ struct CumulativeIngestPipelineTests {
         store: GRDBWikiStore
     ) -> AgentLauncher {
         let launcher = AgentLauncher()
-        launcher.resolveBackend = { _, _, _ in backend }
+        launcher.resolveBackend = { _, _, _, _ in backend }
         launcher.acpCredentialStore = InMemoryACPCredentialStore()
         launcher.planValidationResolveTitle = { title in
             try store.resolveTitleToID(title)

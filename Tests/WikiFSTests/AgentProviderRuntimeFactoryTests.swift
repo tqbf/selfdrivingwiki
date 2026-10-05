@@ -177,7 +177,7 @@ struct AgentProviderRuntimeFactoryTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _ in FakeAgentBackend() })
+            makeBackend: { _, _, _, _ in FakeAgentBackend() })
     }
 }
 

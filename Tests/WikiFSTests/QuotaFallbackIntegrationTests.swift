@@ -30,7 +30,7 @@ struct QuotaFallbackIntegrationTests {
         providers: [AgentProvider]
     ) -> AgentLauncher {
         let launcher = AgentLauncher()
-        launcher.resolveBackend = { _, _, _ in
+        launcher.resolveBackend = { _, _, _, _ in
             counter.increment()
             return backend
         }

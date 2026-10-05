@@ -28,18 +28,26 @@ import WikiFSEngine
 @Suite("AgentLauncher ceiling wiring (#609)")
 struct AgentLauncherCeilingWiringTests {
 
-    /// Thread-safe box for the LAST `turnCeilingTimeout` value the launcher
+    /// Thread-safe box for the LAST (ceiling, idle-stall) pair the launcher
     /// passed to `resolveBackend`. `@unchecked Sendable` so the `@Sendable`
     /// closure body (run on the main actor) can write into it.
     private final class CapturedCeiling: @unchecked Sendable {
         private let lock = NSLock()
         private var _value: TimeInterval?
+        private var _idle: TimeInterval?
         func record(_ ceiling: TimeInterval) {
             lock.lock(); _value = ceiling; lock.unlock()
+        }
+        func recordIdle(_ idle: TimeInterval?) {
+            lock.lock(); _idle = idle; lock.unlock()
         }
         var value: TimeInterval? {
             lock.lock(); defer { lock.unlock() }
             return _value
+        }
+        var idle: TimeInterval? {
+            lock.lock(); defer { lock.unlock() }
+            return _idle
         }
         var callCount: Int {
             lock.lock(); defer { lock.unlock() }
@@ -67,8 +75,9 @@ struct AgentLauncherCeilingWiringTests {
     /// `SpawnModelGuard` lets the run reach `resolveBackend`.
     private func makeLauncher(captured: CapturedCeiling, tempDir: URL) -> AgentLauncher {
         let launcher = AgentLauncher()
-        launcher.resolveBackend = { _, _, ceiling in
+        launcher.resolveBackend = { _, _, ceiling, idleStall in
             captured.record(ceiling)
+            captured.recordIdle(idleStall)
             return FakeAgentBackend()
         }
         launcher.acpCredentialStore = InMemoryACPCredentialStore()
@@ -108,7 +117,7 @@ struct AgentLauncherCeilingWiringTests {
             resolveCommand: { _ in [:] },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, ceiling in
+            makeBackend: { _, _, ceiling, _ in
                 captured.record(ceiling)
                 return backend
             })
@@ -173,6 +182,10 @@ struct AgentLauncherCeilingWiringTests {
         // `runACPIngestPlannerExecutors` runs under.
         #expect(captured.value == TurnLivenessPolicy.queuedIngestCeiling)
         #expect(captured.value == 600)
+        // #1364: the same path passes the queued idle-stall bound (300s) so
+        // a wedged phase cannot sit frozen for a full ceiling.
+        #expect(captured.idle == TurnLivenessPolicy.queuedIdleStallTimeout)
+        #expect(captured.idle == 300)
     }
 
     /// The lint path is the other unattended pipeline kind — it shares the
@@ -201,12 +214,16 @@ struct AgentLauncherCeilingWiringTests {
         #expect(captured.callCount == 1)
         #expect(captured.value == TurnLivenessPolicy.queuedIngestCeiling)
         #expect(captured.value == 600)
+        // #1364: the lint lane carries the queued idle-stall bound too.
+        #expect(captured.idle == TurnLivenessPolicy.queuedIdleStallTimeout)
     }
 
     /// The interactive chat path (`startInteractiveQuery`) routes the 1800s
     /// interactive default — long reasoning chains are legitimate in a
     /// user-attended session, and the UI chip is the release valve. This is
     /// the "interactive path keeps using 1800s" half of the #609 verification.
+    /// #1364: the same path keeps idle monitoring DISABLED (nil) — a silent
+    /// reasoning chain is legitimate while a user is attending.
     @Test func interactivePathPassesInteractiveCeiling() async throws {
         let captured = CapturedCeiling()
         let tempDir = FileManager.default.temporaryDirectory
@@ -234,6 +251,10 @@ struct AgentLauncherCeilingWiringTests {
         #expect(captured.callCount == 1)
         #expect(captured.value == TurnLivenessPolicy.defaultCeilingTimeout)
         #expect(captured.value == 1800)
+        // #1364: interactive chat keeps idle monitoring DISABLED (nil) — a
+        // silent reasoning chain is legitimate while a user is attending.
+        #expect(captured.idle == nil)
+        #expect(captured.idle == TurnLivenessPolicy.idleStallTimeout(for: .chat))
     }
 }
 #endif

@@ -260,6 +260,14 @@ public actor ACPBackend: AgentBackend {
     /// that streams forever without finishing.
     private let turnCeilingTimeout: TimeInterval
 
+    /// #1364: maximum notification silence before the turn watchdog declares
+    /// an idle stall and recovers the turn. nil (default) disables idle
+    /// monitoring — the interactive-chat configuration. The queued lanes
+    /// (ingest/lint) pass `TurnLivenessPolicy.idleStallTimeout(for:)` (300s)
+    /// so a wedged phase cannot sit with a frozen event count for a full
+    /// ceiling. Read per poll from the session fanout's activity timestamp.
+    private let idleStallTimeout: TimeInterval?
+
     /// Watchdog poll interval (seconds).
     private let watchdogPollInterval: TimeInterval
 
@@ -291,6 +299,7 @@ public actor ACPBackend: AgentBackend {
         budget: Duration? = nil,
         capabilities: ClientCapabilities = ACPBackend.defaultCapabilities,
         turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout,
+        idleStallTimeout: TimeInterval? = nil,
         watchdogPollInterval: TimeInterval = TurnLivenessPolicy.defaultPollInterval,
         drainGraceTimeout: Duration = .seconds(3),
         maxConcurrentExecutors: Int = 1,
@@ -301,6 +310,7 @@ public actor ACPBackend: AgentBackend {
         self.permissionBudget = budget
         self.capabilities = capabilities
         self.turnCeilingTimeout = turnCeilingTimeout
+        self.idleStallTimeout = idleStallTimeout
         self.watchdogPollInterval = watchdogPollInterval
         self.drainGraceTimeout = drainGraceTimeout
         self.maxConcurrentExecutors = max(1, maxConcurrentExecutors)
@@ -1130,6 +1140,10 @@ public actor ACPBackend: AgentBackend {
         let translator = ACPEventTranslator()
         let fanout = session.notificationFanout
         let ceilingTimeout = turnCeilingTimeout
+        // #1364: idle-stall bound, captured like ceilingTimeout above so the
+        // off-actor watchdog Task closure is a pure capture (nil = disabled —
+        // interactive chat).
+        let idleStallLimit = idleStallTimeout
         let pollInterval = watchdogPollInterval
         // #615: drain-end grace timeout (captured here so the @Sendable
         // continuation closure below is a pure capture, same actor-isolated-
@@ -1164,11 +1178,13 @@ public actor ACPBackend: AgentBackend {
             // Polls every `pollInterval`; if the prompt hasn't completed AND
             // the total duration exceeds `ceilingTimeout`, fail the turn:
             // cancelSession best-effort, synthesize turn-end events, finish the
-            // continuation. The idle/stall path was removed — ACP agents
-            // produce notifications for every activity (thinking, tool calls,
-            // sub-agent lifecycle), so a live agent is almost never truly idle.
-            // Process death is detected separately by `sendPrompt` throwing.
-            let watchdogTask = Task { [client, sessionId, permissionDelegate, completionFlag, processHealth] in
+            // continuation. The idle/stall path is DISABLED for interactive
+            // chat (`idleStallLimit == nil` — long silent reasoning is
+            // legitimate when a user is attending); the queued lanes enable it
+            // (#1364): no notification for `idleStallLimit` means the phase
+            // process is dead or wedged. Process death is also detected
+            // separately by `sendPrompt` throwing.
+            let watchdogTask = Task { [client, sessionId, permissionDelegate, completionFlag, processHealth, fanout] in
                 while !Task.isCancelled {
                     // Task.sleep only throws CancellationError — expected, not actionable.
                     // swiftlint:disable:next silent_try_optional
@@ -1180,11 +1196,17 @@ public actor ACPBackend: AgentBackend {
                     if processHealth.died {
                         return
                     }
+                    // Read the fanout's activity timestamp per poll (NSLock-
+                    // guarded on the @unchecked Sendable fanout — safe from
+                    // this off-actor task; the drain/readability paths use the
+                    // same lock).
                     let decision = TurnLivenessPolicy.evaluate(
                         now: Date(),
                         promptDone: completionFlag.isDone,
                         turnStartedAt: turnStartedAt,
-                        ceilingTimeout: ceilingTimeout
+                        ceilingTimeout: ceilingTimeout,
+                        idleTimeout: idleStallLimit,
+                        lastActivityAt: fanout.activityTimestamp
                     )
                     switch decision {
                     case .healthy:
@@ -1204,6 +1226,19 @@ public actor ACPBackend: AgentBackend {
                         }
                         continuation.finish()
                         await DebugLog.trying("cancelSession (turn ceiling exceeded)", operation: { try await client.cancelSession(sessionId: sessionId) })
+                        return
+                    case .idleStallExceeded(let idle):
+                        // #1364: mirror of the ceiling-exceeded recovery for the
+                        // queued-lane idle bound — the phase process is alive but
+                        // silent (or wedged), so cancel and surface an honest
+                        // `.stalled` failure reason.
+                        DebugLog.agent("ACPBackend: TURN IDLE-STALL exceeded (\(Int(idle))s idle), recovering")
+                        completionFlag.markDone()
+                        for event in Self.turnEndEvents(error: ACPBackendError.turnIdleStalled(idleSeconds: idle)) {
+                            continuation.yield(event)
+                        }
+                        continuation.finish()
+                        await DebugLog.trying("cancelSession (turn idle-stall exceeded)", operation: { try await client.cancelSession(sessionId: sessionId) })
                         return
                     }
                 }
@@ -1361,6 +1396,17 @@ public actor ACPBackend: AgentBackend {
                     // and surface a .processDied error so the caller knows to
                     // attempt resume().
                     processHealth.markDied()
+                    // #1364: terminal-transition log for a NATURAL death — this
+                    // catch is the only place the backend observes a subprocess
+                    // that died on its own (broken pipe / closed transport; the
+                    // SDK's Process.terminationHandler is internal and surfaces
+                    // no exit status to us). The pid + the transport error is
+                    // the death evidence; the launcher's phase-tracked onExit
+                    // log correlates the phase by time. No exit status exists
+                    // on this path — that is exactly why `finish(status: -1)`
+                    // synthesizes one and the validator names it honestly.
+                    let deadPid = await client.processIdentifier()
+                    DebugLog.agent("ACPBackend: process exit detected pid=\(deadPid.map(String.init) ?? "unknown") reason=sendPrompt error: \(error.localizedDescription)")
                     DebugLog.agent("ACPBackend: prompt failed: \(error.localizedDescription)")
                     if let debugTurn {
                         debugLogger?.logPromptError(error, turn: debugTurn)
@@ -1630,6 +1676,11 @@ public actor ACPBackend: AgentBackend {
                 await DebugLog.trying("cancelSession (warm termination)", operation: { try await warm.client.cancelSession(sessionId: record.sessionId) })
             }
             await warm.client.terminate()
+            // #1364: log the terminal transition BEFORE firing the bound
+            // onExit — this is the backend's process-exit choke point. Without
+            // it, a teardown/signal death leaves no pid or cause in the log.
+            let exitPid = await warm.client.processIdentifier()
+            DebugLog.agent("ACPBackend: process exited pid=\(exitPid.map(String.init) ?? "unknown") status=0 reason=cancel (intentional teardown)")
             warm.permissionDelegate.fireOnExit(status: 0)
             warmProcess = nil
         } else if let record {
@@ -1637,6 +1688,8 @@ public actor ACPBackend: AgentBackend {
             // cancel + terminate via the session's own client reference.
             await DebugLog.trying("cancelSession (no warm process)", operation: { try await record.client.cancelSession(sessionId: record.sessionId) })
             await record.client.terminate()
+            let exitPid = await record.client.processIdentifier()
+            DebugLog.agent("ACPBackend: process exited pid=\(exitPid.map(String.init) ?? "unknown") status=0 reason=cancel (intentional teardown, no warm process)")
             record.permissionDelegate.fireOnExit(status: 0)
         }
         // Clear the debug logger — a new run creates a fresh one via a new
@@ -1669,6 +1722,10 @@ public actor ACPBackend: AgentBackend {
             warm.stderrTask?.cancel()
             warm.notificationFanout.finish()
             await warm.client.terminate()
+            // #1364: mirror of cancel()'s terminal-transition log — shutdown is
+            // the process-level teardown path (#1276).
+            let exitPid = await warm.client.processIdentifier()
+            DebugLog.agent("ACPBackend: process exited pid=\(exitPid.map(String.init) ?? "unknown") status=0 reason=shutdown (intentional teardown)")
             warm.permissionDelegate.fireOnExit(status: 0)
             warmProcess = nil
         }
@@ -1899,6 +1956,15 @@ public actor ACPBackend: AgentBackend {
     /// `maxConcurrentExecutorCount()` accessor shape.
     func ceilingTimeout() -> TimeInterval {
         turnCeilingTimeout
+    }
+
+    /// The idle-stall timeout (seconds) this backend was constructed with, or
+    /// nil when idle monitoring is disabled (interactive chat). #1364:
+    /// `TurnLivenessPolicy.idleStallTimeout(for:)` decides per context — the
+    /// launcher threads the chosen value here alongside the ceiling. Exposed
+    /// for tests, mirroring `ceilingTimeout()` above.
+    func idleStallTimeoutValue() -> TimeInterval? {
+        idleStallTimeout
     }
 
     // MARK: - Model discovery (#329)
@@ -2548,6 +2614,11 @@ public actor ACPBackend: AgentBackend {
             switch acpError {
             case .turnCeilingExceeded(let total):
                 reason = .ceilingExceeded(totalSeconds: total)
+            case .turnIdleStalled(let idle):
+                // #1364: reuses the existing `.stalled` payload — same
+                // semantics (idle turn cancelled) as the interactive idle
+                // path that produced it before; no new UI surface needed.
+                reason = .stalled(idleSeconds: idle)
             case .processDied:
                 reason = .agentError(error.localizedDescription)
             case .processDiedBeforeResult:
@@ -2866,6 +2937,10 @@ enum ACPBackendError: Error, LocalizedError {
     /// The turn exceeded the hard ceiling duration — the agent was still
     /// streaming but took too long. The turn was cancelled.
     case turnCeilingExceeded(totalSeconds: TimeInterval)
+    /// #1364: the turn went silent — no `session/update` notification arrived
+    /// for `idleSeconds` (queued lanes only; interactive chat disables the
+    /// idle bound). The turn was cancelled and recovered like a ceiling kill.
+    case turnIdleStalled(idleSeconds: TimeInterval)
     /// Phase 2: the agent subprocess died unexpectedly (issue #338 —
     /// `claude-agent-acp` stays alive but sessions break / the pipe closes).
     /// The turn failed because `sendPrompt` threw. The caller can attempt
@@ -2920,6 +2995,11 @@ enum ACPBackendError: Error, LocalizedError {
         case .turnCeilingExceeded(let total):
             return """
             ACP agent exceeded the maximum turn duration (\(Int(total))s). \
+            The turn was cancelled; try sending again.
+            """
+        case .turnIdleStalled(let idle):
+            return """
+            ACP agent produced no activity for \(Int(idle))s. \
             The turn was cancelled; try sending again.
             """
         case .processDied:

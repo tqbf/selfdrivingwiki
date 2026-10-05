@@ -172,13 +172,17 @@ public enum QueueIngestionError: Error, LocalizedError {
 /// REGARDLESS of the exit status. Then a strict nonzero-exit rejection:
 /// every successful completion path finishes with status 0, so nonzero
 /// always means an abort (user stop, safety-net teardown, spawn failure),
-/// even when no `.turnFailed` event was observed. `hadTurnFailure` only
-/// selects the message.
+/// even when no `.turnFailed` event was observed. `unrecoveredTurnFailure`
+/// only selects the message; it never changes pass/fail.
 public enum QueueIngestionOutcomeValidator {
+    /// - Parameter unrecoveredTurnFailure: a `.turnFailed` event was observed
+    ///   with NO subsequent successful turn end in the same run (the
+    ///   launcher's `runTerminalTurnFailure`). A turn failure that a later
+    ///   clean turn recovered from is not the run's terminal cause (#1364).
     public static func validate(
         exitStatus: Int32?,
         preflightError: String?,
-        hadTurnFailure: Bool
+        unrecoveredTurnFailure: Bool
     ) throws {
         if let preflightError {
             throw QueueIngestionError.spawnFailed(preflightError)
@@ -187,10 +191,20 @@ public enum QueueIngestionOutcomeValidator {
             throw QueueIngestionError.spawnFailed("The agent did not start.")
         }
         if exitStatus != 0 {
-            throw QueueIngestionError.spawnFailed(
-                hadTurnFailure
-                ? "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(exitStatus))."
-                : "The agent run aborted before completing (exit status \(exitStatus)).")
+            // Message selection only — every branch throws (pass/fail is
+            // decided by the exit status; #765/#1354).
+            let message: String
+            if unrecoveredTurnFailure {
+                message = "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(exitStatus))."
+            } else if exitStatus < 0 {
+                // Negative statuses are synthesized (launcher `finish(status:
+                // -1)`) or signal deaths — the process is gone, not "aborted
+                // mid-run". Name it honestly (#1364).
+                message = "The agent process died unexpectedly (exit status \(exitStatus))."
+            } else {
+                message = "The agent run aborted before completing (exit status \(exitStatus))."
+            }
+            throw QueueIngestionError.spawnFailed(message)
         }
     }
 }

@@ -44,7 +44,7 @@ import WikiFSTypes
             try AppQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: nil,
                 preflightError: "Select a model before starting ingestion.",
-                runHadTurnFailure: false)
+                unrecoveredTurnFailure: false)
             Issue.record("Expected preflight refusal")
         } catch QueueIngestionError.spawnFailed(let message) {
             #expect(message == "Select a model before starting ingestion.")
@@ -66,7 +66,7 @@ import WikiFSTypes
             try AppQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
                 preflightError: "Failed to launch codex-acp. stderr: env: node: No such file or directory",
-                runHadTurnFailure: false)
+                unrecoveredTurnFailure: false)
             Issue.record("Expected launch-failure rejection")
         } catch QueueIngestionError.spawnFailed(let message) {
             // The launch diagnostic must survive into the queue error so the
@@ -81,17 +81,35 @@ import WikiFSTypes
     /// WITHOUT a recorded preflight diagnostic (safety-net teardown, user
     /// stop, a future abort path that forgets to set `preflightError`) must
     /// still fail. Every successful completion path finishes with status 0.
+    /// #1364: a negative status is a synthesized/signal death — named
+    /// honestly instead of "aborted before completing".
     @MainActor
-    @Test("nonzero exit with zero turns fails even without a preflight diagnostic (#1354)")
+    @Test("nonzero negative exit with zero turns reports process death (#1364)")
     func nonzeroExitWithoutTurnFailureStillFails() {
         do {
             try AppQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
                 preflightError: nil,
-                runHadTurnFailure: false)
+                unrecoveredTurnFailure: false)
             Issue.record("Expected abort rejection")
         } catch QueueIngestionError.spawnFailed(let message) {
-            #expect(message == "The agent run aborted before completing (exit status -1).")
+            #expect(message == "The agent process died unexpectedly (exit status -1).")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @MainActor
+    @Test("nonzero positive exit without turn failure reports an abort (#1364)")
+    func positiveExitWithoutTurnFailureReportsAbort() {
+        do {
+            try AppQueueIngestionProvider.validateLauncherOutcome(
+                exitStatus: 1,
+                preflightError: nil,
+                unrecoveredTurnFailure: false)
+            Issue.record("Expected abort rejection")
+        } catch QueueIngestionError.spawnFailed(let message) {
+            #expect(message == "The agent run aborted before completing (exit status 1).")
         } catch {
             Issue.record("Unexpected error: \(error)")
         }
@@ -103,7 +121,7 @@ import WikiFSTypes
         try AppQueueIngestionProvider.validateLauncherOutcome(
             exitStatus: 0,
             preflightError: nil,
-            runHadTurnFailure: false)
+            unrecoveredTurnFailure: false)
     }
 
     @MainActor
@@ -113,7 +131,7 @@ import WikiFSTypes
             try AppQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
                 preflightError: nil,
-                runHadTurnFailure: true)
+                unrecoveredTurnFailure: true)
             Issue.record("Expected turn failure")
         } catch QueueIngestionError.spawnFailed(let message) {
             #expect(message ==

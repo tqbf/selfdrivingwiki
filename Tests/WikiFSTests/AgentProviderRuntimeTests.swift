@@ -23,7 +23,7 @@ struct AgentProviderRuntimeTests {
     private func runtime(
         config: LockedBox<AgentProvidersConfig>,
         counts: RuntimeCounts,
-        factory: @escaping AgentProviderRuntime.BackendFactory = { _, _, _ in FakeAgentBackend() },
+        factory: @escaping AgentProviderRuntime.BackendFactory = { _, _, _, _ in FakeAgentBackend() },
         appleIntelligenceEngine: AppleIntelligenceSummarizer.Engine = .system,
         isAppleIntelligenceAvailable: @escaping AgentProviderRuntime.AppleIntelligenceAvailabilityCheck = { true }
     ) -> AgentProviderRuntime {
@@ -184,7 +184,7 @@ struct AgentProviderRuntimeTests {
     @Test("Cached backend is reused per snapshot provider and fallback gets another backend")
     func backendReuse() async throws {
         let config = LockedBox(configuration()); let counts = RuntimeCounts(); let backendCount = Counter()
-        let service = runtime(config: config, counts: counts, factory: { _, _, _ in backendCount.increment(); return FakeAgentBackend() })
+        let service = runtime(config: config, counts: counts, factory: { _, _, _, _ in backendCount.increment(); return FakeAgentBackend() })
         let initial = try await service.prepare(.ingest)
         _ = try await service.preparedBackend(from: initial.selection.token, stage: .planner)
         _ = try await service.preparedBackend(from: initial.selection.token, stage: .planner)
@@ -201,7 +201,7 @@ struct AgentProviderRuntimeTests {
         let service = runtime(
             config: config,
             counts: counts,
-            factory: { _, _, _ in
+            factory: { _, _, _, _ in
                 backendCount.increment()
                 return FakeAgentBackend()
             })
@@ -237,7 +237,7 @@ struct AgentProviderRuntimeTests {
         let service = runtime(
             config: config,
             counts: counts,
-            factory: { _, _, _ in
+            factory: { _, _, _, _ in
                 backendCount.increment()
                 return FakeAgentBackend()
             })
@@ -300,7 +300,7 @@ struct AgentProviderRuntimeTests {
                 return "key-not-public"
             },
             resolvePermissionPolicy: { _ in .alwaysAsk },
-            makeBackend: { policy, _, _ in
+            makeBackend: { policy, _, _, _ in
                 policies.record(policy)
                 return FakeAgentBackend()
             })
@@ -401,7 +401,7 @@ struct AgentProviderRuntimeTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _ in gated })
+            makeBackend: { _, _, _, _ in gated })
 
         let preparation = try await summarizerPreparation(service)
         let prepared = try await service.preparedBackend(
@@ -478,7 +478,7 @@ struct AgentProviderRuntimeTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _ in gated })
+            makeBackend: { _, _, _, _ in gated })
 
         let preparation = try await summarizerPreparation(service)
         let prepared = try await service.preparedBackend(
@@ -545,7 +545,7 @@ struct AgentProviderRuntimeTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _ in gated })
+            makeBackend: { _, _, _, _ in gated })
 
         let preparation = try await summarizerPreparation(service)
         let prepared = try await service.preparedBackend(

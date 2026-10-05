@@ -352,7 +352,10 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         let logURL: URL?
         let debugURL: URL?
         let exitStatus: Int32?
-        let hadTurnFailure: Bool
+        /// #1364: the launcher's derived honest signal — a `.turnFailed` with
+        /// no subsequent clean turn end in the same run
+        /// (`runTerminalTurnFailure`). NOT the sticky `runHadTurnFailure`.
+        let unrecoveredTurnFailure: Bool
         let preflightError: String?
     }
 
@@ -363,7 +366,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 logURL: launcher.logFileURL,
                 debugURL: launcher.debugFolderURL,
                 exitStatus: launcher.exitStatus,
-                hadTurnFailure: launcher.runHadTurnFailure,
+                unrecoveredTurnFailure: launcher.runTerminalTurnFailure,
                 preflightError: launcher.preflightError)
         }
     }
@@ -372,7 +375,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         try Self.validateLauncherOutcome(
             exitStatus: results.exitStatus,
             preflightError: results.preflightError,
-            hadTurnFailure: results.hadTurnFailure)
+            unrecoveredTurnFailure: results.unrecoveredTurnFailure)
     }
 
     /// The daemon host's seam over the shared #1354 contract
@@ -382,12 +385,12 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     static func validateLauncherOutcome(
         exitStatus: Int32?,
         preflightError: String?,
-        hadTurnFailure: Bool
+        unrecoveredTurnFailure: Bool
     ) throws {
         try QueueIngestionOutcomeValidator.validate(
             exitStatus: exitStatus,
             preflightError: preflightError,
-            hadTurnFailure: hadTurnFailure)
+            unrecoveredTurnFailure: unrecoveredTurnFailure)
     }
 
     private func runLintAgent(

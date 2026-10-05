@@ -44,7 +44,7 @@ struct AgentProviderRuntimeLeaseTests {
     private func makeRuntime(
         config: LockedBox<AgentProvidersConfig>,
         leaseParent: URL,
-        backendFactory: @escaping AgentProviderRuntime.BackendFactory = { _, _, _ in FakeAgentBackend() }
+        backendFactory: @escaping AgentProviderRuntime.BackendFactory = { _, _, _, _ in FakeAgentBackend() }
     ) -> AgentProviderRuntime {
         AgentProviderRuntime(
             readConfiguration: { config.read() },
@@ -127,7 +127,7 @@ struct AgentProviderRuntimeLeaseTests {
         let order = TeardownOrder()
         let gate = GateBox()
         let gated = GatedSummarizerBackend(gate: gate, order: order, replyText: "s")
-        let service = makeRuntime(config: config, leaseParent: leaseRoot, backendFactory: { _, _, _ in gated })
+        let service = makeRuntime(config: config, leaseParent: leaseRoot, backendFactory: { _, _, _, _ in gated })
 
         let preparation = try await summarizerPreparation(service)
         let prepared = try await service.preparedBackend(from: preparation.selection.token, stage: .summarizer)
@@ -173,7 +173,7 @@ struct AgentProviderRuntimeLeaseTests {
         let order = TeardownOrder()
         let gate = GateBox()
         let gated = GatedSummarizerBackend(gate: gate, order: order, replyText: "summary")
-        let service = makeRuntime(config: config, leaseParent: leaseRoot, backendFactory: { _, _, _ in gated })
+        let service = makeRuntime(config: config, leaseParent: leaseRoot, backendFactory: { _, _, _, _ in gated })
 
         let preparation = try await summarizerPreparation(service)
         let prepared = try await service.preparedBackend(from: preparation.selection.token, stage: .summarizer)

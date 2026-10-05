@@ -27,16 +27,25 @@ public enum AgentBackendFactory {
     ///     `.ingest`/`.lint` (queued) → `queuedIngestCeiling` (600s). Defaults
     ///     to the interactive value for callers that don't differentiate
     ///     (matching the underlying `ACPBackend.init` default).
+    ///   - idleStallTimeout: #1364 idle-stall bound — maximum notification
+    ///     silence before the turn watchdog recovers the turn. The caller
+    ///     picks this per context via `TurnLivenessPolicy.idleStallTimeout(for:)`:
+    ///     `.chat` (interactive) → nil (idle monitoring disabled — long silent
+    ///     reasoning is legitimate while a user attends); `.ingest`/`.lint`
+    ///     (queued) → `queuedIdleStallTimeout` (300s). Defaults to nil,
+    ///     matching the underlying `ACPBackend.init` default.
     public static func makeBackend(
         policy: PermissionPolicy,
         budget: Duration? = nil,
-        turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout
+        turnCeilingTimeout: TimeInterval = TurnLivenessPolicy.defaultCeilingTimeout,
+        idleStallTimeout: TimeInterval? = nil
     ) -> AgentBackend {
         #if os(macOS)
         ACPBackend(
             permissionPolicy: policy,
             budget: budget,
-            turnCeilingTimeout: turnCeilingTimeout)
+            turnCeilingTimeout: turnCeilingTimeout,
+            idleStallTimeout: idleStallTimeout)
         #else
         // Linux: ACPBackend is unavailable (the `ACP` product is macOS-only).
         // This factory method is only called from macOS code paths (the app

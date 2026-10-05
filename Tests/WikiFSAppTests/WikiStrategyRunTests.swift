@@ -109,7 +109,7 @@ struct WikiStrategyRunTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _ in backend })
+            makeBackend: { _, _, _, _ in backend })
         let launcherPair = makeTestLauncherPair(
             extractionCoordinator: ExtractionCoordinator(
                 containerDirectory: directory,

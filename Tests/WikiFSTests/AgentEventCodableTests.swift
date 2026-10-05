@@ -90,9 +90,10 @@ import Foundation
     }
 
     @Test func turnFailedStalledRoundTrips() throws {
-        // The .stalled case is still in TurnFailureReason for backward
-        // compatibility with persisted chat history, even though the engine
-        // no longer produces it (idle stall was removed).
+        // The .stalled case round-trips: it is persisted-chat-history
+        // compatible AND produced again since #1364 — the queued-lane
+        // (ingest/lint) idle-stall watchdog maps
+        // ACPBackendError.turnIdleStalled to this reason.
         let event = AgentEvent.turnFailed(reason: .stalled(idleSeconds: 130))
         #expect(try roundTrip(event) == event)
     }

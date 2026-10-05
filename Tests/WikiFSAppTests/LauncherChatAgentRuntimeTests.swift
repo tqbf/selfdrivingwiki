@@ -40,7 +40,7 @@ struct LauncherChatAgentRuntimeTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _ in backend })
+            makeBackend: { _, _, _, _ in backend })
         let store = try GRDBWikiStore(databaseURL: directory.appendingPathComponent("wiki.sqlite"))
         let chat = try store.createChat(kind: .edit, title: "Prepared start")
         let coordinator = ExtractionCoordinator(
@@ -258,7 +258,7 @@ struct LauncherChatAgentRuntimeTests {
                 providerServices: UnavailableAgentProviderServices(),
                 onMessageSummary: { _ in },
                 launcherConfigurator: { launcher in
-                    launcher.resolveBackend = { _, _, _ in backend }
+                    launcher.resolveBackend = { _, _, _, _ in backend }
                     launcher.resolveProvidersContainerDirectory = { directory }
                     launcher.containerDirectory = directory
                     launcher.acpCredentialStore = InMemoryACPCredentialStore()

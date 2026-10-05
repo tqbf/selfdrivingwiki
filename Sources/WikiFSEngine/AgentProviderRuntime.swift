@@ -18,8 +18,23 @@ public struct AgentOperationPolicy: Sendable, Equatable {
     public let permissionPolicy: PermissionPolicy
     public let permissionBudget: Duration?
     public let turnCeiling: TimeInterval
-    public init(kind: AgentProviderOperationKind, permissionPolicy: PermissionPolicy, permissionBudget: Duration?, turnCeiling: TimeInterval) {
-        self.kind = kind; self.permissionPolicy = permissionPolicy; self.permissionBudget = permissionBudget; self.turnCeiling = turnCeiling
+    /// #1364: maximum notification silence before the turn watchdog recovers
+    /// the turn. nil = idle monitoring disabled (interactive chat); the
+    /// queued lanes (ingest/lint) carry
+    /// `TurnLivenessPolicy.queuedIdleStallTimeout` (300s).
+    public let idleStallTimeout: TimeInterval?
+    public init(
+        kind: AgentProviderOperationKind,
+        permissionPolicy: PermissionPolicy,
+        permissionBudget: Duration?,
+        turnCeiling: TimeInterval,
+        idleStallTimeout: TimeInterval? = nil
+    ) {
+        self.kind = kind
+        self.permissionPolicy = permissionPolicy
+        self.permissionBudget = permissionBudget
+        self.turnCeiling = turnCeiling
+        self.idleStallTimeout = idleStallTimeout
     }
 }
 
@@ -409,7 +424,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     /// persisted or logged.
     public typealias SpawnSecretReader = @Sendable (ProviderID) -> [String: String]
     public typealias PermissionPolicyResolver = @Sendable (PermissionOperationKind) -> PermissionPolicy
-    public typealias BackendFactory = @Sendable (PermissionPolicy, Duration?, TimeInterval) -> any AgentBackend
+    public typealias BackendFactory = @Sendable (PermissionPolicy, Duration?, TimeInterval, TimeInterval?) -> any AgentBackend
     /// #1276: the seatbelt front-end usability check. Injected so the catalog
     /// path's fail-closed ORDERING (sandbox gate BEFORE command resolution) is
     /// testable without touching `/usr/bin/sandbox-exec`.
@@ -580,7 +595,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             AgentBackendFactory.makeBackend(
                 policy: $0,
                 budget: $1,
-                turnCeilingTimeout: $2)
+                turnCeilingTimeout: $2,
+                idleStallTimeout: $3)
         },
         probeCatalog: @escaping CatalogProbe = { provider, resolvedCommand, apiKey in
             try await ACPProviderModelProbe(
@@ -716,7 +732,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             kind: .interactive,
             permissionPolicy: .bypass,
             permissionBudget: nil,
-            turnCeiling: TurnLivenessPolicy.ceiling(for: .chat))
+            turnCeiling: TurnLivenessPolicy.ceiling(for: .chat),
+            idleStallTimeout: TurnLivenessPolicy.idleStallTimeout(for: .chat))
         // Review HIGH: `makeSnapshot` suspends (command resolution). On
         // failure the scratch is removed — a failed preparation leaks no
         // temp directory.
@@ -962,7 +979,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         let preparation = try preparationSync(from: token, stage: stage)
         let record = try record(for: token); guard let snapshot = snapshots[record.snapshotID], let spawn = snapshot.chains[stage]?.first(where: { $0.provider.id == preparation.selection.descriptor.id }) else { throw AgentProviderRuntimeError.invalidToken }
         let key = "\(record.snapshotID.uuidString):\(spawn.provider.id.rawValue)"
-        let backend = cache ? (cachedBackends[key] ?? makeBackend(snapshot.policy.permissionPolicy, snapshot.policy.permissionBudget, snapshot.policy.turnCeiling)) : makeBackend(snapshot.policy.permissionPolicy, snapshot.policy.permissionBudget, snapshot.policy.turnCeiling)
+        let backend = cache ? (cachedBackends[key] ?? makeBackend(snapshot.policy.permissionPolicy, snapshot.policy.permissionBudget, snapshot.policy.turnCeiling, snapshot.policy.idleStallTimeout)) : makeBackend(snapshot.policy.permissionPolicy, snapshot.policy.permissionBudget, snapshot.policy.turnCeiling, snapshot.policy.idleStallTimeout)
         if cache { cachedBackends[key] = backend }
         // Issue #1276: the summarizer stage is a read-only LLM spawn with no
         // wiki — its profile MUST carry the snapshot's scratch directory and
@@ -1007,7 +1024,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             kind: operation,
             permissionPolicy: resolvePermissionPolicy(operation.permissionKind),
             permissionBudget: operation == .interactive ? nil : .seconds(60),
-            turnCeiling: TurnLivenessPolicy.ceiling(for: operation.permissionKind, workUnits: queuedWorkUnits))
+            turnCeiling: TurnLivenessPolicy.ceiling(for: operation.permissionKind, workUnits: queuedWorkUnits),
+            idleStallTimeout: TurnLivenessPolicy.idleStallTimeout(for: operation.permissionKind))
         var chains: [AgentProviderStage: [SpawnRecord]] = [:]
         var models: [AgentProviderStage: ModelID?] = [:]
         var stageProviders: [AgentProviderStage: [AgentProvider]] = [:]

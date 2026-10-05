@@ -6,12 +6,13 @@ import WikiFSEngine
 @testable import WikiFS
 @testable import WikiFSEngine
 
-/// Pure unit tests for `TurnLivenessPolicy` — the turn ceiling watchdog
-/// decision helper.
+/// Pure unit tests for `TurnLivenessPolicy` — the turn watchdog decision
+/// helper.
 ///
-/// The idle/stall path was removed: ACP agents emit notifications for every
-/// activity (thinking, tool calls, sub-agent lifecycle), so a live agent is
-/// almost never truly idle. Only the hard ceiling remains.
+/// The INTERACTIVE idle/stall path was removed: ACP agents emit notifications
+/// for every activity, so a live agent is almost never truly idle. #1364
+/// restored an idle bound for the QUEUED lanes only (ingest/lint): an
+/// unattended phase silent for 5 minutes is dead or wedged.
 ///
 /// No actor, no clock, no subprocess. Every test constructs explicit `Date`
 /// values and asserts the decision.
@@ -89,6 +90,137 @@ import WikiFSEngine
             ceilingTimeout: 1800
         )
         #expect(decision == .healthy)
+    }
+
+    // MARK: - Idle stall (queued lanes, #1364)
+
+    /// Idle under the timeout with idle monitoring enabled → healthy.
+    @Test func healthyWhileUnderIdleTimeout() {
+        let start = Date(timeIntervalSince1970: 0)
+        let lastActivity = start.addingTimeInterval(50)   // activity mid-turn
+        let now = lastActivity.addingTimeInterval(299)    // 299s idle < 300s
+
+        let decision = TurnLivenessPolicy.evaluate(
+            now: now,
+            promptDone: false,
+            turnStartedAt: start,
+            ceilingTimeout: 1800,
+            idleTimeout: 300,
+            lastActivityAt: lastActivity
+        )
+        #expect(decision == .healthy)
+    }
+
+    /// Idle over the timeout → idleStallExceeded, carrying the observed idle
+    /// seconds (verified value, not just the case).
+    @Test func idleStallExceededAfterSilence() {
+        let start = Date(timeIntervalSince1970: 0)
+        let lastActivity = start.addingTimeInterval(10)
+        let now = lastActivity.addingTimeInterval(301)    // 301s idle > 300s
+
+        let decision = TurnLivenessPolicy.evaluate(
+            now: now,
+            promptDone: false,
+            turnStartedAt: start,
+            ceilingTimeout: 1800,
+            idleTimeout: 300,
+            lastActivityAt: lastActivity
+        )
+        #expect(decision == .idleStallExceeded(idleSeconds: 301))
+    }
+
+    /// `idleTimeout: nil` (interactive chat) NEVER returns the idle case —
+    /// even after hours of silence. Long silent reasoning is legitimate when
+    /// a user is attending.
+    @Test func nilIdleTimeoutDisablesIdleStall() {
+        let start = Date(timeIntervalSince1970: 0)
+        let lastActivity = start.addingTimeInterval(5)
+        let now = lastActivity.addingTimeInterval(999_999)   // effectively forever
+
+        let decision = TurnLivenessPolicy.evaluate(
+            now: now,
+            promptDone: false,
+            turnStartedAt: start,
+            ceilingTimeout: 1800,
+            idleTimeout: nil,
+            lastActivityAt: lastActivity
+        )
+        // The ceiling still fires (it remains the interactive backstop) — but
+        // only through the ceiling path, never the idle path.
+        #expect(decision == .ceilingExceeded(totalSeconds: now.timeIntervalSince(start)))
+    }
+
+    /// promptDone wins over an idle stall — the turn is over; the watchdog
+    /// must stop.
+    @Test func promptDoneTakesPrecedenceOverIdleStall() {
+        let start = Date(timeIntervalSince1970: 0)
+        let lastActivity = start.addingTimeInterval(5)
+        let now = lastActivity.addingTimeInterval(500)   // 500s idle > 300s
+
+        let decision = TurnLivenessPolicy.evaluate(
+            now: now,
+            promptDone: true,
+            turnStartedAt: start,
+            ceilingTimeout: 1800,
+            idleTimeout: 300,
+            lastActivityAt: lastActivity
+        )
+        #expect(decision == .healthy)
+    }
+
+    /// The ceiling wins over an idle stall when both are exceeded — the
+    /// total-duration bound is the stronger statement about the turn.
+    @Test func ceilingTakesPrecedenceOverIdleStall() {
+        let start = Date(timeIntervalSince1970: 0)
+        let now = start.addingTimeInterval(1810)          // ceiling exceeded
+        let lastActivity = start.addingTimeInterval(1800) // only 10s idle
+
+        let decision = TurnLivenessPolicy.evaluate(
+            now: now,
+            promptDone: false,
+            turnStartedAt: start,
+            ceilingTimeout: 1800,
+            idleTimeout: 300,
+            lastActivityAt: lastActivity
+        )
+        #expect(decision == .ceilingExceeded(totalSeconds: 1810))
+    }
+
+    /// Idle and ceiling both exceeded → the ceiling is reported (precedence).
+    @Test func bothExceededReportsCeiling() {
+        let start = Date(timeIntervalSince1970: 0)
+        let lastActivity = start                          // silent whole turn
+        let now = start.addingTimeInterval(2000)          // idle AND ceiling
+
+        let decision = TurnLivenessPolicy.evaluate(
+            now: now,
+            promptDone: false,
+            turnStartedAt: start,
+            ceilingTimeout: 1800,
+            idleTimeout: 300,
+            lastActivityAt: lastActivity
+        )
+        #expect(decision == .ceilingExceeded(totalSeconds: 2000))
+    }
+
+    // MARK: - Per-context idle-stall selection (#1364)
+
+    /// `idleStallTimeout(for: .chat)` is nil — interactive chat keeps idle
+    /// monitoring disabled (the UI chip is the release valve; the ceiling
+    /// still applies).
+    @Test func idleStallTimeoutForChatIsDisabled() {
+        #expect(TurnLivenessPolicy.idleStallTimeout(for: .chat) == nil)
+    }
+
+    /// `idleStallTimeout(for: .ingest)` / `.lint` resolve to the queued
+    /// idle-stall constant (300s) — the unattended lanes bound a silent phase
+    /// to five minutes, well under the 600s flat ceiling.
+    @Test func idleStallTimeoutForQueuedLanesIs300Seconds() {
+        #expect(TurnLivenessPolicy.idleStallTimeout(for: .ingest)
+                == TurnLivenessPolicy.queuedIdleStallTimeout)
+        #expect(TurnLivenessPolicy.idleStallTimeout(for: .lint)
+                == TurnLivenessPolicy.queuedIdleStallTimeout)
+        #expect(TurnLivenessPolicy.queuedIdleStallTimeout == 300)
     }
 
     // MARK: - Per-context ceiling selection (#609)

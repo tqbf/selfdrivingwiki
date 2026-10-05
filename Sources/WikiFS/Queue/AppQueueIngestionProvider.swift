@@ -320,7 +320,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         try Self.validateLauncherOutcome(
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
-            runHadTurnFailure: launcher.runHadTurnFailure)
+            unrecoveredTurnFailure: launcher.runTerminalTurnFailure)
         // #1344: the validated-successful run is the authoritative completion
         // fact for the sources this job staged. Report truth rules are
         // separate: report targets still stay `.submitted` (per-source
@@ -402,7 +402,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         try Self.validateLauncherOutcome(
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
-            runHadTurnFailure: launcher.runHadTurnFailure)
+            unrecoveredTurnFailure: launcher.runTerminalTurnFailure)
         // Whole-wiki scope stays a marker; agent completion carries NO typed
         // page findings — availability is notReported, never zero.
         onReport?(QueueIngestionReporting.agentCompletionMutation(
@@ -491,7 +491,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         try Self.validateLauncherOutcome(
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
-            runHadTurnFailure: launcher.runHadTurnFailure)
+            unrecoveredTurnFailure: launcher.runTerminalTurnFailure)
         // No typed page findings/checked-page callback exists — completion
         // availability stays notReported (never zero findings).
         onReport?(QueueIngestionReporting.agentCompletionMutation(
@@ -503,16 +503,18 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     /// (`QueueIngestionOutcomeValidator`): preflight first — a recorded
     /// launch failure is terminal regardless of the exit status — then a
     /// strict nonzero-exit rejection. Kept as a host-level static so tests
-    /// pin that THIS host routes through the contract.
+    /// pin that THIS host routes through the contract. `unrecoveredTurnFailure`
+    /// is the launcher's derived honest signal (#1364): a `.turnFailed` with
+    /// no subsequent clean turn end in the same run.
     static func validateLauncherOutcome(
         exitStatus: Int32?,
         preflightError: String?,
-        runHadTurnFailure: Bool
+        unrecoveredTurnFailure: Bool
     ) throws {
         try QueueIngestionOutcomeValidator.validate(
             exitStatus: exitStatus,
             preflightError: preflightError,
-            hadTurnFailure: runHadTurnFailure)
+            unrecoveredTurnFailure: unrecoveredTurnFailure)
     }
 
     /// #1344: stamp the staged sources Ingested after a validated-successful

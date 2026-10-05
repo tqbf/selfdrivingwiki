@@ -1078,7 +1078,7 @@ struct DaemonChatHostTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _ in backend })
+            makeBackend: { _, _, _, _ in backend })
         let wikiID = WikiID(rawValue: "nilid-wiki")
         var wikiRegistry = WikiRegistry()
         wikiRegistry.add(WikiDescriptor(
@@ -1171,7 +1171,7 @@ struct DaemonChatHostTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _ in backend })
+            makeBackend: { _, _, _, _ in backend })
         let wikiID = WikiID(rawValue: "model-title-wiki")
         var wikiRegistry = WikiRegistry()
         wikiRegistry.add(WikiDescriptor(
@@ -1275,7 +1275,7 @@ struct DaemonChatHostTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _ in backend })
+            makeBackend: { _, _, _, _ in backend })
         let wikiID = WikiID(rawValue: "rename-race-wiki")
         var wikiRegistry = WikiRegistry()
         wikiRegistry.add(WikiDescriptor(

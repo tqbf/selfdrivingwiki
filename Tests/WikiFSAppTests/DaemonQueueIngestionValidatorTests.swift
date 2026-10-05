@@ -20,7 +20,7 @@ import WikiFSCore
             try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
                 preflightError: "Failed to launch codex-acp. stderr: env: node: No such file or directory",
-                hadTurnFailure: false)
+                unrecoveredTurnFailure: false)
             Issue.record("Expected launch-failure rejection")
         } catch QueueIngestionError.spawnFailed(let message) {
             #expect(message.contains("env: node: No such file or directory"))
@@ -29,16 +29,52 @@ import WikiFSCore
         }
     }
 
-    @Test("nonzero exit with zero turns fails even without a preflight diagnostic (#1354)")
+    @Test("nonzero negative exit with zero turns reports process death (#1364)")
     func nonzeroExitWithoutTurnFailureStillFails() {
         do {
             try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
                 preflightError: nil,
-                hadTurnFailure: false)
+                unrecoveredTurnFailure: false)
             Issue.record("Expected abort rejection")
         } catch QueueIngestionError.spawnFailed(let message) {
-            #expect(message == "The agent run aborted before completing (exit status -1).")
+            // #1364: a negative status is a synthesized/signal death — named
+            // honestly instead of "aborted before completing".
+            #expect(message == "The agent process died unexpectedly (exit status -1).")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test("nonzero positive exit without turn failure reports an abort (#1364)")
+    func positiveExitWithoutTurnFailureReportsAbort() {
+        do {
+            try DaemonQueueIngestionProvider.validateLauncherOutcome(
+                exitStatus: 1,
+                preflightError: nil,
+                unrecoveredTurnFailure: false)
+            Issue.record("Expected abort rejection")
+        } catch QueueIngestionError.spawnFailed(let message) {
+            #expect(message == "The agent run aborted before completing (exit status 1).")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    /// The #1364 incident shape: turn 1 hit the ceiling (recovered — a later
+    /// turn completed), then a phase process died (exit -1). The failure is
+    /// the process death, NOT the long-gone ceiling — the message must say so.
+    @Test("recovered turn failure + process death blames the death (#1364)")
+    func recoveredTurnFailureWithProcessDeathBlamesDeath() {
+        do {
+            try DaemonQueueIngestionProvider.validateLauncherOutcome(
+                exitStatus: -1,
+                preflightError: nil,
+                unrecoveredTurnFailure: false)
+            Issue.record("Expected rejection")
+        } catch QueueIngestionError.spawnFailed(let message) {
+            #expect(message == "The agent process died unexpectedly (exit status -1).")
+            #expect(!message.contains("time ceiling"))
         } catch {
             Issue.record("Unexpected error: \(error)")
         }
@@ -50,7 +86,7 @@ import WikiFSCore
             try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: nil,
                 preflightError: nil,
-                hadTurnFailure: false)
+                unrecoveredTurnFailure: false)
             Issue.record("Expected did-not-start rejection")
         } catch QueueIngestionError.spawnFailed(let message) {
             #expect(message == "The agent did not start.")
@@ -64,16 +100,16 @@ import WikiFSCore
         try DaemonQueueIngestionProvider.validateLauncherOutcome(
             exitStatus: 0,
             preflightError: nil,
-            hadTurnFailure: false)
+            unrecoveredTurnFailure: false)
     }
 
-    @Test("turn failure remains a queue failure with the ceiling message")
+    @Test("unrecovered turn failure remains a queue failure with the ceiling message")
     func turnFailureThrows() {
         do {
             try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
                 preflightError: nil,
-                hadTurnFailure: true)
+                unrecoveredTurnFailure: true)
             Issue.record("Expected turn failure")
         } catch QueueIngestionError.spawnFailed(let message) {
             #expect(message ==

@@ -147,6 +147,20 @@ public final class AgentLauncher {
     /// and the provider throws so the queue item transitions to `.failed`
     /// instead of `.completed`. Cleared in `resetRunArtifacts()`.
     @ObservationIgnored public var runHadTurnFailure = false
+    /// #1364: a successful turn end was observed AFTER a `.turnFailed` in the
+    /// same run (e.g. turn 1 hit the ceiling, turn 2 completed). Distinguishes
+    /// a recovered failure from the run's terminal cause — the sticky
+    /// `runHadTurnFailure` alone mislabels a later process death as "exceeded
+    /// the time ceiling or failed unexpectedly". Cleared wherever
+    /// `runHadTurnFailure` is cleared (`resetRunArtifacts()`).
+    @ObservationIgnored public private(set) var runRecoveredAfterTurnFailure = false
+    /// #1364 derived signal: the run's last observed turn failure was never
+    /// recovered from — no clean turn end followed it. This is the honest
+    /// "the turn failed" fact the queue validator's message selection reads;
+    /// `runHadTurnFailure` stays sticky for pass/fail (#765).
+    public var runTerminalTurnFailure: Bool {
+        runHadTurnFailure && !runRecoveredAfterTurnFailure
+    }
     /// Ceiling-kill forensic context inherited from the most recent prior run
     /// of this queue item. Nil for first attempts and non-queue runs.
     @ObservationIgnored private var retryCeilingKillContext: CeilingKillContext?
@@ -254,8 +268,14 @@ public final class AgentLauncher {
     /// #609: third parameter is the turn ceiling — `TurnLivenessPolicy.ceiling(for:)`
     /// decides per kind: `.chat` → 1800s (interactive default), `.ingest`/`.lint`
     /// → 600s (unattended pipelines must not burn 30 minutes on a stall).
-    @ObservationIgnored var resolveBackend: (PermissionPolicy, Duration?, TimeInterval) -> AgentBackend = {
-        AgentBackendFactory.makeBackend(policy: $0, budget: $1, turnCeilingTimeout: $2)
+    ///
+    /// #1364: fourth parameter is the idle-stall bound —
+    /// `TurnLivenessPolicy.idleStallTimeout(for:)` decides per kind:
+    /// `.chat` → nil (idle monitoring disabled — a user is attending and the
+    /// UI chip is the release valve), `.ingest`/`.lint` → 300s (a queued
+    /// phase silent for 5 minutes is dead or wedged).
+    @ObservationIgnored var resolveBackend: (PermissionPolicy, Duration?, TimeInterval, TimeInterval?) -> AgentBackend = {
+        AgentBackendFactory.makeBackend(policy: $0, budget: $1, turnCeilingTimeout: $2, idleStallTimeout: $3)
     }
 
     /// The permission policy, resolved per operation kind. #607: previously one
@@ -1574,12 +1594,14 @@ public final class AgentLauncher {
         let policy: PermissionPolicy
         let permissionBudget: Duration?
         let turnCeiling: TimeInterval
+        let idleStall: TimeInterval?
         let provider: AgentProvider
         let resolvedStageModelId: ModelID?
         if let (preparation, prepared) = servicePreparation {
             policy = preparation.policy.permissionPolicy
             permissionBudget = preparation.policy.permissionBudget
             turnCeiling = preparation.policy.turnCeiling
+            idleStall = preparation.policy.idleStallTimeout
             provider = prepared.provider
             resolvedStageModelId = preparation.selection.model
             self.backend = prepared.backend
@@ -1589,10 +1611,11 @@ public final class AgentLauncher {
             policy = resolvePermissionMode(permissionKind)
             permissionBudget = (permissionKind == .chat) ? nil : .seconds(60)
             turnCeiling = TurnLivenessPolicy.ceiling(for: permissionKind)
+            idleStall = TurnLivenessPolicy.idleStallTimeout(for: permissionKind)
             let config = providersConfig()
             provider = config.provider(forStage: stageKey)
             resolvedStageModelId = config.modelId(forStage: stageKey, fallbackProvider: provider.id)
-            self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
+            self.backend = resolveBackend(policy, permissionBudget, turnCeiling, idleStall)
         }
         // SpawnModelGuard for the shared one-shot path (small-source ingest,
         // one-shot query, lint). Previously only the large-source ingest
@@ -1682,7 +1705,7 @@ public final class AgentLauncher {
            let item = DebugLog.trying("queueStore.getItem", operation: { try queueStore.getItem(queueItemID) }),
            let sessionId = item.payload.acpSessionId {
             // Create a temporary backend to attempt resume
-            let tempBackend = resolveBackend(policy, permissionBudget, turnCeiling)
+            let tempBackend = resolveBackend(policy, permissionBudget, turnCeiling, idleStall)
             if let acpBackend = tempBackend as? ACPBackend {
                 DebugLog.agent("run: attempting to resume ACP session \(sessionId.rawValue) for queue item \(queueItemID.rawValue)")
                 do {
@@ -2823,7 +2846,8 @@ public final class AgentLauncher {
                     backend = resolveBackend(
                         policy,
                         .seconds(60),
-                        TurnLivenessPolicy.ceiling(for: .ingest))
+                        TurnLivenessPolicy.ceiling(for: .ingest),
+                        TurnLivenessPolicy.idleStallTimeout(for: .ingest))
                 }
             }
             if let stageModelId, !stageModelId.isEmpty {
@@ -3623,14 +3647,19 @@ public final class AgentLauncher {
         let policy: PermissionPolicy
         let permissionBudget: Duration?
         let turnCeiling: TimeInterval
+        let idleStall: TimeInterval?
         if let (preparation, _) = servicePreparation {
             policy = preparation.policy.permissionPolicy
             permissionBudget = preparation.policy.permissionBudget
             turnCeiling = preparation.policy.turnCeiling
+            idleStall = preparation.policy.idleStallTimeout
         } else {
             policy = resolvePermissionMode(.chat)
             permissionBudget = nil
             turnCeiling = TurnLivenessPolicy.ceiling(for: .chat)
+            // #1364: interactive chat keeps idle monitoring DISABLED — long
+            // silent reasoning is legitimate while a user is attending.
+            idleStall = TurnLivenessPolicy.idleStallTimeout(for: .chat)
         }
         DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy) budget=nil (interactive) ceiling=\(turnCeiling)s")
 
@@ -3660,7 +3689,7 @@ public final class AgentLauncher {
                 forStage: "chat",
                 chatOverrideProviderId: chatOverrideProviderId,
                 chatOverrideModelId: chatOverrideModelId)
-            self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
+            self.backend = resolveBackend(policy, permissionBudget, turnCeiling, idleStall)
         }
         DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel?.rawValue ?? "nil")")
 
@@ -4361,6 +4390,26 @@ public final class AgentLauncher {
     /// instead of only ever appending (issue #121).
     private func mergeOrAppend(_ event: AgentEvent) {
         let now = Date()
+        // #1364: recovery detection runs BEFORE the switch mutates `events`,
+        // while `events.last` is still the event that preceded this one. A
+        // clean turn end is a `.messageStop` that is NOT the tail of the
+        // backend's failed-turn sequence — `turnEndEvents(error:)` yields
+        // `[.turnFailed, .messageStop]` on failure and `[.messageStop]` on
+        // success (ACP has no `.result` event; the translator never emits
+        // one), so "preceded by `.turnFailed`" is exactly the failing tail.
+        // A clean end after a `.turnFailed` (turn 1 ceiling-kill, turn 2
+        // completed) marks the run recovered.
+        if case .messageStop = event {
+            let previousEventWasTurnFailure: Bool
+            if case .turnFailed? = events.last {
+                previousEventWasTurnFailure = true
+            } else {
+                previousEventWasTurnFailure = false
+            }
+            if !previousEventWasTurnFailure && runHadTurnFailure {
+                runRecoveredAfterTurnFailure = true
+            }
+        }
         switch event {
         case .assistantTextDelta(let delta):
             if isStreamingAssistantRow, case .assistantText(let existing) = events.last {
@@ -4640,6 +4689,10 @@ public final class AgentLauncher {
         stderr = ""
         exitStatus = nil
         runHadTurnFailure = false
+        // #1364: recovery state is per-run, like the sticky flag it derives
+        // from — a prior run's recovery must not clear a new run's terminal
+        // turn failure.
+        runRecoveredAfterTurnFailure = false
         // #1354: a stale prior-run phase diagnostic must never leak into the
         // next run's abort-point copy.
         lastPhaseFailureMessage = nil

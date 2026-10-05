@@ -1233,5 +1233,39 @@ import ACPModel
         let queuedCeiling = await queued.ceilingTimeout()
         #expect(queuedCeiling < interactiveCeiling)
     }
+
+    // MARK: - #1364: idle-stall threading
+
+    /// The default `ACPBackend()` has idle monitoring DISABLED (nil) — the
+    /// interactive-chat configuration (long silent reasoning is legitimate
+    /// while a user attends; the UI chip is the release valve).
+    @Test
+    func idleStallTimeoutDefaultsToDisabled() async {
+        let backend = ACPBackend()
+        let idle = await backend.idleStallTimeoutValue()
+        #expect(idle == nil)
+        #expect(idle == TurnLivenessPolicy.idleStallTimeout(for: .chat))
+    }
+
+    /// An explicit `idleStallTimeout: 300` threads through untouched — the
+    /// value the launcher passes for ingest/lint via
+    /// `TurnLivenessPolicy.idleStallTimeout(for:)`. Pinned so a future
+    /// refactor can't accidentally ignore the parameter.
+    @Test
+    func idleStallTimeoutExplicitValueThreaded() async {
+        let backend = ACPBackend(idleStallTimeout: TurnLivenessPolicy.queuedIdleStallTimeout)
+        let idle = await backend.idleStallTimeoutValue()
+        #expect(idle == TurnLivenessPolicy.queuedIdleStallTimeout)
+        #expect(idle == 300)
+    }
+
+    /// #1364 contract: the idle-stall bound (300s) sits ABOVE zero and BELOW
+    /// the queued ceiling (600s) — it bounds a stall to one ceiling-worth of
+    /// dead time while staying above legitimate long tool executions.
+    @Test
+    func queuedIdleStallBelowQueuedCeiling() {
+        #expect(TurnLivenessPolicy.queuedIdleStallTimeout > 0)
+        #expect(TurnLivenessPolicy.queuedIdleStallTimeout < TurnLivenessPolicy.queuedIngestCeiling)
+    }
 }
 #endif

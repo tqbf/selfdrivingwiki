@@ -43,7 +43,7 @@ struct ACPChatResumeTests {
             id: ProviderID(rawValue: "test-acp"), label: "TestACP", command: [dummyPath],
             env: [:], enabled: true, isDefault: true)
         let launcher = AgentLauncher()
-        launcher.resolveBackend = { _, _, _ in backend }
+        launcher.resolveBackend = { _, _, _, _ in backend }
         launcher.acpCredentialStore = InMemoryACPCredentialStore()
         launcher.resolveSelectedProvider = { provider }
         let config = AgentProvidersConfig(
