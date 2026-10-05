@@ -38,6 +38,7 @@ struct AgentProviderRuntimeTests {
             readCredential: { _ in counts.incrementCredentials(); return "key-not-public" },
             resolvePermissionPolicy: { _ in .bypass },
             makeBackend: factory,
+            resolveLoginShellPATH: AgentProviderRuntimeTestSupport.stubLoginShellPATH,
             appleIntelligenceEngine: appleIntelligenceEngine,
             isAppleIntelligenceAvailable: isAppleIntelligenceAvailable)
     }
@@ -303,7 +304,8 @@ struct AgentProviderRuntimeTests {
             makeBackend: { policy, _, _, _ in
                 policies.record(policy)
                 return FakeAgentBackend()
-            })
+            },
+            resolveLoginShellPATH: AgentProviderRuntimeTestSupport.stubLoginShellPATH)
         let result = try await service.prepareSummarization()
         guard case .model(let preparation) = result else {
             Issue.record("expected model summary")
@@ -477,7 +479,8 @@ struct AgentProviderRuntimeTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _, _ in gated })
+            makeBackend: { _, _, _, _ in gated },
+            resolveLoginShellPATH: AgentProviderRuntimeTestSupport.stubLoginShellPATH)
 
         let preparation = try await summarizerPreparation(service)
         let prepared = try await service.preparedBackend(
@@ -554,7 +557,8 @@ struct AgentProviderRuntimeTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _, _ in gated })
+            makeBackend: { _, _, _, _ in gated },
+            resolveLoginShellPATH: AgentProviderRuntimeTestSupport.stubLoginShellPATH)
 
         let preparation = try await summarizerPreparation(service)
         let prepared = try await service.preparedBackend(
@@ -621,7 +625,8 @@ struct AgentProviderRuntimeTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            makeBackend: { _, _, _, _ in gated })
+            makeBackend: { _, _, _, _ in gated },
+            resolveLoginShellPATH: AgentProviderRuntimeTestSupport.stubLoginShellPATH)
 
         let preparation = try await summarizerPreparation(service)
         let prepared = try await service.preparedBackend(
@@ -684,6 +689,7 @@ struct AgentProviderRuntimeTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
+            resolveLoginShellPATH: AgentProviderRuntimeTestSupport.stubLoginShellPATH,
             summarizerScratchParent: isolatedRoot)
 
         // Park preparation inside command resolution, dispose underneath it.

@@ -56,6 +56,7 @@ struct AgentProviderRuntimeLeaseTests {
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
             makeBackend: backendFactory,
+            resolveLoginShellPATH: AgentProviderRuntimeTestSupport.stubLoginShellPATH,
             packageRunnerTempParent: leaseParent)
     }
 
@@ -262,6 +263,7 @@ struct AgentProviderRuntimeLeaseTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
+            resolveLoginShellPATH: AgentProviderRuntimeTestSupport.stubLoginShellPATH,
             packageRunnerTempParent: leaseRoot)
 
         let prepareTask = Task {

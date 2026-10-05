@@ -255,7 +255,8 @@ struct MessageSummaryTests {
                 })
             },
             readCredential: { _ in nil },
-            resolvePermissionPolicy: { _ in .bypass })
+            resolvePermissionPolicy: { _ in .bypass },
+            resolveLoginShellPATH: AgentProviderRuntimeTestSupport.stubLoginShellPATH)
         let launcher = AgentLauncher(
             providerServices: ThrowingModelSummaryServices(runtime: runtime))
 
