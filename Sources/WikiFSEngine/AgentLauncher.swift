@@ -1965,7 +1965,9 @@ public final class AgentLauncher {
             DebugLog.agent("run: spawn FAILED: \(error.localizedDescription)")
             // #1368: name the ACTUAL provider — a hardcoded agent name sent
             // users of every other provider down the wrong debugging path.
-            preflightError = "Failed to launch \(provider.label): \(error.localizedDescription)"
+            // `displayName` (not `label`): a hand-edited config with an empty
+            // label would otherwise render "Failed to launch : …".
+            preflightError = "Failed to launch \(provider.displayName): \(error.localizedDescription)"
             closeLogFiles()
             DebugLog.trying("remove scratch on spawn failure", operation: { try FileManager.default.removeItem(at: scratch) })
             runningKind = nil
@@ -4062,7 +4064,9 @@ public final class AgentLauncher {
             DebugLog.agent("startInteractiveQuery: backend.start FAILED provider=\(provider.id): \(error)")
             // #1368: name the ACTUAL provider — the interactive failure banner
             // must not claim a hardcoded agent name the user never selected.
-            preflightError = "Failed to launch \(provider.label): \(error.localizedDescription)"
+            // `displayName` (not `label`): a hand-edited config with an empty
+            // label would otherwise render "Failed to launch : …".
+            preflightError = "Failed to launch \(provider.displayName): \(error.localizedDescription)"
             closeLogFiles()
             DebugLog.trying("remove scratch on backend.start failure", operation: { try FileManager.default.removeItem(at: scratch) })
             isInteractiveSession = false

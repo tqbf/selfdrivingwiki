@@ -135,6 +135,61 @@ struct ACPExtractionClientTests {
         #expect(turnError == "Error message.")
     }
 
+    // MARK: - Login-shell PATH injection (#1368)
+
+    /// #1368: the extraction spawn used to construct a profile with no
+    /// run context and no login-shell PATH, so the child inherited the
+    /// daemon's minimal PATH and died on `#!/usr/bin/env node` package bins.
+    /// The profile now carries the PATH the provider's command was already
+    /// resolved against, and `resolveSpawnConfig` injects it as the child's
+    /// `PATH`.
+    @Test func extractionProfileCarriesLoginShellPATHIntoTheChildEnvironment() throws {
+        let staging = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wiki-extraction-path-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            do { try FileManager.default.removeItem(at: staging) }
+            catch { Issue.record("staging cleanup failed: \(error)") }
+        }
+        let scratch = try LLMSandboxScratch.adopt(directory: staging)
+        let loginShellPATH = "/users/me/.local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+
+        let profile = ACPExtractionClient.makeProfile(
+            providerHints: [HintKey.acpAgentPath.rawValue: "/usr/local/bin/claude"],
+            scratch: scratch,
+            loginShellPATH: loginShellPATH)
+
+        #expect(profile.loginShellPATH == loginShellPATH,
+                "the resolved search path rides the extraction profile")
+        let spawn = try #require(ACPBackend.resolveSpawnConfig(from: profile))
+        #expect(spawn.environment["PATH"] == loginShellPATH,
+                "the extraction child gets the login-shell PATH, not the daemon's")
+    }
+
+    /// A provider-configured `env.PATH` still wins over the injected
+    /// login-shell PATH: explicit user config beats host injection.
+    @Test func extractionProfileEnvPATHOutranksInjectedLoginShellPATH() throws {
+        let staging = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wiki-extraction-envpath-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            do { try FileManager.default.removeItem(at: staging) }
+            catch { Issue.record("staging cleanup failed: \(error)") }
+        }
+        let scratch = try LLMSandboxScratch.adopt(directory: staging)
+        let hints = [
+            HintKey.acpAgentPath.rawValue: "/usr/local/bin/claude",
+            HintKey.env("PATH"): "/users/me/custom/bin",
+        ]
+
+        let profile = ACPExtractionClient.makeProfile(
+            providerHints: hints,
+            scratch: scratch,
+            loginShellPATH: "/users/me/.local/bin:/usr/bin:/bin")
+
+        let spawn = try #require(ACPBackend.resolveSpawnConfig(from: profile))
+        #expect(spawn.environment["PATH"] == "/users/me/custom/bin",
+                "a user-configured env.PATH is not overwritten by host injection")
+    }
+
     // MARK: - Read-only scratch sandbox (issue #1276)
 
     /// AC.2: the production extraction profile is read-only, sandboxed to the

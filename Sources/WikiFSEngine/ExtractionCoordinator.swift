@@ -335,10 +335,15 @@ private final class LegacyExtractionServices: ExtractionServices {
         case .acp:
             // An absent provider is an unavailable selection: fail closed
             // instead of substituting the retired in-process adapter.
+            // #1368: resolve the login-shell PATH ONCE here — it both finds
+            // the provider's command and rides the extraction profile into
+            // the child, so this legacy seam's spawns match production.
+            let loginShellPATH = await PathPreflight.loginShellPATH()
             guard let provider = ACPExtractionClient.resolveProvider(
                 containerDirectory: containerDirectory,
                 acpProviderId: configuration.acpProviderId,
-                acpCredentialStore: acpCredentialStore) else {
+                acpCredentialStore: acpCredentialStore,
+                searchPath: loginShellPATH) else {
                 throw ExtractionServicesError.unavailable
             }
             extractor = provider

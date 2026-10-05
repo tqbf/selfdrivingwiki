@@ -2,7 +2,6 @@
 import Testing
 import Foundation
 import WikiFSEngine
-@testable import WikiFS
 @testable import WikiFSEngine
 import WikiFSCore
 
@@ -20,8 +19,13 @@ import WikiFSCore
 /// `FakeAgentBackend` whose `start()` throws, with a NON-claude provider
 /// label ("Codex ACP"). Message text only: the surrounding error flow is
 /// untouched, so the observable contract is exactly `preflightError`.
+///
+/// Lives in the DEFAULT test graph (not the `WIKIFS_APP_TESTS=1` app target):
+/// it needs `AgentLauncher` and a failing backend fake, both of which
+/// `WikiFSTests` already links, and CI's app-test steps run explicit filter
+/// lists that never named this suite (#1371 review).
 @MainActor
-@Suite("Launch failure names the actual provider (#1368)")
+@Suite(.serialized, .timeLimit(.minutes(2)))
 struct AgentLauncherLaunchLabelTests {
 
     private static let providerLabel = "Codex ACP"
@@ -137,6 +141,62 @@ struct AgentLauncherLaunchLabelTests {
                 "the failure must name the actual provider, got: \(message)")
         #expect(!message.lowercased().contains("claude"),
                 "no hardcoded agent name may appear, got: \(message)")
+    }
+
+    /// A hand-edited `agent-providers.json` can carry an EMPTY label. The
+    /// failure text must then fall back to the provider id rather than
+    /// rendering "Failed to launch : …" (#1371 review nit).
+    @Test("an empty provider label falls back to the provider id in the failure message")
+    func emptyLabelFallsBackToProviderId() async throws {
+        let fake = FakeAgentBackend(behaviors: [FakeSessionBehavior(shouldFailOnStart: true)])
+        let tempDir = try makeTempDir("empty-label")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let launcher = AgentLauncher()
+        launcher.resolveBackend = { _, _, _, _ in fake }
+        launcher.acpCredentialStore = InMemoryACPCredentialStore()
+        launcher.resolveSelectedProvider = {
+            AgentProvider(
+                id: ProviderID(rawValue: "codex-acp"),
+                label: "",
+                command: ["/usr/bin/false"],
+                env: [:],
+                enabled: true,
+                isDefault: true)
+        }
+        let config = AgentProvidersConfig(
+            providers: [
+                AgentProvider(id: ProviderID(rawValue: "codex-acp"), label: "",
+                              command: ["/usr/bin/false"], enabled: true, isDefault: true)
+            ],
+            selectedModelIds: ["codex-acp": ModelID(rawValue: "fake-model")])
+        do {
+            try config.save(to: tempDir)
+        } catch {
+            Issue.record("Failed to save provider config to temp dir: \(error)")
+        }
+        launcher.resolveProvidersContainerDirectory = { tempDir }
+        launcher.containerDirectory = tempDir
+        launcher.makeQuotaFallbackCoordinator = {
+            QuotaFallbackCoordinator(quotaStateURL: tempDir.appendingPathComponent("quota-state.json"))
+        }
+
+        await launcher.run(
+            request: .ingest(sources: [smallSource()], stateMarkdown: "# State"),
+            wikiID: WikiID(rawValue: "test-wiki"),
+            wikiRoot: "/tmp",
+            systemPrompt: "sys",
+            wikictlDirectory: "/tmp",
+            ingestingSourceIDs: [],
+            onEvent: nil,
+            onLock: {},
+            onUnlock: {}
+        )
+
+        let message = try #require(launcher.preflightError)
+        #expect(message.contains("codex-acp"),
+                "an empty label falls back to the provider id, got: \(message)")
+        #expect(!message.contains("Failed to launch :"),
+                "the failure must never render an empty provider name, got: \(message)")
     }
 }
 #endif

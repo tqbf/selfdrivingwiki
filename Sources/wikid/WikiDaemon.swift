@@ -306,10 +306,18 @@ final class WikiDaemon: @unchecked Sendable {
                     readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
                     readCredential: { extractionCredentialStore.secret($0) },
                     resolveACP: { configuration in
-                        ACPExtractionClient.resolveProvider(
+                        // #1368: resolve the login-shell PATH ONCE per
+                        // provider resolution — it both finds the provider's
+                        // command and rides the extraction profile into the
+                        // child, so the ACP extraction spawn gets the same
+                        // PATH a chat spawn does instead of the daemon's
+                        // minimal one.
+                        let loginShellPATH = await PathPreflight.loginShellPATH()
+                        return ACPExtractionClient.resolveProvider(
                             containerDirectory: containerDirectory,
                             acpProviderId: configuration.acpProviderId,
-                            acpCredentialStore: acpCredentialStore)
+                            acpCredentialStore: acpCredentialStore,
+                            searchPath: loginShellPATH)
                     },
                     httpFetcher: URLSessionRequestFetcher(),
                     packageContainerDirectory: containerDirectory,

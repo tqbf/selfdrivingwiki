@@ -446,7 +446,7 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
                 key: .builtIn(acpKey),
                 backend: RegisteredExtractionBackend(key: acpKey) {
                     let configuration = try input.readConfiguration()
-                    guard let extractor = input.resolveACP(configuration) else {
+                    guard let extractor = await input.resolveACP(configuration) else {
                         DebugLog.config(
                             "ExtractionServices: .acp backend has no configured provider")
                         throw ExtractionServicesError.unavailable

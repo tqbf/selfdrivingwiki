@@ -12,6 +12,25 @@ import Foundation
 @Suite("AgentProvidersConfig seed/backfill")
 struct AgentProvidersConfigSeedBackfillTests {
 
+    // MARK: - Provider display name (#1371 review nit)
+
+    /// A hand-edited `agent-providers.json` can leave `label` empty, which
+    /// rendered as "Failed to launch : …". `displayName` is the single seam
+    /// user-facing text uses: the label when it carries one, else the id.
+    @Test func displayNameFallsBackToTheProviderIdWhenLabelIsEmpty() {
+        let labeled = AgentProvider(
+            id: ProviderID(rawValue: "codex-acp"),
+            label: "Codex ACP",
+            command: ["/usr/bin/false"])
+        #expect(labeled.displayName == "Codex ACP")
+
+        let unlabeled = AgentProvider(
+            id: ProviderID(rawValue: "codex-acp"),
+            label: "",
+            command: ["/usr/bin/false"])
+        #expect(unlabeled.displayName == "codex-acp")
+    }
+
     // MARK: - AC.6a — fresh-install seed includes the default model
 
     @Test func seedIncludesDefaultModelForDefaultProvider() {

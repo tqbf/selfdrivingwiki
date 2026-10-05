@@ -66,7 +66,7 @@ public enum ACPExtractionPlugin {
         resolve: @escaping ExtractionPluginFactory.ACPResolver
     ) -> PluginDefinition {
         adapterDefinition(id: id, label: "ACP extraction", key: key) {
-            guard let extractor = resolve(configuration) else {
+            guard let extractor = await resolve(configuration) else {
                 throw ExtractionServicesError.unavailable
             }
             return .pdf(ExtractionPreparation(

@@ -326,6 +326,82 @@ struct AgentProviderRuntimeTests {
         await service.dispose()
     }
 
+    // MARK: - Summarizer login-shell PATH injection (#1368)
+
+    /// #1368: the summarizer/title spawn shape builds its own profile and has
+    /// no launcher run context, so before this fix its child inherited the
+    /// daemon's minimal PATH and died on `#!/usr/bin/env node` package bins.
+    /// The runtime now resolves the login-shell PATH ONCE per summarization
+    /// snapshot and rides it on the profile, where `resolveSpawnConfig`
+    /// injects it as the child's `PATH`.
+    @Test("The summarizer profile carries the snapshot's login-shell PATH into the child environment")
+    func summarizerProfileCarriesLoginShellPATH() async throws {
+        let config = LockedBox(configuration(summarizer: true))
+        let counts = RuntimeCounts()
+        let injected = "/users/me/.local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+        let service = AgentProviderRuntime(
+            readConfiguration: { config.read() },
+            resolveCommand: { providers in
+                counts.incrementCommands()
+                return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    provider.command.map { (provider.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            resolveLoginShellPATH: { injected })
+
+        let result = try await service.prepareSummarization()
+        guard case .model(let preparation) = result else {
+            Issue.record("expected model summary")
+            return
+        }
+        let prepared = try await service.preparedBackend(
+            from: preparation.selection.token,
+            stage: .summarizer)
+        #expect(prepared.profile.loginShellPATH == injected,
+                "the summarizer profile carries the login-shell PATH")
+        // The child environment gets it — this is the shape whose children
+        // inherited the daemon's minimal PATH before #1368.
+        let spawn = try #require(ACPBackend.resolveSpawnConfig(from: prepared.profile))
+        #expect(spawn.environment["PATH"] == injected,
+                "the summarizer child gets the login-shell PATH, not the daemon's")
+        await service.dispose()
+    }
+
+    /// A failed login-shell hop injects NOTHING: the child's `PATH` stays
+    /// unset rather than silently falling back to the daemon's minimal one.
+    @Test("A failed summarizer login-shell resolution leaves the child PATH unset")
+    func summarizerProfileWithoutResolutionLeavesPATHUnset() async throws {
+        let config = LockedBox(configuration(summarizer: true))
+        let counts = RuntimeCounts()
+        let service = AgentProviderRuntime(
+            readConfiguration: { config.read() },
+            resolveCommand: { providers in
+                counts.incrementCommands()
+                return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    provider.command.map { (provider.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            resolveLoginShellPATH: { nil })
+
+        let result = try await service.prepareSummarization()
+        guard case .model(let preparation) = result else {
+            Issue.record("expected model summary")
+            return
+        }
+        let prepared = try await service.preparedBackend(
+            from: preparation.selection.token,
+            stage: .summarizer)
+        #expect(prepared.profile.loginShellPATH == nil)
+        let spawn = try #require(ACPBackend.resolveSpawnConfig(from: prepared.profile))
+        #expect(spawn.environment["PATH"] == nil,
+                "no resolution and no env.PATH leaves PATH unset (no invented default)")
+        await service.dispose()
+    }
+
     // MARK: - Summarizer sandbox ownership + teardown ordering (issue #1276)
 
     @Test("Summarizer preparation returns a read-only profile with a unique owned scratch")

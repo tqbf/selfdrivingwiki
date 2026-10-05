@@ -69,6 +69,63 @@ only the default argv, does not fix user-customized agent-providers.json
 entries, and waits on the bundled-runtime work. The PATH fix covers every
 ACP package with a node shebang, whatever the argv.
 
+## Review round (PR #1371)
+
+Four code-review findings, all fixed on the same branch.
+
+**1 (MAJOR) — the PATH injection was nil-by-construction on two spawn
+shapes.** The first commit threaded the login-shell PATH through the
+LAUNCHER's profile, but two other shapes build a `BackendProfile`
+themselves and had neither a run context nor a `loginShellPATH`:
+`AgentProviderRuntime.backend(from:)` (the summarizer/title profile) and
+`ACPExtractionClient.makeProfile` (the extraction profile). Both children
+still inherited the daemon's minimal PATH, so #1368 persisted for
+chat-summary, chat-title, and ACP-extraction spawns.
+
+- Summarizer/title: `AgentProviderRuntime` takes an injected
+  `LoginShellPATHResolver` (production default
+  `PathPreflight.loginShellPATH()`), resolves it ONCE per summarization
+  snapshot in `prepareSummarization`, carries it on
+  `Snapshot.summarizerLoginShellPATH`, and rides it on the profile. One
+  cached backend serves many summary/title spawns, so the per-snapshot
+  scope is the narrowest one that keeps the hop off the spawn path.
+- Extraction: `ACPExtractionClient` carries the `searchPath` its
+  `resolveProvider` ALREADY needed to resolve the provider's command — no
+  second hop — and `makeProfile` puts it on the profile. The production
+  wiring closures resolve that PATH once per provider resolution.
+- `ExtractionPluginFactory.ACPResolver` became `async` so the production
+  extraction wiring can do that one hop (both `ProcessExtractionServices`
+  and the legacy `ExtractionRuntimeFactory` resolver now `await` it).
+
+**2 (MINOR) — a residual "Claude CLI" hardcode.** `PathPreflight.resolve`'s
+generic `.missing(reason:)` text told every user to "Install the Claude CLI
+(claude.com/claude-code)", and `AgentLauncher.resolveACPProviderSpawn`
+surfaced that verbatim for ANY provider. The generic reason is now
+provider-neutral ("Install it and make sure it is on your login shell
+PATH"); the provider-specific hint path (`readinessMessage` /
+`ProviderEnvHint`) is unchanged.
+
+**3 (MINOR) — the new suite was invisible to the default gate.**
+`.github/workflows/ci.yml` DOES run `WIKIFS_APP_TESTS=1` steps, but only
+three of them and each with an explicit `--filter` list (the Cordis search
+group, the chat-lifecycle group, the Phase 5 WebKit group). None of those
+lists names `ACPWiringTests`, `AgentRunContextTests`, or the new
+`AgentLauncherLaunchLabelTests`, so a suite in `Tests/WikiFSAppTests` would
+have had no CI coverage. `AgentLauncherLaunchLabelTests` MOVED to
+`Tests/WikiFSTests` (the default graph): it needs `AgentLauncher` and a
+failing backend fake, and that target already links `WikiFSEngine` and the
+`FakeAgentBackend` with `shouldFailOnStart`, so coverage is not weakened.
+The pre-existing `ACPWiringTests` and `AgentRunContextTests` stay where they
+are.
+
+**4 (NITs).** `AgentProvider.displayName` is the new single seam for
+user-facing provider text (the label, else the provider id) and both
+launch-failure catch sites use it — an empty hand-edited label no longer
+renders "Failed to launch : …". `PathPreflight.loginShellPATH()` stays
+unbounded; the accepted risk is now documented on the method (the hop runs
+on user-triggered discovery paths, never per spawn, and bounding it would
+need a cancellation/timeout race around `AsyncProcessRunner`).
+
 ## Verification
 
 - `make build` passed (app built and signed).
@@ -86,15 +143,27 @@ ACP package with a node shebang, whatever the argv.
   expects uv NOT installed, `YouTubeEmbedWebViewTests`, `DiagramEmbedTests`,
   and neighbors); each verified to fail identically on the base commit
   (stash → run → same failures → restore).
-- New suites/tests: `AgentLauncherLaunchLabelTests` (2 tests: the queued
-  `run()` catch and the interactive catch each name the non-claude provider
-  label and never contain "claude"); `ACPWiringTests` +6 (seam injects the
+- New suites/tests: `AgentLauncherLaunchLabelTests` (3 tests: the queued
+  `run()` catch, the interactive catch, and the empty-label fallback — each
+  names the non-claude provider and never contains "claude" or
+  "Failed to launch :"); `ACPWiringTests` +6 (seam injects the
   login-shell PATH; profile value outranks the run-context value; run-context
   fallback; provider `env.PATH` wins over injection; PATH unset without
   resolution; sandbox plan passes PATH through; `buildAgentEnv` helper-head
   prepend); `AgentRunContextTests` updated +3 (protected keys still win
   minus PATH, explicit PATH becomes the tail under the helper head, no
   explicit PATH keeps `effectivePATH`, `withScratch` preserves the raw
-  resolution).
+  resolution); `AgentProviderRuntimeTests` +2 (the summarizer profile
+  carries the snapshot's injected login-shell PATH into the child
+  environment; a failed resolution leaves the child `PATH` unset);
+  `ACPExtractionClientTests` +2 (the extraction profile carries the resolved
+  search path into the child `PATH`; a provider `env.PATH` still wins);
+  `AgentProvidersConfigSeedBackfillTests` +1 (`displayName` falls back to the
+  provider id).
+- Review-round gates: `make build` exit 0; `make test` exit 0 with 0 failed
+  (the moved `AgentLauncherLaunchLabelTests` and all new pins run in that
+  default graph); targeted `WIKIFS_APP_TESTS=1 swift test --parallel`
+  `ACPWiringTests|AgentRunContextTests|LLMSpawnSandboxExhaustivenessTests`
+  exit 0 (69 tests in 2 suites plus 11 in the sandbox suite).
 - The operator should rebuild and reinstall the app so the running daemon
   picks up the fix.

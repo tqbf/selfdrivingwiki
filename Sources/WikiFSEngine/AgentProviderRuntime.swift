@@ -438,6 +438,12 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         [String],
         String?
     ) async throws -> ACPProviderCatalogObservation
+    /// #1368: the login-shell `PATH` discovery for spawn shapes that build
+    /// their own `BackendProfile` here (summarizer/title) and so have no
+    /// launcher-supplied run context to read one from. Production is
+    /// `PathPreflight.loginShellPATH()`; a test injects a constant so the
+    /// injected `PATH` is pinned without a real login-shell hop.
+    public typealias LoginShellPATHResolver = @Sendable () async -> String?
 
     private struct SpawnRecord: Sendable {
         let provider: AgentProvider
@@ -474,6 +480,15 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         /// removed by teardown regardless (an unused lease is cleaned up
         /// like a used one — AC.8).
         var summarizerPackageRunnerTemp: PackageRunnerTempLease?
+        /// The login-shell `PATH` the summarizer profiles inject into their
+        /// children (#1368). Resolved ONCE per snapshot (in
+        /// `prepareSummarization`), not once per spawn: a snapshot serves
+        /// many summary/title spawns through one cached backend, so the
+        /// per-snapshot scope is the narrowest one that still keeps the
+        /// login-shell hop off the spawn path. nil when the hop failed — the
+        /// child's `PATH` then stays unset rather than inheriting the
+        /// daemon's minimal one.
+        let summarizerLoginShellPATH: String?
     }
     private struct TokenRecord: Sendable { let snapshotID: UUID; let stage: AgentProviderStage; let providerID: ProviderID; let isOriginal: Bool }
 
@@ -485,6 +500,11 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     private let makeBackend: BackendFactory
     private let probeCatalog: CatalogProbe
     private let sandboxUsable: SandboxUsabilityCheck
+    /// The login-shell `PATH` discovery used by the summarizer/title spawn
+    /// shape (#1368), which builds its profile here rather than in the
+    /// launcher and so has no run context to read one from. Injectable so a
+    /// test pins the injected `PATH` without spawning a login shell.
+    private let resolveLoginShellPATH: LoginShellPATHResolver
     /// Test seam (issue #1276): when non-nil, summarizer scratch worlds are
     /// created under this root instead of the shared temporary directory, so
     /// a test can assert scratch cleanup on a root it owns exclusively.
@@ -611,6 +631,9 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 .discoverObservation()
         },
         sandboxUsability: @escaping SandboxUsabilityCheck = AgentProviderRuntime.defaultSandboxUsability,
+        resolveLoginShellPATH: @escaping LoginShellPATHResolver = {
+            await PathPreflight.loginShellPATH()
+        },
         summarizerScratchParent: URL? = nil,
         packageRunnerTempParent: URL? = nil,
         appleIntelligenceEngine: AppleIntelligenceSummarizer.Engine = .system,
@@ -626,6 +649,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         self.makeBackend = makeBackend
         self.probeCatalog = probeCatalog
         self.sandboxUsable = sandboxUsability
+        self.resolveLoginShellPATH = resolveLoginShellPATH
         self.summarizerScratchParent = summarizerScratchParent
         self.packageRunnerTempParent = packageRunnerTempParent
         self.appleIntelligenceEngine = appleIntelligenceEngine
@@ -732,6 +756,16 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             under: summarizerScratchParent,
             namePrefix: "summarizer",
             strict: Self.strictSummarizerActive)
+        // #1368: this spawn shape builds its own profile (`backend(from:)`
+        // below) instead of taking a launcher run context, so nothing else
+        // supplies the child's `PATH` — without this the summarizer/title
+        // child inherits the daemon's minimal PATH and dies on
+        // `#!/usr/bin/env node` package bins, exactly like the chat spawn did.
+        // Resolved ONCE per summarization snapshot (the narrowest scope that
+        // still serves every summary/title spawn off the cached backend) —
+        // never per spawn. nil on a failed hop: the child's PATH then stays
+        // unset rather than silently falling back to the daemon's.
+        let loginShellPATH = await resolveLoginShellPATH()
         let snapshotID = UUID()
         let policy = AgentOperationPolicy(
             kind: .interactive,
@@ -752,7 +786,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 thinkingOverride: nil,
                 stages: [.summarizer],
                 policyOverride: policy,
-                summarizerScratch: scratch)
+                summarizerScratch: scratch,
+                summarizerLoginShellPATH: loginShellPATH)
         } catch {
             scratch.remove()
             throw error
@@ -1007,7 +1042,13 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 // lease rides the profile as TRUSTED launch data — never a
                 // provider hint. `ACPBackend` consumes it only when the
                 // effective (post-canonicalization) runner is `.bun`.
-                packageRunnerTempURL: snapshot.summarizerPackageRunnerTemp?.directoryURL)
+                packageRunnerTempURL: snapshot.summarizerPackageRunnerTemp?.directoryURL,
+                // #1368: the snapshot's login-shell PATH rides the profile
+                // the same way — trusted launch data, not a provider hint.
+                // `ACPBackend.resolveSpawnConfig` injects it into the child
+                // environment, so the summarizer/title child no longer
+                // inherits the daemon's minimal PATH.
+                loginShellPATH: snapshot.summarizerLoginShellPATH)
         } else {
             profile = BackendProfile(model: spawn.model?.rawValue, providerHints: spawn.hints)
         }
@@ -1023,6 +1064,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         stages: [AgentProviderStage],
         policyOverride: AgentOperationPolicy? = nil,
         summarizerScratch: LLMSandboxScratch? = nil,
+        summarizerLoginShellPATH: String? = nil,
         queuedWorkUnits: Int? = nil
     ) async throws -> Snapshot {
         let policy = policyOverride ?? AgentOperationPolicy(
@@ -1106,7 +1148,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             chains: chains,
             summarizerScratch: summarizerScratch,
             summarizerLease: summarizerScratch == nil ? nil : SummarizerLeaseGate(),
-            summarizerPackageRunnerTemp: nil)
+            summarizerPackageRunnerTemp: nil,
+            summarizerLoginShellPATH: summarizerLoginShellPATH)
         // Issue #1279: a strict summarizer snapshot whose configured command
         // is JS-adapter-shaped owns ONE package-runner staging lease for the
         // snapshot's lifetime. The decision runs on the FROZEN configured

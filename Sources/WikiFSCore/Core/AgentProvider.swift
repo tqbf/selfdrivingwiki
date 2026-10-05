@@ -25,6 +25,15 @@ public struct AgentProvider: Codable, Equatable, Sendable, Identifiable {
     /// UI label (e.g. "Claude", "Gemini CLI").
     public var label: String
 
+    /// The name to show a user when `label` cannot serve as one. A
+    /// hand-edited `agent-providers.json` can leave `label` empty, which used
+    /// to render as "Failed to launch : …"; the provider id is always present
+    /// and is the honest fallback. Use this — never a bare `label` — in
+    /// user-facing text.
+    public var displayName: String {
+        label.isEmpty ? id.rawValue : label
+    }
+
     /// ACP spawn argv (e.g. `["gemini", "--acp"]`). `command[0]` is the
     /// PATH-resolvable executable; resolved on the login-shell PATH at spawn time.
     public var command: [String]?

@@ -78,6 +78,15 @@ public struct ACPExtractionClient: MarkdownExtractor {
     public let apiKey: String?
     /// The user's per-provider model selection (nil = use provider default).
     public let selectedModelId: String?
+    /// The login-shell `PATH` the provider's spawn command was RESOLVED
+    /// against (#1368). `resolveProvider` already needs this value to find
+    /// the executable, so the extraction child reuses that one resolution
+    /// instead of paying for a second login-shell hop: it rides
+    /// `BackendProfile.loginShellPATH` into the child environment. nil when
+    /// the caller supplied no search path (the resolver then fell back to the
+    /// daemon's own PATH) — the child's `PATH` then stays unset rather than
+    /// inheriting that minimal one.
+    public let loginShellPATH: String?
     /// The permission policy (default: bypass — extraction is a one-shot
     /// transcription; the agent has no wiki to write to).
     public let permissionPolicy: PermissionPolicy
@@ -95,6 +104,7 @@ public struct ACPExtractionClient: MarkdownExtractor {
         resolvedCommand: [String],
         apiKey: String?,
         selectedModelId: String? = nil,
+        loginShellPATH: String? = nil,
         permissionPolicy: PermissionPolicy = .bypass,
         containerDirectory: URL,
         backendFactory: @escaping @Sendable (PermissionPolicy) throws -> any AgentBackend =
@@ -104,6 +114,7 @@ public struct ACPExtractionClient: MarkdownExtractor {
         self.resolvedCommand = resolvedCommand
         self.apiKey = apiKey
         self.selectedModelId = selectedModelId
+        self.loginShellPATH = loginShellPATH
         self.permissionPolicy = permissionPolicy
         self.containerDirectory = containerDirectory
         self.backendFactory = backendFactory
@@ -164,7 +175,10 @@ public struct ACPExtractionClient: MarkdownExtractor {
             resolvedCommand: resolvedCommand,
             apiKey: apiKey,
             selectedModelId: selectedModelId)
-        let profile = Self.makeProfile(providerHints: hints, scratch: scratch)
+        let profile = Self.makeProfile(
+            providerHints: hints,
+            scratch: scratch,
+            loginShellPATH: loginShellPATH)
 
         // Start a one-shot ACP session with the extraction system prompt. A
         // factory or start failure — including the fail-closed
@@ -243,15 +257,22 @@ public struct ACPExtractionClient: MarkdownExtractor {
     /// staged PDF and returns Markdown; it never writes the wiki. Internal +
     /// pure so tests can pin the exact scratch/sandbox pairing without
     /// spawning a child.
+    ///
+    /// #1368: `loginShellPATH` is the value the provider's command was already
+    /// resolved against — trusted launch data (same pattern as
+    /// `packageRunnerTempURL`), never a provider hint — so the extraction child
+    /// gets the user's login-shell PATH instead of the daemon's minimal one.
     static func makeProfile(
         providerHints: [String: String],
-        scratch: LLMSandboxScratch
+        scratch: LLMSandboxScratch,
+        loginShellPATH: String? = nil
     ) -> BackendProfile {
         BackendProfile(
             providerHints: providerHints,
             scratchDirectory: scratch.directoryURL,
             isReadOnly: true,
-            sandbox: scratch.sandbox)
+            sandbox: scratch.sandbox,
+            loginShellPATH: loginShellPATH)
     }
 
     /// Resolve the ACP provider + spawn config for extraction from the user's
@@ -297,6 +318,9 @@ public struct ACPExtractionClient: MarkdownExtractor {
             resolvedCommand: resolvedCommand,
             apiKey: apiKey,
             selectedModelId: selectedModelId?.rawValue,
+            // #1368: the search path that just resolved the command IS the
+            // login-shell PATH the child needs; reusing it costs no extra hop.
+            loginShellPATH: searchPath,
             containerDirectory: containerDirectory)
     }
 }

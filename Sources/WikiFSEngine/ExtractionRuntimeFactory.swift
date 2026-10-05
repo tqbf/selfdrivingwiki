@@ -157,7 +157,7 @@ public struct ExtractionRuntimeFactory: Sendable {
                         case .localPdf2md:
                             throw ExtractionServicesError.unavailable
                         case .acp:
-                            guard let extractor = resolveACP(configuration) else {
+                            guard let extractor = await resolveACP(configuration) else {
                                 DebugLog.config("ExtractionRuntime: .acp backend has no provider")
                                 throw ExtractionServicesError.unavailable
                             }

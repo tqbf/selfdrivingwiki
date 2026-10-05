@@ -1,9 +1,11 @@
 import Foundation
 
-/// Verifies that an executable (specifically `claude`) is resolvable on a PATH
-/// before the app tries to spawn it (`plans/llm-wiki.md` Phase C — "PATH
-/// preflight: check `claude` is on the login-shell PATH before spawning; surface
-/// a clear error if not").
+/// Verifies that an executable is resolvable on a PATH before the app tries to
+/// spawn it (`plans/llm-wiki.md` Phase C — "PATH preflight: check `claude` is on
+/// the login-shell PATH before spawning; surface a clear error if not"). The
+/// failure reason is PROVIDER-NEUTRAL: every ACP provider goes through here, so
+/// the text names the missing executable and never a specific product (#1371
+/// review; the provider-specific hint path is `ProviderEnvHint`/readiness).
 ///
 /// PURE + injectable: `resolve(executable:onPath:fileExists:)` takes the PATH
 /// string and a file-existence predicate, so the search logic is unit-tested
@@ -45,8 +47,8 @@ public enum PathPreflight {
             }
         }
         return .missing(reason: """
-            ‘\(executable)’ was not found on your PATH. Install the Claude CLI \
-            (claude.com/claude-code) and make sure it is on your login shell PATH.
+            ‘\(executable)’ was not found on your PATH. Install it and make \
+            sure it is on your login shell PATH.
             """)
     }
 
@@ -83,6 +85,13 @@ public enum PathPreflight {
 
     /// The login-shell PATH (`zsh -lc 'printf %s "$PATH"'`), or nil if the
     /// hop fails.
+    ///
+    /// Deliberately unbounded: the hop runs on user-triggered discovery paths
+    /// (provider readiness, catalog probe, one per agent run or extraction
+    /// resolution), never per spawn, so a pathological login shell costs one
+    /// stuck discovery — not a wedged spawn path. A bounded variant would
+    /// need a cancellation/timeout race around `AsyncProcessRunner`, and the
+    /// accepted risk is cheaper than that machinery (#1371 review).
     public static func loginShellPATH() async -> String? {
         await loginShellPATH(using: AsyncProcessRunner.run)
     }
