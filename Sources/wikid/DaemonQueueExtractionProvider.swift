@@ -275,7 +275,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
                     // backstop that settles a stale marker.
                     DebugLog.store("DaemonQueueExtractionProvider: fetch-state settle skipped (source=\(sourceID.rawValue)): \(error)")
                 }
-                DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+                DarwinNotifier.postChange()
                 return QueueExtractionOutputReference(versionID: version.id.rawValue)
             } catch {
                 DebugLog.store("DaemonQueueExtractionProvider: package write failed (source=\(sourceID.rawValue)): \(error)")
@@ -290,7 +290,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
             }) else {
                 return nil
             }
-            DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+            DarwinNotifier.postChange()
             return QueueExtractionOutputReference(versionID: version.id.rawValue)
         }
     }
@@ -318,7 +318,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
             }) else {
                 return nil
             }
-            DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+            DarwinNotifier.postChange()
             return QueueExtractionOutputReference(versionID: version.id.rawValue)
 
         case .installedPackage(let baseProducer):
@@ -338,7 +338,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
                     sourceID: sourceID, content: outcome.markdown, package: producer,
                     origin: .transcript, toolVersion: nil,
                     sourceVersionID: initialVersion.id, note: nil)
-                DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+                DarwinNotifier.postChange()
                 return QueueExtractionOutputReference(versionID: version.id.rawValue)
             } catch {
                 DebugLog.store("DaemonQueueExtractionProvider: package transcript write failed (source=\(sourceID.rawValue)): \(error)")
@@ -426,7 +426,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
                 package: fetchProducer(resolution, outcome),
                 externalItemKey: itemKey, externalItemTitle: itemTitle,
                 sourceVersionID: initialVersion.id)
-            DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+            DarwinNotifier.postChange()
             return QueueExtractionOutputReference(versionID: version.id.rawValue)
 
         case .sourceBytes(let bytes):
@@ -445,7 +445,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
                 externalItemKey: itemKey,
                 externalItemTitle: itemTitle,
                 producer: fetchProducer(resolution, outcome))
-            DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+            DarwinNotifier.postChange()
             return QueueExtractionOutputReference(versionID: version.id.rawValue)
         }
     }

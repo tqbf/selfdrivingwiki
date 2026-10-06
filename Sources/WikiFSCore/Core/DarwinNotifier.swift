@@ -1,20 +1,26 @@
 import Foundation
 
-/// Posts the per-wiki Darwin notification after a committing write (wikictl or
-/// the daemon), so the app's change bridge can refresh the sidebar and signal
+/// Posts the wiki-change Darwin notification after a committing write (wikictl
+/// or the daemon), so the app's change bridge can refresh the sidebar and signal
 /// the File Provider.
 ///
-/// Darwin notifications carry no payload, so the wiki id lives in the NAME
-/// (`WikiChangeNotification.name(forWikiID:)`). The poster posts ONLY this — it
-/// never signals the File Provider itself; that stays the app's job (single owner
-/// of FP signaling, per domain).
+/// The post is a stable, payload-free "something changed" signal
+/// (`WikiChangeNotification.baseName`) and takes NO wiki id: Darwin
+/// notifications carry no payload, and encoding the id in the name required the
+/// app to pre-subscribe per wiki — which is exactly what made a wiki created
+/// while the app runs inaudible (#1374). The consumer re-reads the registry to
+/// learn which wikis exist, the same rule
+/// `postAgentProvidersConfigChange` / `postExtractorCatalogChange` follow.
+///
+/// The poster posts ONLY this — it never signals the File Provider itself; that
+/// stays the app's job (single owner of FP signaling, per domain).
 ///
 /// Moved from WikiCtlCore to WikiFSCore so both `wikictl` and the `wikid` daemon
 /// can post change notifications without depending on WikiCtlCore.
 public enum DarwinNotifier {
-    public static func postChange(forWikiID id: String) {
+    public static func postChange() {
         #if os(macOS)
-        post(name: WikiChangeNotification.name(forWikiID: id))
+        post(name: WikiChangeNotification.baseName)
         #else
         // Darwin notifications are macOS-only; on Linux the cross-process
         // change-notification path is unused.

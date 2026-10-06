@@ -1153,7 +1153,7 @@ final class WikiDaemon: @unchecked Sendable {
     /// The daemon's stores live in a separate process from the app, so the
     /// store's own `ResourceChangeEvent` emissions (from `mutate()`) can't
     /// reach the app directly. This wiring bridges them: each event →
-    /// `DarwinNotifier.postChange(forWikiID:)` → the app's `WikiChangeBridge`
+    /// `DarwinNotifier.postChange()` → the app's `WikiChangeBridge`
     /// receives the cross-process Darwin notification → coalesces → reloads.
     ///
     /// Without it, daemon-only writes that never pass through an agent
@@ -1172,7 +1172,7 @@ final class WikiDaemon: @unchecked Sendable {
         if store.eventBus == nil {
             let bus = WikiEventBus(wikiID: wikiID)
             bus.subscribe(nil) { event in
-                DarwinNotifier.postChange(forWikiID: event.wikiID.rawValue)
+                DarwinNotifier.postChange()
             }
             store.eventBus = bus
         }

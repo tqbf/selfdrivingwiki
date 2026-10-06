@@ -167,7 +167,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             onPendingPermission: onPendingPermission,
             providerLabel: providerLabel,
             onLock: { },
-            onUnlock: { DarwinNotifier.postChange(forWikiID: wikiID.rawValue) }
+            onUnlock: { DarwinNotifier.postChange() }
         )
         await launcher.awaitProviderRelease()
 
@@ -195,7 +195,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         // The `onUnlock` Darwin notification fired before the stamps; post
         // once more so attached apps reload the new Ingested state.
         if !stampIDs.isEmpty {
-            DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+            DarwinNotifier.postChange()
         }
         // Snapshot the actual post-run citation evidence into the durable job.
         // A snapshot read failure is logged but does not rewrite the successful
@@ -419,7 +419,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             onPendingPermission: onPendingPermission,
             providerLabel: providerLabel,
             onLock: { },
-            onUnlock: { DarwinNotifier.postChange(forWikiID: wikiID.rawValue) }
+            onUnlock: { DarwinNotifier.postChange() }
         )
         await launcher.awaitProviderRelease()
     }

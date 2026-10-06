@@ -225,10 +225,10 @@ Key mechanics:
                                                                               │
   wikictl  ──page upsert / log append / index set──▶ SQLite (write)          │
        │                                                                      │
-       └── DarwinNotifier.postChange(forWikiID) ──▶ org.sockpuppet.wiki.changed.<ulid>
+       └── DarwinNotifier.postChange() ──▶ org.sockpuppet.wiki.changed
                                                           │
-                                          WikiChangeBridge observes (per wiki)
-                                                          │  ChangeCoalescer (~250 ms)
+                                          WikiChangeBridge observes (once, launch)
+                                                          │  ChangeCoalescer (~250 ms, per wiki)
                                                           ▼
                                    rebuild sidebar (if on-screen) + signalChange(domain)
 ```
@@ -238,11 +238,13 @@ Key mechanics:
   make a second writer process safe), runs one command, prints to stdout, and — only
   after a **committing** call — posts the Darwin notification. It **never** signals
   the File Provider itself: the app is the single owner of FP signaling per domain.
-- **Darwin notifications carry no payload**, so the wiki id lives in the notification
-  *name*: `org.sockpuppet.wiki.changed.<ulid>` (`WikiChangeNotification`). The app
-  subscribes to exactly that name for each registered wiki, so its observer knows
-  which wiki changed with no demux table.
-- **`WikiChangeBridge`** (app) observes those names, hops to the main actor, and
+- **Darwin notifications carry no payload**, so the wiki id CANNOT travel in the
+  notification *name* without the app pre-subscribing per wiki — which made a wiki
+  created while the app runs inaudible (#1374). There is ONE stable name,
+  `org.sockpuppet.wiki.changed` (`WikiChangeNotification`), posted as a
+  payload-free "something changed" signal; the app subscribes to it once at launch
+  and re-reads the wiki registry on receipt to learn which wikis to refresh.
+- **`WikiChangeBridge`** (app) observes that name, hops to the main actor, and
   feeds a **per-wiki `ChangeCoalescer`** (a pure, fake-clock-testable ~250 ms
   debounce — one ingest fires a burst of `wikictl` calls and we want one rebuild +
   one FP signal, not fifteen). On flush it rebuilds the active store's summaries (if

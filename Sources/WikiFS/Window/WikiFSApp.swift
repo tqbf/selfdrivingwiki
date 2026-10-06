@@ -478,7 +478,11 @@ struct WikiFSApp: App {
             bridge.sessionLookup = { [sessionManager] wikiID in
                 sessionManager.allSessions.filter { $0.wikiID == wikiID }
             }
-            bridge.refreshObservations()
+            // ONE subscription for the app lifetime, to the stable
+            // wiki-agnostic name. Nothing per-wiki to keep in lockstep: the
+            // bridge re-reads the registry on every receipt, so a wiki created
+            // while the app runs is heard without any refresh call (#1374).
+            bridge.start()
             // Retain on the AppDelegate (AppKit-owned, app-lifetime), NOT in
             // App `@State`: this Task runs from the `bootstrap` closure's copy
             // of the App struct captured before SwiftUI installed `@State`
@@ -881,12 +885,13 @@ struct WikiFSApp: App {
             } message: { message in
                 Text(message)
             }
-            // Keep the bridge's Darwin observations in lockstep with the wiki
-            // set: a freshly-created wiki's CLI writes must be heard; a
-            // deleted wiki's notification name released.
-            .onChange(of: registry.wikis) { _, _ in
-                appDelegate.changeBridge?.refreshObservations()
-            }
+            // No `.onChange(of: registry.wikis)` handler here any more: it
+            // existed ONLY to keep the bridge's per-wiki Darwin subscriptions in
+            // lockstep with the wiki set (#1374). The bridge now subscribes once
+            // to a wiki-agnostic name and re-reads the registry from disk on
+            // receipt, so a wiki created out-of-process needs no notification
+            // here — `WikiRegistryClient.reloadFromDisk()` publishes it and the
+            // sidebar updates reactively.
             .onChange(of: appearanceModeRaw) { _, _ in
                 applyAppKitAppearance()
             }
@@ -1161,8 +1166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor var operationNotifier: OperationNotifier?
     /// Strong on purpose — same lifetime trap as `menuBarItemController` and
     /// `operationNotifier`: the bridge must outlive `startStatusItem()`.
-    /// It is the app's ONLY subscriber to the per-wiki Darwin change
-    /// notifications (`org.sockpuppet.wiki.changed.<id>`) that cross-process
+    /// It is the app's ONLY subscriber to the wiki-change Darwin notification
+    /// (`org.sockpuppet.wiki.changed`) that cross-process
     /// writers (`wikictl`, the `wikid` daemon and its ingestion agents) post
     /// after committing; its `deinit` unregisters every observer. Storing it
     /// in App-struct `@State` is NOT enough: `startStatusItem()` is reached

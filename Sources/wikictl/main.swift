@@ -639,8 +639,8 @@ private func write(_ output: WikiCtlRunner.Output) {
     if !output.stdout.isEmpty {
         FileHandle.standardOutput.write(output.stdout)
     }
-    if let wikiID = output.changedWikiID {
-        DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+    if output.changedWikiID != nil {
+        DarwinNotifier.postChange()
     }
 }
 

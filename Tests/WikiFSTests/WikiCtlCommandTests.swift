@@ -1202,10 +1202,14 @@ struct WikiCtlCommandTests {
 
     // MARK: - Darwin notification naming
 
-    @Test func darwinNotificationNameCarriesWikiID() {
-        let name = WikiChangeNotification.name(forWikiID: "01ABCDEF")
-        #expect(name == "org.sockpuppet.wiki.changed.01ABCDEF")
-        #expect(name.hasPrefix(WikiChangeNotification.baseName))
+    @Test func darwinNotificationNameIsStableAndWikiAgnostic() {
+        // The change wake is ONE stable, payload-free name: it must not encode a
+        // wiki id, because a wiki created while the app runs cannot be in any
+        // launch-time subscription set (#1374).
+        #expect(WikiChangeNotification.baseName == "org.sockpuppet.wiki.changed")
+        // No per-wiki suffix form is appended any more. A ULID suffix would put a
+        // `.` after the base name; the base name is the whole contract.
+        #expect(!WikiChangeNotification.baseName.hasSuffix("."))
     }
 
     @Test func rendererWakeNamesCarryOnlyScopeIdentity() throws {

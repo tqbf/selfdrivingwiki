@@ -179,7 +179,7 @@ struct RendererEventWakeTests {
     @Test func machineRoutingRejectsResourceNames() throws {
         let scope = try RendererMachineScopeID(validating: "renderer-machine")
         #expect(RendererMachineWakeRouting.scope(forNotificationName: RendererChangeNotification.machineName(for: scope), observedScopes: [scope]) == scope)
-        #expect(RendererMachineWakeRouting.scope(forNotificationName: WikiChangeNotification.name(forWikiID: "01H"), observedScopes: [scope]) == nil)
+        #expect(RendererMachineWakeRouting.scope(forNotificationName: WikiChangeNotification.baseName, observedScopes: [scope]) == nil)
     }
 }
 

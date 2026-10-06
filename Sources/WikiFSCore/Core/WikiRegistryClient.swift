@@ -154,6 +154,29 @@ public final class WikiRegistryClient {
         }
     }
 
+    /// Re-read `wikis.json` from disk and publish any change to ``wikis``.
+    ///
+    /// The app is not the only writer of the registry: `wikictl wiki create`
+    /// and the `wikid` daemon both add wikis by writing the file directly. The
+    /// change bridge calls this when it receives a wiki-change wake so that a
+    /// wiki created while the app is running becomes visible here (#1374) —
+    /// previously the bridge's per-wiki Darwin subscription was refreshed only
+    /// from `.onChange(of: registry.wikis)`, which could not fire for a wiki
+    /// this client had never learned about.
+    ///
+    /// Assigns only when the on-disk set actually differs, so a wake storm does
+    /// not churn `@Observable` observers (and thus SwiftUI) with no-op writes.
+    /// Returns whether ``wikis`` changed.
+    @discardableResult
+    public func reloadFromDisk() -> Bool {
+        let onDisk = WikiRegistry.load(from: containerDirectory).wikis
+        guard onDisk != wikis else { return false }
+        wikis = onDisk
+        DebugLog.store(
+            "WikiRegistryClient: reloaded registry from disk — \(onDisk.count) wiki(s)")
+        return true
+    }
+
     /// Register one File Provider domain per wiki (generalizes the
     /// single-domain add-if-absent). Call after `bootstrap`, once the FP
     /// closures are wired.

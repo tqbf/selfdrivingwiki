@@ -142,7 +142,7 @@ Command surface (stdin/stdout, scriptable):
 - `wikictl index set --body-file -` — rewrites the curated index singleton (Phase B).
 
 After every committing call, `wikictl` **posts a Darwin notification**
-(`org.sockpuppet.wiki.changed`, carrying the wiki id) so the app can react.
+(`org.sockpuppet.wiki.changed`, payload-free) so the app can react.
 `wikictl` never signals the File Provider itself — that stays the app's job
 (single owner of FP signaling, per domain).
 
