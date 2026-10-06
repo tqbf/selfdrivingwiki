@@ -1,5 +1,7 @@
 import Foundation
 
+// pattern: Functional Core
+
 /// Resolves a received wiki-change Darwin notification to the wikis the change
 /// bridge must refresh.
 ///

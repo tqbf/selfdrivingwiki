@@ -115,8 +115,11 @@ WindowGroup(for: String.self) { $wikiID in   ← per-wiki-ID windows
     RootScene(wikiID: wikiID, sessionManager:, registry:, ...)
         .onChange(of: scenePhase) { ... }    ← per-window scenePhase
 }
-.onChange(of: registry.wikis) { changeBridge?.refreshObservations() }
 ```
+
+No `.onChange(of: registry.wikis)` refresh hook is needed: the bridge re-reads
+`wikis.json` itself on every wiki-change wake, so a wiki created while the app
+runs is picked up without the app telling it (#1374).
 
 ### The new `SessionManager` type
 

@@ -655,12 +655,15 @@ private func write(_ output: WikiCtlRunner.Output) {
 // event-bus wiring.
 //
 // Registry-level changes (a new/deleted/renamed wiki) become visible to a
-// running app on its NEXT launch: the app drives its registry in-process via
-// `WikiRegistryClient` and only watches PER-PAGE Darwin notifications, not
-// `wikis.json` itself (WikiChangeBridge). This matches the daemon's prior
-// behavior — `createWiki` posted no registry notification either — and is fine
-// for the CLI's scripting/headless role (the app creates wikis via its own
-// client, not via wikictl).
+// running app on the next committing write, not only on its next launch: the
+// app's `WikiChangeBridge` re-reads `wikis.json` on every wiki-change wake
+// (`WikiRegistryClient.reloadFromDisk()`), and this CLI posts that wake after a
+// committing write via `DarwinNotifier.postChange()`. A registry change that is
+// followed by no write is still only picked up at launch, and the wake is
+// wiki-agnostic, so the app cannot tell which wiki changed — it refreshes every
+// wiki the registry lists. The daemon's prior behavior was to post no registry
+// notification at all, which is fine for the CLI's scripting/headless role (the
+// app creates wikis via its own client, not via wikictl).
 
 func runDumpConfig(overlay: String?) -> Int32 {
     do {

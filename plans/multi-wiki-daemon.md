@@ -632,8 +632,9 @@ serializes registry mutations.
   `WikiReadPool` read-only connections, `mutate()` write-seam event emission,
   `StoreEmissionExhaustivenessTests`. All preserved.
 - **Darwin notification routing** — `wikictl` still posts
-  `DarwinNotifier.postChange(forWikiID:)` after writes. The app's
-  `WikiChangeBridge` still receives and routes to the active store.
+  `DarwinNotifier.postChange()` (one stable, payload-free name) after writes.
+  The app's `WikiChangeBridge` receives it and fans out to every wiki the
+  registry lists.
 - **Agent config** — provider, API keys, permission mode stay app-wide (in
   `UserDefaults` + Keychain). The daemon does not manage agent config in
   Phase 1.

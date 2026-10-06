@@ -359,7 +359,6 @@ coordinator is app-scoped (no per-wiki state).
 
 ### Step 6: Rewire WikiChangeBridge
 - Takes `registry: WikiRegistryClient` + `weak var session: WikiSession?`
-- `refreshObservations()` reads `registry.wikis`
 - `flush(wikiID:)` calls FP + pokes `session?.store.eventBus` if `wikiID == session?.wikiID`
 - Gate: `swift build`
 

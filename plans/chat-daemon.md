@@ -35,7 +35,7 @@ clients.
 - **RC5:** `summarizePendingMessages` generalized for `GRDBWikiStore`.
 - Store sinks wired directly to `GRDBWikiStore` (onTranscript →
   `appendChatMessages`, onSummary → `updateChatSummary`, etc.).
-- `DarwinNotifier.postChange(forWikiID:)` on `onUnlock` (same as ingestion).
+- `DarwinNotifier.postChange()` on `onUnlock` (same as ingestion).
 - Event streaming via `onAgentEvent` + 150ms state-change poll.
 
 ### C3: RemoteChatSession + demux

@@ -70,6 +70,66 @@ struct WikiRegistryClientTests {
         #expect(strict.descriptor(id: WikiID(rawValue: "strict-roundtrip"))?.displayName == "Strict Roundtrip")
     }
 
+    // MARK: - reloadFromDisk (the change bridge's registry re-read)
+
+    /// A malformed `wikis.json` must NOT blank the live list: `reloadFromDisk`
+    /// reads strictly, so a corrupt file leaves `wikis` exactly as it was and
+    /// reports "no change".
+    ///
+    /// The lenient `WikiRegistry.load(from:)` degrades corruption to an EMPTY
+    /// registry, so reading through it here would assign `[]` to `wikis` and drop
+    /// every wiki from the sidebar. The daemon refuses the same read
+    /// (`WikiDaemon.readDiskRegistry()` → `.unreadable`), because treating
+    /// corruption as mass deletion destroys state.
+    @Test func reloadFromDiskKeepsWikisWhenTheFileIsMalformed() throws {
+        let dir = tempDirectory()
+        let registry = WikiRegistryClient(containerDirectory: dir)
+        registry.bootstrap()
+        let before = registry.wikis
+        #expect(!before.isEmpty)
+
+        // A partial write / corrupt file, exactly as the lenient loader's own
+        // test constructs one.
+        try Data("definitely not json".utf8)
+            .write(to: dir.appendingPathComponent(WikiRegistry.fileName))
+
+        #expect(registry.reloadFromDisk() == false)
+        #expect(registry.wikis == before, "a corrupt registry must not blank the live wiki list")
+    }
+
+    /// The other half of the same contract: a genuinely MISSING file is a valid
+    /// empty registry (fresh install), so it is still adopted. This pins that the
+    /// strict read did not turn "no wikis" into "keep stale wikis".
+    @Test func reloadFromDiskAdoptsAnEmptyRegistryWhenTheFileIsMissing() throws {
+        let dir = tempDirectory()
+        let registry = WikiRegistryClient(containerDirectory: dir)
+        registry.bootstrap()
+        #expect(!registry.wikis.isEmpty)
+
+        try FileManager.default.removeItem(at: dir.appendingPathComponent(WikiRegistry.fileName))
+
+        #expect(registry.reloadFromDisk() == true)
+        #expect(registry.wikis.isEmpty)
+    }
+
+    /// A wiki another process added to `wikis.json` is adopted, and the second
+    /// read is a no-op (no `@Observable` churn on a wake storm).
+    @Test func reloadFromDiskAdoptsAnExternallyAddedWikiThenReportsNoChange() throws {
+        let dir = tempDirectory()
+        let registry = WikiRegistryClient(containerDirectory: dir)
+        registry.bootstrap()
+
+        let added = WikiDescriptor.make(displayName: "Added By wikictl")
+        var onDisk = WikiRegistry.load(from: dir)
+        onDisk.add(added)
+        try onDisk.save(to: dir)
+
+        #expect(registry.reloadFromDisk() == true)
+        #expect(registry.wikis.contains { $0.id == added.id })
+        // Nothing changed on the second read.
+        #expect(registry.reloadFromDisk() == false)
+    }
+
     // MARK: - Deferred activation (launch reentrancy sequencing)
 
     /// Guards the macOS-26 launch sequencing: `App.init()` calls

@@ -185,6 +185,12 @@ final class WikiChangeBridge {
     /// daemon, either of which writes `wikis.json` directly) is refreshed by the
     /// next wake with no explicit refresh call anywhere (#1374).
     ///
+    /// The name is resolved BEFORE the registry read, on purpose: rejecting a
+    /// name from another namespace needs no wiki set, and this callback is shared
+    /// with the renderer-machine namespace. Reloading first made a foreign wake
+    /// (a renderer-machine notification) pay a main-actor disk read it never
+    /// uses.
+    ///
     /// Marked `internal` (not `private`) so `WikiChangeBridgeTests` can drive the
     /// receive path directly via `@testable import WikiFS` — same precedent as
     /// `flush(wikiID:)`. Posting a real Darwin notification from a test would
@@ -195,7 +201,13 @@ final class WikiChangeBridge {
             rendererMachineWakeHandler(scope)
             return
         }
-        // Re-read the authoritative registry BEFORE resolving: the wake is
+        // The wiki set is only needed to resolve an ACCEPTED wiki-change name, so
+        // a foreign name returns before any registry read. This is the same
+        // predicate `WikiChangeWakeRouting.wikiIDs` applies; it is stated here as
+        // well because rejecting early is the whole point — routing cannot reject
+        // without being handed a wiki set, and building that set costs a disk read.
+        guard posted == WikiChangeNotification.baseName else { return }
+        // Re-read the authoritative registry before resolving: the wake is
         // wiki-agnostic, so the current wiki set is the only thing that can say
         // which wikis to refresh.
         registry.reloadFromDisk()
@@ -209,8 +221,13 @@ final class WikiChangeBridge {
         // observing.
         DebugLog.store(
             "WikiChangeBridge: Darwin change notification → refreshing \(wikiIDs.count) wiki(s)")
+        // `noteChangeIfNotPending`, NOT `noteChange`: this loop visits every
+        // registry wiki on every wake, so re-arming would reschedule each wiki's
+        // timer for a change that may not be that wiki's — a burst of writes to
+        // one wiki would then keep pushing every OTHER wiki's flush deadline out.
+        // A wiki with a flush already in flight keeps it.
         for wikiID in wikiIDs {
-            coalescer?.noteChange(forWikiID: wikiID)
+            coalescer?.noteChangeIfNotPending(forWikiID: wikiID)
         }
     }
 
@@ -251,8 +268,12 @@ final class WikiChangeBridge {
     /// respective targets.
     ///
     /// The wiki-agnostic wake calls this once per registry wiki; each call is
-    /// idempotent, and a wiki with no live session and no File Provider domain
-    /// (a stale registry entry) costs one lookup that returns nothing.
+    /// idempotent. A stale registry entry still costs the full File Provider
+    /// signal, not a cheap lookup: `signalChange(forWikiID:)` iterates 13
+    /// containers and awaits `signalEnumerator` on each with a 3 s timeout, and
+    /// `NSFileProviderManager(for:)` returns a manager for any identifier whether
+    /// the domain is registered or not, so nothing short-circuits. The bus poke
+    /// for a wiki with no live session is the only part that returns nothing.
     ///
     /// Marked `internal` (not `private`) so `WikiChangeBridgeTests` can call it
     /// directly via `@testable import WikiFS`.
