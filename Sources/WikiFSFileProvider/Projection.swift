@@ -1865,6 +1865,13 @@ struct Projection {
     /// enumeration pass — the fix for #291 where `children(of: .workingSet)`
     /// opened ~35 independent SQLite connections (one per leaf, per index, per
     /// doc, plus one per `changeToken()` call).
+    /// The child of `container` whose filename is exactly `name`, if any.
+    /// `FileProviderExtension.createItem` uses it to match an item the daemon
+    /// re-offers during `reimportItems(below:)` to the node it came from.
+    func child(named name: String, in container: NSFileProviderItemIdentifier) -> ProjectedNode? {
+        children(of: container).first { $0.name == name }
+    }
+
     func children(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
         var scoped = self
         scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)

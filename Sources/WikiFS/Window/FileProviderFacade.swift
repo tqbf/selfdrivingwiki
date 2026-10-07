@@ -38,8 +38,49 @@ final class FileProviderFacade: ChangeSignaler {
     /// tests substitute a fake.
     private let domainService: FileProviderDomainService
 
-    init(domainService: FileProviderDomainService = SystemFileProviderDomainService()) {
+    /// Injected so `verifyProjection` tests don't sleep for real — production
+    /// default is a real `Task.sleep`. `Task.sleep` only throws
+    /// `CancellationError` (expected, not actionable), so the default
+    /// silences it the same way the rest of this file does.
+    private let sleepFor: @Sendable (Duration) async -> Void
+    /// Injected so `verifyProjection` tests don't need a live File Provider
+    /// mount — production default lists a real directory off the main actor.
+    /// Returns `nil` on any failure (missing directory, permission error).
+    private let listDirectory: @Sendable (URL) async -> [String]?
+    /// How long one projection listing may take. Deliberately NOT routed
+    /// through `sleepFor`: tests stub `sleepFor` to return at once, and a
+    /// timeout that fires instantly would race every fixture listing and
+    /// turn the check into a silent skip.
+    private let projectionListingTimeout: Duration
+
+    init(
+        domainService: FileProviderDomainService = SystemFileProviderDomainService(),
+        sleepFor: @escaping @Sendable (Duration) async -> Void = { duration in
+            // swiftlint:disable:next silent_try_optional
+            try? await Task.sleep(for: duration)
+        },
+        listDirectory: @escaping @Sendable (URL) async -> [String]? = FileProviderFacade.defaultListDirectory,
+        projectionListingTimeout: Duration = FileProviderFacade.projectionCheckListingTimeout
+    ) {
         self.domainService = domainService
+        self.sleepFor = sleepFor
+        self.listDirectory = listDirectory
+        self.projectionListingTimeout = projectionListingTimeout
+    }
+
+    /// Production directory lister: runs `FileManager.contentsOfDirectory`
+    /// detached from the main actor, since listing a File Provider folder can
+    /// block on the daemon. Returns `nil` (not `[]`) on any failure so callers
+    /// can tell "empty directory" apart from "listing failed".
+    private static func defaultListDirectory(_ url: URL) async -> [String]? {
+        await Task.detached(priority: .utility) {
+            do {
+                return try FileManager.default.contentsOfDirectory(atPath: url.path)
+            } catch {
+                DebugLog.fileprovider("projection check: listing \(url.path) failed: \(error)")
+                return nil
+            }
+        }.value
     }
 
     // MARK: - Resource-change bus subscription (slice 2a)
@@ -365,6 +406,187 @@ final class FileProviderFacade: ChangeSignaler {
             }
         } else {
             status = "Mount unavailable: domain not registered"
+        }
+    }
+
+    // MARK: - Projection drift check (reimport recovery)
+
+    /// A closure that yields the wiki's current pages, called on the main
+    /// actor. A closure rather than a snapshot so the post-grace-period
+    /// recheck in `verifyProjection` reads FRESH data — a page created during
+    /// the grace period must not be misreported as still missing.
+    typealias ExpectedPagesProvider = @MainActor () -> [ProjectionDriftCheck.ExpectedPage]
+
+    /// How long to wait after a domain is activated before the first
+    /// projection check. A freshly registered domain is still running its
+    /// initial enumeration; checking immediately would misreport in-flight
+    /// pages as missing.
+    static let projectionCheckSettleDelay: Duration = .seconds(20)
+
+    /// How long to wait, once drift is first observed, before rechecking.
+    /// Pages created moments ago may still be mid-propagation; only drift
+    /// that survives this grace period is treated as a stuck item.
+    static let projectionCheckGracePeriod: Duration = .seconds(30)
+
+    /// How long a single `pages/by-id` or `pages/by-title` directory listing
+    /// may take before it is treated as failed (skip, not drift).
+    static let projectionCheckListingTimeout: Duration = .seconds(10)
+
+    /// Wikis this launch has already reimported. Bounds `verifyProjection` to
+    /// at most one `reimportItems` call per wiki per process lifetime, so a
+    /// persistent failure surfaces once instead of looping every time the
+    /// wiki is opened.
+    private var reimportedWikiIDs: Set<WikiID> = []
+
+    /// Compare `id`'s on-disk `pages/by-id` / `pages/by-title` projection
+    /// against its DB via `expectedPages`, and recover a stuck File Provider
+    /// replica by calling `reimportItems(below: .rootContainer)` when pages
+    /// are persistently missing on disk.
+    ///
+    /// Background: `fileproviderd` can get individual items permanently
+    /// stuck — a propagation failure lands the item in the daemon's throttle
+    /// list, and it's never retried because the extension keeps reporting the
+    /// same item version. Normal change signaling never re-syncs it.
+    /// `reimportItems` is the only reliable recovery, and it must be called
+    /// from the app (it fails with -2001/-2014 from an outside process).
+    ///
+    /// Runs in its own `Task`, kicked off (not awaited) right after
+    /// `activate` — it must not block wiki opening. Safe to call more than
+    /// once per wiki per launch: `reimportedWikiIDs` guards repeat reimports,
+    /// and every other outcome (no drift, drift that resolves itself, a
+    /// failed listing) is silently re-checkable next time.
+    func verifyProjection(
+        forWikiID id: WikiID,
+        displayName: String,
+        expectedPages: @escaping ExpectedPagesProvider
+    ) {
+        Task { [weak self] in
+            await self?.runProjectionCheck(forWikiID: id, displayName: displayName, expectedPages: expectedPages)
+        }
+    }
+
+    private func runProjectionCheck(
+        forWikiID id: WikiID,
+        displayName: String,
+        expectedPages: ExpectedPagesProvider
+    ) async {
+        guard !reimportedWikiIDs.contains(id) else { return }
+
+        await sleepFor(Self.projectionCheckSettleDelay)
+        guard !Task.isCancelled else { return }
+
+        guard let root = await resolvedRootURLForProjectionCheck(id: id, displayName: displayName) else { return }
+        await checkProjectionAndReimportIfPersistentlyDrifted(
+            forWikiID: id, displayName: displayName, root: root, expectedPages: expectedPages)
+    }
+
+    /// The check/recheck/reimport core, given an ALREADY-RESOLVED mount root.
+    /// Split out from `runProjectionCheck` so it's directly testable: root-URL
+    /// resolution needs a live `fileproviderd` (see `resolvedRootURLForProjectionCheck`
+    /// / `FileProviderFacadeMountPathTests`'s doc comment on the same limit),
+    /// but everything from here down is driven purely by the injected
+    /// `listDirectory`/`sleepFor`/`domainService`, so it isn't. Not private for
+    /// that reason — internal, called directly from `@testable import WikiFS`
+    /// tests.
+    ///
+    /// Lists `pages/by-id`/`pages/by-title`, and if the DB's `expectedPages`
+    /// aren't all present, waits `projectionCheckGracePeriod` and rechecks with
+    /// FRESH `expectedPages()` (a page created during the wait must not be
+    /// misreported as still missing). Only drift that survives the recheck
+    /// triggers `reimportItems`, and at most once per wiki per launch
+    /// (`reimportedWikiIDs`).
+    func checkProjectionAndReimportIfPersistentlyDrifted(
+        forWikiID id: WikiID,
+        displayName: String,
+        root: URL,
+        expectedPages: ExpectedPagesProvider
+    ) async {
+        guard !reimportedWikiIDs.contains(id) else { return }
+        guard let first = await listProjection(root: root) else { return }
+
+        let firstResult = ProjectionDriftCheck.check(
+            expectedPages: expectedPages(),
+            onDiskByID: first.byID,
+            onDiskByTitle: first.byTitle)
+        guard firstResult.isDrifted else { return }
+
+        DebugLog.fileprovider("""
+            verifyProjection(\(displayName)): drift observed — \
+            missingByID=\(firstResult.missingByIDCount) missingByTitle=\(firstResult.missingByTitleCount); \
+            rechecking after grace period
+            """)
+
+        await sleepFor(Self.projectionCheckGracePeriod)
+        guard !Task.isCancelled, !reimportedWikiIDs.contains(id) else { return }
+
+        guard let second = await listProjection(root: root) else { return }
+        let secondResult = ProjectionDriftCheck.check(
+            expectedPages: expectedPages(),
+            onDiskByID: second.byID,
+            onDiskByTitle: second.byTitle)
+        guard secondResult.isDrifted else {
+            DebugLog.fileprovider("verifyProjection(\(displayName)): drift resolved on recheck — no reimport needed")
+            return
+        }
+
+        reimportedWikiIDs.insert(id)
+        DebugLog.fileprovider("""
+            verifyProjection(\(displayName)): persistent drift — \
+            missingByID=\(secondResult.missingByIDCount) missingByTitle=\(secondResult.missingByTitleCount); \
+            calling reimportItems(below: .rootContainer)
+            """)
+        do {
+            try await domainService.reimport(id: id)
+            DebugLog.fileprovider("verifyProjection(\(displayName)): reimport requested")
+        } catch {
+            DebugLog.fileprovider("verifyProjection(\(displayName)): reimport failed — \(error.localizedDescription)")
+        }
+    }
+
+    /// Resolve THIS wiki's mount root, never the shared `activeWikiID` —
+    /// multi-window means the active wiki can change out from under a
+    /// long-running check. Skips quietly (returns `nil`) if the domain isn't
+    /// registered or its root can't be resolved.
+    private func resolvedRootURLForProjectionCheck(id: WikiID, displayName: String) async -> URL? {
+        guard await isDomainRegistered(id: id) else {
+            DebugLog.fileprovider("verifyProjection(\(displayName)): domain not registered — skipping")
+            return nil
+        }
+        let domain = domain(id: id, displayName: displayName)
+        guard let manager = NSFileProviderManager(for: domain) else { return nil }
+        do {
+            return try await userVisibleURL(manager: manager, itemIdentifier: .rootContainer, timeout: .seconds(5))
+        } catch {
+            DebugLog.fileprovider("verifyProjection(\(displayName)): couldn't resolve mount root — \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// List `pages/by-id` and `pages/by-title` under `root`. A failed listing
+    /// on EITHER side is a skip, not drift — it means we couldn't observe the
+    /// mount, not that the mount is wrong.
+    private func listProjection(root: URL) async -> (byID: Set<String>, byTitle: Set<String>)? {
+        async let byIDFiles = listDirectoryWithTimeout(root.appendingPathComponent(IndexGenerators.pagesByIDPath))
+        async let byTitleFiles = listDirectoryWithTimeout(root.appendingPathComponent(IndexGenerators.pagesByTitlePath))
+        guard let byID = await byIDFiles, let byTitle = await byTitleFiles else { return nil }
+        return (Set(byID), Set(byTitle))
+    }
+
+    /// Race the injected `listDirectory` against `projectionListingTimeout`
+    /// — a File Provider directory listing can block on the daemon, so a
+    /// stuck listing must not hang the whole check. Uses a real sleep, not
+    /// `sleepFor` (see `projectionListingTimeout`). The sleep only throws
+    /// `CancellationError` when the listing wins and `cancelAll` runs.
+    private func listDirectoryWithTimeout(_ url: URL) async -> [String]? {
+        await withTaskGroup(of: [String]?.self) { group in
+            group.addTask { [listDirectory] in await listDirectory(url) }
+            group.addTask { [projectionListingTimeout] in
+                // swiftlint:disable:next silent_try_optional
+                try? await Task.sleep(for: projectionListingTimeout)
+                return nil
+            }
+            defer { group.cancelAll() }
+            return await group.next() ?? nil
         }
     }
 

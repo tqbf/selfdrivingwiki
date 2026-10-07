@@ -24,6 +24,24 @@ struct SystemFileProviderDomainService: FileProviderDomainService {
         try await NSFileProviderManager.remove(Self.domain(id: id, displayName: id.rawValue))
     }
 
+    func reimport(id: WikiID) async throws {
+        let domain = Self.domain(id: id, displayName: id.rawValue)
+        guard let manager = NSFileProviderManager(for: domain) else {
+            throw ReimportError.noManager
+        }
+        // Void-returning bridge (completion handler is `(NSError?) -> Void`,
+        // no nullable object return) — no #756 nil-URL trap risk here.
+        try await manager.reimportItems(below: .rootContainer)
+    }
+
+    enum ReimportError: LocalizedError {
+        case noManager
+
+        var errorDescription: String? {
+            "No NSFileProviderManager for this domain — it may not be registered yet."
+        }
+    }
+
     func domains() async -> [RegisteredDomain] {
         // NSFileProviderDomain is not Sendable, so calling domains() from a
         // @MainActor context is a strict-concurrency error under Swift 6. Run the
