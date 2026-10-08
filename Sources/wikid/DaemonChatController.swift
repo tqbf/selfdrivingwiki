@@ -231,15 +231,26 @@ actor DaemonChatController {
             return
         }
 
-        // A settlement already in flight owns this turn. Only a settlement
-        // that failed to persist admits a retry. Every other phase is a
-        // duplicate Stop and must not run a second effect.
-        if case .settling(var context) = ownership, context.turnID == resolvedTurnID {
-            guard context.phase == .persistenceFailure else { return }
-            context.phase = .writingOutcome
-            context.operationID = UUID()
-            ownership = .settling(context)
-            await settleCancellation(context: context)
+        // A settlement already in flight owns this turn. A settlement that
+        // failed to persist, or one whose terminal outcome committed but whose
+        // runtime cleanup failed, admits a retry that repeats only the failed
+        // step. Every other phase is a duplicate Stop and runs no second effect.
+        if case .settling(let context) = ownership, context.turnID == resolvedTurnID {
+            switch context.phase {
+            case .persistenceFailure:
+                var retrying = context
+                retrying.phase = .writingOutcome
+                retrying.operationID = UUID()
+                ownership = .settling(retrying)
+                await settleCancellation(context: retrying)
+            case .awaitingClose:
+                var retrying = context
+                retrying.operationID = UUID()
+                ownership = .settling(retrying)
+                await finishCancellationSettlement(context: retrying)
+            case .gatheringUsage, .writingOutcome:
+                return
+            }
             return
         }
 
@@ -382,9 +393,17 @@ actor DaemonChatController {
 
         // Terminal persistence is committed. The cancelled runtime is
         // destructive to reuse, so close it and rotate before a follower runs.
+        await finishCancellationSettlement(context: context)
+    }
+
+    /// Completes a settlement whose terminal outcome is already committed: it
+    /// closes the cancelled runtime and then continues the queue. A failed
+    /// close retains ownership so a retry can repeat only the cleanup.
+    private func finishCancellationSettlement(context: SettlingContext) async {
         var awaitingClose = context
         awaitingClose.phase = .awaitingClose
         ownership = .settling(awaitingClose)
+
         let closed = await closeRuntimeForSettlement(turnID: context.turnID)
         guard closed else {
             // Close ownership is retained; followers stay blocked until a
@@ -636,7 +655,7 @@ actor DaemonChatController {
         do {
             startPreparation = try await currentRuntimeStartPreparation()
         } catch {
-            releasePreparationIfCurrent(operationID: preparationOperationID)
+            await releasePreparationIfCurrent(operationID: preparationOperationID)
             throw error
         }
         guard generation == preparingGeneration,
@@ -645,7 +664,7 @@ actor DaemonChatController {
               isCurrentPreparation(operationID: preparationOperationID) else {
             // A cancellation or a transport close took this preparation while
             // it was suspended. Release the token and do not claim.
-            releasePreparationIfCurrent(operationID: preparationOperationID)
+            await releasePreparationIfCurrent(operationID: preparationOperationID)
             await runtime.discardPreparedStart(startPreparation)
             return
         }
@@ -659,7 +678,7 @@ actor DaemonChatController {
             providerID: startRequest.providerID,
             modelID: startRequest.modelID
         ) else {
-            releasePreparationIfCurrent(operationID: preparationOperationID)
+            await releasePreparationIfCurrent(operationID: preparationOperationID)
             await runtime.discardPreparedStart(startPreparation)
             return
         }
@@ -667,7 +686,7 @@ actor DaemonChatController {
         // between the claim and this point. A claimed row that cancellation
         // already settled must not be dispatched.
         guard isCurrentPreparation(operationID: preparationOperationID) else {
-            releasePreparationIfCurrent(operationID: preparationOperationID)
+            await releasePreparationIfCurrent(operationID: preparationOperationID)
             await runtime.discardPreparedStart(startPreparation)
             return
         }
@@ -784,10 +803,13 @@ actor DaemonChatController {
     }
 
     /// Restores idle ownership only when this operation still owns it, so a
-    /// cancellation that replaced the preparation is never overwritten.
-    private func releasePreparationIfCurrent(operationID: UUID) {
+    /// cancellation that replaced the preparation is never overwritten. Any
+    /// drain that arrived while this preparation held ownership runs now, so a
+    /// follower cannot be stranded behind an abandoned preparation.
+    private func releasePreparationIfCurrent(operationID: UUID) async {
         guard isCurrentPreparation(operationID: operationID) else { return }
         ownership = .idle
+        await drainIfRequested(context: "releasePreparation")
     }
 
     /// True while `ownership` still belongs to the given dispatch operation.

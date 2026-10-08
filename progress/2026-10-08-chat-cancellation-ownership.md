@@ -22,7 +22,8 @@ The app projects cancellation from the server active-turn state and drains its l
 ## Verification
 
 Focused suites pass for the chat domain, sync wire, client reducer, store persistence, store emission, run state, cancellation gate, and the daemon chat controller.
-Full-suite validation and independent review remain pending.
+`make test` passes the full default graph, and bare `swift build` and `swift test` also pass.
+An independent review in the DeepSeek model family found a shutdown defect: shutdown read the claim after taking shutdown ownership, so a claimed active turn was never durably settled. The claim is now captured first, and the shutdown test asserts the durable row outcome.
 
 The operator's live chat database was not queried or modified.
 See `plans/chat-cancellation-state-machine.md` for the state table, effect ownership, and the same-bundle sync contract.

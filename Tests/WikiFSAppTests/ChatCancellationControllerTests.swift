@@ -72,6 +72,44 @@ struct ChatCancellationControllerTests {
         #expect(followerCalls.count == 1)
     }
 
+    /// A failed runtime cleanup must retain close ownership and let a retry
+    /// finish the close, after which the follower continues. Without the retry
+    /// the controller would wedge and the advertised retry would do nothing.
+    @Test func cancelCleanupFailureRetriesCloseThenContinuesQueue() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.controller()
+        let active = harness.submission("cleanup-active")
+        let follower = harness.submission("cleanup-follower")
+
+        _ = try await controller.submit(harness.request(active))
+        _ = try await controller.submit(harness.request(follower))
+
+        await harness.runtime.failNextClose()
+        await controller.cancel(turnID: active.turnID)
+
+        // The terminal outcome is committed, but cleanup failed, so followers
+        // stay blocked and the failure is a retryable attention.
+        let blocked = await controller.typedSnapshot()
+        let blockedTurns = try harness.store.listPersistedChatTurns(chatID: harness.chat.id)
+        if case .runtimeCleanupFailed(let turnID, _) = blocked.attention {
+            #expect(turnID == active.turnID)
+        } else {
+            Issue.record("expected a retryable cleanup attention, got \(blocked.attention)")
+        }
+        #expect(blockedTurns.first { $0.submission.turnID == active.turnID }?.state == .cancelled)
+        #expect(await harness.runtime.snapshot().submitCalls.filter { $0.turnID == follower.turnID }.isEmpty)
+
+        // The retry repeats only the close and then continues the queue.
+        await controller.cancel(turnID: active.turnID)
+        try await harness.waitForCancelledRow(turnID: active.turnID)
+        try await harness.waitForFollowerSubmitted(turnID: follower.turnID)
+
+        // The promoted follower is live; finish it so the queue settles.
+        await harness.runtime.emit(.turnCompleted(follower.turnID))
+        try await harness.waitForAllTurnsTerminal()
+        #expect(await harness.runtime.snapshot().submitCalls.filter { $0.turnID == follower.turnID }.count == 1)
+    }
+
     @Test func cancelPersistenceFailureRemainsRecoverable() async throws {
         let harness = try ControllerHarness()
         let controller = try harness.controller()
@@ -177,6 +215,17 @@ struct ChatCancellationControllerTests {
             }
             Issue.record("timed out waiting for the cancelled durable row")
         }
+
+        /// Polls until the promoted follower reaches the provider.
+        func waitForFollowerSubmitted(turnID: ChatTurnID) async throws {
+            for _ in 0..<100 {
+                if await runtime.snapshot().submitCalls.contains(where: { $0.turnID == turnID }) {
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            Issue.record("timed out waiting for the follower to be submitted")
+        }
     }
 
     private actor StubControllerRuntime: ChatAgentRuntime {
@@ -191,6 +240,9 @@ struct ChatCancellationControllerTests {
         private var continuation: AsyncStream<ChatAgentRuntimeEventEnvelope>.Continuation?
         private var submitCalls: [ChatTurnSubmission] = []
         private var startCount = 0
+        private var failClose = false
+
+        enum StubError: Error { case close }
 
         func prepareStart(_ input: ChatRuntimeStartInput) async throws -> ChatRuntimePreparedStart {
             ChatRuntimePreparedStart(request: input.request)
@@ -248,7 +300,15 @@ struct ChatCancellationControllerTests {
         }
 
         func closeForSettlement(_ handle: ChatRuntimeHandle) async throws {
+            if failClose {
+                failClose = false
+                throw StubError.close
+            }
             await close(handle)
+        }
+
+        func failNextClose() {
+            failClose = true
         }
 
         func discardPreparedStart(_ preparation: ChatRuntimePreparedStart) async {}

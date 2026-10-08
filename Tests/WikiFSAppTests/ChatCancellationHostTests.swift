@@ -195,7 +195,6 @@ private actor ControlledRuntime: ChatAgentRuntime {
     private var closeStarted = false
     private var pausesClose = false
     private var closeResumeWaiter: CheckedContinuation<Void, Never>?
-    private var closeStartedWaiter: CheckedContinuation<Void, Never>?
 
     func prepareStart(_ input: ChatRuntimeStartInput) async throws -> ChatRuntimePreparedStart {
         prepareInputs.append(input)
@@ -269,8 +268,6 @@ private actor ControlledRuntime: ChatAgentRuntime {
     func closeForSettlement(_ handle: ChatRuntimeHandle) async throws {
         closeForSettlementCount += 1
         closeStarted = true
-        closeStartedWaiter?.resume()
-        closeStartedWaiter = nil
         if pausesClose {
             await withCheckedContinuation { closeResumeWaiter = $0 }
         }
@@ -287,9 +284,13 @@ private actor ControlledRuntime: ChatAgentRuntime {
         pausesClose = false
     }
 
+    /// Bounded wait: polling avoids an abandoned continuation, which a task
+    /// cancellation could not resume if the controller never closed.
     func waitForCloseToStart() async {
-        guard closeStarted == false else { return }
-        await withCheckedContinuation { closeStartedWaiter = $0 }
+        for _ in 0..<100 {
+            if closeStarted { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
     }
 
     func snapshot() -> Snapshot {
