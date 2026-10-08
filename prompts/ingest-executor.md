@@ -29,6 +29,8 @@ your assignments.
 
 {{SOURCE_IDS}}
 
+Use the bare source ID from this list as the target in every `[[source:…]]` link. Do NOT use the staged source filename from `{{PRIMARY_SOURCE_FILE}}` or any other `slug--ULID` filename as a citation target. For example, write `[[source:01ABC...#"quote"]]`, not `[[source:article-title--01ABC...#"quote"]]`.
+
 ## Instructions
 
 For EACH assigned page:
@@ -64,8 +66,9 @@ For EACH assigned page:
    - For a NEW page, summarize the source content into a clear,
      well-structured wiki page.
    - Either way: cross-link related pages with [[Page Title]] wiki-links
-     (use the titles listed above) and cite sources by their `sources/…`
-     path.
+     (use the titles listed above) and cite claims with
+     `[[source:<bare-source-id>#"quote"]]` links. Use a `sources/…` path only
+     when referring to a filesystem path.
 
 4. Write the page — exactly one of the two expectation flags:
    - Existing page:
