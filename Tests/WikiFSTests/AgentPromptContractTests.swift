@@ -315,6 +315,32 @@ struct AgentPromptContractTests {
         }
     }
 
+    // MARK: - Lint citation targets (#1381)
+
+    /// Lint repairs source links and must write canonical SourceIDs rather than
+    /// staged filenames or filesystem paths.
+    @Test func lintCitationsUseBareSourceIDs() {
+        for (copy, origin) in [
+            (canonical("lint-page-task.md"), "prompts/lint-page-task.md"),
+            (bundled("lint-page-task.md"), "Resources/Prompts/lint-page-task.md"),
+        ] {
+            guard let lintPrompt = copy else {
+                Issue.record("missing prompt: \(origin)")
+                continue
+            }
+            #expect(lintPrompt.contains("bare canonical SourceID"),
+                    "\(origin): lint citations must use canonical source IDs")
+            #expect(lintPrompt.contains("first `id` column from `wikictl source list`"),
+                    "\(origin): lint must identify the canonical source ID field")
+            #expect(lintPrompt.contains("display name"),
+                    "\(origin): lint citations must reject display names")
+            #expect(lintPrompt.contains("staged `slug--ULID` filename"),
+                    "\(origin): lint citations must reject staged filenames")
+            #expect(lintPrompt.contains("filesystem path"),
+                    "\(origin): lint citations must reject filesystem paths")
+        }
+    }
+
     // MARK: - Job-local supporting sources (#1370)
 
     /// The planner may name ONLY this task's staged files in
