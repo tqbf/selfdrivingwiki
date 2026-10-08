@@ -169,6 +169,19 @@ struct AgentOperationRunnerTests {
         #expect(preflight?.brokenSourceLinks.isEmpty == true)
     }
 
+    @Test func stagedSourceProjectionLinkRequiresLintRepair() throws {
+        let (model, store) = try tempStore()
+        let source = try store.addSource(filename: "Guide.md", data: Data("source".utf8))
+        let page = try store.createPage(title: "Citing Page")
+        let staged = "guide--\(source.id.rawValue).md"
+        try store.updatePage(id: page.id, title: "Citing Page",
+            body: "[^1]: [[source:\(staged)#\"intro\"]]\n\nText.[^1]")
+        model.reloadFromStore()
+
+        let preflight = model.preflightLint(pageID: page.id)
+        #expect(preflight?.brokenSourceLinks.contains(staged) == true)
+    }
+
     @Test func sourceLinkWithDashMismatchIsNotBroken() throws {
         let (model, store) = try tempStore()
         let src = try store.addSource(filename: "Guide.md", data: Data("# Guide".utf8))

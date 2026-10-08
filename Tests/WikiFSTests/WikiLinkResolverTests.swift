@@ -22,6 +22,23 @@ struct WikiLinkResolverTests {
             from: "–01KY7MKKGGFHF6SY6QHKVMT3GX.md") == nil)
     }
 
+    @Test func stagedSourceProjectionExtractsFullSourceID() {
+        let id = "01KY7MKKGGFHF6SY6QHKVMT3GX"
+        #expect(WikiLinkResolver.stagedSourceProjectionID(
+            from: "reality-is-the-final-verifier--\(id).ext")?.rawValue == id)
+        #expect(WikiLinkResolver.stagedSourceProjectionID(
+            from: "reality-is-the-final-verifier--\(id)")?.rawValue == id)
+    }
+
+    @Test func stagedSourceProjectionRejectsNonStagedForms() {
+        #expect(WikiLinkResolver.stagedSourceProjectionID(
+            from: "Reality Is the Final Verifier") == nil)
+        #expect(WikiLinkResolver.stagedSourceProjectionID(
+            from: "reality-is-the-final-verifier--01KY7MKK.md") == nil)
+        #expect(WikiLinkResolver.stagedSourceProjectionID(
+            from: "--01KY7MKKGGFHF6SY6QHKVMT3GX.md") == nil)
+    }
+
     // MARK: - candidateSplits ordering
 
     @Test func plainTargetHasSingleCandidate() {
