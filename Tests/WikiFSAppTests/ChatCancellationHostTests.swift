@@ -39,6 +39,11 @@ struct ChatCancellationHostTests {
         #expect(snapshot.startRequests.count == 1)
         #expect(snapshot.submitCalls.map(\.userText) == ["first"])
         #expect(turns.count == 2)
+        // The claimed active turn is durably settled, so daemon recovery cannot
+        // resurrect it as an interrupted turn. The store retains `claim_id` on
+        // terminal rows as history; recovery keys off state, not the claim.
+        #expect(turns[0].state == .cancelled)
+        // The follower is retained, not promoted or dispatched.
         #expect(turns[1].state == .queued)
     }
 

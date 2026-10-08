@@ -412,17 +412,29 @@ actor DaemonChatController {
     /// later daemon recovery.
     func terminateSessionForShutdown() async {
         guard isShutdown == false else { return }
+        // Capture the claim before taking shutdown ownership: the claim
+        // accessors report only dispatching/active/settling ownership, so
+        // reading it afterwards would always look unclaimed and leave a
+        // claimed durable row unsettled.
+        let activeTurn = snapshot.activeTurn
+        let claimedTurnID: ChatTurnID? = if let activeTurn, activeTurn.state.isTerminal == false {
+            activeTurn.turnID
+        } else {
+            nil
+        }
+        let claimID = currentClaimID
+
         // Take shutdown ownership before any await so nothing else can dispatch.
         ownership = .shutdown(ShutdownContext(operationID: UUID()))
         dispatchTask?.cancel()
 
-        if let activeTurn = snapshot.activeTurn, activeTurn.state.isTerminal == false {
-            record(.cancellationRequested(turnID: activeTurn.turnID))
-            if let claimID = currentClaimID {
+        if let claimedTurnID {
+            record(.cancellationRequested(turnID: claimedTurnID))
+            if let claimID {
                 do {
                     _ = try store.finishPersistedChatTurn(
                         chatID: chatID,
-                        turnID: activeTurn.turnID,
+                        turnID: claimedTurnID,
                         claimID: claimID,
                         state: .cancelled,
                         terminalMessage: "Cancelled.",
@@ -434,14 +446,14 @@ actor DaemonChatController {
                 }
             } else {
                 do {
-                    _ = try store.cancelUnclaimedPersistedChatTurn(chatID: chatID, turnID: activeTurn.turnID)
+                    _ = try store.cancelUnclaimedPersistedChatTurn(chatID: chatID, turnID: claimedTurnID)
                 } catch {
                     DebugLog.store("DaemonChatController shutdown unclaimed settlement failed: \(error)")
                 }
             }
             // Retain followers without promotion.
             record(
-                .cancelled(turnID: activeTurn.turnID),
+                .cancelled(turnID: claimedTurnID),
                 terminalContinuationPolicy: .retainQueuedTurns)
         }
 

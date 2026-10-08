@@ -416,6 +416,11 @@ final class DaemonChatHost: @unchecked Sendable {
             chatID: chatID,
             wikiID: wikiID
         )
+        // Two concurrent requests can both pass the get-or-create check across
+        // the launcher and factory suspensions. Only one controller is
+        // installed for the chat. The loser's runtime has never started — the
+        // controller starts it on dispatch — so it holds no provider process or
+        // event stream and is simply discarded.
         await scheduleIdleEviction(for: chatID)
         return resolvedController
     }
