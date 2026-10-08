@@ -9,9 +9,70 @@ import WikiFSCore
 import WikiFSEngine
 
 actor DaemonChatController {
-    private enum RuntimeCloseState {
-        case open
-        case closing
+    private struct PreparationContext {
+        let generation: ChatSessionGenerationID
+        let operationID: UUID
+    }
+
+    private struct DispatchContext {
+        let claimID: ChatTurnClaimID
+        let turnID: ChatTurnID
+        let generation: ChatSessionGenerationID
+        let operationID: UUID
+    }
+
+    private struct ActiveContext {
+        let claimID: ChatTurnClaimID
+        let turnID: ChatTurnID
+        let generation: ChatSessionGenerationID
+        let operationID: UUID
+    }
+
+    private struct SettlingContext {
+        /// Where the sole settlement owner is in its work. A retry is only
+        /// legal from `persistenceFailure`; every other phase treats a repeat
+        /// Stop as an idempotent duplicate.
+        enum Phase {
+            case gatheringUsage
+            case writingOutcome
+            case awaitingClose
+            case persistenceFailure
+        }
+
+        /// Optional because an unclaimed queued turn has no claim to settle.
+        let claimID: ChatTurnClaimID?
+        let turnID: ChatTurnID
+        let generation: ChatSessionGenerationID
+        var operationID: UUID
+        var phase: Phase = .gatheringUsage
+    }
+
+    private struct ClosingContext {
+        let operationID: UUID
+    }
+
+    private struct IdleEvictionContext {
+        let operationID: UUID
+    }
+
+    private struct ShutdownContext {
+        let operationID: UUID
+    }
+
+    private enum DispatchOwnership {
+        case idle
+        case preparing(PreparationContext)
+        case dispatching(DispatchContext)
+        case active(ActiveContext)
+        case settling(SettlingContext)
+        case closing(ClosingContext)
+        case idleEviction(IdleEvictionContext)
+        case shutdown(ShutdownContext)
+    }
+
+    private enum DeferredDrain {
+        case none
+        case queue
     }
 
     private static let replayCapacity = 128
@@ -34,19 +95,32 @@ actor DaemonChatController {
     private var runtimeHandle: ChatRuntimeHandle?
     private var runtimeStartRequest: ChatRuntimeStartRequest?
     private var eventTask: Task<Void, Never>?
-    private var currentClaimID: ChatTurnClaimID?
-    private var currentClaimTurnID: ChatTurnID?
+    private var ownership: DispatchOwnership = .idle
+    private var deferredDrain: DeferredDrain = .none
+    private var cancellationRequestedTurnID: ChatTurnID?
     private var turnUsageAccumulator: ChatTurnUsageAccumulator?
     private var latestSessionUsage: SessionUsage?
-    private var pendingCancellationTurnID: ChatTurnID?
     private var activePermission: ChatPendingPermissionRequest?
-    private var isProcessingQueue = false
-    /// The sole close owner has released this actor while `runtime.close` is
-    /// in flight. Re-entrant lifecycle events must leave this state alone:
-    /// only that owner may rotate the generation and reopen queue processing.
-    private var runtimeCloseState: RuntimeCloseState = .open
-    private var isIdleEvictionAttempt = false
-    private var idleEvictionWasCancelled = false
+    private var isShutdown: Bool {
+        if case .shutdown = ownership { return true }
+        return false
+    }
+    private var currentClaimID: ChatTurnClaimID? {
+        switch ownership {
+        case .dispatching(let context): return context.claimID
+        case .active(let context): return context.claimID
+        case .settling(let context): return context.claimID
+        default: return nil
+        }
+    }
+    private var currentClaimTurnID: ChatTurnID? {
+        switch ownership {
+        case .dispatching(let context): return context.turnID
+        case .active(let context): return context.turnID
+        case .settling(let context): return context.turnID
+        default: return nil
+        }
+    }
     private var latestStateUpdate = ChatStateUpdate(
         isRunning: false,
         isGenerating: false,
@@ -96,8 +170,9 @@ actor DaemonChatController {
     }
 
     func submit(_ request: ChatSubmitRequest) async throws -> ChatID {
-        if isIdleEvictionAttempt {
-            idleEvictionWasCancelled = true
+        guard isShutdown == false else { throw DaemonChatError.shutdownStarted }
+        if case .idleEviction = ownership {
+            deferredDrain = .queue
         }
         let existingTurns = try store.listPersistedChatTurns(chatID: chatID)
         if existingTurns.contains(where: { $0.submission.commandID == request.submission.commandID }) {
@@ -131,31 +206,284 @@ actor DaemonChatController {
         return chatID
     }
 
-    /// Cancels only the currently active turn. Queued turns are intentionally
-    /// preserved here; the typed domain models their mutation separately via
-    /// `removeQueuedTurn`.
+    /// Cancels the current turn, then continues the remaining durable queue in
+    /// FIFO order. A nil `turnID` cancels whatever the snapshot currently
+    /// treats as active, which is what the app's Stop action sends.
+    ///
+    /// Queued followers are preserved. Full session shutdown is a separate
+    /// operation (`terminateSessionForShutdown`).
     func cancel(turnID: ChatTurnID?) async {
-        guard let activeTurn = snapshot.activeTurn else { return }
-        let resolvedTurnID = turnID ?? activeTurn.turnID
-        guard resolvedTurnID == activeTurn.turnID else { return }
-        guard activeTurn.state != .queued else {
+        guard isShutdown == false else { return }
+
+        let resolvedTurnID: ChatTurnID
+        if let activeTurn = snapshot.activeTurn {
+            let candidate = turnID ?? activeTurn.turnID
+            // A request naming a different turn must not mutate this one.
+            guard candidate == activeTurn.turnID else { return }
+            resolvedTurnID = candidate
+        } else if let turnID {
+            // Bootstrap can hold no active turn while a preparation is in
+            // flight; the caller still names the turn it wants stopped.
+            resolvedTurnID = turnID
+        } else {
             return
         }
 
-        pendingCancellationTurnID = resolvedTurnID
-        if let handle = runtimeHandle {
-            do {
-                try await runtime.cancelTurn(resolvedTurnID, in: handle)
-            } catch {
-                DebugLog.agent("DaemonChatController.cancel runtime cancel failed: \(error)")
+        // A settlement already in flight owns this turn. A settlement that
+        // failed to persist, or one whose terminal outcome committed but whose
+        // runtime cleanup failed, admits a retry that repeats only the failed
+        // step. Every other phase is a duplicate Stop and runs no second effect.
+        if case .settling(let context) = ownership, context.turnID == resolvedTurnID {
+            switch context.phase {
+            case .persistenceFailure:
+                var retrying = context
+                retrying.phase = .writingOutcome
+                retrying.operationID = UUID()
+                ownership = .settling(retrying)
+                await settleCancellation(context: retrying)
+            case .awaitingClose:
+                var retrying = context
+                retrying.operationID = UUID()
+                ownership = .settling(retrying)
+                await finishCancellationSettlement(context: retrying)
+            case .gatheringUsage, .writingOutcome:
+                return
             }
+            return
         }
-        _ = await finishTurnIfCurrent(
+
+        // An in-flight preparation holds no claim yet. Invalidate it first so
+        // it cannot claim or send, then settle the still-unclaimed row.
+        if case .preparing(let preparation) = ownership {
+            // Ownership alone fences the abandoned preparation: its late result
+            // is compared against this operation and discarded.
+            ownership = .settling(SettlingContext(
+                claimID: nil,
+                turnID: resolvedTurnID,
+                generation: preparation.generation,
+                operationID: UUID()))
+            record(.cancellationRequested(turnID: resolvedTurnID))
+            await cancelUnclaimedActiveTurn(resolvedTurnID)
+            return
+        }
+
+        guard let activeTurn = snapshot.activeTurn, activeTurn.state.isTerminal == false else {
+            // No live turn to stop. Cancel a durable unclaimed row if the
+            // caller named one, without touching any other turn.
+            if snapshot.activeTurn == nil {
+                await cancelUnclaimedActiveTurn(resolvedTurnID)
+            }
+            return
+        }
+
+        // Enter the cancelling turn state before any runtime effect so the
+        // projection reports Cancelling… and refuses new submissions.
+        record(.cancellationRequested(turnID: resolvedTurnID))
+
+        guard let claimID = currentClaimID else {
+            await cancelUnclaimedActiveTurn(resolvedTurnID)
+            return
+        }
+
+        cancellationRequestedTurnID = resolvedTurnID
+        let context = SettlingContext(
+            claimID: claimID,
             turnID: resolvedTurnID,
             generation: generation,
-            outcome: .cancelled,
-            at: clock()
-        )
+            operationID: UUID())
+        ownership = .settling(context)
+        await settleCancellation(context: context)
+    }
+
+    /// Cancels a durable row that no runtime has claimed. No runtime close and
+    /// no generation rotation happen on this path: there is nothing to tear
+    /// down. The follower is promoted by the domain and dispatched here.
+    private func cancelUnclaimedActiveTurn(_ turnID: ChatTurnID) async {
+        do {
+            guard let cancelled = try store.cancelUnclaimedPersistedChatTurn(chatID: chatID, turnID: turnID) else {
+                ownership = .idle
+                await drainIfRequested(context: "cancelUnclaimedActiveTurn")
+                return
+            }
+            ownership = .idle
+            record(.cancelled(turnID: cancelled.submission.turnID))
+        } catch {
+            DebugLog.store("DaemonChatController.cancel unclaimed write failed: \(error)")
+            // Retain a nonterminal turn with a retryable attention. Ownership
+            // stays with the settlement so a retry can repeat only this write.
+            ownership = .settling(SettlingContext(
+                claimID: nil,
+                turnID: turnID,
+                generation: generation,
+                operationID: UUID(),
+                phase: .persistenceFailure))
+            record(.cancellationPersistenceFailed(
+                turnID: turnID,
+                message: "Could not save cancellation. Retry cancellation."))
+            return
+        }
+        await recoverQueuedTurnsAfterRuntimeClose(context: "cancelUnclaimedActiveTurn")
+    }
+
+    /// The sole settlement owner for a claimed turn. It gathers final usage,
+    /// commits exactly one terminal outcome, then closes the runtime and lets
+    /// the queue continue on a fresh generation.
+    private func settleCancellation(context: SettlingContext) async {
+        guard let claimID = context.claimID else {
+            // Unclaimed settlement: repeat only the durable unclaimed write.
+            await cancelUnclaimedActiveTurn(context.turnID)
+            return
+        }
+
+        // Stop provider work first. The launcher stop is destructive, which is
+        // exactly why followers wait for the close below instead of reusing
+        // this handle.
+        if let handle = runtimeHandle {
+            do {
+                try await runtime.cancelTurn(context.turnID, in: handle)
+            } catch {
+                DebugLog.agent("DaemonChatController runtime cancel failed: \(error)")
+            }
+        }
+
+        // Revalidate the claim after every suspension. A transport close or a
+        // reentrant event must not let another owner settle this turn.
+        let finalUsage = await finalRuntimeUsage()
+        guard case .settling(let current) = ownership,
+              current.operationID == context.operationID,
+              current.claimID == claimID,
+              current.turnID == context.turnID,
+              context.generation == generation else {
+            DebugLog.agent("DaemonChatController settlement lost ownership; another owner took the turn.")
+            return
+        }
+        if let finalUsage, var accumulator = turnUsageAccumulator {
+            _ = accumulator.record(finalUsage)
+            turnUsageAccumulator = accumulator
+            latestSessionUsage = finalUsage
+        }
+
+        var writing = current
+        writing.phase = .writingOutcome
+        ownership = .settling(writing)
+
+        do {
+            _ = try store.finishPersistedChatTurn(
+                chatID: chatID,
+                turnID: context.turnID,
+                claimID: claimID,
+                state: .cancelled,
+                terminalMessage: "Cancelled.",
+                finishedAt: clock(),
+                usage: turnUsageAccumulator?.values
+            )
+        } catch {
+            // The durable row and the claim are retained. Followers stay
+            // blocked until a retry repeats only this write.
+            DebugLog.store("DaemonChatController cancellation persistence failed: \(error)")
+            record(.cancellationPersistenceFailed(
+                turnID: context.turnID,
+                message: "Could not save cancellation. Retry cancellation."))
+            var failed = context
+            failed.phase = .persistenceFailure
+            ownership = .settling(failed)
+            return
+        }
+
+        // Terminal persistence is committed. The cancelled runtime is
+        // destructive to reuse, so close it and rotate before a follower runs.
+        await finishCancellationSettlement(context: context)
+    }
+
+    /// Completes a settlement whose terminal outcome is already committed: it
+    /// closes the cancelled runtime and then continues the queue. A failed
+    /// close retains ownership so a retry can repeat only the cleanup.
+    private func finishCancellationSettlement(context: SettlingContext) async {
+        var awaitingClose = context
+        awaitingClose.phase = .awaitingClose
+        ownership = .settling(awaitingClose)
+
+        let closed = await closeRuntimeForSettlement(turnID: context.turnID)
+        guard closed else {
+            // Close ownership is retained; followers stay blocked until a
+            // retry-close succeeds.
+            record(.runtimeCleanupFailed(
+                turnID: context.turnID,
+                message: "Could not stop the cancelled runtime. Retry cancellation."))
+            var failed = context
+            failed.phase = .awaitingClose
+            ownership = .settling(failed)
+            return
+        }
+
+        turnUsageAccumulator = nil
+        activePermission = nil
+        liveEvents.removeAll(keepingCapacity: true)
+        cancellationRequestedTurnID = nil
+        ownership = .idle
+        record(.cancelled(turnID: context.turnID))
+        await recoverQueuedTurnsAfterRuntimeClose(context: "settleCancellation")
+    }
+
+    /// Permanent shutdown. It rejects new submissions and never promotes or
+    /// dispatches a queued follower: unclaimed followers are retained for
+    /// later daemon recovery.
+    func terminateSessionForShutdown() async {
+        guard isShutdown == false else { return }
+        // Capture the claim before taking shutdown ownership: the claim
+        // accessors report only dispatching/active/settling ownership, so
+        // reading it afterwards would always look unclaimed and leave a
+        // claimed durable row unsettled.
+        let activeTurn = snapshot.activeTurn
+        let claimedTurnID: ChatTurnID? = if let activeTurn, activeTurn.state.isTerminal == false {
+            activeTurn.turnID
+        } else {
+            nil
+        }
+        let claimID = currentClaimID
+
+        // Take shutdown ownership before any await so nothing else can dispatch.
+        ownership = .shutdown(ShutdownContext(operationID: UUID()))
+
+        if let claimedTurnID {
+            record(.cancellationRequested(turnID: claimedTurnID))
+            if let claimID {
+                do {
+                    _ = try store.finishPersistedChatTurn(
+                        chatID: chatID,
+                        turnID: claimedTurnID,
+                        claimID: claimID,
+                        state: .cancelled,
+                        terminalMessage: "Cancelled.",
+                        finishedAt: clock(),
+                        usage: turnUsageAccumulator?.values
+                    )
+                } catch {
+                    DebugLog.store("DaemonChatController shutdown settlement failed: \(error)")
+                }
+            } else {
+                do {
+                    _ = try store.cancelUnclaimedPersistedChatTurn(chatID: chatID, turnID: claimedTurnID)
+                } catch {
+                    DebugLog.store("DaemonChatController shutdown unclaimed settlement failed: \(error)")
+                }
+            }
+            // Retain followers without promotion.
+            record(
+                .cancelled(turnID: claimedTurnID),
+                terminalContinuationPolicy: .retainQueuedTurns)
+        }
+
+        if let handle = runtimeHandle {
+            do { try await runtime.closeForSettlement(handle) }
+            catch { DebugLog.agent("DaemonChatController shutdown close failed: \(error)") }
+        }
+        runtimeHandle = nil
+        runtimeStartRequest = nil
+        eventTask?.cancel()
+        eventTask = nil
+        turnUsageAccumulator = nil
+        activePermission = nil
     }
 
     func stopSession() async {
@@ -179,26 +507,28 @@ actor DaemonChatController {
         guard currentClaimID == nil,
               snapshot.queuedTurns.isEmpty,
               snapshot.activeTurn?.state.isTerminal != false,
-              runtimeCloseState == .open else {
+              isShutdown == false else {
             return false
         }
         guard runtimeHandle != nil else { return true }
-        isIdleEvictionAttempt = true
-        idleEvictionWasCancelled = false
+        let evictionOperationID = UUID()
+        ownership = .idleEviction(IdleEvictionContext(operationID: evictionOperationID))
+        deferredDrain = .none
         if snapshot.lifecycle != .closed {
             record(.sessionClosed)
         }
         activePermission = nil
         _ = await closeRuntimeAndRotateGeneration()
-        isIdleEvictionAttempt = false
 
         let remainsQuiescent = currentClaimID == nil
             && snapshot.queuedTurns.isEmpty
             && snapshot.activeTurn?.state.isTerminal != false
-        guard idleEvictionWasCancelled == false, remainsQuiescent else {
+        guard deferredDrain == .none, remainsQuiescent else {
+            ownership = .idle
             await recoverQueuedTurnsAfterRuntimeClose(context: "closeIfIdle")
             return false
         }
+        ownership = .idle
         return true
     }
 
@@ -289,9 +619,13 @@ actor DaemonChatController {
     }
 
     private func processQueueIfPossible() async throws {
-        guard isProcessingQueue == false, runtimeCloseState == .open else { return }
-        isProcessingQueue = true
-        defer { isProcessingQueue = false }
+        guard isShutdown == false else { return }
+        guard case .idle = ownership else {
+            // Another owner is mid-effect. Record the drain so its owner runs
+            // it on unwind instead of losing it behind the busy state.
+            deferredDrain = .queue
+            return
+        }
 
         guard currentClaimID == nil else { return }
         if let activeTurn = snapshot.activeTurn,
@@ -302,15 +636,33 @@ actor DaemonChatController {
         switch snapshot.attention {
         case .turnFailed, .interruptedTurn:
             guard snapshot.queuedTurns.isEmpty == false else { return }
+        case .cancellationPersistenceFailed, .runtimeCleanupFailed:
+            // Followers stay blocked until the cancellation owner settles.
+            return
         case .none, .permissionRequired:
             break
         }
 
         let preparingGeneration = generation
-        let startPreparation = try await currentRuntimeStartPreparation()
+        let preparationOperationID = UUID()
+        ownership = .preparing(PreparationContext(generation: preparingGeneration, operationID: preparationOperationID))
+        // Any exit from preparation that does not hand off to a dispatch must
+        // release ownership. Leaving `.preparing` behind would wedge the
+        // controller: no later drain could run, and no close could be owned.
+        let startPreparation: ChatRuntimePreparedStart
+        do {
+            startPreparation = try await currentRuntimeStartPreparation()
+        } catch {
+            await releasePreparationIfCurrent(operationID: preparationOperationID)
+            throw error
+        }
         guard generation == preparingGeneration,
               startPreparation.request.generation == preparingGeneration,
-              runtimeCloseState == .open else {
+              isShutdown == false,
+              isCurrentPreparation(operationID: preparationOperationID) else {
+            // A cancellation or a transport close took this preparation while
+            // it was suspended. Release the token and do not claim.
+            await releasePreparationIfCurrent(operationID: preparationOperationID)
             await runtime.discardPreparedStart(startPreparation)
             return
         }
@@ -324,6 +676,15 @@ actor DaemonChatController {
             providerID: startRequest.providerID,
             modelID: startRequest.modelID
         ) else {
+            await releasePreparationIfCurrent(operationID: preparationOperationID)
+            await runtime.discardPreparedStart(startPreparation)
+            return
+        }
+        // Claiming is a store write, but cancellation can still have landed
+        // between the claim and this point. A claimed row that cancellation
+        // already settled must not be dispatched.
+        guard isCurrentPreparation(operationID: preparationOperationID) else {
+            await releasePreparationIfCurrent(operationID: preparationOperationID)
             await runtime.discardPreparedStart(startPreparation)
             return
         }
@@ -340,8 +701,8 @@ actor DaemonChatController {
         }
         adoptClaimedTurnIfNeeded(queuedTurn)
 
-        currentClaimID = claimID
-        currentClaimTurnID = claimed.submission.turnID
+        let dispatchOperationID = UUID()
+        ownership = .dispatching(DispatchContext(claimID: claimID, turnID: claimed.submission.turnID, generation: generation, operationID: dispatchOperationID))
         turnUsageAccumulator = ChatTurnUsageAccumulator(
             baseline: runtimeHandle == nil ? Self.zeroUsage : (latestSessionUsage ?? Self.zeroUsage)
         )
@@ -353,13 +714,37 @@ actor DaemonChatController {
                 handle = existingHandle
             } else {
                 handle = try await runtime.start(startPreparation)
+                // Cancellation during start invalidates this dispatch. The
+                // start task is not cooperative, so fence on identity and
+                // release the late token instead of sending a stale prompt.
+                guard isCurrentDispatch(operationID: dispatchOperationID,
+                                       turnID: claimed.submission.turnID,
+                                       generation: generation) else {
+                    await runtime.discardPreparedStart(startPreparation)
+                    return
+                }
                 runtimeHandle = handle
                 runtimeStartRequest = startRequest
                 startEventLoop(handle)
             }
+            guard isCurrentDispatch(operationID: dispatchOperationID,
+                                   turnID: claimed.submission.turnID,
+                                   generation: generation) else {
+                await runtime.discardPreparedStart(startPreparation)
+                return
+            }
+            ownership = .active(ActiveContext(claimID: claimID, turnID: claimed.submission.turnID, generation: generation, operationID: dispatchOperationID))
             record(.started(turnID: claimed.submission.turnID))
             await observeDiagnostic(stage: .providerTranslation, detail: "provider-submit", turnID: claimed.submission.turnID)
+            // Revalidate after the diagnostic await: a cancellation may have
+            // taken the turn while diagnostics were recording.
+            guard isCurrentDispatch(operationID: dispatchOperationID,
+                                   turnID: claimed.submission.turnID,
+                                   generation: generation) else { return }
             try await runtime.submitTurn(claimed.submission, in: handle)
+            guard isCurrentDispatch(operationID: dispatchOperationID,
+                                   turnID: claimed.submission.turnID,
+                                   generation: generation) else { return }
             let marked = try store.markPersistedChatTurnProviderSubmitted(
                 chatID: chatID,
                 turnID: claimed.submission.turnID,
@@ -404,6 +789,43 @@ actor DaemonChatController {
                 _ = await closeRuntimeAndRotateGeneration()
                 throw DaemonChatError.preflightFailed(message)
             }
+        }
+    }
+
+    /// True while `ownership` still belongs to the given preparation. A
+    /// cancellation replaces it with `.settling`, so a late preparation can
+    /// detect that it lost the turn and release its token.
+    private func isCurrentPreparation(operationID: UUID) -> Bool {
+        guard case .preparing(let context) = ownership else { return false }
+        return context.operationID == operationID
+    }
+
+    /// Restores idle ownership only when this operation still owns it, so a
+    /// cancellation that replaced the preparation is never overwritten. Any
+    /// drain that arrived while this preparation held ownership runs now, so a
+    /// follower cannot be stranded behind an abandoned preparation.
+    private func releasePreparationIfCurrent(operationID: UUID) async {
+        guard isCurrentPreparation(operationID: operationID) else { return }
+        ownership = .idle
+        await drainIfRequested(context: "releasePreparation")
+    }
+
+    /// True while `ownership` still belongs to the given dispatch operation.
+    /// Every suspension in the dispatch path revalidates through this so a
+    /// cancellation cannot be overtaken by a late start or submit.
+    private func isCurrentDispatch(
+        operationID: UUID,
+        turnID: ChatTurnID,
+        generation expectedGeneration: ChatSessionGenerationID
+    ) -> Bool {
+        guard expectedGeneration == generation else { return false }
+        switch ownership {
+        case .dispatching(let context):
+            return context.operationID == operationID && context.turnID == turnID
+        case .active(let context):
+            return context.operationID == operationID && context.turnID == turnID
+        default:
+            return false
         }
     }
 
@@ -511,6 +933,13 @@ actor DaemonChatController {
             }
 
         case .transportClosed:
+            // A transport close during final-usage collection belongs to the
+            // settlement owner. It must not rotate the generation or clear the
+            // claim that owner is still using.
+            if case .settling = ownership {
+                DebugLog.agent("DaemonChatController deferred transport close to settlement owner.")
+                return
+            }
             if let turnID = currentClaimTurnID {
                 if consumePendingCancellation(turnID: turnID) {
                     _ = await finishTurnIfCurrent(turnID: turnID, generation: envelope.generation, outcome: .cancelled, at: clock())
@@ -558,6 +987,12 @@ actor DaemonChatController {
     ) async -> Bool {
         guard eventGeneration == generation else {
             DebugLog.agent("DaemonChatController rejected terminal signal for stale generation \(eventGeneration.rawValue).")
+            return false
+        }
+        // A settlement owns this turn's outcome. A terminal event that races
+        // the cancellation must not commit a second, contradictory outcome.
+        if case .settling(let context) = ownership {
+            DebugLog.agent("DaemonChatController deferred terminal signal to settlement owner for \(context.turnID.rawValue).")
             return false
         }
         guard currentClaimTurnID == turnID else {
@@ -643,13 +1078,26 @@ actor DaemonChatController {
             return false
         }
 
-        currentClaimID = nil
-        currentClaimTurnID = nil
+        ownership = .idle
         turnUsageAccumulator = nil
         activePermission = nil
         record(payload)
         liveEvents.removeAll(keepingCapacity: true)
+        await drainIfRequested(context: "finishTurnIfCurrent")
         return true
+    }
+
+    /// Runs a drain that another owner deferred while it held ownership.
+    /// Without this, a drain requested mid-effect would be lost and a durable
+    /// follower would sit unprocessed.
+    private func drainIfRequested(context: String) async {
+        guard deferredDrain == .queue, case .idle = ownership, isShutdown == false else { return }
+        deferredDrain = .none
+        do {
+            try await processQueueIfPossible()
+        } catch {
+            DebugLog.agent("DaemonChatController.\(context) deferred drain failed: \(error)")
+        }
     }
 
     private func finalRuntimeUsage() async -> SessionUsage? {
@@ -706,12 +1154,15 @@ actor DaemonChatController {
     }
 
     private func consumePendingCancellation(turnID: ChatTurnID) -> Bool {
-        guard pendingCancellationTurnID == turnID else { return false }
-        pendingCancellationTurnID = nil
+        guard cancellationRequestedTurnID == turnID else { return false }
+        cancellationRequestedTurnID = nil
         return true
     }
 
-    private func record(_ payload: ChatSessionEventPayload) {
+    private func record(
+        _ payload: ChatSessionEventPayload,
+        terminalContinuationPolicy: ChatTerminalContinuationPolicy? = nil
+    ) {
         let next: ChatUpdateSequence
         do {
             next = try nextSequence.next()
@@ -723,7 +1174,8 @@ actor DaemonChatController {
             chatID: chatID,
             generation: generation,
             sequence: next,
-            payload: payload
+            payload: payload,
+            terminalContinuationPolicy: terminalContinuationPolicy
         )
         switch ChatSessionMachine.apply(update, to: snapshot) {
         case .applied(let applied):
@@ -912,20 +1364,75 @@ actor DaemonChatController {
     /// observe that close but cannot perform teardown or clear its guard.
     @discardableResult
     private func closeRuntimeAndRotateGeneration() async -> Bool {
-        guard runtimeCloseState == .open else { return false }
-        runtimeCloseState = .closing
-        defer { runtimeCloseState = .open }
-        if let handle = runtimeHandle {
-            await runtime.close(handle)
+        guard case .closing = ownership else {
+            ownership = .closing(ClosingContext(operationID: UUID()))
+            if let handle = runtimeHandle {
+                do { try await runtime.closeForSettlement(handle) }
+                catch { DebugLog.agent("DaemonChatController runtime close failed: \(error)") }
+            }
+            return finishRuntimeClose()
         }
+        return false
+    }
+
+    /// Closes the cancelled runtime before a follower may run on a fresh
+    /// generation. It returns false when teardown failed, in which case close
+    /// ownership is retained and followers stay blocked.
+    private func closeRuntimeForSettlement(turnID: ChatTurnID) async -> Bool {
+        guard let handle = runtimeHandle else {
+            // No runtime exists, so there is nothing to close. The generation
+            // must still advance, and the snapshot must carry it: rotating only
+            // the controller's copy would make the terminal record look stale
+            // and strand the follower.
+            rotateGenerationWithClosedSnapshot()
+            return true
+        }
+        do {
+            try await runtime.closeForSettlement(handle)
+        } catch {
+            DebugLog.agent("DaemonChatController cancelled runtime close failed: \(error)")
+            return false
+        }
+        // Only clear the handle once the runtime is actually gone.
         runtimeHandle = nil
         runtimeStartRequest = nil
         eventTask?.cancel()
         eventTask = nil
         liveEvents.removeAll(keepingCapacity: true)
-        pendingCancellationTurnID = nil
-        currentClaimID = nil
-        currentClaimTurnID = nil
+        latestSessionUsage = nil
+        rotateGenerationWithClosedSnapshot()
+        return true
+    }
+
+    /// Advances the generation and records the closed lifecycle on the snapshot
+    /// so controller and snapshot can never disagree about the current
+    /// generation.
+    private func rotateGenerationWithClosedSnapshot() {
+        generation = ChatSessionGenerationID(rawValue: ULID.generate())
+        snapshot = ChatRuntimeSnapshot(
+            chatID: snapshot.chatID,
+            generation: generation,
+            lifecycle: .closed,
+            activeTurn: snapshot.activeTurn,
+            queuedTurns: snapshot.queuedTurns,
+            attention: snapshot.attention,
+            capabilities: snapshot.capabilities,
+            providerState: snapshot.providerState,
+            usage: snapshot.usage,
+            diagnostics: snapshot.diagnostics,
+            transientTranscriptOverlay: [],
+            lastIncludedSequence: snapshot.lastIncludedSequence
+        )
+    }
+
+    private func finishRuntimeClose() -> Bool {
+        runtimeHandle = nil
+        runtimeStartRequest = nil
+        eventTask?.cancel()
+        eventTask = nil
+        liveEvents.removeAll(keepingCapacity: true)
+        cancellationRequestedTurnID = nil
+        ownership = .idle
         turnUsageAccumulator = nil
         latestSessionUsage = nil
         generation = ChatSessionGenerationID(rawValue: ULID.generate())
@@ -950,6 +1457,13 @@ actor DaemonChatController {
     /// runtime. Recover only after that owner has restored an open lifecycle,
     /// so a queued turn can never be stranded behind a completed close.
     private func recoverQueuedTurnsAfterRuntimeClose(context: String) async {
+        // Another owner is mid-effect. Record the request so its owner drains
+        // when it unwinds, instead of losing the drain behind the busy state.
+        guard case .idle = ownership else {
+            deferredDrain = .queue
+            return
+        }
+        deferredDrain = .none
         do {
             try await processQueueIfPossible()
         } catch {

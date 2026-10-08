@@ -346,7 +346,10 @@ struct ChatDetailPresentation {
             return "Starting chat…"
         }
         if runState == .queued {
-            return "Waiting for the other session to finish before sending…"
+            return "Waiting to send…"
+        }
+        if runState.showsCancelling {
+            return "Cancelling…"
         }
         if runState.isAnswering {
             return isLiveChat
@@ -363,8 +366,7 @@ struct ChatDetailPresentation {
         isDraftSubmitPending: Bool = false
     ) -> Bool {
         return isChatOperationConfigured
-            && !runState.isAnswering
-            && runState != .queued
+            && runState.canSubmit
             && hasDraftText
             && isDraftSubmitPending == false
     }
@@ -389,7 +391,10 @@ struct ChatDetailPresentation {
         queuedMessages: [PendingQueuedMessage]
     ) -> String {
         if remoteSession.runState == .queued {
-            return "Waiting for the other session to finish before sending…"
+            return "Waiting to send…"
+        }
+        if remoteSession.runState.showsCancelling {
+            return "Cancelling…"
         }
         if remoteSession.runState.isAnswering {
             return queuedMessages.isEmpty

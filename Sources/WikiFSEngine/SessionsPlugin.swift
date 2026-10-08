@@ -274,10 +274,12 @@ public enum PerWikiRuntimePlugin {
                 }
                 let wikiID = WikiID(rawValue: config.wikiID)
                 let containerDirectory = URL(fileURLWithPath: config.containerDirectory, isDirectory: true)
+                let sharedGate = await MainActor.run {
+                    GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
+                }
                 let launcherFactory = LauncherFactory { _ in
-                    let gate = GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
                     let launcher = AgentLauncher(
-                        generationGate: gate,
+                        generationGate: sharedGate,
                         extractionCoordinator: ExtractionCoordinator(services: extractionServices),
                         providerServices: providerServices,
                         agentLoopService: agentLoopService)
@@ -297,7 +299,7 @@ public enum PerWikiRuntimePlugin {
                     // no legacy pdf2md subprocess for the agent seatbelt to
                     // deny (extraction runs through the registry's reviewed
                     // package plugins). The launcher default `{ nil }` stands.
-                    return LauncherPair(gate: gate, launcher: launcher)
+                    return LauncherPair(gate: sharedGate, launcher: launcher)
                 }
                 let changeStreamFactory = await MainActor.run {
                     BusSearchChangeStreamFactory(bus: eventBus)

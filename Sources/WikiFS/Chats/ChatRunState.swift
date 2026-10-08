@@ -42,6 +42,9 @@ public enum ChatRunState: Sendable, Equatable {
     /// tokens have started arriving. This is the only state that means
     /// "responding…".
     case answering
+    /// Cancellation was accepted and is being persisted/cleaned up. This is
+    /// live, but it is not answering and must not admit another submission.
+    case cancelling
 
     /// Map from the daemon's flat boolean DTO to the most-specific state.
     ///
@@ -71,4 +74,11 @@ public enum ChatRunState: Sendable, Equatable {
     /// True while a turn is actually in flight. **Every** spinner, "responding…"
     /// badge, and Stop affordance keys off this — never off `isLive`.
     public var isAnswering: Bool { self == .answering }
+
+    public var showsCancelling: Bool { self == .cancelling }
+    public var canSubmit: Bool { self != .answering && self != .queued && self != .cancelling }
+
+    /// True while a Stop request can still affect this chat: an answering turn,
+    /// a pending queued turn, or a cancellation already in progress.
+    public var canCancel: Bool { self == .answering || self == .queued || self == .cancelling }
 }

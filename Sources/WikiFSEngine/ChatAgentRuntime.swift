@@ -278,6 +278,7 @@ public protocol ChatAgentRuntime: Sendable {
     func setConfiguration(_ change: ChatRuntimeConfigurationChange, in handle: ChatRuntimeHandle) async throws
     func snapshot(for handle: ChatRuntimeHandle) async throws -> ChatRuntimeSnapshot
     func close(_ handle: ChatRuntimeHandle) async
+    func closeForSettlement(_ handle: ChatRuntimeHandle) async throws
 }
 
 public extension ChatAgentRuntime {
@@ -290,6 +291,10 @@ public extension ChatAgentRuntime {
     }
 
     func discardPreparedStart(_ preparation: ChatRuntimePreparedStart) async {}
+
+    func closeForSettlement(_ handle: ChatRuntimeHandle) async throws {
+        await close(handle)
+    }
 }
 
 public struct ClosureBackedChatAgentRuntime: ChatAgentRuntime {

@@ -1248,6 +1248,13 @@ public protocol WikiStore: AnyObject, Sendable {
     @discardableResult
     func removePersistedQueuedChatTurn(chatID: ChatID, turnID: ChatTurnID) throws -> Bool
 
+    /// Atomically cancel one unclaimed queued turn in place. The row, ordinal,
+    /// and submission identity are retained; the returned row has terminal
+    /// `cancelled` state, a cancellation timestamp, and cancellation metadata.
+    /// Returns nil when the matching row is absent or is no longer queued.
+    @discardableResult
+    func cancelUnclaimedPersistedChatTurn(chatID: ChatID, turnID: ChatTurnID) throws -> PersistedChatTurn?
+
     /// Atomically claim the oldest currently-queued turn for provider
     /// submission. Returns nil when no queued turn remains.
     @discardableResult

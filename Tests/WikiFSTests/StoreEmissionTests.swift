@@ -842,6 +842,29 @@ struct StoreEmissionTests {
         #expect(events.last?.id == chat.id.rawValue)
     }
 
+    @Test func cancelUnclaimedPersistedChatTurnEmitsOnceAndNoOpIsSilent() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Test Chat")
+        let turnID = ChatTurnID(rawValue: "turn-cancel")
+        _ = try store.enqueuePersistedChatTurn(
+            chatID: chat.id,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "cmd-cancel"), turnID: turnID,
+                userText: "queued", contextReferences: [], submittedAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        try await drain(rec, expected: 2)
+        _ = try #require(try store.cancelUnclaimedPersistedChatTurn(chatID: chat.id, turnID: turnID))
+        let events = try await awaitEvents(rec)
+        #expect(events.count == 1)
+        #expect(events.last?.kind == .chat)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == chat.id.rawValue)
+        rec.clear()
+        #expect(try store.cancelUnclaimedPersistedChatTurn(chatID: chat.id, turnID: turnID) == nil)
+        await assertNoEventsDelivered(rec)
+    }
+
     @Test func claimPersistedChatTurnEmitsChatUpdated() async throws {
         let (store, _, rec) = try makeHarness()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")
