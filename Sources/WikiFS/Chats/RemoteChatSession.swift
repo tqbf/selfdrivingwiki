@@ -332,14 +332,51 @@ public final class RemoteChatSession {
         }
     }
 
+    /// The authoritative daemon attention for this chat, if a projection has
+    /// arrived. Reads the server projection rather than a second client state.
+    public var attention: ChatAttentionState {
+        syncState?.projection?.attention ?? .none
+    }
+
+    /// Durable daemon turns still waiting to be dispatched.
+    public var daemonQueuedTurnIDs: [ChatTurnID] {
+        syncState?.projection?.queuedTurns.map(\.submission.turnID) ?? []
+    }
+
+    public var activeTurn: ChatTurnSnapshot? {
+        syncState?.projection?.activeTurn
+    }
+
+    /// True when no daemon work remains for this chat, so a locally queued
+    /// message may be sent. A terminal active row is compatible with
+    /// readiness: the turn is finished, not pending. A promoted daemon
+    /// follower is not ready, because it must finish first.
+    ///
+    /// Cancellation and its failure attentions are never ready: the cancelled
+    /// turn still owns pending status until its settlement commits.
+    public var isReadyForLocalQueueDrain: Bool {
+        guard runState == .warm else { return false }
+        switch attention {
+        case .cancellationPersistenceFailed, .runtimeCleanupFailed:
+            return false
+        case .none, .permissionRequired, .turnFailed, .interruptedTurn:
+            break
+        }
+        guard daemonQueuedTurnIDs.isEmpty else { return false }
+        guard let activeTurn else { return true }
+        return activeTurn.state.isTerminal
+    }
+
     private static func runState(from projection: ChatSyncProjection) -> ChatRunState {
         guard projection.isLive else { return .idle }
         guard let activeTurn = projection.activeTurn else { return .warm }
         switch activeTurn.state {
         case .queued:
             return .queued
-        case .submitting, .responding, .awaitingPermission, .cancelling:
+        case .submitting, .responding, .awaitingPermission:
             return .answering
+        case .cancelling:
+            return .cancelling
         case .terminal:
             return .warm
         }

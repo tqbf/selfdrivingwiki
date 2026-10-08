@@ -164,6 +164,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         let request = preparation.request
 
         await MainActor.run { launcherConfigurator(launcher) }
+        try Task.checkCancellation()
         let (stream, continuation) = AsyncStream.makeStream(of: ChatAgentRuntimeEventEnvelope.self)
         // AgentLauncher invokes its callback in provider order. Yield those
         // events synchronously into one lossless stream so exactly one task
@@ -173,13 +174,13 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             of: AgentEvent.self,
             bufferingPolicy: .unbounded
         )
+        let handle = ChatRuntimeHandle(rawValue: "chat-runtime-\(chatID.rawValue)-\(ULID.generate())")
         let liveEventConsumerTask = Task { [weak self] in
             for await event in liveEvents {
                 guard let self else { return }
-                await self.handleLiveEvent(event)
+                await self.handleLiveEvent(event, in: handle)
             }
         }
-        let handle = ChatRuntimeHandle(rawValue: "chat-runtime-\(chatID.rawValue)")
         runtimeState = RuntimeState(
             request: request,
             providerPreparation: preparation.providerPreparation,
@@ -202,6 +203,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     }
 
     func submitTurn(_ submission: ChatTurnSubmission, in handle: ChatRuntimeHandle) async throws {
+        try Task.checkCancellation()
         guard var state = runtimeState, state.handle == handle else { throw RuntimeError.unknownHandle }
         state.activeTurnID = submission.turnID
         runtimeState = state
@@ -231,6 +233,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             } else {
                 firstMessage = submission.userText
             }
+            try Task.checkCancellation()
+            guard runtimeState?.handle == handle else { throw RuntimeError.unknownHandle }
             let firstPrePersisted = historySeed.contains(.userText(firstMessage))
             let liveEventContinuation = state.liveEventContinuation
             let preparedInteractiveOperation = state.providerPreparation?.operation
@@ -288,9 +292,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 onAcpSessionId: { [weak self] sessionID in
                     guard let self else { return }
                     Task {
-                        await self.updateLatestProviderSessionID(sessionID)
-                        await self.onSessionID(sessionID)
-                        await self.emit(.resumed(providerSessionID: sessionID))
+                        await self.receiveProviderSessionID(sessionID, in: handle)
                     }
                 },
                 onEvent: { event in
@@ -308,13 +310,13 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 onLiveUsage: { [weak self] usage in
                     guard let self else { return }
                     Task {
-                        await self.emitLiveUsage(usage)
+                        await self.emitLiveUsage(usage, in: handle)
                     }
                 },
                 onPendingPermission: { [weak self] permission in
                     guard let self else { return }
                     Task {
-                        await self.handlePendingPermission(permission)
+                        await self.handlePendingPermission(permission, in: handle)
                     }
                 },
                 onLock: { },
@@ -324,7 +326,12 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 onStreamingCheckpoint: onStreamingCheckpoint
             )
 
-            if let preflight = await MainActor.run(body: { state.launcher.preflightError }) {
+            try Task.checkCancellation()
+            guard runtimeState?.handle == handle else { throw RuntimeError.unknownHandle }
+            let preflight = await MainActor.run(body: { state.launcher.preflightError })
+            try Task.checkCancellation()
+            guard runtimeState?.handle == handle else { throw RuntimeError.unknownHandle }
+            if let preflight {
                 throw RuntimeError.preflight(preflight)
             }
             state.startedInteractiveSession = true
@@ -364,12 +371,16 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         let warmPrompt = Self.turnPrompt(
             strategyMarkdown: Self.turnStrategyMarkdown(warmStrategy),
             userText: submission.userText)
-        await MainActor.run {
+        try Task.checkCancellation()
+        guard runtimeState?.handle == handle else { throw RuntimeError.unknownHandle }
+        try await MainActor.run {
+            try Task.checkCancellation()
             state.launcher.sendInteractiveMessage(
                 warmPrompt,
                 displayText: submission.userText)
         }
-        runtimeState = state
+        try Task.checkCancellation()
+        guard runtimeState?.handle == handle else { throw RuntimeError.unknownHandle }
     }
 
     /// Read the strategy this turn captures: the latest committed revision at
@@ -422,6 +433,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             return
         }
         await state.launcher.resolvePendingPermission(optionId: optionID)
+        guard runtimeState?.handle == handle else { return }
         await emit(.permissionResolved(resolution))
     }
 
@@ -501,6 +513,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         }
         state.liveEventContinuation.finish()
         state.liveEventConsumerTask.cancel()
+        guard runtimeState?.handle == handle else { return }
         runtimeState = nil
         state.continuation.finish()
     }
@@ -510,7 +523,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         monitorTask = Task { [weak self] in
             guard let self else { return }
             while Task.isCancelled == false {
-                guard let current = await self.runtimeState else { return }
+                guard let current = await self.runtimeState,
+                      current.handle == state.handle else { return }
                 let stateAndStatus = await MainActor.run { () -> (ChatStateUpdate, Int32?) in
                     let usageData = current.launcher.runTotalUsage.flatMap { usage in
                         DebugLog.trying("LauncherChatAgentRuntime.poll.encodeUsage") {
@@ -537,11 +551,12 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                     )
                 }
                 let update = stateAndStatus.0
-                await self.forwardStateUpdate(update)
+                await self.forwardStateUpdate(update, in: state.handle)
 
                 if update.isRunning == false,
                    update.isGenerating == false,
-                   let current = await self.runtimeState {
+                   let current = await self.runtimeState,
+                   current.handle == state.handle {
                     current.continuation.yield(.init(
                         generation: current.request.generation,
                         event: .transportClosed(status: stateAndStatus.1)
@@ -561,8 +576,9 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         }
     }
 
-    private func handleLiveEvent(_ event: AgentEvent) async {
+    private func handleLiveEvent(_ event: AgentEvent, in handle: ChatRuntimeHandle) async {
         guard var state = runtimeState,
+              state.handle == handle,
               let turnID = state.activeTurnID else { return }
         var translator = state.translationStateByTurn[turnID] ?? AgentEventTranscriptTranslator()
         let deltas = translator.translate([event], turnID: turnID)
@@ -573,6 +589,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         // callback boundary. This also keeps the method correct if a future
         // caller bypasses the ordered ingress.
         await onLiveEvents([event])
+        guard runtimeState?.handle == handle else { return }
         if deltas.isEmpty == false {
             await emit(
                 .transcript(deltas),
@@ -591,8 +608,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         }
     }
 
-    private func handlePendingPermission(_ permission: PendingPermission?) async {
-        guard var state = runtimeState else { return }
+    private func handlePendingPermission(_ permission: PendingPermission?, in handle: ChatRuntimeHandle) async {
+        guard var state = runtimeState, state.handle == handle else { return }
         guard permission?.toolCallId != state.pendingPermission?.toolCallId else { return }
         state.pendingPermission = permission
         runtimeState = state
@@ -604,13 +621,14 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         ))
     }
 
-    private func forwardStateUpdate(_ update: ChatStateUpdate) async {
-        guard var state = runtimeState else { return }
+    private func forwardStateUpdate(_ update: ChatStateUpdate, in handle: ChatRuntimeHandle) async {
+        guard var state = runtimeState, state.handle == handle else { return }
         let fingerprint = StateFingerprint(update: update)
         guard fingerprint != state.lastFingerprint else { return }
         state.lastFingerprint = fingerprint
         runtimeState = state
         await onStateUpdate(update)
+        guard runtimeState?.handle == state.handle else { return }
         if let usage = update.usageData.flatMap({ data in
             DebugLog.trying("LauncherChatAgentRuntime.decodeUsage") {
                 try JSONDecoder().decode(SessionUsage.self, from: data)
@@ -622,15 +640,19 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         }
     }
 
-    private func emitLiveUsage(_ usage: SessionUsage) async {
-        guard let turnID = runtimeState?.activeTurnID else { return }
+    private func emitLiveUsage(_ usage: SessionUsage, in handle: ChatRuntimeHandle) async {
+        guard runtimeState?.handle == handle,
+              let turnID = runtimeState?.activeTurnID else { return }
         await emit(.usage(turnID: turnID, usage: usage))
     }
 
-    private func updateLatestProviderSessionID(_ sessionID: AcpSessionID?) {
-        guard var state = runtimeState else { return }
+    private func receiveProviderSessionID(_ sessionID: AcpSessionID?, in handle: ChatRuntimeHandle) async {
+        guard var state = runtimeState, state.handle == handle else { return }
         state.latestProviderSessionID = sessionID
         runtimeState = state
+        await onSessionID(sessionID)
+        guard runtimeState?.handle == handle else { return }
+        await emit(.resumed(providerSessionID: sessionID))
     }
 
     func usesStreamingCheckpointForTesting() -> Bool {

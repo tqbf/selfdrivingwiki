@@ -23,22 +23,103 @@ struct ChatDomainStateTests {
         lifecycle: ChatSessionLifecycle = .starting,
         activeTurn: ChatTurnSnapshot? = nil,
         attention: ChatAttentionState = .none,
-        sequence: Int64 = 0
+        sequence: Int64 = 0,
+        queuedTurns: [ChatQueuedTurn] = [],
+        terminalContinuationPolicy: ChatTerminalContinuationPolicy? = nil
     ) -> ChatRuntimeSnapshot {
         ChatRuntimeSnapshot(
             chatID: ChatID(rawValue: "chat-1"),
             generation: ChatSessionGenerationID(rawValue: "generation-1"),
             lifecycle: lifecycle,
             activeTurn: activeTurn,
-            queuedTurns: [],
+            queuedTurns: queuedTurns,
             attention: attention,
             capabilities: ChatCapabilitySet.unavailable,
             providerState: ChatProviderState(providerID: nil, modelID: nil, providerSessionID: nil),
             usage: nil,
             diagnostics: ChatDiagnosticsState(),
             transientTranscriptOverlay: [],
-            lastIncludedSequence: ChatUpdateSequence(rawValue: sequence)
+            lastIncludedSequence: ChatUpdateSequence(rawValue: sequence),
+            terminalContinuationPolicy: terminalContinuationPolicy
         )
+    }
+
+    private func makeTurn(_ state: ChatTurnState, turnID: String = "turn-1") -> ChatTurnSnapshot {
+        ChatTurnSnapshot(
+            turnID: ChatTurnID(rawValue: turnID),
+            commandID: ChatCommandID(rawValue: "command-\(turnID)"),
+            visibleText: turnID,
+            contextReferences: [],
+            submittedAt: Date(timeIntervalSince1970: 10),
+            state: state
+        )
+    }
+
+    private func makeQueuedTurn(_ turnID: String) -> ChatQueuedTurn {
+        ChatQueuedTurn(ordinal: 0, submission: makeSubmission(turnID: turnID, commandID: "command-\(turnID)"))
+    }
+
+    private func allTurnStates() -> [ChatTurnState] {
+        [
+            .queued,
+            .submitting,
+            .responding,
+            .awaitingPermission(PermissionRequestID(rawValue: "permission-1")),
+            .cancelling,
+            .terminal(.completed),
+            .terminal(.failed(category: .runtimeError, message: "failed")),
+            .terminal(.cancelled),
+            .terminal(.interrupted(message: "interrupted"))
+        ]
+    }
+
+    @Test(arguments: ["turn-1", "turn-2"])
+    func cancellationTransitionTableValidIdentity(turnID: String) {
+        let snapshot = makeSnapshot(lifecycle: .ready, activeTurn: makeTurn(.responding, turnID: turnID))
+        let update = ChatSessionUpdate(chatID: snapshot.chatID, generation: snapshot.generation, sequence: .init(rawValue: 1), payload: .cancellationRequested(turnID: .init(rawValue: turnID)))
+        guard case .applied(let result) = ChatSessionMachine.apply(update, to: snapshot) else { Issue.record("valid cancellation should apply"); return }
+        #expect(result.activeTurn?.state == .cancelling)
+    }
+
+    @Test(arguments: ["queued", "submitting", "responding", "awaitingPermission", "cancelling", "completed", "failed", "cancelled", "interrupted"])
+    func cancellationTransitionTableIsExhaustive(stateName: String) {
+        let names = ["queued", "submitting", "responding", "awaitingPermission", "cancelling", "completed", "failed", "cancelled", "interrupted"]
+        guard let index = names.firstIndex(of: stateName) else { Issue.record("missing fixture"); return }
+        let state = allTurnStates()[index]
+        let snapshot = makeSnapshot(lifecycle: .ready, activeTurn: makeTurn(state))
+        let update = ChatSessionUpdate(chatID: snapshot.chatID, generation: snapshot.generation, sequence: .init(rawValue: 1), payload: .cancellationRequested(turnID: .init(rawValue: "turn-1")))
+        switch state {
+        case .queued, .submitting, .responding, .awaitingPermission, .cancelling:
+            guard case .applied(let result) = ChatSessionMachine.apply(update, to: snapshot) else { Issue.record("nonterminal cancellation should apply"); return }
+            #expect(result.activeTurn?.state == (state == .cancelling ? .cancelling : .cancelling))
+        case .terminal:
+            #expect(ChatSessionMachine.apply(update, to: snapshot) == .rejected(.illegalTransition(payload: update.payload)))
+        }
+    }
+
+    @Test func cancellationPromotesFIFOAndRetainPolicyKeepsFollowersQueued() {
+        let first = makeTurn(.cancelling)
+        let follower = makeQueuedTurn("turn-2")
+        for policy in [ChatTerminalContinuationPolicy.fifo, .retainQueuedTurns] {
+            let snapshot = makeSnapshot(lifecycle: .ready, activeTurn: first, queuedTurns: [follower], terminalContinuationPolicy: policy)
+            let update = ChatSessionUpdate(chatID: snapshot.chatID, generation: snapshot.generation, sequence: .init(rawValue: 1), payload: .cancelled(turnID: first.turnID))
+            guard case .applied(let result) = ChatSessionMachine.apply(update, to: snapshot) else { Issue.record("terminal cancellation should apply"); continue }
+            if policy == .fifo { #expect(result.activeTurn?.turnID == follower.submission.turnID); #expect(result.queuedTurns.isEmpty) }
+            else { #expect(result.activeTurn?.state == .terminal(.cancelled)); #expect(result.queuedTurns == [follower]) }
+        }
+    }
+
+    @Test func cancellationRequestWrongTurnStaleGenerationAndDuplicateTerminalAreRejected() {
+        let snapshot = makeSnapshot(lifecycle: .ready, activeTurn: makeTurn(.cancelling), sequence: 1)
+        let wrong = ChatSessionUpdate(chatID: snapshot.chatID, generation: snapshot.generation, sequence: .init(rawValue: 2), payload: .cancellationRequested(turnID: .init(rawValue: "wrong")))
+        #expect(ChatSessionMachine.apply(wrong, to: snapshot) == .rejected(.illegalTransition(payload: wrong.payload)))
+        let stale = ChatSessionUpdate(chatID: snapshot.chatID, generation: .init(rawValue: "old"), sequence: .init(rawValue: 2), payload: .cancelled(turnID: snapshot.activeTurn!.turnID))
+        #expect(ChatSessionMachine.apply(stale, to: snapshot) == .rejected(.staleGeneration(expected: snapshot.generation, received: stale.generation)))
+        let duplicate = ChatSessionUpdate(chatID: snapshot.chatID, generation: snapshot.generation, sequence: .init(rawValue: 2), payload: .cancelled(turnID: snapshot.activeTurn!.turnID))
+        let terminal = ChatSessionMachine.apply(duplicate, to: snapshot)
+        guard case .applied(let cancelled) = terminal else { Issue.record("first terminal should apply"); return }
+        let repeated = ChatSessionMachine.apply(ChatSessionUpdate(chatID: snapshot.chatID, generation: snapshot.generation, sequence: .init(rawValue: 3), payload: .cancelled(turnID: snapshot.activeTurn!.turnID)), to: cancelled)
+        #expect(repeated == .rejected(.illegalTransition(payload: .cancelled(turnID: snapshot.activeTurn!.turnID))))
     }
 
     @Test func derivedCapabilitiesSeparateSubmitQueueCancelAndPermission() {

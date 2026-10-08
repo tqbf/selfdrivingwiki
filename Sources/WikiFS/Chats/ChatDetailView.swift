@@ -200,10 +200,11 @@ struct ChatDetailView: View {
                 chatResolution = store.resolveChat(id: chatID)
                 store.reloadChats()
             }
-            if !runState.isLive, !queuedMessages.isEmpty {
-                firePendingQueuedMessage()
-            }
-            guard !runState.isAnswering, runState.isLive, !queuedMessages.isEmpty else { return }
+            // Queue draining is a local decision, and it must observe the
+            // derived readiness value rather than any single run state: a
+            // promoted daemon follower and an unfinished cancellation both
+            // keep this chat not ready even when it is not answering.
+            guard remoteSession.isReadyForLocalQueueDrain, !queuedMessages.isEmpty else { return }
             firePendingQueuedMessage()
         }
         .task(id: ChatResolutionTaskKey(
@@ -767,11 +768,15 @@ struct ChatDetailView: View {
 
     private func stopActiveResponse() {
         guard let chatID else { return }
+        // Stop must reach a pending queued active turn as well as an answering
+        // one. A repeated Stop during cancellation is an idempotent no-op in
+        // the daemon, so this stays safe to press.
+        guard remoteSession.runState.canCancel else { return }
         Task { await coordinator.stop(wikiID: session.wikiID, chatID: chatID) }
     }
 
     private func sendMessage() {
-        guard isChatOperationConfigured else { return }
+        guard isChatOperationConfigured, remoteSession.runState.canSubmit || remoteSession.runState.isAnswering else { return }
         if remoteSession.runState.isAnswering {
             queueMessage()
             return

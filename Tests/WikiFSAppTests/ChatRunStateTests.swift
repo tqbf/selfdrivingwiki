@@ -81,6 +81,13 @@ struct ChatRunStateTests {
         #expect(ChatRunState.answering.isAnswering == true)
     }
 
+    @Test func cancelling_isLiveButCannotSubmitOrAnswer() {
+        #expect(ChatRunState.cancelling.isLive)
+        #expect(ChatRunState.cancelling.showsCancelling)
+        #expect(ChatRunState.cancelling.isAnswering == false)
+        #expect(ChatRunState.cancelling.canSubmit == false)
+    }
+
     @Test func isLiveAndIsAnswering_areDistinctForWarm() {
         // The invariant the whole enum exists to protect: a session can be live
         // without answering. Any code that uses one where it means the other

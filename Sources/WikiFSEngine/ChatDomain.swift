@@ -20,6 +20,11 @@ public enum ChatTurnTerminalOutcome: Hashable, Sendable, Codable {
     case interrupted(message: String)
 }
 
+public enum ChatTerminalContinuationPolicy: String, Hashable, Sendable, Codable {
+    case fifo
+    case retainQueuedTurns
+}
+
 public enum ChatTurnState: Hashable, Sendable, Codable {
     case queued
     case submitting
@@ -41,6 +46,24 @@ public enum ChatAttentionState: Hashable, Sendable, Codable {
     case permissionRequired(PermissionRequestID)
     case turnFailed(ChatTurnID)
     case interruptedTurn(ChatTurnID)
+    case cancellationPersistenceFailed(ChatTurnID, message: String)
+    case runtimeCleanupFailed(ChatTurnID, message: String)
+
+    public var turnID: ChatTurnID? {
+        switch self {
+        case .none: nil
+        case .permissionRequired: nil
+        case .turnFailed(let turnID), .interruptedTurn(let turnID),
+             .cancellationPersistenceFailed(let turnID, _), .runtimeCleanupFailed(let turnID, _): turnID
+        }
+    }
+
+    public var permitsRetry: Bool {
+        switch self {
+        case .cancellationPersistenceFailed, .runtimeCleanupFailed: true
+        default: false
+        }
+    }
 }
 
 public struct ChatConfigurationValueOption: Hashable, Sendable, Codable {
@@ -287,6 +310,10 @@ public struct ChatRuntimeSnapshot: Sendable, Codable, Equatable {
     public let diagnostics: ChatDiagnosticsState
     public let transientTranscriptOverlay: [ChatTranscriptItem]
     public let lastIncludedSequence: ChatUpdateSequence
+    /// Overrides queued-turn continuation for terminal events. Absent (nil)
+    /// keeps the FIFO default, so previously encoded snapshots decode
+    /// unchanged. Shutdown sets `.retainQueuedTurns` to keep followers queued.
+    public let terminalContinuationPolicy: ChatTerminalContinuationPolicy?
 
     public init(
         chatID: ChatID,
@@ -300,7 +327,8 @@ public struct ChatRuntimeSnapshot: Sendable, Codable, Equatable {
         usage: SessionUsage?,
         diagnostics: ChatDiagnosticsState,
         transientTranscriptOverlay: [ChatTranscriptItem],
-        lastIncludedSequence: ChatUpdateSequence
+        lastIncludedSequence: ChatUpdateSequence,
+        terminalContinuationPolicy: ChatTerminalContinuationPolicy? = nil
     ) {
         self.chatID = chatID
         self.generation = generation
@@ -314,6 +342,7 @@ public struct ChatRuntimeSnapshot: Sendable, Codable, Equatable {
         self.diagnostics = diagnostics
         self.transientTranscriptOverlay = transientTranscriptOverlay
         self.lastIncludedSequence = lastIncludedSequence
+        self.terminalContinuationPolicy = terminalContinuationPolicy
     }
 }
 
@@ -327,7 +356,12 @@ public extension ChatRuntimeSnapshot {
     var canQueue: Bool {
         guard isSessionInteractive else { return false }
         guard let activeTurn else { return false }
-        return activeTurn.state.isTerminal == false
+        guard activeTurn.state.isTerminal == false else { return false }
+        return attention.permitsRetry == false
+    }
+
+    var showsCancelling: Bool {
+        activeTurn?.state == .cancelling
     }
 
     var canCancel: Bool {
@@ -374,6 +408,7 @@ public enum ChatSessionCommand: Hashable, Sendable, Codable {
     /// `removeQueuedTurn`, which preserves arrival order and does not reuse the
     /// active-turn cancellation path.
     case cancelTurn(commandID: ChatCommandID, turnID: ChatTurnID?)
+    case cancellationRequested(turnID: ChatTurnID)
     case editQueuedTurn(turn: ChatQueuedTurn)
     case removeQueuedTurn(commandID: ChatCommandID, turnID: ChatTurnID)
     case retryInterruptedTurn(commandID: ChatCommandID, priorTurnID: ChatTurnID)
@@ -391,6 +426,7 @@ public enum ChatSessionEventPayload: Hashable, Sendable, Codable {
     case queued(ChatQueuedTurn)
     case submitted(turnID: ChatTurnID)
     case started(turnID: ChatTurnID)
+    case cancellationRequested(turnID: ChatTurnID)
     case transcriptChanged([ChatTranscriptDelta])
     case permissionRequested(ChatPendingPermissionRequest)
     case permissionResolved(PermissionRequestID)
@@ -403,6 +439,8 @@ public enum ChatSessionEventPayload: Hashable, Sendable, Codable {
         createdAt: Date
     )
     case cancelled(turnID: ChatTurnID)
+    case cancellationPersistenceFailed(turnID: ChatTurnID, message: String)
+    case runtimeCleanupFailed(turnID: ChatTurnID, message: String)
     case recovering
     case sessionReady(capabilities: ChatCapabilitySet, providerState: ChatProviderState)
     case sessionClosed
@@ -413,17 +451,25 @@ public struct ChatSessionUpdate: Hashable, Sendable, Codable {
     public let generation: ChatSessionGenerationID
     public let sequence: ChatUpdateSequence
     public let payload: ChatSessionEventPayload
+    /// Overrides queued-turn continuation for this terminal event. Absent
+    /// (nil) means the snapshot's own policy applies, which defaults to FIFO.
+    /// Shutdown passes `.retainQueuedTurns` so followers stay queued and no
+    /// follower is promoted or dispatched. The field is optional so existing
+    /// encoded updates keep their exact wire shape.
+    public let terminalContinuationPolicy: ChatTerminalContinuationPolicy?
 
     public init(
         chatID: ChatID,
         generation: ChatSessionGenerationID,
         sequence: ChatUpdateSequence,
-        payload: ChatSessionEventPayload
+        payload: ChatSessionEventPayload,
+        terminalContinuationPolicy: ChatTerminalContinuationPolicy? = nil
     ) {
         self.chatID = chatID
         self.generation = generation
         self.sequence = sequence
         self.payload = payload
+        self.terminalContinuationPolicy = terminalContinuationPolicy
     }
 }
 
@@ -563,6 +609,45 @@ public enum ChatSessionMachine {
             )
             return .applied(next)
 
+        case .cancellationPersistenceFailed(let turnID, let message):
+            guard let activeTurn = next.activeTurn, activeTurn.turnID == turnID,
+                  activeTurn.state == .cancelling else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+            next = replacing(snapshot: next, activeTurn: activeTurn, queuedTurns: next.queuedTurns,
+                             attention: .cancellationPersistenceFailed(turnID, message: message), sequence: update.sequence)
+            return .applied(next)
+
+        case .runtimeCleanupFailed(let turnID, let message):
+            guard let activeTurn = next.activeTurn, activeTurn.turnID == turnID,
+                  activeTurn.state == .cancelling else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+            next = replacing(snapshot: next, activeTurn: activeTurn, queuedTurns: next.queuedTurns,
+                             attention: .runtimeCleanupFailed(turnID, message: message), sequence: update.sequence)
+            return .applied(next)
+
+        case .cancellationRequested(let turnID):
+            guard let activeTurn = next.activeTurn, activeTurn.turnID == turnID,
+                  activeTurn.state.isTerminal == false else {
+                return .rejected(.illegalTransition(payload: update.payload))
+            }
+            // A repeat request during cancelling is idempotent in behavior, but
+            // the update is still accepted so the sequence advances and replay
+            // watermarks stay monotonic.
+            if activeTurn.state == .cancelling {
+                next = replacing(
+                    snapshot: next,
+                    activeTurn: activeTurn,
+                    queuedTurns: next.queuedTurns,
+                    attention: next.attention,
+                    sequence: update.sequence)
+                return .applied(next)
+            }
+            next = replacing(snapshot: next, activeTurn: replacingState(of: activeTurn, with: .cancelling),
+                             queuedTurns: next.queuedTurns, attention: .none, sequence: update.sequence)
+            return .applied(next)
+
         case .transcriptChanged(let deltas):
             next = replacing(
                 snapshot: next,
@@ -629,7 +714,8 @@ public enum ChatSessionMachine {
                     attention: .none,
                     overlay: [],
                     sequence: update.sequence
-                )
+                ),
+                policy: update.terminalContinuationPolicy ?? next.terminalContinuationPolicy ?? .fifo
             )
             return .applied(next)
 
@@ -688,7 +774,8 @@ public enum ChatSessionMachine {
                     attention: .none,
                     overlay: [],
                     sequence: update.sequence
-                )
+                ),
+                policy: update.terminalContinuationPolicy ?? next.terminalContinuationPolicy ?? .fifo
             )
             return .applied(next)
 
@@ -774,7 +861,8 @@ public enum ChatSessionMachine {
             usage: snapshot.usage,
             diagnostics: snapshot.diagnostics,
             transientTranscriptOverlay: overlay ?? snapshot.transientTranscriptOverlay,
-            lastIncludedSequence: sequence
+            lastIncludedSequence: sequence,
+            terminalContinuationPolicy: snapshot.terminalContinuationPolicy
         )
     }
 
@@ -838,7 +926,11 @@ public enum ChatSessionMachine {
         }
     }
 
-    private static func promoteQueuedTurnIfAvailable(_ snapshot: ChatRuntimeSnapshot) -> ChatRuntimeSnapshot {
+    private static func promoteQueuedTurnIfAvailable(
+        _ snapshot: ChatRuntimeSnapshot,
+        policy: ChatTerminalContinuationPolicy = .fifo
+    ) -> ChatRuntimeSnapshot {
+        guard policy == .fifo else { return snapshot }
         guard let nextQueuedTurn = snapshot.queuedTurns.first else {
             return snapshot
         }

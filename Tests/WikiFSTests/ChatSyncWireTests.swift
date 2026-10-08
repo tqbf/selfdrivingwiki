@@ -176,6 +176,70 @@ struct ChatSyncWireTests {
         #expect(compact.count < full.count)
     }
 
+    @Test func cancellationSyncRoundTripPreservesNewEventsPolicyIdentifiersAndTypedState() throws {
+        let turnID = ChatTurnID(rawValue: "cancel-turn")
+        let events: [ChatSessionEventPayload] = [
+            .cancellationRequested(turnID: turnID),
+            .cancellationPersistenceFailed(turnID: turnID, message: "persist failed"),
+            .runtimeCleanupFailed(turnID: turnID, message: "cleanup failed")
+        ]
+        for (offset, payload) in events.enumerated() {
+            let update = ChatSessionUpdate(
+                chatID: ChatID(rawValue: "chat-cancel"),
+                generation: ChatSessionGenerationID(rawValue: "generation-cancel"),
+                sequence: ChatUpdateSequence(rawValue: Int64(offset + 1)),
+                payload: payload,
+                terminalContinuationPolicy: .retainQueuedTurns
+            )
+            // The domain event carries the continuation policy, and the replay
+            // buffer is its durable encoding.
+            let decoded = try JSONDecoder().decode(
+                ChatSessionUpdate.self,
+                from: JSONEncoder().encode(update)
+            )
+            #expect(decoded == update)
+            #expect(decoded.terminalContinuationPolicy == .retainQueuedTurns)
+        }
+
+        let runtime = ChatRuntimeSnapshot(
+            chatID: ChatID(rawValue: "chat-cancel"),
+            generation: ChatSessionGenerationID(rawValue: "generation-cancel"),
+            lifecycle: .ready,
+            activeTurn: makeActiveTurn(state: .cancelling),
+            queuedTurns: [],
+            attention: .runtimeCleanupFailed(turnID, message: "cleanup failed"),
+            capabilities: .unavailable,
+            providerState: ChatProviderState(providerID: nil, modelID: nil, providerSessionID: nil),
+            usage: nil,
+            diagnostics: ChatDiagnosticsState(),
+            transientTranscriptOverlay: [],
+            lastIncludedSequence: ChatUpdateSequence(rawValue: 7),
+            terminalContinuationPolicy: .retainQueuedTurns
+        )
+        let snapshot = ChatRuntimeSnapshot(
+            chatID: runtime.chatID, generation: runtime.generation, lifecycle: runtime.lifecycle,
+            activeTurn: runtime.activeTurn, queuedTurns: runtime.queuedTurns, attention: runtime.attention,
+            capabilities: runtime.capabilities, providerState: runtime.providerState, usage: runtime.usage,
+            diagnostics: runtime.diagnostics, transientTranscriptOverlay: runtime.transientTranscriptOverlay,
+            lastIncludedSequence: runtime.lastIncludedSequence,
+            terminalContinuationPolicy: runtime.terminalContinuationPolicy
+        )
+        #expect(snapshot == runtime)
+
+        let oldUpdate = ChatSessionUpdate(chatID: updateChatID, generation: updateGeneration, sequence: .init(rawValue: 1), payload: .started(turnID: .init(rawValue: "turn-1")))
+        // An update encoded before the policy field existed must still decode,
+        // and must default to FIFO continuation.
+        let oldDecoded = try JSONDecoder().decode(
+            ChatSessionUpdate.self,
+            from: JSONEncoder().encode(oldUpdate)
+        )
+        #expect(oldDecoded == oldUpdate)
+        #expect(oldDecoded.terminalContinuationPolicy == nil)
+    }
+
+    private var updateChatID: ChatID { ChatID(rawValue: "chat-1") }
+    private var updateGeneration: ChatSessionGenerationID { ChatSessionGenerationID(rawValue: "generation-1") }
+
     @Test func snapshotEnvelopeRejectsMissingWireVersion() throws {
         let snapshot = makeSnapshot(sequence: 1)
         let encoded = try ChatSyncSnapshotEnvelope(snapshot: snapshot).encodedData()

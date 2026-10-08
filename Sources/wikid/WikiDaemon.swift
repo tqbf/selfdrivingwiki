@@ -1448,7 +1448,10 @@ final class WikiDaemon: @unchecked Sendable {
                     self?.pushChatEnvelope(envelope)
                 },
                 diagnosticTrace: daemonChatDiagnostics,
-                providerServices: runtime.provider)
+                providerServices: runtime.provider,
+                makeLauncher: {
+                    services.launcherFactory(wikiID: wikiID).launcher
+                })
         }
         try Task.checkCancellation()
 

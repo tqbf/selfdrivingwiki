@@ -139,13 +139,17 @@ struct DaemonChatControllerTests {
         #expect(runtime.cancelCalls.isEmpty)
     }
 
-    @Test func cancelDoesNotRemoveBootstrapQueuedActiveTurn() async throws {
+    /// A bootstrap active turn can be durable and unclaimed. Cancelling it must
+    /// retain the row as cancelled, leave the generation alone, and perform no
+    /// runtime cancel or close: there is no runtime work to stop.
+    @Test func cancelUnclaimedTurnNeedsNoRuntimeTeardown() async throws {
         let harness = try ControllerHarness()
         let queued = try harness.store.enqueuePersistedChatTurn(
             chatID: harness.chat.id,
             submission: harness.makeSubmission(commandID: "command-bootstrap-queued", turnID: "turn-bootstrap-queued")
         )
         let controller = try harness.makeController()
+        let generationBefore = await controller.typedSnapshot().generation
 
         await controller.cancel(turnID: queued.submission.turnID)
 
@@ -154,11 +158,13 @@ struct DaemonChatControllerTests {
         let runtime = await harness.runtime.snapshot()
 
         #expect(snapshot.activeTurn?.turnID == queued.submission.turnID)
-        #expect(snapshot.activeTurn?.state == .queued)
+        #expect(snapshot.activeTurn?.state == .terminal(.cancelled))
         #expect(snapshot.queuedTurns.isEmpty)
         #expect(turns.map(\.submission.turnID) == [queued.submission.turnID])
-        #expect(turns.map(\.state) == [.queued])
+        #expect(turns.map(\.state) == [.cancelled])
+        #expect(snapshot.generation == generationBefore)
         #expect(runtime.cancelCalls.isEmpty)
+        #expect(runtime.closeCallCount == 0)
     }
 
     @Test func permissionResolutionUpdatesAttentionAndForwardsOption() async throws {

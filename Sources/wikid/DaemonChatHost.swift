@@ -13,6 +13,28 @@ import WikiFSEngine
 // pattern: Mixed (unavoidable)
 // Reason: this transport facade coordinates persistence, controller lifecycle,
 // and raw XPC compatibility adapters at the daemon boundary.
+// MARK: - Chat runtime construction
+
+/// Everything one chat's runtime needs to be built. The host supplies a fresh
+/// launcher per chat so two chats never share backend or task ownership; only
+/// the admission gate and provider services are shared.
+struct ChatRuntimeConstructionContext: Sendable {
+    let chatID: ChatID
+    let wikiID: WikiID
+    let store: GRDBWikiStore
+    let launcher: AgentLauncher
+    let providerServices: any AgentProviderServices
+    let pushEvent: @Sendable (QueueEventEnvelope) -> Void
+    let onSessionID: @Sendable (AcpSessionID?) async -> Void
+    let onStateUpdate: @Sendable (ChatStateUpdate) async -> Void
+    let onLiveEvents: @Sendable ([AgentEvent]) async -> Void
+    let onMessageSummary: @MainActor @Sendable (ChatID) -> Void
+}
+
+/// Builds one chat's runtime. Tests inject a controlled runtime through this
+/// seam; production uses `DaemonChatHost.defaultRuntimeFactory`.
+typealias ChatRuntimeFactory = @Sendable (ChatRuntimeConstructionContext) async throws -> any ChatAgentRuntime
+
 final class DaemonChatHost: @unchecked Sendable {
 
     // MARK: - Dependencies
@@ -24,12 +46,36 @@ final class DaemonChatHost: @unchecked Sendable {
     private let providerServices: any AgentProviderServices
 
     private let launcher: AgentLauncher
+    private let makeLauncher: @MainActor @Sendable () -> AgentLauncher
     private let sharedGate: GenerationGate
+    private let runtimeFactory: ChatRuntimeFactory
     private let registry = ControllerRegistry()
     private let idleEvictionDelay: Duration
 
     private static let idleEvictionSeconds = 300
     private static let defaultIdleEvictionDelay: Duration = .seconds(idleEvictionSeconds)
+
+    /// Production runtime: a launcher-backed runtime bound to this chat's own
+    /// fresh launcher. Tests replace this through `runtimeFactory`.
+    static let defaultRuntimeFactory: ChatRuntimeFactory = { context in
+        LauncherChatAgentRuntime(
+            chatID: context.chatID,
+            wikiID: context.wikiID,
+            store: context.store,
+            launcher: context.launcher,
+            pushEvent: context.pushEvent,
+            onSessionID: context.onSessionID,
+            onStateUpdate: context.onStateUpdate,
+            onLiveEvents: context.onLiveEvents,
+            providerServices: context.providerServices,
+            onMessageSummary: context.onMessageSummary,
+            // Phase 3's typed per-delta controller persistence is the sole
+            // owner of compatibility `chat_messages` rows in the daemon path.
+            // Wiring the legacy checkpoint sink here would dual-write the same
+            // assistant message under a second identity and reopen #982/#990.
+            onStreamingCheckpoint: nil
+        )
+    }
 
     // MARK: - Init
 
@@ -41,16 +87,20 @@ final class DaemonChatHost: @unchecked Sendable {
         pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
         diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics(),
         providerServices: any AgentProviderServices,
-        idleEvictionDelay: Duration = DaemonChatHost.defaultIdleEvictionDelay
+        idleEvictionDelay: Duration = DaemonChatHost.defaultIdleEvictionDelay,
+        makeLauncher: (@MainActor @Sendable () -> AgentLauncher)? = nil,
+        runtimeFactory: ChatRuntimeFactory? = nil
     ) {
         self.containerDirectory = containerDirectory
         self.launcher = launcherPair.launcher
+        self.makeLauncher = makeLauncher ?? { launcherPair.launcher }
         self.sharedGate = launcherPair.gate
         self.storeResolver = storeResolver
         self.pushEvent = pushEvent
         self.diagnosticTrace = diagnosticTrace
         self.providerServices = providerServices
         self.idleEvictionDelay = idleEvictionDelay
+        self.runtimeFactory = runtimeFactory ?? DaemonChatHost.defaultRuntimeFactory
     }
 
     // MARK: - Unified submit path
@@ -210,7 +260,7 @@ final class DaemonChatHost: @unchecked Sendable {
     func shutdown() async {
         let controllers = await registry.removeAllForShutdown()
         for controller in controllers {
-            await controller.stopSession()
+            await controller.terminateSessionForShutdown()
         }
     }
 
@@ -311,11 +361,13 @@ final class DaemonChatHost: @unchecked Sendable {
             return existing
         }
 
-        let runtime = LauncherChatAgentRuntime(
+        let chatLauncher = await MainActor.run { makeLauncher() }
+        let context = ChatRuntimeConstructionContext(
             chatID: chatID,
             wikiID: wikiID,
             store: store,
-            launcher: launcher,
+            launcher: chatLauncher,
+            providerServices: providerServices,
             pushEvent: pushEvent,
             onSessionID: { [weak self] sessionID in
                 guard let self else { return }
@@ -345,17 +397,12 @@ final class DaemonChatHost: @unchecked Sendable {
                     await controller.didReceiveLiveEvents(events)
                 }
             },
-            providerServices: providerServices,
             onMessageSummary: { [weak self] chatID in
                 guard let self else { return }
                 self.summarizePendingMessages(chatID: chatID, wikiID: wikiID)
-            },
-            // Phase 3's typed per-delta controller persistence is the sole
-            // owner of compatibility `chat_messages` rows in the daemon path.
-            // Wiring the legacy checkpoint sink here would dual-write the same
-            // assistant message under a second identity and reopen #982/#990.
-            onStreamingCheckpoint: nil
+            }
         )
+        let runtime = try await runtimeFactory(context)
         let controller = try DaemonChatController(
             chatID: chatID,
             wikiID: wikiID,
@@ -889,6 +936,7 @@ enum DaemonChatError: Error, LocalizedError {
     case emptyMessage
     case preflightFailed(String)
     case midGeneration
+    case shutdownStarted
 
     var errorDescription: String? {
         switch self {
@@ -902,6 +950,8 @@ enum DaemonChatError: Error, LocalizedError {
             return msg
         case .midGeneration:
             return "A turn is currently generating — wait for it to finish"
+        case .shutdownStarted:
+            return "Chat shutdown has started"
         }
     }
 }

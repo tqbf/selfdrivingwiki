@@ -221,6 +221,12 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// writer queue.
     public var eventBus: WikiEventBus?
 
+    /// Test-only fault injection for terminal chat-turn writes. When set, the
+    /// next `finishPersistedChatTurn` throws instead of committing, which lets
+    /// tests prove that a failed cancellation keeps its row and claim and
+    /// remains retryable. Never set in production.
+    var failNextTerminalChatTurnWrite = false
+
     /// The wiki ID this store belongs to (stamped onto emitted events).
     /// Defaults to empty when the bus is nil (mirrors `SQLiteWikiStore`'s
     /// `localEvent` fallback).
@@ -10368,6 +10374,44 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     }
 
     @discardableResult
+    public func cancelUnclaimedPersistedChatTurn(chatID: ChatID, turnID: ChatTurnID) throws -> PersistedChatTurn? {
+        let result: (turn: PersistedChatTurn?, didMutate: Bool) = try mutate(event: { result in
+            result.didMutate ? self.localEvent(.chat, id: chatID.rawValue, change: .updated) : nil
+        }) { db in
+            let finishedAt = Date()
+            try db.execute(sql: """
+            UPDATE chat_turns
+            SET state = ?, terminal_message = ?, finished_at = ?
+            WHERE chat_id = ? AND turn_id = ? AND state = ? AND claim_id IS NULL;
+            """, arguments: [
+                ChatTurnPersistenceState.cancelled.rawValue,
+                "Cancelled before provider claim",
+                finishedAt.timeIntervalSince1970,
+                chatID.rawValue,
+                turnID.rawValue,
+                ChatTurnPersistenceState.queued.rawValue,
+            ])
+            guard db.changesCount > 0 else { return (nil, false) }
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT chat_id, turn_id, command_id, ordinal, state, user_text, context_refs_json,
+                       submitted_at, edited_at, claim_id, claimed_at, provider_submitted_at,
+                       provider_session_id, terminal_message, provider_id, model_id, finished_at,
+                       input_tokens, output_tokens, thought_tokens, cache_read_tokens,
+                       cache_write_tokens, cost_decimal, currency
+                FROM chat_turns WHERE chat_id = ? AND turn_id = ?;
+                """,
+                arguments: [chatID.rawValue, turnID.rawValue]
+            ) else {
+                throw WikiStoreError.unexpected("failed to reload cancelled persisted turn")
+            }
+            return (try Self.readPersistedChatTurn(from: row), true)
+        }
+        return result.turn
+    }
+
+    @discardableResult
     public func claimNextPersistedChatTurn(
         chatID: ChatID,
         claimID: ChatTurnClaimID,
@@ -10543,6 +10587,10 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     ) throws -> PersistedChatTurn {
         guard [.completed, .cancelled, .failed].contains(state) else {
             throw WikiStoreError.unexpected("invalid terminal persisted turn state")
+        }
+        if failNextTerminalChatTurnWrite {
+            failNextTerminalChatTurnWrite = false
+            throw WikiStoreError.unexpected("injected terminal chat-turn write failure")
         }
         let result: (turn: PersistedChatTurn, didMutate: Bool) = try mutate(event: { result in
             result.didMutate ? self.localEvent(.chat, id: chatID.rawValue, change: .updated) : nil

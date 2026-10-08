@@ -79,6 +79,41 @@ struct ChatPhase2PersistenceTests {
         #expect(try store.listPersistedChatTurns(chatID: chat.id).map(\.ordinal) == [0, 1])
     }
 
+    @Test func cancelUnclaimedQueuedTurnIsAtomic() throws {
+        let store = try TestStoreFactory.inMemory()
+        let chat = try store.createChat(kind: .edit, title: "Queue")
+        let submission = submission(commandID: "cancel-command", turnID: "cancel-turn", text: "cancel me")
+        let queued = try store.enqueuePersistedChatTurn(chatID: chat.id, submission: submission)
+
+        let cancelled = try #require(try store.cancelUnclaimedPersistedChatTurn(
+            chatID: chat.id, turnID: submission.turnID
+        ))
+        #expect(cancelled.ordinal == queued.ordinal)
+        #expect(cancelled.submission == queued.submission)
+        #expect(cancelled.state == .cancelled)
+        #expect(cancelled.claimID == nil)
+        #expect(cancelled.finishedAt != nil)
+        #expect(cancelled.terminalMessage == "Cancelled before provider claim")
+
+        let noOp = try store.cancelUnclaimedPersistedChatTurn(chatID: chat.id, turnID: submission.turnID)
+        #expect(noOp == nil)
+        #expect(try store.listPersistedChatTurns(chatID: chat.id).map(\.ordinal) == [queued.ordinal])
+    }
+
+    @Test func cancelUnclaimedQueuedTurnDoesNotCancelClaimedTurn() throws {
+        let store = try TestStoreFactory.inMemory()
+        let chat = try store.createChat(kind: .edit, title: "Queue")
+        let submission = submission(commandID: "claimed-command", turnID: "claimed-turn", text: "claimed")
+        _ = try store.enqueuePersistedChatTurn(chatID: chat.id, submission: submission)
+        _ = try store.claimNextPersistedChatTurn(
+            chatID: chat.id, claimID: ChatTurnClaimID(rawValue: "claim"),
+            claimedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        #expect(try store.cancelUnclaimedPersistedChatTurn(chatID: chat.id, turnID: submission.turnID) == nil)
+        #expect(try store.listPersistedChatTurns(chatID: chat.id).first?.state == .claimed)
+    }
+
     @Test func editClaimSubmitAndFinishPersistedTurns() throws {
         let store = try TestStoreFactory.inMemory()
         let chat = try store.createChat(kind: .edit, title: "Queue")
