@@ -1879,8 +1879,16 @@ public final class WikiStoreModel {
             }
 
             // Canonical ULID links (resolved at save time) are never broken —
-            // the ULID is a stable id, not a title to look up by name.
-            if WikiLinkParser.isCanonicalULID(bareTarget) {
+            // the ULID is a stable id, not a title to look up by name. A
+            // current staged projection is resolvable by its embedded ID, but
+            // it is not a canonical citation target and must be linted.
+            let isNonCanonicalSourceProjection = kind == .source
+                && WikiLinkResolver.stagedSourceProjectionID(from: bareTarget)
+                    .map { knownIDs.contains($0.rawValue.uppercased()) } == true
+            if isNonCanonicalSourceProjection {
+                // Keep this link in the lint findings so the agent rewrites it
+                // to the bare SourceID even though it resolves for display.
+            } else if WikiLinkParser.isCanonicalULID(bareTarget) {
                 guard !knownIDs.contains(bareTarget.uppercased()) else { continue }
             } else {
                 guard WikiLinkResolver.resolvedSplit(of: raw, isKnown: known) == nil else { continue }
