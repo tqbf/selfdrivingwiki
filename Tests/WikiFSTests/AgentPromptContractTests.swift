@@ -338,6 +338,10 @@ struct AgentPromptContractTests {
                     "\(origin): lint citations must reject staged filenames")
             #expect(lintPrompt.contains("filesystem path"),
                     "\(origin): lint citations must reject filesystem paths")
+            #expect(lintPrompt.contains("Audit every `[[source:…]]` citation"),
+                    "\(origin): lint must audit citations that preflight does not flag")
+            #expect(lintPrompt.contains("preserve its fragment, quote, or alias"),
+                    "\(origin): citation repair must preserve link context")
         }
     }
 
