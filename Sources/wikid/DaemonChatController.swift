@@ -95,7 +95,6 @@ actor DaemonChatController {
     private var runtimeHandle: ChatRuntimeHandle?
     private var runtimeStartRequest: ChatRuntimeStartRequest?
     private var eventTask: Task<Void, Never>?
-    private var dispatchTask: Task<Void, Never>?
     private var ownership: DispatchOwnership = .idle
     private var deferredDrain: DeferredDrain = .none
     private var cancellationRequestedTurnID: ChatTurnID?
@@ -168,7 +167,6 @@ actor DaemonChatController {
 
     deinit {
         eventTask?.cancel()
-        dispatchTask?.cancel()
     }
 
     func submit(_ request: ChatSubmitRequest) async throws -> ChatID {
@@ -257,7 +255,8 @@ actor DaemonChatController {
         // An in-flight preparation holds no claim yet. Invalidate it first so
         // it cannot claim or send, then settle the still-unclaimed row.
         if case .preparing(let preparation) = ownership {
-            dispatchTask?.cancel()
+            // Ownership alone fences the abandoned preparation: its late result
+            // is compared against this operation and discarded.
             ownership = .settling(SettlingContext(
                 claimID: nil,
                 turnID: resolvedTurnID,
@@ -445,7 +444,6 @@ actor DaemonChatController {
 
         // Take shutdown ownership before any await so nothing else can dispatch.
         ownership = .shutdown(ShutdownContext(operationID: UUID()))
-        dispatchTask?.cancel()
 
         if let claimedTurnID {
             record(.cancellationRequested(turnID: claimedTurnID))
