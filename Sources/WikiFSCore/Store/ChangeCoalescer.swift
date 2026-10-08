@@ -51,6 +51,12 @@ public final class ChangeCoalescer {
     /// window goes quiet. Other wikis' pending flushes are untouched (the
     /// coalescing is strictly per wiki, so one wiki's burst can't delay another's
     /// refresh).
+    ///
+    /// Use this when the change is real and belongs to a KNOWN wiki id — the
+    /// chat tool-call hint (`WikiChangeBridge.noteSuspectedExternalWrite`) and
+    /// the File Provider's own bus subscriber. Each call pushes that wiki's flush
+    /// deadline out by the window, which is correct for a burst of real writes to
+    /// one wiki.
     public func noteChange(forWikiID wikiID: WikiID) {
         pending[wikiID]?.cancel()
         pending[wikiID] = schedule { [weak self] in
@@ -58,5 +64,21 @@ public final class ChangeCoalescer {
             pending[wikiID] = nil
             flush(wikiID)
         }
+    }
+
+    /// Note a change without disturbing an already-pending flush for this wiki.
+    ///
+    /// Use this on a path that visits EVERY wiki regardless of which one changed
+    /// — the wiki-agnostic Darwin wake, whose payload-free name cannot say which
+    /// wiki wrote (`WikiChangeWakeRouting`). Re-arming there would cancel and
+    /// reschedule every wiki's timer on every wake, so a burst of writes to wiki
+    /// A would defer a concurrent wiki B flush that should have landed one window
+    /// after B's own write — exactly the cross-wiki interference
+    /// ``noteChange(forWikiID:)`` promises cannot happen. The first visit to a
+    /// wiki still arms its flush; later visits during the same window leave it
+    /// alone.
+    public func noteChangeIfNotPending(forWikiID wikiID: WikiID) {
+        guard pending[wikiID] == nil else { return }
+        noteChange(forWikiID: wikiID)
     }
 }

@@ -361,6 +361,37 @@ struct WikiChangeBridgeTests {
         #expect(refreshed.isEmpty)
         #expect(machineScopes.isEmpty)
     }
+
+    /// A name from another namespace does not even READ the registry: the name is
+    /// resolved before `reloadFromDisk()`, so a foreign wake costs no main-actor
+    /// disk read. Pinned by making the registry file disagree with the client and
+    /// asserting the foreign wake left the client's view untouched.
+    @Test func testForeignNotificationNameDoesNotReloadTheRegistry() async throws {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let launchDescriptor = registry.wikis.first!
+
+        // A wiki appears on disk behind this client's back — a reload would
+        // adopt it, so its absence afterwards proves no read happened.
+        let lateDescriptor = WikiDescriptor.make(displayName: "Created While Running")
+        try registerWikiOnDisk(lateDescriptor, dir: dir)
+
+        let fileProvider = FileProviderFacade()
+        let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
+        bridge.start()
+
+        bridge.didReceiveDarwinNotification(
+            named: "\(RendererChangeNotification.machineBaseName).not-observed")
+
+        #expect(
+            registry.wikis.map(\.id) == [launchDescriptor.id],
+            "a foreign wake must not reload the registry")
+
+        // The wiki-change name DOES read it, so the assertion above is about the
+        // name check and not about a dead reload path.
+        bridge.didReceiveDarwinNotification(named: WikiChangeNotification.baseName)
+        #expect(registry.wikis.map(\.id).contains(lateDescriptor.id))
+    }
 }
 
 /// A minimal stub `MarkdownExtractor` for tests — returns empty content.

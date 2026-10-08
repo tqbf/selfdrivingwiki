@@ -21,7 +21,7 @@ The decisive facts that make this migration tractable:
 1. **Store-write signaling does NOT need new XPC plumbing.** The store emits
    `ResourceChangeEvent` on a `WikiEventBus`, but that bus is **in-process only**.
    Cross-process signaling is already solved by a *different*, proven path: the writer calls
-   `DarwinNotifier.postChange(forWikiID:)`, and the app's `WikiChangeBridge` re-emits a coarse
+   `DarwinNotifier.postChange()`, and the app's `WikiChangeBridge` re-emits a coarse
    `ResourceChangeEvent` onto the matching live session's bus. `wikictl` is already a second
    writer process that uses exactly this path. The daemon becomes a third writer. **No new
    store-event transport is required.**

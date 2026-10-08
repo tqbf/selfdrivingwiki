@@ -96,4 +96,106 @@ struct ChangeCoalescerTests {
         scheduler.fireAll()
         #expect(flushes == [WikiID(rawValue: "A"), WikiID(rawValue: "A")])
     }
+
+    // MARK: - noteChangeIfNotPending (the wiki-agnostic wake path)
+
+    /// A second `noteChangeIfNotPending` for the SAME wiki does not extend the
+    /// deadline: the first call armed the flush, the second leaves it alone. This
+    /// is what stops a fan-out wake from re-arming every wiki's timer.
+    @Test func noteChangeIfNotPendingDoesNotRearmAPendingFlush() {
+        let scheduler = ManualScheduler()
+        var flushes: [WikiID] = []
+        let coalescer = ChangeCoalescer(
+            schedule: { scheduler.schedule($0) },
+            flush: { flushes.append($0) }
+        )
+
+        coalescer.noteChangeIfNotPending(forWikiID: WikiID(rawValue: "A"))
+        coalescer.noteChangeIfNotPending(forWikiID: WikiID(rawValue: "A"))
+        coalescer.noteChangeIfNotPending(forWikiID: WikiID(rawValue: "A"))
+
+        // One timer, and NONE was cancelled — the pending flush was never
+        // superseded, so its original deadline stands.
+        #expect(scheduler.pendingCount == 1)
+        #expect(scheduler.cancelledIDs.isEmpty)
+
+        scheduler.fireAll()
+        #expect(flushes == [WikiID(rawValue: "A")])
+    }
+
+    /// `noteChange` DOES still re-arm: the contrast that makes the previous test
+    /// meaningful (same call count, different cancellation).
+    @Test func noteChangeStillRearmsAPendingFlush() {
+        let scheduler = ManualScheduler()
+        var flushes: [WikiID] = []
+        let coalescer = ChangeCoalescer(
+            schedule: { scheduler.schedule($0) },
+            flush: { flushes.append($0) }
+        )
+
+        coalescer.noteChange(forWikiID: WikiID(rawValue: "A"))
+        coalescer.noteChange(forWikiID: WikiID(rawValue: "A"))
+        coalescer.noteChange(forWikiID: WikiID(rawValue: "A"))
+
+        #expect(scheduler.pendingCount == 1)
+        #expect(scheduler.cancelledIDs.count == 2)
+
+        scheduler.fireAll()
+        #expect(flushes == [WikiID(rawValue: "A")])
+    }
+
+    /// A burst on wiki A does not defer wiki B's flush — the invariant the
+    /// coalescer documents. A wiki-agnostic wake visits every wiki, so if the
+    /// fan-out re-armed each visit, every A visit would push B's deadline out and
+    /// B's refresh would wait for A's burst to go quiet.
+    @Test func burstOnOneWikiDoesNotDeferAnotherWikisFlush() {
+        let scheduler = ManualScheduler()
+        var flushes: [WikiID] = []
+        let coalescer = ChangeCoalescer(
+            schedule: { scheduler.schedule($0) },
+            flush: { flushes.append($0) }
+        )
+
+        let wikiA = WikiID(rawValue: "A")
+        let wikiB = WikiID(rawValue: "B")
+
+        // Wiki B's own write arms its flush.
+        coalescer.noteChange(forWikiID: wikiB)
+        // Wiki A's write burst arrives; each wake fans out over BOTH wikis.
+        for _ in 0..<15 {
+            coalescer.noteChangeIfNotPending(forWikiID: wikiA)
+            coalescer.noteChangeIfNotPending(forWikiID: wikiB)
+        }
+
+        // One live timer per wiki. B's original timer survived the whole burst —
+        // the only cancellation is A's own re-arm, which `noteChangeIfNotPending`
+        // never performs, so nothing was cancelled at all.
+        #expect(scheduler.pendingCount == 2)
+        #expect(scheduler.cancelledIDs.isEmpty)
+
+        scheduler.fireAll()
+        #expect(flushes.sorted { $0.rawValue < $1.rawValue } == [wikiA, wikiB])
+    }
+
+    /// A wiki whose flush already landed is armed again by the next
+    /// `noteChangeIfNotPending` — the variant suppresses only a PENDING flush, so
+    /// the wake path still refreshes each wiki once per burst.
+    @Test func noteChangeIfNotPendingArmsAgainAfterAFlushLands() {
+        let scheduler = ManualScheduler()
+        var flushes: [WikiID] = []
+        let coalescer = ChangeCoalescer(
+            schedule: { scheduler.schedule($0) },
+            flush: { flushes.append($0) }
+        )
+
+        coalescer.noteChangeIfNotPending(forWikiID: WikiID(rawValue: "A"))
+        scheduler.fireAll()
+        #expect(flushes == [WikiID(rawValue: "A")])
+
+        // The pending slot was cleared by the flush, so the next wake re-arms.
+        coalescer.noteChangeIfNotPending(forWikiID: WikiID(rawValue: "A"))
+        #expect(scheduler.pendingCount == 1)
+        scheduler.fireAll()
+        #expect(flushes == [WikiID(rawValue: "A"), WikiID(rawValue: "A")])
+    }
 }

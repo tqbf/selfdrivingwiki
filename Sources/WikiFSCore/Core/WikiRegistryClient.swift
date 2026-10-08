@@ -167,9 +167,25 @@ public final class WikiRegistryClient {
     /// Assigns only when the on-disk set actually differs, so a wake storm does
     /// not churn `@Observable` observers (and thus SwiftUI) with no-op writes.
     /// Returns whether ``wikis`` changed.
+    ///
+    /// Reads through ``WikiRegistry/loadStrictly(from:)``, NOT the lenient
+    /// ``WikiRegistry/load(from:)``: the lenient loader degrades a corrupt file
+    /// to an EMPTY registry, and assigning that here would drop every wiki from
+    /// the live list over a partial write. On a read failure this KEEPS the
+    /// in-memory list and returns `false` — the same call the daemon makes in
+    /// `WikiDaemon.readDiskRegistry()`, where treating corruption as mass
+    /// deletion destroys state. A missing file is still a valid empty registry
+    /// (fresh install), so first-run behavior is unchanged.
     @discardableResult
     public func reloadFromDisk() -> Bool {
-        let onDisk = WikiRegistry.load(from: containerDirectory).wikis
+        let onDisk: [WikiDescriptor]
+        do {
+            onDisk = try WikiRegistry.loadStrictly(from: containerDirectory).wikis
+        } catch {
+            DebugLog.store(
+                "WikiRegistryClient: registry unreadable, keeping \(wikis.count) wiki(s): \(error)")
+            return false
+        }
         guard onDisk != wikis else { return false }
         wikis = onDisk
         DebugLog.store(
