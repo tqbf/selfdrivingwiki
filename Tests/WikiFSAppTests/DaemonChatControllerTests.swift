@@ -566,6 +566,14 @@ struct DaemonChatControllerTests {
 
         _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
         await harness.runtime.emit(.transportClosed(status: 9))
+        // The close is processed by the controller's event loop, so wait for it
+        // to land. Submitting before then would race and send the second turn
+        // through the runtime that is about to be closed.
+        try await harness.waitUntilRuntimeSnapshot(
+            controller,
+            predicate: { $0.lifecycle == .closed },
+            failureMessage: "expected the transport close to close the runtime before the next turn"
+        )
         _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
 
         let runtime = await harness.runtime.snapshot()
