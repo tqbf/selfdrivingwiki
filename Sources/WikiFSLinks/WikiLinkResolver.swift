@@ -37,6 +37,24 @@ public enum WikiLinkResolver {
         return SourceID(rawValue: rawID)
     }
 
+    /// Extract the source ID from the current staged projection leaf
+    /// `<filename>--<full-source-id>[.<ext>]`. The staged filename is a
+    /// filesystem identifier, not a canonical citation target. Callers must
+    /// still verify that the extracted ID exists in their source namespace.
+    public static func stagedSourceProjectionID(from target: String) -> SourceID? {
+        let stem: String
+        if let dot = target.lastIndex(of: ".") {
+            stem = String(target[..<dot])
+        } else {
+            stem = target
+        }
+        guard let separator = stem.range(of: "--", options: .backwards),
+              separator.lowerBound != stem.startIndex else { return nil }
+        let rawID = String(stem[separator.upperBound...])
+        guard WikiLinkParser.isCanonicalULID(rawID) else { return nil }
+        return SourceID(rawValue: rawID)
+    }
+
     /// One possible reading of a raw target: a normalized base name plus the
     /// verbatim remainder after the splitting `#` (`nil` = no fragment).
     public struct Split: Equatable, Sendable {
