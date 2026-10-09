@@ -44,12 +44,15 @@ Three `ExtractionConfigTests` expectations moved from "HTML resolves to no
 selection" to the new bundled default, which mirrors the PDF decision
 shape.
 
-**Verification:** `make build` clean. `make test` green: 4451 tests in 456
-suites. Two unrelated load flakes appeared in earlier runs
+**Out of scope:** HTML sources ingested before this change stay verbatim.
+The Extract button converts them on demand. A one-time backfill of
+head-less HTML sources is a possible follow-up.
+
+## Verification
+
+`make build` clean. `make test` green: 4451 tests in 456 suites. Two
+unrelated load flakes appeared in earlier runs
 (`quitBackstopKillsAnInFlightManagedOperation`,
 `membershipAdmissionTracksTheGeneratedPluginLifecycle`). Both pass in
 isolation and passed on the final full run.
 
-**Out of scope:** HTML sources ingested before this change stay verbatim.
-The Extract button converts them on demand. A one-time backfill of
-head-less HTML sources is a possible follow-up.
