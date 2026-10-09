@@ -1341,6 +1341,20 @@ public final class WikiStoreModel {
         setActiveTab(id)
     }
 
+    /// Move a tab to a new position in the bar (drag-to-reorder, #1388).
+    /// `newIndex` is the FINAL index in the array after the move (clamped to
+    /// bounds). The active tab is tracked by ID, so it stays active through the
+    /// move; per-tab state (pin, edit mode, drafts) travels with the tab.
+    /// Unknown IDs and no-op moves are ignored.
+    public func moveTab(id: UUID, to newIndex: Int) {
+        guard let from = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let to = min(max(newIndex, 0), tabs.count - 1)
+        guard from != to else { return }
+        let tab = tabs.remove(at: from)
+        tabs.insert(tab, at: to)
+        DebugLog.tabs("[tabs] moveTab: tab \(id) moved \(from) → \(to)")
+    }
+
     /// Persist the editor's edit-mode state to the given tab so that
     /// switching back to it can restore the mode.
     public func setTabEditing(tabID: UUID, isEditing: Bool) {

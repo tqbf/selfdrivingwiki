@@ -57,4 +57,37 @@ public struct TabBarLayout: Equatable, Sendable {
             visibleCount: visible,
             showsOverflow: visible < tabCount)
     }
+
+    /// Insertion slot for drag-to-reorder (#1388). Slot `k` means "insert before
+    /// the tab currently at index `k`"; slot `tabCount` means the end of the
+    /// strip. With no drag, the dragged tab's center sits in its own slot and
+    /// the result is `fromIndex + 1` — see `targetIndex(fromIndex:slot:)`, which
+    /// maps that back to a no-op.
+    ///
+    /// - Parameters:
+    ///   - fromIndex: index of the dragged tab in the displayed (visible) order.
+    ///   - dragOffset: horizontal drag translation in points (right positive).
+    ///   - tabWidth: the uniform per-tab width from `compute`.
+    ///   - tabCount: number of displayed tabs.
+    public static func insertionIndex(
+        fromIndex: Int,
+        dragOffset: Double,
+        tabWidth: Double,
+        tabCount: Int
+    ) -> Int {
+        guard tabCount > 0, tabWidth > 0 else { return 0 }
+        // The dragged tab's center starts at (fromIndex + 0.5) * tabWidth and
+        // moves by dragOffset; the slot boundary is crossed at half-width steps.
+        let center = (Double(fromIndex) + 0.5) * tabWidth + dragOffset
+        let slot = Int((center / tabWidth).rounded())
+        return min(max(slot, 0), tabCount)
+    }
+
+    /// Final array index for a tab moved from `fromIndex` to insertion `slot`
+    /// (from `insertionIndex`). Accounts for the removal shifting every index
+    /// after `fromIndex` down by one, so slot `fromIndex + 1` (the no-drag
+    /// result) maps back to `fromIndex` — a no-op.
+    public static func targetIndex(fromIndex: Int, slot: Int) -> Int {
+        slot > fromIndex ? slot - 1 : slot
+    }
 }

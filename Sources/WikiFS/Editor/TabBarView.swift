@@ -9,6 +9,17 @@ import WikiFSCore
 struct TabBarView: View {
     @Bindable var store: WikiStoreModel
 
+    /// In-flight drag-to-reorder (#1388): which tab is being dragged, its
+    /// horizontal translation, and the insertion slot (in visible-tab order)
+    /// it would land at. `nil` when no drag is active.
+    @State private var drag: TabDrag?
+
+    private struct TabDrag: Equatable {
+        let tabID: UUID
+        var translation: CGFloat
+        var slot: Int
+    }
+
     var body: some View {
         GeometryReader { geo in
             let layout = TabBarLayout.compute(
@@ -17,9 +28,10 @@ struct TabBarView: View {
                 minTabWidth: TabBarMetrics.minTabWidth,
                 maxTabWidth: TabBarMetrics.maxTabWidth,
                 overflowWidth: TabBarMetrics.overflowWidth)
+            let visible = visibleTabs(layout)
 
             HStack(spacing: 0) {
-                ForEach(visibleTabs(layout)) { tab in
+                ForEach(Array(visible.enumerated()), id: \.element.id) { index, tab in
                     TabBarItemView(
                         tab: tab,
                         isActive: tab.id == store.activeTabID,
@@ -30,13 +42,39 @@ struct TabBarView: View {
                         onClose: { store.closeTab(id: tab.id) },
                         onCloseOthers: { store.closeOtherTabs(id: tab.id) },
                         onCloseAfter: { store.closeTabsAfter(id: tab.id) },
-                        onCloseAll: { store.closeAllTabs() }
+                        onCloseAll: { store.closeAllTabs() },
+                        onDragChanged: { translation in
+                            dragChanged(tabID: tab.id, visibleIndex: index,
+                                        translation: translation, layout: layout,
+                                        visibleCount: visible.count)
+                        },
+                        onDragEnded: { translation in
+                            dragEnded(tabID: tab.id, visibleIndex: index,
+                                      translation: translation, layout: layout,
+                                      visible: visible)
+                        }
                     )
+                    // The dragged tab rides with the cursor above its neighbors;
+                    // the strip itself doesn't reflow until the drop commits.
+                    .offset(x: drag?.tabID == tab.id ? drag?.translation ?? 0 : 0)
+                    .zIndex(drag?.tabID == tab.id ? 1 : 0)
                 }
                 if layout.showsOverflow {
                     overflowMenu
                 }
                 Spacer(minLength: 0)
+            }
+            .overlay(alignment: .topLeading) {
+                // Insertion indicator: a 2pt accent line at the drop slot's
+                // leading boundary (Safari/Xcode-style), drawn only mid-drag.
+                if let drag {
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: TabBarMetrics.insertionIndicatorWidth)
+                        .padding(.vertical, TabBarMetrics.insertionIndicatorVerticalInset)
+                        .offset(x: CGFloat(drag.slot) * layout.tabWidth
+                                - TabBarMetrics.insertionIndicatorWidth / 2)
+                }
             }
             .padding(.horizontal, TabBarMetrics.horizontalPadding)
         }
@@ -45,6 +83,44 @@ struct TabBarView: View {
         .overlay(alignment: .bottom) {
             Divider().opacity(PageEditorMetrics.dividerOpacity)
         }
+    }
+
+    // MARK: - Drag-to-reorder (#1388)
+
+    private func dragChanged(tabID: UUID, visibleIndex: Int, translation: CGFloat,
+                             layout: TabBarLayout, visibleCount: Int) {
+        let slot = TabBarLayout.insertionIndex(
+            fromIndex: visibleIndex,
+            dragOffset: translation,
+            tabWidth: layout.tabWidth,
+            tabCount: visibleCount)
+        drag = TabDrag(tabID: tabID, translation: translation, slot: slot)
+    }
+
+    private func dragEnded(tabID: UUID, visibleIndex: Int, translation: CGFloat,
+                           layout: TabBarLayout, visible: [EditorTab]) {
+        let slot = TabBarLayout.insertionIndex(
+            fromIndex: visibleIndex,
+            dragOffset: translation,
+            tabWidth: layout.tabWidth,
+            tabCount: visible.count)
+        drag = nil
+        // Map the visible-order slot onto the store's tab order. The two differ
+        // only when the active tab is pinned into the last visible slot past an
+        // overflow window, so anchor on neighbor tab IDs rather than raw indexes.
+        guard let fromStore = store.tabs.firstIndex(where: { $0.id == tabID }) else { return }
+        let target: Int
+        if slot < visible.count, let anchor = store.tabs.firstIndex(where: { $0.id == visible[slot].id }) {
+            target = TabBarLayout.targetIndex(fromIndex: fromStore, slot: anchor)
+        } else if let last = visible.last,
+                  let lastStore = store.tabs.firstIndex(where: { $0.id == last.id }) {
+            // Past the end of the visible strip: land right after the last
+            // visible tab.
+            target = lastStore >= fromStore ? lastStore : lastStore + 1
+        } else {
+            return
+        }
+        store.moveTab(id: tabID, to: target)
     }
 
     /// The tabs to draw in the strip, in order. When the active tab would fall
@@ -100,4 +176,11 @@ enum TabBarMetrics {
     static let overflowWidth: CGFloat = 28
     /// Inset on each end of the strip.
     static let horizontalPadding: CGFloat = 4
+    /// Distance the pointer must travel before a press on a tab becomes a
+    /// reorder drag instead of a click (#1388).
+    static let dragStartDistance: CGFloat = 4
+    /// Width of the accent insertion line shown at the drop slot mid-drag.
+    static let insertionIndicatorWidth: CGFloat = 2
+    /// Vertical inset so the insertion line doesn't touch the strip's edges.
+    static let insertionIndicatorVerticalInset: CGFloat = 6
 }

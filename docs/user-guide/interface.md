@@ -91,6 +91,7 @@ the top of the detail pane — just like Safari tabs.
 |---|---|
 | Open in a new tab | Click a sidebar item (it may open in the current tab or a new one depending on type). |
 | Switch tabs | Click a tab; ⌘1–⌘9 for the first nine; or ⇧⌘[ / ⇧⌘] to cycle (wraps around). |
+| Reorder tabs | Press and hold a tab, drag it left or right, and release it at the wanted position. A colored line marks the drop position. |
 | Close a tab | Click the × on the tab (appears on hover), or ⌘W. |
 | Close while editing | A confirmation appears: "Close Tab? Unsaved changes will be discarded." |
 | Reopen a closed tab | ⌘⇧T (remembers up to 10 recently closed tabs). |

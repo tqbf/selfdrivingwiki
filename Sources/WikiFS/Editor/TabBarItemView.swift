@@ -18,6 +18,11 @@ struct TabBarItemView: View {
     let onCloseOthers: () -> Void
     let onCloseAfter: () -> Void
     let onCloseAll: () -> Void
+    /// Drag-to-reorder (#1388): horizontal translation while dragging, then the
+    /// final translation on release. The parent (`TabBarView`) owns the drop
+    /// target math and the commit.
+    let onDragChanged: (CGFloat) -> Void
+    let onDragEnded: (CGFloat) -> Void
 
     @State private var isHovering = false
     @State private var isCloseHovering = false
@@ -37,6 +42,14 @@ struct TabBarItemView: View {
         .overlay(alignment: .bottom) { activeUnderline }
         .contentShape(Rectangle())
         .onTapGesture { onClick() }
+        // Competes with the tap gesture above: a press that moves past the
+        // threshold becomes a reorder drag (tap cancelled); a press released
+        // without moving stays a click. Right-click contextMenu is unaffected.
+        .gesture(
+            DragGesture(minimumDistance: TabBarMetrics.dragStartDistance)
+                .onChanged { onDragChanged($0.translation.width) }
+                .onEnded { onDragEnded($0.translation.width) }
+        )
         .onHover { isHovering = $0 }
         .help(tab.title)
         .contextMenu { contextMenuItems }
