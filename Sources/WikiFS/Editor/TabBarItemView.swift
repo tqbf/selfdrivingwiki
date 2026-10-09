@@ -22,11 +22,11 @@ struct TabBarItemView: View {
     let onCloseOthers: () -> Void
     let onCloseAfter: () -> Void
     let onCloseAll: () -> Void
-    /// Drag-to-reorder (#1388): horizontal translation while dragging, then the
-    /// final translation on release. The parent (`TabBarView`) owns the drop
-    /// target math and the commit.
-    let onDragChanged: (CGFloat) -> Void
-    let onDragEnded: (CGFloat) -> Void
+    /// Drag-to-reorder (#1388): the gesture value (pointer position in the
+    /// strip's named coordinate space) while dragging and on release. The
+    /// parent (`TabBarView`) owns the reorder math and the commit.
+    let onDragChanged: (DragGesture.Value) -> Void
+    let onDragEnded: (DragGesture.Value) -> Void
 
     @State private var isHovering = false
     @State private var isCloseHovering = false
@@ -53,9 +53,13 @@ struct TabBarItemView: View {
         // threshold becomes a reorder drag (tap cancelled); a press released
         // without moving stays a click. Right-click contextMenu is unaffected.
         .gesture(
-            DragGesture(minimumDistance: TabBarMetrics.dragStartDistance)
-                .onChanged { onDragChanged($0.translation.width) }
-                .onEnded { onDragEnded($0.translation.width) }
+            // Named strip space, NOT .local: the tab's own space translates
+            // when a live reorder moves it, which would jump the pointer
+            // position by a full tab width at every swap.
+            DragGesture(minimumDistance: TabBarMetrics.dragStartDistance,
+                        coordinateSpace: .named(TabBarMetrics.stripCoordinateSpace))
+                .onChanged { onDragChanged($0) }
+                .onEnded { onDragEnded($0) }
         )
         .onHover { isHovering = $0 }
         .help(tab.title)

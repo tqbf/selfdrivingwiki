@@ -66,60 +66,59 @@ struct TabBarLayoutTests {
         #expect(l.showsOverflow)
     }
 
-    // MARK: - insertionIndex (drag-to-reorder, #1388)
+    // MARK: - liveSlot (live drag-to-reorder, #1388)
 
-    private func slot(_ from: Int, _ offset: Double, count: Int = 4) -> Int {
-        TabBarLayout.insertionIndex(fromIndex: from, dragOffset: offset, tabWidth: maxW, tabCount: count)
+    private func live(_ current: Int, _ centerX: Double, count: Int = 4) -> Int {
+        TabBarLayout.liveSlot(currentIndex: current, centerX: centerX, tabWidth: maxW, tabCount: count)
     }
 
-    @Test func noDragLandsInOwnSlot() {
-        // Zero translation: slot fromIndex, which targetIndex maps to a no-op.
-        #expect(slot(0, 0) == 0)
-        #expect(slot(2, 0) == 2)
+    @Test func centerInOwnSlotStays() {
+        // Tab 1's home center is 300; nowhere near a neighbor's center.
+        #expect(live(1, 300) == 1)
+        #expect(live(0, 100) == 0)
+        #expect(live(3, 700) == 3)
+    }
+
+    @Test func swapTriggersPastNeighborCenterPlusDeadband() {
+        // Right neighbor's center: 500. Deadband 8 → swap right at > 508.
+        #expect(live(1, 505) == 1)
+        #expect(live(1, 509) == 2)
+        // Left neighbor's center: 100 → swap left at < 92.
+        #expect(live(1, 95) == 1)
+        #expect(live(1, 91) == 0)
+    }
+
+    @Test func deadbandPreventsBoundaryChatter() {
+        // Exactly AT the neighbor's center: no swap in either direction.
+        #expect(live(1, 500) == 1)
+        #expect(live(1, 100) == 1)
+    }
+
+    @Test func fastFlingCrossesMultipleSlotsInOneEvent() {
+        // Center at 1000 (past tabs 2, 3, 4's centers at 500/700/900) in a
+        // 5-tab strip: lands at index 4.
+        #expect(live(1, 1000, count: 5) == 4)
+        // Mirror: fling left past tabs 0 and -... clamps at 0.
+        #expect(live(3, 50, count: 5) == 0)
+    }
+
+    @Test func liveSlotClampsToStripEnds() {
+        #expect(live(0, -500) == 0)
+        #expect(live(3, 10000) == 3)
+    }
+
+    @Test func liveSlotDegenerateInputs() {
+        #expect(TabBarLayout.liveSlot(currentIndex: 2, centerX: 500, tabWidth: 0, tabCount: 4) == 2)
+        #expect(TabBarLayout.liveSlot(currentIndex: 2, centerX: 500, tabWidth: maxW, tabCount: 0) == 2)
+        // Out-of-range current index is clamped before swapping. The clamped
+        // tab at slot 3 then moves left to follow the pointer at x = 100.
+        #expect(TabBarLayout.liveSlot(currentIndex: 9, centerX: 100, tabWidth: maxW, tabCount: 4) == 1)
+    }
+
+    @Test func targetIndexAccountsForRemoval() {
+        // Insertion slot → final post-removal index; home slot is a no-op.
         #expect(TabBarLayout.targetIndex(fromIndex: 2, slot: 2) == 2)
-    }
-
-    @Test func belowThresholdDragsStayInPlace() {
-        // Just under the swap threshold (0.25 * 200 = 50pt) either way: still
-        // the home slot.
-        #expect(slot(1, 49) == 1)
-        #expect(slot(1, -49) == 1)
-        #expect(TabBarLayout.targetIndex(fromIndex: 1, slot: 1) == 1)
-    }
-
-    @Test func thresholdDragMovesOneSlot() {
-        // A quarter-width drag swaps one slot (dragSwapThresholdFraction).
-        #expect(slot(1, 50) == 3)   // one slot right (lands after tab 2)
-        #expect(TabBarLayout.targetIndex(fromIndex: 1, slot: 3) == 2)
-        #expect(slot(1, -50) == 0)  // one slot left (lands before tab 0)
-        #expect(TabBarLayout.targetIndex(fromIndex: 1, slot: 0) == 0)
-    }
-
-    @Test func multiTabDrag() {
-        // Each further slot takes a full width: the second swap lands at
-        // (2 - 1 + 0.25) * 200 = 250pt.
-        #expect(slot(0, 249) == 2)  // one slot right
-        #expect(TabBarLayout.targetIndex(fromIndex: 0, slot: 2) == 1)
-        #expect(slot(0, 250) == 3)  // two slots right → final index 2
         #expect(TabBarLayout.targetIndex(fromIndex: 0, slot: 3) == 2)
-        // Drag tab 3 left by 1.25 tab widths → slot 1 → final index 1.
-        #expect(slot(3, -250) == 1)
-        #expect(TabBarLayout.targetIndex(fromIndex: 3, slot: 1) == 1)
-    }
-
-    @Test func dragClampsToStripEnds() {
-        // Past either end: clamp to the strip → no-op past the home end.
-        #expect(slot(0, -1000) == 0)
-        #expect(slot(3, 1000) == 3)
-        #expect(TabBarLayout.targetIndex(fromIndex: 0, slot: 0) == 0)
-        #expect(TabBarLayout.targetIndex(fromIndex: 3, slot: 3) == 3)
-        // Dragging a middle tab past the right end lands it last.
-        #expect(slot(1, 1000) == 4)
-        #expect(TabBarLayout.targetIndex(fromIndex: 1, slot: 4) == 3)
-    }
-
-    @Test func insertionIndexDegenerateInputs() {
-        #expect(TabBarLayout.insertionIndex(fromIndex: 0, dragOffset: 50, tabWidth: 0, tabCount: 4) == 0)
-        #expect(TabBarLayout.insertionIndex(fromIndex: 0, dragOffset: 50, tabWidth: maxW, tabCount: 0) == 0)
+        #expect(TabBarLayout.targetIndex(fromIndex: 3, slot: 0) == 0)
     }
 }

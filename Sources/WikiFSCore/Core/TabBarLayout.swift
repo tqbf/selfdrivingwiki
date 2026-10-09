@@ -58,46 +58,47 @@ public struct TabBarLayout: Equatable, Sendable {
             showsOverflow: visible < tabCount)
     }
 
-    /// Fraction of a tab width the pointer must travel before the dragged tab
-    /// swaps one slot (#1388). 0.5 would be "swap at half a width"; these tabs
-    /// are wide (110–200pt), so 0.25 keeps the drag feeling responsive. Each
-    /// further slot still takes a full width of travel.
-    public static let dragSwapThresholdFraction: Double = 0.25
+    /// Deadband (points) past a neighbor's center the dragged tab's center must
+    /// cross before a live swap triggers (#1388). Without it, a swap lands the
+    /// compensated offset exactly on the mirror-image reverse threshold, so
+    /// holding the pointer at the boundary flickers the two tabs back and
+    /// forth.
+    public static let liveSwapDeadband: Double = 8
 
-    /// Insertion slot for drag-to-reorder (#1388). Slot `k` means "insert before
-    /// the tab currently at index `k`"; slot `tabCount` means the end of the
-    /// strip. The tab swaps position once the drag passes
-    /// `dragSwapThresholdFraction` of a tab width, so the result is `fromIndex`
-    /// itself until then, and `targetIndex(fromIndex:slot:)` maps that back to
-    /// a no-op.
+    /// The slot a dragged tab should occupy during live reorder (#1388). Swap
+    /// semantics, measured from the tab's CURRENT slot (not cumulative travel
+    /// from home): swap right when the dragged center passes the right
+    /// neighbor's center plus `liveSwapDeadband`, mirror for left. A fast fling
+    /// can cross several neighbors in one event, so this loops to the final
+    /// slot; the result is clamped to the strip.
     ///
     /// - Parameters:
-    ///   - fromIndex: index of the dragged tab in the displayed (visible) order.
-    ///   - dragOffset: horizontal drag translation in points (right positive).
+    ///   - currentIndex: the dragged tab's index in the live (displayed) order.
+    ///   - centerX: the dragged tab's center in strip coordinates.
     ///   - tabWidth: the uniform per-tab width from `compute`.
     ///   - tabCount: number of displayed tabs.
-    public static func insertionIndex(
-        fromIndex: Int,
-        dragOffset: Double,
+    public static func liveSlot(
+        currentIndex: Int,
+        centerX: Double,
         tabWidth: Double,
         tabCount: Int
     ) -> Int {
-        guard tabCount > 0, tabWidth > 0 else { return 0 }
-        // Slot k is reached at (k - 1 + threshold) widths of travel: the first
-        // swap at `threshold` of a width, each next swap a full width later.
-        let steps = ((abs(dragOffset) + (1 - dragSwapThresholdFraction) * tabWidth) / tabWidth)
-            .rounded(.down)
-        let moved = Int(steps) * (dragOffset < 0 ? -1 : 1)
-        let projected = min(max(fromIndex + moved, 0), tabCount - 1)
-        // Moving right lands AFTER the tab now at `projected`; moving left (or
-        // not at all) lands BEFORE it.
-        return projected > fromIndex ? projected + 1 : projected
+        guard tabCount > 0, tabWidth > 0 else { return currentIndex }
+        var index = min(max(currentIndex, 0), tabCount - 1)
+        while index < tabCount - 1,
+              centerX > (Double(index) + 1.5) * tabWidth + liveSwapDeadband {
+            index += 1
+        }
+        while index > 0,
+              centerX < (Double(index) - 0.5) * tabWidth - liveSwapDeadband {
+            index -= 1
+        }
+        return index
     }
 
-    /// Final array index for a tab moved from `fromIndex` to insertion `slot`
-    /// (from `insertionIndex`). Accounts for the removal shifting every index
-    /// after `fromIndex` down by one, so slot `fromIndex` (the no-drag result)
-    /// maps back to `fromIndex` — a no-op.
+    /// Final array index for a tab moved from `fromIndex` to insertion `slot`.
+    /// Accounts for the removal shifting every index after `fromIndex` down by
+    /// one, so slot `fromIndex` maps back to `fromIndex` — a no-op.
     public static func targetIndex(fromIndex: Int, slot: Int) -> Int {
         slot > fromIndex ? slot - 1 : slot
     }
