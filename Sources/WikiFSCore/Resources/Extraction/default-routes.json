@@ -28,6 +28,19 @@
     },
     {
       "route": {
+        "kind": "html",
+        "mimeType": "text/html"
+      },
+      "extractor": {
+        "kind": "installed",
+        "installed": {
+          "packageID": "org.selfdrivingwiki.defuddle",
+          "registrationID": "article"
+        }
+      }
+    },
+    {
+      "route": {
         "kind": "podcast-transcript",
         "mimeType": "audio/podcast"
       },
@@ -77,6 +90,14 @@
           "packageID": "org.selfdrivingwiki.zotero",
           "registrationID": "attachment"
         }
+      }
+    }
+  ],
+  "routeAutoExtraction": [
+    {
+      "route": {
+        "kind": "html",
+        "mimeType": "text/html"
       }
     }
   ]

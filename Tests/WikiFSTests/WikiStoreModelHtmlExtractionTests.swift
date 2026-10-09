@@ -1,5 +1,7 @@
 import Foundation
 import Testing
+import WikiFSMarkdown
+import WikiFSTypes
 @testable import WikiFSCore
 
 /// Verifies `WikiStoreModel.extractHtml(for:backend:)` — the HTML extraction
@@ -266,5 +268,105 @@ struct WikiStoreModelHtmlExtractionTests {
 
         let version = await model.extractHtml(for: summary.id, backend: .tagBased)
         #expect(version == nil, "empty source bytes must not append an empty markdown version")
+    }
+
+    // MARK: - Issue #1380 — import-time conversion for claimed HTML
+
+    /// `HtmlMarkdownExtractor` stand-in for the prepared package adapter the
+    /// wired hosts resolve in `prepareImportExtractor`. The model layer never
+    /// constructs package adapters; dispatch tests inject this. Carries the
+    /// reviewed Defuddle provenance so the producer-derived technique matches
+    /// what the real package adapter stamps.
+    private struct StubHTMLExtractor: HtmlMarkdownExtractor, ProcessPackageProvenanceProviding {
+        let markdown: String
+        let packageProvenance: ExtractorPackageExecutionProvenance
+
+        init(markdown: String) throws {
+            self.markdown = markdown
+            self.packageProvenance = ExtractorPackageExecutionProvenance(
+                revision: ReviewedExtractorPackages.defuddle.revision,
+                registrationID: try #require(ExtractorRegistrationID(rawValue: "article")),
+                protocolRevision: .v1)
+        }
+
+        func extract(html: String) async -> HtmlExtractionResult? {
+            HtmlExtractionResult(markdown: markdown)
+        }
+    }
+
+    private func modelWithClaimedHTML(
+        markdown: String
+    ) throws -> (GRDBWikiStore, WikiStoreModel, SourceSummary) {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test-html-import"))
+        let model = WikiStoreModel(store: store)
+        model.registeredExtractionInputs = RegisteredExtractionInputs(claims: [.init(
+            kind: .html,
+            mimeTypes: [MimeType.html],
+            filenameExtensions: ["html"])])
+        model.importAutoExtractionKinds = [.html]
+        let stub = try StubHTMLExtractor(markdown: markdown)
+        model.importExtractorProvider = { _ in
+            .html(stub)
+        }
+        let summary = try store.addSource(
+            filename: "article.html",
+            data: Data(sampleHTML.utf8))
+        return (store, model, summary)
+    }
+
+    @Test func importExtractionSeedsDefuddleHeadForClaimedHTML() async throws {
+        let (store, model, summary) = try modelWithClaimedHTML(markdown: "# Auto converted\n")
+
+        await model.runImportExtraction(sourceID: summary.id, kind: .html)
+
+        // The store-level extraction head (source-origin rows excluded —
+        // the raw HTML blob is itself the source copy).
+        guard let head = try store.processedMarkdownHead(sourceID: summary.id) else {
+            Issue.record("import extraction did not land an extraction head")
+            return
+        }
+        #expect(head.content.contains("# Auto converted"))
+        // The provenance-carrying package adapter stamps the package
+        // technique the alternatives UI surfaces.
+        #expect(head.technique == "extractor-package:org.selfdrivingwiki.defuddle")
+    }
+
+    @Test func importExtractionWithoutPreparedExtractorLeavesHTMLVerbatim() async throws {
+        let (store, model, summary) = try modelWithClaimedHTML(markdown: "# unused\n")
+        model.importExtractorProvider = nil
+
+        // No provider wired → the gate closes; no extraction-derived row
+        // lands and the in-flight marker clears on the skip. This is also
+        // the removal fallback: a removed package fails preparation closed.
+        await model.runImportExtraction(sourceID: summary.id, kind: .html)
+        #expect(try store.processedMarkdownHead(sourceID: summary.id) == nil)
+        #expect(model.importExtractingSourceIDs.isEmpty)
+    }
+
+    @Test func gatedIngestFiresImportExtractionForClaimedHTML() async throws {
+        let (store, model, summary) = try modelWithClaimedHTML(markdown: "# Gated ingest\n")
+
+        // The gated path (storeMaterialized → autoExtractIfRegistered) marks
+        // the source in flight synchronously, then the detached task lands
+        // the extraction head; poll like the DOCX in-flight test instead of
+        // blocking the cooperative pool.
+        model.autoExtractIfRegistered(summary)
+        #expect(model.importExtractingSourceIDs.contains(summary.id))
+
+        let clock = ContinuousClock()
+        // 30s: under the full parallel suite the detached main-actor task can
+        // wait on scheduling long past this suite's own 5s budget; the leash
+        // only has to turn a wedged gate into a diagnosed failure.
+        let deadline = clock.now.advanced(by: .seconds(30))
+        while try store.processedMarkdownHead(sourceID: summary.id) == nil {
+            guard clock.now < deadline else {
+                Issue.record("gated import extraction did not land within the time limit")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.importExtractingSourceIDs.isEmpty)
+        #expect(try store.sourceContent(id: summary.id) == Data(sampleHTML.utf8))
     }
 }
