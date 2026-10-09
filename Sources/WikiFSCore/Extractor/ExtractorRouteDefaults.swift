@@ -10,16 +10,51 @@ public struct ExtractorRouteDefaults: Decodable, Sendable {
     /// read as an extractor choice or the reverse. A missing key decodes to
     /// an empty table (older bundled data).
     public let routeFetchers: [FetcherRouteSelectionRecord]
+    /// Host-owned routes whose bundled policy selects import-time conversion:
+    /// when an active package registration claims the kind, sources of that
+    /// kind convert at ingest instead of waiting for a manual Extract tap.
+    /// Package-only kinds (DOCX) convert on import WITHOUT appearing here —
+    /// their rule is "claim + no host backend". This table exists for
+    /// host-backend kinds where import conversion is a deliberate product
+    /// decision (HTML converts at ingest via the reviewed Defuddle package,
+    /// issue #1380) that must stay bundled data rather than a kind branch.
+    /// Execution still requires the registration claim and resolves through
+    /// the route's installed-package selection; a removed package drops the
+    /// claim and the source lands verbatim. A missing key decodes to an empty
+    /// table (bundled data predating #1380).
+    public let routeAutoExtraction: [RouteAutoExtractionRecord]
 
     public init(
         routeExtractors: [ExtractorRouteSelectionRecord],
-        routeFetchers: [FetcherRouteSelectionRecord] = []
+        routeFetchers: [FetcherRouteSelectionRecord] = [],
+        routeAutoExtraction: [RouteAutoExtractionRecord] = []
     ) {
         self.routeExtractors = routeExtractors.normalizedForPersistence().records
         self.routeFetchers = routeFetchers.normalizedForPersistence().records
+        self.routeAutoExtraction = routeAutoExtraction
     }
 
-    private enum CodingKeys: String, CodingKey { case routeExtractors, routeFetchers }
+    private enum CodingKeys: String, CodingKey {
+        case routeExtractors, routeFetchers, routeAutoExtraction
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            routeExtractors: try container.decodeIfPresent(
+                [ExtractorRouteSelectionRecord].self, forKey: .routeExtractors) ?? [],
+            routeFetchers: try container.decodeIfPresent(
+                [FetcherRouteSelectionRecord].self, forKey: .routeFetchers) ?? [],
+            routeAutoExtraction: try container.decodeIfPresent(
+                [RouteAutoExtractionRecord].self, forKey: .routeAutoExtraction) ?? [])
+    }
+
+    /// The kinds whose bundled policy selects import-time conversion. The
+    /// session wiring intersects this with the active registrations' claimed
+    /// kinds, so an entry without a live claiming package is inert.
+    public var autoExtractKinds: Set<ExtractorKind> {
+        Set(routeAutoExtraction.map(\.route.kind))
+    }
 
     /// The bundled fetcher default record for one route, if any.
     public func fetcherDefault(for route: FetcherRouteID) -> ExtractionBackendReference? {
@@ -47,6 +82,19 @@ public struct ExtractorRouteDefaults: Decodable, Sendable {
     }()
 }
 
+/// One route the bundled policy selects for import-time conversion. Only the
+/// route identity is declared here; execution is still gated on an active
+/// package registration claiming the kind and on the route's selection
+/// resolving to an installed package (built-in execution floors never
+/// convert at import).
+public struct RouteAutoExtractionRecord: Decodable, Hashable, Sendable {
+    public let route: ExtractorRouteID
+
+    public init(route: ExtractorRouteID) {
+        self.route = route
+    }
+}
+
 public extension ExtractionConfig {
     /// Applies host defaults only to routes without a user or migrated legacy
     /// selection. The returned config contains one generic effective table.
@@ -65,7 +113,7 @@ public extension ExtractionConfig {
 
     /// The route's effective selection: the stored record when present,
     /// otherwise the bundled default-route record for that route. Routes the
-    /// bundled policy does not cover (HTML today) return `nil` — no default.
+    /// bundled policy does not cover return `nil` — no default.
     /// Execution and resolution consult this, never the retired typed fields.
     func selectionOrDefault(for route: ExtractorRouteID) -> ExtractionBackendReference? {
         extractorSelection(for: route)

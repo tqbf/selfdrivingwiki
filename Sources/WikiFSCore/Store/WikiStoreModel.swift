@@ -3800,6 +3800,14 @@ public final class WikiStoreModel {
                 return
             }
             _ = await extractDocx(for: sourceID, extractor: extractor)
+        case .html(let extractor):
+            // HtmlMarkdownExtractor has no readiness probe: preparation
+            // resolves the adapter or throws, and a runtime failure (bun
+            // missing, SPA page with no article body) surfaces as an empty
+            // result `extractHtml` already treats as skip-and-log. The
+            // source then keeps landing verbatim with the Extract button
+            // available — the issue #799 manual-retry contract.
+            _ = await extractHtml(for: sourceID, backend: .defuddle, extractor: extractor)
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import WikiFSMarkdown
 
 /// One typed import extractor for a package-claimed kind.
 ///
@@ -10,4 +11,5 @@ import Foundation
 /// mechanism.
 public enum PreparedImportExtractor: Sendable {
     case docx(any DocxMarkdownExtractor)
+    case html(any HtmlMarkdownExtractor)
 }

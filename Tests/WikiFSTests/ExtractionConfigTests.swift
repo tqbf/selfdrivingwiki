@@ -57,8 +57,9 @@ struct ExtractionConfigTests {
 
     /// A fresh install writes nothing to disk; the bundled default-route
     /// policy participates at read time: the PDF route defaults to the
-    /// reviewed pdf2md lineage and the DOCX route to the reviewed docx2md
-    /// lineage. HTML has no shipped default (prompt).
+    /// reviewed pdf2md lineage, the DOCX route to the reviewed docx2md
+    /// lineage, and the HTML route to the reviewed Defuddle package
+    /// (issue #1380).
     @Test func missingFileLoadsBundledRouteDefaults() throws {
         let config = ExtractionConfig.load(from: tempDirectory())
         #expect(config.routeExtractors.isEmpty)
@@ -69,9 +70,12 @@ struct ExtractionConfigTests {
         let docx2md = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.docx2md"),
             registrationID: try ExtractorRegistrationID(validating: "document"))
+        let defuddle = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.defuddle"),
+            registrationID: try ExtractorRegistrationID(validating: "article"))
         #expect(config.selectionOrDefault(for: .canonicalPDF) == .installed(pdf2md))
         #expect(config.selectionOrDefault(for: .canonicalDOCX) == .installed(docx2md))
-        #expect(config.selectionOrDefault(for: .canonicalHTML) == nil)
+        #expect(config.selectionOrDefault(for: .canonicalHTML) == .installed(defuddle))
     }
 
     @Test func corruptFileLoadsBundledDefaults() throws {
@@ -338,12 +342,17 @@ struct ExtractionConfigTests {
 
     /// Without a stored record the bundled default policy participates: the
     /// PDF route defaults to the reviewed pdf2md lineage (unavailable here,
-    /// because the test provides no active registration) and HTML, which the
-    /// policy does not cover, resolves to no selection.
+    /// because the test provides no active registration); HTML now behaves
+    /// the same way with its bundled Defuddle default (issue #1380) — the
+    /// selection is recorded, the execution fails closed without a live
+    /// registration.
     @Test func bundledDefaultsParticipateWhenNoRecordExists() throws {
         let pdf2md = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.pdf2md"),
             registrationID: try ExtractorRegistrationID(validating: "document"))
+        let defuddle = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.defuddle"),
+            registrationID: try ExtractorRegistrationID(validating: "article"))
         let pdf = ExtractorSelectionResolver.resolvePDF(
             configuration: ExtractionConfig(), activeRegistrations: [])
         #expect(pdf.selection == .unavailableInstalled(kind: .pdf, reference: pdf2md))
@@ -351,7 +360,8 @@ struct ExtractionConfigTests {
 
         let html = ExtractorSelectionResolver.resolveHTML(
             configuration: ExtractionConfig(), activeRegistrations: [])
-        #expect(html.selection == .noSelection)
+        #expect(html.selection == .unavailableInstalled(kind: .html, reference: defuddle))
+        #expect(html.diagnostic == .unavailableInstalled(defuddle))
     }
 
     // MARK: - Route selection writes
@@ -659,14 +669,19 @@ struct ExtractionConfigTests {
                 diagnostic: .unavailableInstalled(logical)))
 
         // HTML: the migrated record drives resolution; removal restores the
-        // no-selection state exactly.
+        // bundled default (the reviewed Defuddle package, issue #1380), which
+        // resolves unavailable without a live registration.
         let migratedHTML = ExtractorSelectionResolver.resolveHTML(configuration: config, activeRegistrations: [])
         #expect(migratedHTML.selection == .host(HostExtractorReference(adapterID: HostExtractorID(rawValue: "defuddle")!)))
         config.setExtractorSelection(host("tagBased"), for: .canonicalHTML)
         #expect(ExtractorSelectionResolver.resolveHTML(configuration: config, activeRegistrations: [])
             .selection == .host(HostExtractorReference(adapterID: HostExtractorID(rawValue: "tagBased")!)))
         config.setExtractorSelection(nil, for: .canonicalHTML)
-        #expect(ExtractorSelectionResolver.resolveHTML(configuration: config, activeRegistrations: []).selection == .noSelection)
+        let defuddle = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.defuddle"),
+            registrationID: try ExtractorRegistrationID(validating: "article"))
+        #expect(ExtractorSelectionResolver.resolveHTML(configuration: config, activeRegistrations: []).selection
+            == .unavailableInstalled(kind: .html, reference: defuddle))
     }
 
     /// The route-aware entry point agrees with the per-kind entry points on the
