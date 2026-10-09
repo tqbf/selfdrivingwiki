@@ -8,6 +8,10 @@ import WikiFSCore
 struct TabBarItemView: View {
     let tab: EditorTab
     let isActive: Bool
+    /// True while this tab is being drag-reordered (#1388). Dragged tabs get a
+    /// solid background and a lift shadow: inactive tabs are normally drawn
+    /// clear, which would let the neighbors show through the offset tab.
+    let isDragged: Bool
     let iconName: String
     /// Uniform width the tab is drawn at, computed by `TabBarLayout`. Tabs shrink
     /// as more open; the title truncates within.
@@ -18,6 +22,11 @@ struct TabBarItemView: View {
     let onCloseOthers: () -> Void
     let onCloseAfter: () -> Void
     let onCloseAll: () -> Void
+    /// Drag-to-reorder (#1388): the gesture value (pointer position in the
+    /// strip's named coordinate space) while dragging and on release. The
+    /// parent (`TabBarView`) owns the reorder math and the commit.
+    let onDragChanged: (DragGesture.Value) -> Void
+    let onDragEnded: (DragGesture.Value) -> Void
 
     @State private var isHovering = false
     @State private var isCloseHovering = false
@@ -34,9 +43,24 @@ struct TabBarItemView: View {
         .frame(width: width)
         .frame(maxHeight: .infinity)
         .background(background)
+        .shadow(color: .black.opacity(isDragged ? 0.25 : 0),
+                radius: isDragged ? TabBarMetrics.dragLiftShadowRadius : 0,
+                y: isDragged ? TabBarMetrics.dragLiftShadowY : 0)
         .overlay(alignment: .bottom) { activeUnderline }
         .contentShape(Rectangle())
         .onTapGesture { onClick() }
+        // Competes with the tap gesture above: a press that moves past the
+        // threshold becomes a reorder drag (tap cancelled); a press released
+        // without moving stays a click. Right-click contextMenu is unaffected.
+        .gesture(
+            // Named strip space, NOT .local: the tab's own space translates
+            // when a live reorder moves it, which would jump the pointer
+            // position by a full tab width at every swap.
+            DragGesture(minimumDistance: TabBarMetrics.dragStartDistance,
+                        coordinateSpace: .named(TabBarMetrics.stripCoordinateSpace))
+                .onChanged { onDragChanged($0) }
+                .onEnded { onDragEnded($0) }
+        )
         .onHover { isHovering = $0 }
         .help(tab.title)
         .contextMenu { contextMenuItems }
@@ -100,7 +124,10 @@ struct TabBarItemView: View {
 
     @ViewBuilder
     private var background: some View {
-        if isActive {
+        if isDragged {
+            // Solid while dragging so tabs underneath don't show through.
+            Color(nsColor: .controlBackgroundColor)
+        } else if isActive {
             Color(nsColor: .controlBackgroundColor)
         } else if isHovering {
             Color.primary.opacity(0.06)

@@ -420,6 +420,82 @@ struct EditorTabTests {
         #expect(model.selection == .page(c.id))
     }
 
+    // MARK: - moveTab (drag-to-reorder, #1388)
+
+    /// Open three page tabs (A, B, C) and return their tab IDs in bar order.
+    /// C ends up active.
+    private func threeTabModel() throws -> (WikiStoreModel, [UUID]) {
+        let (model, store) = try tempModel()
+        let a = try store.createPage(title: "A")
+        let b = try store.createPage(title: "B")
+        let c = try store.createPage(title: "C")
+        model.reloadFromStore()
+        model.selection = .page(a.id)
+        model.handleSelectionChange(to: .page(a.id))
+        model.openTab(.page(b.id))
+        model.openTab(.page(c.id))
+        return (model, model.tabs.map(\.id))
+    }
+
+    @Test func moveTabForwardReordersBar() throws {
+        let (model, ids) = try threeTabModel()
+        model.moveTab(id: ids[0], to: 2)
+        #expect(model.tabs.map(\.id) == [ids[1], ids[2], ids[0]])
+    }
+
+    @Test func moveTabBackwardReordersBar() throws {
+        let (model, ids) = try threeTabModel()
+        model.moveTab(id: ids[2], to: 0)
+        #expect(model.tabs.map(\.id) == [ids[2], ids[0], ids[1]])
+    }
+
+    @Test func moveTabKeepsDraggedTabActive() throws {
+        let (model, ids) = try threeTabModel()
+        // C (ids[2]) is active; drag it to the front — it must stay active.
+        model.moveTab(id: ids[2], to: 0)
+        #expect(model.activeTabID == ids[2])
+        #expect(model.activeTabIndex == 0)
+    }
+
+    @Test func moveTabKeepsInactiveActiveTabUntouched() throws {
+        let (model, ids) = try threeTabModel()
+        // C is active; move A (not active) — the active tab must not change.
+        model.moveTab(id: ids[0], to: 1)
+        #expect(model.activeTabID == ids[2])
+        #expect(model.tabs.map(\.id) == [ids[1], ids[0], ids[2]])
+    }
+
+    @Test func moveTabPreservesPerTabState() throws {
+        let (model, ids) = try threeTabModel()
+        model.toggleTabPin(id: ids[0])
+        model.setTabEditing(tabID: ids[0], isEditing: true)
+        model.moveTab(id: ids[0], to: 2)
+        let moved = model.tabs[2]
+        #expect(moved.id == ids[0])
+        #expect(moved.isPinned)
+        #expect(moved.isEditing)
+    }
+
+    @Test func moveTabSameIndexIsNoOp() throws {
+        let (model, ids) = try threeTabModel()
+        model.moveTab(id: ids[1], to: 1)
+        #expect(model.tabs.map(\.id) == ids)
+    }
+
+    @Test func moveTabClampsOutOfBoundsIndex() throws {
+        let (model, ids) = try threeTabModel()
+        model.moveTab(id: ids[0], to: 99)
+        #expect(model.tabs.map(\.id) == [ids[1], ids[2], ids[0]])
+        model.moveTab(id: ids[0], to: -5)
+        #expect(model.tabs.map(\.id) == [ids[0], ids[1], ids[2]])
+    }
+
+    @Test func moveTabUnknownIDIsNoOp() throws {
+        let (model, ids) = try threeTabModel()
+        model.moveTab(id: UUID(), to: 0)
+        #expect(model.tabs.map(\.id) == ids)
+    }
+
     // MARK: - closeOtherTabs
 
     @Test func closeOtherTabsKeepsOnlySpecifiedActiveTab() throws {

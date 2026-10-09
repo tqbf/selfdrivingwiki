@@ -65,4 +65,60 @@ struct TabBarLayoutTests {
         #expect(l.visibleCount == 1)
         #expect(l.showsOverflow)
     }
+
+    // MARK: - liveSlot (live drag-to-reorder, #1388)
+
+    private func live(_ current: Int, _ centerX: Double, count: Int = 4) -> Int {
+        TabBarLayout.liveSlot(currentIndex: current, centerX: centerX, tabWidth: maxW, tabCount: count)
+    }
+
+    @Test func centerInOwnSlotStays() {
+        // Tab 1's home center is 300; nowhere near a neighbor's center.
+        #expect(live(1, 300) == 1)
+        #expect(live(0, 100) == 0)
+        #expect(live(3, 700) == 3)
+    }
+
+    @Test func swapTriggersPastNeighborCenterPlusDeadband() {
+        // Right neighbor's center: 500. Deadband 8 → swap right at > 508.
+        #expect(live(1, 505) == 1)
+        #expect(live(1, 509) == 2)
+        // Left neighbor's center: 100 → swap left at < 92.
+        #expect(live(1, 95) == 1)
+        #expect(live(1, 91) == 0)
+    }
+
+    @Test func deadbandPreventsBoundaryChatter() {
+        // Exactly AT the neighbor's center: no swap in either direction.
+        #expect(live(1, 500) == 1)
+        #expect(live(1, 100) == 1)
+    }
+
+    @Test func fastFlingCrossesMultipleSlotsInOneEvent() {
+        // Center at 1000 (past tabs 2, 3, 4's centers at 500/700/900) in a
+        // 5-tab strip: lands at index 4.
+        #expect(live(1, 1000, count: 5) == 4)
+        // Mirror: fling left past tabs 0 and -... clamps at 0.
+        #expect(live(3, 50, count: 5) == 0)
+    }
+
+    @Test func liveSlotClampsToStripEnds() {
+        #expect(live(0, -500) == 0)
+        #expect(live(3, 10000) == 3)
+    }
+
+    @Test func liveSlotDegenerateInputs() {
+        #expect(TabBarLayout.liveSlot(currentIndex: 2, centerX: 500, tabWidth: 0, tabCount: 4) == 2)
+        #expect(TabBarLayout.liveSlot(currentIndex: 2, centerX: 500, tabWidth: maxW, tabCount: 0) == 2)
+        // Out-of-range current index is clamped before swapping. The clamped
+        // tab at slot 3 then moves left to follow the pointer at x = 100.
+        #expect(TabBarLayout.liveSlot(currentIndex: 9, centerX: 100, tabWidth: maxW, tabCount: 4) == 1)
+    }
+
+    @Test func targetIndexAccountsForRemoval() {
+        // Insertion slot → final post-removal index; home slot is a no-op.
+        #expect(TabBarLayout.targetIndex(fromIndex: 2, slot: 2) == 2)
+        #expect(TabBarLayout.targetIndex(fromIndex: 0, slot: 3) == 2)
+        #expect(TabBarLayout.targetIndex(fromIndex: 3, slot: 0) == 0)
+    }
 }

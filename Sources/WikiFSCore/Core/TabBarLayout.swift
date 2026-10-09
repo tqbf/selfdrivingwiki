@@ -57,4 +57,49 @@ public struct TabBarLayout: Equatable, Sendable {
             visibleCount: visible,
             showsOverflow: visible < tabCount)
     }
+
+    /// Deadband (points) past a neighbor's center the dragged tab's center must
+    /// cross before a live swap triggers (#1388). Without it, a swap lands the
+    /// compensated offset exactly on the mirror-image reverse threshold, so
+    /// holding the pointer at the boundary flickers the two tabs back and
+    /// forth.
+    public static let liveSwapDeadband: Double = 8
+
+    /// The slot a dragged tab should occupy during live reorder (#1388). Swap
+    /// semantics, measured from the tab's CURRENT slot (not cumulative travel
+    /// from home): swap right when the dragged center passes the right
+    /// neighbor's center plus `liveSwapDeadband`, mirror for left. A fast fling
+    /// can cross several neighbors in one event, so this loops to the final
+    /// slot; the result is clamped to the strip.
+    ///
+    /// - Parameters:
+    ///   - currentIndex: the dragged tab's index in the live (displayed) order.
+    ///   - centerX: the dragged tab's center in strip coordinates.
+    ///   - tabWidth: the uniform per-tab width from `compute`.
+    ///   - tabCount: number of displayed tabs.
+    public static func liveSlot(
+        currentIndex: Int,
+        centerX: Double,
+        tabWidth: Double,
+        tabCount: Int
+    ) -> Int {
+        guard tabCount > 0, tabWidth > 0 else { return currentIndex }
+        var index = min(max(currentIndex, 0), tabCount - 1)
+        while index < tabCount - 1,
+              centerX > (Double(index) + 1.5) * tabWidth + liveSwapDeadband {
+            index += 1
+        }
+        while index > 0,
+              centerX < (Double(index) - 0.5) * tabWidth - liveSwapDeadband {
+            index -= 1
+        }
+        return index
+    }
+
+    /// Final array index for a tab moved from `fromIndex` to insertion `slot`.
+    /// Accounts for the removal shifting every index after `fromIndex` down by
+    /// one, so slot `fromIndex` maps back to `fromIndex` — a no-op.
+    public static func targetIndex(fromIndex: Int, slot: Int) -> Int {
+        slot > fromIndex ? slot - 1 : slot
+    }
 }
