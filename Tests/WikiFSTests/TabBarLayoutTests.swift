@@ -79,27 +79,31 @@ struct TabBarLayoutTests {
         #expect(TabBarLayout.targetIndex(fromIndex: 2, slot: 2) == 2)
     }
 
-    @Test func subHalfWidthDragsStayInPlace() {
-        // Just under half a tab width either way: still the home slot.
-        #expect(slot(1, 99) == 1)
-        #expect(slot(1, -99) == 1)
+    @Test func belowThresholdDragsStayInPlace() {
+        // Just under the swap threshold (0.25 * 200 = 50pt) either way: still
+        // the home slot.
+        #expect(slot(1, 49) == 1)
+        #expect(slot(1, -49) == 1)
         #expect(TabBarLayout.targetIndex(fromIndex: 1, slot: 1) == 1)
     }
 
-    @Test func halfWidthDragMovesOneSlot() {
-        // The native tab-bar threshold: half a width of travel swaps one slot.
-        #expect(slot(1, 100) == 3)   // one slot right (lands after tab 2)
+    @Test func thresholdDragMovesOneSlot() {
+        // A quarter-width drag swaps one slot (dragSwapThresholdFraction).
+        #expect(slot(1, 50) == 3)   // one slot right (lands after tab 2)
         #expect(TabBarLayout.targetIndex(fromIndex: 1, slot: 3) == 2)
-        #expect(slot(1, -100) == 0)  // one slot left (lands before tab 0)
+        #expect(slot(1, -50) == 0)  // one slot left (lands before tab 0)
         #expect(TabBarLayout.targetIndex(fromIndex: 1, slot: 0) == 0)
     }
 
     @Test func multiTabDrag() {
-        // Drag tab 0 right by ~2.5 tab widths → slot 3 → final index 2.
-        #expect(slot(0, 499) == 3)
+        // Each further slot takes a full width: the second swap lands at
+        // (2 - 1 + 0.25) * 200 = 250pt.
+        #expect(slot(0, 249) == 2)  // one slot right
+        #expect(TabBarLayout.targetIndex(fromIndex: 0, slot: 2) == 1)
+        #expect(slot(0, 250) == 3)  // two slots right → final index 2
         #expect(TabBarLayout.targetIndex(fromIndex: 0, slot: 3) == 2)
-        // Drag tab 3 left by ~2.5 tab widths → slot 1 → final index 1.
-        #expect(slot(3, -499) == 1)
+        // Drag tab 3 left by 1.25 tab widths → slot 1 → final index 1.
+        #expect(slot(3, -250) == 1)
         #expect(TabBarLayout.targetIndex(fromIndex: 3, slot: 1) == 1)
     }
 

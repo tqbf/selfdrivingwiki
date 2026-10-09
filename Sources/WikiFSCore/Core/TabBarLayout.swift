@@ -58,12 +58,18 @@ public struct TabBarLayout: Equatable, Sendable {
             showsOverflow: visible < tabCount)
     }
 
+    /// Fraction of a tab width the pointer must travel before the dragged tab
+    /// swaps one slot (#1388). 0.5 would be "swap at half a width"; these tabs
+    /// are wide (110–200pt), so 0.25 keeps the drag feeling responsive. Each
+    /// further slot still takes a full width of travel.
+    public static let dragSwapThresholdFraction: Double = 0.25
+
     /// Insertion slot for drag-to-reorder (#1388). Slot `k` means "insert before
     /// the tab currently at index `k`"; slot `tabCount` means the end of the
-    /// strip. The tab swaps position once the drag passes HALF a tab width —
-    /// the threshold native tab bars (Safari, Xcode) use — so the result is
-    /// `fromIndex` itself until then, and `targetIndex(fromIndex:slot:)` maps
-    /// that back to a no-op.
+    /// strip. The tab swaps position once the drag passes
+    /// `dragSwapThresholdFraction` of a tab width, so the result is `fromIndex`
+    /// itself until then, and `targetIndex(fromIndex:slot:)` maps that back to
+    /// a no-op.
     ///
     /// - Parameters:
     ///   - fromIndex: index of the dragged tab in the displayed (visible) order.
@@ -77,9 +83,11 @@ public struct TabBarLayout: Equatable, Sendable {
         tabCount: Int
     ) -> Int {
         guard tabCount > 0, tabWidth > 0 else { return 0 }
-        // One slot per half-width of travel: round(offset / width) is how many
-        // positions the tab has moved, clamped to the strip.
-        let moved = Int((dragOffset / tabWidth).rounded())
+        // Slot k is reached at (k - 1 + threshold) widths of travel: the first
+        // swap at `threshold` of a width, each next swap a full width later.
+        let steps = ((abs(dragOffset) + (1 - dragSwapThresholdFraction) * tabWidth) / tabWidth)
+            .rounded(.down)
+        let moved = Int(steps) * (dragOffset < 0 ? -1 : 1)
         let projected = min(max(fromIndex + moved, 0), tabCount - 1)
         // Moving right lands AFTER the tab now at `projected`; moving left (or
         // not at all) lands BEFORE it.
