@@ -35,6 +35,7 @@ struct TabBarView: View {
                     TabBarItemView(
                         tab: tab,
                         isActive: tab.id == store.activeTabID,
+                        isDragged: drag?.tabID == tab.id,
                         iconName: store.tabIcon(for: tab.selection),
                         width: layout.tabWidth,
                         onClick: { store.selectTab(id: tab.id) },
@@ -183,4 +184,8 @@ enum TabBarMetrics {
     static let insertionIndicatorWidth: CGFloat = 2
     /// Vertical inset so the insertion line doesn't touch the strip's edges.
     static let insertionIndicatorVerticalInset: CGFloat = 6
+    /// Lift shadow on the dragged tab (solid background + shadow = the macOS
+    /// "picked up" look, #1388).
+    static let dragLiftShadowRadius: CGFloat = 4
+    static let dragLiftShadowY: CGFloat = 2
 }
