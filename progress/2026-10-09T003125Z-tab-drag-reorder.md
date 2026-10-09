@@ -17,8 +17,8 @@ release it at the wanted position.
   and stashed drafts travel with the tab.
 - `TabBarLayout.insertionIndex(fromIndex:dragOffset:tabWidth:tabCount:)` and
   `targetIndex(fromIndex:slot:)` hold the drop-target math in Core so it is
-  testable without a view. A swap happens when the dragged tab's center crosses
-  a neighbor's center, the same rule Safari uses.
+  testable without a view. A swap happens once the drag passes half a tab
+  width, the threshold native tab bars (Safari, Xcode) use.
 - `TabBarItemView` adds a `DragGesture` (4 pt start distance) that competes
   with the existing tap gesture. A press released without moving stays a click;
   a press that moves becomes a drag. The right-click context menu is untouched.

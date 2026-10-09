@@ -60,9 +60,10 @@ public struct TabBarLayout: Equatable, Sendable {
 
     /// Insertion slot for drag-to-reorder (#1388). Slot `k` means "insert before
     /// the tab currently at index `k`"; slot `tabCount` means the end of the
-    /// strip. With no drag, the dragged tab's center sits in its own slot and
-    /// the result is `fromIndex + 1` — see `targetIndex(fromIndex:slot:)`, which
-    /// maps that back to a no-op.
+    /// strip. The tab swaps position once the drag passes HALF a tab width —
+    /// the threshold native tab bars (Safari, Xcode) use — so the result is
+    /// `fromIndex` itself until then, and `targetIndex(fromIndex:slot:)` maps
+    /// that back to a no-op.
     ///
     /// - Parameters:
     ///   - fromIndex: index of the dragged tab in the displayed (visible) order.
@@ -76,17 +77,19 @@ public struct TabBarLayout: Equatable, Sendable {
         tabCount: Int
     ) -> Int {
         guard tabCount > 0, tabWidth > 0 else { return 0 }
-        // The dragged tab's center starts at (fromIndex + 0.5) * tabWidth and
-        // moves by dragOffset; the slot boundary is crossed at half-width steps.
-        let center = (Double(fromIndex) + 0.5) * tabWidth + dragOffset
-        let slot = Int((center / tabWidth).rounded())
-        return min(max(slot, 0), tabCount)
+        // One slot per half-width of travel: round(offset / width) is how many
+        // positions the tab has moved, clamped to the strip.
+        let moved = Int((dragOffset / tabWidth).rounded())
+        let projected = min(max(fromIndex + moved, 0), tabCount - 1)
+        // Moving right lands AFTER the tab now at `projected`; moving left (or
+        // not at all) lands BEFORE it.
+        return projected > fromIndex ? projected + 1 : projected
     }
 
     /// Final array index for a tab moved from `fromIndex` to insertion `slot`
     /// (from `insertionIndex`). Accounts for the removal shifting every index
-    /// after `fromIndex` down by one, so slot `fromIndex + 1` (the no-drag
-    /// result) maps back to `fromIndex` — a no-op.
+    /// after `fromIndex` down by one, so slot `fromIndex` (the no-drag result)
+    /// maps back to `fromIndex` — a no-op.
     public static func targetIndex(fromIndex: Int, slot: Int) -> Int {
         slot > fromIndex ? slot - 1 : slot
     }
