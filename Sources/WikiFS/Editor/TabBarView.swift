@@ -10,14 +10,22 @@ struct TabBarView: View {
     @Bindable var store: WikiStoreModel
 
     /// In-flight drag-to-reorder (#1388): which tab is being dragged, its
-    /// horizontal translation, and the insertion slot (in visible-tab order)
-    /// it would land at. `nil` when no drag is active.
+    /// home position in the visible order, its horizontal translation, and the
+    /// insertion slot it would land at. `nil` when no drag is active.
     @State private var drag: TabDrag?
 
     private struct TabDrag: Equatable {
         let tabID: UUID
+        let fromIndex: Int
         var translation: CGFloat
         var slot: Int
+
+        /// Whether the drag has passed the half-width swap threshold. The
+        /// insertion indicator stays hidden until it has — no blue line for a
+        /// drag that would land the tab back where it started.
+        var wouldMove: Bool {
+            TabBarLayout.targetIndex(fromIndex: fromIndex, slot: slot) != fromIndex
+        }
     }
 
     var body: some View {
@@ -32,6 +40,12 @@ struct TabBarView: View {
 
             HStack(spacing: 0) {
                 ForEach(Array(visible.enumerated()), id: \.element.id) { index, tab in
+                    // Insertion indicator lives IN the strip (net zero width, so
+                    // no reflow) at zIndex 0 — the dragged tab (zIndex 1) slides
+                    // over it instead of the line showing through the tab.
+                    if drag?.wouldMove == true, drag?.slot == index {
+                        insertionIndicator
+                    }
                     TabBarItemView(
                         tab: tab,
                         isActive: tab.id == store.activeTabID,
@@ -60,22 +74,13 @@ struct TabBarView: View {
                     .offset(x: drag?.tabID == tab.id ? drag?.translation ?? 0 : 0)
                     .zIndex(drag?.tabID == tab.id ? 1 : 0)
                 }
+                if drag?.wouldMove == true, drag?.slot == visible.count {
+                    insertionIndicator
+                }
                 if layout.showsOverflow {
                     overflowMenu
                 }
                 Spacer(minLength: 0)
-            }
-            .overlay(alignment: .topLeading) {
-                // Insertion indicator: a 2pt accent line at the drop slot's
-                // leading boundary (Safari/Xcode-style), drawn only mid-drag.
-                if let drag {
-                    Capsule()
-                        .fill(Color.accentColor)
-                        .frame(width: TabBarMetrics.insertionIndicatorWidth)
-                        .padding(.vertical, TabBarMetrics.insertionIndicatorVerticalInset)
-                        .offset(x: CGFloat(drag.slot) * layout.tabWidth
-                                - TabBarMetrics.insertionIndicatorWidth / 2)
-                }
             }
             .padding(.horizontal, TabBarMetrics.horizontalPadding)
         }
@@ -84,6 +89,17 @@ struct TabBarView: View {
         .overlay(alignment: .bottom) {
             Divider().opacity(PageEditorMetrics.dividerOpacity)
         }
+    }
+
+    /// 2pt accent line at the drop slot's leading boundary. Net zero width
+    /// (2pt wide with -2pt horizontal padding) so showing it never reflows
+    /// the strip.
+    private var insertionIndicator: some View {
+        Capsule()
+            .fill(Color.accentColor)
+            .frame(width: TabBarMetrics.insertionIndicatorWidth)
+            .padding(.horizontal, -TabBarMetrics.insertionIndicatorWidth)
+            .padding(.vertical, TabBarMetrics.insertionIndicatorVerticalInset)
     }
 
     // MARK: - Drag-to-reorder (#1388)
@@ -95,7 +111,7 @@ struct TabBarView: View {
             dragOffset: translation,
             tabWidth: layout.tabWidth,
             tabCount: visibleCount)
-        drag = TabDrag(tabID: tabID, translation: translation, slot: slot)
+        drag = TabDrag(tabID: tabID, fromIndex: visibleIndex, translation: translation, slot: slot)
     }
 
     private func dragEnded(tabID: UUID, visibleIndex: Int, translation: CGFloat,
