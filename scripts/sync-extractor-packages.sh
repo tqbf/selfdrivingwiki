@@ -756,7 +756,10 @@ PY
 # Reviewed package provenance
 
 - Package: org.selfdrivingwiki.youtube-transcript
-- Version: 1.0.1 (1.0.1: shared-runtime-cache capability for warm uv runs)
+- Version: 1.1.0 (1.0.1: shared-runtime-cache capability for warm uv runs;
+  1.1.0: manifest revision 5 declares the registration-scoped
+  `wantsAgentCleanup` claim — the raw auto-captions this package produces
+  are the input to the host's best-effort transcript cleanup pass)
 - Source: tools/youtube-transcript/youtube-transcript in this repository
 - Entry point: bin/youtube-transcript-extractor, generated from the same source
 - Dependencies: the PEP 723 block of the entry point is copied from the script
@@ -785,9 +788,11 @@ import json, sys
 
 path, script_digest, entry_digest, provenance_digest = sys.argv[1:5]
 manifest = {
-    "manifestRevision": 1,
+    # Manifest revision 5 (issue #1379): the registration declares the
+    # optional `wantsAgentCleanup` claim. Older revisions reject the key.
+    "manifestRevision": 5,
     "packageID": "org.selfdrivingwiki.youtube-transcript",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "displayName": "YouTube Transcript",
     "protocolRevision": 3,
     "entryPoint": "bin/youtube-transcript-extractor",
@@ -798,6 +803,12 @@ manifest = {
             "displayName": "YouTube Transcript",
             "kinds": ["youtube-transcript"],
             "mimeTypes": ["video/youtube"],
+            # Issue #1379: the raw auto-captions this package produces are
+            # hard to read as-is, so the host runs its best-effort agent
+            # cleanup pass after the transcript lands. The podcast
+            # transcript packages do NOT declare this claim — publisher
+            # transcripts are usually already clean.
+            "wantsAgentCleanup": True,
         }
     ],
     # The package fetches captions from the network and launches through uv.

@@ -526,6 +526,14 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         case credentialRequirements, sync, role
     }
 
+    /// Revision-5 keys: adds the registration-scoped `wantsAgentCleanup`
+    /// claim (issue #1379). Older revisions reject this key, so only a
+    /// revision-5 manifest can declare the cleanup claim.
+    enum V5CodingKeys: String, CodingKey, CaseIterable {
+        case id, displayName, kinds, mimeTypes, filenameExtensions
+        case credentialRequirements, sync, role, wantsAgentCleanup
+    }
+
     public let id: ExtractorRegistrationID
     public let displayName: String
     public let kinds: Set<ExtractorKind>
@@ -545,6 +553,13 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
     /// registration is an extractor, and revision-4 registrations without an
     /// encoded `role` key decode as extractors.
     public let role: ExtractorPackageRole
+    /// The registration-scoped agent-cleanup claim (revision 5, issue
+    /// #1379): the markdown this registration produces is raw enough that
+    /// the host should run a best-effort agent cleanup pass after the
+    /// extraction lands (fix punctuation/casing, strip caption artifacts,
+    /// segment paragraphs). Package DATA, never a host kind comparison.
+    /// `false` for every revision-1–4 registration.
+    public let wantsAgentCleanup: Bool
 
     public init(
         id: ExtractorRegistrationID,
@@ -554,7 +569,8 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         filenameExtensions: Set<ExtractorFileExtension> = [],
         credentialRequirements: [ExtractorCredentialRequirement] = [],
         sync: ExtractorSyncDeclaration? = nil,
-        role: ExtractorPackageRole = .extractor
+        role: ExtractorPackageRole = .extractor,
+        wantsAgentCleanup: Bool = false
     ) throws {
         guard displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
               displayName.utf8.count <= 128 else {
@@ -624,6 +640,7 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         self.credentialRequirements = credentialRequirements.sorted()
         self.sync = sync
         self.role = role
+        self.wantsAgentCleanup = wantsAgentCleanup
     }
 
     /// The v1 decoder: strict, no credential key.
@@ -637,9 +654,12 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
     /// revision 2 accepts it and validates every declaration. Revision 3
     /// additionally accepts the `sync` key. Revision 4 additionally accepts
     /// the `role` key; older revisions reject it, so only a revision-4
-    /// manifest can declare a fetcher.
+    /// manifest can declare a fetcher. Revision 5 additionally accepts the
+    /// `wantsAgentCleanup` claim; older revisions reject it.
     public init(from decoder: any Decoder, manifestRevision: ExtractorManifestRevision) throws {
-        if manifestRevision.rawValue >= 4 {
+        if manifestRevision.rawValue >= 5 {
+            try rejectUnknownKeys(from: decoder, allowed: V5CodingKeys.self)
+        } else if manifestRevision.rawValue >= 4 {
             try rejectUnknownKeys(from: decoder, allowed: V4CodingKeys.self)
         } else if manifestRevision == .v3 {
             try rejectUnknownKeys(from: decoder, allowed: V3CodingKeys.self)
@@ -648,7 +668,7 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         } else {
             try rejectUnknownKeys(from: decoder, allowed: CodingKeys.self)
         }
-        let container = try decoder.container(keyedBy: V4CodingKeys.self)
+        let container = try decoder.container(keyedBy: V5CodingKeys.self)
         try self.init(keyedContainer: container, manifestRevision: manifestRevision)
     }
 
@@ -656,15 +676,17 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
     /// record decoder uses this so a stored registration decodes under the
     /// record's own protocol revision — the plain `init(from:)` defaults to
     /// v1 semantics and would reject a v2 registration's credential key.
-    init(keyedContainer: KeyedDecodingContainer<V4CodingKeys>, manifestRevision: ExtractorManifestRevision) throws {
+    init(keyedContainer: KeyedDecodingContainer<V5CodingKeys>, manifestRevision: ExtractorManifestRevision) throws {
         let known: Set<String> = Set(
-            (manifestRevision.rawValue >= 4
-                ? V4CodingKeys.allCases.map(\.stringValue)
-                : manifestRevision == .v3
-                    ? V3CodingKeys.allCases.map(\.stringValue)
-                    : manifestRevision == .v2
-                        ? V2CodingKeys.allCases.map(\.stringValue)
-                        : CodingKeys.allCases.map(\.stringValue)))
+            (manifestRevision.rawValue >= 5
+                ? V5CodingKeys.allCases.map(\.stringValue)
+                : manifestRevision.rawValue >= 4
+                    ? V4CodingKeys.allCases.map(\.stringValue)
+                    : manifestRevision == .v3
+                        ? V3CodingKeys.allCases.map(\.stringValue)
+                        : manifestRevision == .v2
+                            ? V2CodingKeys.allCases.map(\.stringValue)
+                            : CodingKeys.allCases.map(\.stringValue)))
         if let unknown = keyedContainer.allKeys.first(where: { known.contains($0.stringValue) == false }) {
             throw ExtractorValidationError.invalidManifest("unknown field \(unknown.stringValue)")
         }
@@ -689,7 +711,17 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         let requirements: [ExtractorCredentialRequirement]
         let sync: ExtractorSyncDeclaration?
         let role: ExtractorPackageRole
-        if manifestRevision.rawValue >= 4 {
+        let wantsAgentCleanup: Bool
+        if manifestRevision.rawValue >= 5 {
+            requirements = try keyedContainer.decodeIfPresent(
+                [ExtractorCredentialRequirement].self, forKey: .credentialRequirements) ?? []
+            sync = try keyedContainer.decodeIfPresent(
+                ExtractorSyncDeclaration.self, forKey: .sync)
+            role = try keyedContainer.decodeIfPresent(
+                ExtractorPackageRole.self, forKey: .role) ?? .extractor
+            wantsAgentCleanup = try keyedContainer.decodeIfPresent(
+                Bool.self, forKey: .wantsAgentCleanup) ?? false
+        } else if manifestRevision.rawValue >= 4 {
             requirements = try keyedContainer.decodeIfPresent(
                 [ExtractorCredentialRequirement].self, forKey: .credentialRequirements) ?? []
             sync = try keyedContainer.decodeIfPresent(
@@ -698,21 +730,25 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
             // an extractor — the older canonical shape stays readable.
             role = try keyedContainer.decodeIfPresent(
                 ExtractorPackageRole.self, forKey: .role) ?? .extractor
+            wantsAgentCleanup = false
         } else if manifestRevision == .v3 {
             requirements = try keyedContainer.decodeIfPresent(
                 [ExtractorCredentialRequirement].self, forKey: .credentialRequirements) ?? []
             sync = try keyedContainer.decodeIfPresent(
                 ExtractorSyncDeclaration.self, forKey: .sync)
             role = .extractor
+            wantsAgentCleanup = false
         } else if manifestRevision == .v2 {
             requirements = try keyedContainer.decodeIfPresent(
                 [ExtractorCredentialRequirement].self, forKey: .credentialRequirements) ?? []
             sync = nil
             role = .extractor
+            wantsAgentCleanup = false
         } else {
             requirements = []
             sync = nil
             role = .extractor
+            wantsAgentCleanup = false
         }
         try self.init(
             id: keyedContainer.decode(ExtractorRegistrationID.self, forKey: .id),
@@ -722,7 +758,8 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
             filenameExtensions: Set(filenameExtensions),
             credentialRequirements: requirements,
             sync: sync,
-            role: role)
+            role: role,
+            wantsAgentCleanup: wantsAgentCleanup)
     }
 
     /// Decodes a registration array element-by-element under the given
@@ -749,7 +786,7 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
     /// revision-4 manifest encoding — which ALWAYS writes `role` — goes
     /// through `encode(to:manifestRevision:)`.
     public func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: V4CodingKeys.self)
+        var container = encoder.container(keyedBy: V5CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(displayName, forKey: .displayName)
         try container.encode(kinds.sorted { $0.rawValue < $1.rawValue }, forKey: .kinds)
@@ -771,11 +808,18 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         if role != .extractor {
             try container.encode(role, forKey: .role)
         }
+        // Emitted only when set, so revision-1–4 canonical bytes are
+        // unchanged bit-for-bit (the same rule the sync key follows).
+        if wantsAgentCleanup {
+            try container.encode(wantsAgentCleanup, forKey: .wantsAgentCleanup)
+        }
     }
 
     /// Canonical manifest encoding: revision 4 ALWAYS writes `role`
     /// (including plain extractors); older revisions never write it, so
-    /// their canonical bytes and package digests are unchanged.
+    /// their canonical bytes and package digests are unchanged. Revision 5
+    /// writes `wantsAgentCleanup` only when set (the storage shape already
+    /// emits it exactly when set).
     func encode(
         to encoder: any Encoder,
         manifestRevision: ExtractorManifestRevision
@@ -784,7 +828,7 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         if manifestRevision.rawValue >= 4, role == .extractor {
             // The storage shape already wrote a fetcher's role; a revision-4
             // EXTRACTOR needs the explicit default added.
-            var container = encoder.container(keyedBy: V4CodingKeys.self)
+            var container = encoder.container(keyedBy: V5CodingKeys.self)
             try container.encode(role, forKey: .role)
         }
     }
@@ -849,7 +893,7 @@ public struct ExtractorManifest: Codable, Hashable, Sendable {
         limits: ExtractorOperationLimits
     ) throws {
         guard manifestRevision == .v1 || manifestRevision == .v2 || manifestRevision == .v3
-            || manifestRevision == .v4 else {
+            || manifestRevision == .v4 || manifestRevision == .v5 else {
             throw ExtractorValidationError.unsupportedManifestRevision(manifestRevision.rawValue)
         }
         guard displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
@@ -881,6 +925,13 @@ public struct ExtractorManifest: Codable, Hashable, Sendable {
            registrations.contains(where: { $0.role != .extractor }) {
             throw ExtractorValidationError.invalidManifest(
                 "fetcher registrations require manifest revision 4")
+        }
+        // The agent-cleanup claim is a revision-5 feature, under the same
+        // in-memory guard.
+        if manifestRevision.rawValue < 5,
+           registrations.contains(where: \.wantsAgentCleanup) {
+            throw ExtractorValidationError.invalidManifest(
+                "wantsAgentCleanup claims require manifest revision 5")
         }
         // A fetcher speaks protocol revision 5 with the remote-url transport
         // and the network capability, and its declared operation limits

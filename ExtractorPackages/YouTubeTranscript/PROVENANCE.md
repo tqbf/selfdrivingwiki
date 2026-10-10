@@ -1,7 +1,10 @@
 # Reviewed package provenance
 
 - Package: org.selfdrivingwiki.youtube-transcript
-- Version: 1.0.1 (1.0.1: shared-runtime-cache capability for warm uv runs)
+- Version: 1.1.0 (1.0.1: shared-runtime-cache capability for warm uv runs;
+  1.1.0: manifest revision 5 declares the registration-scoped
+  `wantsAgentCleanup` claim — the raw auto-captions this package produces
+  are the input to the host's best-effort transcript cleanup pass)
 - Source: tools/youtube-transcript/youtube-transcript in this repository
 - Entry point: bin/youtube-transcript-extractor, generated from the same source
 - Dependencies: the PEP 723 block of the entry point is copied from the script

@@ -249,7 +249,8 @@ public enum ExtractorPackagePluginDefinitionFactory {
                     kinds: registration.kinds,
                     mimeTypes: registration.mimeTypes,
                     filenameExtensions: registration.filenameExtensions,
-                    credentialRequirements: registration.credentialRequirements)
+                    credentialRequirements: registration.credentialRequirements,
+                    wantsAgentCleanup: registration.wantsAgentCleanup)
                 let reference = ExtractorReference(
                     revision: revision,
                     registrationID: registration.id)

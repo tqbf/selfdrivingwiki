@@ -192,6 +192,7 @@ final class AppProcessPluginCatalog {
         transportBridge: DaemonTransportAppBridge,
         extractionProvider: @escaping @MainActor (
             any ExtractionServices,
+            any AgentProviderServices,
             URL
         ) -> any QueueExtractionProvider,
         makeIngestionProvider: @escaping @MainActor (
@@ -212,7 +213,7 @@ final class AppProcessPluginCatalog {
             try await QueueRuntimeFactory(
                 databaseURL: queueDBURL,
                 extractionProvider: await MainActor.run {
-                    extractionProvider(extractionServices, queueDBURL)
+                    extractionProvider(extractionServices, providerServices, queueDBURL)
                 },
                 makeIngestionProvider: { store in
                     await MainActor.run { makeIngestionProvider(store, providerServices) }

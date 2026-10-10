@@ -46,7 +46,7 @@ struct AgentsSettingsView: View {
     /// summarizer stage pin. Declared here (rather than in `OperationsSettingsView`)
     /// so both views share one source of truth for the operation set.
     enum OperationTab: String, CaseIterable, Identifiable {
-        case chat, ingestion, lint, summary
+        case chat, ingestion, lint, summary, transcriptCleanup
         var id: String { rawValue }
         var label: String {
             switch self {
@@ -54,6 +54,7 @@ struct AgentsSettingsView: View {
             case .ingestion: return "Ingestion"
             case .lint:      return "Lint"
             case .summary:   return "Summary"
+            case .transcriptCleanup: return "Transcript Cleanup"
             }
         }
 
@@ -69,6 +70,8 @@ struct AgentsSettingsView: View {
                 return "Automated lint passes that review wiki pages and propose fixes."
             case .summary:
                 return "The short per-message summaries shown for each assistant reply in chat."
+            case .transcriptCleanup:
+                return "The automatic cleanup pass over newly fetched raw transcripts (YouTube auto-captions and similar). The raw transcript always stays; the cleaned copy is a new version."
             }
         }
     }

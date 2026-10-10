@@ -7,7 +7,7 @@
   "entryPoint": "bin/youtube-transcript-extractor",
   "files": [
     {
-      "digest": "7f57b86e9cf4783d29653493eca48b4cb8d95d3c7bbed49640a55a0cdbfb872e",
+      "digest": "00318962caa45628ab886a05ad22f760a1cd87619d363337a5843f7b3b911f5b",
       "path": "PROVENANCE.md"
     },
     {
@@ -33,7 +33,7 @@
     "maximumMarkdownOutputByteCount": 33554432,
     "maximumProgressEventCount": 64
   },
-  "manifestRevision": 1,
+  "manifestRevision": 5,
   "packageID": "org.selfdrivingwiki.youtube-transcript",
   "protocolRevision": 3,
   "registrations": [
@@ -45,8 +45,9 @@
       ],
       "mimeTypes": [
         "video/youtube"
-      ]
+      ],
+      "wantsAgentCleanup": true
     }
   ],
-  "version": "1.0.1"
+  "version": "1.1.0"
 }

@@ -161,6 +161,9 @@ public struct ExtractorRegistrationPresentation: Hashable, Sendable {
     /// Declared credential REQUIREMENTS (non-secret review facts; #1159).
     /// Never a value and never a reference binding.
     public let credentialRequirements: [ExtractorCredentialRequirement]
+    /// The registration's agent-cleanup claim (manifest revision 5, issue
+    /// #1379) — package data the host consults on the transcript path.
+    public let wantsAgentCleanup: Bool
 
     public init(
         displayName: String,
@@ -169,7 +172,8 @@ public struct ExtractorRegistrationPresentation: Hashable, Sendable {
         kinds: Set<ExtractorKind>,
         mimeTypes: Set<ExtractorMIMEType>,
         filenameExtensions: Set<ExtractorFileExtension>,
-        credentialRequirements: [ExtractorCredentialRequirement] = []
+        credentialRequirements: [ExtractorCredentialRequirement] = [],
+        wantsAgentCleanup: Bool = false
     ) {
         self.displayName = displayName
         self.packageName = packageName
@@ -178,6 +182,7 @@ public struct ExtractorRegistrationPresentation: Hashable, Sendable {
         self.mimeTypes = mimeTypes
         self.filenameExtensions = filenameExtensions
         self.credentialRequirements = credentialRequirements
+        self.wantsAgentCleanup = wantsAgentCleanup
     }
 }
 
@@ -464,7 +469,8 @@ public extension ExtractionBackendRegistry {
                 claims.insert(.init(
                     kind: kind,
                     mimeTypes: Set(snapshot.mimeTypes.map(\.rawValue)),
-                    filenameExtensions: Set(snapshot.filenameExtensions.map(\.rawValue))))
+                    filenameExtensions: Set(snapshot.filenameExtensions.map(\.rawValue)),
+                    wantsAgentCleanup: snapshot.wantsAgentCleanup))
             }
         }
         return RegisteredExtractionInputs(claims: claims)
@@ -534,7 +540,8 @@ public extension ExtractionBackendRegistry {
                     kinds: presentation.kinds,
                     mimeTypes: presentation.mimeTypes,
                     filenameExtensions: presentation.filenameExtensions,
-                    credentialRequirements: presentation.credentialRequirements)
+                    credentialRequirements: presentation.credentialRequirements,
+                    wantsAgentCleanup: presentation.wantsAgentCleanup)
             }
     }
 }

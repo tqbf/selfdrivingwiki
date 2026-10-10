@@ -196,7 +196,8 @@ public struct ProcessExtractionContext: Sendable {
                     kinds: registration.kinds,
                     mimeTypes: registration.mimeTypes,
                     filenameExtensions: registration.filenameExtensions,
-                    credentialRequirements: registration.credentialRequirements)
+                    credentialRequirements: registration.credentialRequirements,
+                    wantsAgentCleanup: registration.wantsAgentCleanup)
             }
         }.sorted { $0.reference < $1.reference }
     }

@@ -86,15 +86,21 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
     private var followOnQueueStore: QueueStore?
     /// Wikis this process already recovery-scanned (one-shot per wiki).
     private var recoveredWikis: Set<WikiID> = []
+    /// The injectable agent seam for the manifest-claimed transcript
+    /// cleanup (issue #1379). `nil` disables the pass (tests, or a host
+    /// without agent services) — the raw transcript stays canonical.
+    private let transcriptCleanupAgent: (any TranscriptCleanupAgent)?
 
     init(
         extractionServices: any ExtractionServices,
         sessionBox: SessionLookupBox,
-        queueDatabaseURL: URL? = nil
+        queueDatabaseURL: URL? = nil,
+        transcriptCleanupAgent: (any TranscriptCleanupAgent)? = nil
     ) {
         self.extractionServices = extractionServices
         self.sessionBox = sessionBox
         self.queueDatabaseURL = queueDatabaseURL
+        self.transcriptCleanupAgent = transcriptCleanupAgent
     }
 
     // MARK: - QueueExtractionProvider
@@ -356,11 +362,74 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                     sourceID: sourceID, content: outcome.markdown, package: producer,
                     origin: .transcript, toolVersion: nil,
                     sourceVersionID: initialVersion.id, note: nil)
+                // Issue #1379: best-effort agent cleanup when the package's
+                // registration declares the claim. The raw transcript above
+                // is already canonical; a cleanup failure is logged and the
+                // extraction item still completes successfully (no retry in
+                // v1 — the manual Transcribe button re-runs both).
+                await runTranscriptCleanupIfClaimed(
+                    store: store, sourceID: sourceID)
                 return QueueExtractionOutputReference(versionID: version.id.rawValue)
             } catch {
                 DebugLog.store("AppQueueExtractionProvider: package transcript write failed (source=\(sourceID.rawValue)): \(error)")
                 throw error
             }
+        }
+    }
+
+    /// The manifest-claimed cleanup pass (issue #1379). Runs in the SAME
+    /// extraction task, after the raw transcript is canonical. The claim is
+    /// registration data — an active claim on the source's stored MIME —
+    /// never a kind comparison. Best-effort on purpose: every failure path
+    /// logs through DebugLog and returns; the raw head stays canonical.
+    private func runTranscriptCleanupIfClaimed(
+        store: WikiStoreModel,
+        sourceID: SourceID
+    ) async {
+        guard let cleanupAgent = transcriptCleanupAgent else { return }
+        // No claim (or an ambiguous claim set) → nothing to do, silently:
+        // the claim's absence is the normal case for every other package.
+        guard let source = store.sources.first(where: { $0.id == sourceID }),
+              let mimeType = source.mimeType,
+              store.registeredExtractionInputs.wantsAgentCleanup(
+                  forNormalizedMIME: mimeType) else { return }
+        // Clean from the just-landed head so the pass always sees the exact
+        // canonical bytes.
+        let rawHead: SourceMarkdownVersion?
+        do {
+            rawHead = try store.internalStore.processedMarkdownHead(sourceID: sourceID)
+        } catch {
+            DebugLog.extraction("Transcript cleanup skipped: raw head unreadable (source=\(sourceID.rawValue)): \(error)")
+            return
+        }
+        guard let rawTranscript = rawHead?.content,
+              rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        else {
+            DebugLog.extraction("Transcript cleanup skipped: raw transcript empty (source=\(sourceID.rawValue))")
+            return
+        }
+        let cleaned: String
+        do {
+            cleaned = try await cleanupAgent.clean(rawTranscript: rawTranscript)
+        } catch {
+            DebugLog.extraction("Transcript cleanup failed; raw transcript stays canonical (source=\(sourceID.rawValue)): \(error)")
+            return
+        }
+        // An unchanged output needs no second version — the raw head is
+        // already the cleaned text.
+        guard cleaned != rawTranscript else { return }
+        do {
+            // Append semantics parent the cleaned copy to the current head
+            // (the raw transcript), which stays in history. The technique
+            // marker is how the alternatives UI surfaces the producer; the
+            // note names the pass.
+            _ = try store.internalStore.appendProcessedMarkdown(
+                sourceID: sourceID, content: cleaned,
+                origin: .transcript,
+                note: "auto transcript cleanup",
+                technique: "transcript-cleanup")
+        } catch {
+            DebugLog.extraction("Transcript cleanup append failed; raw transcript stays canonical (source=\(sourceID.rawValue)): \(error)")
         }
     }
 

@@ -181,7 +181,13 @@ public enum MessageSummarizer {
     /// One backend session, ONE turn, collected assistant text (`.result`
     /// fallback), session always cancelled. The shared core of `modelSummary`
     /// and `modelTitle`. Returns nil on start/turn failure or empty output.
-    private static func oneShotReply(
+    /// The shared one-shot session driver for single-turn model operations
+    /// (summary, title, and the transcript-cleanup transform): start a
+    /// session with the given system prompt, send ONE turn, collect the
+    /// assistant/result text, cancel the session. Internal so the
+    /// transcript-cleanup path (issue #1379) reuses the exact mechanics —
+    /// preamble stripping included — instead of duplicating them.
+    static func oneShotReply(
         systemPrompt: String,
         prompt: String,
         backend: any AgentBackend,

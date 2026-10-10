@@ -214,11 +214,13 @@ struct WikiFSApp: App {
         let processComposition = AppProcessPluginCatalog(
             containerDirectory: directory,
             transportBridge: transportBridge,
-            extractionProvider: { services, queueDBURL in
+            extractionProvider: { services, providerServices, queueDBURL in
                 AppQueueExtractionProvider(
                     extractionServices: services,
                     sessionBox: sessionBox,
-                    queueDatabaseURL: queueDBURL)
+                    queueDatabaseURL: queueDBURL,
+                    transcriptCleanupAgent: ModelTranscriptCleanupAgent(
+                        services: providerServices))
             },
             makeIngestionProvider: { store, providerServices in
                 AppQueueIngestionProvider(
@@ -238,7 +240,9 @@ struct WikiFSApp: App {
             sessionBox: sessionBox,
             queueDatabaseURL: DebugLog.trying(
                 "resolve queue database URL",
-                operation: { try DatabaseLocation.queueDatabaseURL() }))
+                operation: { try DatabaseLocation.queueDatabaseURL() }),
+            transcriptCleanupAgent: ModelTranscriptCleanupAgent(
+                services: providerServices))
         let runtimeController = processComposition.queueController
         let transportOwner = processComposition.transportOwner
         let rendererOwner = processComposition.rendererOwner

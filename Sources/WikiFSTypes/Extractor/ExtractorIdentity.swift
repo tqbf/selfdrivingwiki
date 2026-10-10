@@ -310,8 +310,18 @@ public struct ExtractorManifestRevision: RawRepresentable, Codable, Hashable, Se
     /// canonical JSON and package digest — is preserved byte-for-byte.
     /// Revision-4 canonical encoding always writes `role`.
     public static let v4 = Self(validatedRawValue: 4)
+    /// Revision 5 adds the registration-scoped `wantsAgentCleanup` claim
+    /// (issue #1379): an EXTRACTOR registration may declare that the
+    /// markdown it produces is raw enough that the host should run a
+    /// best-effort agent cleanup pass after the extraction lands. Older
+    /// revisions reject the key (unknown-field policy), so every revision
+    /// 1–4 manifest — and its canonical JSON and package digest — is
+    /// preserved byte-for-byte. Revision-5 encoding writes the key only
+    /// when the claim is set.
+    public static let v5 = Self(validatedRawValue: 5)
     public init?(rawValue: Int) {
-        guard rawValue == 1 || rawValue == 2 || rawValue == 3 || rawValue == 4 else { return nil }
+        guard rawValue == 1 || rawValue == 2 || rawValue == 3 || rawValue == 4
+            || rawValue == 5 else { return nil }
         self.rawValue = rawValue
     }
     private init(validatedRawValue: Int) { self.rawValue = validatedRawValue }
@@ -319,7 +329,7 @@ public struct ExtractorManifestRevision: RawRepresentable, Codable, Hashable, Se
     /// reader uses it to skip — not fail on — records persisted by a newer
     /// host, so a mixed-version machine degrades to "record invisible"
     /// instead of an unreadable catalog.
-    public static var maximumKnownRawValue: Int { v4.rawValue }
+    public static var maximumKnownRawValue: Int { v5.rawValue }
     public init(from decoder: any Decoder) throws {
         let rawValue = try Int(from: decoder)
         guard let value = Self(rawValue: rawValue) else { throw ExtractorValidationError.invalidRevision(rawValue) }

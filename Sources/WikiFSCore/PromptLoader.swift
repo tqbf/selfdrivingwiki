@@ -59,6 +59,7 @@ enum GeneratedPrompts {
     static let ingestExecutor = load("ingest-executor")
     static let ingestFinalizer = load("ingest-finalizer")
     static let chatTitleTask = load("chat-title-task")
+    static let transcriptCleanup = load("transcript-cleanup")
 }
 
 /// Public prompt text for callers outside WikiFSCore (the daemon's
@@ -67,4 +68,8 @@ public enum PublicPrompts {
     /// System prompt for the one-shot chat-title generation session
     /// (`prompts/chat-title-task.md`).
     public static let chatTitleTask = GeneratedPrompts.chatTitleTask
+    /// System prompt for the one-shot transcript-cleanup session
+    /// (`prompts/transcript-cleanup.md`, issue #1379). Runs on the
+    /// dedicated transcript-cleanup stage after a raw transcript lands.
+    public static let transcriptCleanup = GeneratedPrompts.transcriptCleanup
 }

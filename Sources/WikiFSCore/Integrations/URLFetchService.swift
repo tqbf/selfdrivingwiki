@@ -47,6 +47,19 @@ public struct URLFetchService {
         public let byteSize: Int
         /// The detected kind, for a human-readable confirmation.
         public let kind: Kind
+        /// Whether an installed extractor registration claims this source's
+        /// MIME type for transcript extraction (issue #1379). The store
+        /// model has no queue dependency, so the UI layer that called
+        /// `addURL` enqueues the standard `.extraction` queue item — the
+        /// same request the manual Transcribe button builds — when this is
+        /// `true`. Derived from registration claims, never a host kind
+        /// comparison.
+        public let transcriptExtractionWanted: Bool
+        /// The created source, when the producer knows it. `nil` for the
+        /// raw `URLFetchService.fetch` path (no store model there). The UI
+        /// layer uses it to target the auto-transcript extraction enqueue
+        /// (issue #1379).
+        public let sourceID: SourceID?
 
         public enum Kind: Sendable, Equatable {
             case html           // verbatim HTML (extracted markdown stored as a processed version)
@@ -60,10 +73,16 @@ public struct URLFetchService {
             case videoTranscript // YouTube embed + extracted caption transcript → markdown
         }
 
-        public init(filename: String, byteSize: Int, kind: Kind) {
+        public init(
+            filename: String, byteSize: Int, kind: Kind,
+            transcriptExtractionWanted: Bool = false,
+            sourceID: SourceID? = nil
+        ) {
             self.filename = filename
             self.byteSize = byteSize
             self.kind = kind
+            self.transcriptExtractionWanted = transcriptExtractionWanted
+            self.sourceID = sourceID
         }
     }
 

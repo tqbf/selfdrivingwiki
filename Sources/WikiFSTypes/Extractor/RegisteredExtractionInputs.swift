@@ -23,15 +23,22 @@ public struct RegisteredExtractionInputs: Hashable, Sendable {
         public let kind: ExtractorKind
         public let mimeTypes: Set<String>
         public let filenameExtensions: Set<String>
+        /// The registration's agent-cleanup claim (manifest revision 5,
+        /// issue #1379): the markdown this registration produces wants a
+        /// best-effort agent cleanup pass after it lands. Package data,
+        /// never host policy.
+        public let wantsAgentCleanup: Bool
 
         public init(
             kind: ExtractorKind,
             mimeTypes: Set<String>,
-            filenameExtensions: Set<String>
+            filenameExtensions: Set<String>,
+            wantsAgentCleanup: Bool = false
         ) {
             self.kind = kind
             self.mimeTypes = Set(mimeTypes.map { $0.lowercased() })
             self.filenameExtensions = Set(filenameExtensions.map { $0.lowercased() })
+            self.wantsAgentCleanup = wantsAgentCleanup
         }
 
         fileprivate var preferredMIME: String? { mimeTypes.sorted().first }
@@ -81,6 +88,17 @@ public struct RegisteredExtractionInputs: Hashable, Sendable {
         }.map(\.kind))
         guard kinds.count == 1, let kind = kinds.first else { return nil }
         return RegisteredExtension(kind: kind, ext: normalized)
+    }
+
+    /// Whether the registrations claiming this MIME declare the
+    /// agent-cleanup claim (issue #1379). Fail-closed like every other
+    /// registration ambiguity: `false` when no claim matches or when the
+    /// matching claims disagree.
+    public func wantsAgentCleanup(forNormalizedMIME mime: String) -> Bool {
+        let normalized = mime.lowercased()
+        let matching = claims.filter { $0.mimeTypes.contains(normalized) }
+        guard matching.isEmpty == false else { return false }
+        return matching.allSatisfy(\.wantsAgentCleanup)
     }
 
     /// Promotes a generic ZIP detection when one active registration claim

@@ -120,6 +120,20 @@ struct OperationsSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        case .transcriptCleanup:
+            Section {
+                StageProviderModelPicker(
+                    stageKey: "transcriptCleanup",
+                    config: $config,
+                    containerDirectory: containerDirectory,
+                    label: "Transcript Cleanup")
+            } header: {
+                Text("Transcript Cleanup Model")
+            } footer: {
+                Text("Provider and model for the automatic cleanup pass over newly fetched raw transcripts. Cleanup is best-effort: when it fails, the raw transcript stays the source's current version. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

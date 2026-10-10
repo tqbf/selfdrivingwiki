@@ -211,10 +211,11 @@ struct ReviewedExtractorPackageTests {
         }
     }
 
-    /// The reviewed YouTube transcript package: manifest revision 1 with
-    /// protocol revision 3, one `youtube-transcript` registration over the
-    /// synthetic `video/youtube` MIME, and the `network` capability only.
-    /// Media download and speech-to-text are not registered.
+    /// The reviewed YouTube transcript package: manifest revision 5 (the
+    /// `wantsAgentCleanup` claim, issue #1379) with protocol revision 3, one
+    /// `youtube-transcript` registration over the synthetic `video/youtube`
+    /// MIME, and the `network` capability only. Media download and
+    /// speech-to-text are not registered.
     @Test func youtubeTranscriptRevisionMatchesGolden() throws {
         let output = try validate("YouTubeTranscript")
 
@@ -223,11 +224,14 @@ struct ReviewedExtractorPackageTests {
         #expect(output.registrationIDs == ["captions"])
 
         let manifest = try manifest("YouTubeTranscript")
-        #expect(manifest.manifestRevision == .v1)
+        #expect(manifest.manifestRevision == .v5)
         let registration = try #require(manifest.registrations.first)
         #expect(registration.kinds == [.youtubeTranscript])
         #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "video/youtube")])
         #expect(registration.credentialRequirements.isEmpty)
+        // Issue #1379: the raw auto-captions want the host's best-effort
+        // agent cleanup pass after they land.
+        #expect(registration.wantsAgentCleanup)
         // Network for the caption fetch; shared-runtime-cache keeps uv's
         // CPython install and wheel cache warm across operations.
         #expect(manifest.capabilities == [.network, .sharedRuntimeCache])
@@ -242,7 +246,7 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "23e987d6ee3207ff89fb506a23c5ccef8e2693410dd14bc7f8e47e4f8acd7679")
+            == "f2a4ae9a91f8f389c446e1dcd85f388ac6b2492c4f2552c82c1ee9fedcab9b59")
     }
 
     /// The reviewed YouTube package never claims model download: it fetches

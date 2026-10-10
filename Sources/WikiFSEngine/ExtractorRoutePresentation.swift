@@ -27,6 +27,9 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
     public let filenameExtensions: Set<ExtractorFileExtension>
     /// Declared credential requirements (non-secret declarations; #1159).
     public let credentialRequirements: [ExtractorCredentialRequirement]
+    /// The registration's agent-cleanup claim (manifest revision 5, issue
+    /// #1379) — package data the host consults on the transcript path.
+    public let wantsAgentCleanup: Bool
 
     public init(
         reference: ExtractorReference,
@@ -37,7 +40,8 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
         kinds: Set<ExtractorKind>,
         mimeTypes: Set<ExtractorMIMEType>,
         filenameExtensions: Set<ExtractorFileExtension>,
-        credentialRequirements: [ExtractorCredentialRequirement] = []
+        credentialRequirements: [ExtractorCredentialRequirement] = [],
+        wantsAgentCleanup: Bool = false
     ) {
         self.reference = reference
         self.sourceCategory = sourceCategory
@@ -48,6 +52,7 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
         self.mimeTypes = mimeTypes
         self.filenameExtensions = filenameExtensions
         self.credentialRequirements = credentialRequirements
+        self.wantsAgentCleanup = wantsAgentCleanup
     }
 }
 
