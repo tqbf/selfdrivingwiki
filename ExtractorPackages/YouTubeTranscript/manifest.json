@@ -7,15 +7,15 @@
   "entryPoint": "bin/youtube-transcript-extractor",
   "files": [
     {
-      "digest": "7f57b86e9cf4783d29653493eca48b4cb8d95d3c7bbed49640a55a0cdbfb872e",
+      "digest": "2c7c5184f5bbfa6e90cfb53da2174891862832faca761bd2daf72b5f8c8d4c5c",
       "path": "PROVENANCE.md"
     },
     {
-      "digest": "d35ba748f41f1d480644d852fc00fb5e0a1f4f6aa554f8cf47c37782f601393f",
+      "digest": "5767f686272b0aff350d63c2def1de66938715ca9d68e64f1dfef2af4d1251d6",
       "path": "bin/youtube-transcript"
     },
     {
-      "digest": "a8fa5097be73d1930c2b50911acbad26a886f424a5210e5632d129b4a5340a54",
+      "digest": "57b5d1c60165e05b5f9909b9448a4fd00d311d070cbcb3a9929de6fd3acdacad",
       "path": "bin/youtube-transcript-extractor"
     }
   ],
@@ -33,7 +33,7 @@
     "maximumMarkdownOutputByteCount": 33554432,
     "maximumProgressEventCount": 64
   },
-  "manifestRevision": 1,
+  "manifestRevision": 5,
   "packageID": "org.selfdrivingwiki.youtube-transcript",
   "protocolRevision": 3,
   "registrations": [
@@ -45,8 +45,9 @@
       ],
       "mimeTypes": [
         "video/youtube"
-      ]
+      ],
+      "wantsAgentCleanup": true
     }
   ],
-  "version": "1.0.1"
+  "version": "1.2.0"
 }

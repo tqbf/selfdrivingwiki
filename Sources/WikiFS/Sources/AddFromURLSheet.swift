@@ -1,5 +1,6 @@
 import SwiftUI
 import WikiFSCore
+import WikiFSEngine
 
 /// A small, native sheet to ingest a resource by URL: paste a URL, hit Fetch, and
 /// on success the new file appears under Files (live, via the existing rebuild).
@@ -24,10 +25,32 @@ struct AddFromURLSheet: View {
     /// context-menu item so the user lands on a ready-to-Fetch sheet. Defaults to
     /// empty for the toolbar / empty-state buttons. Seeding `_urlText` here (rather
     /// than an `.onAppear` sync) means the field is populated on first paint.
-    init(store: WikiStoreModel, initialURL: String = "") {
+    /// `queueEngine` is the enqueue seam for the auto-transcript extraction
+    /// (issue #1379): when the add outcome reports the claimed route is in the
+    /// bundled import-transcription policy, the sheet enqueues the standard
+    /// `.extraction` queue item — the same request the manual Transcribe button
+    /// builds. Optional so previews/tests can omit it.
+    /// `urlFetcher` is a test-infrastructure seam: hosted scenarios inject a
+    /// fake fetcher so the Fetch action runs offline. `nil` uses the
+    /// production fetcher.
+    init(
+        store: WikiStoreModel,
+        initialURL: String = "",
+        queueEngine: (any QueueEngineClient)? = nil,
+        urlFetcher: (any URLFetchService.URLResourceFetcher)? = nil
+    ) {
         self.store = store
         self._urlText = State(initialValue: initialURL)
+        self.queueEngine = queueEngine
+        self.urlFetcher = urlFetcher
     }
+
+    /// The enqueue seam for the auto-transcript extraction (issue #1379).
+    /// `nil` in previews/tests — the fetch still succeeds, only the
+    /// auto-enqueue is absent.
+    private let queueEngine: (any QueueEngineClient)?
+    /// The offline seam for hosted tests. `nil` in production.
+    private let urlFetcher: (any URLFetchService.URLResourceFetcher)?
 
     /// The fetch lifecycle. A small closed enum so the view derives every piece of
     /// UI from one value (§3.1) rather than juggling several bools.
@@ -37,6 +60,16 @@ struct AddFromURLSheet: View {
         case failed(String)
         case duplicate(SourceSummary)
     }
+
+#if DEBUG
+    /// Test-infrastructure seam: the Fetch button's exact action body.
+    /// Hosted scenarios exercise this seam because SwiftUI's unbridged
+    /// controls expose no AppKit button to click through; the seam runs the
+    /// same code path as the user's click on the mounted view.
+    func fetchActionForTesting() {
+        fetch()
+    }
+#endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
@@ -178,7 +211,34 @@ struct AddFromURLSheet: View {
         phase = .fetching
         Task {
             do {
-                _ = try await store.addURL(input, allowDuplicateURL: allowDuplicateURL)
+                let outcome = try await store.addURL(
+                    input,
+                    fetcher: urlFetcher ?? URLSessionFetcher(),
+                    allowDuplicateURL: allowDuplicateURL)
+                // Issue #1379, revised: auto-transcribe only for routes the
+                // bundled import-transcription policy covers AND an active
+                // registration claims (the store model's
+                // `transcriptExtractionWanted` signal encodes both gates).
+                // Caption routes are covered; speech-to-text never is — it
+                // runs only on an explicit user action. Same `.extraction`
+                // queue item the manual Transcribe button enqueues, so the
+                // existing Activity/row indicators track it unchanged.
+                // Best-effort: an enqueue failure is logged, never fails
+                // the add — the Transcribe button stays as the manual
+                // retry.
+                if outcome.transcriptExtractionWanted,
+                   let sourceID = outcome.sourceID,
+                   let queueEngine {
+                    let request = QueueItemRequest(
+                        queue: .extraction,
+                        wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
+                        payload: QueueItemPayload(sourceIDs: [sourceID]))
+                    do {
+                        _ = try await queueEngine.enqueue(request)
+                    } catch {
+                        DebugLog.extraction("AddFromURLSheet: auto-transcript enqueue failed (\(sourceID.rawValue)): \(error)")
+                    }
+                }
                 dismiss()  // success: the new file is already in store.sources
             } catch WikiStoreError.duplicateURL(let existing) {
                 phase = .duplicate(existing)

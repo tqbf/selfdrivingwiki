@@ -325,7 +325,7 @@ class TestSuccess:
         terminal = _terminal(_frames(out))
         metadata = terminal["payload"]["metadata"]
         assert metadata["toolName"] == "youtube-transcript"
-        assert metadata["toolVersion"] == "1.0.0"
+        assert metadata["toolVersion"] == "1.2.0"
         assert metadata["language"] == "es"
         assert metadata["transcriptGenerated"] is True
 
@@ -356,14 +356,17 @@ class TestSuccess:
         assert metadata["language"] == "fr"
         assert metadata["transcriptGenerated"] is True
 
-    def test_empty_transcript_reports_no_captions(self, mocker, mock_yta, tmp_path):
+    def test_empty_transcript_feeds_the_fallback(self, mocker, mock_yta, mock_ytdlp, tmp_path):
         # A fetch with zero segments falls through to the track list; when
-        # that finds nothing either, the video reports as caption-less.
+        # that finds nothing either, the eligible "no track" failure hands
+        # the request to the yt-dlp fallback (mocked here to its fixed
+        # failure) and no output is written.
         code, out, _ = _run(
             _request(), mocker, mock_yta, fetched=MockFetchedTranscript("en", segments=[])
         )
         assert code == 0
-        assert _failure_cause(out) == "unsupported-input"
+        assert _failure_cause(out) == "extraction-failure"
+        assert mock_ytdlp.call_count == 1
         assert not (tmp_path / "output/result.md").exists()
 
     def test_whitespace_only_captions_produce_no_text(self, mocker, mock_yta, tmp_path):
@@ -381,20 +384,31 @@ class TestSuccess:
 
 class TestFailureMapping:
     @pytest.mark.parametrize(
-        ("exception", "expected_cause"),
+        ("exception", "expected_cause", "expected_fallback_calls"),
         [
-            (NoTranscriptFound("t"), "unsupported-input"),
-            (TranscriptsDisabled("t"), "unsupported-input"),
-            (VideoUnavailable("t"), "unsupported-input"),
-            (RequestBlocked("t"), "extraction-failure"),
-            (IpBlocked("t"), "extraction-failure"),
-            (YouTubeRequestFailed("t"), "extraction-failure"),
-            (YouTubeDataUnparsable("t"), "extraction-failure"),
-            (RuntimeError("SECRET upstream detail"), "extraction-failure"),
+            # Eligible primary failures hand the request to the (mocked)
+            # fallback, whose fixed failure becomes the terminal frame.
+            (NoTranscriptFound("t"), "extraction-failure", 1),
+            (TranscriptsDisabled("t"), "extraction-failure", 1),
+            (YouTubeRequestFailed("t"), "extraction-failure", 1),
+            (YouTubeDataUnparsable("t"), "extraction-failure", 1),
+            (RuntimeError("SECRET upstream detail"), "extraction-failure", 1),
+            # Ineligible failures never invoke the fallback: the primary
+            # mapping is the terminal frame.
+            (VideoUnavailable("t"), "unsupported-input", 0),
+            (RequestBlocked("t"), "extraction-failure", 0),
+            (IpBlocked("t"), "extraction-failure", 0),
         ],
     )
     def test_library_failures_map_to_typed_causes(
-        self, mocker, mock_yta, tmp_path, exception, expected_cause
+        self,
+        mocker,
+        mock_yta,
+        mock_ytdlp,
+        tmp_path,
+        exception,
+        expected_cause,
+        expected_fallback_calls,
     ):
         mock_yta.YouTubeTranscriptApi.return_value.fetch.side_effect = exception
         mock_yta.YouTubeTranscriptApi.return_value.list.side_effect = exception
@@ -403,17 +417,28 @@ class TestFailureMapping:
 
         assert code == 0
         assert _failure_cause(out) == expected_cause
+        assert mock_ytdlp.call_count == expected_fallback_calls
         # Failures write no transcript version and no partial output.
         assert not (tmp_path / "output/result.md").exists()
         assert not (tmp_path / "output/result.md.partial").exists()
 
-    def test_generic_failure_discards_upstream_text(self, mocker, mock_yta):
+    def test_generic_failure_discards_upstream_text(self, mocker, mock_yta, mock_ytdlp):
+        from youtube_transcript import FetchedCaptions  # noqa: PLC0415
+
         mock_yta.YouTubeTranscriptApi.return_value.fetch.side_effect = RuntimeError(
             "SECRET-UPSTREAM-TEXT"
         )
+        mock_ytdlp.side_effect = None
+        mock_ytdlp.return_value = FetchedCaptions(
+            segments=build_mock_segments(),
+            language="en",
+            is_generated=False,
+            tool_metadata={"toolName": "yt-dlp", "toolVersion": "2026.08.19"},
+        )
         code, out, err = _run(_request(), mocker, mock_yta)
         terminal = _terminal(_frames(out))
-        assert terminal["payload"]["message"] == "caption retrieval failed"
+        assert terminal["kind"] == "result"
+        assert terminal["payload"]["metadata"]["toolName"] == "yt-dlp"
         assert "SECRET-UPSTREAM-TEXT" not in out
         assert "SECRET-UPSTREAM-TEXT" not in err
 
@@ -667,14 +692,22 @@ class TestManifestParity:
         manifest = json.loads(self.MANIFEST_PATH.read_text(encoding="utf-8"))
 
         assert manifest["packageID"] == "org.selfdrivingwiki.youtube-transcript"
-        assert manifest["version"] == "1.0.0"
+        assert manifest["version"] == "1.2.0"
         assert manifest["protocolRevision"] == _yt.PROTOCOL_REVISION == 3
         assert manifest["capabilities"] == ["network", "shared-runtime-cache"]
+        # The result frame's primary-route tool provenance and the manifest
+        # version are one release identity.
+        assert _yt._TOOL_METADATA["toolVersion"] == manifest["version"]
+        assert _yt._TOOL_METADATA["toolName"] == "youtube-transcript"
+        # The pinned fallback release is named in the package's own
+        # provenance metadata constant.
+        assert _yt._YTDLP_TOOL_METADATA["toolVersion"] == _yt._YTDLP_RELEASE
 
         registration = manifest["registrations"][0]
         assert registration["id"] == "captions"
         assert registration["kinds"] == ["youtube-transcript"]
         assert registration["mimeTypes"] == ["video/youtube"]
+        assert registration["wantsAgentCleanup"] is True
         assert manifest["launch"] == {
             "mode": "runtime",
             "command": "uv",
@@ -687,6 +720,16 @@ class TestManifestParity:
         assert limits["maximumProgressEventCount"] == _yt._MAX_PROGRESS_FRAMES
         # Package-owned bounds tighten, never loosen, the manifest policy.
         assert 0 < _yt._OUTPUT_RESERVE_BYTES < _yt._MAX_OUTPUT_BYTES
+        assert _yt._MAX_CAPTION_PAYLOAD_BYTES >= _yt._MAX_OUTPUT_BYTES
         budget = _yt._MAX_OUTPUT_BYTES - _yt._OUTPUT_RESERVE_BYTES
         assert budget >= _yt._MAX_SEGMENT_TEXT_BYTES
         assert _yt._MAX_SEGMENT_COUNT >= 1
+
+    def test_pep723_block_pins_the_fallback_release(self) -> None:
+        """The PEP 723 block and the provenance metadata name one release."""
+        script_path = Path(__file__).resolve().parent.parent / "youtube-transcript"
+        text = script_path.read_text(encoding="utf-8")
+        block = text.split("# /// script", 1)[1].split("# ///", 1)[0]
+        assert f'"yt-dlp=={_yt._YTDLP_RELEASE}"' in block
+        assert '"yt-dlp-ejs==0.8.0"' in block
+        assert '"youtube-transcript-api>=1.0"' in block

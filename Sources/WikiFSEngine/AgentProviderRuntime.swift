@@ -10,8 +10,15 @@ public struct AgentProviderDescriptor: Sendable, Equatable, Hashable, CustomStri
     public var description: String { "AgentProviderDescriptor(id: \(id.rawValue), label: \(label))" }
 }
 
-public enum AgentProviderOperationKind: Sendable, Equatable { case interactive, ingest, lint }
-public enum AgentProviderStage: Sendable, Equatable, Hashable, CaseIterable { case chat, planner, executor, finalizer, summarizer, lint }
+public enum AgentProviderOperationKind: Sendable, Equatable { case interactive, ingest, lint, transcriptCleanup }
+public enum AgentProviderStage: Sendable, Equatable, Hashable, CaseIterable {
+    case chat, planner, executor, finalizer, summarizer, lint
+    /// The source-transcript cleanup lane (issue #1379): a one-shot
+    /// single-turn model call that rewrites a raw extracted transcript. Its
+    /// own stage — never the chat summarizer's — so the cleanup model is
+    /// independently configurable and provenance names the cleanup agent.
+    case transcriptCleanup
+}
 
 public struct AgentOperationPolicy: Sendable, Equatable {
     public let kind: AgentProviderOperationKind
@@ -178,8 +185,23 @@ public protocol AgentProviderServices: Sendable {
     func preparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage) async throws -> AgentOperationPreparation
     func fallbackPreparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage, fallbackProviderID: ProviderID) async throws -> AgentOperationPreparation
     func prepareSummarization() async throws -> AgentProviderSummaryPreparation
+    /// The transcript-cleanup stage's preparation (issue #1379) — the
+    /// source-cleanup lane's own stage, never the chat summarizer's. Throws
+    /// `.unavailable`/`.noProvider` when no provider is enabled.
+    func prepareTranscriptCleanup() async throws -> AgentOperationPreparation
     func discoverCatalog(for provider: AgentProvider) async throws -> ACPProviderCatalogObservation
     func modelSummary(text: String, preparation: AgentOperationPreparation) async throws -> String?
+    /// One-shot single-pass model transform with a CALLER-SUPPLIED system
+    /// prompt (issue #1379 transcript cleanup): one document in, one
+    /// transformed document out — no tools, no wiki writes, no ingestion
+    /// system prompt. Runs on the transcript-cleanup stage. Returns nil when
+    /// the model produced nothing usable; throws when the preparation is not
+    /// a transcript-cleanup token.
+    func modelTransform(
+        text: String,
+        systemPrompt: String,
+        preparation: AgentOperationPreparation
+    ) async throws -> String?
     /// Generate a conversation title from the opening question and the
     /// assistant's first reply, through the summarizer-stage preparation.
     /// Throws `.unavailable` when no summarizer model is configured; returns
@@ -208,6 +230,21 @@ public extension AgentProviderServices {
     func modelTitle(
         question: String,
         answer: String?,
+        preparation: AgentOperationPreparation
+    ) async throws -> String? {
+        throw AgentProviderRuntimeError.unavailable
+    }
+
+    /// Defaults for conformers that carry no transcript-cleanup lane
+    /// (issue #1379): the operation is unavailable rather than silently
+    /// skipped, so the caller logs the failure instead of guessing.
+    func prepareTranscriptCleanup() async throws -> AgentOperationPreparation {
+        throw AgentProviderRuntimeError.unavailable
+    }
+
+    func modelTransform(
+        text: String,
+        systemPrompt: String,
         preparation: AgentOperationPreparation
     ) async throws -> String? {
         throw AgentProviderRuntimeError.unavailable
@@ -323,6 +360,10 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
         try await installed.prepareSummarization()
     }
 
+    public func prepareTranscriptCleanup() async throws -> AgentOperationPreparation {
+        try await installed.prepareTranscriptCleanup()
+    }
+
     public func discoverCatalog(
         for provider: AgentProvider
     ) async throws -> ACPProviderCatalogObservation {
@@ -334,6 +375,15 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
         preparation: AgentOperationPreparation
     ) async throws -> String? {
         try await installed.modelSummary(text: text, preparation: preparation)
+    }
+
+    public func modelTransform(
+        text: String,
+        systemPrompt: String,
+        preparation: AgentOperationPreparation
+    ) async throws -> String? {
+        try await installed.modelTransform(
+            text: text, systemPrompt: systemPrompt, preparation: preparation)
     }
 
     public func modelTitle(
@@ -805,6 +855,66 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         return .model(try makePreparation(snapshotID: snapshotID, stage: .summarizer, providerID: nil))
     }
 
+    /// The transcript-cleanup stage's preparation (issue #1379): a
+    /// dedicated, independently-pinnable one-shot lane for source cleanup —
+    /// `stageProviderIds["transcriptCleanup"]` when set, otherwise the
+    /// global default provider chain. Same strict one-shot shape as
+    /// `prepareSummarization` (own scratch world, bypass permission policy,
+    /// lease gate, login-shell PATH), but NO mode switch: cleanup is always
+    /// a model call, and an unconfigured runtime fails closed below when no
+    /// provider is enabled at all. Throws before any scratch allocation
+    /// when no provider is enabled.
+    public func prepareTranscriptCleanup() async throws -> AgentOperationPreparation {
+        try requireAvailable()
+        let configuration = try readConfiguration()
+        guard configuration.enabledProviders.isEmpty == false else {
+            throw AgentProviderRuntimeError.noProvider
+        }
+        // Issue #1276: allocate ONE dedicated scratch world for this
+        // snapshot, mirroring the summarizer lane — the cleanup spawn is the
+        // same fenceable one-shot shape (no file tools, read-only sandbox).
+        let scratch = try LLMSandboxScratch.make(
+            under: summarizerScratchParent,
+            namePrefix: "transcript-cleanup",
+            strict: Self.strictSummarizerActive)
+        // Same login-shell PATH resolution as the summarizer lane: this
+        // spawn shape builds its own profile, so nothing else supplies the
+        // child's PATH.
+        let loginShellPATH = await resolveLoginShellPATH()
+        let snapshotID = UUID()
+        let policy = AgentOperationPolicy(
+            kind: .transcriptCleanup,
+            permissionPolicy: .bypass,
+            permissionBudget: nil,
+            turnCeiling: TurnLivenessPolicy.ceiling(for: .chat),
+            idleStallTimeout: TurnLivenessPolicy.idleStallTimeout(for: .chat))
+        // A failed preparation must leak no temp directory (same Review HIGH
+        // contract as prepareSummarization).
+        let snapshot: Snapshot
+        do {
+            snapshot = try await makeSnapshot(
+                configuration: configuration,
+                operation: .transcriptCleanup,
+                providerOverride: nil,
+                modelOverride: nil,
+                thinkingOverride: nil,
+                stages: [.transcriptCleanup],
+                policyOverride: policy,
+                summarizerScratch: scratch,
+                summarizerLoginShellPATH: loginShellPATH)
+        } catch {
+            scratch.remove()
+            throw error
+        }
+        guard !disposed else {
+            snapshot.summarizerPackageRunnerTemp?.remove()
+            scratch.remove()
+            throw AgentProviderRuntimeError.unavailable
+        }
+        snapshots[snapshotID] = snapshot
+        return try makePreparation(snapshotID: snapshotID, stage: .transcriptCleanup, providerID: nil, isOriginal: true)
+    }
+
     public func discoverCatalog(
         for provider: AgentProvider
     ) async throws -> ACPProviderCatalogObservation {
@@ -886,6 +996,44 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 profile: prepared.profile)
             await gate.release()
             return title
+        } catch {
+            await gate.release()
+            throw error
+        }
+    }
+
+    /// One-shot single-pass transform with a caller-supplied system prompt
+    /// (issue #1379 transcript cleanup). Runs on the transcript-cleanup
+    /// stage — its own lane, never the chat summarizer's — with the same
+    /// lease protocol (acquire before backend setup, release on all paths)
+    /// and one-shot session mechanics as `modelSummary`. Only the stage, the
+    /// system prompt, and the turn payload differ (the raw transcript; the
+    /// cleanup prompt file is the system prompt, never the wiki-writing
+    /// ingestion prompt).
+    public func modelTransform(
+        text: String,
+        systemPrompt: String,
+        preparation: AgentOperationPreparation
+    ) async throws -> String? {
+        guard preparation.selection.stage == .transcriptCleanup else {
+            throw AgentProviderRuntimeError.stageMismatch
+        }
+        let gate = try summarizerLease(for: preparation.selection.token)
+        guard await gate.acquire() else {
+            throw AgentProviderRuntimeError.invalidToken
+        }
+        do {
+            let prepared = try backend(
+                from: preparation.selection.token,
+                stage: .transcriptCleanup,
+                cache: true)
+            let transformed = await MessageSummarizer.oneShotReply(
+                systemPrompt: systemPrompt,
+                prompt: text,
+                backend: prepared.backend,
+                profile: prepared.profile)
+            await gate.release()
+            return transformed
         } catch {
             await gate.release()
             throw error
@@ -1025,10 +1173,13 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         // wiki — its profile MUST carry the snapshot's scratch directory and
         // the matching read-only sandbox invocation. A snapshot without a
         // scratch world fails closed here (`unavailable`) instead of spawning
-        // unfenced. Other stages stay plain: the launcher layers its wiki-aware
-        // run context + write sandbox onto those spawns itself.
+        // unfenced. The transcript-cleanup stage (issue #1379) is the same
+        // shape: one-shot, read-only, no wiki — it shares the snapshot's
+        // one-shot scratch fields. Other stages stay plain: the launcher
+        // layers its wiki-aware run context + write sandbox onto those
+        // spawns itself.
         let profile: BackendProfile
-        if stage == .summarizer {
+        if stage == .summarizer || stage == .transcriptCleanup {
             guard let scratch = snapshot.summarizerScratch else {
                 throw AgentProviderRuntimeError.unavailable
             }
@@ -1207,14 +1358,44 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
 }
 
 private extension AgentProviderOperationKind {
-    var permissionKind: PermissionOperationKind { switch self { case .interactive: .chat; case .ingest: .ingest; case .lint: .lint } }
-    var primaryStage: AgentProviderStage { switch self { case .interactive: .chat; case .ingest: .planner; case .lint: .lint } }
+    var permissionKind: PermissionOperationKind {
+        switch self {
+        case .interactive: .chat
+        case .ingest: .ingest
+        case .lint: .lint
+        // No permission prompts: the cleanup pass writes nothing (its one
+        // output lands through the extraction provider, not the agent), so
+        // it shares the lint permission class.
+        case .transcriptCleanup: .lint
+        }
+    }
+    var primaryStage: AgentProviderStage {
+        switch self {
+        case .interactive: .chat
+        case .ingest: .planner
+        case .lint: .lint
+        case .transcriptCleanup: .transcriptCleanup
+        }
+    }
     var stages: [AgentProviderStage] {
         switch self {
         case .interactive: [.chat]
         case .ingest: [.planner, .executor, .finalizer]
         case .lint: [.lint]
+        case .transcriptCleanup: [.transcriptCleanup]
         }
     }
 }
-private extension AgentProviderStage { var configurationKey: String { switch self { case .chat: "chat"; case .planner: "planner"; case .executor: "executor"; case .finalizer: "finalizer"; case .summarizer: "summarizer"; case .lint: "lint" } } }
+private extension AgentProviderStage {
+    var configurationKey: String {
+        switch self {
+        case .chat: "chat"
+        case .planner: "planner"
+        case .executor: "executor"
+        case .finalizer: "finalizer"
+        case .summarizer: "summarizer"
+        case .lint: "lint"
+        case .transcriptCleanup: "transcriptCleanup"
+        }
+    }
+}

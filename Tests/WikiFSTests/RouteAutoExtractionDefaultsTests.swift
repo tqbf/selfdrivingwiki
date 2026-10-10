@@ -41,5 +41,67 @@ struct RouteAutoExtractionDefaultsTests {
 
         #expect(defaults.routeAutoExtraction.isEmpty)
         #expect(defaults.autoExtractKinds.isEmpty)
+        #expect(defaults.routeImportTranscription.isEmpty)
+    }
+
+    // MARK: - Import-transcription policy (issue #1379, revised)
+
+    @Test("bundled policy covers the caption routes INCLUDING YouTube")
+    func bundledImportTranscriptionPolicy() throws {
+        let bundled = ExtractorRouteDefaults.bundled
+
+        let rssPodcast = ExtractorRouteID(
+            kind: .podcastTranscript,
+            mimeType: try ExtractorMIMEType(validating: "audio/podcast"))
+        let applePodcast = ExtractorRouteID(
+            kind: .applePodcastTranscript,
+            mimeType: try ExtractorMIMEType(validating: "audio/apple-podcast"))
+        let youtube = ExtractorRouteID(
+            kind: .youtubeTranscript,
+            mimeType: try ExtractorMIMEType(validating: "video/youtube"))
+
+        #expect(bundled.importTranscriptionWanted(for: rssPodcast))
+        #expect(bundled.importTranscriptionWanted(for: applePodcast))
+        // Caption-based transcription is cheap and covered at import.
+        #expect(bundled.importTranscriptionWanted(for: youtube))
+        // Conversion policy and transcription policy stay separate tables.
+        #expect(bundled.routeAutoExtraction.contains {
+            $0.route == .canonicalHTML
+        })
+    }
+
+    @Test("a policy without the import-transcription table decodes empty")
+    func missingImportTranscriptionTableDecodesEmpty() throws {
+        let json = """
+        {"routeExtractors": [], "routeAutoExtraction": [
+            {"route": {"kind": "html", "mimeType": "text/html"}}
+        ]}
+        """
+        let defaults = try JSONDecoder().decode(
+            ExtractorRouteDefaults.self, from: Data(json.utf8))
+
+        #expect(defaults.routeImportTranscription.isEmpty)
+        #expect(defaults.importTranscriptionWanted(for: .canonicalHTML) == false)
+    }
+
+    @Test("import-transcription records round-trip through their route identity")
+    func importTranscriptionRecordsRoundTrip() throws {
+        // ExtractorRouteDefaults is persist-decodable only, so the record
+        // round-trips through the same JSON shape the policy file carries.
+        let json = """
+        {"routeExtractors": [], "routeImportTranscription": [
+            {"route": {"kind": "html", "mimeType": "text/html"}}
+        ]}
+        """
+        let decoded = try JSONDecoder().decode(
+            ExtractorRouteDefaults.self, from: Data(json.utf8))
+
+        #expect(decoded.routeImportTranscription.count == 1)
+        #expect(decoded.routeImportTranscription.first?.route == .canonicalHTML)
+        #expect(decoded.importTranscriptionWanted(for: .canonicalHTML))
+        #expect(decoded.importTranscriptionWanted(
+            for: ExtractorRouteID(
+                kind: .youtubeTranscript,
+                mimeType: try ExtractorMIMEType(validating: "video/youtube"))) == false)
     }
 }

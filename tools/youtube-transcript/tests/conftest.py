@@ -132,3 +132,37 @@ def mock_yta() -> Any:
     yta.YouTubeDataUnparsable = YouTubeDataUnparsable
     yta.YouTubeTranscriptApi = MagicMock()
     return yta
+
+
+# ── Mock yt-dlp fallback ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def mock_ytdlp(mocker: Any) -> Any:
+    """A mock for the script's yt-dlp fallback entry point.
+
+    The real fallback needs the pinned PEP 723 environment (the dev test
+    environment does not install yt-dlp), so in-process tests patch
+    `_fetch_captions_via_ytdlp` itself. The default side effect is the
+    fixed failure the real fallback emits when it cannot retrieve
+    captions; a test sets `return_value` to simulate fallback success.
+    Eligibility is observable through `call_count`.
+    """
+    from youtube_transcript import ProtocolFailure  # noqa: PLC0415
+
+    fallback = mocker.patch.object(
+        _yt_module(),
+        "_fetch_captions_via_ytdlp",
+        side_effect=ProtocolFailure(
+            "extraction-failure",
+            "the caption fallback could not retrieve captions",
+        ),
+    )
+    return fallback
+
+
+def _yt_module() -> Any:
+    """The already-imported youtube-transcript module (see test_protocol)."""
+    import sys  # noqa: PLC0415
+
+    return sys.modules["youtube_transcript"]

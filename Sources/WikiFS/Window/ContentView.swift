@@ -91,7 +91,7 @@ struct ContentView: View {
     var body: some View {
         baseContent
         .sheet(item: $pendingAddURL) { pending in
-            AddFromURLSheet(store: store, initialURL: pending.url)
+            AddFromURLSheet(store: store, initialURL: pending.url, queueEngine: queueEngine)
         }
         // Expose the "present Add from URL (pre-filled)" action to the whole
         // subtree so the reader views' right-click "Add as Source" item (and the

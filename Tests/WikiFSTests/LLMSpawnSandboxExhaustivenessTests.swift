@@ -182,6 +182,7 @@ struct LLMSpawnSandboxExhaustivenessTests {
         ("ManagedExtractorProcessExecutor.swift", "ManagedExtractorProcessError", "enum case construction in a throw, not a launch"),
         ("ManagedExtractorProcessExecutor.swift", "RaceFreeProcessGroupRunner", "verified process-safety boundary (re-verified PID, new group)"),
         ("RuntimeCommandLocator.swift", "RaceFreeProcessGroupRunner", "verified process-safety boundary (re-verified PID, new group)"),
+        ("AuxiliaryRuntimeVersionProbe.swift", "RaceFreeProcessGroupRunner", "verified process-safety boundary (re-verified PID, new group): bounded `<executable> --version` probe of the host-resolved auxiliary runtime"),
         ("RendererAssetReferenceExtractorClient.swift", "RaceFreeProcessGroupRunner", "verified process-safety boundary (re-verified PID, new group)"),
         ("WikiDaemon.swift", "RaceFreeProcessGroupRunner", "verified process-safety boundary (re-verified PID, new group)"),
     ]

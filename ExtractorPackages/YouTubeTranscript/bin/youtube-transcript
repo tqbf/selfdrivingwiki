@@ -3,6 +3,8 @@
 # requires-python = ">=3.12,<3.14"
 # dependencies = [
 #     "youtube-transcript-api>=1.0",
+#     "yt-dlp==2026.08.19",
+#     "yt-dlp-ejs==0.8.0",
 # ]
 # ///
 """youtube-transcript — Fetch YouTube video transcripts and output markdown.
@@ -32,16 +34,30 @@ Extractor package protocol (revision 3):
     this module's `run_extractor_protocol` and reads JSON Lines frames from
     stdout. The CLI above is unchanged; the protocol path is reached only
     through the generated entry point in the reviewed package.
+
+Caption fallback (protocol path only):
+    youtube-transcript-api is the primary retrieval route. When it reports
+    no caption track, disabled captions, or an ordinary retrieval failure,
+    the protocol path makes ONE yt-dlp attempt to fetch the same captions'
+    subtitle BYTES (never media, never audio, never speech-to-text). A
+    descriptor listing alone is never success: the transcript publishes only
+    when actual WebVTT bytes arrive and parse. Blocked requests (IP block,
+    HTTP 429), invalid requests, expired deadlines, malformed payloads, and
+    output-limit failures never invoke the fallback — an IP block in
+    particular must not produce repeated requests.
 """
 
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import re
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, NamedTuple
 from urllib.parse import parse_qs, urlparse
@@ -205,6 +221,9 @@ class FetchedCaptions(NamedTuple):
     # True for auto-generated captions, False for manual captions, and None
     # when the installed library version does not expose the status.
     is_generated: bool | None
+    # The retrieval route that produced these segments: the result frame's
+    # tool provenance. `None` on the CLI path, where provenance is unused.
+    tool_metadata: dict[str, str] | None = None
 
 
 def _fetch_transcript(video_id: str, lang: str) -> FetchedCaptions:
@@ -432,7 +451,14 @@ PROTOCOL_MIME_TYPE = "video/youtube"
 PROTOCOL_TRANSPORT = "remote-url"
 _TOOL_METADATA = {
     "toolName": "youtube-transcript",
-    "toolVersion": "1.0.0",
+    "toolVersion": "1.2.0",
+}
+# Provenance for a transcript that the yt-dlp fallback route retrieved: the
+# result frame names the route that actually produced the bytes.
+_YTDLP_RELEASE = "2026.08.19"
+_YTDLP_TOOL_METADATA = {
+    "toolName": "yt-dlp",
+    "toolVersion": _YTDLP_RELEASE,
 }
 
 # Package-owned bounds. They equal or tighten the generated manifest limits
@@ -451,15 +477,44 @@ _MAX_SEGMENT_COUNT = 200_000
 # the incremental accounting during segment consumption cannot be negated
 # by formatting overhead.
 _OUTPUT_RESERVE_BYTES = 65_536
+# Bound on one WebVTT payload read from the caption endpoint. Raw VTT
+# carries timestamps and per-cue overhead the joined markdown drops, so the
+# cap sits above the output bound but stays bounded: the reader stops at
+# limit+1 bytes and rejects an over-limit payload before parsing.
+_MAX_CAPTION_PAYLOAD_BYTES = 67_108_864
+# Per-connection socket timeout for the caption-byte fetch, always capped
+# by the operation deadline at call time.
+_CAPTION_SOCKET_TIMEOUT_SECONDS = 60
+# Manual-redirect ceiling for the caption fetch (automatic redirects are
+# disabled; each hop is re-validated before the next connection).
+_MAX_CAPTION_REDIRECTS = 2
+# The only host allowed to serve caption bytes for the pinned release.
+_CAPTION_HOST = "www.youtube.com"
+# The only host the metadata call is pointed at: the already validated
+# video ID is embedded into this fixed watch URL.
+_YOUTUBE_WATCH_BASE = "https://www.youtube.com/watch"
+# yt-dlp plugin/remote-component guards (see _import_ytdlp).
+_YTDLP_NO_PLUGINS_ENV = "YTDLP_NO_PLUGINS"
 
 
 class ProtocolFailure(Exception):
-    """One typed protocol failure. `cause` is a protocol failure cause."""
+    """One typed protocol failure. `cause` is a protocol failure cause.
 
-    def __init__(self, cause: str, message: str) -> None:
+    `fallback_eligible` marks the primary-route failures the yt-dlp caption
+    fallback may answer: no advertised track, disabled captions, and
+    ordinary retrieval failures. Blocked requests (IP block / 429), invalid
+    requests, expired deadlines, conversion, size, and publication failures
+    are never eligible — a blocked address in particular must not receive a
+    second request from a different client.
+    """
+
+    def __init__(
+        self, cause: str, message: str, fallback_eligible: bool = False
+    ) -> None:
         super().__init__(message)
         self.cause = cause
         self.message = message
+        self.fallback_eligible = fallback_eligible
 
 
 def build_protocol_frame(kind: str, payload: dict) -> dict:
@@ -562,20 +617,27 @@ def _fetch_captions_for_protocol(
     youtube-transcript-api talks to an undocumented YouTube interface, so
     every retrieval failure maps to a stable, bounded protocol failure —
     including blocked requests and library/network errors that can carry
-    unbounded upstream text (which is discarded, never forwarded).
+    unbounded upstream text (which is discarded, never forwarded). The
+    failures the yt-dlp fallback may answer are marked `fallback_eligible`;
+    blocked requests are deliberately not.
     """
     _check_deadline(deadline_ms)
     yta = _import_api()
     blocked = _blocked_exception_types(yta)
     try:
-        return _try_fetch(yta, video_id, "en")
+        fetched = _try_fetch(yta, video_id, "en")
+        return fetched._replace(tool_metadata=dict(_TOOL_METADATA))
     except yta.NoTranscriptFound:
         raise ProtocolFailure(
-            "unsupported-input", "no caption track is available for this video"
+            "unsupported-input",
+            "no caption track is available for this video",
+            fallback_eligible=True,
         ) from None
     except yta.TranscriptsDisabled:
         raise ProtocolFailure(
-            "unsupported-input", "captions are disabled for this video"
+            "unsupported-input",
+            "captions are disabled for this video",
+            fallback_eligible=True,
         ) from None
     except yta.VideoUnavailable:
         raise ProtocolFailure(
@@ -591,12 +653,501 @@ def _fetch_captions_for_protocol(
         ) from None
     except yta.CouldNotRetrieveTranscript:
         raise ProtocolFailure(
-            "extraction-failure", "captions could not be retrieved"
+            "extraction-failure",
+            "captions could not be retrieved",
+            fallback_eligible=True,
         ) from None
     except Exception:  # noqa: BLE001 - reported as a typed frame
         raise ProtocolFailure(
-            "extraction-failure", "caption retrieval failed"
+            "extraction-failure",
+            "caption retrieval failed",
+            fallback_eligible=True,
         ) from None
+
+
+# ── yt-dlp caption fallback (protocol path) ────────────────────────────
+#
+# The primary route talks to an undocumented interface that YouTube can
+# withdraw or block per address. The fallback asks yt-dlp — pinned to one
+# release with plugins, remote components, cookies, netrc, proxies, and
+# retries disabled — for the same captions with media download disabled,
+# then fetches the WebVTT subtitle bytes through this package's own bounded
+# opener. It never downloads media and never runs speech-to-text. Every
+# failure below is a fixed string: the yt-dlp logger discards everything
+# the library prints, and upstream error text never reaches a frame or
+# stderr.
+
+
+class _DiscardLogger:
+    """The yt-dlp logger contract: debug/warning/error, all discarded.
+
+    Upstream messages can carry URLs, tokens, and error internals; none of
+    it may reach a protocol frame or stderr.
+    """
+
+    def debug(self, message: str) -> None:
+        return
+
+    def warning(self, message: str) -> None:
+        return
+
+    def error(self, message: str) -> None:
+        return
+
+
+def _import_ytdlp() -> Any:
+    """Import yt_dlp with the release's plugin guard already applied.
+
+    `YTDLP_NO_PLUGINS` is read by this release's `load_plugins()` before
+    any plugin directory is scanned; it is a source-supported guard, not a
+    promised stable API, and the offline contract test pins its behavior
+    against the tagged source. Remote components stay refused through the
+    YoutubeDL parameter set (the default already disallows them and is set
+    explicitly).
+    """
+    os.environ[_YTDLP_NO_PLUGINS_ENV] = "1"
+    import yt_dlp
+
+    return yt_dlp
+
+
+def _ytdlp_params(bun_path: str | None, deadline_ms: int) -> dict[str, Any]:
+    """The pinned, reduced yt-dlp option set for one metadata call.
+
+    Hardening choices, all load-bearing:
+    - `skip_download` + `noplaylist`: caption metadata only; media is
+      never downloaded by this package.
+    - No netrc, no cookie files, no browser cookies: the package never
+      presents ambient credentials to YouTube.
+    - `proxy: ""`: yt-dlp must not inherit a host proxy environment; the
+      caption-byte opener below disables proxy lookup the same way.
+    - Retry ceilings at zero for the network, the extractor, fragments,
+      and file access: a known 429 or IP block is never retried, and one
+      bounded attempt is the whole fallback budget.
+    - `js_runtimes`: exactly the host-resolved Bun when present, else an
+      EMPTY table so yt-dlp never PATH-searches for Deno or Node (the
+      library's default enables Deno).
+    """
+    remaining_seconds = (deadline_ms - int(time.time() * 1000)) / 1000.0
+    socket_timeout = max(min(remaining_seconds, _CAPTION_SOCKET_TIMEOUT_SECONDS), 1.0)
+    return {
+        "quiet": True,
+        "no_warnings": True,
+        "logger": _DiscardLogger(),
+        "skip_download": True,
+        "noplaylist": True,
+        "usenetrc": False,
+        "cookiefile": None,
+        "cookiesfrombrowser": None,
+        "proxy": "",
+        "remote_components": set(),
+        "retries": 0,
+        "extractor_retries": 0,
+        "fragment_retries": 0,
+        "file_access_retries": 0,
+        "socket_timeout": socket_timeout,
+        "nocheckcertificate": False,
+        "js_runtimes": {"bun": {"path": bun_path}} if bun_path else {},
+    }
+
+
+# English preference order, matching the primary route's language chain.
+_ENGLISH_CANDIDATES = ("en", "en-US", "en-GB")
+
+
+def _select_ytdlp_caption_track(info: Any) -> tuple[list[Any], str, bool] | None:
+    """Pick one caption track's descriptor list from yt-dlp metadata.
+
+    Preference keeps the primary route's fallback order: English manual,
+    English automatic, then the first available track of any language
+    (manual before automatic). Returns `(formats, language, is_generated)`,
+    or `None` when the metadata advertises no track.
+    """
+    if not isinstance(info, dict):
+        return None
+    manual_raw = info.get("subtitles")
+    automatic_raw = info.get("automatic_captions")
+    manual = manual_raw if isinstance(manual_raw, dict) else {}
+    automatic = automatic_raw if isinstance(automatic_raw, dict) else {}
+
+    def first_track(
+        tracks: dict[str, Any], keys: list[str]
+    ) -> tuple[str, list[Any]] | None:
+        for key in keys:
+            formats = tracks.get(key)
+            if isinstance(formats, list) and formats:
+                return key, formats
+        return None
+
+    english = list(_ENGLISH_CANDIDATES)
+    for tracks, generated in ((manual, False), (automatic, True)):
+        pick = first_track(tracks, english)
+        if pick is not None:
+            return pick[1], pick[0], generated
+    for tracks, generated in ((manual, False), (automatic, True)):
+        pick = first_track(tracks, sorted(tracks))
+        if pick is not None:
+            return pick[1], pick[0], generated
+    return None
+
+
+def _descriptor_webvtt_url(candidate: Any) -> str | None:
+    """The WebVTT descriptor's URL, when the entry declares that shape."""
+    if not isinstance(candidate, dict) or candidate.get("ext") != "vtt":
+        return None
+    url = candidate.get("url")
+    return url if isinstance(url, str) and url else None
+
+
+def _select_webvtt_format(formats: list[Any]) -> str | None:
+    """The track's WebVTT descriptor URL, if it declares one."""
+    for candidate in formats:
+        url = _descriptor_webvtt_url(candidate)
+        if url is not None:
+            return url
+    return None
+
+
+def _select_inline_webvtt(formats: list[Any]) -> bytes | None:
+    """Inline VTT `data` on a descriptor, under the same payload bound.
+
+    Some descriptors carry the captions inline instead of a URL; the same
+    byte cap applies before anything is parsed.
+    """
+    for candidate in formats:
+        if not isinstance(candidate, dict) or candidate.get("ext") != "vtt":
+            continue
+        data = candidate.get("data")
+        if isinstance(data, str) and data:
+            payload = data.encode("utf-8")
+            if len(payload) > _MAX_CAPTION_PAYLOAD_BYTES:
+                raise ProtocolFailure(
+                    "extraction-failure", "the caption data exceeds the size limit"
+                )
+            return payload
+    return None
+
+
+def _validate_caption_url(url: str) -> str:
+    """Only the pinned release's caption endpoint host may serve bytes.
+
+    Accepts exactly one shape: https on the default (443) port at
+    www.youtube.com, no embedded credentials, no fragment, bounded length.
+    Anything else — other schemes, hosts, or ports, userinfo, fragments —
+    fails closed. The pinned release serves the timed-text endpoint from
+    this host; widening the allowlist requires tests and review.
+    """
+    disallowed = ProtocolFailure(
+        "extraction-failure", "the caption location is not allowed"
+    )
+    if not url or len(url.encode("utf-8")) > _MAX_URL_BYTES or "\0" in url:
+        raise disallowed
+    # The delimiter itself is rejected, not just a non-empty fragment:
+    # urlparse reports a trailing '#' as an empty fragment.
+    if "#" in url:
+        raise disallowed
+    try:
+        parsed = urlparse(url)
+        port = parsed.port
+    except ValueError:
+        raise disallowed from None
+    if parsed.scheme != "https":
+        raise disallowed
+    if (parsed.hostname or "").lower() != _CAPTION_HOST:
+        raise disallowed
+    if port not in (None, 443):
+        raise disallowed
+    if parsed.username is not None or parsed.password is not None:
+        raise disallowed
+    if parsed.fragment:
+        raise disallowed
+    return url
+
+
+class _DisableProxies(urllib.request.ProxyHandler):
+    """Empty proxy table: the opener never inherits a host proxy env."""
+
+    def __init__(self) -> None:
+        super().__init__(proxies={})
+
+
+class _NoAutoRedirect(urllib.request.HTTPRedirectHandler):
+    """Turns automatic redirect following into an inspectable HTTPError.
+
+    Returning `None` makes urllib surface the 3xx as an HTTPError whose
+    headers carry the Location; the fetch loop re-validates each location
+    through `_validate_caption_url` before it opens the next connection,
+    up to the manual ceiling.
+    """
+
+    def redirect_request(  # type: ignore[override]
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+def _build_caption_opener(https_handler: Any = None) -> Any:
+    """The package-owned opener: no proxies, no automatic redirects.
+
+    `https_handler` exists for tests only; production always passes `None`
+    and gets urllib's real TLS handler.
+    """
+    handlers: list[Any] = [_DisableProxies(), _NoAutoRedirect()]
+    if https_handler is not None:
+        handlers.append(https_handler)
+    return urllib.request.build_opener(*handlers)
+
+
+def _caption_request(url: str) -> urllib.request.Request:
+    return urllib.request.Request(
+        url,
+        headers={
+            # Identity only: a compressed response cannot be bounded before
+            # decompression, so compressed replies are refused below.
+            "Accept-Encoding": "identity",
+        },
+        method="GET",
+    )
+
+
+_REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+
+def _fetch_caption_bytes(
+    descriptor_url: str,
+    deadline_ms: int,
+    https_handler: Any = None,
+) -> bytes:
+    """Fetch the caption bytes behind one validated descriptor URL.
+
+    At most `_MAX_CAPTION_REDIRECTS` 3xx hops are followed manually, each
+    re-validated before the next connection opens; automatic redirects are
+    disabled. The response must be uncompressed and reads at most the
+    payload cap plus one byte, so an oversized body is detected and
+    rejected instead of buffered unbounded. Non-redirect error statuses
+    (including a known 429) end the attempt: the fetch is one bounded
+    pass, never a retry loop. Every failure is a fixed, redacted protocol
+    failure; upstream bodies, headers, and URLs never reach a frame.
+    """
+    remaining_seconds = (deadline_ms - int(time.time() * 1000)) / 1000.0
+    if remaining_seconds <= 0:
+        raise ProtocolFailure("timeout", "the request deadline passed")
+    timeout = min(remaining_seconds, _CAPTION_SOCKET_TIMEOUT_SECONDS)
+    opener = _build_caption_opener(https_handler)
+    request = _caption_request(_validate_caption_url(descriptor_url))
+    redirects_left = _MAX_CAPTION_REDIRECTS
+    while True:
+        _check_deadline(deadline_ms)
+        try:
+            response = opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            location = None
+            if error.code in _REDIRECT_CODES:
+                location = error.headers.get("Location")
+            error.close()
+            if location is None:
+                raise ProtocolFailure(
+                    "extraction-failure",
+                    "the caption track could not be downloaded",
+                ) from None
+            if redirects_left <= 0:
+                raise ProtocolFailure(
+                    "extraction-failure",
+                    "the caption location redirected too many times",
+                ) from None
+            redirects_left -= 1
+            request = _caption_request(_validate_caption_url(location))
+            continue
+        with response:
+            status = getattr(response, "status", None) or getattr(response, "code", None)
+            headers = getattr(response, "headers", None)
+            encoding = "identity"
+            if headers is not None:
+                encoding = (headers.get("Content-Encoding") or "identity").strip().lower()
+            if status != 200:
+                raise ProtocolFailure(
+                    "extraction-failure",
+                    "the caption track could not be downloaded",
+                )
+            if encoding != "identity":
+                raise ProtocolFailure(
+                    "extraction-failure",
+                    "the caption response used an unsupported encoding",
+                )
+            payload = response.read(_MAX_CAPTION_PAYLOAD_BYTES + 1)
+        if len(payload) > _MAX_CAPTION_PAYLOAD_BYTES:
+            raise ProtocolFailure(
+                "extraction-failure", "the caption data exceeds the size limit"
+            )
+        return payload
+
+
+_WEBVTT_TIMESTAMP = re.compile(
+    r"^(?:(\d{2,}):)?(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(?:(\d{2,}):)?(\d{2}):(\d{2})\.(\d{3})"
+)
+
+
+def _webvtt_seconds(
+    hours: str | None, minutes: str, seconds: str, millis: str
+) -> float:
+    return (
+        int(hours or 0) * 3600
+        + int(minutes) * 60
+        + int(seconds)
+        + int(millis) / 1000.0
+    )
+
+
+def _clean_webvtt_cue_text(raw: str) -> str:
+    """Strip inline tags and entities; collapse the whitespace."""
+    without_tags = re.sub(r"<[^>]*>", "", raw)
+    return " ".join(html.unescape(without_tags).split())
+
+
+def _parse_webvtt(payload: bytes) -> list[dict[str, str | float]]:
+    """Parse WebVTT bytes into the segment shape the pipeline consumes.
+
+    One bounded dict per cue — text, start, duration — so the existing
+    segment consumer and byte accounting apply unchanged. Rolling
+    auto-caption lines (each cue restates the growing line) collapse to
+    their delta, so the joined markdown does not repeat text.
+    """
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ProtocolFailure("extraction-failure", "caption data is malformed") from None
+    if not text.lstrip("﻿").startswith("WEBVTT"):
+        raise ProtocolFailure("extraction-failure", "caption data is malformed")
+
+    segments: list[dict[str, str | float]] = []
+    previous_raw = ""
+    lines = text.splitlines()
+    total = len(lines)
+    index = 0
+    while index < total:
+        line = lines[index].strip()
+        index += 1
+        match = _WEBVTT_TIMESTAMP.match(line)
+        if match is None:
+            continue
+        hours, minutes, seconds, millis, end_hours, end_minutes, end_seconds, end_millis = (
+            match.groups()
+        )
+        start = _webvtt_seconds(hours, minutes, seconds, millis)
+        end = _webvtt_seconds(end_hours, end_minutes, end_seconds, end_millis)
+        text_lines: list[str] = []
+        while index < total:
+            cue_line = lines[index]
+            index += 1
+            if cue_line.strip() == "":
+                break
+            if _WEBVTT_TIMESTAMP.match(cue_line.strip()) is not None:
+                # The next cue's timing line: no body text for this one.
+                index -= 1
+                break
+            text_lines.append(cue_line)
+        raw_cleaned = _clean_webvtt_cue_text(" ".join(text_lines))
+        if not raw_cleaned or raw_cleaned == previous_raw:
+            continue
+        emitted = raw_cleaned
+        if previous_raw and raw_cleaned.startswith(previous_raw + " "):
+            emitted = raw_cleaned[len(previous_raw) + 1 :].strip()
+        previous_raw = raw_cleaned
+        if not emitted:
+            continue
+        segments.append(
+            {
+                "text": emitted,
+                "start": start,
+                "duration": max(end - start, 0.0),
+            }
+        )
+        if len(segments) > _MAX_SEGMENT_COUNT:
+            raise ProtocolFailure(
+                "extraction-failure", "the transcript has too many caption segments"
+            )
+    return segments
+
+
+def _close_quietly(extractor: Any) -> None:
+    """Release yt-dlp's helper processes without surfacing errors."""
+    close = getattr(extractor, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # noqa: BLE001 - cleanup must never mask the outcome
+            pass
+
+
+def _fetch_captions_via_ytdlp(
+    video_id: str, bun_path: str | None, deadline_ms: int
+) -> FetchedCaptions:
+    """One yt-dlp attempt: metadata, descriptor selection, subtitle bytes.
+
+    The metadata call targets only the fixed watch URL built from the
+    already validated video ID. `extract_info(download=False)` never saves
+    media; the transcript publishes only when WebVTT bytes actually arrive
+    and parse. A missing auxiliary runtime is a fixed setup failure before
+    any network work — the primary route keeps working without it.
+    """
+    _check_deadline(deadline_ms)
+    if bun_path is None:
+        raise ProtocolFailure(
+            "setup", "the caption fallback runtime is unavailable"
+        ) from None
+    try:
+        ytdlp = _import_ytdlp()
+    except ImportError:
+        raise ProtocolFailure(
+            "setup", "the caption fallback runtime is unavailable"
+        ) from None
+    try:
+        extractor = ytdlp.YoutubeDL(_ytdlp_params(bun_path, deadline_ms))
+    except Exception:  # noqa: BLE001 - redacted; an option defect is a package defect
+        raise ProtocolFailure("setup", "the caption fallback could not start") from None
+    _check_deadline(deadline_ms)
+    watch_url = f"{_YOUTUBE_WATCH_BASE}?v={video_id}"
+    try:
+        info = extractor.extract_info(watch_url, download=False)
+    except Exception:  # noqa: BLE001 - upstream text is discarded, never framed
+        _close_quietly(extractor)
+        raise ProtocolFailure(
+            "extraction-failure", "the caption fallback could not retrieve captions"
+        ) from None
+    _close_quietly(extractor)
+    _check_deadline(deadline_ms)
+    selection = _select_ytdlp_caption_track(info)
+    if selection is None:
+        raise ProtocolFailure(
+            "unsupported-input", "no caption track is available for this video"
+        )
+    formats, language, is_generated = selection
+    descriptor_url = _select_webvtt_format(formats)
+    if descriptor_url is not None:
+        payload = _fetch_caption_bytes(descriptor_url, deadline_ms)
+    else:
+        payload = _select_inline_webvtt(formats)
+        if payload is None:
+            raise ProtocolFailure(
+                "extraction-failure", "the caption track could not be downloaded"
+            )
+    segments = _parse_webvtt(payload)
+    if not segments:
+        raise ProtocolFailure(
+            "extraction-failure", "caption conversion produced no text"
+        )
+    return FetchedCaptions(
+        segments=segments,
+        language=language,
+        is_generated=is_generated,
+        tool_metadata=dict(_YTDLP_TOOL_METADATA),
+    )
 
 
 def _consume_segments(
@@ -725,6 +1276,56 @@ def run_extractor_protocol(
         )
 
 
+# The host-owned operation configuration shape the reviewed YouTube package
+# reads: exactly one absolute executable path for the auxiliary JavaScript
+# runtime, staged by the host for this exact package revision. The path is
+# never a secret and never package-chosen.
+_BUN_CONFIG_KIND = "reviewed-youtube-bun-runtime"
+_MAX_EXECUTABLE_PATH_BYTES = 4_096
+
+
+def _validated_bun_path(path: str) -> str | None:
+    """Accept only a bounded absolute path with no control characters."""
+    if not path or len(path.encode("utf-8")) > _MAX_EXECUTABLE_PATH_BYTES:
+        return None
+    if not path.startswith("/") or "\0" in path:
+        return None
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in path):
+        return None
+    return path
+
+
+def _read_bun_path(request: dict) -> str | None:
+    """Resolve the host-provided auxiliary JavaScript runtime, if any.
+
+    The operation-configuration file is host-owned and non-secret; the
+    reviewed shape carries exactly one validated absolute executable path.
+    Anything malformed or absent simply means "no fallback runtime": the
+    primary route must keep working, so a configuration problem never
+    fails the request — the fallback reports its own fixed setup failure
+    only when it is actually reached.
+    """
+    relative = request.get("operationConfigurationPath")
+    if not isinstance(relative, str) or not relative:
+        return None
+    if relative.startswith("/") or "\\" in relative or "\0" in relative:
+        return None
+    if any(segment in ("", ".", "..") for segment in relative.split("/")):
+        return None
+    try:
+        document = json.loads(Path(relative).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    if document.get("kind") != _BUN_CONFIG_KIND:
+        return None
+    path = document.get("executablePath")
+    if not isinstance(path, str):
+        return None
+    return _validated_bun_path(path)
+
+
 def _serve_request(request: dict, request_id: str, out_stream: Any) -> int:
     """Validate the request, fetch captions, and publish one result.
 
@@ -780,9 +1381,26 @@ def _serve_request(request: dict, request_id: str, out_stream: Any) -> int:
     reporter = _ProgressReporter(request_id, out_stream)
     reporter.emit(0, 4, "fetching captions")
 
-    fetched = _fetch_captions_for_protocol(video_id, deadline_ms)
+    # Primary route first. Only its marked-eligible failures — no advertised
+    # track, disabled captions, ordinary retrieval errors — reach the single
+    # yt-dlp attempt; blocked requests, invalid requests, and deadline
+    # failures propagate untouched.
+    used_fallback = False
+    try:
+        fetched = _fetch_captions_for_protocol(video_id, deadline_ms)
+    except ProtocolFailure as primary_failure:
+        if not primary_failure.fallback_eligible:
+            raise
+        used_fallback = True
+        reporter.emit(1, 4, "trying the caption fallback")
+        fetched = _fetch_captions_via_ytdlp(
+            video_id, _read_bun_path(request), deadline_ms
+        )
 
-    reporter.emit(1, 4, "processing captions")
+    if used_fallback:
+        reporter.emit(2, 4, "processing captions")
+    else:
+        reporter.emit(1, 4, "processing captions")
     _check_deadline(deadline_ms)
 
     texts = _consume_segments(fetched.segments, deadline_ms)
@@ -808,7 +1426,7 @@ def _serve_request(request: dict, request_id: str, out_stream: Any) -> int:
 
     reporter.emit(3, 4, "done")
 
-    metadata: dict[str, Any] = dict(_TOOL_METADATA)
+    metadata: dict[str, Any] = dict(fetched.tool_metadata or _TOOL_METADATA)
     if isinstance(fetched.language, str) and fetched.language:
         metadata["language"] = fetched.language[:256]
     if isinstance(fetched.is_generated, bool):

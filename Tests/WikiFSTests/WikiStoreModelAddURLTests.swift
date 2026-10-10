@@ -8,6 +8,127 @@ import Testing
 @MainActor
 struct WikiStoreModelAddURLTests {
 
+    // MARK: - Issue #1379 (revised): claim + route-policy auto-transcript signal
+
+    /// Claims fixture: one transcript-extractor registration claiming the
+    /// given MIME (the shape `registeredExtractionInputs()` builds from the
+    /// active installed registrations).
+    private static func claims(_ mimeType: String, kind: ExtractorKind = .youtubeTranscript) -> RegisteredExtractionInputs {
+        RegisteredExtractionInputs(claims: [
+            .init(kind: kind, mimeTypes: [mimeType], filenameExtensions: []),
+        ])
+    }
+
+    /// Caption routes auto-transcribe at import: a YouTube URL import with
+    /// an active registration queues the standard extraction job (the
+    /// bundled import-transcription policy covers the YouTube route).
+    @Test func youTubeURLQueuesTranscriptExtractionFromRoutePolicy() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        model.registeredExtractionInputs = Self.claims("video/youtube")
+        let fetcher = FakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data(), contentType: nil,
+            finalURL: URL(string: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")!))
+
+        let outcome = try await model.addURL(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ", fetcher: fetcher)
+
+        #expect(outcome.kind == .videoEmbed)
+        #expect(outcome.transcriptExtractionWanted)
+        #expect(outcome.sourceID != nil)
+        // The created source's MIME is what the claim matched. The byteless
+        // path reloads async off the bus — reload explicitly for the read.
+        model.reloadFromStore()
+        let source = try #require(model.sources.first(where: { $0.id == outcome.sourceID }))
+        #expect(source.mimeType == "video/youtube")
+    }
+
+    @Test func applePodcastsURLStillWantsTranscriptExtractionFromRoutePolicy() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        model.registeredExtractionInputs = Self.claims(
+            "audio/apple-podcast", kind: .applePodcastTranscript)
+        let episodeURL =
+            "https://podcasts.apple.com/us/podcast/chinatalk/id1289062927?i=1000774368453"
+
+        let outcome = try await model.addURL(episodeURL)
+
+        #expect(outcome.kind == .audioEmbed)
+        #expect(outcome.transcriptExtractionWanted)
+        #expect(outcome.sourceID != nil)
+        model.reloadFromStore()
+        let source = try #require(model.sources.first(where: { $0.id == outcome.sourceID }))
+        #expect(source.mimeType == "audio/apple-podcast")
+    }
+
+    @Test func rssPodcastURLWantsTranscriptExtractionFromRoutePolicy() async throws {
+        // The RSS podcast route keeps its existing import policy: claim +
+        // policy entry → the signal flips and the importing UI enqueues the
+        // extraction. Feeds enter through the dedicated podcast entry point.
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        model.registeredExtractionInputs = Self.claims(
+            "audio/podcast", kind: .podcastTranscript)
+
+        let outcome = try await model.addPodcastFeedURL(
+            "https://feeds.example.com/show.xml")
+
+        #expect(outcome.kind == .audioEmbed)
+        #expect(outcome.transcriptExtractionWanted)
+        #expect(outcome.sourceID != nil)
+    }
+
+    @Test func claimedMIMEWithoutRoutePolicyEntryReportsNotWanted() async throws {
+        // A registration claims the MIME, but the claimed (kind, MIME) route
+        // has no bundled import-transcription entry: the claim alone does
+        // not flip the signal. Claiming the Apple Podcasts MIME with the
+        // YouTube kind builds exactly that unclaimed-route shape without
+        // naming any policy branch in the test.
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        model.registeredExtractionInputs = Self.claims(
+            "audio/apple-podcast", kind: .youtubeTranscript)
+        let episodeURL =
+            "https://podcasts.apple.com/us/podcast/chinatalk/id1289062927?i=1000774368453"
+
+        let outcome = try await model.addURL(episodeURL)
+
+        #expect(outcome.kind == .audioEmbed)
+        #expect(outcome.transcriptExtractionWanted == false)
+    }
+
+    @Test func bytelessSourceWithNoClaimedMIMEReportsNotWanted() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        // Only YouTube/Podcasts are claimed; nothing claims Vimeo.
+        model.registeredExtractionInputs = Self.claims("video/youtube")
+        let fetcher = FakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data(), contentType: nil,
+            finalURL: URL(string: "https://vimeo.com/76979871")!))
+
+        let outcome = try await model.addURL("https://vimeo.com/76979871", fetcher: fetcher)
+
+        #expect(outcome.kind == .videoEmbed)
+        #expect(outcome.transcriptExtractionWanted == false)
+        #expect(outcome.sourceID != nil)
+    }
+
+    @Test func unregisteredClaimsSetReportsNotWantedForEveryProvider() async throws {
+        // No installed registrations at all: no provider reports wanted.
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let fetcher = FakeFetcher(response: URLFetchService.FetchResponse(
+            data: Data(), contentType: nil,
+            finalURL: URL(string: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")!))
+
+        let outcome = try await model.addURL(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ", fetcher: fetcher)
+
+        #expect(outcome.transcriptExtractionWanted == false)
+    }
+
+    // MARK: - Fixtures
+
     actor FetchCallCounter {
         private(set) var count = 0
         func record() { count += 1 }

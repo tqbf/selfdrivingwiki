@@ -9,7 +9,7 @@
     "tools/docx2md/extractor-protocol.js": "f41fad99bf960b6cc075087f12baa44484a8af9657fb15d10454fca99b30a916",
     "tools/pdf2md/pdf2md": "0ec600ec2acd6a8c9073e9a11ba0310c35c76eefaf9cfdd12b9dd80945a30943",
     "tools/podcast-transcript/podcast-transcript": "eb4bede5a2a1670db2762b7da80432129eb49bd1510d6ded415838789306372a",
-    "tools/youtube-transcript/youtube-transcript": "d35ba748f41f1d480644d852fc00fb5e0a1f4f6aa554f8cf47c37782f601393f",
+    "tools/youtube-transcript/youtube-transcript": "5767f686272b0aff350d63c2def1de66938715ca9d68e64f1dfef2af4d1251d6",
     "tools/zotero/zotero": "06b9bb3af673a6c17b74e9a6ce7315e9bba21baff3204684b6a1c6d4e397d482"
   }
 }
