@@ -46,11 +46,15 @@ authorization/model-asset failure as a typed readiness state. No
 Two parts and one explicit trigger:
 
 1. **Audio acquisition — reviewed extractor package.**
-   `org.selfdrivingwiki.audio-acquire`, protocol revision 3 `remote-url`,
-   kind `audio-transcript` (a NEW ExtractorKind — see the migration
-   checklist), v1 claims `video/youtube` ONLY; podcast feeds are a
-   follow-up (a feed URL is not an episode enclosure — enclosure
-   resolution and redirect validation are their own work).
+   `org.selfdrivingwiki.audio-acquire`, **protocol revision 4** — the
+   revision whose typed BYTES-result shape (`resultMIMEType`) the host
+   already interprets through the raw-byte `executeSourceResult` path;
+   a binary result cannot ride the revision-3 Markdown result, which
+   the host UTF-8-decodes — with kind `audio-transcript` (a NEW
+   ExtractorKind — see the migration checklist), v1 claims
+   `video/youtube` ONLY; podcast feeds are a follow-up (a feed URL is
+   not an episode enclosure — enclosure resolution and redirect
+   validation are their own work).
 
    Contract: with the SAME hardening as the caption fallback (pinned
    yt-dlp + ejs, plugins/cookies/proxies/retries disabled, Bun grant),
@@ -63,12 +67,11 @@ Two parts and one explicit trigger:
    - Pre-download duration check from yt-dlp metadata: reject > 2 h
      (`unsupported-input`, fixed frame).
    - Bounded download: limit-plus-one read against a 120 MiB cap —
-     deliberately BELOW the manifest's 128 MiB
-     `maximumMarkdownOutputByteCount`, so the existing extractor
-     protocol result path carries the file unchanged. The result frame
-     is the existing markdown-result shape; its byte count is the
-     audio byte count, and the ONLY consumer of the bytes is the
-     speech arm. The result is never rendered as markdown.
+     deliberately BELOW the manifest's 128 MiB result cap, so the
+     revision-4 bytes result carries the file unchanged through the
+     existing `executeSourceResult` path. The result frame declares
+     `resultMIMEType: audio/mp4`; the ONLY consumer of the bytes is
+     the speech arm. The bytes are never rendered as markdown.
    - M4A sanity check on the bytes (`ftyp` box present) before
      emitting success.
 
@@ -103,10 +106,22 @@ Two parts and one explicit trigger:
      HOST owns (not the package operation root, whose `deinit` bounds
      package lifetime) and is removed in a `defer` on every terminal
      path: success, error, cancel, and crash recovery sweep.
-   - Disk preflight before download: free space ≥ 2× the expected
-     audio size; download and decoded-AAC caps are independent.
+   - Disk preflight before download: reserve free space against the
+     HARD cap, not the expected size — 2× the 120 MiB download bound
+     (the operation-root copy plus the host-staged copy) plus margin,
+     with a recheck before the speech stage; download and decoded-AAC
+     caps are independent.
 
-5. **UX — a distinct explicit action.** "Transcribe (on-device)" as a
+5. **Failure taxonomy.** Fixed redacted frames, one attempt, blocked
+   requests never retried, upstream text discarded. Typed causes:
+   `blocked` (acquisition 429/denial), `over-duration`, `over-size`,
+   `malformed-container` (no `ftyp`), `acquisition-timeout`,
+   `speech-timeout`, `cancelled`, `speech-model-unavailable`, `locale-
+   unsupported`, `no-speech-detected`, `disk-preflight-failure`.
+   Acquisition timeout, speech timeout, and cancellation are distinct
+   terminal states with distinct user messaging.
+
+6. **UX — a distinct explicit action.** "Transcribe (on-device)" as a
    separate affordance (Re-transcribe menu item + prominent CTA on a
    source whose captions attempt ended in the no-track failure). Never
    fired by import, never fired as an automatic fallback.
@@ -138,14 +153,6 @@ the host engine/locale (where Speech exposes them), and the acquiring
 package's exact revision identity separately. No `wantsAgentCleanup`
 claim in v1 (STT output is already normalized text; cleanup is a later
 decision).
-
-## Failure and bound rules
-
-Same discipline as the caption package: fixed redacted frames; one
-attempt; blocked requests never retried; upstream text discarded.
-Typed causes: blocked/429 (acquisition), over-duration, over-size,
-malformed container (no `ftyp`), speech model unavailable, locale
-unsupported, no speech detected, disk preflight failure.
 
 ## Testing strategy
 
