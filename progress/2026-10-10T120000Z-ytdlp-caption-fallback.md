@@ -67,8 +67,19 @@ enqueues zero extraction jobs; the Transcribe action enqueues exactly one.
 
 ## Limitations
 
-Live YouTube access was not exercised in this session: the automatable
-offline gates are the release evidence, and a real subtitle-byte fetch
-remains operator-approved manual validation. A listed caption track does
-not prove access — byte retrieval can still return 429 or require a
-proof-of-origin token, and the package reports that as a bounded failure.
+The first live validation ran against a real queue job (video
+`Wiy2TLAij4s`, "01 Peter Norvig Keynote", public, 20:12). The full chain
+worked in production — the host granted Bun, the package read the
+operation configuration, the pinned yt-dlp returned metadata, and the
+selection found no tracks — and the queue item failed with exactly the
+typed frame "no caption track is available for this video". The video
+genuinely has no captions: four player clients across two yt-dlp
+releases (the pinned 2026.08.19 and the system 2026.07.04) all report
+zero subtitle and zero automatic-caption tracks. So the live run
+validated the grant → metadata → selection → typed-failure path; the
+byte-fetch leg is still only covered by the offline contract fixture
+until a caption-bearing video is transcribed. Caption-less videos are a
+correct typed outcome for this package: the boundary is captions-only —
+no media download, no speech-to-text — so a video YouTube offers no
+tracks for has nothing this package can fetch.
+
