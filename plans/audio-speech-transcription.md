@@ -1,7 +1,7 @@
 # On-device speech transcription (STT) for caption-less sources
 
-Status: planned. Engine decision made (Apple Speech, on-device). Policy
-decision made (STT is explicit-only, never automatic). Not started.
+Status: planned. Revised after independent review (sol model, REQUEST
+CHANGES round 1 — all five blockers addressed in this revision).
 
 ## Problem
 
@@ -9,8 +9,7 @@ The reviewed caption packages cover only videos YouTube attached tracks
 to. A public talk with no captions — e.g. `Wiy2TLAij4s`, "01 Peter
 Norvig Keynote" — fails with the typed "no caption track is available
 for this video" frame, and there is no path to a transcript. Speech-to-
-text closes that gap for every audio-bearing source: YouTube embeds,
-podcast feeds, and later any audio-bearing source type.
+text closes that gap.
 
 ## Policy (operator decision, load-bearing)
 
@@ -19,113 +18,169 @@ podcast feeds, and later any audio-bearing source type.
   (podcast, Apple Podcasts, YouTube).
 - **Speech-to-text is explicit-only, permanently.** STT downloads media
   and burns minutes of compute; it must never run at import, never
-  appear in `routeImportTranscription`, and never be triggered by
-  another route's failure automatically. The only trigger is a direct
-  user action on a source.
+  appear in either bundled policy table (`routeImportTranscription` OR
+  `routeAutoExtraction`), and never be triggered automatically by
+  another route's failure — including a failed captions job. The only
+  trigger is a direct user action carrying an explicit persisted
+  intent.
 
-This policy is a tested invariant: the bundled-policy tests assert the
-STT kind has no import-policy entry, so "helpfully" adding one later
-fails a gate.
+Enforcement: the invariant test lands in the SAME change that
+introduces the STT kind (no chicken-and-egg), and asserts absence from
+BOTH tables, that importing each claimed MIME with the speech package
+active enqueues zero speech work, and that a failed captions job never
+enqueues a speech-intent item.
 
 ## Engine decision (operator decision)
 
 Apple Speech, on device — `SpeechAnalyzer` / `SpeechTranscriber`
-(macOS 26 SDK). Rationale: the app is native Swift, the SDK is already
-macOS 26; on-device transcription is free and private, needs no Python
-environment, no ffmpeg, and no model zoo (the per-language model
-installs on demand through Apple's asset system). Quality on clear
-English talks is good. whisper/MLX or a cloud API remain future
-alternatives if quality or language coverage demands.
+(macOS 26 SDK), as a Swift host execution floor (operator-approved).
+On-device only: the floor never configures a network recognizer.
+Authorization is a RUNTIME VERIFICATION, not an assumption: the
+implementation compiles against the macOS 26 SDK, exercises file
+transcription inside the signed SwiftPM-built app, and surfaces any
+authorization/model-asset failure as a typed readiness state. No
+`SFSpeechRecognizer` permission assumptions carry over.
 
 ## Architecture
 
-Two moving parts, joined by an explicit user action:
+Two parts and one explicit trigger:
 
 1. **Audio acquisition — reviewed extractor package.**
-   `org.selfdrivingwiki.audio-acquire`, protocol revision 3, role
-   extractor, kind `audio-transcript`, claiming `video/youtube` and
-   `audio/podcast`. Contract: download the AUDIO-ONLY stream for the
-   validated source URL (yt-dlp pinned release, same hardening as the
-   caption fallback — plugins/cookies/proxies/retries disabled, Bun
-   grant if the pinned release requires it), write the decoded audio to
-   `outputPath` as 16 kHz mono PCM WAV (decode via the pinned
-   release's ffmpeg dependency or ffmpeg-free pure-Python decode — to
-   be settled at implementation), bounded duration and byte caps. The
-   manifest declares `network` (+ whatever the decode path needs). It
-   never transcribes and never runs in the background.
+   `org.selfdrivingwiki.audio-acquire`, protocol revision 3 `remote-url`,
+   kind `audio-transcript` (a NEW ExtractorKind — see the migration
+   checklist), v1 claims `video/youtube` ONLY; podcast feeds are a
+   follow-up (a feed URL is not an episode enclosure — enclosure
+   resolution and redirect validation are their own work).
+
+   Contract: with the SAME hardening as the caption fallback (pinned
+   yt-dlp + ejs, plugins/cookies/proxies/retries disabled, Bun grant),
+   select the audio-only M4A stream (`bestaudio[ext=m4a]`, fallback
+   format 140) — AAC-LC in an MP4/M4A container. NO transcode and NO
+   ffmpeg anywhere: Core Audio (`AVAudioFile`) decodes AAC/M4A natively
+   in the Swift floor, which deletes the decode-dependency question.
+
+   Bounds, all enforced by the package before and during download:
+   - Pre-download duration check from yt-dlp metadata: reject > 2 h
+     (`unsupported-input`, fixed frame).
+   - Bounded download: limit-plus-one read against a 120 MiB cap —
+     deliberately BELOW the manifest's 128 MiB
+     `maximumMarkdownOutputByteCount`, so the existing extractor
+     protocol result path carries the file unchanged. The result frame
+     is the existing markdown-result shape; its byte count is the
+     audio byte count, and the ONLY consumer of the bytes is the
+     speech arm. The result is never rendered as markdown.
+   - M4A sanity check on the bytes (`ftyp` box present) before
+     emitting success.
 
 2. **Transcription — host execution floor (Swift).**
-   A `SpeechTranscribing` seam wrapping `SpeechAnalyzer`: audio in
-   (file), transcript segments + language out. Like the PDF/HTML host
-   floors, it is host code, not a package; the package boundary stays
-   Python-only. The floor needs microphone-free usage
-   (`SFSpeechRecognizer`-era authorization does not apply to file
-   transcription on 26; verify at implementation and surface any
-   permission prompt as a typed readiness state).
+   `SpeechTranscribing` seam wrapping `SpeechAnalyzer`:
+   `AVAudioFile` (Core Audio decodes the M4A/AAC) → transcript
+   segments + detected locale. The floor owns a typed readiness state
+   (authorization, language-asset availability) surfaced as setup
+   guidance, per the runtime-verification rule above.
 
-3. **Orchestration — one queue arm, two stages, explicit trigger.**
-   A new extraction provider arm `speechTranscribe(sourceID:)`:
-   resolve the audio-acquire package through the normal selection
-   state machine, run it (network), run the speech floor over the
-   staged WAV, then write the transcript through the durable
-   `.transcript` provenance path with technique
-   `on-device-speech`. The staged audio lives only inside the
-   operation root and dies with it. The captions package is untouched.
+3. **Orchestration — one queue arm with a persisted intent.**
+   The extraction queue payload gains a TYPED intent
+   (`QueueItemPayload` extension: `.captions` default | `.speech`),
+   persisted with the item and validated by BOTH the app and daemon
+   providers. Import enqueues the default captions intent; the
+   explicit UI action enqueues the speech intent. Worker resolution
+   routes on the intent: speech intent → resolve the audio-acquire
+   package (normal selection state machine), run it, hand the staged
+   audio to the speech floor, then persist — one queue item, one
+   terminal persistence, mirroring how the Apple package's
+   TTML/RSS choice stays inside one arm. A source-only enqueue always
+   means captions; speech can never arise from intent-less dispatch.
 
-4. **UX — a distinct explicit action.** Sources whose captions fail
-   (or that have no captions) surface "Transcribe (on-device)" as a
-   separate affordance from the captions Transcribe button — a menu
-   item under the existing Re-transcribe control plus a prominent CTA
-   on caption-less sources after a no-track failure. Never fired by
-   import, never fired as an automatic fallback of a failed captions
-   job.
+4. **Lifecycle, deadlines, cancellation.**
+   - Acquisition runs inside the package process under the manifest's
+     30-minute process limit.
+   - The speech stage runs host-side with its OWN deadline and
+     cooperative-cancellation propagation into both yt-dlp (acquisition
+     cancel) and the analyzer; queue wait-policy and UI waiting use the
+     speech deadline, not the 35-minute caption default.
+   - The staged audio file is written to a speech-stage directory the
+     HOST owns (not the package operation root, whose `deinit` bounds
+     package lifetime) and is removed in a `defer` on every terminal
+     path: success, error, cancel, and crash recovery sweep.
+   - Disk preflight before download: free space ≥ 2× the expected
+     audio size; download and decoded-AAC caps are independent.
 
-## Failure and bound rules (same discipline as the caption work)
+5. **UX — a distinct explicit action.** "Transcribe (on-device)" as a
+   separate affordance (Re-transcribe menu item + prominent CTA on a
+   source whose captions attempt ended in the no-track failure). Never
+   fired by import, never fired as an automatic fallback.
 
-- Fixed, redacted frames: acquisition failures (blocked, 429, denied)
-  and speech failures (model unavailable, unsupported locale, no
-  speech detected) map to bounded typed causes; upstream text is
-  discarded.
-- One attempt; blocked requests never retry.
-- Bounds: audio duration capped (2 h), WAV bytes capped (2 h x
-  32 kB/s ~= 2 GiB upper bound — tune down), transcript bounded by the
-  existing output cap.
-- On-device only: the floor never configures a network speech
-  recognizer, so no audio leaves the machine even if Apple offers a
-  server path.
+## New-kind migration checklist (finding 3)
+
+Adding `ExtractorKind.audioTranscript` is a contract change, not just a
+manifest row. The implementation must enumerate and touch:
+
+- `ExtractorContractTypes` kind allowlist; `ContentTypeRegistry` kind +
+  capabilities — with `shouldAutoIngest`-style automatic ingest
+  deliberately FALSE, and no `routeAutoExtraction` /
+  `routeImportTranscription` entry (the policy invariant).
+- `ExtractorPackagePluginDefinitionFactory`: backendKind mapping +
+  adapter switch arm; typed `prepareAudioAcquire` API on the provider.
+- Registry presentation, route selection + bundled default for
+  `video/youtube` pointing at the new package.
+- App AND daemon queue routing on the persisted intent.
+- `ExtractorKindNeutralityContractTests` coverage for the new kind, and
+  the speech-eligibility logic carried by the intent + registration
+  data — never a `kind == .audioTranscript` production branch.
+
+## Provenance (finding 9)
+
+The speech transcript does NOT use the `.installedPackage` producer
+mode — that would misattribute host-engine work to the acquisition
+package. A typed speech producer records: technique `on-device-speech`,
+the host engine/locale (where Speech exposes them), and the acquiring
+package's exact revision identity separately. No `wantsAgentCleanup`
+claim in v1 (STT output is already normalized text; cleanup is a later
+decision).
+
+## Failure and bound rules
+
+Same discipline as the caption package: fixed redacted frames; one
+attempt; blocked requests never retried; upstream text discarded.
+Typed causes: blocked/429 (acquisition), over-duration, over-size,
+malformed container (no `ftyp`), speech model unavailable, locale
+unsupported, no speech detected, disk preflight failure.
 
 ## Testing strategy
 
 - **Engine seam**: `SpeechTranscribing` is protocol-injected;
-  unit tests use a scripted engine.
-- **Real-speech fixture**: tests synthesize speech with the macOS `say`
-  CLI into a temp audio file at runtime (`say -o fix.aiff "…known
-  sentence…"`), then run the REAL floor over it and assert a fuzzy
-  match of the sentence — a genuine on-device integration test with no
-  network and no bundled audio assets.
-- **Policy invariant**: bundled-policy tests assert no
-  `routeImportTranscription` entry names the STT kind (permanent gate
-  against "helpful" automation).
-- **Acquisition**: the package's Python suite with mocked network (the
-  caption suite's harness pattern) plus a protocol-smoke fixture; live
-  audio download is an operator-approved manual check.
-- **Hosted UX scenario**: the explicit action enqueues exactly one STT
-  job; import enqueues zero STT jobs (the existing hosted harness).
+  deterministic unit tests use a scripted engine.
+- **Real-speech integration (gated)**: synthesize speech at runtime
+  with the macOS `say` CLI (`say -o fix.aiff "…known sentence…"`,
+  non-blocking subprocess pattern with a timeout) and run the REAL
+  floor over it — `AVAudioFile` reads AIFF directly, so no conversion
+  is needed; assert a fuzzy match. Availability-checked (voice/locale/
+  speech assets), and explicitly NOT network-free on first run (the
+  language asset may download). Deterministic injected-engine tests
+  remain the CI gate; the `say` test is a gated integration suite.
+- **Policy invariant**: same-change test — no STT record in either
+  policy table; import per claimed MIME with the package active
+  enqueues zero speech work; failed captions never enqueue speech
+  intent.
+- **Intent + resolution**: payload intent round-trip; both providers
+  route by intent; source-only enqueue always means captions.
+- **Acquisition**: Python suite with mocked network + protocol-smoke
+  fixture; live audio download is an operator-approved manual check.
 
 ## Risks
 
-- `SpeechAnalyzer` availability/authorization quirks on specific
-  builds; mitigate with a typed readiness probe surfaced as setup
-  guidance.
-- Long talks: transcribe in chunks with progress reporting through the
-  existing queue progress frames.
+- `SpeechAnalyzer` authorization/asset quirks on specific builds —
+  typed readiness probe, surfaced as setup guidance.
+- Long talks: chunked transcription with progress through the existing
+  queue progress frames.
 - yt-dlp audio acquisition can hit the same blocks as caption
-  metadata; the same never-retry-after-block rule applies.
-- The decode dependency (ffmpeg vs pure-Python WAV decode of a
-  pre-muxed format) is the one open implementation question; settle it
-  first, since it decides the package's dependency footprint.
+  metadata; never-retry-after-block applies.
+- Disk pressure: preflight + caps above; concurrency capped at one
+  speech job.
 
 ## Out of scope
 
-Podcast-feed episode audio reuse from existing caches, speaker
-diarization, timestamps in output, and non-Mac platforms.
+Podcast-feed enclosures (v2 — needs enclosure resolution), speaker
+diarization, timestamps in output, non-Mac platforms, and any network
+speech path.
