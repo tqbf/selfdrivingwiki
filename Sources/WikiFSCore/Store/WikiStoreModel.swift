@@ -2855,6 +2855,13 @@ public final class WikiStoreModel {
         //    version, so the reader tab shows rendered content with inlined
         //    images alongside the original-HTML HTML tab.
         appendExtractedMarkdown(to: pageSummary, from: snapshot.page)
+        // 5. Issue #1380: the snapshot sidecar is the ingest-time FALLBACK
+        //    (image-rewritten tag-based text). The gated import extraction
+        //    still runs for snapshot sources, so the route-selected package
+        //    (Defuddle) lands and is nominated active when available. The
+        //    gate closes without a live claiming package and the sidecar
+        //    stays the active readable version — the pre-#1380 behavior.
+        autoExtractIfRegistered(pageSummary)
         return pageSummary
     }
 
@@ -3807,7 +3814,15 @@ public final class WikiStoreModel {
             // result `extractHtml` already treats as skip-and-log. The
             // source then keeps landing verbatim with the Extract button
             // available — the issue #799 manual-retry contract.
-            _ = await extractHtml(for: sourceID, backend: .defuddle, extractor: extractor)
+            let version = await extractHtml(for: sourceID, backend: .defuddle, extractor: extractor)
+            // Snapshot ingests land with the image-rewritten materializer
+            // sidecar as the default head; nominate the package version so
+            // the route selection, not the ingest fallback, is the active
+            // readable text. On sidecar-less paths the import version is
+            // already the head and this is a no-op.
+            if let version {
+                setActiveMarkdown(for: sourceID, to: version.id)
+            }
         }
     }
 

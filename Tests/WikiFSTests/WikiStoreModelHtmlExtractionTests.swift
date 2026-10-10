@@ -369,4 +369,104 @@ struct WikiStoreModelHtmlExtractionTests {
         #expect(model.importExtractingSourceIDs.isEmpty)
         #expect(try store.sourceContent(id: summary.id) == Data(sampleHTML.utf8))
     }
+
+    // MARK: - Snapshot ingests honor the gate too (#1390 follow-up)
+
+    /// Serves the page HTML for any non-image URL and a minimal PNG for
+    /// image URLs, so `WebsiteMaterializer.materializeSnapshot` produces a
+    /// snapshot-with-images ingest (the `storeSnapshot` path).
+    private struct SnapshotPageFetcher: URLFetchService.URLResourceFetcher {
+        let pageHTML: String
+        func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse {
+            if url.lastPathComponent.hasSuffix(".png") {
+                return URLFetchService.FetchResponse(
+                    data: Data([
+                        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+                        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+                    ]),
+                    contentType: "image/png", finalURL: url)
+            }
+            return URLFetchService.FetchResponse(
+                data: Data(pageHTML.utf8), contentType: "text/html", finalURL: url)
+        }
+    }
+
+    private let snapshotHTML = """
+    <html><head><title>Snapshot Page</title></head><body>
+    <article><p>Body text</p>
+    <img src="images/foo.png" alt="foo">
+    </article></body></html>
+    """
+
+    @Test func snapshotURLIngestNominatesPackageHeadOverSidecar() async throws {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test-html-snapshot"))
+        let model = WikiStoreModel(store: store)
+        model.registeredExtractionInputs = RegisteredExtractionInputs(claims: [.init(
+            kind: .html,
+            mimeTypes: [MimeType.html],
+            filenameExtensions: ["html"])])
+        model.importAutoExtractionKinds = [.html]
+        let stub = try StubHTMLExtractor(markdown: "# Snapshot defuddle\n")
+        model.importExtractorProvider = { _ in .html(stub) }
+
+        _ = try await model.addURL(
+            "https://example.com/page", fetcher: SnapshotPageFetcher(pageHTML: snapshotHTML))
+        model.reloadFromStore()
+        let id = try #require(model.sources.first?.id)
+
+        // Poll for the NOMINATED package head (the materializer sidecar is
+        // already head before the detached import task lands).
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(30))
+        while true {
+            if let head = try store.processedMarkdownHead(sourceID: id),
+               head.content.contains("# Snapshot defuddle") {
+                break
+            }
+            guard clock.now < deadline else {
+                Issue.record("snapshot import extraction did not land within the time limit")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        guard let head = try store.processedMarkdownHead(sourceID: id) else {
+            Issue.record("no extraction head landed")
+            return
+        }
+        #expect(head.technique == "extractor-package:org.selfdrivingwiki.defuddle")
+        // The image-rewritten materializer sidecar rides as the alternative.
+        let history = try store.processedMarkdownHistory(sourceID: id)
+        #expect(history.count == 2)
+        #expect(history.contains { $0.content.contains("](images/foo.png)") })
+        #expect(try store.sourceContent(id: id) == Data(snapshotHTML.utf8))
+    }
+
+    @Test func snapshotURLIngestWithoutPackageKeepsMaterializerSidecar() async throws {
+        let store = try tempStore()
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test-html-snapshot-fallback"))
+        let model = WikiStoreModel(store: store)
+        model.registeredExtractionInputs = RegisteredExtractionInputs(claims: [.init(
+            kind: .html,
+            mimeTypes: [MimeType.html],
+            filenameExtensions: ["html"])])
+        model.importAutoExtractionKinds = [.html]
+        // No provider wired — the gate closes and the pre-#1380 behavior
+        // holds: the image-rewritten materializer sidecar is the only
+        // markdown version and stays the active head.
+        model.importExtractorProvider = nil
+
+        _ = try await model.addURL(
+            "https://example.com/page", fetcher: SnapshotPageFetcher(pageHTML: snapshotHTML))
+        model.reloadFromStore()
+        let id = try #require(model.sources.first?.id)
+
+        guard let head = try store.processedMarkdownHead(sourceID: id) else {
+            Issue.record("no materializer sidecar landed")
+            return
+        }
+        #expect(head.content.contains("](images/foo.png)"))
+        #expect(try store.processedMarkdownHistory(sourceID: id).count == 1)
+    }
 }
