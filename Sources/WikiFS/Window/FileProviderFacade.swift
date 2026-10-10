@@ -518,10 +518,17 @@ final class FileProviderFacade: ChangeSignaler {
     ///
     /// `preferMarkdownSibling` (#1375) resolves the source's `.md` markdown
     /// SIBLING identifier (`source-markdown-by-name:`) instead of the raw
-    /// node — the Share rule's "share the readable transcript" branch. The
-    /// raw node remains the default so "Reveal in Finder" and other callers
-    /// keep resolving the raw artifact (which is now the `.webloc` shortcut
-    /// for byteless sources).
+    /// node — the Share rule's "share the readable transcript" branch, with
+    /// no fallback (Share only sets it when the sibling is eligible).
+    ///
+    /// Generic resolution (default) tries the raw node first, then falls back
+    /// to the sibling. The #1375 sibling-only projection RETIRES the raw
+    /// identifier for byteless sources with a processed head (bare provider
+    /// id, e.g. a YouTube video id — no `.webloc` is possible), so "Reveal in
+    /// Finder", reader links, and link menus must land on the sibling — the
+    /// only projected artifact — instead of failing. The mount is the source
+    /// of truth for the shape; the fallback mirrors it rather than
+    /// duplicating the eligibility rule.
     ///
     /// `wikiID` selects the File Provider domain (one per wiki). Without an
     /// explicit value it falls back to `activeWikiID` — but in multi-window
@@ -542,21 +549,38 @@ final class FileProviderFacade: ChangeSignaler {
         }
         let domain = domain(id: wiki, displayName: wiki.rawValue)
         guard let manager = NSFileProviderManager(for: domain) else { return nil }
-        let identifier = NSFileProviderItemIdentifier(
-            preferMarkdownSibling
-                ? WikiFSContainerID.sourceMarkdownByName(id.rawValue)
-                : WikiFSContainerID.sourceByName(id.rawValue))
-        do {
-            let url = try await userVisibleURL(
-                manager: manager,
-                itemIdentifier: identifier,
-                timeout: .seconds(5))
-            DebugLog.fileprovider("resolveSourceByNameURL: resolved \(url.lastPathComponent) wikiID=\(wiki.rawValue) markdownSibling=\(preferMarkdownSibling)")
-            return url
-        } catch {
-            DebugLog.fileprovider("resolveSourceByNameURL: failed wikiID=\(wiki.rawValue) explicitWikiIDArg=\(wikiID?.rawValue ?? "nil") activeWikiID=\(activeWikiID?.rawValue ?? "nil") markdownSibling=\(preferMarkdownSibling) — \(error.localizedDescription)")
-            return nil
+
+        // One getUserVisibleURL round trip per identifier, with the shared
+        // success/failure diagnostics. A "file doesn't exist" failure here is
+        // also the symptom of routing to the wrong wiki's domain (issue #672).
+        func resolve(_ identifierString: String, node: String) async -> URL? {
+            do {
+                let url = try await userVisibleURL(
+                    manager: manager,
+                    itemIdentifier: NSFileProviderItemIdentifier(identifierString),
+                    timeout: .seconds(5))
+                DebugLog.fileprovider("resolveSourceByNameURL: resolved \(url.lastPathComponent) wikiID=\(wiki.rawValue) node=\(node)")
+                return url
+            } catch {
+                DebugLog.fileprovider("resolveSourceByNameURL: failed wikiID=\(wiki.rawValue) explicitWikiIDArg=\(wikiID?.rawValue ?? "nil") activeWikiID=\(activeWikiID?.rawValue ?? "nil") node=\(node) — \(error.localizedDescription)")
+                return nil
+            }
         }
+
+        let raw = WikiFSContainerID.sourceByName(id.rawValue)
+        let sibling = WikiFSContainerID.sourceMarkdownByName(id.rawValue)
+
+        // Explicit Share rule: the readable transcript, no fallback — Share
+        // only asks for the sibling when the projection projects one.
+        if preferMarkdownSibling {
+            return await resolve(sibling, node: "markdown-sibling")
+        }
+        // Generic resolution: raw node first, then the sibling (see the doc
+        // comment — the sibling-only projection retires the raw identifier).
+        if let url = await resolve(raw, node: "raw") {
+            return url
+        }
+        return await resolve(sibling, node: "markdown-sibling-fallback")
     }
 
     /// Resolve the user-visible URL for sharing a page via its `page-by-title`
