@@ -125,7 +125,9 @@ struct Projection {
         static let sourceByIDPrefix = WikiFSContainerID.sourceByIDPrefix
         static let sourceByNamePrefix = WikiFSContainerID.sourceByNamePrefix
         static let sourceMarkdownByIDPrefix = "source-markdown-by-id:"
-        static let sourceMarkdownByNamePrefix = "source-markdown-by-name:"
+        // Shared with the app (which resolves the `.md` sibling for Share,
+        // #1375) so the two sides build the identical identifier.
+        static let sourceMarkdownByNamePrefix = WikiFSContainerID.sourceMarkdownByNamePrefix
 
         static func pageByID(_ ulid: String) -> NSFileProviderItemIdentifier {
             NSFileProviderItemIdentifier(byIDPrefix + ulid)
@@ -370,6 +372,14 @@ struct Projection {
         /// `cachedLinkMaps`.
         private var cachedHeads: [String: SourceMarkdownVersion]?
 
+        /// Per-scope bulk map of byteless sources' external identities
+        /// (#1375): `source_versions.external_identity` for every source whose
+        /// current content version has no blob (the byteless population),
+        /// built once per scope via `embedDescriptors()` and reused by
+        /// enumeration, single-item resolution, and content serving.
+        /// Invalidated on token change, like the caches above.
+        private var cachedBytelessExternalIdentities: [SourceID: String]?
+
         /// Per-scope credibility-signal caches (#927): cite-usage signals +
         /// head producers, grow-only and token-invalidated like the caches
         /// above. `cachedSignalIDs` tracks exactly which source ids the maps
@@ -414,6 +424,7 @@ struct Projection {
                 cachedToken = value
                 cachedLinkMaps = nil
                 cachedHeads = nil
+                cachedBytelessExternalIdentities = nil
                 cachedSignalIDs = nil
                 cachedUsageSignals = nil
                 cachedHeadProducers = nil
@@ -442,6 +453,18 @@ struct Projection {
         func cacheHeads(_ heads: [String: SourceMarkdownVersion]) {
             lock.lock(); defer { lock.unlock() }
             cachedHeads = heads
+        }
+
+        /// The cached byteless external-identity map, or nil if not yet computed.
+        var bytelessExternalIdentities: [SourceID: String]? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedBytelessExternalIdentities
+        }
+
+        /// Cache the byteless external-identity map (built once per scope).
+        func cacheBytelessExternalIdentities(_ identities: [SourceID: String]) {
+            lock.lock(); defer { lock.unlock() }
+            cachedBytelessExternalIdentities = identities
         }
 
         /// The source ids the credibility-signal caches cover (nil = nothing fetched yet).
@@ -1001,6 +1024,26 @@ struct Projection {
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
                       let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }) else { return nil }
+                // Byteless (#1375): single-item resolution must project the
+                // SAME shape enumeration did — the `.webloc` shortcut in the
+                // source's own identifier slot. Checked before the by-name
+                // rewritten-content fast path so the byteless case is never
+                // shadowed.
+                if let webloc = Self.bytelessWeblocData(
+                    byteSize: file.byteSize,
+                    externalIdentity: projection.cachedBytelessExternalIdentities()[SourceID(rawValue: ulid)]) {
+                    return Self.sourceWeblocNode(for: id, file: file, weblocData: webloc)
+                }
+                // Byteless without a usable URL (#1375): when the `.md` sibling
+                // stands in for the raw node, enumeration DROPPED the verbatim
+                // node — single-item resolution must agree, so the identifier
+                // resolves to nothing rather than resurrecting a zero-byte file
+                // the mount no longer lists.
+                if file.byteSize == 0,
+                   projection.cachedHeadsBySource()[ulid] != nil,
+                   !MimeType.isText(file.mimeType) {
+                    return nil
+                }
                 if id.rawValue.hasPrefix(Identity.sourceByNamePrefix) {
                     let contentData = projection.rewrittenVerbatimSourceContent(
                         id: SourceID(rawValue: ulid), mimeType: file.mimeType,
@@ -1030,8 +1073,28 @@ struct Projection {
             }
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
-                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }),
-                      let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: SourceID(rawValue: ulid)) }) else { return nil }
+                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }) else { return nil }
+                // Byteless (#1375): serve the SAME webloc bytes the shortcut
+                // node's documentSize was computed from — a size/content
+                // mismatch truncates `cat`. Checked before the by-name
+                // rewritten-content fast path so the byteless case is never
+                // shadowed.
+                if let webloc = Self.bytelessWeblocData(
+                    byteSize: file.byteSize,
+                    externalIdentity: projection.cachedBytelessExternalIdentities()[SourceID(rawValue: ulid)]) {
+                    return webloc
+                }
+                // Byteless without a usable URL (#1375): a sibling-eligible
+                // source's verbatim node is dropped (see `sourceNodes`) — the
+                // retired identifier serves no content. Non-eligible byteless
+                // sources fall through; their stored content is nil anyway
+                // (blob_hash IS NULL ⇒ no bytes).
+                if file.byteSize == 0,
+                   projection.cachedHeadsBySource()[ulid] != nil,
+                   !MimeType.isText(file.mimeType) {
+                    return nil
+                }
+                guard let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: SourceID(rawValue: ulid)) }) else { return nil }
                 if id.rawValue.hasPrefix(Identity.sourceByNamePrefix),
                    let rewritten = projection.rewrittenVerbatimSourceContent(
                        id: SourceID(rawValue: ulid), mimeType: file.mimeType,
@@ -1618,6 +1681,124 @@ struct Projection {
         )
     }
 
+    // MARK: - Byteless source URL shortcuts (#1375)
+
+    /// File extension of the URL-shortcut node that replaces a byteless
+    /// source's zero-byte verbatim node: an Apple `.webloc` XML property list
+    /// pointing at the source's origin URL.
+    static let weblocFileExtension = "webloc"
+
+    /// Marker folded into the shortcut node's content version so mounts that
+    /// already saw the old zero-byte node (versioned by the bare row `version`)
+    /// refetch the changed shape. The row `version` does not move when only
+    /// the projection's node shape changes, so the marker + a content digest
+    /// must carry the bump — mirroring how the markdown sibling folds
+    /// head id + provenance digest.
+    static let weblocVersionMarker = "webloc"
+
+    /// Length of the hex SHA-256 prefix folded into the shortcut's content
+    /// version (short, non-cryptographic: change detection only).
+    static let weblocDigestHexLength = 12
+
+    /// Key of the URL entry inside a `.webloc` property list.
+    static let weblocURLKey = "URL"
+
+    /// Parse a byteless source's stored external identity
+    /// (`source_versions.external_identity`) into a usable origin URL, or nil
+    /// when it is absent or not an http(s) URL. The column is
+    /// provider-specific — a full URL for website/direct-remote fetches but a
+    /// bare id for YouTube/Vimeo/Spotify — and only a URL can anchor a
+    /// `.webloc` shortcut.
+    static func weblocURL(fromExternalIdentity identity: String?) -> URL? {
+        guard let identity, !identity.isEmpty,
+              let url = URL(string: identity),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return nil }
+        return url
+    }
+
+    /// Serialize the Apple `.webloc` XML property list for `url`. The
+    /// shortcut node's reported size AND its served bytes both derive from
+    /// this one Data — the size==content invariant (a mismatch truncates
+    /// `cat`).
+    static func weblocData(for url: URL) -> Data {
+        let plist: [String: String] = [weblocURLKey: url.absoluteString]
+        do {
+            return try PropertyListSerialization.data(
+                fromPropertyList: plist, format: .xml, options: 0)
+        } catch {
+            // Unreachable for a [String: String] plist, but never silently:
+            // log it and serve a minimal hand-built equivalent so the node
+            // still has content (its size and bytes stay tied to this Data).
+            DebugLog.fileprovider("weblocData: PropertyListSerialization failed — \(error.localizedDescription)")
+            let escaped = url.absoluteString
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+            return Data("""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+            \t<key>\(weblocURLKey)</key>
+            \t<string>\(escaped)</string>
+            </dict>
+            </plist>
+            """.utf8)
+        }
+    }
+
+    /// The node-shape decision for ONE source (#1375): non-nil → the source
+    /// is BYTELESS (`byteSize == 0`) and has a usable http(s) origin URL, so
+    /// the projection serves this webloc Data as the node's content; nil →
+    /// the source is not byteless or has no usable URL, so the caller falls
+    /// back (verbatim node kept — or the sibling-only drop, when the source
+    /// is sibling-eligible and the sibling stands in for it). Callers derive
+    /// node size and served bytes from the same returned Data.
+    static func bytelessWeblocData(
+        byteSize: Int, externalIdentity: String?
+    ) -> Data? {
+        guard byteSize == 0,
+              let url = weblocURL(fromExternalIdentity: externalIdentity) else { return nil }
+        return weblocData(for: url)
+    }
+
+    /// Build the URL-shortcut node that replaces a byteless source's
+    /// zero-byte verbatim node (#1375). Reuses the source's own item
+    /// identifier so mount identity is stable across the shape change; only
+    /// the name's extension (`.webloc`) and the served bytes change. Size is
+    /// the webloc byte count — exactly what `contentForLeaf` serves. The
+    /// content version folds the row `version` + the webloc marker + a
+    /// content digest (old mounts refetch); the metadata version folds the
+    /// content version so the renamed node is re-enumerated.
+    static func sourceWeblocNode(
+        for id: NSFileProviderItemIdentifier,
+        file: SourceSummary,
+        weblocData: Data
+    ) -> ProjectedNode {
+        let raw = id.rawValue
+        let isByName = raw.hasPrefix(Identity.sourceByNamePrefix)
+        let humanName = file.displayName ?? file.filename
+        let name = isByName
+            ? FilenameEscaping.byNameSourceFilename(
+                filename: humanName, ext: weblocFileExtension, sourceID: file.id)
+            : FilenameEscaping.byIDSourceFilename(sourceID: file.id, ext: weblocFileExtension)
+        let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
+        let digest = String(
+            RendererSHA256.digest(weblocData).hex.prefix(weblocDigestHexLength))
+        let contentVersion = "\(file.version):\(weblocVersionMarker):\(digest)"
+        let metaKey = isByName
+            ? "\(humanName)|\(file.updatedAt.timeIntervalSince1970)|\(contentVersion)"
+            : "\(file.filename)|\(file.updatedAt.timeIntervalSince1970)|\(contentVersion)"
+        return .file(
+            id: id, parent: parent, name: name, size: weblocData.count,
+            version: Data(contentVersion.utf8),
+            metadataVersion: Data(metaKey.utf8),
+            created: file.createdAt, modified: file.updatedAt,
+            ingestedExt: weblocFileExtension,
+            mimeType: nil)
+    }
+
     /// Build a file node for a page row, under whichever view `id` belongs to.
     /// Pass `contentData` when the caller has already computed the rewritten
     /// bytes (by-title view) so the reported `documentSize` matches what
@@ -1747,6 +1928,23 @@ struct Projection {
         return heads
     }
 
+    /// The batched `[SourceID: externalIdentity]` map for BYTELESS sources in
+    /// this scope (#1375). Built once per read scope via `embedDescriptors()`
+    /// (one query for the whole byteless population — never per source) and
+    /// reused by enumeration, single-item resolution, and content serving,
+    /// mirroring `cachedHeadsBySource()`. `embedDescriptors()` swallows and
+    /// logs its own SQL errors (→ `[:]`, the pre-migration-safe empty), so a
+    /// failed fetch degrades every byteless source to the verbatim fallback.
+    private func cachedBytelessExternalIdentities() -> [SourceID: String] {
+        if let scope = readStoreHolder, let cached = scope.bytelessExternalIdentities {
+            return cached
+        }
+        let descriptors = (DebugLog.trying("embedDescriptors", operation: { try openReadStore()?.embedDescriptors() })) ?? [:]
+        let identities = descriptors.mapValues { $0.externalIdentity ?? "" }
+        readStoreHolder?.cacheBytelessExternalIdentities(identities)
+        return identities
+    }
+
     private func makeLinkMaps() -> LinkMaps {
         let store = openReadStore()
 
@@ -1754,12 +1952,15 @@ struct Projection {
         // name-variant / loose-key / sibling-image computation so this and
         // WikiRenderContext.build agree on normalization (#511). The index is
         // a neutral intermediate; we adapt its entries to RelativeLinkRewriter
-        // .Target below — the file-path logic is Projection-specific.
+        // .Target below — the file-path logic is Projection-specific. Source
+        // rows are fetched once and reused for the byteless (#1375) webloc
+        // target map below.
         let siblingImages = (DebugLog.trying("siblingImageResolvers", operation: { try store?.siblingImageResolvers() })) ?? [:]
+        let sourceRows = (DebugLog.trying("listAllSources", operation: { try store?.listAllSourcesOrderedByID() })) ?? []
         let index = WikiLinkIndex.build(
             pages: ((DebugLog.trying("listAllPages", operation: { try store?.listAllPagesOrderedByID() })) ?? []).map {
                 WikiLinkIndex.PageEntry(id: $0.id.rawValue, title: $0.title) },
-            sources: ((DebugLog.trying("listAllSources", operation: { try store?.listAllSourcesOrderedByID() })) ?? []).map {
+            sources: sourceRows.map {
                 WikiLinkIndex.SourceEntry(
                     id: $0.id, filename: $0.filename, ext: $0.ext,
                     mime: $0.mime, displayName: $0.displayName) },
@@ -1770,6 +1971,22 @@ struct Projection {
         // Heads map — Projection-specific: determines whether each source
         // target points at the readable .md sibling or the raw verbatim file.
         let heads = (DebugLog.trying("processedMarkdownHeads", operation: { try store?.processedMarkdownHeadsBySource() })) ?? [:]
+
+        // Byteless sources with a usable http(s) external identity project as
+        // `.webloc` URL shortcuts (#1375) — their link target must name that
+        // shortcut file, not a phantom zero-byte verbatim file. One bulk
+        // identity fetch (cached per scope upstream of the by-name leaf
+        // paths); sources without a usable URL stay on the verbatim target.
+        let bytelessIdentities = (DebugLog.trying("embedDescriptors", operation: { try store?.embedDescriptors() }) ?? [:])
+            .mapValues { $0.externalIdentity ?? "" }
+        var weblocFileNames: [String: String] = [:]
+        for row in sourceRows where row.byteSize == 0 {
+            guard Self.weblocURL(fromExternalIdentity: bytelessIdentities[SourceID(rawValue: row.id)] ?? nil) != nil else { continue }
+            weblocFileNames[row.id] = FilenameEscaping.byNameSourceFilename(
+                filename: row.displayName ?? row.filename,
+                ext: Self.weblocFileExtension,
+                sourceID: SourceID(rawValue: row.id))
+        }
 
         var pageByTitle: [String: RelativeLinkRewriter.Target] = [:]
         var pageByID: [String: RelativeLinkRewriter.Target] = [:]
@@ -1783,13 +2000,21 @@ struct Projection {
         var sourceByName: [String: RelativeLinkRewriter.Target] = [:]
         var sourceByID: [String: RelativeLinkRewriter.Target] = [:]
         for entry in index.sources {
-            // Sibling eligibility mirrors `sourceNodes`: a processed head AND a
-            // non-`text/*` mime yields the `.md` sibling; otherwise the verbatim file.
+            // Target selection mirrors `sourceNodes` emission (#1375): a
+            // processed head AND a non-`text/*` mime yields the `.md` sibling —
+            // including the byteless no-URL shape whose zero-byte verbatim node
+            // is DROPPED (the sibling is the only projected node, so its links
+            // must point at it); otherwise a BYTELESS source with a usable
+            // origin URL targets its `.webloc` shortcut (the node actually
+            // projected in the verbatim slot); everything else targets the
+            // verbatim file (still projected — the byteless no-sibling
+            // fallback keeps its zero-byte node).
             let hasSibling = heads[entry.id] != nil
                 && (entry.mime.map { !MimeType.isText($0) } ?? false)
             let file = hasSibling
                 ? FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: "md", sourceID: SourceID(rawValue: entry.id))
-                : FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: entry.ext, sourceID: SourceID(rawValue: entry.id))
+                : weblocFileNames[entry.id]
+                    ?? FilenameEscaping.byNameSourceFilename(filename: entry.humanName, ext: entry.ext, sourceID: SourceID(rawValue: entry.id))
             let target = RelativeLinkRewriter.Target(path: Self.sourcesByNameDir + [file], title: entry.humanName)
             sourceByName[entry.humanName] = target
             sourceByID[entry.id.uppercased()] = target
@@ -1994,46 +2219,103 @@ struct Projection {
     /// When a source has a processed markdown head (from `source_markdown_versions`),
     /// emits BOTH the verbatim source node AND a `.md` sibling — the processed
     /// markdown version — under both `by-id` and `by-name` views. Single bulk
-    /// head query avoids N+1 across the source list.
+    /// head + external-identity queries avoid N+1 across the source list.
+    ///
+    /// Node shape per source (#1375):
+    /// - `byteSize > 0`: verbatim node; plus the `.md` sibling when eligible.
+    /// - `byteSize == 0` WITH a usable http(s) `source_versions.external_identity`:
+    ///   ONE `.webloc` URL-shortcut node in the verbatim slot (same item
+    ///   identifier, so mount identity is stable) — a byteless source has no
+    ///   raw file to project, and the origin URL is its meaningful raw artifact;
+    ///   plus the `.md` sibling when eligible.
+    /// - `byteSize == 0` WITHOUT a usable external identity (nil, or a
+    ///   provider-specific bare id like a YouTube video id — the issue's real
+    ///   shape: `video/youtube` + `tUPPVhBBcoM`) AND sibling-eligible
+    ///   (processed head + non-text mime): ONLY the `.md` sibling — the
+    ///   zero-byte verbatim node is DROPPED entirely. It carries no content,
+    ///   and `makeLinkMaps` already targets the sibling name for this shape,
+    ///   so nothing dangles.
+    /// - `byteSize == 0` without a usable identity and NOT sibling-eligible:
+    ///   the zero-byte verbatim node stays — with no sibling there is nothing
+    ///   to stand in for it, and dropping it would dangle mount identity and
+    ///   `[[wikilink]]` targets.
     private func sourceNodes(byName: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
               let files = DebugLog.trying("listAllSources", operation: { try store.listAllSourcesOrderedByID() }) else { return [] }
         let heads = cachedHeadsBySource()
+        let bytelessIdentities = cachedBytelessExternalIdentities()
         prefetchCredibilitySignals(
             in: store, sourceIDs: files.map { SourceID(rawValue: $0.id) })
         let signals = readStoreHolder?.usageSignals ?? [:]
         // Build link maps once for by-name markdown sibling rewriting.
         let maps = byName ? cachedLinkMaps() : nil
-        return files.flatMap { row in
+        return files.flatMap { row -> [ProjectedNode] in
             let id = byName ? Identity.sourceByName(row.id) : Identity.sourceByID(row.id)
             let summary = SourceSummary(
                 id: SourceID(rawValue: row.id), filename: row.filename, ext: row.ext,
                 mimeType: row.mime, byteSize: row.byteSize,
                 createdAt: row.createdAt, updatedAt: row.updatedAt, version: row.version,
                 displayName: row.displayName)
+            let sibling = markdownSiblingNode(
+                head: heads[row.id], source: summary, byName: byName, maps: maps,
+                signal: signals[row.id])
+            if let webloc = Self.bytelessWeblocData(
+                byteSize: row.byteSize,
+                externalIdentity: bytelessIdentities[SourceID(rawValue: row.id)]) {
+                // Byteless + usable URL: the shortcut replaces the verbatim
+                // node in its slot; the sibling (if eligible) follows.
+                var nodes = [Self.sourceWeblocNode(for: id, file: summary, weblocData: webloc)]
+                if let sibling { nodes.append(sibling) }
+                return nodes
+            }
+            if row.byteSize == 0 {
+                // Byteless WITHOUT a usable URL (#1375): no shortcut is
+                // possible, and a zero-byte extension-less file carries no
+                // content — when the `.md` sibling stands in for the raw node
+                // (link maps already target it for this shape), DROP the
+                // verbatim node entirely. Without a sibling, keep the
+                // zero-byte verbatim node: dropping it would leave mount
+                // identity and `[[wikilink]]` targets dangling with nothing
+                // to point at.
+                if let sibling { return [sibling] }
+                return [Self.sourceNode(for: id, file: summary, contentData: nil)]
+            }
             let verbatimContentData = byName
                 ? maps.map { rewrittenVerbatimSourceContent(
                     id: SourceID(rawValue: row.id), mimeType: row.mime, maps: $0) }
                   .flatMap { $0 }
                 : nil
             let verbatimNode = Self.sourceNode(for: id, file: summary, contentData: verbatimContentData)
-            // Sibling eligibility: has a chain AND is NOT markdown-native.
-            // Markdown-native sources don't get a sibling — the verbatim .md is the content.
-            guard let head = heads[row.id],
-                  !MimeType.isText(row.mime) else { return [verbatimNode] }
-            let markdownID = byName
-                ? Identity.sourceMarkdownByName(row.id)
-                : Identity.sourceMarkdownByID(row.id)
-            let contentData = maps.map {
-                rewriteLinks(head.content, maps: $0, baseDir: Self.sourcesByNameDir)
-            }
-            // Same self-reference fold as `sourceMarkdownContent`, so enumerated
-            // versions and leaf versions advance together on the same inputs.
-            let selfReference = Self.sourceSelfReference(source: summary, signal: signals[row.id])
-            return [verbatimNode, Self.sourceMarkdownNode(
-                        for: markdownID, source: summary, head: head, contentData: contentData,
-                        provenanceDigest: Self.provenanceDigest([selfReference]))]
+            guard let sibling else { return [verbatimNode] }
+            return [verbatimNode, sibling]
         }
+    }
+
+    /// The `.md` markdown-sibling node for one source, or nil. Shared by the
+    /// enumeration and byteless branches so eligibility is stated once.
+    /// Sibling eligibility: has a processed head AND is NOT markdown-native —
+    /// for markdown-native sources the verbatim `.md` IS the content, so no
+    /// sibling (mirrored by `makeLinkMaps` target selection).
+    private func markdownSiblingNode(
+        head: SourceMarkdownVersion?,
+        source: SourceSummary,
+        byName: Bool,
+        maps: LinkMaps?,
+        signal: GRDBWikiStore.SourceUsageSignal?
+    ) -> ProjectedNode? {
+        guard let head, !MimeType.isText(source.mimeType) else { return nil }
+        let markdownID = byName
+            ? Identity.sourceMarkdownByName(source.id.rawValue)
+            : Identity.sourceMarkdownByID(source.id.rawValue)
+        let contentData = maps.map {
+            rewriteLinks(head.content, maps: $0, baseDir: Self.sourcesByNameDir)
+        }
+        // Same self-reference fold as `sourceMarkdownContent`, so enumerated
+        // versions and leaf versions advance together on the same inputs.
+        let selfReference = Self.sourceSelfReference(source: source, signal: signal)
+        return Self.sourceMarkdownNode(
+            for: markdownID, source: source, head: head, contentData: contentData,
+            provenanceDigest: Self.provenanceDigest([selfReference]))
     }
 
     /// All chat summaries projected as file nodes under the given view, ordered

@@ -84,6 +84,17 @@ public enum WikiFSContainerID {
         sourceByNamePrefix + ulid
     }
 
+    /// Prefix for a source's processed-markdown `.md` SIBLING leaf identifier
+    /// (by-name view). Shared so Share can resolve the sibling (#1375) with
+    /// the exact identifier the extension projects
+    /// (`Projection.Identity.sourceMarkdownByName(_:)`).
+    public static let sourceMarkdownByNamePrefix = "source-markdown-by-name:"
+
+    /// Build the by-name markdown-sibling identifier string for a source's ULID.
+    public static func sourceMarkdownByName(_ ulid: String) -> String {
+        sourceMarkdownByNamePrefix + ulid
+    }
+
     // Bookmarks (#125, Phase D). A top-level `bookmarks/` tree mirrors the
     // user-defined folder/ref structure from `bookmark_nodes`. Folders are
     // directories; page/source refs are leaf files serving the target's content.

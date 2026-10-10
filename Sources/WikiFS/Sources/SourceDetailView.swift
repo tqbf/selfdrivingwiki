@@ -982,13 +982,25 @@ struct SourceDetailView: View {
                     .help("Reveal this source in the sidebar")
                     if fileProvider.path != nil {
                         Button("Share", systemImage: "square.and.arrow.up") {
-                            DebugLog.fileprovider("SourceDetailView: Share tapped — id=\(file.id.rawValue)")
+                            // Share rule (#1375): prefer the `.md` markdown
+                            // sibling when a processed head exists and the
+                            // source is not markdown-native; otherwise resolve
+                            // the raw node (the `.webloc` origin shortcut for
+                            // byteless sources). `headVersion` is the
+                            // already-loaded head state — no re-query.
+                            let choice = SourceShareNodeChoice.forSource(
+                                hasProcessedHead: headVersion != nil,
+                                mimeType: file.mimeType)
+                            DebugLog.fileprovider(
+                                "SourceDetailView: Share tapped — id=\(file.id.rawValue) node=\(choice.logLabel)")
                             Task {
-                                guard let url = await fileProvider.resolveSourceByNameURL(id: file.id, wikiID: wikiID) else {
-                                    DebugLog.fileprovider("Share source detail: resolveSourceByNameURL returned nil — id=\(file.id.rawValue) wikiID=\(wikiID)")
+                                guard let url = await fileProvider.resolveSourceByNameURL(
+                                    id: file.id, wikiID: wikiID,
+                                    preferMarkdownSibling: choice == .markdownSibling) else {
+                                    DebugLog.fileprovider("Share source detail: resolveSourceByNameURL returned nil — id=\(file.id.rawValue) wikiID=\(wikiID) node=\(choice.logLabel)")
                                     return
                                 }
-                                DebugLog.fileprovider("Share source detail: \(url.lastPathComponent)")
+                                DebugLog.fileprovider("Share source detail: \(url.lastPathComponent) node=\(choice.logLabel)")
                                 let picker = NSSharingServicePicker(items: [url])
                                 let mouseScreen = NSEvent.mouseLocation
                                 guard let window = NSApplication.shared.keyWindow,
