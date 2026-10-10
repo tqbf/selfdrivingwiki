@@ -159,6 +159,39 @@ struct ZeroByteSourceProjectionTests {
         }
     }
 
+    /// Webloc upgrade (#1375 follow-up): the issue's REAL shape — byteless +
+    /// `video/youtube` + a BARE video id in `external_identity`, with the
+    /// fetch activity carrying the full origin URL (`plan`, mirrored in
+    /// `external_ref`) — resolves the origin from the ACTIVITY: the node
+    /// list is [webloc shortcut, `.md` sibling] and the sibling frontmatter
+    /// carries the activity's plan URL (the identity alone would never
+    /// resolve).
+    @Test func bytelessBareIdWithActivityPlanURLProjectsWeblocAndCarriesOrigin() throws {
+        let fixture = try makeStore()
+        let source = try fixture.store.addBytelessSource(
+            filename: "Warp Talk", mimeType: MimeType.videoYouTube,
+            provenance: SourceProvenance(
+                agentName: "youtube", activityKind: "fetch",
+                plan: originURL, externalRef: originURL,
+                externalIdentity: "tUPPVhBBcoM"))
+        _ = try fixture.store.appendProcessedMarkdown(
+            sourceID: source.id, content: "Transcript.", origin: .extraction, note: nil)
+        let projection = makeProjection(fixture)
+        let nodes = projection.children(of: Projection.Identity.sourcesByName)
+        #expect(nodes.count == 2, "expected [webloc, .md], got \(nodes.map(\.name))")
+        #expect(nodes.contains { $0.name.hasSuffix(".webloc") && $0.size > 0 })
+        #expect(nodes.contains { $0.name.hasSuffix(".md") })
+        // The sibling frontmatter carries the ACTIVITY's URL — the identity
+        // is only the bare video id and resolves to nothing on its own.
+        let content = String(
+            decoding: projection.contents(
+                for: Projection.Identity.sourceMarkdownByName(source.id.rawValue))
+                ?? Data(),
+            as: UTF8.self)
+        #expect(content.contains("- resource: \"\(originURL)\""),
+            "frontmatter must carry the activity's plan URL")
+    }
+
     /// Test 4: source WITH bytes + head + non-text mime → [verbatim, sibling]
     /// — regression guard that the byteless rule leaves byteful sources alone.
     @Test func sourceWithBytesAndHeadKeepsVerbatimPlusSibling() throws {
@@ -255,5 +288,130 @@ struct ZeroByteSourceProjectionTests {
             hasProcessedHead: false, mimeType: MimeType.videoYouTube) == .rawNode)
         #expect(SourceShareNodeChoice.forSource(
             hasProcessedHead: false, mimeType: nil) == .rawNode)
+    }
+
+    // MARK: - Sibling origin URL + honest sizing (#1375 follow-up)
+
+    /// Change 2 regression pin: the sibling node's size equals the served
+    /// byte count EXACTLY on BOTH views, on a fixture with producer metadata
+    /// (non-trivial frontmatter). The pre-fix node sized from raw
+    /// `head.content`, under-reporting by exactly the OKF frontmatter the
+    /// render prepends; the cached render makes size == served bytes. The
+    /// enumerated and single-item versions must also agree (same cache).
+    @Test func siblingNodeSizeMatchesServedBytesExactlyOnBothViews() throws {
+        let fixture = try makeStore()
+        let source = try fixture.store.addSource(
+            filename: "report.pdf", data: Data("%PDF-1.4 producer fixture".utf8),
+            mimeType: "application/pdf",
+            provenance: bytelessProvenance(externalIdentity: "https://example.com/report"))
+        let head = try fixture.store.appendProcessedMarkdown(
+            sourceID: source.id, content: "# Extracted with producer",
+            origin: .extraction, note: nil, technique: "pdf2md v1.2")
+        let projection = makeProjection(fixture)
+        let views: [(container: NSFileProviderItemIdentifier,
+                     makeID: (String) -> NSFileProviderItemIdentifier)] = [
+                (Projection.Identity.sourcesByName, Projection.Identity.sourceMarkdownByName),
+                (Projection.Identity.sourcesByID, Projection.Identity.sourceMarkdownByID),
+            ]
+        for view in views {
+            let id = view.makeID(source.id.rawValue)
+            let node = try #require(projection.node(for: id))
+            let bytes = try #require(projection.contents(for: id))
+            #expect(node.size == bytes.count,
+                "documentSize must equal the served byte count exactly")
+            // The OKF-wrapped render is strictly larger than the raw head —
+            // the delta is the frontmatter the old sizing dropped.
+            #expect(node.size > head.content.utf8.count)
+            // Enumeration and single-item resolution share the cached render:
+            // identical versions, not just identical sizes.
+            let sameRenderNode = try #require(
+                projection.node(for: view.makeID(source.id.rawValue)))
+            #expect(node.contentVersion == sameRenderNode.contentVersion)
+        }
+    }
+
+    /// Change 1: the sibling frontmatter carries an id-less origin-URL entry
+    /// (`- resource: https://…`) AFTER the id-carrying self-reference — for
+    /// the byteless+head+URL shape AND the with-bytes+head+URL shape (a
+    /// website-snapshot-like fetched PDF).
+    @Test func siblingFrontmatterCarriesOriginURLForURLShapedIdentities() throws {
+        let fixture = try makeStore()
+        let byteless = try addBytelessSource(
+            fixture.store, filename: "Warp Talk", mimeType: MimeType.videoYouTube,
+            externalIdentity: originURL)
+        _ = try fixture.store.appendProcessedMarkdown(
+            sourceID: byteless.id, content: "Transcript.", origin: .extraction, note: nil)
+        let snapshot = try fixture.store.addSource(
+            filename: "report.pdf", data: Data("%PDF-1.4 snapshot".utf8),
+            mimeType: "application/pdf",
+            provenance: bytelessProvenance(externalIdentity: "https://example.com/report"))
+        _ = try fixture.store.appendProcessedMarkdown(
+            sourceID: snapshot.id, content: "# Extracted", origin: .extraction, note: nil)
+        let projection = makeProjection(fixture)
+        for (source, origin) in [(byteless, originURL),
+                                 (snapshot, "https://example.com/report")] {
+            let content = String(
+                decoding: projection.contents(
+                    for: Projection.Identity.sourceMarkdownByName(source.id.rawValue))
+                    ?? Data(),
+                as: UTF8.self)
+            // yamlString always double-quotes scalar values, so the origin
+            // entry renders as: - resource: "https://…"
+            #expect(content.contains("- resource: \"\(origin)\""),
+                "sibling frontmatter must carry the origin URL")
+            // Truthful ordering: the id-carrying self-reference leads, the
+            // origin entry follows it.
+            guard let selfRefRange = content.range(of: "- id: "),
+                  let originRange = content.range(of: "- resource: \"\(origin)\"") else {
+                Issue.record("expected self-reference + origin entry in frontmatter")
+                return
+            }
+            #expect(selfRefRange.lowerBound < originRange.lowerBound)
+        }
+    }
+
+    /// Change 1 truthful-omissive half: a BARE video id (YouTube) and a nil
+    /// identity produce NO origin-URL line — the sibling carries only the
+    /// id-carrying self-reference.
+    @Test func siblingOmitsOriginURLForNonURLIdentities() throws {
+        let fixture = try makeStore()
+        let bareID = try addBytelessSource(
+            fixture.store, filename: "Warp Talk", mimeType: MimeType.videoYouTube,
+            externalIdentity: "tUPPVhBBcoM")
+        _ = try fixture.store.appendProcessedMarkdown(
+            sourceID: bareID.id, content: "Transcript.", origin: .extraction, note: nil)
+        let anonymous = try fixture.store.addSource(
+            filename: "doc.pdf", data: Data("%PDF-1.4 x".utf8), mimeType: "application/pdf")
+        _ = try fixture.store.appendProcessedMarkdown(
+            sourceID: anonymous.id, content: "# Extracted", origin: .extraction, note: nil)
+        let projection = makeProjection(fixture)
+        for source in [bareID, anonymous] {
+            let content = String(
+                decoding: projection.contents(
+                    for: Projection.Identity.sourceMarkdownByName(source.id.rawValue))
+                    ?? Data(),
+                as: UTF8.self)
+            #expect(!content.contains("- resource: http"),
+                "\(source.filename): no usable URL → no origin-URL entry")
+            #expect(content.contains("- id: "), "self-reference still present")
+        }
+    }
+
+    /// Change 1 version semantics: the origin reference is id-less, so the
+    /// provenance digest folds its URL — changing the origin URL changes the
+    /// digest, and with it the sibling's `:prov:` content-version fold
+    /// (existing mounts refetch). Also: appending an origin entry moves the
+    /// digest relative to the self-reference alone.
+    @Test func changingOriginURLChangesTheSiblingContentVersion() {
+        let a = OKFSourceReference(resource: .url(URL(string: "https://example.com/a")!))
+        let b = OKFSourceReference(resource: .url(URL(string: "https://example.com/b")!))
+        #expect(Projection.provenanceDigest([a]) != Projection.provenanceDigest([b]),
+            "the digest must distinguish origin URLs")
+        let selfRef = OKFSourceReference(
+            resource: .bundlePath("/sources/by-id/X.pdf"),
+            title: "X", id: "X", usageCount: 0)
+        #expect(Projection.provenanceDigest([selfRef])
+            != Projection.provenanceDigest([selfRef, a]),
+            "adding the origin reference must advance the digest")
     }
 }
