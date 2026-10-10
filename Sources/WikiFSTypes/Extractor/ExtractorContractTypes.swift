@@ -22,6 +22,16 @@ public enum ExtractorKind: String, Codable, CaseIterable, Hashable, Sendable {
     /// and never downloads media or runs speech-to-text
     /// (`youtube-transcript` on the wire).
     case youtubeTranscript = "youtube-transcript"
+    /// URL-backed AUDIO acquisition for explicit on-device speech
+    /// transcription. Protocol revision 4: the request is the same
+    /// `remote-url` shape, and the typed result is the audio-only M4A
+    /// stream (`resultMIMEType: audio/mp4`) — binary bytes, never
+    /// Markdown. The registration claims the synthetic source MIME
+    /// `audio/x-wiki-audio-acquire` so it never competes with the caption
+    /// package's `video/youtube` claim; the route is selected by the
+    /// persisted speech intent, never at import (`audio-transcript` on
+    /// the wire).
+    case audioTranscript = "audio-transcript"
 }
 
 public enum ExtractorLaunchMode: String, Codable, CaseIterable, Hashable, Sendable {

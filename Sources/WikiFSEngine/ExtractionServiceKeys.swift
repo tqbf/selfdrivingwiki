@@ -13,6 +13,7 @@ public enum ExtractionBackendKind: String, Codable, Hashable, Sendable {
     case youtubeTranscript
     case rssPodcastTranscript
     case applePodcastTranscript
+    case audioTranscript
 }
 
 /// Stable registry identity for one extraction adapter.
@@ -38,6 +39,10 @@ public enum ExtractionBackendAdapter: Sendable {
     /// former built-in fetcher case could not, and is removed with the
     /// YouTube caption packaging.
     case youtubeTranscript(ProcessPackageYouTubeTranscript)
+    /// The process-backed audio-acquire adapter for explicit on-device
+    /// speech transcription. Protocol revision 4 bytes result: the M4A
+    /// audio stream the host-side speech floor consumes.
+    case audioTranscript(ProcessPackageAudioAcquire)
     /// The process-backed RSS podcast transcript adapter. Carries the
     /// prepared package operation, so results keep exact package provenance
     /// — the former built-in fetcher case could not, and was removed.

@@ -51,10 +51,20 @@ Two parts and one explicit trigger:
    already interprets through the raw-byte `executeSourceResult` path;
    a binary result cannot ride the revision-3 Markdown result, which
    the host UTF-8-decodes — with kind `audio-transcript` (a NEW
-   ExtractorKind — see the migration checklist), v1 claims
-   `video/youtube` ONLY; podcast feeds are a follow-up (a feed URL is
-   not an episode enclosure — enclosure resolution and redirect
-   validation are their own work).
+   ExtractorKind — see the migration checklist).
+
+   Registration claims the SYNTHETIC source MIME
+   `audio/x-wiki-audio-acquire`, NOT `video/youtube`: the caption
+   package already claims `video/youtube` with kind
+   `youtube-transcript`, and `registeredMIME` is single-kind — a second
+   kind claiming the same MIME would make the claim ambiguous and break
+   captions auto-import. The synthetic claim follows the Zotero
+   fetcher's `application/zotero` precedent: route selection for speech
+   resolves the route `(audio-transcript, audio/x-wiki-audio-acquire)`
+   directly, selected by the persisted speech INTENT rather than the
+   source's MIME. v1 covers `video/youtube` sources only; podcast
+   feeds are a follow-up (a feed URL is not an episode enclosure —
+   enclosure resolution and redirect validation are their own work).
 
    Contract: with the SAME hardening as the caption fallback (pinned
    yt-dlp + ejs, plugins/cookies/proxies/retries disabled, Bun grant),

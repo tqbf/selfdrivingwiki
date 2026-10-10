@@ -74,6 +74,13 @@ public enum MimeType {
     /// `video/youtube` — the synthetic embed type used by `ExternalEmbed`.
     public static let videoYouTube = "video/youtube"
 
+    /// `audio/x-wiki-audio-acquire` — the synthetic source MIME claimed by
+    /// the audio-acquire extractor registration for on-device speech
+    /// transcription. Kept distinct from `video/youtube` so the caption
+    /// package's single-kind claim stays unambiguous; the speech intent —
+    /// never the source MIME — selects this route.
+    public static let audioXWikiAudioAcquire = "audio/x-wiki-audio-acquire"
+
     // MARK: - Sets / prefixes
 
     /// Prefix shared by every `text/*` type.

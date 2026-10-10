@@ -47,6 +47,9 @@ public enum ProcessPackageRunError: LocalizedError, Equatable {
     case invalidOutputEncoding
     case missingTerminalFrame
     case unexpectedBytesResult
+    /// The audio-acquire package's terminal result declared a MIME other
+    /// than `audio/mp4` — a protocol violation, never guessed around.
+    case audioResultMIMEViolation(declared: String?)
     /// A fetch operation was asked to acquire a source MIME the selected
     /// fetcher registration does not claim.
     case unclaimedFetchMIMEType
@@ -68,6 +71,10 @@ public enum ProcessPackageRunError: LocalizedError, Equatable {
             return "The extractor returned no terminal result."
         case .unexpectedBytesResult:
             return "The extractor returned source bytes where Markdown was expected."
+        case .audioResultMIMEViolation(let declared):
+            return declared == nil
+                ? "The audio package result stated no MIME type."
+                : "The audio package result declared an unexpected MIME type."
         case .unclaimedFetchMIMEType:
             return "The selected fetcher does not claim this source type."
         case .fetcherResultTypeMissing:
@@ -296,6 +303,21 @@ public struct ProcessExtractorProvider: Sendable {
         let operation = try await prepareOperation(
             kind: .youtubeTranscript, revision: revision, manifest: manifest)
         return ProcessPackageYouTubeTranscript(operation: operation)
+    }
+
+    /// Prepares the process-backed audio-acquire adapter for one exact
+    /// package revision. Protocol revision 4: the operation downloads the
+    /// source's audio-only M4A stream and the typed bytes result
+    /// (`resultMIMEType: audio/mp4`) flows through the raw-byte
+    /// `executeSourceResult` path — never the Markdown decoder. The speech
+    /// floor is host-side; this package only acquires.
+    public func prepareAudioAcquire(
+        revision: ExtractorPackageRevisionID,
+        manifest: ExtractorManifest
+    ) async throws -> ProcessPackageAudioAcquire {
+        let operation = try await prepareOperation(
+            kind: .audioTranscript, revision: revision, manifest: manifest)
+        return ProcessPackageAudioAcquire(operation: operation)
     }
 
     /// Prepares the process-backed fetcher adapter for one exact package
@@ -1093,6 +1115,10 @@ public final class PreparedProcessOperation: Sendable {
                 case .podcastTranscript: MimeType.audioPodcast
                 case .applePodcastTranscript: MimeType.audioApplePodcast
                 case .youtubeTranscript: MimeType.videoYouTube
+                // The audio-acquire registration always declares its
+                // synthetic source MIME, so this fallback is unreachable in
+                // practice; it names the same value for exhaustiveness.
+                case .audioTranscript: MimeType.audioXWikiAudioAcquire
                 case nil: ContentTypeRegistry.zoteroAttachment
                 }
                 requestMIMEType = try ExtractorMIMEType(
@@ -1734,6 +1760,81 @@ public struct ProcessPackageYouTubeTranscript: Sendable, ProcessPackageProvenanc
             return Outcome(
                 markdown: outcome.markdown,
                 reportedMetadata: outcome.reportedMetadata)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch ManagedExtractorProcessError.cancellation {
+            throw CancellationError()
+        } catch {
+            throw ProcessPackageError(
+                message: ProcessPackageFailureMapper.message(error))
+        }
+    }
+}
+
+/// The process-backed audio-acquire adapter for on-device speech
+/// transcription. Protocol revision 4: the operation downloads the source's
+/// audio-only M4A stream and the typed bytes result flows through the
+/// raw-byte `executeSourceResult` path — never the Markdown decoder. The
+/// result's declared MIME must be `audio/mp4`; anything else fails closed.
+public struct ProcessPackageAudioAcquire: Sendable, ProcessPackageProvenanceProviding {
+    /// The only result MIME the speech arm accepts from the package.
+    static let audioResultMIME = "audio/mp4"
+
+    public var displayName: String { operation.manifest.displayName }
+    public var packageProvenance: ExtractorPackageExecutionProvenance {
+        ExtractorPackageExecutionProvenance(
+            revision: operation.revision,
+            registrationID: operation.registrationID,
+            protocolRevision: operation.protocolRevision)
+    }
+
+    let operation: PreparedProcessOperation
+
+    init(operation: PreparedProcessOperation) {
+        self.operation = operation
+    }
+
+    /// The shared operation-level readiness answer (runtime resolution,
+    /// entry-point presence).
+    public func readiness() async -> ExtractionReadiness {
+        operation.readiness()
+    }
+
+    /// One outcome of one audio acquisition: the M4A bytes plus the
+    /// package-reported metadata for provenance.
+    public struct Outcome: Sendable {
+        public let audio: Data
+        public let reportedMetadata: ExtractorReportedMetadata
+
+        public init(audio: Data, reportedMetadata: ExtractorReportedMetadata) {
+            self.audio = audio
+            self.reportedMetadata = reportedMetadata
+        }
+    }
+
+    /// Acquires the audio-only stream for `sourceURL`. Progress lines are
+    /// package-controlled text already redacted by the operation.
+    public func audio(
+        for sourceURL: URL,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> Outcome {
+        do {
+            let outcome = try await operation.executeSourceResult(
+                kind: .audioTranscript,
+                remoteURL: ExtractorRemoteSourceURL(
+                    validating: sourceURL.absoluteString),
+                filename: "audio",
+                onProgress: onProgress)
+            let declared = outcome.frame.resultMIMEType?.rawValue
+            guard declared == Self.audioResultMIME else {
+                // A Markdown or other-MIME result from the audio package is
+                // a protocol violation — fail closed, never guess.
+                throw ProcessPackageRunError.audioResultMIMEViolation(
+                    declared: declared)
+            }
+            return Outcome(
+                audio: outcome.sourceBytes,
+                reportedMetadata: outcome.frame.metadata)
         } catch is CancellationError {
             throw CancellationError()
         } catch ManagedExtractorProcessError.cancellation {
