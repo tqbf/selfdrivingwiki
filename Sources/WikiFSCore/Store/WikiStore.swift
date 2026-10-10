@@ -679,6 +679,14 @@ public protocol WikiStore: AnyObject, Sendable {
     /// `ExternalEmbed.target(for:)` for byteless external embeds.
     func embedDescriptors() throws -> [SourceID: SourceEmbedDescriptor]
 
+    /// Batched `sourceOrigin(sourceID:)` for ALL sources in one query —
+    /// `[SourceID: SourceOrigin]`, same shared column list and `originFrom`
+    /// mapper, refs-preferred + MAX(id) fallback, NO blob filter (origins are
+    /// visible for fetched sources WITH bytes too, e.g. website snapshots).
+    /// READ seam — no mutate/emit. Enumeration callers MUST use this map
+    /// instead of per-source `sourceOrigin` calls (N+1).
+    func sourceOriginsBySource() throws -> [SourceID: SourceOrigin]
+
     // MARK: - Phase 4: website snapshot store primitives
 
     /// Create the shared fetch activity for a website snapshot. Commits the
