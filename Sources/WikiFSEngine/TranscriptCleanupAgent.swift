@@ -8,9 +8,6 @@ import WikiFSCore
 /// transcript stays canonical — so these errors exist to be logged with a
 /// precise reason, not surfaced as extraction failures.
 public enum TranscriptCleanupError: Error, Equatable, Sendable {
-    /// No model-backed summarizer stage is configured (the cleanup lane runs
-    /// on the summarizer stage). The raw transcript stays canonical.
-    case unavailable
     /// The model produced nothing usable (empty, preamble-only, or a failed
     /// turn). The raw transcript stays canonical.
     case emptyOutput
@@ -52,10 +49,14 @@ public struct ModelTranscriptCleanupAgent: TranscriptCleanupAgent {
         // (`stageProviderIds["transcriptCleanup"]`), never the chat
         // summarizer's configuration.
         let preparation = try await services.prepareTranscriptCleanup()
+        // nil AND whitespace-only model results are both "nothing usable"
+        // (the one-shot lane already folds a failed turn into nil).
         guard let cleaned = try await services.modelTransform(
             text: trimmed,
             systemPrompt: PublicPrompts.transcriptCleanup,
-            preparation: preparation) else {
+            preparation: preparation),
+            cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        else {
             throw TranscriptCleanupError.emptyOutput
         }
         return cleaned

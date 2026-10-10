@@ -106,10 +106,7 @@ struct TranscriptAutoCleanupTests {
     }
 
     /// Seeds one byteless YouTube source and returns (model, sourceID).
-    private func makeSession(
-        wantsAgentCleanup: Bool,
-        cleanupAgent: StubCleanupAgent?
-    ) throws -> (WikiStoreModel, SourceID) {
+    private func makeSession(wantsAgentCleanup: Bool) throws -> (WikiStoreModel, SourceID) {
         let store = try TestStoreFactory.inMemory()
         let summary = try store.addBytelessSource(
             filename: "youtube-dQw4w9WgXcQ",
@@ -123,7 +120,6 @@ struct TranscriptAutoCleanupTests {
             role: .primary)
         let model = WikiStoreModel(store: store)
         model.registeredExtractionInputs = claims(wantsAgentCleanup: wantsAgentCleanup)
-        _ = cleanupAgent
         return (model, summary.id)
     }
 
@@ -142,13 +138,10 @@ struct TranscriptAutoCleanupTests {
     // MARK: - Claimed cleanup
 
     @Test func claimedCleanupAppendsCleanedHeadParentedToRaw() async throws {
-        let (model, sourceID) = try makeSession(
-            wantsAgentCleanup: true, cleanupAgent: nil)
+        let (model, sourceID) = try makeSession(wantsAgentCleanup: true)
         let agent = StubCleanupAgent(cleaned: "Cleaned captions.")
         let provider = makeProvider(model: model, cleanupAgent: agent)
 
-        let rawHistoryBefore = try model.internalStore.processedMarkdownHistory(
-            sourceID: sourceID)
         let reference = try await provider.persistTranscriptExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
             resolution: try Self.youtubeResolution(), outcome: Self.outcome())
@@ -172,14 +165,12 @@ struct TranscriptAutoCleanupTests {
             .contains(where: { $0.id == rawVersionID }))
         #expect(try model.internalStore.processedMarkdownHistory(sourceID: sourceID)
             .contains(where: { $0.content == "uh um RAW CAPTIONS" }))
-        _ = rawHistoryBefore
     }
 
     // MARK: - No claim
 
     @Test func noClaimSkipsCleanup() async throws {
-        let (model, sourceID) = try makeSession(
-            wantsAgentCleanup: false, cleanupAgent: nil)
+        let (model, sourceID) = try makeSession(wantsAgentCleanup: false)
         let agent = StubCleanupAgent(cleaned: "should never happen")
         let provider = makeProvider(model: model, cleanupAgent: agent)
 
@@ -196,8 +187,7 @@ struct TranscriptAutoCleanupTests {
     // MARK: - Failure tolerance
 
     @Test func cleanupFailureKeepsRawCanonicalAndStillCompletes() async throws {
-        let (model, sourceID) = try makeSession(
-            wantsAgentCleanup: true, cleanupAgent: nil)
+        let (model, sourceID) = try makeSession(wantsAgentCleanup: true)
         let agent = StubCleanupAgent(error: CleanupFailed())
         let provider = makeProvider(model: model, cleanupAgent: agent)
 
@@ -219,8 +209,7 @@ struct TranscriptAutoCleanupTests {
     // MARK: - Empty transcript
 
     @Test func emptyRawTranscriptSkipsCleanup() async throws {
-        let (model, sourceID) = try makeSession(
-            wantsAgentCleanup: true, cleanupAgent: nil)
+        let (model, sourceID) = try makeSession(wantsAgentCleanup: true)
         let agent = StubCleanupAgent(cleaned: "should never happen")
         let provider = makeProvider(model: model, cleanupAgent: agent)
 

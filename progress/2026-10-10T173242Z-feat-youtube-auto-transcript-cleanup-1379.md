@@ -26,7 +26,9 @@ publisher transcripts are usually already clean).
   extractor kind. All three byteless creation paths report it: the Apple
   Podcasts branch, `bytelessMediaOutcome` (YouTube/Vimeo/Spotify/SoundCloud/
   remote — whichever of their MIME types a registration claims), and
-  `addPodcastFeedURL` for consistency.
+  `addPodcastFeedURL` for consistency. `addPodcastFeedURL` is currently a
+  dormant entry point (no production caller), so nothing auto-enqueues from
+  it yet.
 - The UI layer that calls `addURL` enqueues: `AddFromURLSheet` takes an
   optional `queueEngine` (wired from `ContentView`) and, when the outcome
   reports the claim, enqueues the standard `.extraction` queue item — the
