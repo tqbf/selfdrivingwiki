@@ -8,15 +8,19 @@ import WikiFSEngine
 import WikiFSTypes
 @testable import WikiFS
 
-/// AC.2 of the revised YouTube import policy (issue #1379), exercised
+/// AC.2 of the import-transcription policy (issue #1379), exercised
 /// through the real UI actions:
 ///
-/// - Hosting `AddFromURLSheet` and clicking the REAL Fetch button, with an
-///   active YouTube registration, enqueues ZERO extraction jobs — the sheet
-///   runs offline through the injectable fetcher seam.
-/// - Hosting `SourceDetailView` for the created source and clicking the
-///   REAL Transcribe button enqueues EXACTLY ONE `.extraction` job — the
-///   only path YouTube transcription has.
+/// - Hosting `AddFromURLSheet` and running the REAL Fetch action, with an
+///   active YouTube registration, enqueues exactly ONE captions job — the
+///   sheet runs offline through the injectable fetcher seam.
+/// - Hosting `SourceDetailView` for the created source and running the
+///   REAL Transcribe action enqueues exactly ONE `.extraction` job.
+///
+/// Speech-to-text transcription is deliberately outside the bundled
+/// import-transcription policy: it downloads media and burns minutes of
+/// compute, so it can only ever run on an explicit user action and has no
+/// import path at all.
 ///
 /// The queue engine is a full `QueueEngineClient` that records every
 /// enqueue; nothing reaches a worker and no network is touched.
@@ -126,15 +130,20 @@ struct AddURLAndTranscribeHostedTests {
 
     // MARK: - AC.2 part 1: Add URL queues zero jobs
 
+    /// The policy under test: caption-based transcription auto-enqueues at
+    /// import (one job after Add URL with an active claim), and the
+    /// Transcribe action enqueues exactly one more. Speech-to-text is
+    /// deliberately outside this policy and has no import path at all.
+    ///
     /// SwiftUI's ordinary controls are not bridged to AppKit buttons, so a
     /// hosted scenario cannot click them in-process (the repo's other hosted
     /// tests click controls the app explicitly bridges). The plan's test
     /// strategy sanctions a small injectable action seam: both tests below
     /// invoke the mounted view's exact button-action body through it, then
-    /// assert what the user action must (and must not) enqueue.
+    /// assert what the user action must enqueue.
 
-    @Test("a hosted Fetch with an active YouTube claim enqueues zero jobs")
-    func addURLFetchEnqueuesZeroJobs() async throws {
+    @Test("a hosted Fetch with an active YouTube claim enqueues one captions job")
+    func addURLFetchAutoEnqueuesCaptionsJob() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
@@ -167,10 +176,11 @@ struct AddURLAndTranscribeHostedTests {
         model.reloadFromStore()
         #expect(model.sources.first?.mimeType == "video/youtube")
 
-        // Give any (wrong) enqueue path a generous window, then assert none
-        // happened: YouTube import stays explicit.
-        try await Task.sleep(for: .milliseconds(500))
-        #expect(engine.extractionEnqueueCount() == 0)
+        // The captions job auto-enqueues for the covered route.
+        let one = await waitUntil { engine.extractionEnqueueCount() == 1 }
+        #expect(one, "the import did not auto-enqueue exactly one captions job")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(engine.extractionEnqueueCount() == 1)
     }
 
     // MARK: - AC.2 part 2: Transcribe queues exactly one job

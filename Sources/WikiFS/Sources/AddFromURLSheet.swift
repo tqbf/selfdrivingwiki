@@ -219,12 +219,13 @@ struct AddFromURLSheet: View {
                 // bundled import-transcription policy covers AND an active
                 // registration claims (the store model's
                 // `transcriptExtractionWanted` signal encodes both gates).
-                // YouTube is deliberately absent: its Transcribe action is
-                // the only path. Same `.extraction` queue item the manual
-                // Transcribe button enqueues, so the existing Activity/row
-                // indicators track it unchanged. Best-effort: an enqueue
-                // failure is logged, never fails the add — the Transcribe
-                // button stays as the manual retry.
+                // Caption routes are covered; speech-to-text never is — it
+                // runs only on an explicit user action. Same `.extraction`
+                // queue item the manual Transcribe button enqueues, so the
+                // existing Activity/row indicators track it unchanged.
+                // Best-effort: an enqueue failure is logged, never fails
+                // the add — the Transcribe button stays as the manual
+                // retry.
                 if outcome.transcriptExtractionWanted,
                    let sourceID = outcome.sourceID,
                    let queueEngine {

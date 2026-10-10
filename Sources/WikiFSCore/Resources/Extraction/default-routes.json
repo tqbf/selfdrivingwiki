@@ -113,6 +113,12 @@
         "kind": "apple-podcast-transcript",
         "mimeType": "audio/apple-podcast"
       }
+    },
+    {
+      "route": {
+        "kind": "youtube-transcript",
+        "mimeType": "video/youtube"
+      }
     }
   ]
 }

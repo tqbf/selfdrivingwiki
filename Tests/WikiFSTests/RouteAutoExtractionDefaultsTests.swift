@@ -46,7 +46,7 @@ struct RouteAutoExtractionDefaultsTests {
 
     // MARK: - Import-transcription policy (issue #1379, revised)
 
-    @Test("bundled policy covers the podcast routes and NOT the YouTube route")
+    @Test("bundled policy covers the caption routes INCLUDING YouTube")
     func bundledImportTranscriptionPolicy() throws {
         let bundled = ExtractorRouteDefaults.bundled
 
@@ -62,10 +62,8 @@ struct RouteAutoExtractionDefaultsTests {
 
         #expect(bundled.importTranscriptionWanted(for: rssPodcast))
         #expect(bundled.importTranscriptionWanted(for: applePodcast))
-        // YouTube import stays explicit: the Transcribe action is the only
-        // path, even though the route's default selection is the reviewed
-        // package.
-        #expect(bundled.importTranscriptionWanted(for: youtube) == false)
+        // Caption-based transcription is cheap and covered at import.
+        #expect(bundled.importTranscriptionWanted(for: youtube))
         // Conversion policy and transcription policy stay separate tables.
         #expect(bundled.routeAutoExtraction.contains {
             $0.route == .canonicalHTML

@@ -12,11 +12,11 @@ Status: implemented on `feature/youtube-transcript-extractor-package`, stacked o
 > pinned `yt-dlp==2026.08.19` + `yt-dlp-ejs==0.8.0` dependency pair, and
 > the host-granted auxiliary JavaScript runtime (Bun, minimum 1.2.11)
 > passed through the `reviewed-youtube-bun-runtime` operation
-> configuration. YouTube URL imports queue nothing: the Transcribe action
-> is the only path (the bundled import-transcription policy has no YouTube
-> route entry). A listed caption track is not proof of access — the
-> package publishes only when actual subtitle bytes arrive, and blocked
-> requests never reach the fallback.
+> configuration. (Policy update: caption routes — including YouTube —
+> now auto-transcribe at import via `routeImportTranscription`; see
+> `plans/audio-speech-transcription.md`.) A listed caption track is not
+> proof of access — the package publishes only when actual subtitle
+> bytes arrive, and blocked requests never reach the fallback.
 
 ## Summary
 

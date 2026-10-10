@@ -2709,11 +2709,11 @@ public final class WikiStoreModel {
         // Issue #1379, revised: report "transcript extraction wanted" only
         // when an installed registration claims the created source's MIME
         // AND the claimed route is in the bundled import-transcription
-        // policy. The YouTube route has no policy entry, so a YouTube URL
-        // import never queues transcript work — the Transcribe action is
-        // the only path. The UI layer that called addURL enqueues the
-        // standard `.extraction` queue item for the routes that remain
-        // automatic — the same request the manual Transcribe button builds.
+        // policy. Caption routes are covered (podcast, Apple Podcasts,
+        // YouTube); speech-to-text never is. The UI layer that called
+        // addURL enqueues the standard `.extraction` queue item for the
+        // covered routes — the same request the manual Transcribe button
+        // builds.
         let transcriptExtractionWanted = transcriptExtractionWanted(
             mimeType: match.mimeType)
         return URLFetchService.FetchOutcome(
@@ -2728,9 +2728,9 @@ public final class WikiStoreModel {
     /// unambiguous claim, matching `autoExtractIfRegistered`'s gate
     /// philosophy) AND the claimed route appears in the bundled
     /// import-transcription policy. Names no extractor kind; claims data
-    /// and bundled route policy decide. The YouTube transcript route has no
-    /// entry, so a YouTube URL import never queues work and the manual
-    /// Transcribe action stays the only path. Issue #1379.
+    /// and bundled route policy decide. Caption routes (podcast, Apple
+    /// Podcasts, YouTube) are covered; speech-to-text is not in the table
+    /// and runs only on an explicit user action. Issue #1379.
     private func transcriptExtractionWanted(mimeType: String) -> Bool {
         guard let claim = registeredExtractionInputs
             .registeredMIME(forNormalizedMIME: mimeType),

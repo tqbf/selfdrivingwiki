@@ -19,11 +19,10 @@ struct WikiStoreModelAddURLTests {
         ])
     }
 
-    /// A YouTube URL import must NOT queue transcript work even when an
-    /// active registration claims the MIME: the bundled import-transcription
-    /// policy has no YouTube route entry, so the Transcribe action is the
-    /// only path to extraction.
-    @Test func youTubeURLDoesNotQueueTranscriptExtractionDespiteActiveClaim() async throws {
+    /// Caption routes auto-transcribe at import: a YouTube URL import with
+    /// an active registration queues the standard extraction job (the
+    /// bundled import-transcription policy covers the YouTube route).
+    @Test func youTubeURLQueuesTranscriptExtractionFromRoutePolicy() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
         model.registeredExtractionInputs = Self.claims("video/youtube")
@@ -35,7 +34,7 @@ struct WikiStoreModelAddURLTests {
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ", fetcher: fetcher)
 
         #expect(outcome.kind == .videoEmbed)
-        #expect(outcome.transcriptExtractionWanted == false)
+        #expect(outcome.transcriptExtractionWanted)
         #expect(outcome.sourceID != nil)
         // The created source's MIME is what the claim matched. The byteless
         // path reloads async off the bus — reload explicitly for the read.

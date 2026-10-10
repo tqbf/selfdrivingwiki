@@ -29,10 +29,11 @@ public struct ExtractorRouteDefaults: Decodable, Sendable {
     /// queue item — the same request the manual Transcribe action builds.
     /// Deliberately separate from `routeAutoExtraction` (HTML's ingest-time
     /// conversion table): transcript work is queued work with progress and
-    /// agent cleanup, not ingest conversion. The YouTube transcript route is
-    /// intentionally absent — YouTube import stays explicit (the Transcribe
-    /// action) until a future automatic-extraction model exists. Execution
-    /// still requires the registration claim; a missing key decodes to an
+    /// agent cleanup, not ingest conversion. Caption-based routes are cheap
+    /// and covered here (podcast, Apple Podcasts, YouTube). Speech-to-text
+    /// transcription is deliberately excluded — it downloads media and burns
+    /// minutes of compute, so it runs only on an explicit user action; the
+    /// bundled-policy tests pin that exclusion. A missing key decodes to an
     /// empty table (bundled data predating the policy).
     public let routeImportTranscription: [RouteImportTranscriptionRecord]
 

@@ -158,9 +158,11 @@ fetch the same captions' WebVTT subtitle bytes:
   failures, output-limit failures, and publication failures never invoke
   the fallback.
 
-YouTube URL imports never queue this package: the Transcribe action is the
-only path (the bundled import-transcription policy has no YouTube route
-entry).
+YouTube URL imports auto-transcribe at import like the podcast routes:
+the bundled import-transcription policy covers the caption routes
+(podcast, Apple Podcasts, YouTube). Speech-to-text transcription for
+caption-less videos is a separate, explicit-only feature — see
+`plans/audio-speech-transcription.md`.
 
 See `docs/architecture/extractor-script-protocol.md` and
 `plans/youtube-transcript-extractor-package.md`.
