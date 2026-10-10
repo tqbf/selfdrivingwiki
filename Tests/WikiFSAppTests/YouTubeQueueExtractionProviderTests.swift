@@ -25,9 +25,23 @@ struct YouTubeQueueExtractionProviderTests {
 
     /// Returns the transcript the fake "package process" wrote, and records
     /// the protocol request so tests can assert the validated source URL.
+    /// `metadata` replays the route's reported provenance — the primary
+    /// route (`youtube-transcript` 1.2.0) and the yt-dlp fallback route
+    /// (`yt-dlp` at its pinned release) both flow through this frame.
     private final class FakeYouTubeExecutor: ManagedProcessExecuting, @unchecked Sendable {
         let markdown = "Hello from the captions."
+        let metadata: ExtractorReportedMetadata
         private(set) var lastRequest: ExtractorProtocolRequest?
+
+        init(
+            metadata: ExtractorReportedMetadata = try! ExtractorReportedMetadata(
+                toolName: "youtube-transcript",
+                toolVersion: "1.2.0",
+                language: "en",
+                transcriptGenerated: false)
+        ) {
+            self.metadata = metadata
+        }
 
         func execute(
             _ operation: ManagedExtractorProcessRequest,
@@ -46,10 +60,7 @@ struct YouTubeQueueExtractionProviderTests {
                 requestID: request.requestID,
                 outputPath: request.outputPath,
                 markdownByteCount: markdown.utf8.count,
-                metadata: try ExtractorReportedMetadata(
-                    toolName: "youtube-transcript",
-                    language: "en",
-                    transcriptGenerated: false)))
+                metadata: metadata))
             return ManagedExtractorProcessResult(
                 terminationCause: .exited(code: 0),
                 terminalFrame: frame,
@@ -66,7 +77,7 @@ struct YouTubeQueueExtractionProviderTests {
         {
           "manifestRevision": 1,
           "packageID": "org.selfdrivingwiki.youtube-transcript",
-          "version": "1.0.0",
+          "version": "1.2.0",
           "displayName": "YouTube Transcript",
           "protocolRevision": 3,
           "entryPoint": "bin/youtube-transcript-extractor",
@@ -261,6 +272,53 @@ struct YouTubeQueueExtractionProviderTests {
         #expect(persisted.reportedMetadata.language == "en")
     }
 
+    /// The yt-dlp fallback route: the frame's tool provenance names the
+    /// route that actually produced the bytes (`yt-dlp` at its pinned
+    /// release) while the package provenance stays the exact reviewed
+    /// revision — both survive persistence.
+    @Test func appProviderPersistsYtdlpFallbackProvenance() async throws {
+        let store = try makeStore()
+        let sourceID = try seedYouTubeSource(store)
+        let model = WikiStoreModel(store: store)
+        let executor = FakeYouTubeExecutor(metadata: try ExtractorReportedMetadata(
+            toolName: "yt-dlp",
+            toolVersion: "2026.08.19",
+            language: "en",
+            transcriptGenerated: true))
+
+        let box = SessionLookupBox()
+        box.setLookup { _ in model }
+        let provider = AppQueueExtractionProvider(
+            extractionServices: try await makeServices(executor: executor),
+            sessionBox: box)
+
+        guard case .transcript(let transcript)? = try await provider.resolveExtraction(
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            Issue.record("expected a transcript resolution")
+            return
+        }
+        let outcome = try await transcript.fetch { _ in }
+        #expect(outcome.reportedMetadata.toolName == "yt-dlp")
+        #expect(outcome.reportedMetadata.toolVersion == "2026.08.19")
+        #expect(outcome.reportedMetadata.transcriptGenerated == true)
+
+        try await provider.persistTranscriptExtraction(
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
+            resolution: transcript, outcome: outcome)
+
+        let head = try #require(try store.processedMarkdownHead(sourceID: sourceID))
+        let provenance = try #require(
+            try store.extractionProvenance(markdownVersionID: head.id))
+        guard case .installedPackage(let persisted) = provenance.producer else {
+            Issue.record("expected installed-package producer")
+            return
+        }
+        #expect(persisted.revision == Self.youtubePackage.revision)
+        #expect(persisted.registrationID.rawValue == "captions")
+        #expect(persisted.reportedMetadata.toolName == "yt-dlp")
+        #expect(persisted.reportedMetadata.toolVersion == "2026.08.19")
+    }
+
     // MARK: - Daemon provider
 
     @Test func daemonProviderResolvesYouTubeThroughPackageAndPersistsProvenance() async throws {
@@ -291,6 +349,44 @@ struct YouTubeQueueExtractionProviderTests {
             try store.contentVersionHistory(sourceID: sourceID)
                 .first(where: { $0.parentID == nil }))
         #expect(head.sourceVersionID == initialV1.id)
+    }
+
+    /// Daemon arm of the fallback route: yt-dlp tool provenance with the
+    /// exact stored package revision, persisted unchanged.
+    @Test func daemonProviderPersistsYtdlpFallbackProvenance() async throws {
+        let store = try makeStore()
+        let sourceID = try seedYouTubeSource(store)
+        let executor = FakeYouTubeExecutor(metadata: try ExtractorReportedMetadata(
+            toolName: "yt-dlp",
+            toolVersion: "2026.08.19",
+            language: "es",
+            transcriptGenerated: true))
+
+        let provider = DaemonQueueExtractionProvider(
+            extractionServices: try await makeServices(executor: executor),
+            storeResolver: { _ in store })
+
+        guard case .transcript(let transcript)? = try await provider.resolveExtraction(
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            Issue.record("expected a transcript resolution")
+            return
+        }
+        let outcome = try await transcript.fetch { _ in }
+        try await provider.persistTranscriptExtraction(
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
+            resolution: transcript, outcome: outcome)
+
+        let head = try #require(try store.processedMarkdownHead(sourceID: sourceID))
+        let provenance = try #require(
+            try store.extractionProvenance(markdownVersionID: head.id))
+        guard case .installedPackage(let persisted) = provenance.producer else {
+            Issue.record("expected installed-package producer")
+            return
+        }
+        #expect(persisted.revision == Self.youtubePackage.revision)
+        #expect(persisted.protocolRevision == .v3)
+        #expect(persisted.reportedMetadata.toolName == "yt-dlp")
+        #expect(persisted.reportedMetadata.language == "es")
     }
 
     // MARK: - Source URL contracts (AC.7)

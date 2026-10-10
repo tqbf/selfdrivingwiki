@@ -7,15 +7,15 @@
   "entryPoint": "bin/youtube-transcript-extractor",
   "files": [
     {
-      "digest": "00318962caa45628ab886a05ad22f760a1cd87619d363337a5843f7b3b911f5b",
+      "digest": "2c7c5184f5bbfa6e90cfb53da2174891862832faca761bd2daf72b5f8c8d4c5c",
       "path": "PROVENANCE.md"
     },
     {
-      "digest": "d35ba748f41f1d480644d852fc00fb5e0a1f4f6aa554f8cf47c37782f601393f",
+      "digest": "ef405f61bc8ea36b655ed7ff3e76d682ec36c632bf015a4f9730a986e475ef80",
       "path": "bin/youtube-transcript"
     },
     {
-      "digest": "a8fa5097be73d1930c2b50911acbad26a886f424a5210e5632d129b4a5340a54",
+      "digest": "57b5d1c60165e05b5f9909b9448a4fd00d311d070cbcb3a9929de6fd3acdacad",
       "path": "bin/youtube-transcript-extractor"
     }
   ],
@@ -49,5 +49,5 @@
       "wantsAgentCleanup": true
     }
   ],
-  "version": "1.1.0"
+  "version": "1.2.0"
 }

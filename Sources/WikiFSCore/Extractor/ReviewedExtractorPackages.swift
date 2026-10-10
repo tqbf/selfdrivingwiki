@@ -69,8 +69,8 @@ public enum ReviewedExtractorPackages {
     public static let youtubeTranscript = make(
         directoryName: "YouTubeTranscript",
         packageID: "org.selfdrivingwiki.youtube-transcript",
-        version: "1.1.0",
-        digest: "f2a4ae9a91f8f389c446e1dcd85f388ac6b2492c4f2552c82c1ee9fedcab9b59")
+        version: "1.2.0",
+        digest: "8dbd854c66b0e56c01c2d9b5f5589e70a9161078a1cf18a0ea9127fca3765b1c")
 
     public static let zotero = make(
         directoryName: "Zotero",

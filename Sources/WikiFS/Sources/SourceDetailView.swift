@@ -1836,6 +1836,16 @@ struct SourceDetailView: View {
         }
     }
 
+#if DEBUG
+    /// Test-infrastructure seam: the Transcribe button's exact action body
+    /// (the `Task { await runTranscription() }` the button invokes). Hosted
+    /// scenarios exercise this seam because SwiftUI's unbridged controls
+    /// expose no AppKit button to click through.
+    func transcribeActionForTesting() {
+        Task { await runTranscription() }
+    }
+#endif
+
     // MARK: - Extraction alternatives (Phase 2)
 
     /// The provenance line rendered as the single home for extraction

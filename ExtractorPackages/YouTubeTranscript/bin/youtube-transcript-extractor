@@ -3,6 +3,8 @@
 # requires-python = ">=3.12,<3.14"
 # dependencies = [
 #     "youtube-transcript-api>=1.0",
+#     "yt-dlp==2026.08.19",
+#     "yt-dlp-ejs==0.8.0",
 # ]
 # ///
 """Extractor package entry point for youtube-transcript.

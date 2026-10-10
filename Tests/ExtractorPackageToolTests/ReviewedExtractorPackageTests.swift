@@ -246,7 +246,7 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "f2a4ae9a91f8f389c446e1dcd85f388ac6b2492c4f2552c82c1ee9fedcab9b59")
+            == "8dbd854c66b0e56c01c2d9b5f5589e70a9161078a1cf18a0ea9127fca3765b1c")
     }
 
     /// The reviewed YouTube package never claims model download: it fetches
@@ -293,6 +293,17 @@ struct ReviewedExtractorPackageTests {
             fixtures.appendingPathComponent("frames-blocked.jsonl").path,
         ])
         #expect(blocked.terminalKind == "failure")
+
+        // The yt-dlp fallback route: the "trying the caption fallback"
+        // progress step and the yt-dlp tool provenance on the result.
+        let fallback = try ExtractorPackageToolExecutor().execute(arguments: [
+            "protocol-smoke",
+            Self.packageURL("YouTubeTranscript").path,
+            request,
+            fixtures.appendingPathComponent("frames-ytdlp-fallback.jsonl").path,
+        ])
+        #expect(fallback.terminalKind == "result")
+        #expect(fallback.progressEventCount == 4)
     }
 
     /// A malformed frame document (two terminal frames) must fail the

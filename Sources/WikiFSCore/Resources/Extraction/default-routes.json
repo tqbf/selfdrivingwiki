@@ -100,5 +100,19 @@
         "mimeType": "text/html"
       }
     }
+  ],
+  "routeImportTranscription": [
+    {
+      "route": {
+        "kind": "podcast-transcript",
+        "mimeType": "audio/podcast"
+      }
+    },
+    {
+      "route": {
+        "kind": "apple-podcast-transcript",
+        "mimeType": "audio/apple-podcast"
+      }
+    }
   ]
 }

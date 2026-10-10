@@ -3,6 +3,21 @@
 Status: implemented on `feature/youtube-transcript-extractor-package`, stacked on
 `feature/apple-ttml-extractor-package` (#1211, and transitively #1210).
 
+> **Current facts (1.2.0).** The version facts below the fold predate the
+> later revisions. The package is now version 1.2.0 at manifest revision 5:
+> 1.0.1 added the `shared-runtime-cache` capability; 1.1.0 declared the
+> registration-scoped `wantsAgentCleanup` claim; 1.2.0 added the yt-dlp
+> caption-byte fallback (an eligible primary-route failure makes ONE
+> yt-dlp attempt to fetch the same captions' WebVTT subtitle bytes), the
+> pinned `yt-dlp==2026.08.19` + `yt-dlp-ejs==0.8.0` dependency pair, and
+> the host-granted auxiliary JavaScript runtime (Bun, minimum 1.2.11)
+> passed through the `reviewed-youtube-bun-runtime` operation
+> configuration. YouTube URL imports queue nothing: the Transcribe action
+> is the only path (the bundled import-transcription policy has no YouTube
+> route entry). A listed caption track is not proof of access — the
+> package publishes only when actual subtitle bytes arrive, and blocked
+> requests never reach the fallback.
+
 ## Summary
 
 YouTube transcripts now run through a reviewed, digest-pinned extractor

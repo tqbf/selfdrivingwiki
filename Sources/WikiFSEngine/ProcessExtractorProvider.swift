@@ -161,6 +161,10 @@ public struct ProcessExtractorProvider: Sendable {
     /// The one extractor runtime locator. Preparation resolves each runtime
     /// command through it exactly once and retains the outcome.
     let runtimeLocator: any ExtractorRuntimeLocating
+    /// The auxiliary-runtime version prober (the reviewed YouTube package's
+    /// Bun). Injectable for tests; the production probe runs
+    /// `<executable> --version` through the race-free runner.
+    let auxiliaryRuntimeProber: any AuxiliaryRuntimeVersionProbing
 
     /// The cache roots are host-owned. A package can use them only when its
     /// manifest declares the matching capability.
@@ -176,7 +180,8 @@ public struct ProcessExtractorProvider: Sendable {
         operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)? = nil,
         operationSupport: (any ExtractorOperationSupportProviding)? = nil,
         durableTokenCacheRoot: (@Sendable (ExtractorPackageRevisionID) -> URL?)? = nil,
-        runtimeLocator: (any ExtractorRuntimeLocating)? = nil
+        runtimeLocator: (any ExtractorRuntimeLocating)? = nil,
+        auxiliaryRuntimeProber: (any AuxiliaryRuntimeVersionProbing)? = nil
     ) {
         self.layout = layout
         self.catalogReader = catalogReader
@@ -191,6 +196,8 @@ public struct ProcessExtractorProvider: Sendable {
         self.operationSupport = operationSupport
         self.durableTokenCacheRoot = durableTokenCacheRoot
         self.runtimeLocator = runtimeLocator ?? RuntimeCommandLocator()
+        self.auxiliaryRuntimeProber = auxiliaryRuntimeProber
+            ?? AuxiliaryRuntimeVersionProbe()
     }
 
     /// Convenience initializer for closure-backed admission checks.
@@ -431,6 +438,20 @@ public struct ProcessExtractorProvider: Sendable {
         } else {
             runtimeResolution = nil
         }
+        // The AUXILIARY runtime for the exact reviewed YouTube revision: a
+        // second login-shell resolution (Bun) plus its version gate against
+        // the pinned minimum. The outcome is retained — success, or a typed
+        // unavailable reason — and never blocks preparation, readiness, or
+        // the primary caption route. Any revision outside the exact
+        // reviewed identity (including a copy of the package ID or claims
+        // with a different digest) receives no auxiliary grant at all.
+        let auxiliaryRuntimeResolution: AuxiliaryRuntimeOutcome?
+        if Self.wantsAuxiliaryRuntime(revision) {
+            auxiliaryRuntimeResolution = await Self.resolveAuxiliaryRuntime(
+                locator: runtimeLocator, prober: auxiliaryRuntimeProber)
+        } else {
+            auxiliaryRuntimeResolution = nil
+        }
 
         return PreparedProcessOperation(
             directoryRoot: operationRoot.standardizedFileURL,
@@ -465,7 +486,88 @@ public struct ProcessExtractorProvider: Sendable {
             operationConfiguration: operationConfiguration,
             operationSupport: operationSupport,
             durableTokenCacheRoot: durableTokenCacheRoot,
-            runtimeResolution: runtimeResolution)
+            runtimeResolution: runtimeResolution,
+            auxiliaryRuntimeResolution: auxiliaryRuntimeResolution)
+    }
+
+    /// The exact-revision auxiliary-runtime gate: only the reviewed YouTube
+    /// revision — package ID, version, AND digest — receives the Bun grant.
+    /// A copy of the package ID or claims with a different digest is not
+    /// this package and receives nothing.
+    static func wantsAuxiliaryRuntime(_ revision: ExtractorPackageRevisionID) -> Bool {
+        revision == ReviewedExtractorPackages.youtubeTranscript.revision
+    }
+
+    /// Resolves and validates the reviewed YouTube package's auxiliary
+    /// JavaScript runtime: the login-shell Bun path, then its `--version`
+    /// against the pinned retrieval library's minimum. A failure at either
+    /// stage is a retained typed outcome, never a thrown error — the
+    /// fallback reports its own fixed setup failure when (and only when)
+    /// the eligible primary failure reaches it.
+    static func resolveAuxiliaryRuntime(
+        locator: any ExtractorRuntimeLocating,
+        prober: any AuxiliaryRuntimeVersionProbing
+    ) async -> AuxiliaryRuntimeOutcome {
+        let command = AuxiliaryRuntimePolicies.bun.name
+        let outcome = await locator.locate(command)
+        guard case .resolved(let resolution) = outcome else {
+            let failure: RuntimeCommandResolutionFailure
+            if case .failed(let reason) = outcome {
+                failure = reason
+            } else {
+                // Unreachable: locate returns exactly one case.
+                failure = .commandAbsent
+            }
+            DebugLog.extraction(
+                "Auxiliary runtime \(command.rawValue) unavailable (\(failure.diagnosticCategory)).")
+            return .unavailable(.resolutionFailed(failure))
+        }
+        switch await prober.probe(executableURL: resolution.executableURL) {
+        case .version(let version):
+            let minimum = AuxiliaryRuntimePolicies.bun.minimumVersion
+            guard version >= minimum else {
+                DebugLog.extraction(
+                    "Auxiliary runtime \(command.rawValue) version below the pinned minimum.")
+                return .unavailable(.unsupportedVersion(
+                    reported: "\(version.major).\(version.minor).\(version.patch)",
+                    minimum: "\(minimum.major).\(minimum.minor).\(minimum.patch)"))
+            }
+            return .resolved(resolution)
+        case .failed:
+            DebugLog.extraction(
+                "Auxiliary runtime \(command.rawValue) version probe failed.")
+            return .unavailable(.versionProbeFailed)
+        }
+    }
+
+    /// Derives the reviewed YouTube package's operation configuration from
+    /// the retained auxiliary-runtime outcome. A resolved runtime yields
+    /// the typed Bun grant ONLY when the executable on disk still matches
+    /// the identity pinned at preparation; any drift — or an unavailable
+    /// runtime — yields `nil`, and the package's caption fallback then
+    /// reports its own fixed setup failure when it is reached. The primary
+    /// caption route is unaffected either way.
+    static func auxiliaryRuntimeConfiguration(
+        retained: AuxiliaryRuntimeOutcome
+    ) -> ExtractorOperationConfiguration? {
+        switch retained {
+        case .unavailable:
+            return nil
+        case .resolved(let resolution):
+            // Identity recheck: the same stat-based probe the locator used
+            // at resolution. A replaced or rewritten executable fails
+            // closed instead of launching.
+            guard case .identity(let identity) = RuntimeFileProbe.probe(
+                resolution.executableURL),
+                identity == resolution.identity else {
+                DebugLog.extraction(
+                    "Auxiliary runtime identity recheck failed; the fallback grant is withheld.")
+                return nil
+            }
+            // swiftlint:disable:next silent_try_optional
+            return try? ExtractorOperationConfiguration(
+                reviewedYouTubeBunRuntimeExecutablePath: resolution.executableURL.path)
+        }
     }
 
     private static func isOwnerPrivateDirectory(_ url: URL) throws -> Bool {
@@ -560,6 +662,13 @@ public final class PreparedProcessOperation: Sendable {
     /// at preparation. Readiness and every execute consume exactly this
     /// value; neither performs another lookup.
     let runtimeResolution: RuntimeCommandOutcome?
+    /// The retained AUXILIARY runtime resolution for reviewed packages that
+    /// need a second runtime beside the launch command (the reviewed
+    /// YouTube package's Bun). Nil for every other revision. Resolved once
+    /// at preparation; the operation-configuration seam consumes exactly
+    /// this retained outcome — never a second lookup at execute time. A
+    /// retained failure never blocks readiness or the primary route.
+    let auxiliaryRuntimeResolution: AuxiliaryRuntimeOutcome?
 
     init(
         directoryRoot: URL,
@@ -581,7 +690,8 @@ public final class PreparedProcessOperation: Sendable {
         operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?,
         operationSupport: (any ExtractorOperationSupportProviding)? = nil,
         durableTokenCacheRoot: (@Sendable (ExtractorPackageRevisionID) -> URL?)? = nil,
-        runtimeResolution: RuntimeCommandOutcome?
+        runtimeResolution: RuntimeCommandOutcome?,
+        auxiliaryRuntimeResolution: AuxiliaryRuntimeOutcome? = nil
     ) {
         self.directoryRoot = directoryRoot
         self.packageRoot = packageRoot
@@ -603,6 +713,7 @@ public final class PreparedProcessOperation: Sendable {
         self.operationSupport = operationSupport
         self.durableTokenCacheRoot = durableTokenCacheRoot
         self.runtimeResolution = runtimeResolution
+        self.auxiliaryRuntimeResolution = auxiliaryRuntimeResolution
     }
 
     deinit {
@@ -824,6 +935,20 @@ public final class PreparedProcessOperation: Sendable {
         }
         if manifest.protocolRevision >= .v2 {
             configuration = operationConfiguration?(revision)
+        }
+        // Reviewed YouTube auxiliary runtime: the RETAINED preparation-time
+        // outcome feeds the operation configuration — no second runtime
+        // lookup happens here. Before the path may reach the package, the
+        // executable identity is rechecked against the resolution pinned at
+        // preparation. This is the host-ownership limit: the managed child,
+        // and the pinned retrieval library inside it, launch the executable
+        // later and that later launch cannot be validated from here — the
+        // residual window is documented in the extractor protocol docs.
+        // A withheld grant never blocks the primary caption route; the
+        // fallback reports its own fixed setup failure when it is reached.
+        if let auxiliaryRuntimeResolution {
+            configuration = ProcessExtractorProvider.auxiliaryRuntimeConfiguration(
+                retained: auxiliaryRuntimeResolution)
         }
 
         // Reviewed-only operation support (Phase 2): the provider admits by

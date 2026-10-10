@@ -227,9 +227,19 @@ struct ProcessExtractorOperationSupportTests {
         #expect(appleObject["kind"] as? String == "apple-podcast-transcript")
         #expect(appleObject["helperPath"] as? String == "support/req/helper")
 
+        // The reviewed YouTube Bun grant: the tagged shape with one
+        // host-resolved ABSOLUTE executable path.
+        let bun = try ExtractorOperationConfiguration(
+            reviewedYouTubeBunRuntimeExecutablePath: "/opt/homebrew/bin/bun")
+        let bunData = try JSONEncoder().encode(bun)
+        let bunObject = try JSONSerialization.jsonObject(with: bunData) as! [String: Any]
+        #expect(bunObject["kind"] as? String == "reviewed-youtube-bun-runtime")
+        #expect(bunObject["executablePath"] as? String == "/opt/homebrew/bin/bun")
+
         // Round trips.
         #expect(try JSONDecoder().decode(ExtractorOperationConfiguration.self, from: doclingData) == docling)
         #expect(try JSONDecoder().decode(ExtractorOperationConfiguration.self, from: appleData) == apple)
+        #expect(try JSONDecoder().decode(ExtractorOperationConfiguration.self, from: bunData) == bun)
     }
 
     @Test func configurationRejectsMixedUnknownAndInvalidShapes() throws {
@@ -268,6 +278,30 @@ struct ProcessExtractorOperationSupportTests {
             try JSONDecoder().decode(ExtractorOperationConfiguration.self, from: Data(#"""
             {"kind": "apple-podcast-transcript", "helperPath": "../escape"}
             """#.utf8))
+        }
+        // Bun shape carrying an Apple or Docling field.
+        #expect(throws: ExtractorValidationError.self) {
+            try JSONDecoder().decode(ExtractorOperationConfiguration.self, from: Data(#"""
+            {"kind": "reviewed-youtube-bun-runtime", "executablePath": "/bin/b", "helperPath": "h"}
+            """#.utf8))
+        }
+        // Bun shape without a path.
+        #expect(throws: ExtractorValidationError.self) {
+            try JSONDecoder().decode(ExtractorOperationConfiguration.self, from: Data(#"""
+            {"kind": "reviewed-youtube-bun-runtime"}
+            """#.utf8))
+        }
+        // A RELATIVE executable path — the package must never receive a
+        // path it could redirect inside the operation root.
+        #expect(throws: ExtractorValidationError.self) {
+            try ExtractorOperationConfiguration(
+                reviewedYouTubeBunRuntimeExecutablePath: "relative/bun")
+        }
+        // A path with a control character (DEL). Spaces stay legal: an
+        // executable may live under a directory containing spaces.
+        #expect(throws: ExtractorValidationError.self) {
+            try ExtractorOperationConfiguration(
+                reviewedYouTubeBunRuntimeExecutablePath: "/bin/bun\u{7F}")
         }
         // Legacy flat shape still decodes (installed Docling v2 package).
         let legacy = try JSONDecoder().decode(

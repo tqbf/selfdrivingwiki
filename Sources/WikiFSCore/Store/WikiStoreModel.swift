@@ -2606,9 +2606,11 @@ public final class WikiStoreModel {
         // `source_markdown_versions` stays empty until the user transcribes.
         // Mirrors the Apple PR4 + YouTube PR5 byteless-only ingest contract.
         openTab(.source(summary.id), title: summary.effectiveName)
-        // Issue #1379 consistency: same registration-derived signal as the
+        // Issue #1379 consistency: same claim + route-policy signal as the
         // addURL byteless branches — the PodcastTranscript package claims
-        // `audio/podcast`, so the caller can auto-enqueue the extraction.
+        // `audio/podcast` AND the bundled import-transcription policy covers
+        // the podcast-transcript route, so the caller can auto-enqueue the
+        // extraction.
         return URLFetchService.FetchOutcome(
             filename: summary.filename,
             byteSize: 0,
@@ -2704,12 +2706,14 @@ public final class WikiStoreModel {
         // appendDerivedMarkdown). The tab title is passed explicitly (the
         // resolved title when available) so it needs no synchronous freshness.
         openTab(.source(summary.id), title: metadata?.title ?? summary.effectiveName)
-        // Issue #1379: report "transcript extraction wanted" when an
-        // installed registration claims the created source's MIME — kind-free,
-        // registration-derived (YouTube's `video/youtube` today; any future
-        // transcript package follows the same claim). The UI layer that
-        // called addURL enqueues the standard `.extraction` queue item — the
-        // same request the manual Transcribe button builds.
+        // Issue #1379, revised: report "transcript extraction wanted" only
+        // when an installed registration claims the created source's MIME
+        // AND the claimed route is in the bundled import-transcription
+        // policy. The YouTube route has no policy entry, so a YouTube URL
+        // import never queues transcript work — the Transcribe action is
+        // the only path. The UI layer that called addURL enqueues the
+        // standard `.extraction` queue item for the routes that remain
+        // automatic — the same request the manual Transcribe button builds.
         let transcriptExtractionWanted = transcriptExtractionWanted(
             mimeType: match.mimeType)
         return URLFetchService.FetchOutcome(
@@ -2718,13 +2722,27 @@ public final class WikiStoreModel {
             sourceID: summary.id)
     }
 
-    /// Registration-derived "should this source's transcript be fetched
-    /// automatically at import?" — `true` when an active installed
-    /// registration claims the MIME type (an unambiguous claim, matching
-    /// `autoExtractIfRegistered`'s gate philosophy). Names no extractor kind;
-    /// the claims data decides. Issue #1379.
+    /// Registration-derived, route-policy-gated "should this source's
+    /// transcript be fetched automatically at import?" — `true` only when
+    /// BOTH hold: an active installed registration claims the MIME (an
+    /// unambiguous claim, matching `autoExtractIfRegistered`'s gate
+    /// philosophy) AND the claimed route appears in the bundled
+    /// import-transcription policy. Names no extractor kind; claims data
+    /// and bundled route policy decide. The YouTube transcript route has no
+    /// entry, so a YouTube URL import never queues work and the manual
+    /// Transcribe action stays the only path. Issue #1379.
     private func transcriptExtractionWanted(mimeType: String) -> Bool {
-        registeredExtractionInputs.registeredMIME(forNormalizedMIME: mimeType) != nil
+        guard let claim = registeredExtractionInputs
+            .registeredMIME(forNormalizedMIME: mimeType),
+            // Claims are normalized registration data, so this reparse
+            // always succeeds in practice; a failure means the route
+            // cannot be named and the import stays manual (deliberately
+            // inert, not swallowed).
+            // swiftlint:disable:next silent_try_optional
+            let claimedMIME = try? ExtractorMIMEType(validating: claim.mimeType)
+        else { return false }
+        return ExtractorRouteDefaults.bundled.importTranscriptionWanted(
+            for: ExtractorRouteID(kind: claim.kind, mimeType: claimedMIME))
     }
 
     /// Off-main oEmbed metadata fetch for a byteless media match. The GET

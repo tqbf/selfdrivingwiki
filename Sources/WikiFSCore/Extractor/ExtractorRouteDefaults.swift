@@ -23,19 +23,33 @@ public struct ExtractorRouteDefaults: Decodable, Sendable {
     /// claim and the source lands verbatim. A missing key decodes to an empty
     /// table (bundled data predating #1380).
     public let routeAutoExtraction: [RouteAutoExtractionRecord]
+    /// Host-owned routes whose bundled policy enqueues transcript extraction
+    /// at import: when an active registration claims the route AND the route
+    /// has an entry here, the importing UI enqueues the standard `.extraction`
+    /// queue item — the same request the manual Transcribe action builds.
+    /// Deliberately separate from `routeAutoExtraction` (HTML's ingest-time
+    /// conversion table): transcript work is queued work with progress and
+    /// agent cleanup, not ingest conversion. The YouTube transcript route is
+    /// intentionally absent — YouTube import stays explicit (the Transcribe
+    /// action) until a future automatic-extraction model exists. Execution
+    /// still requires the registration claim; a missing key decodes to an
+    /// empty table (bundled data predating the policy).
+    public let routeImportTranscription: [RouteImportTranscriptionRecord]
 
     public init(
         routeExtractors: [ExtractorRouteSelectionRecord],
         routeFetchers: [FetcherRouteSelectionRecord] = [],
-        routeAutoExtraction: [RouteAutoExtractionRecord] = []
+        routeAutoExtraction: [RouteAutoExtractionRecord] = [],
+        routeImportTranscription: [RouteImportTranscriptionRecord] = []
     ) {
         self.routeExtractors = routeExtractors.normalizedForPersistence().records
         self.routeFetchers = routeFetchers.normalizedForPersistence().records
         self.routeAutoExtraction = routeAutoExtraction
+        self.routeImportTranscription = routeImportTranscription
     }
 
     private enum CodingKeys: String, CodingKey {
-        case routeExtractors, routeFetchers, routeAutoExtraction
+        case routeExtractors, routeFetchers, routeAutoExtraction, routeImportTranscription
     }
 
     public init(from decoder: Decoder) throws {
@@ -46,7 +60,10 @@ public struct ExtractorRouteDefaults: Decodable, Sendable {
             routeFetchers: try container.decodeIfPresent(
                 [FetcherRouteSelectionRecord].self, forKey: .routeFetchers) ?? [],
             routeAutoExtraction: try container.decodeIfPresent(
-                [RouteAutoExtractionRecord].self, forKey: .routeAutoExtraction) ?? [])
+                [RouteAutoExtractionRecord].self, forKey: .routeAutoExtraction) ?? [],
+            routeImportTranscription: try container.decodeIfPresent(
+                [RouteImportTranscriptionRecord].self,
+                forKey: .routeImportTranscription) ?? [])
     }
 
     /// The kinds whose bundled policy selects import-time conversion. The
@@ -54,6 +71,13 @@ public struct ExtractorRouteDefaults: Decodable, Sendable {
     /// kinds, so an entry without a live claiming package is inert.
     public var autoExtractKinds: Set<ExtractorKind> {
         Set(routeAutoExtraction.map(\.route.kind))
+    }
+
+    /// The bundled import-transcription policy for one route: `true` only
+    /// when the route has an entry. Callers still gate on the active
+    /// registration claim.
+    public func importTranscriptionWanted(for route: ExtractorRouteID) -> Bool {
+        routeImportTranscription.contains { $0.route == route }
     }
 
     /// The bundled fetcher default record for one route, if any.
@@ -88,6 +112,18 @@ public struct ExtractorRouteDefaults: Decodable, Sendable {
 /// resolving to an installed package (built-in execution floors never
 /// convert at import).
 public struct RouteAutoExtractionRecord: Decodable, Hashable, Sendable {
+    public let route: ExtractorRouteID
+
+    public init(route: ExtractorRouteID) {
+        self.route = route
+    }
+}
+
+/// One route the bundled policy enqueues transcript extraction for at
+/// import. Like the auto-extraction table, only the route identity is
+/// declared; the enqueue still requires an active registration claiming the
+/// route, so a removed package's absence makes the entry inert.
+public struct RouteImportTranscriptionRecord: Decodable, Hashable, Sendable {
     public let route: ExtractorRouteID
 
     public init(route: ExtractorRouteID) {
