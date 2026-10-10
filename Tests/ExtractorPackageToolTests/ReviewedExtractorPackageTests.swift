@@ -246,7 +246,7 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "8dbd854c66b0e56c01c2d9b5f5589e70a9161078a1cf18a0ea9127fca3765b1c")
+            == "8baac5e4c4d78a6869a0acf2ca9d1bf7503f65a7a5c61889aab33df492347a52")
     }
 
     /// The reviewed YouTube package never claims model download: it fetches

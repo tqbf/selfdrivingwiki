@@ -842,6 +842,10 @@ def _validate_caption_url(url: str) -> str:
     )
     if not url or len(url.encode("utf-8")) > _MAX_URL_BYTES or "\0" in url:
         raise disallowed
+    # The delimiter itself is rejected, not just a non-empty fragment:
+    # urlparse reports a trailing '#' as an empty fragment.
+    if "#" in url:
+        raise disallowed
     try:
         parsed = urlparse(url)
         port = parsed.port

@@ -328,6 +328,9 @@ def arm_contract() -> int:
         f"https://www.youtube.com:8443/api/timedtext?v={_VIDEO_ID}",
         f"https://user:pass@www.youtube.com/api/timedtext?v={_VIDEO_ID}",
         f"https://www.youtube.com/api/timedtext?v={_VIDEO_ID}#fragment",
+        # The delimiter alone is rejected: urlparse reports it as an
+        # EMPTY fragment.
+        "https://www.youtube.com/api/timedtext#",
     ):
         try:
             module._validate_caption_url(bad)
