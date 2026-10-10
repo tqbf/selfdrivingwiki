@@ -91,6 +91,7 @@ struct WikiDetailView: View {
                         .contentShape(Rectangle())
                         .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
                             let payloads = lists.flatMap(\.items)
+                            DebugLog.tabs("[drop] detail dropDestination: lists=\(lists.count) payloadCount=\(payloads.count)")
                             guard !payloads.isEmpty else {
                                 DebugLog.tabs("[drop] detail action fired with NO payload")
                                 return false

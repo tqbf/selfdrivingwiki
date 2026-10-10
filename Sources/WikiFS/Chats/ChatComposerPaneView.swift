@@ -98,6 +98,8 @@ struct ChatComposerPaneView: View {
             .frame(maxWidth: .infinity)
             .dropDestination(for: SidebarDragPayloadList.self) { lists, _ in
                 let payloads = lists.flatMap(\.items)
+                let payloadDump = payloads.map { "\($0.kind.rawValue):\($0.id)" }.joined(separator: ",")
+                DebugLog.tabs("[drop] composer dropDestination: lists=\(lists.count) payloadCount=\(payloads.count) [\(payloadDump)]")
                 for payload in payloads {
                     props.onAddAttachment(ChatAttachment(payload: payload, store: props.store))
                 }
