@@ -112,4 +112,51 @@ struct ExtractionActivityPlanCodecTests {
         #expect(decoded.sourceVersionID == SourceVersionID(rawValue: "source-v1"))
         #expect(decoded.note == "keep me")
     }
+
+    /// AC.3 — the host-speech producer round-trips through the plan codec:
+    /// technique `on-device-speech`, the engine and locale as separate
+    /// fields, and the exact acquisition fetcher identity. Older plans
+    /// without the kind keep decoding unchanged.
+    @Test func speechProducerRoundTrip() throws {
+        let fetcher = ExtractionInstalledPackageProducer(
+            revision: ReviewedExtractorPackages.audioAcquire.revision,
+            registrationID: try ExtractorRegistrationID(validating: "audio"),
+            protocolRevision: .v5,
+            reportedMetadata: try ExtractorReportedMetadata(toolName: "audio-acquire"))
+        let speech = try ExtractionHostSpeechProducer(
+            engine: "speechanalyzer",
+            localeID: "en-US",
+            acquisitionFetcher: fetcher)
+        let plan = ExtractionActivityPlan(
+            producer: .hostSpeech(speech),
+            origin: .transcript,
+            sourceVersionID: SourceVersionID(rawValue: "01JSPEECHSRCVER00000000"))
+
+        let encoded = try ExtractionActivityPlanCodec.encode(plan)
+        // The producer kind tag is the codec's stable wire identity; the
+        // technique tag is derived at the store boundary.
+        #expect(encoded.contains("hostSpeech"))
+        #expect(encoded.contains("speechanalyzer"))
+        #expect(encoded.contains("en-US"))
+        #expect(encoded.contains("org.selfdrivingwiki.audio-acquire"))
+
+        let decoded = try ExtractionActivityPlanCodec.decode(encoded)
+        guard case .hostSpeech(let roundTripped)? = decoded.producer else {
+            Issue.record("expected the host-speech producer to round-trip")
+            return
+        }
+        #expect(roundTripped == speech)
+        #expect(decoded.origin == .transcript)
+        #expect(decoded.sourceVersionID == SourceVersionID(rawValue: "01JSPEECHSRCVER00000000"))
+
+        // Older plans decode unchanged: a plan without the kind is intact,
+        // and an UNKNOWN producer kind still drops only the producer.
+        let legacy = #"{"version":1,"producer":{"kind":"tool","tool":"transcript"},"origin":"transcript"}"#
+        let legacyDecoded = try ExtractionActivityPlanCodec.decode(legacy)
+        #expect(legacyDecoded.producer == .tool(.transcript))
+        let unknown = #"{"version":1,"producer":{"kind":"fromTheFuture"},"origin":"transcript","note":"kept"}"#
+        let unknownDecoded = try ExtractionActivityPlanCodec.decode(unknown)
+        #expect(unknownDecoded.producer == nil)
+        #expect(unknownDecoded.note == "kept")
+    }
 }

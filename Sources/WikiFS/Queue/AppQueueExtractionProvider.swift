@@ -90,17 +90,36 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
     /// cleanup (issue #1379). `nil` disables the pass (tests, or a host
     /// without agent services) — the raw transcript stays canonical.
     private let transcriptCleanupAgent: (any TranscriptCleanupAgent)?
+    /// The injected host speech engine and its locale for explicit
+    /// speech jobs. Tests inject a scripted engine; production uses the
+    /// system speech analyzer.
+    private let speechEngine: any SpeechTranscribing
+    private let speechLocaleID: String
+    /// The host-owned private stage root for speech jobs.
+    private let speechStageRoot: URL
 
     init(
         extractionServices: any ExtractionServices,
         sessionBox: SessionLookupBox,
         queueDatabaseURL: URL? = nil,
-        transcriptCleanupAgent: (any TranscriptCleanupAgent)? = nil
+        transcriptCleanupAgent: (any TranscriptCleanupAgent)? = nil,
+        speechEngine: any SpeechTranscribing = SystemSpeechTranscriber(),
+        speechLocaleID: String = Locale.current.identifier(.bcp47),
+        speechStageRoot: URL? = nil
     ) {
         self.extractionServices = extractionServices
         self.sessionBox = sessionBox
         self.queueDatabaseURL = queueDatabaseURL
         self.transcriptCleanupAgent = transcriptCleanupAgent
+        self.speechEngine = speechEngine
+        self.speechLocaleID = speechLocaleID
+        // Default stage root: beside the queue database inside the app
+        // group container (host-owned, private). Tests pass an explicit root.
+        self.speechStageRoot = speechStageRoot
+            ?? queueDatabaseURL?.deletingLastPathComponent()
+                .appendingPathComponent("SpeechStages", isDirectory: true)
+            ?? FileManager.default.temporaryDirectory
+                .appendingPathComponent("wikifs-speech-stages-\(UUID().uuidString)", isDirectory: true)
     }
 
     // MARK: - QueueExtractionProvider
@@ -108,11 +127,19 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
     func resolveExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
-        backendOverride: ExtractionBackend?
+        backendOverride: ExtractionBackend?,
+        transcriptionIntent: QueueItemPayload.TranscriptionIntent?
     ) async throws -> ExtractionResolution? {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             DebugLog.extraction("AppQueueExtractionProvider: no session for wikiID=\(wikiID)")
             return nil
+        }
+
+        // The EXPLICIT speech arm dispatches BEFORE every caption and
+        // generic arm. A caption failure starts no speech, and a speech
+        // item never resolves through the caption routes.
+        if transcriptionIntent == .onDeviceSpeech {
+            return try await resolveSpeech(store: store, sourceID: sourceID)
         }
 
         // Transcript sources have no local bytes; the markdown comes from a
@@ -277,6 +304,92 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
             backend: preparation.backend,
             modelVersion: preparation.modelVersion,
             packageProducer: preparation.packageProvenance))
+    }
+
+    /// The EXPLICIT speech arm: YouTube sources only (v1 scope gate, checked
+    /// only for the `.onDeviceSpeech` intent), resolved through the active
+    /// synthetic fetcher selection and the injected host engine. This is
+    /// NOT an origin gate in `FetchRouteDecision` or the generic fetch
+    /// pipeline — generic fetch behavior stays provider-neutral.
+    private func resolveSpeech(
+        store: WikiStoreModel,
+        sourceID: SourceID
+    ) async throws -> ExtractionResolution {
+        // v1 scope: the source must be a YouTube source with a validated
+        // operation URL.
+        guard let origin = store.sourceOrigin(for: sourceID),
+              origin.provider == .youtube else {
+            throw SpeechResolutionError.sourceOutsideSpeechScope
+        }
+        guard let sourceURL = YouTubeSourceURL.resolveOperationURL(
+            plan: origin.plan,
+            externalIdentity: origin.externalIdentity) else {
+            throw SpeechResolutionError.sourceURLInvalid
+        }
+        // The active, unambiguous synthetic fetcher selection. A missing,
+        // disabled, or ambiguous selection throws the typed extraction
+        // error — the speech item fails visibly, never falls back.
+        guard let claimedMIME = AudioAcquireAdapter.claimedMIMEType else {
+            throw SpeechResolutionError.speechFetcherUnavailable(
+                "the synthetic audio route is not configured")
+        }
+        let fetcher = try await extractionServices.prepareFetcher(
+            sourceMIMEType: claimedMIME)
+        let adapter = try AudioAcquireAdapter(fetcher: fetcher)
+        // The host engine must be ready for the locale BEFORE any network
+        // work; asset installation is never started here.
+        let engine = speechEngine
+        switch await engine.readiness(localeID: speechLocaleID) {
+        case .ready:
+            break
+        case .needsSetup(let guidance):
+            throw SpeechResolutionError.engineNotReady(guidance.message)
+        }
+        let stageRoot = speechStageRoot
+        let localeID = speechLocaleID
+        return .speech(SpeechExtractionResolution(
+            acquire: { onProgress in
+                try await adapter.acquireAudio(
+                    for: sourceURL, onProgress: onProgress)
+            },
+            speechEngine: engine,
+            stageRoot: stageRoot,
+            localeID: localeID,
+            sourceURL: sourceURL))
+    }
+
+    @discardableResult
+    func persistSpeechExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        outcome: SpeechOutcome
+    ) async throws -> QueueExtractionOutputReference? {
+        guard let store = sessionBox.resolve(wikiID: wikiID) else {
+            DebugLog.extraction("AppQueueExtractionProvider: persistSpeechExtraction — no session for wikiID=\(wikiID)")
+            return nil
+        }
+        // The source's immutable initial version is REQUIRED (same lineage
+        // rule as a package transcript): the write fails before persisting
+        // when absent.
+        guard let initialVersion = store.initialContentVersion(for: sourceID) else {
+            DebugLog.store("AppQueueExtractionProvider: speech transcript has no initial source version (source=\(sourceID.rawValue))")
+            throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
+        }
+        let producer = try ExtractionHostSpeechProducer(
+            engine: outcome.transcription.engine,
+            localeID: outcome.transcription.localeID,
+            acquisitionFetcher: outcome.acquisitionFetcher)
+        do {
+            let version = try store.internalStore.appendHostSpeechTranscript(
+                sourceID: sourceID,
+                content: outcome.transcription.text,
+                producer: producer,
+                sourceVersionID: initialVersion.id)
+            return QueueExtractionOutputReference(versionID: version.id.rawValue)
+        } catch {
+            DebugLog.store("AppQueueExtractionProvider: speech transcript write failed (source=\(sourceID.rawValue)): \(error)")
+            throw error
+        }
     }
 
     @discardableResult

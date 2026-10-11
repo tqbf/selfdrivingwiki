@@ -89,7 +89,8 @@ private final class StubExtractor: MarkdownExtractor {
 /// A no-op `QueueExtractionProvider` for tests — returns nil (no extraction).
 private struct StubExtractionProvider: QueueExtractionProvider {
     func resolveExtraction(
-        wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?
+        wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?,
+        transcriptionIntent: QueueItemPayload.TranscriptionIntent?
     ) async throws -> ExtractionResolution? { nil }
     func persistBytesExtraction(
         wikiID: WikiID, sourceID: SourceID,
@@ -102,6 +103,9 @@ private struct StubExtractionProvider: QueueExtractionProvider {
     func persistFetch(
         wikiID: WikiID, sourceID: SourceID,
         resolution: FetcherResolution, outcome: FetchOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
+    func persistSpeechExtraction(
+        wikiID: WikiID, sourceID: SourceID, outcome: SpeechOutcome
     ) async throws -> QueueExtractionOutputReference? { nil }
     func enqueueFollowOnExtraction(
         wikiID: WikiID, sourceID: SourceID,

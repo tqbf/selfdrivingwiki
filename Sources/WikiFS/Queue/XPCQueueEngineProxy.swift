@@ -135,6 +135,36 @@ final class XPCQueueEngineProxy: QueueEngineClient {
         }
     }
 
+    /// The deadline-explicit wait. The daemon side bounds its own wait with
+    /// the caption-era bound; for the longer speech bound this proxy keeps
+    /// re-observing the item until the LOCAL deadline passes. The item is
+    /// left untouched on timeout — the wait is bounded, not the work.
+    func waitForCompletion(
+        of id: QueueItem.ID,
+        deadline: Duration
+    ) async throws -> Result<Void, Error> {
+        let start = ContinuousClock.now
+        while true {
+            let result = try await waitForCompletion(of: id)
+            switch result {
+            case .success:
+                return .success(())
+            case .failure(let error):
+                // A real item failure (enqueue-time rejection, worker error)
+                // ends the wait; only the daemon-side WAIT timeout keeps
+                // polling within the caller's bound.
+                if ContinuousClock.now - start >= deadline {
+                    return .failure(error)
+                }
+                // Re-observe after a short, bounded interval.
+                try await Task.sleep(for: .seconds(2))
+                if ContinuousClock.now - start >= deadline {
+                    return .failure(QueueEngineCompletionWaitError.timeout(itemID: id))
+                }
+            }
+        }
+    }
+
     func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] {
         do {
             return try await workloadClient.loadTranscript(for: itemID)

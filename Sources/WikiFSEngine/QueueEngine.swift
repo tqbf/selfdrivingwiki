@@ -681,6 +681,18 @@ public actor QueueEngine {
     /// `handleWorkerFinished` resumes all waiters for the item and empties
     /// the waiters array.
     public func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> {
+        await waitForCompletion(of: id, deadline: QueueEngineWaitPolicy.completionWaitDeadline)
+    }
+
+    /// The deadline-explicit variant: the explicit on-device speech action
+    /// waits on ``QueueEngineWaitPolicy/speechCompletionWaitDeadline``
+    /// (a legitimate speech job runs far longer than a caption fetch);
+    /// every other caller keeps the caption-era bound above. The wait is
+    /// bounded, not the work — the item is left untouched on timeout.
+    public func waitForCompletion(
+        of id: QueueItem.ID,
+        deadline: Duration
+    ) async -> Result<Void, Error> {
         switch lifecycle {
         case .shuttingDown:
             return .failure(QueueEngineLifecycleError.shuttingDown)
@@ -722,7 +734,7 @@ public actor QueueEngine {
             }
             group.addTask { [self] in
                 for await _ in deadlineSource.stream(
-                    after: QueueEngineWaitPolicy.completionWaitDeadline) { break }
+                    after: deadline) { break }
                 // Settlement won the race — do not steal waiters registered
                 // after its sweep.
                 if Task.isCancelled { return .failure(CancellationError()) }

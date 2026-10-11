@@ -174,6 +174,15 @@ actor QueueEngineHotSwap: QueueEngineClient {
         return try await admission.client.waitForCompletion(of: id)
     }
 
+    func waitForCompletion(
+        of id: QueueItem.ID,
+        deadline: Duration
+    ) async throws -> Result<Void, Error> {
+        let admission = admit()
+        defer { releaseAdmission(admission.generation) }
+        return try await admission.client.waitForCompletion(of: id, deadline: deadline)
+    }
+
     func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] {
         let admission = admit()
         defer { releaseAdmission(admission.generation) }

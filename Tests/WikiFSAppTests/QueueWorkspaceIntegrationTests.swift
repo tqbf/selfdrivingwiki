@@ -958,6 +958,10 @@ actor StubReportEngine: QueueEngineClient {
     func snapshot() async -> QueueSnapshot { snapshots }
     nonisolated func hasActiveWork(for wikiID: WikiID) async -> Bool { false }
     nonisolated func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> { .success(()) }
+    func waitForCompletion(
+        of id: QueueItem.ID,
+        deadline: Duration
+    ) async -> Result<Void, Error> { .success(()) }
     nonisolated func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] { [] }
     nonisolated func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }
 

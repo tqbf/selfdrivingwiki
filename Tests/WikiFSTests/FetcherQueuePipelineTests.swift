@@ -36,7 +36,8 @@ struct FetcherQueuePipelineTests {
         func resolveExtraction(
             wikiID: WikiID,
             sourceID: SourceID,
-            backendOverride: ExtractionBackend?
+            backendOverride: ExtractionBackend?,
+            transcriptionIntent: QueueItemPayload.TranscriptionIntent?
         ) async throws -> ExtractionResolution? { nil }
 
         func persistBytesExtraction(
@@ -51,6 +52,13 @@ struct FetcherQueuePipelineTests {
             sourceID: SourceID,
             resolution: TranscriptExtractionResolution,
             outcome: TranscriptFetchOutcome
+        ) async throws -> QueueExtractionOutputReference? { nil }
+
+        @discardableResult
+        func persistSpeechExtraction(
+            wikiID: WikiID,
+            sourceID: SourceID,
+            outcome: SpeechOutcome
         ) async throws -> QueueExtractionOutputReference? { nil }
 
         @discardableResult

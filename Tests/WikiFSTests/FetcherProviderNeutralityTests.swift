@@ -145,6 +145,35 @@ struct FetcherProviderNeutralityTests {
 
     // MARK: - Schema neutrality
 
+    /// AC.2 — the speech intent's YouTube scope gate lives ONLY in the
+    /// explicit speech arm. A generic byteless fetch (any provider's MIME an
+    /// active fetcher claims) resolves through the provider-neutral
+    /// `FetchRouteDecision` exactly as before: no speech gate appears in
+    /// `FetchRouteDecision` or the generic fetch pipeline.
+    @Test func speechIntentScopeDoesNotGateGenericFetch() throws {
+        // The shared decision itself has no speech concept.
+        let route = FetchRouteDecision.resolve(
+            hasBytes: false,
+            planURL: "https://example.org/items/EXTSRC1/file",
+            mimeType: "application/x-fake-source",
+            fetcherClaimedMIMETypes: ["application/x-fake-source"])
+        #expect(route == .fetch)
+        // A YouTube source that IS byteless with a claimed MIME resolves as
+        // a fetch too — the scope gate never touches this function.
+        let youtubeFetch = FetchRouteDecision.resolve(
+            hasBytes: false,
+            planURL: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            mimeType: "application/zotero",
+            fetcherClaimedMIMETypes: ["application/zotero"])
+        #expect(youtubeFetch == .fetch)
+        // The decision source never names speech.
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: "Sources/WikiFSEngine/FetchRouteDecision.swift"),
+            encoding: .utf8)
+        #expect(source.contains("Speech") == false)
+        #expect(source.contains("onDeviceSpeech") == false)
+    }
+
     @Test func freshSchemaCarriesOnlyNeutralColumnNames() throws {
         let store = try TestStoreFactory.inMemory()
         let present = { (column: String) in

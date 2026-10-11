@@ -78,9 +78,16 @@ public enum ReviewedExtractorPackages {
         version: "1.1.0",
         digest: "ecd2466df32e81a5347caee9b30b75b9fc9672b9429f4f406c3045d6ae0f9f7a")
 
+    public static let audioAcquire = make(
+        directoryName: "AudioAcquire",
+        packageID: "org.selfdrivingwiki.audio-acquire",
+        version: "1.0.0",
+        digest: "2c27524ed9ebe8869c348e5ee084b7a6258d4595156e216e3f900d9a07d4a910")
+
     public static let all: [ReviewedExtractorPackage] = [
         defuddle, pdf2md, doclingServe, docx2md, podcastTranscript,
         applePodcastTranscript, youtubeTranscript, zotero,
+        audioAcquire,
     ]
 
     /// Locates the reviewed payload. `Bundle.main` resolves in both hosts:

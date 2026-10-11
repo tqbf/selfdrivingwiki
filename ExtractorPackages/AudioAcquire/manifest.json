@@ -1,0 +1,50 @@
+{
+  "capabilities": [
+    "network",
+    "shared-runtime-cache"
+  ],
+  "displayName": "Audio Acquire",
+  "entryPoint": "bin/audio-acquire-extractor",
+  "files": [
+    {
+      "digest": "7a1a0c9cc6a0c1629e1e0be035080aa3bbac726cefcdb96f21b739033948d4b3",
+      "path": "PROVENANCE.md"
+    },
+    {
+      "digest": "bca69c3cfe61c6c719b8bbd8ab708de2f350bb2943502d7b012a00a111e7fcf5",
+      "path": "bin/audio-acquire"
+    },
+    {
+      "digest": "c0ee9824d8b5b8606971b34b310e16c708b588361712c9fe7589d4ac140754fb",
+      "path": "bin/audio-acquire-extractor"
+    }
+  ],
+  "launch": {
+    "arguments": [
+      "run",
+      "--script"
+    ],
+    "command": "uv",
+    "mode": "runtime"
+  },
+  "limits": {
+    "maximumDurationMilliseconds": 1800000,
+    "maximumInputByteCount": 1048576,
+    "maximumMarkdownOutputByteCount": 134217728,
+    "maximumProgressEventCount": 64
+  },
+  "manifestRevision": 4,
+  "packageID": "org.selfdrivingwiki.audio-acquire",
+  "protocolRevision": 5,
+  "registrations": [
+    {
+      "displayName": "Audio Acquire",
+      "id": "audio",
+      "mimeTypes": [
+        "audio/x-wiki-audio-acquire"
+      ],
+      "role": "fetcher"
+    }
+  ],
+  "version": "1.0.0"
+}

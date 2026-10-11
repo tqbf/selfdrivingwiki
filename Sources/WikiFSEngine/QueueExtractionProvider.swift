@@ -195,14 +195,102 @@ public struct FetcherResolution: Sendable {
     }
 }
 
+/// The typed result of one completed speech job: the transcript text plus
+/// the honest engine facts and the exact acquisition identity provenance
+/// persists. The AUDIO never appears here — it was consumed transiently.
+public struct SpeechOutcome: Sendable {
+    public let transcription: SpeechTranscription
+    /// The exact acquisition fetcher identity that downloaded the audio.
+    public let acquisitionFetcher: ExtractorPackageExecutionProvenance
+    /// The staged file's duration in seconds, when reported.
+    public let durationSeconds: Double?
+
+    public init(
+        transcription: SpeechTranscription,
+        acquisitionFetcher: ExtractorPackageExecutionProvenance,
+        durationSeconds: Double?
+    ) {
+        self.transcription = transcription
+        self.acquisitionFetcher = acquisitionFetcher
+        self.durationSeconds = durationSeconds
+    }
+}
+
+/// Explicit-intent speech work: acquire the audio transiently through the
+/// reviewed fetcher, stage it privately, run the INJECTED host engine, and
+/// persist ONE transcript version. The payload carries no audio — the fetch
+/// closure produces the bytes inside the worker's stage call, and nothing
+/// here can persist them as a source blob.
+public struct SpeechExtractionResolution: Sendable {
+    /// The acquisition: the fetcher's validated `source-bytes` result. Runs
+    /// inside the worker; progress lines are already redacted.
+    public let acquire: @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> AudioAcquireAdapter.AcquiredAudio
+    /// The injected host speech engine.
+    public let speechEngine: any SpeechTranscribing
+    /// The private stage manager (host-owned root).
+    public let stageRoot: URL
+    /// The BCP 47 locale for the transcription.
+    public let localeID: String
+    /// The source's canonical operation URL (the fetcher's input).
+    public let sourceURL: URL
+    /// Its own single-job capacity bucket.
+    public let capacityID: String
+
+    public static let defaultCapacityID = "speech"
+
+    public init(
+        acquire: @escaping @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> AudioAcquireAdapter.AcquiredAudio,
+        speechEngine: any SpeechTranscribing,
+        stageRoot: URL,
+        localeID: String,
+        sourceURL: URL,
+        capacityID: String = SpeechExtractionResolution.defaultCapacityID
+    ) {
+        self.acquire = acquire
+        self.speechEngine = speechEngine
+        self.stageRoot = stageRoot
+        self.localeID = localeID
+        self.sourceURL = sourceURL
+        self.capacityID = capacityID
+    }
+}
+
 /// The result of resolving an extraction request. The tag is the execution
-/// model — staged bytes, a URL-backed transcript, or a URL-backed fetch —
-/// so an invalid combination is unrepresentable and the worker switches
-/// exhaustively.
+/// model — staged bytes, a URL-backed transcript, a URL-backed fetch, or an
+/// explicit-intent speech job — so an invalid combination is
+/// unrepresentable and the worker switches exhaustively.
 public enum ExtractionResolution: Sendable {
     case bytes(BytesExtractionResolution)
     case transcript(TranscriptExtractionResolution)
     case fetch(FetcherResolution)
+    case speech(SpeechExtractionResolution)
+}
+
+/// The speech arm's typed resolution failures. Visible per-item failures —
+/// a missing, disabled, or unavailable speech route never silently
+/// completes and never falls back to captions.
+public enum SpeechResolutionError: Error, LocalizedError, Equatable {
+    /// Speech is explicit-only for YouTube sources in v1.
+    case sourceOutsideSpeechScope
+    /// The source's stored URL does not validate as a YouTube video URL.
+    case sourceURLInvalid
+    /// The synthetic fetcher route has no active, unambiguous selection.
+    case speechFetcherUnavailable(String)
+    /// The host speech engine is not ready for the requested locale.
+    case engineNotReady(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .sourceOutsideSpeechScope:
+            return "On-device speech transcription currently supports YouTube videos only."
+        case .sourceURLInvalid:
+            return "This source's web address is not a supported YouTube video URL."
+        case .speechFetcherUnavailable:
+            return "The audio acquisition route is unavailable. Open Extraction Settings to fix the audio fetcher."
+        case .engineNotReady(let message):
+            return message
+        }
+    }
 }
 
 // MARK: - QueueExtractionProvider
@@ -219,10 +307,16 @@ public protocol QueueExtractionProvider: Sendable {
     ///   backend instead of the configured default (re-extraction with a
     ///   chosen backend). Transcript routes ignore it; their selection is
     ///   registration-driven through the extraction services.
+    /// - Parameter transcriptionIntent: The payload's normalized intent.
+    ///   `nil`/`.captions` resolves the caption routes only; `.onDeviceSpeech`
+    ///   resolves the explicit speech arm (which requires a YouTube source
+    ///   and an active synthetic fetcher selection) BEFORE any caption or
+    ///   generic fetch arm.
     func resolveExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
-        backendOverride: ExtractionBackend?
+        backendOverride: ExtractionBackend?,
+        transcriptionIntent: QueueItemPayload.TranscriptionIntent?
     ) async throws -> ExtractionResolution?
 
     /// Persist a bytes-based extraction result: the legacy seeded-PDF path
@@ -263,6 +357,18 @@ public protocol QueueExtractionProvider: Sendable {
         sourceID: SourceID,
         resolution: FetcherResolution,
         outcome: FetchOutcome
+    ) async throws -> QueueExtractionOutputReference?
+
+    /// Persist one speech job: ONE nonempty `.transcript` version with the
+    /// typed host-speech producer (engine, locale) and the exact
+    /// acquisition fetcher identity, linked to the source's immutable
+    /// initial version, in one store transaction. Never attaches a blob and
+    /// never enqueues a follow-on item.
+    @discardableResult
+    func persistSpeechExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        outcome: SpeechOutcome
     ) async throws -> QueueExtractionOutputReference?
 
     /// Enqueue the follow-on `.extraction` queue item for a source that just

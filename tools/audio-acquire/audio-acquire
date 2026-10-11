@@ -1,0 +1,1043 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12,<3.14"
+# dependencies = [
+#     "yt-dlp==2026.08.19",
+#     "yt-dlp-ejs==0.8.0",
+# ]
+# ///
+"""audio-acquire — YouTube audio acquisition for the extractor protocol.
+
+The reviewed extractor package serves ONE revision-5 `remote-url` FETCH
+request (role `fetcher`): a JSON request object on stdin, JSON Lines frames
+on stdout, and the acquired audio file at the requested output path.
+
+The package ACQUIRES only. It downloads ONE audio-only M4A stream for the
+video at the request URL and never converts formats, never runs
+speech-to-text, and never persists anything itself — the HOST consumes the
+published file inside its own private analysis stage. yt-dlp is used for
+METADATA only (`extract_info(download=False)`, `skip_download=True`) on an
+application-built watch URL; the media bytes are fetched through this
+package's own bounded streaming client against the metadata's signed URL.
+
+Transport policy, all fail-closed:
+
+- A connection guard wraps every DNS answer and every TCP connect for the
+  duration of the operation. The metadata arm permits `www.youtube.com:443`
+  ONLY; the media arm permits hosts whose name is one or more labels
+  followed by the exact `.googlevideo.com` suffix, on 443 ONLY. Every
+  resolved IPv4/IPv6 answer must be globally routable; private, loopback,
+  link-local, or mixed answers reject the whole lookup. Connections are
+  made to the validated addresses without a second DNS lookup while the
+  URL hostname is retained for HTTP Host, TLS SNI, and certificate
+  verification. Redirects are never followed, proxies are never inherited,
+  and compressed responses are refused.
+- One audio-only M4A/AAC format is selected from the metadata
+  (`ext=m4a`, `vcodec=none`, a present `acodec`): the best validated M4A
+  by audio bitrate, then validated format 140. yt-dlp's media downloader
+  and ffmpeg are never invoked.
+- The metadata duration must be present and at most 2 hours; the download
+  reads at most 120 MiB plus one byte; the result must begin with a
+  nonempty M4A `ftyp` box. The file is published atomically with
+  `resultType: "source-bytes"` and `resultMIMEType: "audio/mp4"`.
+
+Every failure message is a fixed string. The source URL, the signed media
+URL, any token or credential, upstream error text, and media bytes never
+appear in a frame or on stderr.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import os
+import re
+import socket
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+# ── Package protocol (revision 5, fetcher role) ────────────────────────────
+
+PROTOCOL_REVISION = 5
+PROTOCOL_ROLE = "fetcher"
+PROTOCOL_CLAIMED_MIME = "audio/x-wiki-audio-acquire"
+TOOL_METADATA = {"toolName": "audio-acquire", "toolVersion": "1.0.0"}
+
+# Mirrors the manifest output limit (128 MiB). The manifest cap must stay
+# ABOVE the download bound so a full acquisition can always be published;
+# tests fail if either side drifts.
+MAX_OUTPUT_BYTES = 134_217_728
+
+# Package-owned bounds. They equal or tighten the generated manifest limits
+# (see the generated manifest); tests fail if either side drifts.
+_MAX_REQUEST_BYTES = 1_048_576  # == manifest maximumInputByteCount
+_MAX_PROGRESS_FRAMES = 64  # == manifest maximumProgressEventCount
+
+# The download bound: reads stop at cap+1 bytes, so an oversized stream is
+# detected and rejected instead of buffered unbounded. The manifest output
+# limit stays above this so a full acquisition is publishable.
+_MAX_AUDIO_BYTES = 125_829_120  # 120 MiB
+
+# The metadata duration contract: present, positive, at most 2 hours.
+_MAX_DURATION_SECONDS = 7_200
+
+# Process deadline budget mirrored in the manifest duration limit (30 min).
+_MAX_DURATION_MILLISECONDS = 1_800_000
+
+_MAX_URL_BYTES = 2_048  # mirrors the host ExtractorRemoteSourceURL bound
+# Signed googlevideo URLs carry long token query strings; the bound is
+# generous but absolute.
+_MAX_MEDIA_URL_BYTES = 16_384
+
+# Per-connection socket timeout, always capped by the operation deadline.
+_SOCKET_TIMEOUT_SECONDS = 60
+
+# The only host the metadata call is pointed at: the already validated
+# video ID is embedded into this fixed watch URL.
+_YOUTUBE_WATCH_HOST = "www.youtube.com"
+_YOUTUBE_WATCH_BASE = f"https://{_YOUTUBE_WATCH_HOST}/watch"
+
+# The media arm's host policy: one or more labels, then this exact suffix,
+# on the default 443 port only.
+_MEDIA_HOST_SUFFIX = ".googlevideo.com"
+
+# yt-dlp plugin guard (see _import_ytdlp).
+_YTDLP_NO_PLUGINS_ENV = "YTDLP_NO_PLUGINS"
+
+# The host-owned operation configuration shape this package reads: exactly
+# one absolute executable path for the auxiliary JavaScript runtime, staged
+# by the host for this exact package revision. Distinct from the caption
+# package's kind: a grant is per reviewed revision, never shared.
+_BUN_CONFIG_KIND = "reviewed-audio-acquire-bun-runtime"
+_MAX_EXECUTABLE_PATH_BYTES = 4_096
+
+# YouTube video IDs are 11 characters of [A-Za-z0-9_-].
+_VIDEO_ID_RE = re.compile(r"[a-zA-Z0-9_-]{11}")
+_WATCH_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com"}
+_SHORT_HOSTS = {"youtu.be", "www.youtu.be"}
+_PATH_PREFIXES = frozenset(("shorts", "embed"))
+
+
+class ProtocolFailure(Exception):
+    """One typed protocol failure. `cause` is a protocol failure cause."""
+
+    def __init__(self, cause: str, message: str) -> None:
+        super().__init__(message)
+        self.cause = cause
+        self.message = message
+
+
+def build_protocol_frame(kind: str, payload: dict) -> dict:
+    """One protocol envelope. The host rejects any other shape."""
+    return {"kind": kind, "payload": payload}
+
+
+def _emit(frame: dict, stream: Any) -> None:
+    stream.write(json.dumps(frame, separators=(",", ":")))
+    stream.write("\n")
+    stream.flush()
+
+
+def _progress(request_id: str, completed: int, total: int, message: str) -> dict:
+    return build_protocol_frame(
+        "progress",
+        {
+            "requestID": request_id,
+            "completedUnitCount": completed,
+            "totalUnitCount": total,
+            "message": message,
+        },
+    )
+
+
+def _failure(request_id: str, cause: str, message: str) -> dict:
+    return build_protocol_frame(
+        "failure",
+        {
+            "requestID": request_id,
+            "cause": cause,
+            "message": message[:4096],
+        },
+    )
+
+
+def _fail(request_id: str, cause: str, message: str, out_stream: Any) -> int:
+    """Emit exactly one terminal failure frame. The frame is the report."""
+    _emit(_failure(request_id, cause, message), out_stream)
+    return 0
+
+
+class _ProgressReporter:
+    """Emits progress at fixed seams, never past the package frame bound."""
+
+    def __init__(self, request_id: str, out_stream: Any) -> None:
+        self._request_id = request_id
+        self._out_stream = out_stream
+        self._emitted = 0
+
+    def emit(self, completed: int, total: int, message: str) -> None:
+        if self._emitted >= _MAX_PROGRESS_FRAMES:
+            return
+        self._emitted += 1
+        _emit(_progress(self._request_id, completed, total, message), self._out_stream)
+
+
+def _deadline_passed(deadline_ms: int) -> bool:
+    return int(time.time() * 1000) > deadline_ms
+
+
+def _check_deadline(deadline_ms: int) -> None:
+    """One deadline seam. Called before network work and at every stage."""
+    if _deadline_passed(deadline_ms):
+        raise ProtocolFailure("timeout", "the request deadline passed")
+
+
+def _validate_relative_output_path(output_path: Any) -> str:
+    """Accepts only a safe relative path as the host-provided output."""
+    if not isinstance(output_path, str) or not output_path:
+        raise ProtocolFailure("invalid-request", "request has no output path")
+    if output_path.startswith("/") or "\\" in output_path or "\0" in output_path:
+        raise ProtocolFailure("invalid-request", "request has an invalid output path")
+    segments = output_path.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise ProtocolFailure("invalid-request", "request has an invalid output path")
+    return output_path
+
+
+# ── Video ID extraction (strict, package path) ─────────────────────────────
+
+
+def extract_video_id_from_url(url: str) -> str | None:
+    """Strictly extract a video ID from one validated HTTP(S) YouTube URL.
+
+    Accepts ONLY YouTube hosts, requires an explicit http/https scheme, and
+    never searches the raw string for an ID-shaped substring. Non-YouTube
+    hosts, missing IDs, and malformed URLs return None without echoing any
+    part of the input.
+    """
+    if len(url.encode("utf-8")) > _MAX_URL_BYTES or "\0" in url:
+        return None
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    if parsed.fragment:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host in _SHORT_HOSTS:
+        path_segments = parsed.path.strip("/").split("/")
+        if len(path_segments) == 1 and _VIDEO_ID_RE.fullmatch(path_segments[0]):
+            return path_segments[0]
+        return None
+    if host in _WATCH_HOSTS:
+        try:
+            query = parse_qs(parsed.query)
+        except ValueError:
+            return None
+        if "v" in query:
+            candidate = query["v"][0]
+            if _VIDEO_ID_RE.fullmatch(candidate):
+                return candidate
+        path_parts = parsed.path.strip("/").split("/")
+        if (
+            len(path_parts) >= 2
+            and path_parts[0] in _PATH_PREFIXES
+            and _VIDEO_ID_RE.fullmatch(path_parts[1])
+        ):
+            return path_parts[1]
+    return None
+
+
+# ── Connection guard ───────────────────────────────────────────────────────
+#
+# Every DNS answer and every TCP connect for this operation passes through
+# this guard. It is installed around (and only around) the metadata and
+# media network phases, so neither yt-dlp's internals nor any alternative
+# HTTP handler it selects can open a connection outside policy: the socket
+# layer is the one seam every client library shares.
+
+
+def _is_globally_routable(address: str) -> bool:
+    """True when the address is a global unicast IPv4/IPv6 address."""
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return parsed.is_global
+
+
+class _ConnectionGuard:
+    """Patches the socket layer for the duration of one network phase.
+
+    - `host_allowed(host)` decides which hostnames may be resolved. Every
+      other name fails closed BEFORE any DNS query is issued.
+    - Answers for an allowed host are validated as globally routable; a
+      lookup returning private, loopback, link-local, or mixed answers
+      rejects the whole lookup. Only validated answers are handed back.
+    - Connections are made to the validated addresses directly — no second
+      DNS lookup — while callers keep the hostname so HTTP Host, TLS SNI,
+      and certificate verification still name the real server.
+    - `unauthorized_attempts` counts every refused resolve/connect so tests
+      can assert policy violations produced zero connection attempts.
+    """
+
+    def __init__(self, host_allowed: Any) -> None:
+        self._host_allowed = host_allowed
+        self.unauthorized_attempts = 0
+        self._validated: dict[tuple[str, int], list[tuple]] = {}
+        self._real_getaddrinfo = socket.getaddrinfo
+        self._real_create_connection = socket.create_connection
+
+    # -- policy -------------------------------------------------------
+
+    def _validate_answers(self, answers: list[tuple]) -> list[tuple]:
+        validated: list[tuple] = []
+        for answer in answers:
+            family, socktype, proto, canonical, sockaddr = answer
+            if family not in (socket.AF_INET, socket.AF_INET6):
+                continue
+            address = sockaddr[0]
+            if not _is_globally_routable(address):
+                # A private, loopback, or link-local answer mixed into the
+                # response rejects the WHOLE lookup: partial trust is how
+                # SSRF filters leak.
+                raise ProtocolFailure(
+                    "extraction-failure", "the destination address is not allowed"
+                )
+            validated.append((family, socktype, proto, canonical, sockaddr))
+        if not validated:
+            raise ProtocolFailure(
+                "extraction-failure", "the destination address is not allowed"
+            )
+        return validated
+
+    # -- patched socket layer ------------------------------------------
+
+    def _getaddrinfo(self, host: Any, port: Any, *args: Any, **kwargs: Any) -> list[tuple]:
+        hostname = host if isinstance(host, str) else str(host)
+        numeric_port = port if isinstance(port, int) else 443
+        if not self._host_allowed(hostname.lower()):
+            self.unauthorized_attempts += 1
+            raise ProtocolFailure(
+                "extraction-failure", "the destination host is not allowed"
+            )
+        key = (hostname.lower(), numeric_port)
+        cached = self._validated.get(key)
+        if cached is not None:
+            return cached
+        try:
+            answers = self._real_getaddrinfo(host, port, *args, **kwargs)
+        except OSError as error:
+            raise ProtocolFailure(
+                "extraction-failure", "the destination could not be resolved"
+            ) from error
+        validated = self._validate_answers(list(answers))
+        self._validated[key] = validated
+        return validated
+
+    def _create_connection(self, address: Any, *args: Any, **kwargs: Any) -> Any:
+        if not (isinstance(address, tuple) and len(address) >= 2):
+            self.unauthorized_attempts += 1
+            raise ProtocolFailure(
+                "extraction-failure", "the destination host is not allowed"
+            )
+        hostname, port = address[0], address[1]
+        if not isinstance(hostname, str) or not self._host_allowed(hostname.lower()):
+            self.unauthorized_attempts += 1
+            raise ProtocolFailure(
+                "extraction-failure", "the destination host is not allowed"
+            )
+        key = (hostname.lower(), port if isinstance(port, int) else 443)
+        answers = self._validated.get(key)
+        if answers is None:
+            # Resolve through the validated path once, then connect to the
+            # validated addresses without another lookup.
+            answers = self._getaddrinfo(hostname, key[1])
+        last_error: Exception | None = None
+        for family, socktype, proto, _canonical, sockaddr in answers:
+            sock = None
+            try:
+                sock = socket.socket(family, socktype, proto)
+                if kwargs.get("timeout") is not None or args:
+                    timeout = kwargs.get("timeout")
+                    if timeout is None and len(args) > 0:
+                        timeout = args[0]
+                    if timeout is not None:
+                        sock.settimeout(timeout)
+                sock.connect(sockaddr)
+                return sock
+            except OSError as error:
+                last_error = error
+                try:
+                    sock.close()  # type: ignore[union-attr]
+                except Exception:  # noqa: BLE001 - cleanup must never mask policy
+                    pass
+        raise ProtocolFailure(
+            "extraction-failure", "the destination connection failed"
+        ) from last_error
+
+    # -- context management ---------------------------------------------
+
+    def __enter__(self) -> "_ConnectionGuard":
+        socket.getaddrinfo = self._getaddrinfo  # type: ignore[assignment]
+        socket.create_connection = self._create_connection  # type: ignore[assignment]
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        socket.getaddrinfo = self._real_getaddrinfo  # type: ignore[assignment]
+        socket.create_connection = self._real_create_connection  # type: ignore[assignment]
+
+
+def _metadata_host_allowed(host: str) -> bool:
+    """The metadata arm permits ONLY the watch host."""
+    return host == _YOUTUBE_WATCH_HOST
+
+
+def _media_host_allowed(host: str) -> bool:
+    """The media arm permits one-or-more labels + the exact suffix."""
+    return host.endswith(_MEDIA_HOST_SUFFIX) and len(host) > len(_MEDIA_HOST_SUFFIX)
+
+
+# ── yt-dlp metadata (pinned, reduced) ──────────────────────────────────────
+
+
+class _DiscardLogger:
+    """The yt-dlp logger contract: debug/warning/error, all discarded.
+
+    Upstream messages can carry URLs, tokens, and error internals; none of
+    it may reach a protocol frame or stderr.
+    """
+
+    def debug(self, message: str) -> None:
+        return
+
+    def warning(self, message: str) -> None:
+        return
+
+    def error(self, message: str) -> None:
+        return
+
+
+def _import_ytdlp() -> Any:
+    """Import yt_dlp with the release's plugin guard already applied.
+
+    `YTDLP_NO_PLUGINS` is read by this release's `load_plugins()` before
+    any plugin directory is scanned; it is a source-supported guard, not a
+    promised stable API, and the offline contract test pins its behavior
+    against the tagged source. Remote components stay refused through the
+    YoutubeDL parameter set (the default already disallows them and is set
+    explicitly).
+    """
+    os.environ[_YTDLP_NO_PLUGINS_ENV] = "1"
+    import yt_dlp
+
+    return yt_dlp
+
+
+def _ytdlp_params(bun_path: str | None, deadline_ms: int) -> dict[str, Any]:
+    """The pinned, reduced yt-dlp option set for one metadata call.
+
+    Hardening choices, all load-bearing:
+    - `skip_download` + `noplaylist`: metadata only; yt-dlp's media
+      downloader is never invoked by this package.
+    - No netrc, no cookie files, no browser cookies: the package never
+      presents ambient credentials to YouTube.
+    - `proxy: ""`: yt-dlp must not inherit a host proxy environment; the
+      media client below disables proxy lookup the same way.
+    - Retry ceilings at zero for the network, the extractor, fragments,
+      and file access: one bounded attempt is the whole budget.
+    - `js_runtimes`: exactly the host-resolved Bun when present, else an
+      EMPTY table so yt-dlp never PATH-searches for Deno or Node.
+    """
+    remaining_seconds = (deadline_ms - int(time.time() * 1000)) / 1000.0
+    socket_timeout = max(min(remaining_seconds, _SOCKET_TIMEOUT_SECONDS), 1.0)
+    return {
+        "quiet": True,
+        "no_warnings": True,
+        "logger": _DiscardLogger(),
+        "skip_download": True,
+        "noplaylist": True,
+        "usenetrc": False,
+        "cookiefile": None,
+        "cookiesfrombrowser": None,
+        "proxy": "",
+        "remote_components": set(),
+        "retries": 0,
+        "extractor_retries": 0,
+        "fragment_retries": 0,
+        "file_access_retries": 0,
+        "socket_timeout": socket_timeout,
+        "nocheckcertificate": False,
+        "js_runtimes": {"bun": {"path": bun_path}} if bun_path else {},
+    }
+
+
+def _close_quietly(extractor: Any) -> None:
+    """Release yt-dlp's helper processes without surfacing errors."""
+    close = getattr(extractor, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # noqa: BLE001 - cleanup must never mask the outcome
+            pass
+
+
+def fetch_metadata(
+    video_id: str, bun_path: str | None, deadline_ms: int
+) -> dict[str, Any]:
+    """One metadata-only yt-dlp call under the metadata connection guard.
+
+    The URL is application-built from the already validated video ID, so
+    the metadata arm's only possible destination is the watch host. Any
+    failure — import, option parsing, extraction — maps to a fixed,
+    redacted protocol failure; upstream text is discarded, never framed.
+    """
+    _check_deadline(deadline_ms)
+    try:
+        ytdlp = _import_ytdlp()
+    except ImportError:
+        raise ProtocolFailure(
+            "setup", "the audio acquisition runtime is unavailable"
+        ) from None
+    try:
+        extractor = ytdlp.YoutubeDL(_ytdlp_params(bun_path, deadline_ms))
+    except Exception:  # noqa: BLE001 - redacted; an option defect is a package defect
+        raise ProtocolFailure(
+            "setup", "the audio acquisition could not start"
+        ) from None
+    _check_deadline(deadline_ms)
+    watch_url = f"{_YOUTUBE_WATCH_BASE}?v={video_id}"
+    try:
+        with _ConnectionGuard(_metadata_host_allowed):
+            info = extractor.extract_info(watch_url, download=False)
+    except ProtocolFailure:
+        raise
+    except Exception:  # noqa: BLE001 - upstream text is discarded, never framed
+        raise ProtocolFailure(
+            "extraction-failure", "video metadata could not be retrieved"
+        ) from None
+    finally:
+        _close_quietly(extractor)
+    if not isinstance(info, dict):
+        raise ProtocolFailure(
+            "extraction-failure", "video metadata could not be retrieved"
+        )
+    return info
+
+
+# ── Metadata validation and format selection ───────────────────────────────
+
+
+def validate_duration(info: dict[str, Any]) -> float:
+    """The metadata duration must be present, positive, and at most 2 hours.
+
+    A missing duration means the package cannot bound its own work — that
+    is a typed refusal, never a guess.
+    """
+    duration = info.get("duration")
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+        raise ProtocolFailure(
+            "unsupported-input", "this video does not report a duration"
+        )
+    if duration <= 0 or duration > _MAX_DURATION_SECONDS:
+        raise ProtocolFailure(
+            "unsupported-input", "this video is outside the supported duration"
+        )
+    return float(duration)
+
+
+def _format_is_validated_m4a(candidate: Any) -> bool:
+    """One audio-only M4A/AAC format: m4a container, no video, audio codec."""
+    if not isinstance(candidate, dict):
+        return False
+    if candidate.get("ext") != "m4a":
+        return False
+    if candidate.get("vcodec") not in ("none", None):
+        return False
+    acodec = candidate.get("acodec")
+    return isinstance(acodec, str) and acodec not in ("", "none")
+
+
+def _format_bitrate(candidate: dict[str, Any]) -> float:
+    """The numeric audio bitrate preference; 0 when absent."""
+    for key in ("abr", "tbr"):
+        value = candidate.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return 0.0
+
+
+def select_audio_format(info: dict[str, Any]) -> dict[str, Any]:
+    """Pick ONE audio-only M4A format from the metadata formats table.
+
+    Preference: the best validated M4A by audio bitrate, then validated
+    format 140 (the pinned release's Apple AAC stream). Formats arrive from
+    the pinned library's metadata; anything not matching the validated
+    shape is ignored, and no match is a typed refusal.
+    """
+    formats = info.get("formats")
+    if not isinstance(formats, list):
+        raise ProtocolFailure(
+            "unsupported-input", "no supported audio stream is available"
+        )
+    validated = [c for c in formats if _format_is_validated_m4a(c)]
+    if validated:
+        best = max(validated, key=_format_bitrate)
+        if isinstance(best.get("url"), str) and best["url"]:
+            return best
+    for candidate in validated:
+        if candidate.get("format_id") == "140":
+            if isinstance(candidate.get("url"), str) and candidate["url"]:
+                return candidate
+    raise ProtocolFailure(
+        "unsupported-input", "no supported audio stream is available"
+    )
+
+
+# ── Media URL policy ───────────────────────────────────────────────────────
+
+
+def _validate_media_url(url: str) -> str:
+    """Only the pinned release's media hosts may serve audio bytes.
+
+    Accepts exactly one shape: https on the default (443) port at a host of
+    one or more labels followed by the exact `.googlevideo.com` suffix, no
+    embedded credentials, no fragment, bounded length. Anything else fails
+    closed. The signed URL itself is data — it is never echoed anywhere.
+    """
+    disallowed = ProtocolFailure(
+        "extraction-failure", "the media location is not allowed"
+    )
+    if not url or len(url.encode("utf-8")) > _MAX_MEDIA_URL_BYTES or "\0" in url:
+        raise disallowed
+    # The delimiter itself is rejected, not just a non-empty fragment:
+    # urlparse reports a trailing '#' as an empty fragment.
+    if "#" in url:
+        raise disallowed
+    try:
+        parsed = urlparse(url)
+        port = parsed.port
+    except ValueError:
+        raise disallowed from None
+    if parsed.scheme != "https":
+        raise disallowed
+    hostname = (parsed.hostname or "").lower()
+    if not _media_host_allowed(hostname):
+        raise disallowed
+    if port not in (None, 443):
+        raise disallowed
+    if parsed.username is not None or parsed.password is not None:
+        raise disallowed
+    if parsed.fragment:
+        raise disallowed
+    return url
+
+
+# ── Media download (package-owned streaming client) ────────────────────────
+
+
+class _DisableProxies(urllib.request.ProxyHandler):
+    """Empty proxy table: the opener never inherits a host proxy env."""
+
+    def __init__(self) -> None:
+        super().__init__(proxies={})
+
+
+class _NoAutoRedirect(urllib.request.HTTPRedirectHandler):
+    """Turns automatic redirect following into an inspectable HTTPError.
+
+    Returning `None` makes urllib surface the 3xx as an HTTPError whose
+    headers carry the Location. Redirects are NEVER followed: a signed
+    media URL is fetched directly, and a redirect response is a typed
+    refusal (the connection guard would reject any new host anyway, and
+    same-host redirect chains are still refused — one bounded pass).
+    """
+
+    def redirect_request(  # type: ignore[override]
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+def _build_media_opener(https_handler: Any = None) -> Any:
+    """The package-owned opener: no proxies, no automatic redirects.
+
+    `https_handler` exists for tests only; production always passes `None`
+    and gets urllib's real TLS handler.
+    """
+    handlers: list[Any] = [_DisableProxies(), _NoAutoRedirect()]
+    if https_handler is not None:
+        handlers.append(https_handler)
+    return urllib.request.build_opener(*handlers)
+
+
+def _media_request(url: str) -> urllib.request.Request:
+    return urllib.request.Request(
+        url,
+        headers={
+            # Identity only: a compressed response cannot be bounded before
+            # decompression, so compressed replies are refused below.
+            "Accept-Encoding": "identity",
+        },
+        method="GET",
+    )
+
+
+# The media statuses with dedicated fixed messages: known blocks and auth
+# rejections never leak upstream text and are never retried.
+_MEDIA_REJECTED_STATUSES = {401, 403, 429}
+
+
+def _fetch_media_bytes(
+    media_url: str,
+    byte_cap: int,
+    deadline_ms: int,
+    https_handler: Any = None,
+) -> bytes:
+    """Fetch the audio bytes behind one validated signed URL.
+
+    The fetch is ONE bounded pass: no redirects, no retries, no proxy
+    inheritance, identity encoding, reads at most `byte_cap` + 1 bytes so
+    an oversized stream is detected and rejected instead of buffered
+    unbounded. The connection guard wraps the whole transfer, so every
+    connect goes to a validated routable address. Every failure is a
+    fixed, redacted protocol failure; upstream bodies, headers, and URLs
+    never reach a frame.
+    """
+    remaining_seconds = (deadline_ms - int(time.time() * 1000)) / 1000.0
+    if remaining_seconds <= 0:
+        raise ProtocolFailure("timeout", "the request deadline passed")
+    timeout = min(remaining_seconds, _SOCKET_TIMEOUT_SECONDS)
+    opener = _build_media_opener(https_handler)
+    request = _media_request(_validate_media_url(media_url))
+    with _ConnectionGuard(_media_host_allowed):
+        _check_deadline(deadline_ms)
+        try:
+            response = opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            status = error.code
+            error.close()
+            if status in _MEDIA_REJECTED_STATUSES:
+                raise ProtocolFailure(
+                    "extraction-failure",
+                    "the media server rejected the request",
+                ) from None
+            raise ProtocolFailure(
+                "extraction-failure",
+                "the audio stream could not be downloaded",
+            ) from None
+        except urllib.error.URLError:
+            raise ProtocolFailure(
+                "extraction-failure",
+                "the audio stream could not be downloaded",
+            ) from None
+        except OSError:
+            raise ProtocolFailure(
+                "extraction-failure",
+                "the audio stream could not be downloaded",
+            ) from None
+        with response:
+            status = getattr(response, "status", None) or getattr(response, "code", None)
+            headers = getattr(response, "headers", None)
+            encoding = "identity"
+            if headers is not None:
+                encoding = (headers.get("Content-Encoding") or "identity").strip().lower()
+            if status != 200:
+                if status in _MEDIA_REJECTED_STATUSES:
+                    raise ProtocolFailure(
+                        "extraction-failure",
+                        "the media server rejected the request",
+                    )
+                raise ProtocolFailure(
+                    "extraction-failure",
+                    "the audio stream could not be downloaded",
+                )
+            if encoding != "identity":
+                raise ProtocolFailure(
+                    "extraction-failure",
+                    "the media response used an unsupported encoding",
+                )
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                _check_deadline(deadline_ms)
+                chunk = response.read(256 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > byte_cap:
+                    raise ProtocolFailure(
+                        "output-limit", "the audio stream exceeds the size limit"
+                    )
+                chunks.append(chunk)
+    return b"".join(chunks)
+
+
+# ── Container validation and publication ───────────────────────────────────
+
+
+def validate_m4a(payload: bytes) -> None:
+    """The acquired bytes must begin with a nonempty M4A `ftyp` box.
+
+    ISO BMFF: a 4-byte box size then the `ftyp` brand. An HTML error page,
+    an empty body, or any non-M4A payload fails here instead of reaching
+    the speech stage.
+    """
+    if len(payload) < 12:
+        raise ProtocolFailure(
+            "extraction-failure", "the acquired audio is not a valid media file"
+        )
+    if payload[4:8] != b"ftyp":
+        raise ProtocolFailure(
+            "extraction-failure", "the acquired audio is not a valid media file"
+        )
+
+
+def _publish_audio(output_path: str, payload: bytes) -> int:
+    """Write the audio atomically; remove partial output on failure.
+
+    Returns the published byte count. The temporary file lives beside the
+    destination and is renamed into place only after the full write, so
+    the host never observes a half-written acquisition.
+    """
+    destination = Path(output_path)
+    temporary = destination.parent / (destination.name + ".partial")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with open(temporary, "wb") as handle:
+            handle.write(payload)
+        os.replace(temporary, destination)
+    except OSError:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise ProtocolFailure(
+            "extraction-failure", "unable to write the audio file"
+        ) from None
+    return len(payload)
+
+
+# ── Host-provided auxiliary runtime ────────────────────────────────────────
+
+
+def _validated_bun_path(path: str) -> str | None:
+    """Accept only a bounded absolute path with no control characters."""
+    if not path or len(path.encode("utf-8")) > _MAX_EXECUTABLE_PATH_BYTES:
+        return None
+    if not path.startswith("/") or "\0" in path:
+        return None
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in path):
+        return None
+    return path
+
+
+def _read_bun_path(request: dict) -> str | None:
+    """Resolve the host-provided auxiliary JavaScript runtime, if any.
+
+    The operation-configuration file is host-owned and non-secret; the
+    reviewed shape carries exactly one validated absolute executable path.
+    Anything malformed or absent simply means "no runtime": yt-dlp then
+    runs without an external JavaScript runtime and a challenge-gated
+    video fails with its own fixed retrieval failure.
+    """
+    relative = request.get("operationConfigurationPath")
+    if not isinstance(relative, str) or not relative:
+        return None
+    if relative.startswith("/") or "\\" in relative or "\0" in relative:
+        return None
+    if any(segment in ("", ".", "..") for segment in relative.split("/")):
+        return None
+    try:
+        document = json.loads(Path(relative).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    if document.get("kind") != _BUN_CONFIG_KIND:
+        return None
+    path = document.get("executablePath")
+    if not isinstance(path, str):
+        return None
+    return _validated_bun_path(path)
+
+
+# ── Package protocol entry point ───────────────────────────────────────────
+
+
+def _serve_request(request: dict, request_id: str, out_stream: Any) -> int:
+    """Validate the request, acquire the audio, and publish one result.
+
+    Raises ProtocolFailure for every typed failure; `run_extractor_protocol`
+    turns that into the single terminal failure frame.
+    """
+    if request.get("protocolRevision") != PROTOCOL_REVISION:
+        raise ProtocolFailure("invalid-request", "unsupported protocol revision")
+    if request.get("role") != PROTOCOL_ROLE:
+        raise ProtocolFailure(
+            "invalid-request",
+            "this package acquires sources as a fetcher only",
+        )
+    if request.get("mimeType") != PROTOCOL_CLAIMED_MIME:
+        raise ProtocolFailure(
+            "invalid-request",
+            "the claimed source MIME is not one this fetcher declares",
+        )
+    if "kind" in request or "inputTransport" in request or "inputPath" in request:
+        raise ProtocolFailure(
+            "invalid-request",
+            "a fetch request carries no extractor kind or staged input",
+        )
+
+    source_url = request.get("remoteURL")
+    if not isinstance(source_url, str) or not source_url:
+        raise ProtocolFailure("invalid-request", "request has no source URL")
+    if len(source_url.encode("utf-8")) > _MAX_URL_BYTES:
+        raise ProtocolFailure("invalid-request", "the source URL is too long")
+
+    video_id = extract_video_id_from_url(source_url)
+    if video_id is None:
+        # Not a YouTube video URL, malformed, or an invalid video ID. The
+        # URL is never echoed back.
+        raise ProtocolFailure(
+            "unsupported-input", "the source URL is not a supported YouTube video URL"
+        )
+
+    output_path = _validate_relative_output_path(request.get("outputPath"))
+
+    deadline_ms = request.get("deadlineMillisecondsSince1970")
+    if (
+        not isinstance(deadline_ms, int)
+        or isinstance(deadline_ms, bool)
+        or deadline_ms <= 0
+    ):
+        raise ProtocolFailure("invalid-request", "request has no valid deadline")
+    _check_deadline(deadline_ms)
+
+    reporter = _ProgressReporter(request_id, out_stream)
+    reporter.emit(0, 4, "reading video metadata")
+
+    # Phase 1: metadata only, on the application-built watch URL.
+    info = fetch_metadata(video_id, _read_bun_path(request), deadline_ms)
+    reporter.emit(1, 4, "selecting audio stream")
+
+    _check_deadline(deadline_ms)
+    validate_duration(info)
+    audio_format = select_audio_format(info)
+    media_url = audio_format.get("url")
+    if not isinstance(media_url, str) or not media_url:
+        raise ProtocolFailure(
+            "unsupported-input", "no supported audio stream is available"
+        )
+
+    # Phase 2: the signed media URL through the package-owned client.
+    reporter.emit(2, 4, "downloading audio")
+    _check_deadline(deadline_ms)
+    payload = _fetch_media_bytes(media_url, _MAX_AUDIO_BYTES, deadline_ms)
+
+    # Phase 3: container check, then atomic publication.
+    _check_deadline(deadline_ms)
+    validate_m4a(payload)
+    if len(payload) > MAX_OUTPUT_BYTES:
+        raise ProtocolFailure(
+            "output-limit", "the audio stream exceeds the size limit"
+        )
+
+    reporter.emit(3, 4, "writing audio")
+    _check_deadline(deadline_ms)
+    # Publication is the commit point: after the rename, the result frame
+    # is emitted unconditionally, so a published output is never reported
+    # as a failure.
+    published_bytes = _publish_audio(output_path, payload)
+
+    reporter.emit(4, 4, "done")
+
+    _emit(
+        build_protocol_frame(
+            "result",
+            {
+                "requestID": request_id,
+                "outputPath": output_path,
+                "markdownByteCount": published_bytes,
+                "metadata": dict(TOOL_METADATA),
+                "resultType": "source-bytes",
+                "resultMIMEType": "audio/mp4",
+            },
+        ),
+        out_stream,
+    )
+    return 0
+
+
+def run_extractor_protocol(
+    request_text: str,
+    out_stream: Any = None,
+    log_stream: Any = None,
+) -> int:
+    """Serve one extractor protocol request.
+
+    Returns the process exit code. A refused or failed request still exits 0
+    when a failure frame was emitted, because the frame is the report.
+    """
+    out_stream = sys.stdout if out_stream is None else out_stream
+    log_stream = sys.stderr if log_stream is None else log_stream
+
+    if len(request_text.encode("utf-8")) > _MAX_REQUEST_BYTES:
+        # The request document itself exceeds the package input bound. No
+        # request ID can be trusted, so exit nonzero and let the host
+        # report a malformed protocol.
+        print("Error: extractor request exceeds the input limit", file=log_stream)
+        return 2
+
+    try:
+        request = json.loads(request_text)
+    except (ValueError, TypeError):
+        print("Error: malformed extractor request", file=log_stream)
+        return 2
+
+    request_id = request.get("requestID") if isinstance(request, dict) else None
+    if not isinstance(request_id, str) or not request_id:
+        print("Error: extractor request has no request ID", file=log_stream)
+        return 2
+
+    try:
+        return _serve_request(request, request_id, out_stream)
+    except ProtocolFailure as failure:
+        return _fail(request_id, failure.cause, failure.message, out_stream)
+    except ImportError:
+        # Dependency initialization failed (a broken or missing runtime
+        # install). The frame is the report; the exception text would carry
+        # paths, so it is discarded.
+        return _fail(
+            request_id, "setup", "audio acquisition runtime setup failed", out_stream
+        )
+    except Exception:  # noqa: BLE001 - reported as a typed frame
+        # Any unexpected package defect still produces exactly one terminal
+        # frame with a fixed, redacted message.
+        return _fail(
+            request_id, "extraction-failure", "audio acquisition failed", out_stream
+        )
+
+
+if __name__ == "__main__":
+    print(
+        "This script is an extractor package entry point; the host launches "
+        "it as `uv run --script <entry point> <this file>`.",
+        file=sys.stderr,
+    )
+    sys.exit(2)

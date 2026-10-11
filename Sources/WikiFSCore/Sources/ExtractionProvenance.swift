@@ -27,6 +27,41 @@ public enum ExtractionTool: String, Codable, CaseIterable, Sendable {
 /// version.
 public typealias ExtractionInstalledPackageProducer = ExtractorPackageExecutionProvenance
 
+/// Exact identity of one HOST-produced on-device speech transcription. The
+/// speech floor runs in the host process — no installed package produced the
+/// transcript — so this producer names the engine that ran, the locale it ran
+/// with, and the exact fetcher revision that acquired the audio, as separate
+/// fields. The technique is the fixed `on-device-speech` marker.
+public struct ExtractionHostSpeechProducer: Equatable, Sendable, Codable {
+    /// The closed technique tag for host speech. One value, spelled once.
+    public static let technique = "on-device-speech"
+
+    /// The speech engine identifier (e.g. `speechanalyzer`). Bounded,
+    /// control-character-free — a review fact, never free text.
+    public let engine: String
+    /// The BCP 47 locale identifier the transcription ran with.
+    public let localeID: String
+    /// The exact acquisition fetcher identity (revision, registration,
+    /// protocol revision) that downloaded the analyzed audio.
+    public let acquisitionFetcher: ExtractionInstalledPackageProducer
+
+    static let maximumFieldCharacterCount = 256
+
+    public init(engine: String, localeID: String, acquisitionFetcher: ExtractionInstalledPackageProducer) throws {
+        let fields = [engine, localeID]
+        for value in fields {
+            guard value.isEmpty == false,
+                  value.utf8.count <= Self.maximumFieldCharacterCount,
+                  value.contains("\0") == false else {
+                throw AppendDerivedMarkdownError.invalidHostSpeechProducer
+            }
+        }
+        self.engine = engine
+        self.localeID = localeID
+        self.acquisitionFetcher = acquisitionFetcher
+    }
+}
+
 /// Cross-target provenance exposed by a process-backed HTML extractor without
 /// importing the engine module into the core store target.
 public protocol ProcessPackageProvenanceProviding: Sendable {
@@ -39,6 +74,9 @@ public enum ExtractionProducer: Equatable, Sendable {
     case tool(ExtractionTool)
     case legacy(rawTechnique: String?)
     case installedPackage(ExtractionInstalledPackageProducer)
+    /// Host-produced on-device speech: never marked `.installedPackage`,
+    /// never claimed for agent cleanup.
+    case hostSpeech(ExtractionHostSpeechProducer)
 }
 
 /// Typed read projection over a source markdown version and its existing PROV
@@ -89,6 +127,7 @@ public enum AppendDerivedMarkdownError: Error, Equatable, Sendable {
     case providerFieldsUnsupportedForLocalTool
     case toolVersionUnsupportedForBackend
     case invalidInstalledPackageProducer
+    case invalidHostSpeechProducer
     case foreignSourceVersion(SourceVersionID)
     case missingSource(SourceID)
     /// A package transcript was requested without the source's immutable

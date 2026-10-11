@@ -20,6 +20,15 @@ public enum QueueEngineWaitPolicy: Sendable {
     /// strictly above the ceiling. `QueueEngineBoundedWaitTests` asserts the
     /// ordering so the two constants cannot drift apart silently.
     public static let completionWaitDeadline: Duration = .seconds(35 * 60)
+
+    /// Upper bound for a SPEECH job's completion wait — 2 hours 45 minutes:
+    /// the reviewed acquisition manifest allows 30 minutes (metadata plus a
+    /// full-length 2-hour download), and the on-device analysis of that
+    /// audio gets its own bounded budget on top. Caption waits keep the
+    /// 35-minute deadline; a speech item's waiter (the UI's explicit
+    /// action) uses this longer bound so a legitimate long job is not
+    /// reported as timed out mid-run.
+    public static let speechCompletionWaitDeadline: Duration = .seconds(165 * 60)
 }
 
 /// Typed failure for a bounded `waitForCompletion` wait.

@@ -164,10 +164,14 @@ private final class StubExtractor: MarkdownExtractor {
 }
 
 private struct StubExtractionProvider: QueueExtractionProvider {
-    func resolveExtraction(wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?) async throws -> ExtractionResolution? { nil }
+    func resolveExtraction(wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?, transcriptionIntent: QueueItemPayload.TranscriptionIntent?) async throws -> ExtractionResolution? { nil }
     func persistBytesExtraction(wikiID: WikiID, sourceID: SourceID, resolution: BytesExtractionResolution, markdown: String) async throws -> QueueExtractionOutputReference? { nil }
     func persistTranscriptExtraction(wikiID: WikiID, sourceID: SourceID, resolution: TranscriptExtractionResolution, outcome: TranscriptFetchOutcome) async throws -> QueueExtractionOutputReference? { nil }
     func persistFetch(wikiID: WikiID, sourceID: SourceID, resolution: FetcherResolution, outcome: FetchOutcome) async throws -> QueueExtractionOutputReference? { nil }
+    @discardableResult
+    func persistSpeechExtraction(
+        wikiID: WikiID, sourceID: SourceID, outcome: SpeechOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
     func enqueueFollowOnExtraction(wikiID: WikiID, sourceID: SourceID, acquiredContentVersionID: SourceVersionID, dedupeKey: QueueItemDedupeKey) async throws {}
 }
 

@@ -314,7 +314,7 @@ struct ZoteroQueueExtractionProviderTests {
 
         // Resolution runs the fetch arm with the stored file URL, revision-5.
         let resolution = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil)
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil, transcriptionIntent: nil)
         guard case .fetch(let fetcher)? = resolution else {
             Issue.record("expected a fetch resolution")
             return
@@ -384,7 +384,7 @@ struct ZoteroQueueExtractionProviderTests {
             sessionBox: box)
 
         guard case .fetch(let fetcher)? = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil, transcriptionIntent: nil) else {
             Issue.record("expected a fetch resolution")
             return
         }
@@ -427,7 +427,7 @@ struct ZoteroQueueExtractionProviderTests {
             queueStore: queueStore)
 
         guard case .fetch(let fetcher)? = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil, transcriptionIntent: nil) else {
             Issue.record("expected a fetch resolution")
             return
         }
@@ -505,7 +505,7 @@ struct ZoteroQueueExtractionProviderTests {
 
         // First resolution (byteless source): the acquisition arm.
         guard case .fetch(let fetcher)? = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil, transcriptionIntent: nil) else {
             Issue.record("expected a fetch resolution")
             return
         }
@@ -517,7 +517,7 @@ struct ZoteroQueueExtractionProviderTests {
         // Second resolution (the follow-on format-route item): the acquired
         // bytes route the host's own format path, not another acquisition.
         guard case .bytes(let bytes)? = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil, transcriptionIntent: nil) else {
             Issue.record("expected a bytes (format-route) resolution after acquisition")
             return
         }
@@ -541,7 +541,7 @@ struct ZoteroQueueExtractionProviderTests {
             storeResolver: { _ in store })
 
         guard case .fetch(let fetcher)? = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil, transcriptionIntent: nil) else {
             Issue.record("expected a fetch resolution")
             return
         }
@@ -551,7 +551,7 @@ struct ZoteroQueueExtractionProviderTests {
             resolution: fetcher, outcome: outcome)
 
         guard case .bytes(let bytes)? = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil, transcriptionIntent: nil) else {
             Issue.record("expected a bytes (format-route) resolution after acquisition")
             return
         }

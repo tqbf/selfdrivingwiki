@@ -349,8 +349,8 @@ private struct ChatOutlineStubExtractionProvider: QueueExtractionProvider {
     func resolveExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
-        backendOverride: ExtractionBackend?
-    ) async throws -> ExtractionResolution? { nil }
+        backendOverride: ExtractionBackend?,
+        transcriptionIntent: QueueItemPayload.TranscriptionIntent?    ) async throws -> ExtractionResolution? { nil }
 
     func persistBytesExtraction(
         wikiID: WikiID,
@@ -370,6 +370,10 @@ private struct ChatOutlineStubExtractionProvider: QueueExtractionProvider {
         sourceID: SourceID,
         resolution: FetcherResolution,
         outcome: FetchOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
+    @discardableResult
+    func persistSpeechExtraction(
+        wikiID: WikiID, sourceID: SourceID, outcome: SpeechOutcome
     ) async throws -> QueueExtractionOutputReference? { nil }
     func enqueueFollowOnExtraction(
         wikiID: WikiID,

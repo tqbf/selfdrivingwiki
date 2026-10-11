@@ -1,0 +1,6 @@
+{"kind":"progress","payload":{"requestID":"7c2d4f6a-0000-4000-8000-000000000004","completedUnitCount":0,"totalUnitCount":4,"message":"reading video metadata"}}
+{"kind":"progress","payload":{"requestID":"7c2d4f6a-0000-4000-8000-000000000004","completedUnitCount":1,"totalUnitCount":4,"message":"selecting audio stream"}}
+{"kind":"progress","payload":{"requestID":"7c2d4f6a-0000-4000-8000-000000000004","completedUnitCount":2,"totalUnitCount":4,"message":"downloading audio"}}
+{"kind":"progress","payload":{"requestID":"7c2d4f6a-0000-4000-8000-000000000004","completedUnitCount":3,"totalUnitCount":4,"message":"writing audio"}}
+{"kind":"progress","payload":{"requestID":"7c2d4f6a-0000-4000-8000-000000000004","completedUnitCount":4,"totalUnitCount":4,"message":"done"}}
+{"kind":"result","payload":{"requestID":"7c2d4f6a-0000-4000-8000-000000000004","outputPath":"output/fetch/result","markdownByteCount":65536,"metadata":{"toolName":"audio-acquire","toolVersion":"1.0.0"},"resultType":"source-bytes","resultMIMEType":"audio/mp4"}}

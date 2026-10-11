@@ -764,6 +764,17 @@ public protocol WikiStore: AnyObject, Sendable {
         sourceVersionID: SourceVersionID?, note: String?
     ) throws -> SourceMarkdownVersion
 
+    /// Append one HOST-produced on-device speech transcript as ONE
+    /// `.transcript` version with the typed host-speech producer and the
+    /// REQUIRED initial source-version link (same lineage rule as a package
+    /// transcript). Never attaches a blob and never claims agent cleanup.
+    @discardableResult
+    func appendHostSpeechTranscript(
+        sourceID: SourceID, content: String,
+        producer: ExtractionHostSpeechProducer,
+        sourceVersionID: SourceVersionID
+    ) throws -> SourceMarkdownVersion
+
     /// Revert to an older version by appending a NEW version whose content
     /// copies the target. History is preserved; HEAD = the new revert version.
     @discardableResult

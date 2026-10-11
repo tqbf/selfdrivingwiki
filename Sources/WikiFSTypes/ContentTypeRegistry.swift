@@ -343,11 +343,9 @@ public extension ContentKind {
         case .pdf:   return .pdf
         case .html:  return .html
         case .docx:  return .docx
-        case .podcastTranscript, .applePodcastTranscript, .youtubeTranscript,
-             .audioTranscript:
-            // The audio-acquire kind is URL-backed like the transcript
-            // kinds AND claims a synthetic source MIME, so its claim never
-            // appears on a staged file's classification either.
+        case .podcastTranscript, .applePodcastTranscript, .youtubeTranscript:
+            // URL-backed kinds never stage a file, so their registration
+            // claims never appear on a staged file's classification either.
             return .unknown
         }
     }

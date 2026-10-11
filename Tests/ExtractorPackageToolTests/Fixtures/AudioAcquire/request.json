@@ -1,0 +1,10 @@
+{
+  "requestID": "7c2d4f6a-0000-4000-8000-000000000004",
+  "protocolRevision": 5,
+  "role": "fetcher",
+  "mimeType": "audio/x-wiki-audio-acquire",
+  "originalFilename": "audio",
+  "remoteURL": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "outputPath": "output/fetch/result",
+  "deadlineMillisecondsSince1970": 1735689600000
+}
