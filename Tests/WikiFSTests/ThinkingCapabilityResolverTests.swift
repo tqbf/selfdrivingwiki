@@ -180,7 +180,7 @@ import Testing
             isDefault: true)
         let observedFingerprint = ACPAgentFingerprint(
             identity: CodexThinkingCapabilityAdapter.identity,
-            version: ACPAgentVersion(rawValue: "2.0.0"))
+            version: ACPAgentVersion(rawValue: "3.0.0"))
         let observation = ACPProviderCatalogObservation(
             providerID: codexProviderID,
             fingerprint: observedFingerprint,
@@ -198,6 +198,47 @@ import Testing
 
         #expect(result.capability == nil)
         #expect(!result.shouldRenderSelector)
+    }
+
+    @Test func observedSupportedFingerprintResolvesThroughAdapter() {
+        // The widened predicate admits observed 2.x agents (the model-ID
+        // convention survived into 2.x): the adapter resolves the variant
+        // selector from the observation itself, no legacy command needed.
+        let codexProviderID = ProviderID(rawValue: "codex-acp")
+        let variants = [
+            CachedModelInfo(
+                modelId: ModelID(rawValue: "gpt[low]"),
+                name: "GPT (low)",
+                isDefault: true),
+            CachedModelInfo(modelId: ModelID(rawValue: "gpt[high]"), name: "GPT (high)"),
+        ]
+        let provider = AgentProvider(
+            id: codexProviderID,
+            label: "Codex",
+            command: ["npx", "@agentclientprotocol/codex-acp@1.1.7"],
+            enabled: true,
+            isDefault: true)
+        let observedFingerprint = ACPAgentFingerprint(
+            identity: CodexThinkingCapabilityAdapter.identity,
+            version: ACPAgentVersion(rawValue: "2.2.2"))
+        let observation = ACPProviderCatalogObservation(
+            providerID: codexProviderID,
+            fingerprint: observedFingerprint,
+            models: variants,
+            currentModelID: variants[0].modelId,
+            thinkingCapability: nil)
+        let config = AgentProvidersConfig(
+            providers: [provider],
+            providerModels: [codexProviderID.rawValue: variants],
+            catalogObservations: [codexProviderID.rawValue: observation])
+
+        let result = config.resolveThinkingCapability(
+            providerID: codexProviderID,
+            modelID: variants[0].modelId)
+
+        #expect(result.shouldRenderSelector)
+        #expect(result.source == .agentAdapter(
+            adapterID: CodexThinkingCapabilityAdapter.adapterID))
     }
 
     @Test func legacyCodexSidecarRejectsUntrustedCommand() {

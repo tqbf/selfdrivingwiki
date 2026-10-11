@@ -30,10 +30,21 @@ import Testing
         #expect(fingerprint.version == ACPAgentVersion(rawValue: "1.1.7"))
     }
 
+    @Test func trustedLegacyCommandCoversCurrentCatalogPin() throws {
+        // The command the refreshed registry snapshot stores for fresh adds.
+        let command = ["npx", "@agentclientprotocol/codex-acp@2.2.2"]
+        let fingerprint = try #require(CodexThinkingCapabilityAdapter.trustedLegacyFingerprint(
+            configuredCommand: command))
+
+        #expect(fingerprint.identity == CodexThinkingCapabilityAdapter.identity)
+        #expect(fingerprint.version == ACPAgentVersion(rawValue: "2.2.2"))
+    }
+
     @Test(arguments: [
         ["npx", "@agentclientprotocol/codex-acp@1.1.8"],
         ["npx", "@agentclientprotocol/codex-acp@1.1.7", "--extra"],
         ["bunx", "@agentclientprotocol/codex-acp@1.1.7"],
+        ["npx", "@agentclientprotocol/codex-acp@2.2.3"],
     ])
     func trustedLegacyCommandRejectsChangedInvocation(_ command: [String]) {
         let result = CodexThinkingCapabilityAdapter.trustedLegacyFingerprint(
@@ -60,7 +71,7 @@ import Testing
     @Test(arguments: [
         ACPAgentFingerprint(identity: ACPAgentIdentity(rawValue: "other"), version: ACPAgentVersion(rawValue: "1.4.0")),
         ACPAgentFingerprint(identity: CodexThinkingCapabilityAdapter.identity, version: nil),
-        ACPAgentFingerprint(identity: CodexThinkingCapabilityAdapter.identity, version: ACPAgentVersion(rawValue: "2.0.0")),
+        ACPAgentFingerprint(identity: CodexThinkingCapabilityAdapter.identity, version: ACPAgentVersion(rawValue: "3.0.0")),
         ACPAgentFingerprint(identity: CodexThinkingCapabilityAdapter.identity, version: ACPAgentVersion(rawValue: "opaque")),
     ])
     func rejectsIdentityAndVersionMismatches(_ fingerprint: ACPAgentFingerprint) {

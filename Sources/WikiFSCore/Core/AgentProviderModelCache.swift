@@ -343,19 +343,30 @@ public enum CodexThinkingModelVariantParser {
 public enum CodexThinkingCapabilityAdapter {
     public static let adapterID = ThinkingCapabilityAdapterID(rawValue: "codex-model-variants-v1")
     public static let identity = ACPAgentIdentity(rawValue: "@agentclientprotocol/codex-acp")
+    /// The 2.x line is verified: codex-acp kept the `model[effort]` `ModelId`
+    /// convention byte-for-byte from v1.1.7 through v2.2.2 (2.0.0 broke the
+    /// AIR tool-call contract, not model selection or session config options).
     public static let supportedVersions = ACPAgentVersionPredicate.semanticRange(
         lowerInclusive: ACPAgentVersion(rawValue: "0.1.0"),
-        upperExclusive: ACPAgentVersion(rawValue: "2.0.0"))
+        upperExclusive: ACPAgentVersion(rawValue: "3.0.0"))
 
     /// Immutable commands that prior app versions stored before catalog
     /// observations included ACP `agentInfo`. Each command pins the package
-    /// version that supplies the matching compatibility fingerprint.
+    /// version that supplies the matching compatibility fingerprint. The
+    /// newest entry matches the command the bundled registry snapshot now
+    /// stores for fresh adds (`acp-registry.json` → codex-acp 2.2.2).
     public static let trustedLegacyCommands: [([String], ACPAgentFingerprint)] = [
         (
             ["npx", "@agentclientprotocol/codex-acp@1.1.7"],
             ACPAgentFingerprint(
                 identity: identity,
                 version: ACPAgentVersion(rawValue: "1.1.7"),
+                title: "Codex")),
+        (
+            ["npx", "@agentclientprotocol/codex-acp@2.2.2"],
+            ACPAgentFingerprint(
+                identity: identity,
+                version: ACPAgentVersion(rawValue: "2.2.2"),
                 title: "Codex"))
     ]
 
