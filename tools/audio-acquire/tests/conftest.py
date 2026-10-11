@@ -48,6 +48,11 @@ class MockYoutubeDL:
             raise MockYoutubeDL.extract_raises
         return MockYoutubeDL.extract_result
 
+    def urlopen(self, url_or_request: Any) -> Any:
+        # The media phase goes through the pinned transport; protocol tests
+        # patch the package's bounded fetch, so this must never run.
+        raise AssertionError("urlopen ran: the media fetch was not patched")
+
     def close(self) -> None:
         return
 

@@ -82,7 +82,7 @@ public enum ReviewedExtractorPackages {
         directoryName: "AudioAcquire",
         packageID: "org.selfdrivingwiki.audio-acquire",
         version: "1.0.0",
-        digest: "2c27524ed9ebe8869c348e5ee084b7a6258d4595156e216e3f900d9a07d4a910")
+        digest: "539b74360d40f0b156df02a10786099fcd6915c562cab6a66b58965db8075238")
 
     public static let all: [ReviewedExtractorPackage] = [
         defuddle, pdf2md, doclingServe, docx2md, podcastTranscript,

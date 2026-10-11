@@ -14,25 +14,26 @@ request (role `fetcher`, registration id `audio`, claimed source MIME
 1. Validates the request: revision, role, claimed MIME, no extractor kind
    or staged input, a YouTube video URL, a safe relative output path, and
    a valid deadline.
-2. Runs ONE metadata-only yt-dlp call (`extract_info(download=False)`,
-   `skip_download=True`) against the application-built watch URL, under a
-   connection guard that permits `www.youtube.com:443` only and validates
-   every DNS answer as globally routable.
-3. Checks the metadata duration (present, at most 2 hours) and selects ONE
-   audio-only M4A/AAC format (`ext=m4a`, `vcodec=none`, present `acodec`;
-   best by audio bitrate, then format 140).
-4. Fetches the signed media URL with the package's own streaming client:
-   https on 443 only, host must be one-or-more labels plus the exact
-   `.googlevideo.com` suffix, no redirects, no proxy inheritance, identity
-   encoding, at most 120 MiB plus one byte, and the payload must begin
-   with a nonempty M4A `ftyp` box.
-5. Publishes the file atomically and emits one result frame with
-   `resultType: "source-bytes"` and `resultMIMEType: "audio/mp4"`.
+2. Runs ONE metadata-only yt-dlp call (`extract_info(download=False)`)
+   against the application-built watch URL to validate the video (duration
+   present, at most 2 hours) and confirm an audio-only M4A stream exists.
+3. Downloads the selected audio-only M4A with the SAME pinned release's
+   NATIVE downloader — the component that makes YouTube downloads fast and
+   reliable — under the package's reduced posture: no plugins, no cookies,
+   no netrc, no proxy inheritance, bounded retries, a 120 MiB
+   `max_filesize` cap, and the package's connection guard wrapping every
+   DNS answer and TCP connect (any hostname permitted; every resolved
+   address must be globally routable; connections go to validated
+   addresses with no second DNS lookup).
+4. Validates the published file begins with a nonempty M4A `ftyp` box,
+   then renames it atomically to the requested output path and emits one
+   result frame with `resultType: "source-bytes"` and
+   `resultMIMEType: "audio/mp4"`.
 
-The package never converts formats, never runs speech-to-text, and never
-touches yt-dlp's media downloader or ffmpeg. The HOST consumes the
-acquired file transiently inside its own private analysis stage — audio is
-never stored as a source blob.
+The package never post-processes (no ffmpeg), never selects a video
+format, and never runs speech-to-text. The HOST consumes the acquired
+file transiently inside its own private analysis stage — audio is never
+stored as a source blob.
 
 ## Pinned dependencies
 
@@ -49,8 +50,10 @@ never stored as a source blob.
 Every DNS answer and every TCP connect passes through a connection guard
 installed around the metadata and media phases:
 
-- Metadata: `www.youtube.com` only. Media: one-or-more labels plus the
-  exact `.googlevideo.com` suffix, on 443 only.
+- Metadata: `www.youtube.com` plus the `.googlevideo.com` family (the
+  pinned release fetches HLS format manifests from it during format
+  enumeration). Media: one-or-more labels plus the exact
+  `.googlevideo.com` suffix, on 443 only.
 - Every resolved IPv4/IPv6 answer must be globally routable; private,
   loopback, link-local, or mixed answers reject the whole lookup.
 - Connections go to the validated addresses without a second DNS lookup

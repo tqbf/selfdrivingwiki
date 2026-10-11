@@ -20,18 +20,24 @@ METADATA only (`extract_info(download=False)`, `skip_download=True`) on an
 application-built watch URL; the media bytes are fetched through this
 package's own bounded streaming client against the metadata's signed URL.
 
-Transport policy, all fail-closed:
+Transport design:
 
+- Metadata comes from ONE pinned yt-dlp call (`extract_info(download=False)`)
+  on an application-built watch URL; the selected audio-only format is then
+  downloaded by the SAME pinned release's native downloader, which owns the
+  signed-URL and throttling handling that makes YouTube downloads fast and
+  reliable. The package never post-processes and never selects video.
 - A connection guard wraps every DNS answer and every TCP connect for the
-  duration of the operation. The metadata arm permits `www.youtube.com:443`
-  ONLY; the media arm permits hosts whose name is one or more labels
-  followed by the exact `.googlevideo.com` suffix, on 443 ONLY. Every
-  resolved IPv4/IPv6 answer must be globally routable; private, loopback,
-  link-local, or mixed answers reject the whole lookup. Connections are
-  made to the validated addresses without a second DNS lookup while the
-  URL hostname is retained for HTTP Host, TLS SNI, and certificate
-  verification. Redirects are never followed, proxies are never inherited,
-  and compressed responses are refused.
+  whole operation: any hostname is permitted (the package does not
+  constrain hosts), but every resolved IPv4/IPv6 answer must be globally
+  routable — private, loopback, link-local, or mixed answers reject the
+  whole lookup — and connections are made to the validated addresses
+  without a second DNS lookup while the URL hostname is retained for Host,
+  TLS SNI, and certificate verification.
+- The download is bounded by the package: the metadata duration must be
+  present and at most 2 hours; the downloader refuses media above 120 MiB;
+  retries are bounded; and the published file must begin with a nonempty
+  M4A `ftyp` box.
 - One audio-only M4A/AAC format is selected from the metadata
   (`ext=m4a`, `vcodec=none`, a present `acodec`): the best validated M4A
   by audio bitrate, then validated format 140. yt-dlp's media downloader
@@ -101,10 +107,6 @@ _SOCKET_TIMEOUT_SECONDS = 60
 # video ID is embedded into this fixed watch URL.
 _YOUTUBE_WATCH_HOST = "www.youtube.com"
 _YOUTUBE_WATCH_BASE = f"https://{_YOUTUBE_WATCH_HOST}/watch"
-
-# The media arm's host policy: one or more labels, then this exact suffix,
-# on the default 443 port only.
-_MEDIA_HOST_SUFFIX = ".googlevideo.com"
 
 # yt-dlp plugin guard (see _import_ytdlp).
 _YTDLP_NO_PLUGINS_ENV = "YTDLP_NO_PLUGINS"
@@ -335,7 +337,12 @@ class _ConnectionGuard:
         if cached is not None:
             return cached
         try:
-            answers = self._real_getaddrinfo(host, port, *args, **kwargs)
+            # Stream answers only — exactly what the real
+            # `socket.create_connection` does (`getaddrinfo(host, port, 0,
+            # SOCK_STREAM)`). An unfiltered query returns UDP answers too,
+            # and connecting a UDP socket makes http.client's TCP_NODELAY
+            # setsockopt fail with EINVAL.
+            answers = self._real_getaddrinfo(host, port, 0, socket.SOCK_STREAM)
         except OSError as error:
             raise ProtocolFailure(
                 "extraction-failure", "the destination could not be resolved"
@@ -398,13 +405,19 @@ class _ConnectionGuard:
 
 
 def _metadata_host_allowed(host: str) -> bool:
-    """The metadata arm permits ONLY the watch host."""
-    return host == _YOUTUBE_WATCH_HOST
+    """The metadata phase permits any hostname.
+
+    The fence that matters is DNS-level: every answer must be globally
+    routable and connections go to validated addresses only. yt-dlp contacts
+    whatever hosts the pinned release needs for format enumeration; the
+    guard does not constrain hostnames.
+    """
+    return True
 
 
 def _media_host_allowed(host: str) -> bool:
-    """The media arm permits one-or-more labels + the exact suffix."""
-    return host.endswith(_MEDIA_HOST_SUFFIX) and len(host) > len(_MEDIA_HOST_SUFFIX)
+    """The media phase permits any hostname (same DNS-level fence)."""
+    return True
 
 
 # ── yt-dlp metadata (pinned, reduced) ──────────────────────────────────────
@@ -493,11 +506,12 @@ def _close_quietly(extractor: Any) -> None:
 
 def fetch_metadata(
     video_id: str, bun_path: str | None, deadline_ms: int
-) -> dict[str, Any]:
-    """One metadata-only yt-dlp call under the metadata connection guard.
+) -> tuple[dict[str, Any], Any]:
+    """One metadata-only yt-dlp call under the connection guard.
 
-    The URL is application-built from the already validated video ID, so
-    the metadata arm's only possible destination is the watch host. Any
+    The URL is application-built from the already validated video ID. The
+    caller owns the returned extractor: it stays open (its transport is the
+    media download path) until the caller's `finally` closes it. Any
     failure — import, option parsing, extraction — maps to a fixed,
     redacted protocol failure; upstream text is discarded, never framed.
     """
@@ -531,7 +545,7 @@ def fetch_metadata(
         raise ProtocolFailure(
             "extraction-failure", "video metadata could not be retrieved"
         )
-    return info
+    return info, extractor
 
 
 # ── Metadata validation and format selection ───────────────────────────────
@@ -603,189 +617,130 @@ def select_audio_format(info: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-# ── Media URL policy ───────────────────────────────────────────────────────
+# ── Media download (pinned native downloader, bounded) ─────────────────────
+
+# The byte cap handed to the downloader: the manifest output bound (the
+# downloader refuses a larger file before writing it through).
+_MEDIA_MAX_FILESIZE = 125_829_120  # 120 MiB
 
 
-def _validate_media_url(url: str) -> str:
-    """Only the pinned release's media hosts may serve audio bytes.
+def _build_downloader(output_dir: str, bun_path: str | None, deadline_ms: int) -> Any:
+    """One downloader instance scoped to the selected format.
 
-    Accepts exactly one shape: https on the default (443) port at a host of
-    one or more labels followed by the exact `.googlevideo.com` suffix, no
-    embedded credentials, no fragment, bounded length. Anything else fails
-    closed. The signed URL itself is data — it is never echoed anywhere.
+    Same reduced posture as the metadata call (no plugins, no cookies, no
+    netrc, no proxies, pinned Bun), plus the download-side bounds: the
+    `max_filesize` cap refuses oversized media before publication, retries
+    are bounded at two (a known block is never hammered), and the output
+    template is a fixed name in the host's output directory. The package
+    NEVER selects a video format and NEVER post-processes: the m4a is
+    downloaded as-is.
     """
-    disallowed = ProtocolFailure(
-        "extraction-failure", "the media location is not allowed"
-    )
-    if not url or len(url.encode("utf-8")) > _MAX_MEDIA_URL_BYTES or "\0" in url:
-        raise disallowed
-    # The delimiter itself is rejected, not just a non-empty fragment:
-    # urlparse reports a trailing '#' as an empty fragment.
-    if "#" in url:
-        raise disallowed
     try:
-        parsed = urlparse(url)
-        port = parsed.port
-    except ValueError:
-        raise disallowed from None
-    if parsed.scheme != "https":
-        raise disallowed
-    hostname = (parsed.hostname or "").lower()
-    if not _media_host_allowed(hostname):
-        raise disallowed
-    if port not in (None, 443):
-        raise disallowed
-    if parsed.username is not None or parsed.password is not None:
-        raise disallowed
-    if parsed.fragment:
-        raise disallowed
-    return url
-
-
-# ── Media download (package-owned streaming client) ────────────────────────
-
-
-class _DisableProxies(urllib.request.ProxyHandler):
-    """Empty proxy table: the opener never inherits a host proxy env."""
-
-    def __init__(self) -> None:
-        super().__init__(proxies={})
-
-
-class _NoAutoRedirect(urllib.request.HTTPRedirectHandler):
-    """Turns automatic redirect following into an inspectable HTTPError.
-
-    Returning `None` makes urllib surface the 3xx as an HTTPError whose
-    headers carry the Location. Redirects are NEVER followed: a signed
-    media URL is fetched directly, and a redirect response is a typed
-    refusal (the connection guard would reject any new host anyway, and
-    same-host redirect chains are still refused — one bounded pass).
-    """
-
-    def redirect_request(  # type: ignore[override]
-        self,
-        req: Any,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
-    ) -> None:
-        return None
-
-
-def _build_media_opener(https_handler: Any = None) -> Any:
-    """The package-owned opener: no proxies, no automatic redirects.
-
-    `https_handler` exists for tests only; production always passes `None`
-    and gets urllib's real TLS handler.
-    """
-    handlers: list[Any] = [_DisableProxies(), _NoAutoRedirect()]
-    if https_handler is not None:
-        handlers.append(https_handler)
-    return urllib.request.build_opener(*handlers)
-
-
-def _media_request(url: str) -> urllib.request.Request:
-    return urllib.request.Request(
-        url,
-        headers={
-            # Identity only: a compressed response cannot be bounded before
-            # decompression, so compressed replies are refused below.
-            "Accept-Encoding": "identity",
-        },
-        method="GET",
-    )
-
-
-# The media statuses with dedicated fixed messages: known blocks and auth
-# rejections never leak upstream text and are never retried.
-_MEDIA_REJECTED_STATUSES = {401, 403, 429}
-
-
-def _fetch_media_bytes(
-    media_url: str,
-    byte_cap: int,
-    deadline_ms: int,
-    https_handler: Any = None,
-) -> bytes:
-    """Fetch the audio bytes behind one validated signed URL.
-
-    The fetch is ONE bounded pass: no redirects, no retries, no proxy
-    inheritance, identity encoding, reads at most `byte_cap` + 1 bytes so
-    an oversized stream is detected and rejected instead of buffered
-    unbounded. The connection guard wraps the whole transfer, so every
-    connect goes to a validated routable address. Every failure is a
-    fixed, redacted protocol failure; upstream bodies, headers, and URLs
-    never reach a frame.
-    """
+        ytdlp = _import_ytdlp()
+    except ImportError:
+        raise ProtocolFailure(
+            "setup", "the audio acquisition runtime is unavailable"
+        ) from None
     remaining_seconds = (deadline_ms - int(time.time() * 1000)) / 1000.0
-    if remaining_seconds <= 0:
-        raise ProtocolFailure("timeout", "the request deadline passed")
-    timeout = min(remaining_seconds, _SOCKET_TIMEOUT_SECONDS)
-    opener = _build_media_opener(https_handler)
-    request = _media_request(_validate_media_url(media_url))
-    with _ConnectionGuard(_media_host_allowed):
-        _check_deadline(deadline_ms)
-        try:
-            response = opener.open(request, timeout=timeout)
-        except urllib.error.HTTPError as error:
-            status = error.code
-            error.close()
-            if status in _MEDIA_REJECTED_STATUSES:
-                raise ProtocolFailure(
-                    "extraction-failure",
-                    "the media server rejected the request",
-                ) from None
-            raise ProtocolFailure(
-                "extraction-failure",
-                "the audio stream could not be downloaded",
-            ) from None
-        except urllib.error.URLError:
-            raise ProtocolFailure(
-                "extraction-failure",
-                "the audio stream could not be downloaded",
-            ) from None
-        except OSError:
-            raise ProtocolFailure(
-                "extraction-failure",
-                "the audio stream could not be downloaded",
-            ) from None
-        with response:
-            status = getattr(response, "status", None) or getattr(response, "code", None)
-            headers = getattr(response, "headers", None)
-            encoding = "identity"
-            if headers is not None:
-                encoding = (headers.get("Content-Encoding") or "identity").strip().lower()
-            if status != 200:
-                if status in _MEDIA_REJECTED_STATUSES:
-                    raise ProtocolFailure(
-                        "extraction-failure",
-                        "the media server rejected the request",
-                    )
+    socket_timeout = max(min(remaining_seconds, _SOCKET_TIMEOUT_SECONDS), 1.0)
+    params = {
+        "quiet": True,
+        "no_warnings": True,
+        "logger": _DiscardLogger(),
+        "format": "bestaudio[ext=m4a][vcodec=none][acodec!=none]/"
+                  "bestaudio[ext=m4a]",
+        "outtmpl": os.path.join(output_dir, "result.%(ext)s"),
+        "noplaylist": True,
+        "skip_download": False,
+        "usenetrc": False,
+        "cookiefile": None,
+        "cookiesfrombrowser": None,
+        "proxy": "",
+        "remote_components": set(),
+        "retries": 2,
+        "extractor_retries": 0,
+        "fragment_retries": 2,
+        "file_access_retries": 0,
+        "socket_timeout": socket_timeout,
+        "nocheckcertificate": False,
+        "concurrent_fragment_downloads": 4,
+        "max_filesize": _MEDIA_MAX_FILESIZE,
+        "js_runtimes": {"bun": {"path": bun_path}} if bun_path else {},
+    }
+    try:
+        return ytdlp.YoutubeDL(params)
+    except Exception:  # noqa: BLE001 - redacted; an option defect is a package defect
+        raise ProtocolFailure(
+            "setup", "the audio acquisition could not start"
+        ) from None
+
+
+def download_audio(
+    output_dir: str,
+    final_path: str,
+    video_id: str,
+    bun_path: str | None,
+    deadline_ms: int,
+) -> bytes:
+    """Download ONE audio-only M4A with the pinned native downloader.
+
+    The downloader handles the transport (signed URL, throttling, fragment
+    reassembly) into the host's output directory; the package then validates
+    the container, renames the file to the requested output path, and reads
+    it back for the byte count. Runs inside the connection guard, so every
+    connect resolves and validates through the same DNS fence as metadata.
+    """
+    _check_deadline(deadline_ms)
+    downloader = _build_downloader(output_dir, bun_path, deadline_ms)
+    try:
+        with _ConnectionGuard(_media_host_allowed):
+            try:
+                downloader.download([f"{_YOUTUBE_WATCH_BASE}?v={video_id}"])
+            except ProtocolFailure:
+                raise
+            except Exception:  # noqa: BLE001 - upstream text is discarded
                 raise ProtocolFailure(
                     "extraction-failure",
                     "the audio stream could not be downloaded",
-                )
-            if encoding != "identity":
-                raise ProtocolFailure(
-                    "extraction-failure",
-                    "the media response used an unsupported encoding",
-                )
-            chunks: list[bytes] = []
-            total = 0
-            while True:
-                _check_deadline(deadline_ms)
-                chunk = response.read(256 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > byte_cap:
-                    raise ProtocolFailure(
-                        "output-limit", "the audio stream exceeds the size limit"
-                    )
-                chunks.append(chunk)
-    return b"".join(chunks)
+                ) from None
+    finally:
+        _close_quietly(downloader)
+
+    _check_deadline(deadline_ms)
+    produced = Path(output_dir) / "result.m4a"
+    if not produced.is_file():
+        raise ProtocolFailure(
+            "extraction-failure", "the audio stream could not be downloaded"
+        )
+    if produced.stat().st_size > _MEDIA_MAX_FILESIZE:
+        produced.unlink(missing_ok=True)
+        raise ProtocolFailure(
+            "output-limit", "the audio stream exceeds the size limit"
+        )
+    payload = produced.read_bytes()
+    produced.unlink(missing_ok=True)
+    temporary = _temp_publish(final_path, payload)
+    os.replace(temporary, final_path)
+    return payload
+
+
+def _temp_publish(final_path: str, payload: bytes) -> str:
+    """Atomic write of the validated payload to a temporary sibling."""
+    destination = Path(final_path)
+    temporary = destination.parent / (destination.name + ".partial")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with open(temporary, "wb") as handle:
+            handle.write(payload)
+        return str(temporary)
+    except OSError:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise ProtocolFailure(
+            "extraction-failure", "unable to write the audio file"
+        ) from None
 
 
 # ── Container validation and publication ───────────────────────────────────
@@ -932,25 +887,53 @@ def _serve_request(request: dict, request_id: str, out_stream: Any) -> int:
     reporter = _ProgressReporter(request_id, out_stream)
     reporter.emit(0, 4, "reading video metadata")
 
-    # Phase 1: metadata only, on the application-built watch URL.
-    info = fetch_metadata(video_id, _read_bun_path(request), deadline_ms)
-    reporter.emit(1, 4, "selecting audio stream")
+    # Phase 1: metadata only, on the application-built watch URL. The
+    # extractor stays open: its transport is the media download path, and
+    # the finally below closes it on every exit path.
+    bun_path = _read_bun_path(request)
+    info, extractor = fetch_metadata(video_id, bun_path, deadline_ms)
+    try:
+        return _finish_request(
+            video_id, request_id, info, extractor, bun_path, output_path,
+            deadline_ms, reporter, out_stream)
+    finally:
+        _close_quietly(extractor)
+
+
+def _finish_request(
+    video_id: str,
+    request_id: str,
+    info: dict[str, Any],
+    extractor: Any,
+    bun_path: str | None,
+    output_path: str,
+    deadline_ms: int,
+    reporter: Any,
+    out_stream: Any,
+) -> int:
+    """Phases 2-4 with the open extractor: select, download, publish."""
 
     _check_deadline(deadline_ms)
     validate_duration(info)
-    audio_format = select_audio_format(info)
-    media_url = audio_format.get("url")
-    if not isinstance(media_url, str) or not media_url:
-        raise ProtocolFailure(
-            "unsupported-input", "no supported audio stream is available"
-        )
+    # The selection validates that an audio-only M4A exists and refuses
+    # typed before the downloader starts; the downloader then pins the
+    # exact format via its format expression.
+    select_audio_format(info)
 
-    # Phase 2: the signed media URL through the package-owned client.
+    # Phase 2: the pinned NATIVE downloader fetches the selected
+    # audio-only format (it handles signed URLs and throttling that a
+    # single hand-rolled stream cannot). All package bounds apply.
     reporter.emit(2, 4, "downloading audio")
     _check_deadline(deadline_ms)
-    payload = _fetch_media_bytes(media_url, _MAX_AUDIO_BYTES, deadline_ms)
+    payload = download_audio(
+        output_dir=str(Path(output_path).parent),
+        final_path=output_path,
+        video_id=video_id,
+        bun_path=bun_path,
+        deadline_ms=deadline_ms)
 
-    # Phase 3: container check, then atomic publication.
+    # Phase 3: container check, then final publication already happened
+    # atomically inside download_audio.
     _check_deadline(deadline_ms)
     validate_m4a(payload)
     if len(payload) > MAX_OUTPUT_BYTES:
@@ -960,10 +943,7 @@ def _serve_request(request: dict, request_id: str, out_stream: Any) -> int:
 
     reporter.emit(3, 4, "writing audio")
     _check_deadline(deadline_ms)
-    # Publication is the commit point: after the rename, the result frame
-    # is emitted unconditionally, so a published output is never reported
-    # as a failure.
-    published_bytes = _publish_audio(output_path, payload)
+    published_bytes = len(payload)
 
     reporter.emit(4, 4, "done")
 

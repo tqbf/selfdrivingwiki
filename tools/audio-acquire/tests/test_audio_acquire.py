@@ -12,6 +12,7 @@ paths never reach a frame or stderr.
 from __future__ import annotations
 
 import json
+import types
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,24 @@ from conftest import (
 )
 
 # ── Helpers ────────────────────────────────────────────────────────────
+
+
+def _install_fake_downloader(audio: Any, monkeypatch: Any, payload: bytes) -> None:
+    """A downloader double that "downloads" the payload into <output_dir>/result.m4a."""
+
+    def install(output_dir: str) -> Any:
+        class FakeDownloader:
+            def download(self, urls: list[str]) -> None:
+                path = Path(output_dir) / "result.m4a"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+
+            def close(self) -> None:
+                return
+
+        return FakeDownloader()
+
+    monkeypatch.setattr(audio, "_build_downloader", lambda output_dir, *_a, **_k: install(output_dir))
 
 
 def run(audio: Any, request: dict[str, Any]) -> tuple[int, list[dict[str, Any]]]:
@@ -121,9 +140,7 @@ class TestSuccess:
         media_url = "https://rr3---sn-p5qs7nz6.googlevideo.com/videoplayback?id=1"
         patched_metadata(audio, valid_metadata(media_url))
         payload = FTYP_HEADER + b"m" * 4096
-        monkeypatch.setattr(
-            audio, "_fetch_media_bytes", lambda *_a, **_k: payload
-        )
+        _install_fake_downloader(audio, monkeypatch, payload)
 
         code, frames = run(audio, build_request())
         assert code == 0
@@ -207,13 +224,15 @@ class TestFailureMatrix:
         def oversized(*_a: Any, **_k: Any) -> bytes:
             raise audio.ProtocolFailure("output-limit", "the audio stream exceeds the size limit")
 
-        monkeypatch.setattr(audio, "_fetch_media_bytes", oversized)
+        monkeypatch.setattr(audio, "_build_downloader", lambda *_a, **_k: types.SimpleNamespace(
+            download=lambda urls: oversized(),
+            close=lambda: None))
         code, frames = run(audio, build_request())
         assert frames[-1]["payload"]["cause"] == "output-limit"
 
     def test_non_m4a_payload_rejected(self, audio: Any, monkeypatch: Any) -> None:
         patched_metadata(audio, valid_metadata())
-        monkeypatch.setattr(audio, "_fetch_media_bytes", lambda *_a, **_k: b"<html>403</html>")
+        _install_fake_downloader(audio, monkeypatch, b"<html>403</html>")
         code, frames = run(audio, build_request())
         assert frames[-1]["payload"]["cause"] == "extraction-failure"
         # The upstream body is never framed.
@@ -235,10 +254,12 @@ class TestFailureMatrix:
         def explode(*_a: Any, **_k: Any) -> bytes:
             raise ValueError("internal https://leak")
 
-        monkeypatch.setattr(audio, "_fetch_media_bytes", explode)
+        monkeypatch.setattr(audio, "_build_downloader", lambda *_a, **_k: types.SimpleNamespace(
+            download=lambda urls: explode(),
+            close=lambda: None))
         code, frames = run(audio, build_request())
         assert len([f for f in frames if f["kind"] == "failure"]) == 1
-        assert frames[-1]["payload"]["message"] == "audio acquisition failed"
+        assert frames[-1]["payload"]["message"] == "the audio stream could not be downloaded"
         assert "leak" not in json.dumps(frames)
 
 

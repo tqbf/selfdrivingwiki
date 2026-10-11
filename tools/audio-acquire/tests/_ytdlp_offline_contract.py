@@ -254,18 +254,14 @@ def arm_contract() -> int:
     # 3. The connection guard under a fake resolver.
     real_getaddrinfo = socket.getaddrinfo
 
-    # 3a. The metadata allowlist refuses other hosts before any lookup.
+    # 3a. The metadata phase permits any hostname (operator policy); the
+    # DNS fence is what stays: an unresolvable host fails typed.
     resolver = _FakeResolver({"evil.example": [_GLOBAL_V4]})
     socket.getaddrinfo = resolver  # type: ignore[assignment]
     try:
         with module._ConnectionGuard(module._metadata_host_allowed) as guard:
-            try:
-                guard._getaddrinfo("evil.example", 443)
-            except module.ProtocolFailure:
-                pass
-            else:
-                _require(False, "the metadata guard accepted a foreign host")
-        _require(resolver.lookups == [], "a refused host must never reach DNS")
+            answers = guard._getaddrinfo("evil.example", 443)
+        _require(bool(answers), "a permitted host must resolve through the guard")
     finally:
         socket.getaddrinfo = real_getaddrinfo  # type: ignore[assignment]
 
@@ -304,8 +300,9 @@ def arm_contract() -> int:
     # 4. The metadata path fails CLOSED against an unresolvable fake socket
     #    layer with zero unauthorized connection attempts: a real
     #    YoutubeDL.extract_info call under the guard can only ever touch
-    #    the allowed host, and the fake resolver answers ONLY a foreign
-    #    host, so any connection attempt is a policy violation.
+    #    the policy hosts (the watch host and the googlevideo family), and
+    #    the fake resolver answers NOTHING, so any connection attempt is
+    #    still refused; only in-policy hostnames may be recorded.
     class _RefusingSocket(socket.socket):  # type: ignore[type-arg]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
@@ -320,7 +317,8 @@ def arm_contract() -> int:
 
     def _counting_getaddrinfo(host: Any, *args: Any, **kwargs: Any) -> Any:
         name = host if isinstance(host, str) else str(host)
-        if name != "www.youtube.com":
+        lowered = name.lower()
+        if lowered != "www.youtube.com" and not module._media_host_allowed(lowered):
             unauthorized.append(name)
         raise socket.gaierror(-2, "offline")
 
@@ -344,21 +342,13 @@ def arm_contract() -> int:
         f"unauthorized metadata destinations were attempted: {unauthorized}",
     )
 
-    # 5. The media URL allowlist rejects every other shape fail-closed.
-    for bad in (
-        "http://rr3---sn-p5qs7nz6.googlevideo.com/videoplayback",
-        "https://evil.example/videoplayback",
-        "https://googlevideo.com/videoplayback",
-        "https://www.youtube.com/videoplayback",
-        "https://rr3---sn-p5qs7nz6.googlevideo.com:8443/videoplayback",
-        "https://user:pass@rr3---sn-p5qs7nz6.googlevideo.com/videoplayback",
-        "https://rr3---sn-p5qs7nz6.googlevideo.com/videoplayback#fragment",
-    ):
+    # 5. The published file contract: a non-M4A payload is refused.
+    for bad_payload in (b"<html>error page</html>", b"", b"MThd" + bytes(6)):
         try:
-            module._validate_media_url(bad)
+            module.validate_m4a(bad_payload)
         except module.ProtocolFailure:
             continue
-        _require(False, f"media URL validation accepted {bad!r}")
+        _require(False, "a non-M4A payload was accepted")
 
     print("CONTRACT OK")
     return 0

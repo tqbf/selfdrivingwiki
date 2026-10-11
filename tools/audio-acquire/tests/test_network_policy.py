@@ -124,15 +124,6 @@ class TestConnectionGuard:
             guard._getaddrinfo(WATCH_URL_HOST, 443)
         assert guard.unauthorized_attempts == 0
 
-        # A different host is refused BEFORE any DNS query is issued.
-        resolver, _connect = install({WATCH_URL_HOST: [_GLOBAL_V4]})
-        with audio._ConnectionGuard(audio._metadata_host_allowed) as guard:
-            with pytest.raises(audio.ProtocolFailure) as excinfo:
-                guard._getaddrinfo("evil.example", 443)
-        assert "host" in excinfo.value.message
-        assert resolver.lookups == []
-        assert guard.unauthorized_attempts == 1
-
     def test_private_dns_answer_rejected(
         self, audio: Any, guard_sockets: Any
     ) -> None:
@@ -199,178 +190,112 @@ class TestConnectionGuard:
         # Connected to the FIRST validated address, never the hostname.
         assert connects == [(_GLOBAL_V4, 443)]
 
-    def test_media_suffix_allowlist(self, audio: Any) -> None:
+    def test_media_phase_permits_any_host(self, audio: Any) -> None:
+        # The operator's policy: any URL. The DNS-level fence (global
+        # routability) is what remains, tested above.
         assert audio._media_host_allowed("rr3---sn-p5qs7nz6.googlevideo.com")
-        assert audio._media_host_allowed("a.b.googlevideo.com")
-        # The bare suffix is NOT a valid host: one or more labels must
-        # precede it.
-        assert audio._media_host_allowed("googlevideo.com") is False
-        assert audio._media_host_allowed(".googlevideo.com") is False
-        assert audio._media_host_allowed("evil-googlevideo.com") is False
-        assert audio._media_host_allowed("googlevideo.com.evil.example") is False
+        assert audio._media_host_allowed("example.org")
 
 
 # ── Media URL validation ───────────────────────────────────────────────
 
 
-class TestMediaURLValidation:
-    GOOD = "https://rr3---sn-p5qs7nz6.googlevideo.com/videoplayback?id=1&sig=abc"
+class TestMediaPolicy:
+    def test_any_host_permitted(self, audio: Any) -> None:
+        assert audio._metadata_host_allowed("example.org")
+        assert audio._media_host_allowed("example.org")
 
-    def test_accepts_signed_media_url(self, audio: Any) -> None:
-        assert audio._validate_media_url(self.GOOD) == self.GOOD
-
-    def test_rejects_every_other_shape(self, audio: Any) -> None:
-        for bad in (
-            "http://rr3---sn-p5qs7nz6.googlevideo.com/videoplayback",
-            "https://evil.example/videoplayback",
-            "https://googlevideo.com/videoplayback",
-            "https://www.youtube.com/videoplayback",
-            "https://rr3---sn-p5qs7nz6.googlevideo.com:8443/videoplayback",
-            "https://user:pass@rr3---sn-p5qs7nz6.googlevideo.com/videoplayback",
-            "https://rr3---sn-p5qs7nz6.googlevideo.com/videoplayback#fragment",
-            "https://rr3---sn-p5qs7nz6.googlevideo.com/videoplayback#",
-            "https://rr3---sn-p5qs7nz6.googlevideo.com/" + "a" * 20_000,
-        ):
-            with pytest.raises(audio.ProtocolFailure) as excinfo:
-                audio._validate_media_url(bad)
-            assert excinfo.value.message == "the media location is not allowed"
-
-
-# ── Media fetch through the production opener ──────────────────────────
-
-
-class _FakeResponse:
-    """The minimum urllib response surface the fetch path uses."""
-
-    def __init__(
-        self,
-        status: int,
-        body: bytes = b"",
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        self.status = status
-        self.code = status
-        self.msg = "fixture"
-        self.headers = Message()
-        for key, value in (headers or {}).items():
-            self.headers[key] = value
-        self._body = body
-        self.closed = False
-
-    def info(self) -> Message:
-        return self.headers
-
-    def __enter__(self) -> "_FakeResponse":
-        return self
-
-    def __exit__(self, *_args: Any) -> None:
-        self.close()
-
-    def close(self) -> None:
-        self.closed = True
-
-    def read(self, size: int = -1) -> bytes:
-        if size < 0 or size >= len(self._body):
-            body, self._body = self._body, b""
-            return body
-        body, self._body = self._body[:size], self._body[size:]
-        return body
-
-
-class _HandlerStub(urllib.request.HTTPSHandler):
-    """Replaces ONLY the low-level HTTPS transport; no socket is opened."""
-
-    def __init__(self, responses: list[Any]) -> None:
-        super().__init__()
-        self.responses = list(responses)
-        self.requests: list[Any] = []
-
-    def https_open(self, req: Any) -> Any:
-        self.requests.append(req)
-        response = self.responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-    def http_open(self, req: Any) -> Any:
-        # Never reached by the production fetcher (https only); present so
-        # a scheme mistake cannot fall through to a real connection.
-        self.requests.append(req)
-        response = self.responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-
-def _deadline(audio: Any, seconds: int = 600) -> int:
-    import time
-
-    return int(time.time() * 1000) + seconds * 1000
-
-
-def self_good_url() -> str:
-    return "https://rr3---sn-p5qs7nz6.googlevideo.com/videoplayback?id=1&sig=abc"
-
-
-class TestMediaFetch:
-    def test_success_reads_exactly_the_body(self, audio: Any) -> None:
+    def test_produced_m4a_validated(self, audio: Any) -> None:
         from conftest import FTYP_HEADER
 
-        body = FTYP_HEADER + b"audio" * 100
-        stub = _HandlerStub([_FakeResponse(200, body)])
-        payload = audio._fetch_media_bytes(
-            self_good_url(), 200 * 1024 * 1024, _deadline(audio), https_handler=stub
-        )
-        assert payload == body
-        request = stub.requests[0]
-        assert request.get_header("Accept-encoding") == "identity"
+        audio.validate_m4a(FTYP_HEADER + b"payload")
+        with pytest.raises(audio.ProtocolFailure):
+            audio.validate_m4a(b"<html>not audio</html>")
 
-    def test_redirect_is_refused_not_followed(self, audio: Any) -> None:
-        redirect = urllib_error(302, {"Location": "https://evil.example/x"})
-        stub = _HandlerStub([redirect])
+
+# ── Media download through the pinned native downloader ────────────────
+
+
+class TestMediaDownload:
+    class _FakeDownloader:
+        def __init__(self, fail: bool = False) -> None:
+            self.fail = fail
+            self.download_calls: list[list[str]] = []
+
+        def download(self, urls: list[str]) -> None:
+            self.download_calls.append(urls)
+            if self.fail:
+                raise OSError("download failed")
+
+        def close(self) -> None:
+            return
+
+    def test_download_renames_and_reads_payload(
+        self, audio: Any, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        from conftest import FTYP_HEADER
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        payload = FTYP_HEADER + b"m" * 512
+        produced = output_dir / "result.m4a"
+        produced.write_bytes(payload)
+        final = output_dir / "result"
+
+        downloader = self._FakeDownloader()
+        monkeypatch.setattr(audio, "_build_downloader", lambda *_a, **_k: downloader)
+        got = audio.download_audio(
+            str(output_dir), str(final), "dQw4w9WgXcQ", None,
+            int(time.time() * 1000) + 60_000)
+        assert got == payload
+        assert downloader.download_calls == [[audio._YOUTUBE_WATCH_BASE + "?v=dQw4w9WgXcQ"]]
+        # The produced file was moved to the requested output path.
+        assert final.read_bytes() == payload
+        assert produced.exists() is False
+
+    def test_missing_output_is_typed_failure(
+        self, audio: Any, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        downloader = self._FakeDownloader()
+        monkeypatch.setattr(audio, "_build_downloader", lambda *_a, **_k: downloader)
         with pytest.raises(audio.ProtocolFailure) as excinfo:
-            audio._fetch_media_bytes(
-                self_good_url(), 1024, _deadline(audio), https_handler=stub
-            )
+            audio.download_audio(
+                str(output_dir), str(output_dir / "result"), "dQw4w9WgXcQ", None,
+                int(time.time() * 1000) + 60_000)
         assert excinfo.value.message == "the audio stream could not be downloaded"
-        assert len(stub.requests) == 1  # never followed
 
-    def test_401_403_429_are_typed_rejections(self, audio: Any) -> None:
-        for status in (401, 403, 429):
-            stub = _HandlerStub([urllib_error(status)])
-            with pytest.raises(audio.ProtocolFailure) as excinfo:
-                audio._fetch_media_bytes(
-                    self_good_url(), 1024, _deadline(audio), https_handler=stub
-                )
-            assert excinfo.value.message == "the media server rejected the request"
-
-    def test_compressed_response_refused(self, audio: Any) -> None:
-        stub = _HandlerStub(
-            [_FakeResponse(200, b"gz", headers={"Content-Encoding": "gzip"})]
-        )
+    def test_download_failure_is_typed(
+        self, audio: Any, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        downloader = self._FakeDownloader(fail=True)
+        monkeypatch.setattr(audio, "_build_downloader", lambda *_a, **_k: downloader)
         with pytest.raises(audio.ProtocolFailure) as excinfo:
-            audio._fetch_media_bytes(
-                self_good_url(), 1024, _deadline(audio), https_handler=stub
-            )
-        assert excinfo.value.message == "the media response used an unsupported encoding"
+            audio.download_audio(
+                str(output_dir), str(output_dir / "result"), "dQw4w9WgXcQ", None,
+                int(time.time() * 1000) + 60_000)
+        assert excinfo.value.message == "the audio stream could not be downloaded"
 
-    def test_oversized_stream_hits_cap_plus_one(self, audio: Any) -> None:
-        cap = 1024
-        body = b"a" * (cap + 64)
-        stub = _HandlerStub([_FakeResponse(200, body)])
+    def test_oversized_download_is_output_limit(
+        self, audio: Any, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        from conftest import FTYP_HEADER
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        (output_dir / "result.m4a").write_bytes(
+            FTYP_HEADER + b"m" * (audio._MEDIA_MAX_FILESIZE + 1))
+        monkeypatch.setattr(
+            audio, "_build_downloader",
+            lambda *_a, **_k: self._FakeDownloader())
         with pytest.raises(audio.ProtocolFailure) as excinfo:
-            audio._fetch_media_bytes(
-                self_good_url(), cap, _deadline(audio), https_handler=stub
-            )
+            audio.download_audio(
+                str(output_dir), str(output_dir / "result"), "dQw4w9WgXcQ", None,
+                int(time.time() * 1000) + 60_000)
         assert excinfo.value.cause == "output-limit"
-
-    def test_transport_error_is_typed(self, audio: Any) -> None:
-        stub = _HandlerStub([OSError("connection reset https://secret")])
-        with pytest.raises(audio.ProtocolFailure) as excinfo:
-            audio._fetch_media_bytes(
-                self_good_url(), 1024, _deadline(audio), https_handler=stub
-            )
-        assert excinfo.value.message == "the audio stream could not be downloaded"
 
 
 # ── AC.1: the real pinned-library offline contract ──────────────────────

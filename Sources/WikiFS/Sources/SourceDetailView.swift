@@ -940,37 +940,6 @@ struct SourceDetailView: View {
                                  ? "Fetch this video's transcript via YouTube captions"
                                  : "Fetch this episode's transcript via Apple Podcasts"))
                     }
-                    if isEligibleForOnDeviceSpeech {
-                        // The SEPARATE explicit on-device speech action. The
-                        // caption button above stays caption-only; this
-                        // action downloads audio and runs local speech
-                        // analysis, so it states its consequences and
-                        // enqueues ONLY after confirmation.
-                        Button("Transcribe (on-device)", systemImage: "waveform.badge.mic") {
-                            isOnDeviceSpeechConfirmationPresented = true
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(isTranscribing || tracker.isSlotBusyForOtherSource(file.id))
-                        .help("Download this video's audio and transcribe it on this Mac")
-                        .confirmationDialog(
-                            "Transcribe on this Mac?",
-                            isPresented: $isOnDeviceSpeechConfirmationPresented,
-                            titleVisibility: .visible) {
-                            Button("Download Audio and Transcribe") {
-                                // The ONLY path that enqueues an
-                                // `.onDeviceSpeech` item from this view.
-                                Task { await runOnDeviceTranscription() }
-                            }
-                            Button("Cancel", role: .cancel) {}
-                        } message: {
-                            Text("""
-                            This downloads the video's audio (up to 120 MB) and runs \
-                            speech analysis on this Mac, which can take several minutes. \
-                            If the speech model for this language is not installed yet, \
-                            you will be asked to set it up first.
-                            """)
-                        }
-                    }
                     ingestButton
                     // The source's content affordance is one-per-source: an
                     // unextracted PDF or HTML source shows Extract (above) to
@@ -2007,6 +1976,19 @@ struct SourceDetailView: View {
                     .disabled(isTranscribing
                               || isThisFileExtracting
                               || tracker.isSlotBusyForOtherSource(file.id))
+                    // The explicit on-device speech action sits NEXT TO the
+                    // transcript re-run: same menu, clearly-different
+                    // consequences (audio download + local analysis), and
+                    // still enqueues ONLY after the confirmation dialog.
+                    if isEligibleForOnDeviceSpeech {
+                        Button("Transcribe (on-device)…", systemImage: "waveform.badge.mic") {
+                            isOnDeviceSpeechConfirmationPresented = true
+                        }
+                        .disabled(isTranscribing
+                                  || isThisFileExtracting
+                                  || tracker.isSlotBusyForOtherSource(file.id))
+                        .help("Download this video's audio and transcribe it on this Mac")
+                    }
                 } else if SourceRendererPresentationPlanner.isDOCXSource(file) {
                     // DOCX: a single package-only re-extraction path — there
                     // is no backend enum to iterate.
@@ -2037,6 +2019,24 @@ struct SourceDetailView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Switch the active extraction, compare alternatives, or re-extract")
+        .confirmationDialog(
+            "Transcribe on this Mac?",
+            isPresented: $isOnDeviceSpeechConfirmationPresented,
+            titleVisibility: .visible) {
+            Button("Download Audio and Transcribe") {
+                // The ONLY path that enqueues an `.onDeviceSpeech` item from
+                // this view.
+                Task { await runOnDeviceTranscription() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("""
+            This downloads the video's audio (up to 120 MB) and runs \
+            speech analysis on this Mac, which can take several minutes. \
+            If the speech model for this language is not installed yet, \
+            you will be asked to set it up first.
+            """)
+        }
     }
 
     /// Stable, human-facing name for the active markdown alternative. A user

@@ -488,7 +488,7 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "2c27524ed9ebe8869c348e5ee084b7a6258d4595156e216e3f900d9a07d4a910")
+            == "539b74360d40f0b156df02a10786099fcd6915c562cab6a66b58965db8075238")
     }
 
     /// The recorded audio-acquire protocol frames replay through the
