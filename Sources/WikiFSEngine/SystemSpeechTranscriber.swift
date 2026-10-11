@@ -84,7 +84,7 @@ public struct SystemSpeechTranscriber: SpeechTranscribing {
         }
         let transcriber = SpeechTranscriber(
             locale: locale,
-            preset: .progressiveTranscription)
+            preset: .transcription)
         guard let request = try await AssetInventory.assetInstallationRequest(
             supporting: [transcriber]) else {
             // Nothing to install — treat as success.
@@ -153,7 +153,7 @@ public struct SystemSpeechTranscriber: SpeechTranscribing {
 
         let transcriber = SpeechTranscriber(
             locale: locale,
-            preset: .progressiveTranscription)
+            preset: .transcription)
         let analyzer = SpeechAnalyzer(modules: [transcriber])
 
         do {
