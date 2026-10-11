@@ -779,6 +779,19 @@ public enum CLIReference {
                     commandLine: "halt --lane <extraction|ingestion>",
                     options: [CLIOption("--lane <lane>", required: true, summary: "the queue lane (extraction|ingestion)")]),
             ]),
+        CLIFamily(
+            name: "transcribe",
+            summary: "explicit on-device speech transcription for one source",
+            leaves: [
+                CLILeaf(
+                    "on-device", summary: "enqueue on-device speech transcription for one YouTube source (downloads audio, transcribes on this Mac; no caption fallback)",
+                    commandLine: "on-device --source <source-id> [--json] [--no-wait]",
+                    options: [
+                        CLIOption("--source <source-id>", required: true, summary: "the source to transcribe (a YouTube video source)"),
+                        CLIOption("--json", summary: "print JSON instead of text"),
+                        CLIOption("--no-wait", summary: "return after enqueueing instead of waiting for completion"),
+                    ]),
+            ]),
     ]
 
     // MARK: - Lookup helpers

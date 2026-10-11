@@ -317,7 +317,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
     ) async throws -> QueueExtractionOutputReference? {
         guard let store = storeResolver(wikiID) else {
             DebugLog.extraction("DaemonQueueExtractionProvider: persistSpeechExtraction — no store for wikiID=\(wikiID.rawValue)")
-            return nil
+            throw DaemonStoreUnavailableError(wikiID: wikiID)
         }
         guard let initialVersion = try store.initialContentVersion(sourceID: sourceID) else {
             DebugLog.store("DaemonQueueExtractionProvider: speech transcript has no initial source version (source=\(sourceID.rawValue))")

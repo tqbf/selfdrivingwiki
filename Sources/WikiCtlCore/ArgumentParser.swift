@@ -85,6 +85,8 @@ public enum ArgumentParser {
         case job(JobCommand.Action)
         /// Per-lane queue truth + lane controls over the live daemon.
         case queue(QueueCommand.Action)
+        /// Explicit on-device speech transcription over the live daemon.
+        case transcribe(TranscribeCommand.Action)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
         /// Strategy commands: read, save, reset for the per-wiki editorial
@@ -241,6 +243,8 @@ public enum ArgumentParser {
             command = try parseJobCommand(Array(args.dropFirst()))
         case "queue":
             command = try parseQueueCommand(Array(args.dropFirst()))
+        case "transcribe":
+            command = try parseTranscribeCommand(Array(args.dropFirst()))
         case "workspace":
             command = try parseWorkspaceCommand(Array(args.dropFirst()))
         case "strategy":
@@ -739,6 +743,27 @@ public enum ArgumentParser {
         default:
             throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "job", given: sub))
         }
+    }
+
+    private static func parseTranscribeCommand(_ args: [String]) throws -> Command {
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "transcribe"))
+        }
+        guard CLIReference.leaf(family: "transcribe", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "transcribe", given: sub))
+        }
+        guard sub == "on-device" else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "transcribe", given: sub))
+        }
+        let options = try Options(
+            Array(args.dropFirst()), options: CLIReference.options(forFamily: "transcribe"))
+        guard let source = options.value("--source") else {
+            throw Failure.usage("transcribe on-device: --source is required (the source ID)")
+        }
+        return .transcribe(.onDevice(
+            source: source,
+            json: options.flag("--json"),
+            wait: options.flag("--no-wait") == false))
     }
 
     private static func parseQueueCommand(_ args: [String]) throws -> Command {

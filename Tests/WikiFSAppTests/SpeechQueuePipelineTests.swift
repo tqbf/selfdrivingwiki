@@ -457,7 +457,6 @@ struct SpeechQueuePipelineTests {
                 bytes: acquired.bytes, wikiID: WikiID(rawValue: "w"),
                 itemID: QueueItem.ID(rawValue: "01JSUCCESSITEM000000000"), attempt: 1)
             stagedPath = staged.audioURL.path
-            staged.lease.release()
             defer { staged.discard() }
             let transcription = try await speech.speechEngine.transcribeFile(
                 at: staged.audioURL, localeID: speech.localeID,

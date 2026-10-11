@@ -7307,6 +7307,24 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             toolVersion: toolVersion, sourceVersionID: sourceVersionID, note: note)
     }
 
+    /// Read-only preflight for CLI tools enqueueing on-device speech: does
+    /// this wiki contain `sourceID`, and is it a YouTube video source (the
+    /// explicit speech scope)? Opens a read-only connection; throws when the
+    /// store cannot be read. Implemented here so the store boundary stays
+    /// inside its owning file (see the Cordis boundary contract).
+    public static func youtubeSpeechPreflight(
+        readOnlyURL: URL, sourceID: SourceID
+    ) throws -> Bool {
+        let store = try GRDBWikiStore(readOnlyURL: readOnlyURL)
+        defer { store.close() }
+        let summaries = try store.listSources()
+        guard summaries.contains(where: { $0.id == sourceID }) else {
+            return false
+        }
+        let origin = try store.sourceOrigin(sourceID: sourceID)
+        return origin?.provider == SourceProvider.youtube
+    }
+
     /// Append one HOST-produced on-device speech transcript. The speech floor
     /// runs in the host process, so the producer is the typed host-speech
     /// identity (engine, locale, exact acquisition fetcher) — never

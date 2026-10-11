@@ -1,6 +1,6 @@
 # On-device speech transcription (STT) for caption-less sources
 
-Status: planned. Revised after independent review (sol model, REQUEST
+Status: IMPLEMENTED on feature/audio-speech-transcription (live-verified). The body below is the ORIGINAL design and is SUPERSEDED IN PART by the "Implementation status" appendix at the end: the audio acquisition is a manifest-4/protocol-5 FETCHER (no audioTranscript kind, no prepareAudioAcquire arm), the media transport is the pinned release's native downloader (bounded retries, 120 MiB cap), any HTTPS host is permitted behind the DNS-level routability fence, and the action is a provenance-chip menu item without a confirmation dialog. Where the body and the appendix disagree, the appendix wins.. Revised after independent review (sol model, REQUEST
 CHANGES round 1 — all five blockers addressed in this revision).
 
 ## Problem

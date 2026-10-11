@@ -64,12 +64,6 @@ struct SourceDetailView: View {
     /// across same-type tab switches (SwiftUI keeps the view alive).
     @State private var isHeaderExpanded = false
     @State private var headVersion: SourceMarkdownVersion?
-    /// The explicit on-device speech action's confirmation gate (issue:
-    /// audio-speech-transcription). Import, simple viewing, and the caption
-    /// Transcribe action NEVER set this; only the user clicking the
-    /// dedicated "Transcribe (on-device)" button does, and the actual
-    /// enqueue runs only after the confirmation dialog's OK.
-    @State private var isOnDeviceSpeechConfirmationPresented = false
     /// Set only by the confirmed on-device action; the model-asset
     /// installation request flows from it and from nowhere else.
     @State private var isOnDeviceSpeechSetupRequested = false
@@ -1982,12 +1976,12 @@ struct SourceDetailView: View {
                     // still enqueues ONLY after the confirmation dialog.
                     if isEligibleForOnDeviceSpeech {
                         Button("Transcribe (on-device)…", systemImage: "waveform.badge.mic") {
-                            isOnDeviceSpeechConfirmationPresented = true
+                            Task { await runOnDeviceTranscription() }
                         }
                         .disabled(isTranscribing
                                   || isThisFileExtracting
                                   || tracker.isSlotBusyForOtherSource(file.id))
-                        .help("Download this video's audio and transcribe it on this Mac")
+                        .help("Downloads this video's audio (up to 120 MB), runs speech analysis on this Mac (can take minutes), and adds a transcript alternative")
                     }
                 } else if SourceRendererPresentationPlanner.isDOCXSource(file) {
                     // DOCX: a single package-only re-extraction path — there
@@ -2019,24 +2013,6 @@ struct SourceDetailView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Switch the active extraction, compare alternatives, or re-extract")
-        .confirmationDialog(
-            "Transcribe on this Mac?",
-            isPresented: $isOnDeviceSpeechConfirmationPresented,
-            titleVisibility: .visible) {
-            Button("Download Audio and Transcribe") {
-                // The ONLY path that enqueues an `.onDeviceSpeech` item from
-                // this view.
-                Task { await runOnDeviceTranscription() }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("""
-            This downloads the video's audio (up to 120 MB) and runs \
-            speech analysis on this Mac, which can take several minutes. \
-            If the speech model for this language is not installed yet, \
-            you will be asked to set it up first.
-            """)
-        }
     }
 
     /// Stable, human-facing name for the active markdown alternative. A user

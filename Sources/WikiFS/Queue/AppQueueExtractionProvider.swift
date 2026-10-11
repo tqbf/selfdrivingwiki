@@ -366,7 +366,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
     ) async throws -> QueueExtractionOutputReference? {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             DebugLog.extraction("AppQueueExtractionProvider: persistSpeechExtraction — no session for wikiID=\(wikiID)")
-            return nil
+            throw AppendDerivedMarkdownError.missingSource(sourceID)
         }
         // The source's immutable initial version is REQUIRED (same lineage
         // rule as a package transcript): the write fails before persisting

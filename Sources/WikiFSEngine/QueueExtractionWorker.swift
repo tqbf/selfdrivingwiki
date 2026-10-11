@@ -294,6 +294,14 @@ struct QueueExtractionWorker: QueueWorker {
             // and the staged file is removed on every exit path.
             emitProgress(item.id, stamp("Acquiring audio…"))
             emitReport?(QueueReportMutation(phase: .running))
+            // Fail-closed disk preflight BEFORE the network download: the
+            // fetcher holds ~120 MiB resident while the stage persists a
+            // second copy.
+            do {
+                try SpeechStageManager.preflightDisk(root: speech.stageRoot)
+            } catch let error as SpeechStageManager.StageError {
+                throw QueueExtractionError.notReady(error.localizedDescription)
+            }
             let acquired = try await speech.acquire { [itemID = item.id] line in
                 emitProgress(itemID, stamp(line))
             }
@@ -310,8 +318,9 @@ struct QueueExtractionWorker: QueueWorker {
             } catch let error as SpeechStageManager.StageError {
                 throw QueueExtractionError.notReady(error.localizedDescription)
             }
-            staged.lease.release()
-            // The staged file is removed on success, error, and cancellation.
+            // The lease is HELD through analysis (the stage must read as
+            // owned by live work the whole time); discard releases it and
+            // removes the file on success, error, and cancellation.
             defer { staged.discard() }
 
             emitProgress(item.id, stamp("Transcribing on device…"))
@@ -332,6 +341,13 @@ struct QueueExtractionWorker: QueueWorker {
                     transcription: transcription,
                     acquisitionFetcher: acquired.provenance,
                     durationSeconds: transcription.durationSeconds))
+            // One durable transcript is the SUCCESS contract: a nil
+            // reference means persistence did not happen, so the item must
+            // fail rather than report succeeded without output.
+            guard outputReference != nil else {
+                throw QueueExtractionError.notReady(
+                    "the speech transcript could not be persisted")
+            }
 
             emitReport?(QueueReportMutation(
                 phase: .finished,

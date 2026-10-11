@@ -129,6 +129,20 @@ func run() async -> Int32 {
         }
     }
 
+    // The transcribe family enqueues on-device speech jobs through the same
+    // live daemon surface; waiting jobs block on the daemon's completion
+    // wait. No writable wiki-store profile is opened unless a source
+    // existence check needs one.
+    if case .transcribe(let action) = invocation.command {
+        do {
+            print(try await runTranscribeCommand(action, wikiSelector: invocation.wikiSelector))
+            return 0
+        } catch {
+            FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
+            return 1
+        }
+    }
+
     // `extractor list` is read-only and wiki-independent: no store, no
     // wiki selection — only the machine catalog (App Group container) and
     // describe-only credential presence checks. Dispatching it before the
@@ -301,6 +315,10 @@ func execute(
         let body = try readBodyFile(from: bodyFile)
         let r = try LogIndexCommand.run(.indexSet(body: body, workspace: workspace), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+    case .transcribe:
+        // Unreachable: main.swift handles the transcribe family against the
+        // live daemon before any wiki store is opened.
+        throw ArgumentParser.Failure.usage("transcribe requires no wiki store context")
     case .source(let action):
         if case .addURL(let rawInput, let allowDuplicateURL) = action {
             return try await SourceCommand.runAddURL(
@@ -490,6 +508,172 @@ private func runQueueCommand(_ action: QueueCommand.Action) async throws -> Stri
 private struct QueueCommandUnsupportedError: LocalizedError {
     var errorDescription: String? { "wikictl queue requires macOS (the wikid daemon XPC surface)" }
 }
+
+/// Enqueue the EXPLICIT on-device speech job for one source through the live
+/// daemon workload surface, mirroring the app's provenance-chip menu action:
+/// same payload intent, same speech arm, same typed failures (YouTube
+/// sources only; no caption fallback). `--wiki` resolves the owning wiki
+/// through the ordinary registry; the source must exist there and be a
+/// YouTube source — a wrong-source mistake fails BEFORE anything is
+/// enqueued. With the default `--wait`, the command blocks on the daemon's
+/// completion wait and prints the typed outcome (success, or the queue
+/// item's redacted error).
+private func runTranscribeCommand(
+    _ action: TranscribeCommand.Action,
+    wikiSelector: String
+) async throws -> String {
+    #if os(macOS)
+    switch action {
+    case .onDevice(let source, let json, let wait):
+        guard wikiSelector.isEmpty == false else {
+            throw TranscribeCommand.Failure(
+                "transcribe on-device: pass --wiki <id> before the subcommand (the wiki that owns the source)")
+        }
+        let resolver = try WikiResolver.appGroupContainer()
+        let target = try resolver.resolve(selection: .registry(wikiSelector))
+
+        // Pre-flight the source against the owning wiki: the queue path
+        // would fail anyway, but the typed message reads better here and
+        // nothing is enqueued for a mistake.
+        let sourceID = SourceID(rawValue: source)
+        do {
+            let inScope = try GRDBWikiStore.youtubeSpeechPreflight(
+                readOnlyURL: target.databaseURL, sourceID: sourceID)
+            guard inScope else {
+                throw TranscribeCommand.Failure(
+                    "source \(source) is not a YouTube video in wiki \(wikiSelector) — on-device speech supports YouTube videos only")
+            }
+        } catch let error as TranscribeCommand.Failure {
+            throw error
+        } catch {
+            // A read failure of the owning wiki is surfaced, not swallowed:
+            // the agent should see WHY the source could not be verified.
+            throw TranscribeCommand.Failure(
+                "could not verify source \(source) in wiki \(wikiSelector): \(error.localizedDescription)")
+        }
+
+        let connection = try WikiDaemonConnection.connect()
+        let client = try DaemonWorkloadClient(connection: connection)
+        // The enqueue write is durable in the daemon's queue store even if
+        // its reply is slow (the handler runs the dispatch scan inline). A
+        // CLI cannot leak a parked continuation — it would never exit — so
+        // the call is raced against a bounded local wait and the process
+        // exits with a clear note if the reply misses it.
+        let request = QueueItemRequest(
+            queue: .extraction,
+            wikiID: target.wikiID,
+            payload: QueueItemPayload(
+                sourceIDs: [sourceID],
+                transcriptionIntent: .onDeviceSpeech))
+        // Synchronized single-result box: the detached task writes, the
+        // polling loop reads, under one NSLock — the lock is the Sendable
+        // invariant. The enqueue write is durable in the daemon's queue
+        // store even if its reply is slow (the handler runs the dispatch
+        // scan inline), but a CLI cannot leak a parked continuation — it
+        // would never exit — so the reply is raced against a bounded local
+        // wait and a missed reply exits with a clear note.
+        // swiftlint:disable:next unchecked_sendable
+        final class Box: @unchecked Sendable {
+            private let lock = NSLock()
+            private var itemID: String?
+            private var error: Error?
+            func store(id: String) { lock.lock(); itemID = id; lock.unlock() }
+            func store(error: Error) { lock.lock(); self.error = error; lock.unlock() }
+            func snapshot() -> (String?, Error?) {
+                lock.lock(); defer { lock.unlock() }
+                return (itemID, error)
+            }
+        }
+        let box = Box()
+        let clientRef = client
+        let task = Task.detached {
+            do {
+                let id = try await clientRef.enqueue(request)
+                box.store(id: id.rawValue)
+            } catch {
+                box.store(error: error)
+            }
+        }
+        let enqueueDeadline = Date().addingTimeInterval(35)
+        var snapshot = box.snapshot()
+        while snapshot.0 == nil && snapshot.1 == nil && Date() < enqueueDeadline {
+            try await Task.sleep(for: .milliseconds(250))
+            snapshot = box.snapshot()
+        }
+        task.cancel()
+        if let error = snapshot.1 {
+            throw TranscribeCommand.Failure(
+                "enqueue failed: \(error.localizedDescription)")
+        }
+        guard let idRaw = snapshot.0 else {
+            FileHandle.standardError.write(Data(
+                "wikictl: the enqueue reply is slow — the job was written durably and will run; check `wikictl job list`\n".utf8))
+            return json
+                ? "{ \"enqueued\": \"pending\" }"
+                : "enqueue reply pending; the job was written durably and will run"
+        }
+        let itemID = QueueItemID(rawValue: idRaw)
+
+        let enqueuedLine = TranscribeCommand.renderEnqueued(
+            itemID: itemID.rawValue, source: source, wait: wait)
+        if json {
+            print("{ \"itemID\": \"\(itemID.rawValue)\", \"enqueued\": true }")
+        } else {
+            print(enqueuedLine)
+        }
+
+        guard wait else { return "" }
+
+        // Poll the DURABLE queue store rather than the daemon's completion
+        // wait: the workload XPC client bounds every call at 30 s, and a
+        // speech job legitimately runs minutes. A deduplicated enqueue
+        // returns an already-terminal item, so the poll reads the store the
+        // engine writes (the same truth `wikictl job get` renders); the
+        // loop is bounded by the speech wait policy (2 h 45 m).
+        let started = Date()
+        let waitLimit = started.addingTimeInterval(
+            165 * 60)
+        var finalState: String?
+        var finalError: String?
+        let queueStore = try QueueStore(readOnlyDatabaseURL: DatabaseLocation.queueDatabaseURL())
+        defer { queueStore.close() }
+        while Date() < waitLimit {
+            try Task.checkCancellation()
+            if let item = try queueStore.getItem(itemID) {
+                switch item.state {
+                case .completed: finalState = "completed"
+                case .failed: finalError = item.error
+                case .cancelled: finalError = "cancelled"
+                default: break
+                }
+                if finalState != nil || finalError != nil { break }
+            }
+            try await Task.sleep(for: .seconds(5))
+        }
+        let elapsed = Int(Date().timeIntervalSince(started))
+        if finalState == nil && finalError == nil {
+            finalError = "wait limit exceeded; the job may still be running"
+        }
+        let completed = (finalState == "completed")
+        if json {
+            let errorJSON = finalError.map { message in
+                ", \"error\": \"\(message.replacingOccurrences(of: "\"", with: "\\\""))\""
+            } ?? ""
+            print("{ \"itemID\": \"\(itemID.rawValue)\", \"completed\": \(completed)\(errorJSON), \"elapsedSeconds\": \(elapsed) }")
+            return ""
+        }
+        return TranscribeCommand.renderOutcome(
+            source: source,
+            completed: completed,
+            errorMessage: finalError,
+            elapsedSeconds: elapsed)
+    }
+    #else
+    throw TranscribeCommand.Failure(
+        "wikictl transcribe requires macOS (the wikid daemon XPC surface)")
+    #endif
+}
+
 
 /// Read durable job state without creating, migrating, or checkpointing either
 /// database. A missing queue database is an empty list, not an invitation to

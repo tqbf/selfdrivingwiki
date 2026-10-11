@@ -25,6 +25,18 @@ public struct SpeechStageManager: Sendable {
     /// stage write persists a second copy; disk must hold both plus margin.
     public static let minimumFreeBytes: Int64 = 2 * 120 * 1024 * 1024 + 256 * 1024 * 1024
 
+    /// Fail-closed disk preflight for the SPEECH arm, called BEFORE the
+    /// network download starts: the fetcher holds up to 120 MiB resident
+    /// while the stage write persists a second copy, so the volume must
+    /// hold both plus margin. An unreadable capacity is a refusal, never a
+    /// bypass.
+    public static func preflightDisk(root: URL) throws {
+        try Self.ensureOwnerPrivateRoot(root)
+        guard Self.freeDiskBytes(at: root) >= Self.minimumFreeBytes else {
+            throw StageError.outOfDisk
+        }
+    }
+
     public init(root: URL) {
         self.root = root
     }
@@ -113,6 +125,10 @@ public struct SpeechStageManager: Sendable {
         guard Self.isSafeStagePath(stageDirectory, inside: root) else {
             throw StageError.unsafePath
         }
+        // Reject symlinked components BEFORE creating anything: a symlink at
+        // <root>/<wikiID> (or any stage component) would redirect lease,
+        // write, and removal paths outside the owner-private root.
+        try Self.rejectSymlinkedComponents(stageDirectory, below: root)
         // A stage directory for the SAME item+attempt is a retry: its
         // previous dispatch cannot be analyzing concurrently (one dispatch
         // per item). Remove it only when no lease is held; a held lease
@@ -161,6 +177,23 @@ public struct SpeechStageManager: Sendable {
 
     /// Only paths structurally inside the root are ever touched. The
     /// directory name is typed-ID-shaped; this re-checks the resolved path.
+    /// lstat every component of `url` below `root`; an existing symlink
+    /// component fails staging (recovery already refuses to follow them).
+    static func rejectSymlinkedComponents(_ url: URL, below root: URL) throws {
+        let rootPath = root.standardizedFileURL.path
+        var probe = root.standardizedFileURL
+        let target = url.standardizedFileURL.path
+        let relative = String(target.dropFirst(rootPath.count + 1))
+        for component in relative.split(separator: "/") {
+            probe = probe.appendingPathComponent(String(component), isDirectory: true)
+            var status = stat()
+            guard lstat(probe.path, &status) == 0 else { return } // absent: fine
+            guard status.st_mode & S_IFMT == S_IFDIR else {
+                throw StageError.unsafePath
+            }
+        }
+    }
+
     static func isSafeStagePath(_ url: URL, inside root: URL) -> Bool {
         let standardized = url.standardizedFileURL.path
         let rootPath = root.standardizedFileURL.path
