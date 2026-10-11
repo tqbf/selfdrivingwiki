@@ -64,6 +64,15 @@ struct SourceDetailView: View {
     /// across same-type tab switches (SwiftUI keeps the view alive).
     @State private var isHeaderExpanded = false
     @State private var headVersion: SourceMarkdownVersion?
+    /// The explicit on-device speech action's confirmation gate (issue:
+    /// audio-speech-transcription). Import, simple viewing, and the caption
+    /// Transcribe action NEVER set this; only the user clicking the
+    /// dedicated "Transcribe (on-device)" button does, and the actual
+    /// enqueue runs only after the confirmation dialog's OK.
+    @State private var isOnDeviceSpeechConfirmationPresented = false
+    /// Set only by the confirmed on-device action; the model-asset
+    /// installation request flows from it and from nowhere else.
+    @State private var isOnDeviceSpeechSetupRequested = false
     @State private var origin: SourceOrigin?
     /// Provenance edit history for the inspector's History tab. Loaded via
     /// `.task(id:)` keyed on `file.id`.
@@ -1836,6 +1845,65 @@ struct SourceDetailView: View {
         }
     }
 
+    /// Eligibility for the EXPLICIT on-device speech action: YouTube sources
+    /// only (the operator's v1 scope). Import, viewing, caption actions, and
+    /// caption failures never reach this — it is this view's dedicated
+    /// button, behind confirmation, alone.
+    private var isEligibleForOnDeviceSpeech: Bool {
+        isYouTubeEmbed
+    }
+
+    /// The confirmed on-device speech action: enqueues exactly ONE
+    /// `.extraction` item carrying the `.onDeviceSpeech` intent, then waits
+    /// on the SPEECH-specific completion bound (a legitimate job can run far
+    /// longer than a caption fetch). The caption path above keeps its
+    /// existing behavior unchanged. A failed resolution (missing fetcher
+    /// route, missing speech assets, out-of-scope source) lands on the
+    /// queue item's `error` field — no caption fallback exists.
+    private func runOnDeviceTranscription() async {
+        do {
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
+                payload: QueueItemPayload(
+                    sourceIDs: [file.id],
+                    transcriptionIntent: .onDeviceSpeech))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = try await queueEngine.waitForCompletion(
+                of: itemID,
+                deadline: QueueEngineWaitPolicy.speechCompletionWaitDeadline)
+            switch result {
+            case .success:
+                if let head = store.processedMarkdownHead(for: file) {
+                    headVersion = head
+                }
+            case .failure:
+                break  // Tracker records the error from queue events
+            }
+        } catch {
+            DebugLog.extraction("SourceDetailView: on-device speech enqueue failed (\(file.id.rawValue)): \(error)")
+        }
+    }
+
+#if DEBUG
+    /// Test-infrastructure seam: the on-device speech button's exact
+    /// confirmation-gated action body. Hosted scenarios exercise this seam
+    /// because SwiftUI's confirmation dialog exposes no AppKit control to
+    /// click through. Calling this models the user having CONFIRMED the
+    /// dialog — the enqueue happens here and nowhere else.
+    func onDeviceTranscribeActionForTesting() {
+        Task { await runOnDeviceTranscription() }
+    }
+
+    /// Test-infrastructure seam: the CONFIRMATION GATE itself. Before
+    /// confirmation, the enqueue seam is untouched and the setup request is
+    /// unset; the model-asset installation is reachable only through the
+    /// confirmed flow (`onDeviceTranscribeActionForTesting`) or the explicit
+    /// setup request below.
+    func assertOnDeviceSpeechRequiresConfirmation() -> Bool {
+        isOnDeviceSpeechSetupRequested == false
+    }
+#endif
+
 #if DEBUG
     /// Test-infrastructure seam: the Transcribe button's exact action body
     /// (the `Task { await runTranscription() }` the button invokes). Hosted
@@ -1908,6 +1976,19 @@ struct SourceDetailView: View {
                     .disabled(isTranscribing
                               || isThisFileExtracting
                               || tracker.isSlotBusyForOtherSource(file.id))
+                    // The explicit on-device speech action sits NEXT TO the
+                    // transcript re-run: same menu, clearly-different
+                    // consequences (audio download + local analysis), and
+                    // still enqueues ONLY after the confirmation dialog.
+                    if isEligibleForOnDeviceSpeech {
+                        Button("Transcribe (on-device)…", systemImage: "waveform.badge.mic") {
+                            isOnDeviceSpeechConfirmationPresented = true
+                        }
+                        .disabled(isTranscribing
+                                  || isThisFileExtracting
+                                  || tracker.isSlotBusyForOtherSource(file.id))
+                        .help("Download this video's audio and transcribe it on this Mac")
+                    }
                 } else if SourceRendererPresentationPlanner.isDOCXSource(file) {
                     // DOCX: a single package-only re-extraction path — there
                     // is no backend enum to iterate.
@@ -1938,6 +2019,24 @@ struct SourceDetailView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Switch the active extraction, compare alternatives, or re-extract")
+        .confirmationDialog(
+            "Transcribe on this Mac?",
+            isPresented: $isOnDeviceSpeechConfirmationPresented,
+            titleVisibility: .visible) {
+            Button("Download Audio and Transcribe") {
+                // The ONLY path that enqueues an `.onDeviceSpeech` item from
+                // this view.
+                Task { await runOnDeviceTranscription() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("""
+            This downloads the video's audio (up to 120 MB) and runs \
+            speech analysis on this Mac, which can take several minutes. \
+            If the speech model for this language is not installed yet, \
+            you will be asked to set it up first.
+            """)
+        }
     }
 
     /// Stable, human-facing name for the active markdown alternative. A user

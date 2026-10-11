@@ -477,8 +477,8 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
 
     func resolveExtraction(
         wikiID: WikiID, sourceID: SourceID,
-        backendOverride: ExtractionBackend?
-    ) async throws -> ExtractionResolution? {
+        backendOverride: ExtractionBackend?,
+        transcriptionIntent: QueueItemPayload.TranscriptionIntent?    ) async throws -> ExtractionResolution? {
         lock.withLock { state in
             state.callLog.append("resolve(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue), backend:\(backendOverride?.rawValue ?? "default"))")
             state.lastBackendOverride = backendOverride
@@ -533,6 +533,10 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
         resolution: FetcherResolution, outcome: FetchOutcome
     ) async throws -> QueueExtractionOutputReference? { nil }
 
+    @discardableResult
+    func persistSpeechExtraction(
+        wikiID: WikiID, sourceID: SourceID, outcome: SpeechOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
     func enqueueFollowOnExtraction(
         wikiID: WikiID, sourceID: SourceID,
         acquiredContentVersionID: SourceVersionID, dedupeKey: QueueItemDedupeKey

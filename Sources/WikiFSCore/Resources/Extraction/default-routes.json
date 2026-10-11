@@ -91,6 +91,18 @@
           "registrationID": "attachment"
         }
       }
+    },
+    {
+      "route": {
+        "mimeType": "audio/x-wiki-audio-acquire"
+      },
+      "fetcher": {
+        "kind": "installed",
+        "installed": {
+          "packageID": "org.selfdrivingwiki.audio-acquire",
+          "registrationID": "audio"
+        }
+      }
     }
   ],
   "routeAutoExtraction": [

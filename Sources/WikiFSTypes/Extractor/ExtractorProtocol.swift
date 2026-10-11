@@ -591,12 +591,18 @@ public enum ExtractorOperationConfiguration: Hashable, Sendable {
     /// it only for its caption-fallback retrieval; a missing grant never
     /// fails the primary caption route.
     case reviewedYouTubeBunRuntime(executablePath: String)
+    /// The reviewed audio-acquire package's auxiliary JavaScript runtime:
+    /// the same host-resolved Bun, under a DISTINCT wire kind. A grant is
+    /// per reviewed revision — the audio package's exact digest receives
+    /// its own case and never the caption package's.
+    case audioAcquireBunRuntime(executablePath: String)
 
     public static let maximumEndpointByteCount = 2_048
     public static let maximumTimeoutMilliseconds = ExtractorHostLimits.maximumDurationMilliseconds
     public static let maximumExecutablePathByteCount = 4_096
     static let appleKindValue = "apple-podcast-transcript"
     static let youTubeBunKindValue = "reviewed-youtube-bun-runtime"
+    static let audioAcquireBunKindValue = "reviewed-audio-acquire-bun-runtime"
 
     /// The legacy-compatible Docling construction. Validation matches the
     /// original struct: bounded http/https endpoint, in-policy timeout.
@@ -645,6 +651,24 @@ public enum ExtractorOperationConfiguration: Hashable, Sendable {
         }
         self = .reviewedYouTubeBunRuntime(executablePath: path)
     }
+
+    /// The reviewed audio-acquire Bun construction. Same validation shape
+    /// as the caption sibling under its own wire kind.
+    public init(reviewedAudioAcquireBunRuntimeExecutablePath path: String) throws {
+        guard path.isEmpty == false,
+              path.utf8.count <= Self.maximumExecutablePathByteCount,
+              path.hasPrefix("/"),
+              path.contains("\0") == false,
+              path.allSatisfy({ character in
+                  character.unicodeScalars.allSatisfy { scalar in
+                      scalar.value >= 0x20 && scalar.value != 0x7F
+                  }
+              }) else {
+            throw ExtractorValidationError.invalidManifest(
+                "reviewed-audio-acquire-bun-runtime executable path")
+        }
+        self = .audioAcquireBunRuntime(executablePath: path)
+    }
 }
 
 extension ExtractorOperationConfiguration: Codable {
@@ -667,6 +691,9 @@ extension ExtractorOperationConfiguration: Codable {
             try container.encode(helperPath, forKey: .helperPath)
         case .reviewedYouTubeBunRuntime(let executablePath):
             try container.encode(Self.youTubeBunKindValue, forKey: .kind)
+            try container.encode(executablePath, forKey: .executablePath)
+        case .audioAcquireBunRuntime(let executablePath):
+            try container.encode(Self.audioAcquireBunKindValue, forKey: .kind)
             try container.encode(executablePath, forKey: .executablePath)
         }
     }
@@ -731,6 +758,22 @@ extension ExtractorOperationConfiguration: Codable {
                     "reviewed-youtube-bun-runtime executable path")
             }
             try self = .init(reviewedYouTubeBunRuntimeExecutablePath: pathRaw)
+        case Self.audioAcquireBunKindValue:
+            // Tagged audio-acquire-Bun shape: exactly one absolute
+            // executable path; every other field must be absent. The kind
+            // is distinct from the caption package's — a grant never
+            // crosses reviewed lineages.
+            guard raw[CodingKeys.endpoint.rawValue] == nil,
+                  raw[CodingKeys.timeoutMilliseconds.rawValue] == nil,
+                  raw[CodingKeys.helperPath.rawValue] == nil else {
+                throw ExtractorValidationError.invalidManifest(
+                    "reviewed-audio-acquire-bun-runtime configuration accepts an executable path only")
+            }
+            guard let pathRaw = raw[CodingKeys.executablePath.rawValue]?.stringValue else {
+                throw ExtractorValidationError.invalidManifest(
+                    "reviewed-audio-acquire-bun-runtime executable path")
+            }
+            try self = .init(reviewedAudioAcquireBunRuntimeExecutablePath: pathRaw)
         case .some:
             throw ExtractorValidationError.invalidManifest(
                 "unknown operation configuration kind")

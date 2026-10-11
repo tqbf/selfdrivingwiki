@@ -230,7 +230,8 @@ struct YouTubeQueueExtractionProviderTests {
 
         // Resolution runs the package arm with the stored watch URL.
         let resolution = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil)
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
+            transcriptionIntent: nil)
         guard case .transcript(let transcript)? = resolution else {
             Issue.record("expected a transcript resolution")
             return
@@ -293,7 +294,8 @@ struct YouTubeQueueExtractionProviderTests {
             sessionBox: box)
 
         guard case .transcript(let transcript)? = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
+            transcriptionIntent: nil) else {
             Issue.record("expected a transcript resolution")
             return
         }
@@ -331,7 +333,8 @@ struct YouTubeQueueExtractionProviderTests {
             storeResolver: { _ in store })
 
         let resolution = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil)
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
+            transcriptionIntent: nil)
         guard case .transcript(let transcript)? = resolution,
               case .installedPackage = transcript.resultMode else {
             Issue.record("expected an installedPackage transcript resolution")
@@ -367,7 +370,8 @@ struct YouTubeQueueExtractionProviderTests {
             storeResolver: { _ in store })
 
         guard case .transcript(let transcript)? = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
+            transcriptionIntent: nil) else {
             Issue.record("expected a transcript resolution")
             return
         }
@@ -406,7 +410,8 @@ struct YouTubeQueueExtractionProviderTests {
             sessionBox: box)
 
         guard case .transcript(let transcript)? = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
+            transcriptionIntent: nil) else {
             Issue.record("expected a transcript resolution")
             return
         }
@@ -428,7 +433,8 @@ struct YouTubeQueueExtractionProviderTests {
             sessionBox: box)
 
         guard case .transcript(let transcript)? = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil) else {
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
+            transcriptionIntent: nil) else {
             Issue.record("expected a transcript resolution for the legacy row")
             return
         }
@@ -458,7 +464,7 @@ struct YouTubeQueueExtractionProviderTests {
                 sessionBox: box)
 
             let resolution = try await provider.resolveExtraction(
-                wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil)
+                wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil, transcriptionIntent: nil)
             #expect(resolution == nil, "plan=\(shape.0 ?? "nil") identity=\(shape.1 ?? "nil")")
             #expect(executor.lastRequest == nil)
         }

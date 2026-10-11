@@ -167,6 +167,16 @@ public struct FetcherRouteID: Codable, Hashable, Sendable, Comparable, CustomStr
     public static let canonicalZotero = FetcherRouteID.validatedCanonical(
         mimeTypeString: "application/zotero")
 
+    /// The canonical audio-acquisition route for explicit on-device speech
+    /// transcription. The synthetic `audio/x-wiki-audio-acquire` source MIME
+    /// is deliberately NOT the source's real `video/youtube` MIME: the
+    /// caption extractor owns that claim, and a speech job selects this
+    /// fetcher route directly from its persisted transcription intent —
+    /// never through MIME classification, auto extraction, or import
+    /// transcription policy.
+    public static let canonicalAudioAcquire = FetcherRouteID.validatedCanonical(
+        mimeTypeString: MimeType.audioXWikiAudioAcquire)
+
     private static func validatedCanonical(mimeTypeString: String) -> FetcherRouteID {
         guard let route = FetcherRouteID(normalizing: mimeTypeString) else {
             preconditionFailure("canonical fetcher route literal must be a valid MIME type: \(mimeTypeString)")

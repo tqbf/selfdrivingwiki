@@ -15,6 +15,34 @@ import Testing
 @Suite
 struct QueueStoreTests {
 
+    @Test func speechIntentRoundTrip() throws {
+        // A nil intent decodes to nil (the captions default for legacy
+        // payloads), and an explicit `.onDeviceSpeech` survives the
+        // persistence round trip unchanged.
+        let url = tempDatabaseURL()
+        let writer = try QueueStore(databaseURL: url)
+        let silent = try writer.enqueue(QueueItemRequest(
+            queue: .extraction,
+            wikiID: WikiID(rawValue: "01JSPEECHWIKI000000000000"),
+            payload: QueueItemPayload(sourceIDs: [
+                SourceID(rawValue: "01JSPEECHSOURCE00000000000"),
+            ])))
+        let explicit = try writer.enqueue(QueueItemRequest(
+            queue: .extraction,
+            wikiID: WikiID(rawValue: "01JSPEECHWIKI000000000000"),
+            payload: QueueItemPayload(
+                sourceIDs: [
+                    SourceID(rawValue: "01JSPEECHSOURCE00000000000"),
+                ],
+                transcriptionIntent: .onDeviceSpeech)))
+        defer { writer.close() }
+
+        let silentReloaded = try #require(try writer.getItem(silent.id))
+        #expect(silentReloaded.payload.transcriptionIntent == nil)
+        let explicitReloaded = try #require(try writer.getItem(explicit.id))
+        #expect(explicitReloaded.payload.transcriptionIntent == .onDeviceSpeech)
+    }
+
     @Test func readOnlyOpenReadsStablyWithoutMigrating() throws {
         let url = tempDatabaseURL()
         let writer = try QueueStore(databaseURL: url)

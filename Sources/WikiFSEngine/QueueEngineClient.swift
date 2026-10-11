@@ -72,6 +72,14 @@ public protocol QueueEngineClient: AnyObject, Sendable {
     /// Await the completion of a specific item.
     func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Error>
 
+    /// Await completion under an explicit wait bound. The explicit
+    /// on-device speech action uses the speech-specific deadline; caption
+    /// callers keep the default bound.
+    func waitForCompletion(
+        of id: QueueItem.ID,
+        deadline: Duration
+    ) async throws -> Result<Void, Error>
+
     /// Load persisted typed transcript items for a queue item.
     func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem]
 

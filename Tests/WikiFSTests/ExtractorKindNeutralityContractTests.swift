@@ -353,4 +353,85 @@ struct ExtractorKindNeutralityContractTests {
             queueProviderFiles == 2,
             "the app and daemon queue extraction providers must both exist and be scanned")
     }
+
+    /// The on-device speech acquisition runs as a FETCHER route, never as
+    /// an extractor kind. The kind-based scaffold this plan corrected
+    /// (`ExtractorKind.audioTranscript`, a kind-named prepare seam, or a
+    /// kind-to-backend mapping arm) must stay gone, the reviewed package ID
+    /// literal may appear only where reviewed identities are declared, and
+    /// the synthetic route must never reappear in the automatic policy
+    /// tables.
+    @Test func audioAcquireIsFetcherRoleData() throws {
+        let root = try Self.locateRepositoryRoot()
+        let files = try Self.sourceFiles(under: root)
+        #expect(files.isEmpty == false, "no host sources found to scan")
+
+        // The retired kind is gone everywhere, comments included: a
+        // reintroduction in any form is the regression this contract pins.
+        let retiredKind = try NSRegularExpression(
+            pattern: #"audioTranscript|\baudio-transcript\b"#)
+        // No package-ID policy literal outside the reviewed-identity table.
+        let packageIDLiteral = try NSRegularExpression(
+            pattern: #"org\.selfdrivingwiki\.audio-acquire"#)
+        let allowedPackageIDFiles: Set<String> = ["ReviewedExtractorPackages.swift"]
+        // The synthetic MIME may appear only in these host seams: the MIME
+        // constant, the canonical route literal, the bundled policy data,
+        // and the speech arm's adapter (an operation-shape seam, not
+        // policy).
+        let syntheticMIME = try NSRegularExpression(
+            pattern: #"audio/x-wiki-audio-acquire"#)
+        let allowedMIMEFiles: Set<String> = [
+            "MimeType.swift",
+            "ExtractorRoute.swift",
+            "AudioAcquireAdapter.swift",
+        ]
+
+        for file in files {
+            let contents = try String(contentsOf: file, encoding: .utf8)
+            let stripped = contents.replacingOccurrences(
+                of: #"//.*"#,
+                with: "",
+                options: .regularExpression)
+            let strippedRange = NSRange(stripped.startIndex..., in: stripped)
+            let rawRange = NSRange(contents.startIndex..., in: contents)
+
+            // Comments included for the retired kind: a commented-out
+            // scaffold reference would still document a dead shape.
+            let kindMatches = retiredKind.matches(in: contents, range: rawRange)
+            #expect(
+                kindMatches.isEmpty,
+                "\(file.lastPathComponent) references the retired audioTranscript extractor kind; speech acquisition is a fetcher route")
+
+            let idMatches = packageIDLiteral.matches(in: contents, range: strippedRange)
+            if allowedPackageIDFiles.contains(file.lastPathComponent) == false {
+                #expect(
+                    idMatches.isEmpty,
+                    "\(file.lastPathComponent) hard-codes the reviewed audio-acquire package ID; eligibility must come from route data")
+            }
+
+            let mimeMatches = syntheticMIME.matches(in: contents, range: strippedRange)
+            if allowedMIMEFiles.contains(file.lastPathComponent) == false {
+                #expect(
+                    mimeMatches.isEmpty,
+                    "\(file.lastPathComponent) hard-codes the synthetic audio route MIME; the route identity lives in ExtractorRoute")
+            }
+        }
+
+        // The bundled policy data carries the route as a FETCHER selection
+        // only. The automatic tables are decoded in RouteAutoExtraction
+        // DefaultsTests; here the JSON file itself must not carry the
+        // synthetic MIME outside `routeFetchers`.
+        let policyURL = root.appendingPathComponent(
+            "Sources/WikiFSCore/Resources/Extraction/default-routes.json")
+        let policy = try String(contentsOf: policyURL, encoding: .utf8)
+        let automaticSection = policy
+            .split(separator: "\"routeAutoExtraction\"", omittingEmptySubsequences: false)
+            .dropFirst()
+            .joined()
+        #expect(
+            automaticSection.contains(Self.syntheticMIMEPattern) == false,
+            "the bundled policy's automatic tables must never name the synthetic audio route")
+    }
+
+    private static let syntheticMIMEPattern = "audio/x-wiki-audio-acquire"
 }

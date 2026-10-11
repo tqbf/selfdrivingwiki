@@ -70,9 +70,12 @@ struct AddURLAndTranscribeHostedTests {
 
         func hasActiveWork(for wikiID: WikiID) async throws -> Bool { false }
 
-        func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Error> {
-            .success(())
-        }
+        func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Error> { .success(()) }
+
+        func waitForCompletion(
+            of id: QueueItem.ID,
+            deadline: Duration
+        ) async throws -> Result<Void, Error> { .success(()) }
 
         func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] { [] }
 
@@ -279,8 +282,8 @@ struct AddURLAndTranscribeHostedTests {
         func resolveExtraction(
             wikiID: WikiID,
             sourceID: SourceID,
-            backendOverride: ExtractionBackend?
-        ) async throws -> ExtractionResolution? { nil }
+            backendOverride: ExtractionBackend?,
+        transcriptionIntent: QueueItemPayload.TranscriptionIntent?        ) async throws -> ExtractionResolution? { nil }
 
         func persistBytesExtraction(
             wikiID: WikiID,
@@ -303,6 +306,10 @@ struct AddURLAndTranscribeHostedTests {
             outcome: FetchOutcome
         ) async throws -> QueueExtractionOutputReference? { nil }
 
+    @discardableResult
+    func persistSpeechExtraction(
+        wikiID: WikiID, sourceID: SourceID, outcome: SpeechOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
         func enqueueFollowOnExtraction(
             wikiID: WikiID,
             sourceID: SourceID,

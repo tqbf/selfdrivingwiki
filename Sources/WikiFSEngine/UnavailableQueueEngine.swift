@@ -100,6 +100,13 @@ public final class UnavailableQueueEngine: QueueEngineClient, @unchecked Sendabl
     }
 
     public func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Swift.Error> {
+        try await waitForCompletion(of: id, deadline: QueueEngineWaitPolicy.completionWaitDeadline)
+    }
+
+    public func waitForCompletion(
+        of id: QueueItem.ID,
+        deadline: Duration
+    ) async throws -> Result<Void, Swift.Error> {
         throw Error.unavailable(reason: reason)
     }
 

@@ -7346,6 +7346,24 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             toolVersion: toolVersion, sourceVersionID: sourceVersionID, note: note)
     }
 
+    /// Append one HOST-produced on-device speech transcript. The speech floor
+    /// runs in the host process, so the producer is the typed host-speech
+    /// identity (engine, locale, exact acquisition fetcher) — never
+    /// `.installedPackage`, never an agent-cleanup claim. The transcript
+    /// REQUIRES the source's immutable initial version (the same lineage
+    /// rule as a package transcript) and lands as ONE `.transcript` version
+    /// in one store transaction with its derived output reference.
+    public func appendHostSpeechTranscript(
+        sourceID: SourceID, content: String,
+        producer: ExtractionHostSpeechProducer,
+        sourceVersionID: SourceVersionID
+    ) throws -> SourceMarkdownVersion {
+        try appendDerivedMarkdown(
+            sourceID: sourceID, content: content, origin: .transcript,
+            producer: .hostSpeech(producer), providerID: nil, modelID: nil,
+            toolVersion: nil, sourceVersionID: sourceVersionID, note: nil)
+    }
+
     /// `db:`-taking HEAD read for use inside `mutate` (cannot call the public
     /// `processedMarkdownHead` — it re-enters `dbWriter.read` and deadlocks).
 
@@ -7432,7 +7450,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         case .backend:
             modelID = modelVersion.map(ModelID.init(rawValue:))
             toolVersion = nil
-        case .tool, .legacy, .installedPackage:
+        case .tool, .legacy, .installedPackage, .hostSpeech:
             modelID = nil
             toolVersion = modelVersion
         }
@@ -12203,6 +12221,10 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             name = "extractor-package:\(package.packageID)"
             version = package.version
             externalRef = package.digest
+        case .hostSpeech(let speech):
+            name = "\(ExtractionHostSpeechProducer.technique):\(speech.engine)"
+            version = speech.localeID
+            externalRef = speech.acquisitionFetcher.digest
         }
         if let id = try String.fetchOne(
             db,
@@ -12258,6 +12280,17 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             }
             // The package may report model metadata. It is not a provider model
             // and therefore does not use `modelID`.
+        case .hostSpeech(let speech):
+            if providerID != nil || modelID != nil || toolVersion != nil {
+                throw AppendDerivedMarkdownError.providerFieldsUnsupportedForLocalTool
+            }
+            guard speech.engine.isEmpty == false,
+                  speech.localeID.isEmpty == false,
+                  speech.acquisitionFetcher.packageID.isEmpty == false,
+                  speech.acquisitionFetcher.digest.isEmpty == false,
+                  speech.acquisitionFetcher.protocolRevision.rawValue > 0 else {
+                throw AppendDerivedMarkdownError.invalidHostSpeechProducer
+            }
         }
     }
 
@@ -12268,6 +12301,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         case .tool(let tool): return tool.rawValue
         case .legacy(let rawTechnique): return rawTechnique
         case .installedPackage(let package): return "extractor-package:\(package.packageID)"
+        case .hostSpeech: return ExtractionHostSpeechProducer.technique
         }
     }
 

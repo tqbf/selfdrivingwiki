@@ -43,6 +43,10 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
             ExtractionBackend(rawValue: $0)
         }
 
+        // The normalized intent flows from the payload exactly like the
+        // worker's later resolution — a speech item resolves the speech arm.
+        let intent = item.payload.transcriptionIntent
+
         // Ask the provider to resolve — if it returns nil (no bytes, no
         // route), the item stays queued and is never dispatched.
         let resolved: ExtractionResolution?
@@ -50,7 +54,8 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
             resolved = try await provider.resolveExtraction(
                 wikiID: item.wikiID,
                 sourceID: sourceID,
-                backendOverride: override
+                backendOverride: override,
+                transcriptionIntent: intent
             )
         } catch let error as ExtractionServicesError {
             // An unavailable explicit extractor selection is an actionable
@@ -59,6 +64,12 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
             // worker surfaces the typed error through the normal failed path.
             DebugLog.store("QueueExtractionWorker.resolveExtraction blocked: \(error)")
             return ProviderID(rawValue: "blocked-extraction")
+        } catch let error as SpeechResolutionError {
+            // A missing/disabled/unavailable speech route fails VISIBLY: the
+            // item dispatches into the speech bucket and the worker surfaces
+            // the typed message on the item. No caption fallback exists.
+            DebugLog.store("QueueExtractionWorker speech resolution blocked: \(error)")
+            return ProviderID(rawValue: SpeechExtractionResolution.defaultCapacityID)
         } catch {
             // Any other resolve failure is a real per-item fault: bad legacy
             // identity data, admission failure, or a lost store. Route the
@@ -77,6 +88,9 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         case .fetch(let fetch):
             // Fetch acquisition shares the transcript (non-PDF) bucket.
             return ProviderID(rawValue: fetch.capacityID)
+        case .speech(let speech):
+            // One speech job at a time: its own single-job bucket.
+            return ProviderID(rawValue: speech.capacityID)
         case .bytes(let bytes):
             // Map the backend to a provider ID that the engine's capacity
             // config can route: local → "local-pdf2md", remote → backend-specific.
@@ -176,11 +190,15 @@ struct QueueExtractionWorker: QueueWorker {
                 target: .source(sourceID),
                 state: .processing)]))
 
-        // Resolve the extraction (main-actor hop in the app impl).
+        // Resolve the extraction (main-actor hop in the app impl). The
+        // payload's normalized intent rides along: an explicit speech item
+        // resolves the speech arm, everything else keeps the caption/fetch
+        // behavior.
         guard let resolved = try await provider.resolveExtraction(
             wikiID: item.wikiID,
             sourceID: sourceID,
-            backendOverride: backendOverride
+            backendOverride: backendOverride,
+            transcriptionIntent: item.payload.transcriptionIntent
         ) else {
             // No bytes and no transcript route — skip extraction (the worker
             // returns normally → item .completed). Recorded as skipped with
@@ -265,6 +283,60 @@ struct QueueExtractionWorker: QueueWorker {
                 phase: .finished,
                 availability: .available,
                 resultSummary: "Transcript persisted",
+                targetUpserts: [QueueReportTargetRecord(
+                    target: .source(sourceID),
+                    state: .succeeded,
+                    result: outputReference.map { QueueTargetResult.outputReference($0) })]))
+
+        case .speech(let speech):
+            // EXPLICIT speech job: acquire transiently, stage privately,
+            // analyze, persist ONE transcript. No blob, no follow-on item,
+            // and the staged file is removed on every exit path.
+            emitProgress(item.id, stamp("Acquiring audio…"))
+            emitReport?(QueueReportMutation(phase: .running))
+            let acquired = try await speech.acquire { [itemID = item.id] line in
+                emitProgress(itemID, stamp(line))
+            }
+
+            // Stage the fetched bytes (preflights disk and bounds size).
+            let stage = SpeechStageManager(root: speech.stageRoot)
+            let staged: SpeechStageManager.StagedAudio
+            do {
+                staged = try stage.stage(
+                    bytes: acquired.bytes,
+                    wikiID: item.wikiID,
+                    itemID: item.id,
+                    attempt: item.attempt)
+            } catch let error as SpeechStageManager.StageError {
+                throw QueueExtractionError.notReady(error.localizedDescription)
+            }
+            staged.lease.release()
+            // The staged file is removed on success, error, and cancellation.
+            defer { staged.discard() }
+
+            emitProgress(item.id, stamp("Transcribing on device…"))
+            let deadline = ContinuousClock.now + SpeechExtractionPolicy.analysisDeadline
+            let transcription = try await speech.speechEngine.transcribeFile(
+                at: staged.audioURL,
+                localeID: speech.localeID,
+                deadline: deadline,
+                onProgress: { [itemID = item.id] fraction in
+                    emitProgress(itemID, stamp("Transcribing… \(Int((fraction * 100).rounded()))%"))
+                })
+
+            emitReport?(QueueReportMutation(phase: .persisting))
+            let outputReference = try await provider.persistSpeechExtraction(
+                wikiID: item.wikiID,
+                sourceID: sourceID,
+                outcome: SpeechOutcome(
+                    transcription: transcription,
+                    acquisitionFetcher: acquired.provenance,
+                    durationSeconds: transcription.durationSeconds))
+
+            emitReport?(QueueReportMutation(
+                phase: .finished,
+                availability: .available,
+                resultSummary: "Speech transcript persisted",
                 targetUpserts: [QueueReportTargetRecord(
                     target: .source(sourceID),
                     state: .succeeded,

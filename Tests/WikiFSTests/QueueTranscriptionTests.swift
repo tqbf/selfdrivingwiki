@@ -364,10 +364,11 @@ private final class FakeTranscriptionProvider: QueueExtractionProvider, @uncheck
     }
 
     func resolveExtraction(
-        wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?
+        wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?,
+        transcriptionIntent: QueueItemPayload.TranscriptionIntent?
     ) async throws -> ExtractionResolution? {
         lock.withLock { state in
-            state.callLog.append("resolve(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue))")
+            state.callLog.append("resolve(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue), intent:\(transcriptionIntent.map(\.rawValue) ?? "nil"))")
             state.lastTechnique = "youtube-captions"
         }
 
@@ -409,6 +410,10 @@ private final class FakeTranscriptionProvider: QueueExtractionProvider, @uncheck
     func persistFetch(
         wikiID: WikiID, sourceID: SourceID,
         resolution: FetcherResolution, outcome: FetchOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
+
+    func persistSpeechExtraction(
+        wikiID: WikiID, sourceID: SourceID, outcome: SpeechOutcome
     ) async throws -> QueueExtractionOutputReference? { nil }
 
     func enqueueFollowOnExtraction(

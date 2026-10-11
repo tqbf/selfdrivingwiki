@@ -211,7 +211,8 @@ struct AppleQueueExtractionProviderTests {
 
         // Resolution runs the package arm with the validated episode URL.
         let resolution = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil)
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
+            transcriptionIntent: nil)
         guard case .transcript(let transcript)? = resolution else {
             Issue.record("expected a transcript resolution")
             return
@@ -267,7 +268,8 @@ struct AppleQueueExtractionProviderTests {
             storeResolver: { _ in store })
 
         let resolution = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil)
+            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
+            transcriptionIntent: nil)
         guard case .transcript(let transcript)? = resolution,
               case .installedPackage = transcript.resultMode else {
             Issue.record("expected an installedPackage transcript resolution")
@@ -309,7 +311,8 @@ struct AppleQueueExtractionProviderTests {
             sessionBox: box)
 
         let resolution = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: summary.id, backendOverride: nil)
+            wikiID: WikiID(rawValue: "w"), sourceID: summary.id, backendOverride: nil,
+            transcriptionIntent: nil)
         #expect(resolution == nil)
     }
 }

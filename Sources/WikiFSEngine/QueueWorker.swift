@@ -308,8 +308,12 @@ public struct QueueEngineConfig: Sendable {
     public var localExtractionLimit: Int
 
     /// Maximum concurrent extractions using a remote backend (Claude,
-    /// Docling Serve). Default 2.
+    /// Gemini, Docling Serve). Default 2.
     public var remoteExtractionLimit: Int
+
+    /// Maximum concurrent on-device speech jobs. Default 1: the analysis
+    /// holds the machine and the decode memory budget is per job.
+    public var speechExtractionLimit: Int
 
     /// How many terminal items to load for the snapshot's `recentItems`.
     public var recentLimit: Int
@@ -318,11 +322,13 @@ public struct QueueEngineConfig: Sendable {
         ingestionLimits: [String: Int] = [:],
         localExtractionLimit: Int = 1,
         remoteExtractionLimit: Int = 2,
+        speechExtractionLimit: Int = 1,
         recentLimit: Int = 200
     ) {
         self.ingestionLimits = ingestionLimits
         self.localExtractionLimit = localExtractionLimit
         self.remoteExtractionLimit = remoteExtractionLimit
+        self.speechExtractionLimit = max(1, speechExtractionLimit)
         self.recentLimit = recentLimit
     }
 
@@ -333,12 +339,16 @@ public struct QueueEngineConfig: Sendable {
 
     /// The extraction limit for a given provider/extraction-backend ID.
     /// Local backends (containing "local" or "pdf2md") get `localExtractionLimit`;
-    /// everything else gets `remoteExtractionLimit`.
+    /// the single-job speech bucket gets 1 (an on-device analysis holds the
+    /// machine); everything else gets `remoteExtractionLimit`.
     public func extractionLimit(for providerID: ProviderID) -> Int {
         // String-op boundary: substring test needs the raw String.
         let lowered = providerID.rawValue.lowercased()
         if lowered.contains("local") || lowered.contains("pdf2md") {
             return localExtractionLimit
+        }
+        if lowered == SpeechExtractionResolution.defaultCapacityID {
+            return speechExtractionLimit
         }
         return remoteExtractionLimit
     }

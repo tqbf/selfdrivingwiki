@@ -119,11 +119,14 @@ public enum ExtractionActivityPlanCodec {
         case tool(ExtractionTool)
         case legacy(rawTechnique: String?)
         case installedPackage(ExtractionInstalledPackageProducer)
+        case hostSpeech(ExtractionHostSpeechProducer)
 
         private enum CodingKeys: String, CodingKey {
-            case kind, backend, tool, rawTechnique, installedPackage
+            case kind, backend, tool, rawTechnique, installedPackage, hostSpeech
         }
-        fileprivate enum Kind: String, Codable { case backend, tool, legacy, installedPackage }
+        fileprivate enum Kind: String, Codable {
+            case backend, tool, legacy, installedPackage, hostSpeech
+        }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
@@ -140,6 +143,9 @@ public enum ExtractionActivityPlanCodec {
             case .installedPackage(let package):
                 try container.encode(Kind.installedPackage, forKey: .kind)
                 try container.encode(package, forKey: .installedPackage)
+            case .hostSpeech(let speech):
+                try container.encode(Kind.hostSpeech, forKey: .kind)
+                try container.encode(speech, forKey: .hostSpeech)
             }
         }
 
@@ -149,6 +155,7 @@ public enum ExtractionActivityPlanCodec {
             case .tool(let tool): self = .tool(tool)
             case .legacy(let rawTechnique): self = .legacy(rawTechnique: rawTechnique)
             case .installedPackage(let package): self = .installedPackage(package)
+            case .hostSpeech(let speech): self = .hostSpeech(speech)
             }
         }
 
@@ -158,6 +165,7 @@ public enum ExtractionActivityPlanCodec {
             case .tool(let tool): return .tool(tool)
             case .legacy(let rawTechnique): return .legacy(rawTechnique: rawTechnique)
             case .installedPackage(let package): return .installedPackage(package)
+            case .hostSpeech(let speech): return .hostSpeech(speech)
             }
         }
     }
@@ -171,7 +179,7 @@ public enum ExtractionActivityPlanCodec {
         let producer: Producer?
 
         private enum CodingKeys: String, CodingKey {
-            case kind, backend, tool, rawTechnique, installedPackage
+            case kind, backend, tool, rawTechnique, installedPackage, hostSpeech
         }
 
         init(from decoder: Decoder) throws {
@@ -201,6 +209,9 @@ public enum ExtractionActivityPlanCodec {
                 case .installedPackage:
                     producer = .installedPackage(
                         try container.decode(ExtractionInstalledPackageProducer.self, forKey: .installedPackage))
+                case .hostSpeech:
+                    producer = .hostSpeech(
+                        try container.decode(ExtractionHostSpeechProducer.self, forKey: .hostSpeech))
                 }
             } catch {
                 producer = nil

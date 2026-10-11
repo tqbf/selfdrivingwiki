@@ -288,6 +288,8 @@ enum SourceMetadataProjection {
         case .tool(let tool): return tool.rawValue
         case .legacy(let rawTechnique): return rawTechnique
         case .installedPackage(let package): return package.packageID
+        case .hostSpeech(let speech):
+            return "\(ExtractionHostSpeechProducer.technique):\(speech.engine)"
         }
     }
 }

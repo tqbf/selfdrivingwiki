@@ -51,10 +51,20 @@ Two parts and one explicit trigger:
    already interprets through the raw-byte `executeSourceResult` path;
    a binary result cannot ride the revision-3 Markdown result, which
    the host UTF-8-decodes — with kind `audio-transcript` (a NEW
-   ExtractorKind — see the migration checklist), v1 claims
-   `video/youtube` ONLY; podcast feeds are a follow-up (a feed URL is
-   not an episode enclosure — enclosure resolution and redirect
-   validation are their own work).
+   ExtractorKind — see the migration checklist).
+
+   Registration claims the SYNTHETIC source MIME
+   `audio/x-wiki-audio-acquire`, NOT `video/youtube`: the caption
+   package already claims `video/youtube` with kind
+   `youtube-transcript`, and `registeredMIME` is single-kind — a second
+   kind claiming the same MIME would make the claim ambiguous and break
+   captions auto-import. The synthetic claim follows the Zotero
+   fetcher's `application/zotero` precedent: route selection for speech
+   resolves the route `(audio-transcript, audio/x-wiki-audio-acquire)`
+   directly, selected by the persisted speech INTENT rather than the
+   source's MIME. v1 covers `video/youtube` sources only; podcast
+   feeds are a follow-up (a feed URL is not an episode enclosure —
+   enclosure resolution and redirect validation are their own work).
 
    Contract: with the SAME hardening as the caption fallback (pinned
    yt-dlp + ejs, plugins/cookies/proxies/retries disabled, Bun grant),
@@ -191,3 +201,26 @@ decision).
 Podcast-feed enclosures (v2 — needs enclosure resolution), speaker
 diarization, timestamps in output, non-Mac platforms, and any network
 speech path.
+
+## Implementation status (2026-10-10)
+
+Slices 1–7 are implemented on this branch, with one structural correction
+to the original design: the audio acquisition is a FETCHER, not an
+extractor kind. The kind-based scaffold (`audio-transcript`) was removed;
+the reviewed `org.selfdrivingwiki.audio-acquire` package registers with
+manifest revision 4, protocol revision 5, role `fetcher`, the synthetic
+`audio/x-wiki-audio-acquire` source MIME, and a typed `source-bytes` result
+declaring `audio/mp4`. The speech intent selects the canonical
+`FetcherRouteID` directly — never MIME classification, never an automatic
+policy table. The host consumes the fetched bytes transiently: private
+0700/0600 staging keyed by item and attempt, an `flock` lease held through
+analysis, abandoned-stage sweep at startup, and removal on success, error,
+and cancellation. Provenance is a typed host producer
+(`on-device-speech` technique, engine, locale, and the exact acquisition
+fetcher revision) persisted as ONE `.transcript` version linked to the
+source's initial version. The Bun grant is its own wire kind
+(`reviewed-audio-acquire-bun-runtime`) admitted only for the exact
+reviewed digest. Remaining: the signed-bundle diagnostic harness run on a
+macOS 26 machine with model assets installed (the gated SwiftPM suite and
+`scripts/test-signed-speech.sh` are in place), and the operator-run live
+YouTube check.

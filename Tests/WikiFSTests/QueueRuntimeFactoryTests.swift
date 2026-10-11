@@ -172,8 +172,8 @@ private struct QueueRuntimeExtractionProvider: QueueExtractionProvider {
     func resolveExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
-        backendOverride: ExtractionBackend?
-    ) async throws -> ExtractionResolution? {
+        backendOverride: ExtractionBackend?,
+        transcriptionIntent: QueueItemPayload.TranscriptionIntent?    ) async throws -> ExtractionResolution? {
         nil
     }
 
@@ -195,6 +195,10 @@ private struct QueueRuntimeExtractionProvider: QueueExtractionProvider {
         sourceID: SourceID,
         resolution: FetcherResolution,
         outcome: FetchOutcome
+    ) async throws -> QueueExtractionOutputReference? { nil }
+    @discardableResult
+    func persistSpeechExtraction(
+        wikiID: WikiID, sourceID: SourceID, outcome: SpeechOutcome
     ) async throws -> QueueExtractionOutputReference? { nil }
     func enqueueFollowOnExtraction(
         wikiID: WikiID,

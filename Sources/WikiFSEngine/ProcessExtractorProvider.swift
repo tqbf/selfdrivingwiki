@@ -438,13 +438,14 @@ public struct ProcessExtractorProvider: Sendable {
         } else {
             runtimeResolution = nil
         }
-        // The AUXILIARY runtime for the exact reviewed YouTube revision: a
-        // second login-shell resolution (Bun) plus its version gate against
-        // the pinned minimum. The outcome is retained — success, or a typed
+        // The AUXILIARY runtime for an exact reviewed revision: a second
+        // login-shell resolution (Bun) plus its version gate against the
+        // pinned minimum. The outcome is retained — success, or a typed
         // unavailable reason — and never blocks preparation, readiness, or
-        // the primary caption route. Any revision outside the exact
-        // reviewed identity (including a copy of the package ID or claims
-        // with a different digest) receives no auxiliary grant at all.
+        // a route that does not need the runtime. Any revision outside the
+        // exact reviewed identities (including a copy of a package ID or
+        // claims with a different digest) receives no auxiliary grant at
+        // all.
         let auxiliaryRuntimeResolution: AuxiliaryRuntimeOutcome?
         if Self.wantsAuxiliaryRuntime(revision) {
             auxiliaryRuntimeResolution = await Self.resolveAuxiliaryRuntime(
@@ -491,11 +492,12 @@ public struct ProcessExtractorProvider: Sendable {
     }
 
     /// The exact-revision auxiliary-runtime gate: only the reviewed YouTube
-    /// revision — package ID, version, AND digest — receives the Bun grant.
-    /// A copy of the package ID or claims with a different digest is not
-    /// this package and receives nothing.
+    /// and audio-acquire revisions — package ID, version, AND digest —
+    /// receive the Bun grant. A copy of a package ID or claims with a
+    /// different digest is not that package and receives nothing.
     static func wantsAuxiliaryRuntime(_ revision: ExtractorPackageRevisionID) -> Bool {
         revision == ReviewedExtractorPackages.youtubeTranscript.revision
+            || revision == ReviewedExtractorPackages.audioAcquire.revision
     }
 
     /// Resolves and validates the reviewed YouTube package's auxiliary
@@ -540,15 +542,17 @@ public struct ProcessExtractorProvider: Sendable {
         }
     }
 
-    /// Derives the reviewed YouTube package's operation configuration from
-    /// the retained auxiliary-runtime outcome. A resolved runtime yields
-    /// the typed Bun grant ONLY when the executable on disk still matches
-    /// the identity pinned at preparation; any drift — or an unavailable
-    /// runtime — yields `nil`, and the package's caption fallback then
-    /// reports its own fixed setup failure when it is reached. The primary
-    /// caption route is unaffected either way.
+    /// Derives the reviewed package's operation configuration from the
+    /// retained auxiliary-runtime outcome, keyed by WHICH exact revision is
+    /// being prepared: each reviewed lineage receives its own typed wire
+    /// kind, never a sibling's grant. A resolved runtime yields the typed
+    /// Bun grant ONLY when the executable on disk still matches the
+    /// identity pinned at preparation; any drift — or an unavailable
+    /// runtime — yields `nil`, and the package then reports its own fixed
+    /// setup failure when it is reached.
     static func auxiliaryRuntimeConfiguration(
-        retained: AuxiliaryRuntimeOutcome
+        retained: AuxiliaryRuntimeOutcome,
+        revision: ExtractorPackageRevisionID
     ) -> ExtractorOperationConfiguration? {
         switch retained {
         case .unavailable:
@@ -563,6 +567,11 @@ public struct ProcessExtractorProvider: Sendable {
                 DebugLog.extraction(
                     "Auxiliary runtime identity recheck failed; the fallback grant is withheld.")
                 return nil
+            }
+            if revision == ReviewedExtractorPackages.audioAcquire.revision {
+                // swiftlint:disable:next silent_try_optional
+                return try? ExtractorOperationConfiguration(
+                    reviewedAudioAcquireBunRuntimeExecutablePath: resolution.executableURL.path)
             }
             // swiftlint:disable:next silent_try_optional
             return try? ExtractorOperationConfiguration(
@@ -948,7 +957,7 @@ public final class PreparedProcessOperation: Sendable {
         // fallback reports its own fixed setup failure when it is reached.
         if let auxiliaryRuntimeResolution {
             configuration = ProcessExtractorProvider.auxiliaryRuntimeConfiguration(
-                retained: auxiliaryRuntimeResolution)
+                retained: auxiliaryRuntimeResolution, revision: revision)
         }
 
         // Reviewed-only operation support (Phase 2): the provider admits by

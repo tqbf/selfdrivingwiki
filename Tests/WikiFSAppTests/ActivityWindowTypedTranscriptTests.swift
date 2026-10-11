@@ -253,6 +253,10 @@ private final class StaticQueueEngineClient: QueueEngineClient, @unchecked Senda
     func snapshot() async -> QueueSnapshot { value }
     func hasActiveWork(for wikiID: WikiID) async -> Bool { false }
     func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> { .success(()) }
+    func waitForCompletion(
+        of id: QueueItem.ID,
+        deadline: Duration
+    ) async -> Result<Void, Error> { .success(()) }
     func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] { transcript }
     func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }
 

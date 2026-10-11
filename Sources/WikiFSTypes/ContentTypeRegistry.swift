@@ -344,6 +344,8 @@ public extension ContentKind {
         case .html:  return .html
         case .docx:  return .docx
         case .podcastTranscript, .applePodcastTranscript, .youtubeTranscript:
+            // URL-backed kinds never stage a file, so their registration
+            // claims never appear on a staged file's classification either.
             return .unknown
         }
     }

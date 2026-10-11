@@ -129,13 +129,23 @@ public struct QueueItemPayload: Codable, Sendable {
     /// ACP session ID for crash-resume. Set after session start, cleared on completion.
     public var acpSessionId: AcpSessionID?
 
+    /// The transcription engine a `.extraction` item must run. `nil` (the
+    /// decoded default for payloads persisted before this field) means the
+    /// caption route — the cheap, registration-claimed path that may also
+    /// run automatically at import. `.onDeviceSpeech` selects the
+    /// audio-acquire + on-device speech pipeline, which downloads media and
+    /// burns minutes of compute: it is enqueued ONLY by an explicit user
+    /// action and has no import path.
+    public var transcriptionIntent: TranscriptionIntent?
+
     public init(
         sourceIDs: [SourceID],
         stageRouting: [String: String]? = nil,
         chainedItemID: QueueItemID? = nil,
         lintPageIDs: [PageID]? = nil,
         acpSessionId: AcpSessionID? = nil,
-        recordedNames: [String: String]? = nil
+        recordedNames: [String: String]? = nil,
+        transcriptionIntent: TranscriptionIntent? = nil
     ) {
         self.sourceIDs = sourceIDs
         self.stageRouting = stageRouting
@@ -143,6 +153,18 @@ public struct QueueItemPayload: Codable, Sendable {
         self.lintPageIDs = lintPageIDs
         self.acpSessionId = acpSessionId
         self.recordedNames = recordedNames
+        self.transcriptionIntent = transcriptionIntent
+    }
+
+    /// The transcription engine an extraction item must run. Pure value
+    /// type; the raw values are the persistence contract.
+    public enum TranscriptionIntent: String, Codable, Sendable {
+        /// The caption routes (podcast, Apple Podcasts, YouTube). Default
+        /// for intent-less payloads.
+        case captions
+        /// On-device speech transcription of the source's audio — explicit
+        /// user action only.
+        case onDeviceSpeech = "on-device-speech"
     }
 
     /// The enqueue-time recorded title for `pageID` (lint payloads), or

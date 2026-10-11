@@ -104,4 +104,46 @@ struct RouteAutoExtractionDefaultsTests {
                 kind: .youtubeTranscript,
                 mimeType: try ExtractorMIMEType(validating: "video/youtube"))) == false)
     }
+
+    // MARK: - Speech policy (on-device transcription)
+
+    /// The on-device speech acquisition is NEVER an automatic policy row:
+    /// the synthetic audio fetcher route exists only as a fetcher selection
+    /// (an explicit speech job resolves it directly from the persisted
+    /// intent), and it can never appear in the import-conversion or
+    /// import-transcription tables. Import never enqueues `.onDeviceSpeech`,
+    /// even with the audio fetcher active.
+    @Test("speech never runs automatically from bundled policy")
+    func speechNeverAutomatic() throws {
+        let bundled = ExtractorRouteDefaults.bundled
+
+        // The fetcher selection exists for the explicit speech action.
+        let selection = bundled.fetcherDefault(for: .canonicalAudioAcquire)
+        guard case .installed(let logical)? = selection else {
+            Issue.record("bundled audio-acquire fetcher route has no default selection")
+            return
+        }
+        #expect(logical.packageID.rawValue == "org.selfdrivingwiki.audio-acquire")
+        #expect(logical.registrationID.rawValue == "audio")
+
+        // Automatic policy never mentions it. The automatic tables are
+        // extractor-kind tables, so a fetcher route cannot even be
+        // expressed there — assert the tables stay free of the synthetic
+        // MIME and that no route selects speech behavior.
+        let synthetic = MimeType.audioXWikiAudioAcquire
+        #expect(bundled.routeAutoExtraction.contains { record in
+            record.route.mimeType.rawValue == synthetic
+        } == false)
+        #expect(bundled.routeImportTranscription.contains { record in
+            record.route.mimeType.rawValue == synthetic
+        } == false)
+    }
+
+    @Test("the synthetic audio route is absent from a policy file without it")
+    func syntheticRouteAbsentDecodesEmpty() throws {
+        let json = #"{"routeExtractors": [], "routeFetchers": []}"#
+        let defaults = try JSONDecoder().decode(
+            ExtractorRouteDefaults.self, from: Data(json.utf8))
+        #expect(defaults.fetcherDefault(for: .canonicalAudioAcquire) == nil)
+    }
 }

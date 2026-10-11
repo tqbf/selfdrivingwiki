@@ -1246,9 +1246,12 @@ private final class ScriptedQueueEngineClient: QueueEngineClient, @unchecked Sen
 
     func hasActiveWork(for wikiID: WikiID) async throws -> Bool { false }
 
-    func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Error> {
-        .success(())
-    }
+    func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Error> { .success(()) }
+
+    func waitForCompletion(
+        of id: QueueItem.ID,
+        deadline: Duration
+    ) async throws -> Result<Void, Error> { .success(()) }
 
     func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] { [] }
 

@@ -444,6 +444,72 @@ struct ReviewedExtractorPackageTests {
         }
     }
 
+    /// The reviewed audio-acquire package: manifest revision 4 with the
+    /// FETCHER role (no operation kinds — its claim is the synthetic
+    /// `audio/x-wiki-audio-acquire` source MIME), protocol revision 5 with
+    /// a typed `source-bytes` result declaring `audio/mp4`, and the
+    /// acquisition-only capability set. The package downloads ONE audio
+    /// stream for the speech arm's transient analysis; it never converts
+    /// formats, never runs speech-to-text, and never stores audio as a
+    /// source blob.
+    @Test func audioAcquireRevisionMatchesGolden() throws {
+        let output = try validate("AudioAcquire")
+
+        #expect(output.packageID == "org.selfdrivingwiki.audio-acquire")
+        #expect(output.protocolRevision == 5)
+        #expect(output.registrationIDs == ["audio"])
+
+        let manifest = try manifest("AudioAcquire")
+        #expect(manifest.manifestRevision == .v4)
+        let registration = try #require(manifest.registrations.first)
+        // Fetcher: role declared by the package, no kinds, and the claimed
+        // input MIME set is exactly the synthetic source route.
+        #expect(registration.role == .fetcher)
+        #expect(registration.kinds.isEmpty)
+        #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "audio/x-wiki-audio-acquire")])
+        #expect(registration.filenameExtensions.isEmpty)
+        #expect(registration.credentialRequirements.isEmpty)
+        // Acquisition only: network (REQUIRED for a fetcher) + shared
+        // runtime cache, no model.
+        #expect(manifest.capabilities == [.network, .sharedRuntimeCache])
+        #expect(manifest.capabilities.contains(.modelDownload) == false)
+        // The output bound stays ABOVE the package's 120 MiB download cap,
+        // and the 30-minute duration bound covers a full-length download.
+        #expect(manifest.limits.maximumMarkdownOutputByteCount == 134_217_728)
+        #expect(manifest.limits.maximumMarkdownOutputByteCount > 120 * 1024 * 1024)
+        #expect(manifest.limits.maximumDurationMilliseconds == 1_800_000)
+        guard case .runtime(let command, let arguments) = manifest.launch else {
+            Issue.record("audio-acquire must launch through a runtime")
+            return
+        }
+        #expect(command.rawValue == "uv")
+        #expect(arguments == ["run", "--script"])
+
+        // The exact reviewed identity is pinned byte-for-byte; a regenerated
+        // package whose digest changed fails this gate with the new value.
+        #expect(output.packageDigest
+            == "539b74360d40f0b156df02a10786099fcd6915c562cab6a66b58965db8075238")
+    }
+
+    /// The recorded audio-acquire protocol frames replay through the
+    /// revision-5 sequence: progress frames, then one terminal `result`
+    /// carrying the `source-bytes` tag and the concrete `audio/mp4` MIME.
+    @Test func audioAcquireProtocolSmoke() throws {
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/AudioAcquire", isDirectory: true)
+
+        let success = try ExtractorPackageToolExecutor().execute(arguments: [
+            "protocol-smoke",
+            Self.packageURL("AudioAcquire").path,
+            fixtures.appendingPathComponent("request.json").path,
+            fixtures.appendingPathComponent("frames.jsonl").path,
+        ])
+        #expect(success.packageID == "org.selfdrivingwiki.audio-acquire")
+        #expect(success.terminalKind == "result")
+        #expect(success.progressEventCount == 5)
+    }
+
     @Test func reviewedDigestsAreStableAcrossRepeatedValidation() throws {
         for name in ["Defuddle", "Pdf2md", "DoclingServe", "Docx2md", "PodcastTranscript", "ApplePodcastTranscript", "YouTubeTranscript", "Zotero"] {
             let first = try validate(name)

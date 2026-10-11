@@ -135,7 +135,8 @@ struct YouTubeAuxiliaryRuntimeTests {
             #expect(reported == "1.2.10" || reported == "1.0.31")
             // A withheld grant derives no configuration at all.
             #expect(ProcessExtractorProvider.auxiliaryRuntimeConfiguration(
-                retained: rejectedOutcome) == nil)
+                retained: rejectedOutcome,
+                revision: ReviewedExtractorPackages.youtubeTranscript.revision) == nil)
         }
     }
 
@@ -176,7 +177,8 @@ struct YouTubeAuxiliaryRuntimeTests {
         // caption fallback then reports its own fixed setup failure, while
         // the primary route is untouched.
         #expect(ProcessExtractorProvider.auxiliaryRuntimeConfiguration(
-            retained: outcome) == nil)
+            retained: outcome,
+            revision: ReviewedExtractorPackages.youtubeTranscript.revision) == nil)
     }
 
     // MARK: - Exact-revision grant
@@ -204,7 +206,8 @@ struct YouTubeAuxiliaryRuntimeTests {
 
         // Same bytes: the grant derives.
         let unchanged = ProcessExtractorProvider.auxiliaryRuntimeConfiguration(
-            retained: .resolved(pinned))
+            retained: .resolved(pinned),
+            revision: ReviewedExtractorPackages.youtubeTranscript.revision)
         guard case .reviewedYouTubeBunRuntime(let path)? = unchanged else {
             Issue.record("an unchanged executable must derive the grant")
             return
@@ -214,7 +217,8 @@ struct YouTubeAuxiliaryRuntimeTests {
         // Rewritten bytes: the stat identity drifts, the grant is withheld.
         try Data("#!/bin/sh\necho tampered\n".utf8).write(to: url)
         let drifted = ProcessExtractorProvider.auxiliaryRuntimeConfiguration(
-            retained: .resolved(pinned))
+            retained: .resolved(pinned),
+            revision: ReviewedExtractorPackages.youtubeTranscript.revision)
         #expect(drifted == nil)
     }
 
@@ -227,7 +231,8 @@ struct YouTubeAuxiliaryRuntimeTests {
 
         let configuration = try #require(
             ProcessExtractorProvider.auxiliaryRuntimeConfiguration(
-                retained: .resolved(pinned)))
+                retained: .resolved(pinned),
+                revision: ReviewedExtractorPackages.youtubeTranscript.revision))
         let data = try JSONEncoder().encode(configuration)
         let document = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         // Exactly the tagged shape the package reads.
