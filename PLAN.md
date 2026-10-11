@@ -35,6 +35,7 @@ load-bearing for the app to function.
 
 | Doc | What it covers |
 | --- | --- |
+| [`plans/agent-adapter-upgrade-manager.md`](plans/agent-adapter-upgrade-manager.md) | **In-app ACP adapter upgrade manager.** Planned feature: adopt the newest registry-published adapter version that passes this build's compatibility predicate — probe before adopt, atomic command swap, one-click rollback. Companion to the codex-acp 2.2.2 bump (#1401). |
 | [`plans/wiki-strategies-and-cumulative-ingestion.md`](plans/wiki-strategies-and-cumulative-ingestion.md) | **Wiki strategies and cumulative ingestion.** Per-wiki Markdown editorial instructions, captured run context, the current mounted strategy, copyable templates, atomic conflict-safe page updates, and the live semantic evaluation rubric. |
 | [`docs/user-guide/`](docs/user-guide/README.md) | **User guide.** What the user sees and does — not architecture. Covers concepts, getting started, the interface, pages & links, sources & ingestion, chatting with the agent, renderer packages, bookmarks/search/navigation, multiple wikis, settings, the queue, and keyboard shortcuts. Start here for user-facing documentation. |
 | [`docs/user-guide/renderer-packages.md`](docs/user-guide/renderer-packages.md) | **Renderer packages.** Explains the local-folder contract, validation and copying, machine-wide availability, import limits, removal, safe mode, source preferences, and fallback behavior. Package authors use the maintainer skill for the full schema and validation workflow. |
