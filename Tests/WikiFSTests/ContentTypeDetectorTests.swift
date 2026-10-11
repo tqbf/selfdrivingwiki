@@ -114,6 +114,18 @@ struct ContentTypeDetectorTests {
         #expect(result.conflicts.allSatisfy { $0.chosenMIMEType == "application/pdf" })
     }
 
+    @Test func binarySignatureOverridesTrustedGeneratedMIME() {
+        // trustedGenerated declared MIME (the addSource(mimeType:) path)
+        // loses to a byte signature like every other declared origin.
+        let result = ContentTypeDetector.detect(.init(
+            data: Data("%PDF-1.7".utf8),
+            hints: .init(
+                declaredMIME: .init("application/custom", origin: .trustedGenerated),
+                filenameExtension: "pdf")))
+        #expect(result.normalizedMIMEType == "application/pdf")
+        #expect(result.conflicts.map(\.conflictingEvidence.origin) == [.utf8Text, .trustedGenerated])
+    }
+
     @Test func binarySignatureOverridesLocalUTIAndExtension() {
         let result = ContentTypeDetector.detect(.init(
             data: Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),

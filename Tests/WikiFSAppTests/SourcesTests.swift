@@ -41,13 +41,19 @@ struct SourcesTests {
 
     @Test func extAndMimeDerivedFromFilename() throws {
         let store = try tempStore()
-        let pdf = try store.addSource(filename: "Report.PDF", data: Data("%PDF".utf8))
+        // Byte signatures are the top evidence tier (chooseEvidence), so the
+        // fixture carries the full "%PDF-" signature the sniff matches; the
+        // ext is still lowercased from the filename ("Report.PDF" → "pdf").
+        let pdf = try store.addSource(filename: "Report.PDF", data: Data("%PDF-1.4\n%binary".utf8))
         #expect(pdf.ext == "pdf")  // lowercased
         #expect(pdf.mimeType == "application/pdf")
 
+        // No extension: the utf8-text evidence tier classifies non-empty
+        // plain bytes as text/plain. Stored MIME is nil only when no tier
+        // fires at all (e.g. empty bytes with no extension).
         let noExt = try store.addSource(filename: "README", data: Data("x".utf8))
         #expect(noExt.ext == "")
-        #expect(noExt.mimeType == nil)
+        #expect(noExt.mimeType == "text/plain")
     }
 
     // MARK: - MIME from content sniff (content-type-over-extension plan)
@@ -69,14 +75,17 @@ struct SourcesTests {
         #expect(source.mimeType == "image/png")
     }
 
-    @Test func mimeExplicitParamOverridesSniff() throws {
-        // Explicit mimeType parameter wins over both byte sniff and ext fallback.
+    @Test func mimeByteSignatureOverridesExplicitParam() throws {
+        // Declared MIME cannot override a byte signature: binary evidence is
+        // the top evidence tier (issue #1396). The explicit mimeType:
+        // parameter wins only when the byte evidence is inconclusive
+        // (see explicitMimeStillWinsOverMmdExtension below).
         let store = try tempStore()
         let source = try store.addSource(
             filename: "data.pdf", data: Data("%PDF-1.4\ncontent".utf8),
             externalItemKey: nil, externalItemTitle: nil,
             mimeType: "application/custom")
-        #expect(source.mimeType == "application/custom")
+        #expect(source.mimeType == "application/pdf")
     }
 
     @Test func mimeFallsBackToExtWhenSniffInconclusive() throws {
