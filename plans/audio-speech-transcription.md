@@ -220,7 +220,18 @@ and cancellation. Provenance is a typed host producer
 fetcher revision) persisted as ONE `.transcript` version linked to the
 source's initial version. The Bun grant is its own wire kind
 (`reviewed-audio-acquire-bun-runtime`) admitted only for the exact
-reviewed digest. Remaining: the signed-bundle diagnostic harness run on a
-macOS 26 machine with model assets installed (the gated SwiftPM suite and
-`scripts/test-signed-speech.sh` are in place), and the operator-run live
-YouTube check.
+reviewed digest. The operator has since run the LIVE check on this Mac: the full flow
+(menu action → speech job → acquisition → on-device transcription →
+persisted transcript) completed against a real 20-minute YouTube video.
+Two defects found and fixed during verification: the metadata-phase host
+allowlist (the pinned release fetches format manifests outside the watch
+host — the allowlist was dropped entirely per operator direction, leaving
+the DNS-level routability fence), and the transcription preset
+(`progressiveTranscription` emits running-text results; concatenating them
+produces prefix garbage — the `.transcription` preset emits finalized
+chunks). The media download uses the pinned release's NATIVE downloader
+(any HTTPS host, bounded retries, 120 MiB cap) after a hand-rolled single
+stream measured ~31 KB/s googlevideo throttling. Remaining: the
+signed-bundle diagnostic run (`scripts/test-signed-speech.sh` is in
+place) and the gated `say`-fixture suite on a machine with model assets
+installed.

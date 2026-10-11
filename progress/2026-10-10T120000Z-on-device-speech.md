@@ -56,6 +56,22 @@ YouTube sources, per the approved plan.
   and `scripts/test-signed-speech.sh` (packaged app + bundled daemon,
   signature-verified, bounded typed result only).
 
+## Live verification (2026-10-10, this Mac)
+
+The operator ran the real flow against a 20-minute YouTube video
+(`Wiy2TLAij4s`): the menu action enqueued one speech job; acquisition
+downloaded the 19.6 MB M4A in ~3 s; on-device transcription persisted a
+readable `.transcript` alternative with the host-speech producer. Two
+defects surfaced and were fixed: (1) the metadata-phase host allowlist
+rejected the format-manifest fetches the pinned release makes outside the
+watch host — the allowlist was dropped entirely per operator direction,
+leaving the DNS-level routability fence; (2) the
+`progressiveTranscription` preset emits running-text results, so
+concatenation produced prefix garbage — switched to the `.transcription`
+preset, which emits finalized chunks. A hand-rolled single-stream media
+fetch was also replaced by the pinned release's native downloader after
+measuring ~31 KB/s googlevideo throttling (19.6 MB now downloads in ~3 s).
+
 ## Verification
 
 A live transcription on real hardware: the gated SwiftPM suite and the
