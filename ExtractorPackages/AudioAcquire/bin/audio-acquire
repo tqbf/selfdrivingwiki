@@ -691,6 +691,36 @@ def download_audio(
     connect resolves and validates through the same DNS fence as metadata.
     """
     _check_deadline(deadline_ms)
+    # Two attempts, each with a FRESH extraction (a fresh signed URL):
+    # googlevideo intermittently rejects a just-minted URL at download
+    # start, and a second extraction mints a new one. Bounded failures
+    # (output-limit, timeout, invalid-request) are never retried.
+    last_failure: ProtocolFailure = ProtocolFailure(
+        "extraction-failure", "the audio stream could not be downloaded"
+    )
+    for _attempt in range(2):
+        try:
+            return _download_once(
+                output_dir, final_path, video_id, bun_path, deadline_ms)
+        except ProtocolFailure as failure:
+            if failure.cause in ("output-limit", "timeout", "invalid-request"):
+                raise
+            last_failure = failure
+            if _attempt == 0:
+                time.sleep(2)
+    raise last_failure
+
+
+def _download_once(
+    output_dir: str,
+    final_path: str,
+    video_id: str,
+    bun_path: str | None,
+    deadline_ms: int,
+) -> bytes:
+    """One native-downloader pass; leaves the validated file at final_path
+    and returns the exact bytes published."""
+    _check_deadline(deadline_ms)
     downloader = _build_downloader(output_dir, bun_path, deadline_ms)
     try:
         with _ConnectionGuard(_media_host_allowed):
