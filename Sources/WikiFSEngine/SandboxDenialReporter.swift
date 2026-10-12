@@ -43,6 +43,12 @@ enum SandboxDenialReporter {
     /// Maximum normalized denial lines returned (and rendered).
     static let defaultDenialLimit = 8
 
+    /// Token floor: shorter tokens (the 1-character `x` runner argument in
+    /// `bun x …`) are substrings of common words ("sandbox") and would
+    /// over-match every denial line in the window, evicting the real
+    /// diagnosis from the capped result. `.pi` (3) survives.
+    static let minimumTokenLength = 3
+
     /// Hard wall-clock bound for the whole `log show` invocation. `log show`
     /// scans the whole store from `--start`, so an unbounded query could run
     /// for minutes; past this bound the reporter gives up (returns []).
@@ -138,7 +144,12 @@ enum SandboxDenialReporter {
         var tokens: [String] = []
         func insert(_ raw: String) {
             let lowered = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !lowered.isEmpty, !tokens.contains(lowered) else { return }
+            // The floor keeps `bun x`'s 1-character runner argument ("x")
+            // out of the token set: "x" is a substring of "sandbox", so it
+            // would match effectively every denial line in the window and
+            // evict the real diagnosis from the capped result.
+            guard lowered.count >= minimumTokenLength,
+                  !tokens.contains(lowered) else { return }
             tokens.append(lowered)
         }
         // Basename each argv element: the executable is a path; arguments may
@@ -233,8 +244,18 @@ enum SandboxDenialReporter {
         bound: Duration = queryTimeBound,
         runLogShow: @escaping LogShowInvocation = SandboxDenialReporter.defaultLogShowInvocation
     ) async -> [String] {
-        let sanitizedTokens = tokens.map { $0.lowercased() }.filter { !$0.isEmpty }
+        let sanitizedTokens = tokens
+            .map { $0.lowercased() }
+            .filter { $0.count >= minimumTokenLength }
         guard !sanitizedTokens.isEmpty, limit > 0 else { return [] }
+        // A caller cancelled while unwinding (probe timeout, user cancel)
+        // should not wait out the bounded race — the denial section would
+        // be discarded anyway.
+        guard !Task.isCancelled else { return [] }
+        // logd delivery can lag the kernel's denial by a beat; the query's
+        // open-ended end (now) plus the 8s bound absorb typical flush
+        // latency. A denial missing from an immediate query is possible —
+        // the raw adapter error still surfaces.
         let argv = logShowArguments(since: since, tokens: sanitizedTokens, now: now)
 
         let box = RaceBox()

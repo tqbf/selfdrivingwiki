@@ -25,7 +25,7 @@ import WikiFSCore
 /// `swift test` run every unstructured task here competes for the same
 /// cooperative pool the process-spawning suites depend on (AGENTS.md #1051),
 /// so the suite keeps its own footprint serial and small.
-@Suite("SandboxDenialReporter", .serialized)
+@Suite("SandboxDenialReporter", .serialized, .timeLimit(.minutes(5)))
 struct SandboxDenialReporterTests {
 
     // MARK: - Fixtures
@@ -154,13 +154,15 @@ struct SandboxDenialReporterTests {
     }
 
     /// A `bun x` adapter shape: the runner basename, the package spec, and
-    /// the bun home subpaths all become tokens.
+    /// the bun home subpaths all become tokens — except the 1-character
+    /// runner argument "x", which the token floor drops (it is a substring
+    /// of "sandbox" and would match every denial line in the window).
     @Test func sandboxDenialTokensForBunAdapterShape() {
         let tokens = SandboxDenialReporter.sandboxDenialTokens(
             executablePath: "/Users/dev/.bun/bin/bun",
             arguments: ["x", "@agentclientprotocol/pi-acp"])
         #expect(tokens.contains("bun"))
-        #expect(tokens.contains("x"))
+        #expect(tokens.contains("x") == false)
         // The package spec's basename carries the adapter name.
         #expect(tokens.contains("pi-acp"))
         #expect(tokens.contains(".bun"))
@@ -324,7 +326,7 @@ struct SandboxDenialReporterTests {
         let output = builder.joined(separator: "\n")
         let denials = await SandboxDenialReporter.recentDenials(
             since: Date(),
-            tokens: ["d-"],
+            tokens: ["/tmp/d-"],
             limit: 3,
             runLogShow: { _ in output })
         #expect(denials == [
@@ -370,6 +372,19 @@ struct SandboxDenialReporterTests {
         #expect(rendered.contains("env: node: No such file or directory"))
         #expect(rendered.contains("Hint: set CLAUDE_CODE_EXECUTABLE"))
         #expect(rendered.contains("Sandbox denials:") == false)
+    }
+
+    /// SHOULD-FIX from the #1413 review: the `bun x pi-acp` launch shape
+    /// basenames the 1-character runner argument "x", which is a substring
+    /// of "sandbox" — it must not become a token (it would match every
+    /// denial line in the window).
+    @Test func sandboxDenialTokensDropShortRunnerArguments() {
+        let tokens = SandboxDenialReporter.sandboxDenialTokens(
+            executablePath: "/usr/local/bin/bun",
+            arguments: ["x", "pi-acp@0.0.34"])
+        #expect(!tokens.contains("x"))
+        #expect(tokens.contains("bun"))
+        #expect(tokens.contains("pi-acp@0.0.34"))
     }
 
     // MARK: - Helpers
