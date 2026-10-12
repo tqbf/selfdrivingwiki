@@ -1,10 +1,15 @@
-# ACP adapter upgrade manager shipped
+---
+timestamp: 2026-10-12T041100Z
+title: ACP adapter upgrade manager shipped (PR #1403)
+branch: feature/agent-adapter-upgrade-manager
+status: complete
+---
 
-Date: 2026-08-16. PR #1403 (`feature/agent-adapter-upgrade-manager`).
+# ACP adapter upgrade manager shipped (PR #1403)
 
-## What landed
+## Progress
 
-The in-app adapter upgrade manager per
+Implemented the in-app adapter upgrade manager per
 `plans/agent-adapter-upgrade-manager.md` (the plan doc was rewritten in
 the same branch to describe what ships, after an independent design
 review corrected the probe scope and the identity join).
@@ -14,11 +19,11 @@ Slices:
 1. Decision layer (`Sources/WikiFSCore/Integrations/ACPAdapterUpgradeDecision.swift`):
    typed npx/npm-exec/bun/uvx parse, exact-pin extraction, floating
    forms never adoptable, no silent downgrades.
-2. Storage (`Sources/WikiFSCore/Core/AdapterUpgradeState.swift` +
-   `AgentProvidersConfig.adapterUpgrades`): adoption records with
-   byte-exact from-command, ownership states, probe-failure backoff,
-   restore suppression. Forward-compatible decode; the field rides
-   every reconstruction site and `mergeMutation`.
+2. Storage (`Sources/WikiFSCore/Core/AdapterUpgradeState.swift` plus the
+   `adapterUpgrades` field on `AgentProvidersConfig`): adoption records
+   with byte-exact from-command, ownership states, probe-failure
+   backoff, restore suppression. Forward-compatible decode; the field
+   rides every reconstruction site and `mergeMutation`.
 3. Candidate probe (`Sources/WikiFSEngine/ACPAdapterCandidateProbe.swift`):
    initialize-only handshake through the real sandboxed launch plan.
    Verification (`ACPAdapterCandidateReport.swift`) is pure: protocol,
@@ -27,18 +32,19 @@ Slices:
 4. Manager (`Sources/WikiFSEngine/ACPAdapterUpgradeManager.swift`):
    decide, probe, one locked CAS commit. Ownership gates (user-owned,
    custom shapes, drifted baselines), live-use deferral, exponential
-   backoff capped at 24h, manual checks bypass backoff and suppression.
-5. App wiring (`ACPAdapterUpgradeCoordinator` + `WikiFSApp` +
+   backoff capped at 24 hours, manual checks bypass backoff and
+   suppression.
+5. App wiring (`ACPAdapterUpgradeCoordinator`, `WikiFSApp`,
    `AgentsSettingsView`): activation-throttled automatic checks, the
    manual check button, the Adapter Updates panel, one-click restore.
 6. CI (`acp-registry-refresh.yml`): weekly bundled-snapshot refresh to
-   a chore branch with one reusable PR, JSON validation first,
+   a chore branch with one reusable PR, JSON validation first, the
    GITHUB_TOKEN pull_request limitation documented, never merges.
 
-## Review corrections incorporated
+Review corrections incorporated:
 
-- Probe is initialize-only (no authenticate, no session/new, no model
-  enumeration).
+- The probe is initialize-only (no authenticate, no session/new, no
+  model enumeration).
 - Identity comes from a verified package-to-identity contract table,
   not the package name. Unknown packages fail closed (unverified,
   never auto-adopted).
@@ -49,7 +55,7 @@ Slices:
   after the registry TTL" because no launch-time registry refresh
   existed before this branch.
 
-## Known limitations
+Known limitations:
 
 - Only `@agentclientprotocol/codex-acp` has a verified contract today,
   so only codex auto-adopts. Other agents' newer pins show in Settings
@@ -63,13 +69,14 @@ Slices:
 - The live-use gate defers ALL adoptions while any chat is generating
   (conservative; the queue engine is not consulted).
 
-## Gates
+## Verification
 
 - `make build` green (app + signed).
-- `make test` green: 4568 tests, 0 failures. New suites:
-  ACPAdapterUpgradeDecisionTests (21), AdapterUpgradeStateTests (10),
-  ACPAdapterProbeVerificationTests (6), ACPAdapterCandidateProbeTests
-  (10, real sandboxed subprocess fixture), ACPAdapterUpgradeManagerTests
-  (15). The candidate probe was registered in the
-  LLMSpawnSandboxExhaustiveness and ProcessSignalSafety audit
+- `make test` green locally: 4568 tests, 0 failures.
+- New suites: `ACPAdapterUpgradeDecisionTests` (21),
+  `AdapterUpgradeStateTests` (10), `ACPAdapterProbeVerificationTests`
+  (6), `ACPAdapterCandidateProbeTests` (10, real sandboxed subprocess
+  fixture), `ACPAdapterUpgradeManagerTests` (15).
+- The candidate probe was registered in the
+  `LLMSpawnSandboxExhaustiveness` and `ProcessSignalSafety` audit
   inventories with rationales.

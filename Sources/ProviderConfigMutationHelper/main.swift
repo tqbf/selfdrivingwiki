@@ -1,13 +1,34 @@
 import Foundation
 import WikiFSCore
 
-private enum HelperError: Error {
+private enum HelperError: Error, CustomStringConvertible {
     case invalidArguments
+
+    var description: String {
+        switch self {
+        case .invalidArguments: return "invalid arguments"
+        }
+    }
 }
 
 @main
 struct ProviderConfigMutationHelper {
-    static func main() async throws {
+    static func main() async {
+        do {
+            try await run()
+        } catch {
+            // Report to stderr (the test pipes child stderr to nullDevice,
+            // but a human rerunning the helper, or a test harness change,
+            // then sees the reason). Exit 1 — a bare uncaught throw would
+            // trap as SIGTRAP and read like a code bug instead of a
+            // deadline/lock timeout.
+            FileHandle.standardError.write(
+                Data("ProviderConfigMutationHelper: \(error)\n".utf8))
+            exit(1)
+        }
+    }
+
+    private static func run() async throws {
         let arguments = CommandLine.arguments
         guard arguments.count == 7 else { throw HelperError.invalidArguments }
 
