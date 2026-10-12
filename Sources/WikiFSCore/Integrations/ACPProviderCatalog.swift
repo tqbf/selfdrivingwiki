@@ -137,6 +137,18 @@ public enum ACPProviderCatalog {
             summary: "Open-source terminal AI coding agent with multi-provider support.",
             detectExecutable: "opencode",
             command: ["opencode", "acp"]),
+        KnownACPAgent(
+            id: ProviderID(rawValue: "gjc"),
+            label: "Gajae Code",
+            summary: "Plan-before-mutation coding agent that runs on an existing Claude, Codex, or Gemini subscription, with approval prompts for shell and destructive edits.",
+            detectExecutable: "gjc",
+            command: ["gjc", "acp"]),
+        KnownACPAgent(
+            id: ProviderID(rawValue: "traecli"),
+            label: "TRAE CLI",
+            summary: "ByteDance's official TRAE coding agent with native ACP support.",
+            detectExecutable: "traecli",
+            command: ["traecli", "acp", "serve"]),
     ]
 
     /// Sync accessor for contexts that can't `await` (SwiftUI previews,
@@ -171,13 +183,25 @@ public enum ACPProviderCatalog {
         let mapped = ACPRegistryClient.mapRegistryToCatalog(response)
         // Empty decoded payload → fall through to the hardcoded list (don't
         // silently render an empty catalog).
-        return mapped.isEmpty ? fallbackCatalog : mapped
+        if mapped.isEmpty { return fallbackCatalog }
+        return mergingFallbackExtras(into: mapped)
+    }
+
+    /// The registry catalog is authoritative for agents it lists; the
+    /// hardcoded `fallbackCatalog` is the durable FLOOR of providers the
+    /// upstream registry does not carry (hermes, grok, codewhale, gjc,
+    /// traecli, ...). Without this union those providers vanish from the
+    /// Add Provider sheet whenever a registry fetch succeeds. Registry
+    /// entries shadow same-id fallback entries.
+    static func mergingFallbackExtras(into catalog: [KnownACPAgent]) -> [KnownACPAgent] {
+        let listed = Set(catalog.map(\.id))
+        return catalog + fallbackCatalog.filter { !listed.contains($0.id) }
     }
 
     /// Async accessor: the live registry with cache + offline fallback. Always
     /// returns SOME list (worst case, `fallbackCatalog`). Never throws —
     /// network errors are logged via `DebugLog.agent` and the call degrades.
     public static func loadAgents() async -> [KnownACPAgent] {
-        await ACPRegistryClient.loadAgents()
+        mergingFallbackExtras(into: await ACPRegistryClient.loadAgents())
     }
 }
