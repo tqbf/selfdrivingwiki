@@ -158,7 +158,7 @@ struct ActivityWindowTypedTranscriptTests {
         client: StaticQueueEngineClient,
         tracker: QueueActivityTracker
     ) async throws -> WKWebView? {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let root = ActivityWindowView(
             queue: item.queue,

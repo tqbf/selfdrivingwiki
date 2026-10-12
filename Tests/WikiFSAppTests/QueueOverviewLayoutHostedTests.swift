@@ -74,7 +74,7 @@ struct QueueOverviewLayoutHostedTests {
     /// Host the Overview at `size` and measure the bridged inventory table's
     /// row count and height after the layout settles.
     private func measureOverview(size: NSSize) async throws -> (rowCount: Int, height: CGFloat) {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         defer { lease.release() }
 
@@ -120,7 +120,7 @@ struct QueueOverviewLayoutHostedTests {
     /// `browsePages` routing plugs into. A dead target (no action) renders
     /// plain text and must host NO button.
     @Test func targetRowNameLinkInvokesRoutingAction() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         defer { lease.release() }
 
@@ -215,7 +215,7 @@ struct QueueOverviewLayoutHostedTests {
     /// (`appendPageVersion` provenance inputs) into a real GRDB store, then
     /// resolved through the real store API + mapper.
     @Test func ingestionOverviewShowsOutputsSectionWithClickableRows() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         defer { lease.release() }
 
@@ -323,7 +323,7 @@ struct QueueOverviewLayoutHostedTests {
     /// behavior, where the `ContentUnavailableView` path meant NO table view
     /// mounted at all and the recorded-outputs section vanished with it.
     @Test func outputsSectionSurvivesEmptyInputsInventory() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         defer { lease.release() }
 

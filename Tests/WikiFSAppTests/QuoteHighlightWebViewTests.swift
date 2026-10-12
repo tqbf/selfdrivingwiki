@@ -88,8 +88,8 @@ struct QuoteHighlightWebViewTests {
     }
 
     @MainActor
-    private func makeHostedWebView() async -> (lease: HostedAppKitTestGate.Lease, window: NSWindow, webView: WKWebView) {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+    private func makeHostedWebView() async throws -> (lease: HostedAppKitTestGate.Lease, window: NSWindow, webView: WKWebView) {
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
         let window = NSWindow(
@@ -142,7 +142,7 @@ struct QuoteHighlightWebViewTests {
     // MARK: - Tests
 
     @Test func debugHighlightState() async throws {
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>The data show a clear improvement in throughput.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
@@ -164,7 +164,7 @@ struct QuoteHighlightWebViewTests {
     }
 
     @Test func highlightWrapsExactQuoteInMark() async throws {
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let body = "<h2 id=\"results\">Results</h2><p>The data show a clear improvement in throughput.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
@@ -177,7 +177,7 @@ struct QuoteHighlightWebViewTests {
 
     @Test("#1059 highlight retains quoted text inside a quoted source fragment")
     func highlightWrapsQuoteContainingInnerQuotationMarks() async throws {
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let quote = #"The location for tests is in the "test" folder."#
         let renderedQuote = #"The location for tests is in the “test” folder."#
@@ -190,7 +190,7 @@ struct QuoteHighlightWebViewTests {
 
     @Test("#1059 highlight normalizes source typography without changing its selection")
     func highlightMatchesRenderedTypographyVariants() async throws {
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let quote = #""quoted" 'single' office - example ..."#
         let renderedQuote = #"“quoted” ‘single’ ofﬁce — example …"#
@@ -204,7 +204,7 @@ struct QuoteHighlightWebViewTests {
     @Test func highlightMatchesAcrossCollapsedWhitespace() async throws {
         // The source has extra internal whitespace / a newline; the quote is
         // single-spaced. The index-map fallback must still wrap the match.
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>The  data show a clear\nimprovement here.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
@@ -221,7 +221,7 @@ struct QuoteHighlightWebViewTests {
         let markdown = "# Study\n\nThe results show a 30% improvement in latency."
         let prepared = ReaderMarkdown.preparedDocument(markdown)
         let body = MarkdownHTMLRenderer.render(prepared, projection: .init(), options: .disabled)
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
@@ -235,7 +235,7 @@ struct QuoteHighlightWebViewTests {
         // A quote that spans a <strong> boundary lives in TWO text nodes — the
         // common case for real source prose with inline formatting. The
         // highlight must still find + mark it (across both segments) and scroll.
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let body = "<p><strong>AI is an amplifier.</strong> It magnifies the strengths of organizations.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
@@ -260,7 +260,7 @@ struct QuoteHighlightWebViewTests {
         """
         let prepared = ReaderMarkdown.preparedDocument(markdown)
         let body = MarkdownHTMLRenderer.render(prepared, projection: .init(), options: .disabled)
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
@@ -278,7 +278,7 @@ struct QuoteHighlightWebViewTests {
         // "vo-" / "litional") into the MIDDLE of the sentence, so the full quote
         // never appears contiguously. The fallback must still highlight the
         // longest contiguous run that IS present and scroll to it.
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let body = """
         <p>More recently, the vo-</p>\
@@ -299,7 +299,7 @@ struct QuoteHighlightWebViewTests {
     @Test func noFallbackHighlightForShortUnmatchedQuote() async throws {
         // A short quote (<4 words) that isn't present must NOT trigger a noisy
         // partial highlight — the fallback floor is 4 words.
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>alpha beta gamma delta epsilon</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
@@ -311,7 +311,7 @@ struct QuoteHighlightWebViewTests {
 
     @Test func reHighlightClearsThePreviousMark() async throws {
         // A second highlight must remove the first mark, not stack them.
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>alpha beta gamma delta</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
@@ -330,7 +330,7 @@ struct QuoteHighlightWebViewTests {
     /// `WikiReaderRep.apply(.quote, in:)` is what the Coordinator runs once the
     /// page has painted. Confirms the seam the pending-anchor consume drives.
     @Test func applyQuoteRunsHighlightJS() async throws {
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>The data show a clear improvement in throughput.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
@@ -346,7 +346,7 @@ struct QuoteHighlightWebViewTests {
     /// `pageLoaded` — exactly the lifecycle that runs in `didFinish`. If this
     /// fails, the trigger (not the JS) is where the source highlight breaks.
     @Test func coordinatorAppliesQuoteHighlightOnceLoaded() async throws {
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>The data show a clear improvement in throughput.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
@@ -367,7 +367,7 @@ struct QuoteHighlightWebViewTests {
     /// it (the version gate holds), so it doesn't re-run highlight on every
     /// `updateNSView`.
     @Test func coordinatorDoesNotReapplySameVersion() async throws {
-        let (lease, window, webView) = await makeHostedWebView()
+        let (lease, window, webView) = try await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         let body = "<p>alpha beta gamma</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
@@ -449,7 +449,7 @@ struct QuoteHighlightWebViewTests {
         store.selectSource(byDisplayName: "paper", anchor: "\"clear improvement\"")
 
         let view = WikiReaderView(markdown: markdown, currentSelection: store.selection, store: store)
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.orderFront(nil)

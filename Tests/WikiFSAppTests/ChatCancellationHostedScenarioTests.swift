@@ -22,7 +22,7 @@ struct ChatCancellationHostedScenarioTests {
     private static let app: NSApplication = NSApplication.shared
 
     @Test func cancelThenContinueHostedScenario() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let chatID = ChatID(rawValue: "01HOSTEDCANCELCHAT0000000000")
@@ -109,7 +109,7 @@ struct ChatCancellationHostedScenarioTests {
     }
 
     @Test func queuedMessagesRenderFIFO() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let attachment = ChatAttachment(kind: .page, itemID: "page-1", displayName: "Reference")

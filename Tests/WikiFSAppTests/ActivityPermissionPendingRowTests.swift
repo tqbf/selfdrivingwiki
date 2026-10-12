@@ -62,8 +62,8 @@ struct ActivityPermissionPendingRowTests {
     /// Host a view, give SwiftUI a layout pass, return the natural fitting size
     /// height (the height the view requests when given unlimited vertical
     /// space). Mirrors `AddressBarLayoutHostedTests.renderedWidth(...)`.
-    private func renderedHeight<V: View>(_ view: V) async -> CGFloat {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+    private func renderedHeight<V: View>(_ view: V) async throws -> CGFloat {
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let hosting = NSHostingController(rootView: view)
@@ -115,12 +115,12 @@ struct ActivityPermissionPendingRowTests {
         // (near-zero) height of an empty stack. Build via a `Group` so the
         // view tree type matches the "row absent" path the call site renders
         // (`if permission != nil { Row } else { EmptyView }`).
-        let clearedHeight = await renderedHeight(
+        let clearedHeight = try await renderedHeight(
             VStack(alignment: .leading, spacing: 0) { EmptyView() }
                 .frame(width: 320)
         )
         let permission = makePermission()
-        let rowHeight = await renderedHeight(
+        let rowHeight = try await renderedHeight(
             VStack(alignment: .leading, spacing: 0) {
                 PermissionPendingRow(permission: permission)
             }

@@ -17,7 +17,7 @@ import WikiFSTypes
 struct SVGRendererPackageHostedValidationTests {
     @Test("an SVG fence expands, renders as an isolated image, and collapses")
     func svgFenceExpandsRendersAndCollapses() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = NSApplication.shared
 

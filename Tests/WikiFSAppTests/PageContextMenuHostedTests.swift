@@ -53,7 +53,7 @@ struct PageContextMenuHostedTests {
         // lease it can overlap with another window-owning suite (e.g. the
         // Editor/Composer autocomplete or QuoteHighlight suites) and wedge
         // the shared AppKit/WebKit environment (see AutocompleteHostedTestGate.swift).
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let (model, store) = try tempModel()

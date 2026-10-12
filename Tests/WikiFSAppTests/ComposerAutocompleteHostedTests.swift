@@ -184,8 +184,8 @@ struct ComposerAutocompleteHostedTests {
 
     // MARK: - AC #5: debounce + cancel (reviewer correction #3 — now deterministic via #661)
 
-    @Test func debouncedQueryCancelsStaleInFlightPartial() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func debouncedQueryCancelsStaleInFlightPartial() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         // Drive the coordinator's schedule with two partials in quick
         // succession. The first must be cancelled before its fetch runs; only
@@ -234,8 +234,8 @@ struct ComposerAutocompleteHostedTests {
         #expect(calls.first?.kind == .page)
     }
 
-    @Test func onlyLatestPartialTriggersAFetchWhenTypingRapidly() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func onlyLatestPartialTriggersAFetchWhenTypingRapidly() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         // Stronger version of the cancel test: type three partials in rapid
         // succession (faster than the debounce — captured, not run). Only the
@@ -276,8 +276,8 @@ struct ComposerAutocompleteHostedTests {
 
     // MARK: - Happy path: trigger detected → fetch → result applied
 
-    @Test func openTriggerFiresFetchAndAppliesResults() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func openTriggerFiresFetchAndAppliesResults() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
@@ -315,8 +315,8 @@ struct ComposerAutocompleteHostedTests {
 
     // MARK: - No trigger → no fetch
 
-    @Test func noOpenTriggerDoesNotFireFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func noOpenTriggerDoesNotFireFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
@@ -344,8 +344,8 @@ struct ComposerAutocompleteHostedTests {
         #expect(calls.isEmpty, "no fetch should fire without an open-link trigger")
     }
 
-    @Test func closingTheBracketsHidesTheTriggerAndDoesNotFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func closingTheBracketsHidesTheTriggerAndDoesNotFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
@@ -374,8 +374,8 @@ struct ComposerAutocompleteHostedTests {
 
     // MARK: - Reviewer correction #4: newline/paste guards
 
-    @Test func newlineInTriggerDoesNotFireFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func newlineInTriggerDoesNotFireFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
@@ -403,8 +403,8 @@ struct ComposerAutocompleteHostedTests {
         #expect(calls.isEmpty, "newline in the trigger should bail (paste/multi-line guard)")
     }
 
-    @Test func overlongPartialDoesNotFireFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func overlongPartialDoesNotFireFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
@@ -435,8 +435,8 @@ struct ComposerAutocompleteHostedTests {
 
     // MARK: - Schedule-not-fired → no fetch (proves work is captured, not run eagerly)
 
-    @Test func scheduleWithoutFireDoesNotRunFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func scheduleWithoutFireDoesNotRunFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         // The ManualScheduler captures work without running it. So scheduling
         // without firing must NOT call fetch — this is the load-bearing

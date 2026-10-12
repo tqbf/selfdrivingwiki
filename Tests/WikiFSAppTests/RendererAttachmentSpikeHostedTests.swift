@@ -38,7 +38,7 @@ struct RendererAttachmentSpikeHostedTests {
     func testScrollZoomResizeAndHeightMutationStayAligned() async throws {
         for iteration in 1...20 {
             var alignmentEvidences: [RendererAttachmentSpikeAlignmentEvidence] = []
-            let lease = await HostedAppKitTestGate.shared.acquire()
+            let lease = try await HostedAppKitTestGate.shared.acquire()
             defer { lease.release() }
             Self.prepareApplication()
 
@@ -224,7 +224,7 @@ struct RendererAttachmentSpikeHostedTests {
     func testClippingAndHitTestingRespectVisiblePlaceholder() async throws {
         for iteration in 1...20 {
             var alignmentEvidences: [RendererAttachmentSpikeAlignmentEvidence] = []
-            let lease = await HostedAppKitTestGate.shared.acquire()
+            let lease = try await HostedAppKitTestGate.shared.acquire()
             defer { lease.release() }
             Self.prepareApplication()
 
@@ -326,7 +326,7 @@ struct RendererAttachmentSpikeHostedTests {
     @Test
     func testStaleGenerationAndTeardownCannotReviveAttachment() async throws {
         for iteration in 1...20 {
-            let lease = await HostedAppKitTestGate.shared.acquire()
+            let lease = try await HostedAppKitTestGate.shared.acquire()
             defer { lease.release() }
             Self.prepareApplication()
 

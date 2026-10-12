@@ -127,7 +127,7 @@ struct MetadataPanelHostedTests {
     }
 
     private func mount<V: View>(_ view: V, width: CGFloat) async throws -> Mounted<V> {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let host = NSHostingController(rootView: view)
         let window = NSWindow(

@@ -23,7 +23,7 @@ struct MermaidRendererPackageHostedValidationTests {
     @Test("the package's own startup request renders a flowchart as an SVG in both appearances")
     func renderFlowchartProducesSVG() async throws {
         let fixture = try MermaidHostedFixture()
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         Self.prepareApplication()
 
@@ -104,7 +104,7 @@ struct MermaidRendererPackageHostedValidationTests {
     @Test("a syntax error surfaces the error region and the session stays intact")
     func syntaxErrorShowsErrorRegionAndKeepsSource() async throws {
         let fixture = try MermaidHostedFixture()
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         Self.prepareApplication()
 
@@ -151,7 +151,7 @@ struct MermaidRendererPackageHostedValidationTests {
     @Test("a claimed mermaid fence renders the generic disclosure row and mounts on activation")
     func mermaidFenceRendersThroughPackageClaim() async throws {
         let fixture = try MermaidHostedFixture()
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         Self.prepareApplication()
 
