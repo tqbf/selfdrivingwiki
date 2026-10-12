@@ -738,15 +738,23 @@ private struct ProviderDetailPane: View {
             .sorted()
         let env = ProviderSecretEnvironment.strippingSecrets(from: parsed)
         let command = ShellWords.split(commandText)
+        let newCommand: [String]? = command.isEmpty ? nil : command
         var providers = config.providers
         providers[idx] = AgentProvider(
             id: existing.id,
             label: cleanLabel.isEmpty ? existing.label : cleanLabel,
-            command: command.isEmpty ? nil : command,
+            command: newCommand,
             env: env,
             enabled: existing.enabled,
             isDefault: existing.isDefault)
-        saveConfig(config.replacingProviders(providers))
+        var updated = config.replacingProviders(providers)
+        // A changed command is a user edit: mark the provider user-owned so
+        // the upgrade manager never rewrites it back (package recognition
+        // is not ownership).
+        if newCommand != existing.command {
+            updated = updated.markingAdapterCommandUserEdited(forProvider: provider.id)
+        }
+        saveConfig(updated)
     }
 
     private func saveConfig(_ updated: AgentProvidersConfig) {

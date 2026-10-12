@@ -838,6 +838,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             ingestStageModelIds: ingestStageModelIds,
             stageProviderIds: stageProviderIds,
             catalogObservations: catalogObservations,
+            adapterUpgrades: adapterUpgrades,
             generation: generation)
     }
 
