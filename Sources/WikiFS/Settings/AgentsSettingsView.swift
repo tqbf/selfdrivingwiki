@@ -78,13 +78,19 @@ struct AgentsSettingsView: View {
 
     let containerDirectory: URL
     let providerServices: any AgentProviderServices
+    /// The adapter upgrade check's owner: the manual "Check for Adapter
+    /// Updates" action, the per-provider update states, and one-click
+    /// restore.
+    let upgradeCoordinator: ACPAdapterUpgradeCoordinator
 
     init(
         containerDirectory: URL,
-        providerServices: any AgentProviderServices
+        providerServices: any AgentProviderServices,
+        upgradeCoordinator: ACPAdapterUpgradeCoordinator
     ) {
         self.containerDirectory = containerDirectory
         self.providerServices = providerServices
+        self.upgradeCoordinator = upgradeCoordinator
         let loaded = AgentProvidersConfig.loadOrSeed(from: containerDirectory)
         _config = State(initialValue: loaded)
         _selectedProviderID = State(initialValue: loaded.providers.first?.id)
@@ -180,6 +186,13 @@ struct AgentsSettingsView: View {
 
                 providerActionBar
             }
+
+            Divider()
+
+            AdapterUpdatesPanel(
+                config: config,
+                coordinator: upgradeCoordinator,
+                onConfigChanged: { config = AgentProvidersConfig.loadOrSeed(from: containerDirectory) })
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -842,6 +855,160 @@ private struct ProviderDetailPane: View {
         modelRefreshTask = nil
         if modelRefreshState == .loading {
             modelRefreshState = .idle
+        }
+    }
+}
+
+// MARK: - Adapter updates panel (agent-adapter-upgrade-manager plan)
+
+/// The sidebar's bottom panel: the per-provider adapter update states, the
+/// "Check for Adapter Updates" action, and one-click **Restore previous
+/// command**. Renders `AdapterUpdateDisplay` values only — no policy here.
+private struct AdapterUpdatesPanel: View {
+    let config: AgentProvidersConfig
+    @ObservedObject var coordinator: ACPAdapterUpgradeCoordinator
+    let onConfigChanged: () -> Void
+
+    @State private var isExpanded = false
+
+    /// Providers with anything to say, in config display order.
+    private var rows: [(provider: AgentProvider, display: AdapterUpdateDisplay)] {
+        config.providers.compactMap { provider in
+            guard let state = config.adapterUpgradeState(for: provider.id) else { return nil }
+            return (provider, state.display)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    Label("Adapter Updates", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                if coordinator.isChecking {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Button {
+                        Task {
+                            await coordinator.checkNow()
+                            onConfigChanged()
+                        }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .help("Check for Adapter Updates")
+                }
+            }
+            .padding(.horizontal, 10)
+
+            if let summary = coordinator.lastCheckSummary {
+                Text(summary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+            }
+
+            if isExpanded {
+                ForEach(rows, id: \.provider.id) { row in
+                    AdapterUpdateRow(
+                        provider: row.provider,
+                        display: row.display,
+                        onRestore: {
+                            Task {
+                                await coordinator.restorePreviousCommand(for: row.provider.id)
+                                onConfigChanged()
+                            }
+                        })
+                    .padding(.horizontal, 10)
+                }
+                if rows.isEmpty {
+                    Text("No adapter checks recorded yet. Use the refresh button above.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                }
+            }
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+/// One provider's adapter-update row: a status line plus the Restore button
+/// when an adoption can be rolled back (AC 3).
+private struct AdapterUpdateRow: View {
+    let provider: AgentProvider
+    let display: AdapterUpdateDisplay
+    let onRestore: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: iconName)
+                .foregroundStyle(iconColor)
+                .font(.caption)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(provider.displayName)
+                    .font(.caption.weight(.medium))
+                Text(statusText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+            if case .adopted = display {
+                Button("Restore Previous") { onRestore() }
+                    .controlSize(.mini)
+                    .help("Restore the command this provider ran before the last adoption")
+            }
+        }
+    }
+
+    private var iconName: String {
+        switch display {
+        case .upToDate: return "checkmark.circle"
+        case .notApplicable: return "circle"
+        case .updateAvailableSupported: return "arrow.up.circle"
+        case .updateAvailableUnsupported, .updateAvailableUnverified: return "exclamationmark.triangle"
+        case .probeFailed: return "xmark.circle"
+        case .adopted: return "checkmark.circle.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        switch display {
+        case .upToDate, .adopted: return .green
+        case .notApplicable: return .secondary
+        case .updateAvailableSupported: return .accentColor
+        case .updateAvailableUnsupported, .updateAvailableUnverified, .probeFailed: return .orange
+        }
+    }
+
+    private var statusText: String {
+        switch display {
+        case .upToDate:
+            return "Up to date."
+        case .notApplicable:
+            return "No managed adapter updates for this command."
+        case .updateAvailableSupported(let spec):
+            return "Update available: \(spec.package) \(spec.version.rawValue). Adopts after the probe passes."
+        case .updateAvailableUnsupported(let spec):
+            return "\(spec.package) \(spec.version.rawValue) needs a newer app build for compatibility. Never adopted automatically."
+        case .updateAvailableUnverified(let spec):
+            return "\(spec.package) \(spec.version.rawValue) has no verified compatibility contract. Never adopted automatically."
+        case .probeFailed(let reason, let retryAfter):
+            if let retryAfter {
+                return "Last check failed: \(reason). Retries after \(retryAfter.formatted(date: .omitted, time: .shortened))."
+            }
+            return "Last check failed: \(reason)."
+        case .adopted(let spec, let adoptedAt):
+            return "Adopted \(spec.version.rawValue) at \(adoptedAt.formatted(date: .abbreviated, time: .shortened))."
         }
     }
 }

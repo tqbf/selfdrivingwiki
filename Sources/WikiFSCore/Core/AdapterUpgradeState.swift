@@ -108,4 +108,48 @@ public struct AdapterUpgradeState: Codable, Hashable, Sendable {
     public func isSuppressed(candidateVersion: ACPAgentVersion) -> Bool {
         suppressedCandidateVersion == candidateVersion
     }
+
+    /// The user-facing state this struct presents in Settings (the plan's
+    /// four decision states plus the adoption/failure surfaces). PURE — the
+    /// Settings row renders this without policy of its own.
+    public var display: AdapterUpdateDisplay {
+        if let adoption = lastAdoption {
+            return .adopted(
+                spec: adoption.toSpec,
+                adoptedAt: adoption.adoptedAt)
+        }
+        if let failure = probeFailure {
+            return .probeFailed(reason: failure.lastError, retryAfter: failure.backoffUntil)
+        }
+        switch finding {
+        case .upToDate:
+            return .upToDate
+        case .notApplicable, nil:
+            return .notApplicable
+        case .updateAvailable(let target, let support):
+            switch support {
+            case .knownSupported: return .updateAvailableSupported(spec: target)
+            case .unsupported: return .updateAvailableUnsupported(spec: target)
+            case .unverified: return .updateAvailableUnverified(spec: target)
+            }
+        }
+    }
+}
+
+/// The user-facing adapter update state for one provider.
+public enum AdapterUpdateDisplay: Hashable, Sendable {
+    case upToDate
+    case notApplicable
+    /// A newer supported pin exists (auto-adoptable on the next check).
+    case updateAvailableSupported(spec: ACPPackageSpec)
+    /// A newer pin this build cannot interpret yet — visible, never
+    /// auto-adopted (AC 4).
+    case updateAvailableUnsupported(spec: ACPPackageSpec)
+    /// A newer pin for a package without a verified contract — visible,
+    /// never auto-adopted.
+    case updateAvailableUnverified(spec: ACPPackageSpec)
+    /// The last probe failed; `retryAfter` is the automatic backoff window.
+    case probeFailed(reason: String, retryAfter: Date?)
+    /// The last committed adoption (the Restore button's source).
+    case adopted(spec: ACPPackageSpec, adoptedAt: Date)
 }

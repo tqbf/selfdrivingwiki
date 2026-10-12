@@ -179,4 +179,42 @@ struct AdapterUpgradeStateTests {
         #expect(state.isSuppressed(candidateVersion: codexTo.version))
         #expect(!state.isSuppressed(candidateVersion: ACPAgentVersion(rawValue: "3.1.0")))
     }
+
+    // MARK: - Display mapping (the Settings row renders these, nothing else)
+
+    @Test func displayMapsAllDecisionStates() throws {
+        let providerID = ProviderID(rawValue: "codex-acp")
+        let from = ["npx", "@agentclientprotocol/codex-acp@2.2.2"]
+        // updateAvailable(knownSupported) → supported-visible.
+        let supported = AdapterUpgradeState(
+            finding: .updateAvailable(target: codexTo, support: .knownSupported))
+        #expect(supported.display == .updateAvailableSupported(spec: codexTo))
+        // updateAvailable(unsupported) → unsupported-visible (AC 4).
+        let unsupported = AdapterUpgradeState(
+            finding: .updateAvailable(target: codexTo, support: .unsupported))
+        #expect(unsupported.display == .updateAvailableUnsupported(spec: codexTo))
+        // updateAvailable(unverified) → unverified-visible.
+        let unverified = AdapterUpgradeState(
+            finding: .updateAvailable(target: codexTo, support: .unverified))
+        #expect(unverified.display == .updateAvailableUnverified(spec: codexTo))
+        // upToDate / notApplicable.
+        #expect(AdapterUpgradeState(finding: .upToDate).display == .upToDate)
+        #expect(AdapterUpgradeState(finding: .notApplicable).display == .notApplicable)
+        #expect(AdapterUpgradeState().display == .notApplicable)
+        // probe failure → failed with retry window.
+        let failed = AdapterUpgradeState(
+            probeFailure: AdapterProbeFailure(
+                count: 1, lastError: "handshake timed out",
+                lastFailedAt: Date(timeIntervalSince1970: 0),
+                backoffUntil: Date(timeIntervalSince1970: 3_600)))
+        #expect(failed.display == .probeFailed(
+            reason: "handshake timed out",
+            retryAfter: Date(timeIntervalSince1970: 3_600)))
+        // adoption → adopted (Restore visible).
+        let record = adoption(from: from, to: codexTo)
+        let adopted = try #require(config(command: from).adoptingAdapter(
+            record, forProvider: providerID))
+        #expect(adopted.adapterUpgradeState(for: providerID)?.display == .adopted(
+            spec: codexTo, adoptedAt: record.adoptedAt))
+    }
 }

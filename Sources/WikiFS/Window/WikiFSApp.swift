@@ -111,6 +111,10 @@ struct WikiFSApp: App {
     /// scene even though `WikiFSApp` itself is a transient value.
     @State private var chatDaemonHolder: ChatDaemonCoordinatorHolder
 
+    /// Owns the adapter upgrade manager: automatic checks at activation
+    /// (throttled), the Settings manual check, and one-click restore.
+    @State private var adapterUpgradeCoordinator: ACPAdapterUpgradeCoordinator
+
     /// Presentation-only adapter for typed daemon transport events.
     @State private var healthMonitor: DaemonHealthMonitor
 
@@ -254,6 +258,15 @@ struct WikiFSApp: App {
         _healthMonitor = State(initialValue: transportMonitor)
         let chatDaemonHolder = ChatDaemonCoordinatorHolder()
         _chatDaemonHolder = State(initialValue: chatDaemonHolder)
+        // The adapter upgrade check's bootstrap owner (MUST-FIX 5): built
+        // once per process; runs the automatic check at activation
+        // (throttled) and the manual check + one-click restore from
+        // Settings.
+        let upgradeCoordinator = ACPAdapterUpgradeCoordinator(
+            containerDirectory: directory,
+            providerServices: providerServices,
+            chatDaemonHolder: chatDaemonHolder)
+        _adapterUpgradeCoordinator = State(initialValue: upgradeCoordinator)
         daemonTransportCoordinator = DaemonTransportAppCoordinator(
             services: transportOwner.services,
             bridge: transportBridge,
@@ -412,6 +425,11 @@ struct WikiFSApp: App {
         await optionalRuntimeSetupModel.refresh()
         showingOptionalRuntimeSetup = !optionalRuntimeSetupModel.isComplete
         connectToDaemon()
+        // The adapter upgrade check's bootstrap owner: runs after the
+        // daemon/queue settle so the live-use gate sees a truthful state.
+        // The registry client's cache TTL gates the network fetch; the
+        // coordinator's own throttle bounds the decision pass.
+        await adapterUpgradeCoordinator.runAutomaticCheckIfDue()
     }
 
     private func bootstrapApp() {
@@ -1055,7 +1073,8 @@ struct WikiFSApp: App {
                     .tabItem { Label("Fetch", systemImage: "arrow.down.circle") }
                 AgentsSettingsView(
                     containerDirectory: containerDirectory,
-                    providerServices: agentProviderServices)
+                    providerServices: agentProviderServices,
+                    upgradeCoordinator: adapterUpgradeCoordinator)
                     .tag(SettingsTab.agents)
                     .tabItem { Label("Providers", systemImage: "cpu") }
                 OperationsSettingsView(containerDirectory: containerDirectory)

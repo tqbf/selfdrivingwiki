@@ -1,0 +1,134 @@
+name: ACP registry refresh
+
+# Weekly complement to the in-app adapter upgrade manager
+# (plans/agent-adapter-upgrade-manager.md): refresh the bundled offline
+# registry snapshot when the official registry drifted, so the fallback
+# does not rot the way 1.1.4 did.
+#
+# Report-only contract:
+# - The job commits to a `chore/` branch and updates ONE reusable open
+#   PR. It never pushes to main and never merges.
+# - Known limitation (workflow design, deliberate): a PR created with
+#   the default GITHUB_TOKEN does not trigger the repository's own
+#   `pull_request` CI event (GitHub blocks recursive workflow runs from
+#   the same token). The PR body says so; CI runs after any human
+#   touch (rebase, edit, or push) on the branch.
+# - A no-diff run is a no-op: no branch, no PR, no comment noise.
+
+on:
+  schedule:
+    # Weekly, Monday 06:20 UTC (an off-the-hour minute avoids the top-of-
+    # hour crunch).
+    - cron: "20 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the live registry and detect drift
+        id: drift
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Accept: application/json" \
+            -o /tmp/registry.json \
+            https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json
+
+          # Validate BEFORE anything else: a truncated or malformed CDN
+          # payload must never reach the bundle (offline fallback must
+          # stay loadable). The decode matches the app's own schema gate:
+          # version + agents present, every agent has an id.
+          python3 - <<'PY'
+          import json
+          with open("/tmp/registry.json") as f:
+              data = json.load(f)
+          assert isinstance(data.get("version"), str), "registry: missing version"
+          agents = data.get("agents")
+          assert isinstance(agents, list) and len(agents) > 0, "registry: no agents"
+          for agent in agents:
+              assert agent.get("id"), "registry: agent without id"
+          with open("Resources/acp-registry.json", "w") as f:
+              # Preserve upstream key order (the bundled file mirrors the
+              # registry's ordering; no sort_keys) with Prettier-compatible
+              # 2-space JSON so byte-stable no-diff runs stay no-ops.
+              json.dump(data, f, indent=2)
+              f.write("\n")
+          PY
+
+          if git diff --quiet -- Resources/acp-registry.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or reuse the chore branch
+        if: steps.drift.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          BRANCH="chore/acp-registry-refresh"
+          if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
+          echo "BRANCH=$BRANCH" >> "$GITHUB_ENV"
+
+      - name: Commit the refreshed snapshot
+        if: steps.drift.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "selfdrivingwiki-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Resources/acp-registry.json
+          if git diff --cached --quiet; then
+            echo "Nothing to commit (branch already up to date)."
+          else
+            git commit -m "chore(agents): refresh the bundled ACP registry snapshot"
+            git push origin "$BRANCH"
+          fi
+
+      - name: Open or update the reusable PR
+        if: steps.drift.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ env.BRANCH }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/pr-body.md <<'BODY'
+          ## What
+
+          Refreshes `Resources/acp-registry.json` from the official ACP
+          registry (https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json).
+          The bundled snapshot is the app's offline fallback; without this
+          weekly refresh it rots the way the 1.1.4 snapshot did.
+
+          ## Notes
+
+          - The payload passed the same structural validation the app's
+            decoder applies (version string, non-empty agents, agent ids).
+          - This PR is reused every week: one open PR, always current.
+            A no-diff week closes nothing and creates nothing.
+          - Automatic limitation: a PR created with the workflow's own
+            GITHUB_TOKEN does not trigger this repository's
+            `pull_request` CI event. CI runs after any human interaction
+            with this PR (edit, rebase, or push). The operator reviews,
+            enqueues, and merges per the house rules; the workflow never
+            merges and never pushes to main.
+          BODY
+          gh pr list --head "$BRANCH" --state open --json number \
+            --jq 'length' | grep -q '^1$' || \
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore(agents): refresh the bundled ACP registry snapshot" \
+              --body-file /tmp/pr-body.md
+          # Keep the single reusable PR current (no-op when already current).
+          gh pr edit "$BRANCH" --body-file /tmp/pr-body.md 2>/dev/null || true
