@@ -189,7 +189,10 @@ public protocol AgentProviderServices: Sendable {
     /// source-cleanup lane's own stage, never the chat summarizer's. Throws
     /// `.unavailable`/`.noProvider` when no provider is enabled.
     func prepareTranscriptCleanup() async throws -> AgentOperationPreparation
-    func discoverCatalog(for provider: AgentProvider) async throws -> ACPProviderCatalogObservation
+    func discoverCatalog(
+        for provider: AgentProvider,
+        isolation: ACPProviderModelProbe.LaunchIsolation
+    ) async throws -> ACPProviderCatalogObservation
     func modelSummary(text: String, preparation: AgentOperationPreparation) async throws -> String?
     /// One-shot single-pass model transform with a CALLER-SUPPLIED system
     /// prompt (issue #1379 transcript cleanup): one document in, one
@@ -240,6 +243,16 @@ public extension AgentProviderServices {
     /// skipped, so the caller logs the failure instead of guessing.
     func prepareTranscriptCleanup() async throws -> AgentOperationPreparation {
         throw AgentProviderRuntimeError.unavailable
+    }
+
+    /// The production isolation tier for callers that do not choose one:
+    /// chat-launch model capture and the summarizer probe run sandboxed.
+    /// Only the explicit Refresh Models action opts into the unsandboxed
+    /// tier.
+    func discoverCatalog(
+        for provider: AgentProvider
+    ) async throws -> ACPProviderCatalogObservation {
+        try await discoverCatalog(for: provider, isolation: .sandboxedProduction)
     }
 
     func modelTransform(
@@ -365,9 +378,10 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
     }
 
     public func discoverCatalog(
-        for provider: AgentProvider
+        for provider: AgentProvider,
+        isolation: ACPProviderModelProbe.LaunchIsolation
     ) async throws -> ACPProviderCatalogObservation {
-        try await installed.discoverCatalog(for: provider)
+        try await installed.discoverCatalog(for: provider, isolation: isolation)
     }
 
     public func modelSummary(
@@ -443,7 +457,10 @@ public struct UnavailableAgentProviderServices: AgentProviderServices {
     public func preparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
     public func fallbackPreparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage, fallbackProviderID: ProviderID) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
     public func prepareSummarization() async throws -> AgentProviderSummaryPreparation { throw AgentProviderRuntimeError.unavailable }
-    public func discoverCatalog(for provider: AgentProvider) async throws -> ACPProviderCatalogObservation { throw AgentProviderRuntimeError.unavailable }
+    public func discoverCatalog(
+        for provider: AgentProvider,
+        isolation: ACPProviderModelProbe.LaunchIsolation
+    ) async throws -> ACPProviderCatalogObservation { throw AgentProviderRuntimeError.unavailable }
     public func modelSummary(text: String, preparation: AgentOperationPreparation) async throws -> String? { throw AgentProviderRuntimeError.unavailable }
     public func release(_ token: AgentProviderAttemptToken) async {}
     public func readiness() async -> Bool { false }
@@ -486,7 +503,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     public typealias CatalogProbe = @Sendable (
         AgentProvider,
         [String],
-        String?
+        String?,
+        ACPProviderModelProbe.LaunchIsolation
     ) async throws -> ACPProviderCatalogObservation
     /// #1368: the login-shell `PATH` discovery for spawn shapes that build
     /// their own `BackendProfile` here (summarizer/title) and so have no
@@ -668,7 +686,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 turnCeilingTimeout: $2,
                 idleStallTimeout: $3)
         },
-        probeCatalog: @escaping CatalogProbe = { provider, resolvedCommand, apiKey in
+        probeCatalog: @escaping CatalogProbe = { provider, resolvedCommand, apiKey, isolation in
             try await ACPProviderModelProbe(
                 provider: provider,
                 resolvedCommand: resolvedCommand,
@@ -677,7 +695,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                 // launches do — the probe composes its own child environment,
                 // and without this its child inherits the daemon's minimal
                 // PATH and dies on `#!/usr/bin/env node` package bins.
-                loginShellPATH: await PathPreflight.loginShellPATH())
+                loginShellPATH: await PathPreflight.loginShellPATH(),
+                launchIsolation: isolation)
                 .discoverObservation()
         },
         sandboxUsability: @escaping SandboxUsabilityCheck = AgentProviderRuntime.defaultSandboxUsability,
@@ -916,16 +935,21 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     }
 
     public func discoverCatalog(
-        for provider: AgentProvider
+        for provider: AgentProvider,
+        isolation: ACPProviderModelProbe.LaunchIsolation
     ) async throws -> ACPProviderCatalogObservation {
         try requireAvailable()
         // Issue #1276 fail-closed ORDERING: the sandbox gate runs BEFORE
         // command resolution (and before the probe spawn). An unusable
         // seatbelt front-end means no probe subprocess at all — nothing is
-        // resolved, configured, or launched.
-        guard sandboxUsable(SandboxProfile.sandboxExecutablePath) else {
-            DebugLog.agent("AgentProviderRuntime.discoverCatalog: sandbox front-end unusable — refusing to probe (fail closed)")
-            throw ACPProviderModelProbeError.sandboxUnavailable
+        // resolved, configured, or launched. The unsandboxed manual refresh
+        // (the explicit Refresh Models action, Paseo parity) does not use
+        // sandbox-exec, so the front-end gate does not apply to it.
+        if isolation == .sandboxedProduction {
+            guard sandboxUsable(SandboxProfile.sandboxExecutablePath) else {
+                DebugLog.agent("AgentProviderRuntime.discoverCatalog: sandbox front-end unusable — refusing to probe (fail closed)")
+                throw ACPProviderModelProbeError.sandboxUnavailable
+            }
         }
         let commands = await resolveCommand([provider])
         try requireAvailable()
@@ -935,7 +959,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         return try await probeCatalog(
             provider,
             resolvedCommand,
-            readCredential(provider.id))
+            readCredential(provider.id),
+            isolation)
     }
 
     public func modelSummary(

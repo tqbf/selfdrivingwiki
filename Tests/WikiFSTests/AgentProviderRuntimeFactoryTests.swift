@@ -74,7 +74,7 @@ struct AgentProviderRuntimeFactoryTests {
                 return "secret"
             },
             resolvePermissionPolicy: { _ in .bypass },
-            probeCatalog: { receivedProvider, command, credential in
+            probeCatalog: { receivedProvider, command, credential, _ in
                 await calls.record(
                     provider: receivedProvider,
                     command: command,

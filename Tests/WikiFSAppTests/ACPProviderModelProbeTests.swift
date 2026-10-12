@@ -688,6 +688,101 @@ struct ACPProviderModelProbeTests {
         #expect(elapsed < .seconds(10),
                 "the hard bound must unblock the caller promptly, took \(elapsed)")
     }
+
+    /// The unsandboxed manual refresh spawns the REAL executable — no
+    /// sandbox-exec wrapper — and skips the fail-closed front-end gate
+    /// entirely (an unusable sandbox front-end must not block a manual
+    /// refresh). Paseo parity for the explicit Refresh Models action.
+    @Test func manualRefreshUnsandboxedSpawnsPlainExecutablePastTheGate() async throws {
+        let planBox = Mutex<ACPBackend.SandboxedSpawnPlan?>(nil)
+        let probe = ACPProviderModelProbe(
+            provider: AgentProvider(
+                id: ProviderID(rawValue: "pi-acp"),
+                label: "pi",
+                command: ["npx", "pi-acp@0.0.34"]),
+            resolvedCommand: ["/usr/local/bin/npx", "pi-acp@0.0.34"],
+            apiKey: "sk-test-secret",
+            loginShellPATH: "/usr/bin:/bin",
+            launchIsolation: .manualRefreshUnsandboxed,
+            // An unusable front-end MUST NOT block the unsandboxed tier:
+            // if the gate still ran, this stub yields .sandboxUnavailable
+            // and the plan is never captured.
+            sandboxUsability: { _ in false },
+            resolveBunRuntime: { nil },
+            makeClient: { Client() },
+            performLaunch: { _, plan, _ in
+                planBox.withLock { $0 = plan }
+                throw ACPProviderModelProbeError.timedOut
+            })
+
+        do {
+            _ = try await probe.discoverObservation(timeout: .seconds(5))
+            Issue.record("expected the stubbed launch error")
+        } catch let error as ACPProviderModelProbeError {
+            // Any launch-seam error proves the flow got past the front-end
+            // gate; .sandboxUnavailable here would mean the gate still ran.
+            #expect(error != .sandboxUnavailable, "the gate must be skipped, got \(error)")
+        }
+        let plan = planBox.withLock { $0 }
+        let captured = try #require(plan, "the unsandboxed plan must reach the launch seam")
+        #expect(captured.executablePath == "/usr/local/bin/npx",
+                "the real executable spawns directly, not sandbox-exec")
+        #expect(captured.arguments.contains("-p") == false,
+                "no seatbelt profile travels with an unsandboxed probe")
+        // Secrets rule: pi-acp has NO verified contract — the key is
+        // withheld in the unsandboxed tier.
+        #expect(ACPProviderModelProbe.effectiveAPIKey(
+            apiKey: "sk-test-secret",
+            launchIsolation: .manualRefreshUnsandboxed,
+            providerCommand: ["npx", "pi-acp@0.0.34"],
+            resolvedCommand: ["/usr/local/bin/npx", "pi-acp@0.0.34"]) == nil)
+    }
+
+    /// The secrets rule's positive half: a VERIFIED contract (codex-acp)
+    /// keeps its Keychain credential on the unsandboxed manual refresh, so
+    /// auth-capable adapters still discover models after the policy change.
+    @Test func manualRefreshUnsandboxedKeepsKeyForVerifiedContract() async throws {
+        let planBox = Mutex<ACPBackend.SandboxedSpawnPlan?>(nil)
+        let probe = ACPProviderModelProbe(
+            provider: AgentProvider(
+                id: ProviderID(rawValue: "codex-acp"),
+                label: "Codex",
+                command: ["npx", "@agentclientprotocol/codex-acp@2.2.2"]),
+            resolvedCommand: ["/usr/local/bin/npx", "@agentclientprotocol/codex-acp@2.2.2"],
+            apiKey: "sk-test-secret",
+            loginShellPATH: "/usr/bin:/bin",
+            launchIsolation: .manualRefreshUnsandboxed,
+            sandboxUsability: { _ in false },
+            resolveBunRuntime: { nil },
+            makeClient: { Client() },
+            performLaunch: { _, plan, _ in
+                planBox.withLock { $0 = plan }
+                throw ACPProviderModelProbeError.timedOut
+            })
+
+        do {
+            _ = try await probe.discoverObservation(timeout: .seconds(5))
+            Issue.record("expected the stubbed launch error")
+        } catch {
+            // The capture assertions are the point; the typed error shape is
+            // mapProbeError's contract, already pinned elsewhere.
+        }
+        // The plan must reach the launch seam; the helper assertions above
+        // pin the secrets rule, so the captured plan itself is not read here.
+        _ = try #require(planBox.withLock { $0 })
+        // Secrets rule: the verified contract keeps its Keychain credential.
+        #expect(ACPProviderModelProbe.effectiveAPIKey(
+            apiKey: "sk-test-secret",
+            launchIsolation: .manualRefreshUnsandboxed,
+            providerCommand: ["npx", "@agentclientprotocol/codex-acp@2.2.2"],
+            resolvedCommand: ["/usr/local/bin/npx", "@agentclientprotocol/codex-acp@2.2.2"]) == "sk-test-secret")
+        // Production tiers pass the key through unchanged.
+        #expect(ACPProviderModelProbe.effectiveAPIKey(
+            apiKey: "sk-test-secret",
+            launchIsolation: .sandboxedProduction,
+            providerCommand: ["npx", "pi-acp@0.0.34"],
+            resolvedCommand: ["/usr/local/bin/npx", "pi-acp@0.0.34"]) == "sk-test-secret")
+    }
 }
 
 private final class Counter: Sendable {

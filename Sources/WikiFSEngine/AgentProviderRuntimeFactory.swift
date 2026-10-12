@@ -54,14 +54,15 @@ public struct AgentProviderRuntimeFactory: Sendable {
                 turnCeilingTimeout: ceiling,
                 idleStallTimeout: idleStall)
         },
-        probeCatalog: @escaping AgentProviderRuntime.CatalogProbe = { provider, resolvedCommand, apiKey in
+        probeCatalog: @escaping AgentProviderRuntime.CatalogProbe = { provider, resolvedCommand, apiKey, isolation in
             try await ACPProviderModelProbe(
                 provider: provider,
                 resolvedCommand: resolvedCommand,
                 apiKey: apiKey,
                 // #1368: probe launches see the same login-shell PATH chat
                 // launches do (see AgentProviderRuntime's default).
-                loginShellPATH: await PathPreflight.loginShellPATH())
+                loginShellPATH: await PathPreflight.loginShellPATH(),
+                launchIsolation: isolation)
                 .discoverObservation()
         }
     ) {

@@ -46,6 +46,35 @@ import WikiFSCore
 /// launches.
 public struct ACPProviderModelProbe: Sendable {
 
+    /// Whether the probe's adapter subprocess runs inside the production
+    /// spawn sandbox.
+    ///
+    /// - `sandboxedProduction` (default): the fail-closed sandbox-exec
+    ///   launch plan — the fail-safe tier for any caller that does not
+    ///   explicitly choose. Today's only explicit unsandboxed caller is
+    ///   the Settings "Refresh Models" action: chat-launch model capture
+    ///   reads the cached catalog and the summarizer lane spawns through
+    ///   its own path (neither probes through this type), and the upgrade
+    ///   manager's candidate probe stays sandboxed via its own launch
+    ///   path (`ACPAdapterCandidateProbe`).
+    /// - `manualRefreshUnsandboxed`: Paseo parity for the EXPLICIT
+    ///   "Refresh Models" action — the canonicalized command spawns
+    ///   directly, so every ACP works without a per-adapter home
+    ///   allowance. Secrets rule: the Keychain API key is injected ONLY
+    ///   when the adapter has a VERIFIED compatibility contract
+    ///   (`ACPAdapterCompatibility`); unverified adapters run
+    ///   secrets-free, and an auth-required candidate fails with a clear
+    ///   authenticate error instead of running credential-laden outside
+    ///   containment.
+    public enum LaunchIsolation: Sendable, Hashable {
+        case sandboxedProduction
+        case manualRefreshUnsandboxed
+    }
+
+    /// The isolation tier for this probe's launch (default: the production
+    /// sandbox).
+    public let launchIsolation: LaunchIsolation
+
     /// The provider whose agent subprocess the probe spawns. Captured by value
     /// (`AgentProvider` is `Sendable`).
     public let provider: AgentProvider
@@ -122,6 +151,7 @@ public struct ACPProviderModelProbe: Sendable {
         resolvedCommand: [String],
         apiKey: String?,
         loginShellPATH: String? = nil,
+        launchIsolation: LaunchIsolation = .sandboxedProduction,
         sandboxUsability: @escaping @Sendable (String) -> Bool = ACPProviderModelProbe.defaultSandboxUsability,
         resolveBunRuntime: @escaping @Sendable () async -> RuntimeCommandResolution? = ACPProviderModelProbe.defaultBunResolver,
         makeClient: @escaping @Sendable () -> Client = { Client() },
@@ -131,10 +161,38 @@ public struct ACPProviderModelProbe: Sendable {
         self.resolvedCommand = resolvedCommand
         self.apiKey = apiKey
         self.loginShellPATH = loginShellPATH
+        self.launchIsolation = launchIsolation
         self.sandboxUsability = sandboxUsability
         self.resolveBunRuntime = resolveBunRuntime
         self.makeClient = makeClient
         self.performLaunch = performLaunch
+    }
+
+    /// The API key the probe may use under `isolation` (the secrets rule):
+    /// the unsandboxed manual refresh carries a Keychain credential ONLY
+    /// for an adapter with a verified compatibility contract; every other
+    /// tier passes the caller's key through unchanged. Pure — unit-tested
+    /// without spawning.
+    ///
+    /// Source priority: the package identity lives in the STORED command
+    /// (bare runner argv[0] — `"npx"`, `"bun"`, `"uvx"`); the PATH-resolved
+    /// argv carries an absolute argv[0] the parser does not match, so the
+    /// normal path verifies via `providerCommand`, and the
+    /// `resolvedCommand` leg covers a bare-name resolve-miss fallback.
+    /// Resolution preserves the package argument, so both agree on
+    /// identity.
+    static func effectiveAPIKey(
+        apiKey: String?,
+        launchIsolation: LaunchIsolation,
+        providerCommand: [String]?,
+        resolvedCommand: [String]
+    ) -> String? {
+        guard launchIsolation == .manualRefreshUnsandboxed else { return apiKey }
+        let verified = [providerCommand, resolvedCommand].contains { argv in
+            guard let parsed = ACPPackageCommandParser.parse(argv) else { return false }
+            return ACPAdapterCompatibility.contract(forPackage: parsed.package) != nil
+        }
+        return verified ? apiKey : nil
     }
 
     /// Discover the models the provider's agent advertises, WITHOUT a
@@ -166,19 +224,44 @@ public struct ACPProviderModelProbe: Sendable {
         // scratch creation, bun resolution. The runtime boundary checks
         // before command resolution; this second check protects independent
         // probe callers, and nothing at all happens on an unusable system.
-        guard sandboxUsability(SandboxProfile.sandboxExecutablePath) else {
-            DebugLog.agent("ACPProviderModelProbe: sandbox front-end unusable — refusing to probe (fail closed)")
-            throw ACPProviderModelProbeError.sandboxUnavailable
+        // The unsandboxed manual refresh does not use sandbox-exec at all,
+        // so the gate — and the containment question — does not apply to it.
+        if launchIsolation == .sandboxedProduction {
+            guard sandboxUsability(SandboxProfile.sandboxExecutablePath) else {
+                DebugLog.agent("ACPProviderModelProbe: sandbox front-end unusable — refusing to probe (fail closed)")
+                throw ACPProviderModelProbeError.sandboxUnavailable
+            }
         }
 
         // Build the spawn profile via the SAME construction ACPBackend uses —
         // `resolveSpawnConfig` handles PATH resolution, env.* hints, and the
         // Keychain key. We pass NO selectedModelId: the probe reads the agent's
         // *advertised* list, not a chosen model.
+        //
+        // Secrets rule (manualRefreshUnsandboxed): a Keychain credential is
+        // injected ONLY for an adapter with a VERIFIED compatibility
+        // contract. Unverified adapters run secrets-free; an auth-required
+        // candidate fails with a clear authenticate error instead of running
+        // credential-laden outside containment. The provider's own
+        // user-configured env always flows.
+        let effectiveAPIKey = Self.effectiveAPIKey(
+            apiKey: apiKey,
+            launchIsolation: launchIsolation,
+            providerCommand: provider.command,
+            resolvedCommand: resolvedCommand)
+        if launchIsolation == .manualRefreshUnsandboxed, apiKey != nil, effectiveAPIKey == nil {
+            DebugLog.agent("ACPProviderModelProbe: unsandboxed manual refresh — Keychain key withheld (no verified contract for provider=\(provider.id))")
+        }
+        // THE application point of the secrets rule: withholding here means
+        // ACPAuthResolver sees no key against the candidate's authMethods
+        // and authenticate is skipped (.missingCredentials) — an
+        // auth-required unverified adapter fails with a clear auth error.
+        // The key travels in-band to the authenticate call, never in the
+        // child environment (`acpAgentApiKey` has no `env.` prefix).
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: resolvedCommand,
-            apiKey: apiKey,
+            apiKey: effectiveAPIKey,
             selectedModelId: nil)
         guard !hints.isEmpty else {
             // An empty resolved command → no `acpAgentPath` → no spawn possible.
@@ -234,12 +317,24 @@ public struct ACPProviderModelProbe: Sendable {
         // of the launch that reaches the SDK client: `sandbox-exec` as the
         // executable, the adapter argv behind `--`, the provider-home-layered
         // read-only profile, and the scratch-relocated environment.
-        let plan = ACPBackend.sandboxedSpawnPlan(
-            invocation: scratch.sandbox,
-            executablePath: spawn.executablePath,
-            arguments: spawn.arguments,
-            environment: env,
-            scratchDirectory: scratch.directoryURL)
+        // The unsandboxed manual refresh keeps the SAME typed seam but the
+        // plan carries the real executable — Paseo parity (`PROBE_ENV`) with
+        // no sandbox-exec wrapper and no relocated TMPDIR.
+        let plan: ACPBackend.SandboxedSpawnPlan
+        if launchIsolation == .manualRefreshUnsandboxed {
+            plan = ACPBackend.SandboxedSpawnPlan(
+                executablePath: spawn.executablePath,
+                arguments: spawn.arguments,
+                environment: env,
+                defines: [])
+        } else {
+            plan = ACPBackend.sandboxedSpawnPlan(
+                invocation: scratch.sandbox,
+                executablePath: spawn.executablePath,
+                arguments: spawn.arguments,
+                environment: env,
+                scratchDirectory: scratch.directoryURL)
+        }
 
         // The SDK Client is the concurrency boundary. Local to this call —
         // there is no shared transport (Paseo parity: spawnProcess(PROBE_ENV)).

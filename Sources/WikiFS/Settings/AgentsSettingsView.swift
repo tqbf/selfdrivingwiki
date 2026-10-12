@@ -819,7 +819,8 @@ private struct ProviderDetailPane: View {
             let outcome: Result<ACPProviderCatalogObservation, Error>
             do {
                 let observation = try await providerServices.discoverCatalog(
-                    for: providerForProbe)
+                    for: providerForProbe,
+                    isolation: .manualRefreshUnsandboxed)
                 if ACPProviderModelProbe.shouldThrowNoModels(observation.models) {
                     DebugLog.agent("ProviderDetailPane.refreshModels: probe OK but no models advertised provider=\(providerID)")
                     outcome = .failure(ACPProviderModelProbeError.noModelsAdvertised)

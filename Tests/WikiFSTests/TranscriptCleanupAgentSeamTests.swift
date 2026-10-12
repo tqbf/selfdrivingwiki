@@ -170,7 +170,10 @@ struct TranscriptCleanupAgentSeamTests {
         func prepareSummarization() async throws -> AgentProviderSummaryPreparation {
             throw AgentProviderRuntimeError.unavailable
         }
-        func discoverCatalog(for provider: AgentProvider) async throws -> ACPProviderCatalogObservation {
+        func discoverCatalog(
+            for provider: AgentProvider,
+            isolation: ACPProviderModelProbe.LaunchIsolation
+        ) async throws -> ACPProviderCatalogObservation {
             throw AgentProviderRuntimeError.unavailable
         }
         func modelSummary(
