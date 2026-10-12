@@ -803,7 +803,8 @@ private struct ThrowingModelSummaryServices: AgentProviderServices {
     }
 
     func discoverCatalog(
-        for provider: AgentProvider
+        for provider: AgentProvider,
+        isolation: ACPProviderModelProbe.LaunchIsolation
     ) async throws -> ACPProviderCatalogObservation {
         throw LaunchFailure()
     }

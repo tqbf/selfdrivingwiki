@@ -749,7 +749,7 @@ struct AgentProviderRuntimeTests {
             },
             readCredential: { _ in "key" },
             resolvePermissionPolicy: { _ in .bypass },
-            probeCatalog: { _, resolvedCommand, _ in
+            probeCatalog: { _, resolvedCommand, _, _ in
                 probedCommand.mutate { $0 = resolvedCommand }
                 return observation
             })
@@ -774,7 +774,7 @@ struct AgentProviderRuntimeTests {
             },
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
-            probeCatalog: { _, _, _ in
+            probeCatalog: { _, _, _, _ in
                 Issue.record("the probe must never run when the sandbox is unusable")
                 throw ACPProviderModelProbeError.notConfigured
             },
