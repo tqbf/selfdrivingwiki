@@ -407,4 +407,104 @@ struct NewChatSidebarProjectionTests {
         #expect(row.configuredThinkingOptionID == configured)
         #expect(row.effectiveThinkingOptionID == configured)
     }
+
+    // MARK: - Attachment hand-off (create-chat-with-attachments)
+
+    @Test("beginNewChat with attachments persists the row and installs the chat-scoped request")
+    func beginNewChatWithAttachmentsPersistsRowAndInstallsRequest() throws {
+        let (model, store) = try makeModel()
+        let page = try store.createPage(title: "Attach Me")
+        // Constructing the SourceID from raw text is deliberate: this test
+        // pins the hand-off's typed boundaries, not store rows.
+        let targets: [ChatAttachmentTarget] = [
+            .page(page.id),
+            .source(SourceID(rawValue: "01HATTACHSOURCE")),
+        ]
+
+        model.beginNewChat(attachments: targets)
+
+        let chatID = try #require(activeChatID(model))
+        #expect(try store.listChats().map(\.id) == [chatID])
+        #expect(model.pendingChatAttachmentRequest
+            == PendingChatAttachmentRequest(chatID: chatID, targets: targets))
+        #expect(model.pendingSidebarReveal == .chat(chatID))
+    }
+
+    @Test("a failed beginNewChat with attachments leaves no request and opens no tab")
+    func failedBeginNewChatWithAttachmentsLeavesNoRequestAndOpensNoTab() throws {
+        let (model, _, _) = try makeReadOnlyModel()
+
+        model.beginNewChat(attachments: [.page(PageID(rawValue: "01HANY"))])
+
+        #expect(model.storeError != nil, "the failure must surface the store error alert")
+        #expect(model.tabs.isEmpty)
+        #expect(model.pendingChatAttachmentRequest == nil)
+    }
+
+    @Test("the attachment request is consumed once, by its own chat only")
+    func attachmentRequestConsumedByItsOwnChatOnly() throws {
+        let (model, _) = try makeModel()
+        let targets: [ChatAttachmentTarget] = [.page(PageID(rawValue: "01HSELF"))]
+        model.beginNewChat(attachments: targets)
+        let chatID = try #require(activeChatID(model))
+
+        // A nil chat (legacy draft surface) and a foreign chat both get
+        // nothing, and the request stays installed.
+        #expect(model.consumePendingChatAttachmentRequest(for: nil).isEmpty)
+        #expect(model.consumePendingChatAttachmentRequest(for: ChatID(rawValue: "other")).isEmpty)
+        #expect(model.pendingChatAttachmentRequest != nil)
+
+        // The own chat consumes exactly once.
+        #expect(model.consumePendingChatAttachmentRequest(for: chatID) == targets)
+        #expect(model.pendingChatAttachmentRequest == nil)
+        #expect(model.consumePendingChatAttachmentRequest(for: chatID).isEmpty)
+    }
+
+    @Test("the attachment consume works after the composer focus marker is cleared")
+    func attachmentConsumeWorksAfterComposerFocusCleared() throws {
+        let (model, _) = try makeModel()
+        let targets: [ChatAttachmentTarget] = [.source(SourceID(rawValue: "01HAFTERCLEAR"))]
+        model.beginNewChat(attachments: targets)
+        let chatID = try #require(activeChatID(model))
+
+        // The composer cleared the focus marker before the surface consumed
+        // its attachments: the two hand-offs do not proxy each other.
+        model.consumeComposerFocusRequest(for: chatID)
+        #expect(model.pendingComposerFocusChatID == nil)
+        #expect(model.consumePendingChatAttachmentRequest(for: chatID) == targets)
+        #expect(model.pendingChatAttachmentRequest == nil)
+    }
+
+    @Test("a second beginNewChat replaces the attachment request")
+    func secondBeginNewChatReplacesAttachmentRequest() throws {
+        let (model, _) = try makeModel()
+        model.beginNewChat(attachments: [.page(PageID(rawValue: "01HFIRST"))])
+        let firstID = try #require(activeChatID(model))
+        model.beginNewChat(attachments: [.source(SourceID(rawValue: "01HSECOND"))])
+        let secondID = try #require(activeChatID(model))
+
+        #expect(firstID != secondID)
+        #expect(model.pendingChatAttachmentRequest == PendingChatAttachmentRequest(
+            chatID: secondID, targets: [.source(SourceID(rawValue: "01HSECOND"))]))
+        // The first chat can no longer consume anything.
+        #expect(model.consumePendingChatAttachmentRequest(for: firstID).isEmpty)
+    }
+
+    @Test("a second beginNewChat with empty attachments replaces the outstanding request")
+    func secondBeginNewChatWithEmptyAttachmentsReplacesRequest() throws {
+        let (model, _) = try makeModel()
+        model.beginNewChat(attachments: [.page(PageID(rawValue: "01HOLD"))])
+        let firstID = try #require(activeChatID(model))
+
+        model.beginNewChat()
+        let secondID = try #require(activeChatID(model))
+
+        // The empty creation retargets (and thereby cancels) the request; the
+        // first chat's targets can neither be inherited nor stranded.
+        #expect(model.pendingChatAttachmentRequest
+            == PendingChatAttachmentRequest(chatID: secondID, targets: []))
+        #expect(model.consumePendingChatAttachmentRequest(for: firstID).isEmpty)
+        #expect(model.consumePendingChatAttachmentRequest(for: secondID).isEmpty)
+        #expect(model.pendingChatAttachmentRequest == nil)
+    }
 }
