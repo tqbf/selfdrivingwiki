@@ -61,6 +61,16 @@ public protocol FileProviderDomainService: Sendable {
     /// The daemon's current domain list. Returns `[]` if the list can't be
     /// fetched, so callers read a failure as "not present" and keep retrying.
     func domains() async -> [RegisteredDomain]
+
+    /// Force the daemon to re-scan and re-fetch every item below the domain's
+    /// root, recovering items `fileproviderd` has gotten permanently stuck on
+    /// (an item lands in the daemon's throttle list after a propagation
+    /// failure and is never retried because the extension keeps reporting the
+    /// same item version). This is the only reliable recovery: it must be
+    /// called from the app itself — from an external process it fails with
+    /// -2001/-2014. See `FileProviderFacade.verifyProjection`, the only
+    /// caller, which reserves this for confirmed, persistent drift.
+    func reimport(id: WikiID) async throws
 }
 
 extension FileProviderDomainService {

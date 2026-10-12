@@ -294,6 +294,22 @@ struct RootScene: View {
             // Wire the File Provider bus subscription for this wiki's session.
             fileProvider.subscribeBus(for: wikiID, bus: resolved.store.eventBus)
             Task { await fileProvider.activate(id: descriptor.id, displayName: descriptor.displayName) }
+            // Check the mount's `pages/by-id`/`pages/by-title` projection against the
+            // DB and self-heal a stuck File Provider replica (`reimportItems`) if
+            // pages are persistently missing on disk. Fire-and-forget — must not
+            // block wiki opening. The closure re-reads `resolved.store.summaries` at
+            // recheck time so pages created during the grace period aren't
+            // misreported as missing; `weak resolved` avoids extending the session's
+            // lifetime past this window closing.
+            fileProvider.verifyProjection(
+                forWikiID: descriptor.id,
+                displayName: descriptor.displayName,
+                expectedPages: { [weak resolved] in
+                    (resolved?.store.summaries ?? []).map {
+                        ProjectionDriftCheck.ExpectedPage(id: $0.id, title: $0.title)
+                    }
+                }
+            )
             // Reap stale workspaces for this wiki.
             DebugLog.trying("reap stale workspaces", operation: { try resolved.store.reapStaleWorkspaces(ttl: 86_400) })
         }

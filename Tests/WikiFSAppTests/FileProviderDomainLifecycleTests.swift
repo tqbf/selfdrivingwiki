@@ -45,12 +45,14 @@ struct FileProviderDomainLifecycleTests {
             case add(id: String, displayName: String)
             case remove(id: String, reason: DomainRemovalReason)
             case domains
+            case reimport(id: String)
         }
 
         private let lock = NSLock()
         private var _calls: [Call] = []
         private var registered: [String: String] = [:]
         private var _addError: (any Error)?
+        private var _reimportError: (any Error)?
 
         init(registered: [String: String] = [:]) {
             self.registered = registered
@@ -61,11 +63,18 @@ struct FileProviderDomainLifecycleTests {
         var removals: [(id: String, reason: DomainRemovalReason)] {
             calls.compactMap { if case let .remove(id, reason) = $0 { (id, reason) } else { nil } }
         }
+        /// Every wiki id that `reimport` was called for, in call order.
+        var reimports: [String] {
+            calls.compactMap { if case let .reimport(id) = $0 { id } else { nil } }
+        }
         func name(of id: String) -> String? { lock.withLock { registered[id] } }
 
         /// Make `add` throw instead of applying — models e.g.
         /// `NSFileWriteFileExistsError` against a leftover replica.
         func failAdds(with error: any Error) { lock.withLock { _addError = error } }
+
+        /// Make `reimport` throw instead of succeeding.
+        func failReimports(with error: any Error) { lock.withLock { _reimportError = error } }
 
         func add(id: WikiID, displayName: String) async throws {
             try lock.withLock {
@@ -86,6 +95,13 @@ struct FileProviderDomainLifecycleTests {
             lock.withLock {
                 _calls.append(.domains)
                 return registered.map { RegisteredDomain(id: WikiID(rawValue: $0.key), displayName: $0.value) }
+            }
+        }
+
+        func reimport(id: WikiID) async throws {
+            try lock.withLock {
+                _calls.append(.reimport(id: id.rawValue))
+                if let _reimportError { throw _reimportError }
             }
         }
     }

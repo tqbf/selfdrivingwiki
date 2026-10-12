@@ -57,14 +57,42 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     // MARK: Read-only — reject all mutations.
 
+    /// Rejects every create, except one case: an item the daemon re-offers
+    /// during `reimportItems(below:)`.
+    ///
+    /// A reimport makes `fileproviderd` treat every file already on disk as a
+    /// new local item and call `createItem` with `.mayAlreadyExist`. Those
+    /// files came from this extension. If they are rejected as read-only, the
+    /// daemon puts each one on its throttle list and never reconciles the
+    /// subtree, so the reimport that `FileProviderFacade.verifyProjection`
+    /// requests leaves the mount as incomplete as before.
     func createItem(basedOn itemTemplate: NSFileProviderItem,
                     fields: NSFileProviderItemFields,
                     contents url: URL?,
                     options: NSFileProviderCreateItemOptions,
                     request: NSFileProviderRequest,
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
-        completionHandler(nil, [], false, readOnly)
+        if let node = Self.existingNode(forReimportOf: itemTemplate, options: options, in: projection) {
+            // Documents ask the daemon to fetch content, so the projection's
+            // bytes replace whatever is on disk.
+            completionHandler(WikiFSItem(node: node), [], !node.isFolder, nil)
+        } else {
+            completionHandler(nil, [], false, readOnly)
+        }
         return Progress()
+    }
+
+    /// The projected node that a reimported item matches, by parent and
+    /// filename. `nil` when the create is a real user create (no
+    /// `.mayAlreadyExist`) or the projection has no such item; both stay
+    /// read-only rejections.
+    static func existingNode(
+        forReimportOf itemTemplate: NSFileProviderItem,
+        options: NSFileProviderCreateItemOptions,
+        in projection: Projection
+    ) -> ProjectedNode? {
+        guard options.contains(.mayAlreadyExist) else { return nil }
+        return projection.child(named: itemTemplate.filename, in: itemTemplate.parentItemIdentifier)
     }
 
     func modifyItem(_ item: NSFileProviderItem,
