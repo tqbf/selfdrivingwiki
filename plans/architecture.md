@@ -115,8 +115,16 @@ The *why* behind each fold:
 
 - **pages use `count:sum(version)`, not `MAX(version)`** — `version` is per-row, so
   editing a page that doesn't hold the global max would leave `MAX` unchanged and
-  the edit would silently stay stale. `count:sum` moves on every create / update /
-  delete of any page.
+  the edit would silently stay stale. `count:sum` moves on most creates, updates,
+  and deletes, but not all: two writes can cancel out. For example, delete a page
+  at version 1 and create a new page at version 1. The count and the sum do not
+  change.
+- **`change_revision` (schema v57, last field)** — a single-row counter that
+  SQLite triggers increment on every INSERT, UPDATE, and DELETE of each table
+  that a fold reads (`GRDBWikiStore.changeRevisionTables`). It only increases,
+  so two writes cannot cancel out. It makes the token change on every write.
+  The folds stay in the token. SQLite drops a table's triggers when it drops
+  the table, so each migration run re-creates any trigger that is missing.
 - **`ingested_files` count+sum** — without it, ingesting/removing a file wouldn't
   refresh the `files/` tree.
 - **`system_prompt` version** — editing *only* the prompt must still refresh

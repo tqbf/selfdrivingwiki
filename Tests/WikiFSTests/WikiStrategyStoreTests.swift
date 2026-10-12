@@ -82,7 +82,7 @@ struct WikiStrategyStoreTests {
     @Test func migrationDefaults() throws {
         // Fresh schema: the table exists, unseeded, reads Default.
         let fresh = try TestStoreFactory.inMemory()
-        #expect(fresh.pragmaValue("user_version") == "56")
+        #expect(fresh.pragmaValue("user_version") == "57")
         #expect(fresh.scalarText(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wiki_strategy';") == "1")
         #expect(try fresh.getWikiStrategy() == nil)
@@ -97,7 +97,7 @@ struct WikiStrategyStoreTests {
         PRAGMA user_version = 55;
         """, at: pair.url)
         let migrated = try GRDBWikiStore(databaseURL: pair.url)
-        #expect(migrated.pragmaValue("user_version") == "56")
+        #expect(migrated.pragmaValue("user_version") == "57")
         #expect(migrated.scalarText(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wiki_strategy';") == "1")
         #expect(try migrated.getWikiStrategy() == nil)

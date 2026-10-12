@@ -158,7 +158,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// `PRAGMA user_version` up to 37, and this store must recognize them as
     /// already-migratable so the ladder is a no-op on re-open (the proven
     /// `if version < N`)
-    private static let currentSchemaVersion = 56
+    private static let currentSchemaVersion = 57
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -601,6 +601,14 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         // `guard` above fired).
         var v = version
         try migrate(from: &v, in: db)
+        // SQLite drops a table's triggers with the table. A later step that
+        // rebuilds a covered table (create, copy, drop, rename) would silently
+        // stop the change revision for it, so re-create any missing trigger
+        // after every ladder run. Idempotent (`IF NOT EXISTS`).
+        try db.inTransaction(.immediate) {
+            try Self.createChangeRevisionV57(in: db)
+            return .commit
+        }
     }
 
     /// The stepwise, idempotent migration ladder keyed on `PRAGMA user_version`.
@@ -1662,6 +1670,22 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 return .commit
             }
             version = 56
+        }
+
+        // v56→v57: a change revision that only increases. The change token
+        // folded COUNT and SUM(version) per table, so two writes could cancel
+        // out: delete a page at version 1, create another, and the token was
+        // unchanged, so the File Provider saw "nothing changed". A single-row
+        // `change_revision` table is bumped by triggers on every INSERT,
+        // UPDATE, and DELETE of the tables the token covers, and the token
+        // appends it as its last field.
+        if version < 57 {
+            try db.inTransaction(.immediate) {
+                try Self.createChangeRevisionV57(in: db)
+                try db.execute(sql: "PRAGMA user_version = 57;")
+                return .commit
+            }
+            version = 57
         }
 
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
@@ -3780,6 +3804,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         try createMetadataProvenanceTablesV48(in: db)
         try createRendererSettingsTablesV49(in: db)
         try createOKFTrustTablesV52(in: db)
+        // Last: the triggers need every covered table to exist.
+        try createChangeRevisionV57(in: db)
     }
 
     // MARK: - Internal helpers (mirrors of SQLiteWikiStore privates)
@@ -3871,12 +3897,83 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             name: author, kind: authorKind(author), on: db)
     }
 
+    // MARK: - Change revision (v57)
+
+    /// The tables whose writes advance `change_revision`: every table a
+    /// ``ChangeTokenContributor`` reads. Keep it in step with
+    /// `tokenContributors`; `ChangeRevisionTests` checks that each table has
+    /// its three triggers.
+    static let changeRevisionTables = [
+        "pages", "sources", "log", "wiki_index", "source_markdown_versions",
+        "source_versions", "refs", "activities", "bookmark_nodes",
+        "chats", "chat_messages",
+        "page_okf_metadata", "source_markdown_okf_metadata", "wiki_strategy",
+    ]
+
+    /// The trigger operations, by name suffix.
+    private static let changeRevisionTriggerOperations = [
+        ("ai", "INSERT"), ("au", "UPDATE"), ("ad", "DELETE"),
+    ]
+
+    /// The name of the trigger that bumps the revision on `operation`
+    /// (`ai`/`au`/`ad`) of `table`.
+    static func changeRevisionTriggerName(table: String, operation: String) -> String {
+        "change_revision_\(table)_\(operation)"
+    }
+
+    /// v57 DDL, shared by the migration step and `createFreshSchema` so a
+    /// migrated DB and a fresh DB are identical. Creates the single-row
+    /// `change_revision` table (seeded at 0) and, for each covered table that
+    /// exists, an AFTER INSERT, UPDATE, and DELETE trigger that adds 1.
+    /// Everything is `IF NOT EXISTS`-guarded, so re-running it only adds what
+    /// is missing. Tables that do not exist yet (test fixtures that build
+    /// only part of the schema) are skipped; the post-ladder call in
+    /// `migrateIfNeeded` adds their triggers once a later step creates them.
+    ///
+    /// SQLite triggers run once per row. A bulk write (a cascade delete of a
+    /// chat's messages) bumps the revision once per row: one single-row update
+    /// each, inside the writer's transaction. A reader never sees a partial
+    /// bump because the write commits atomically.
+    static func createChangeRevisionV57(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS change_revision (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            revision INTEGER NOT NULL
+        );
+        """)
+        try db.execute(sql: "INSERT OR IGNORE INTO change_revision (id, revision) VALUES (1, 0);")
+        for table in changeRevisionTables where try tableExists(table, in: db) {
+            for (suffix, operation) in changeRevisionTriggerOperations {
+                let name = changeRevisionTriggerName(table: table, operation: suffix)
+                try db.execute(sql: """
+                CREATE TRIGGER IF NOT EXISTS \(name) AFTER \(operation) ON \(table)
+                BEGIN
+                    UPDATE change_revision SET revision = revision + 1 WHERE id = 1;
+                END;
+                """)
+            }
+        }
+    }
+
+    /// The current change revision, `0` before v57 (a read-only connection to
+    /// a DB the app has not migrated yet).
+    internal func changeRevisionValue(on db: Database) -> Int64 {
+        resilientScalar("SELECT COALESCE((SELECT revision FROM change_revision WHERE id = 1), 0);", on: db)
+    }
+
     // MARK: - changeToken (File Provider sync anchor)
 
     /// The whole-database change token — the File Provider sync anchor and
     /// durable per-wiki ground truth. Folds `COUNT`/`SUM` over every table
     /// into one ``ChangeToken``, assembled from per-kind
-    /// ``ChangeTokenContributor``s in registration order.
+    /// ``ChangeTokenContributor``s in registration order, then appends the
+    /// v57 change revision.
+    ///
+    /// The folds alone can collide: two writes can leave every count and sum
+    /// unchanged (delete a page at version 1, create another). The change
+    /// revision only increases, on every write to a covered table, so the
+    /// token changes on every write. It is not a contributor because it
+    /// belongs to no single ``ResourceKind``.
     ///
     /// The registry order is load-bearing: it reproduces the historical
     /// 14-field ``ChangeToken/rawString`` byte-for-byte. The
@@ -3888,6 +3985,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             for contributor in Self.tokenContributors {
                 token.apply(try contributor.fold(in: self, on: db))
             }
+            token.changeRevision = changeRevisionValue(on: db)
             return token
         }
     }

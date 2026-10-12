@@ -12,8 +12,8 @@ import WikiFSTypes
 /// fit a single page; by-id/by-title paginate cleanly for large wikis.
 ///
 /// Change signaling (the crux): the sync anchor is the live whole-database
-/// change token (`Projection.changeToken()` — count:sum over pages, advancing
-/// on ANY edit). When the app saves a page it calls `signalEnumerator`; the
+/// change token (`Projection.checkedChangeToken()` — per-table folds plus the
+/// v57 change revision, which advances on every write). When the app saves a page it calls `signalEnumerator`; the
 /// File Provider then asks `enumerateChanges` from its last anchor. If the token has
 /// advanced we re-emit the container's items — now carrying higher
 /// `itemVersion`s (`contentVersion = page.version`) — so the File Provider discards its

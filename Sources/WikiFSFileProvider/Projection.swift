@@ -810,8 +810,8 @@ struct Projection {
     // MARK: - Change token (sync anchor)
 
     /// The whole-database change token used as the File Provider sync anchor.
-    /// Advances on ANY page create/update/delete (count:sum — see
-    /// `GRDBWikiStore.changeToken()`). Opens a short-lived read store; returns
+    /// Advances on every write to a covered table (the v57 change revision —
+    /// see `GRDBWikiStore.changeToken()`). Opens a short-lived read store; returns
     /// `"0:0"` if the DB is unavailable so the node builders that fold the
     /// token into cache keys can still answer. Within a read scope the failure
     /// is recorded, so `checkedChangeToken()` throws instead: the enumerator

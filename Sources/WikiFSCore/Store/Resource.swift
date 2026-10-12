@@ -69,10 +69,16 @@ public struct ChangeToken: Sendable, Equatable {
     public var chat = Chat()
     public var okfMetadataRevisionSum: Int64 = 0
     public var strategyRevision: Int64 = 0
+    /// The v57 change revision: advances on every INSERT, UPDATE, and DELETE
+    /// of a table the folds cover. The folds are counts and sums, so two
+    /// writes can cancel out; this field cannot, so the token changes on
+    /// every write. Not a fold: it belongs to no single resource kind.
+    public var changeRevision: Int64 = 0
 
     /// Colon-joined form reproducing the historical positional token, for the
     /// File Provider sync anchor. Append-only (never reorder fields) — the
-    /// strategy fold (v56) is field 16, appended after the OKF sum.
+    /// strategy fold (v56) is field 16, appended after the OKF sum; the
+    /// change revision (v57) is field 17.
     public var rawString: String {
         "\(pages.count):\(pages.versionSum):"
         + "\(sourceTable.count):\(sourceTable.versionSum):"
@@ -80,6 +86,7 @@ public struct ChangeToken: Sendable, Equatable {
         + "\(sourceGraph.versionCount):\(sourceGraph.refsGenerationSum):\(sourceGraph.activitiesCount):"
         + "\(bookmarks):\(chat.count):\(chat.messageCount):\(okfMetadataRevisionSum)"
         + ":\(strategyRevision)"
+        + ":\(changeRevision)"
     }
 
     /// Applies one fold's values into the matching named field.
