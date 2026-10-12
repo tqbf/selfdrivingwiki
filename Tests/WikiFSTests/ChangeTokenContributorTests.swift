@@ -52,8 +52,10 @@ struct ChangeTokenContributorTests {
         let expectedHash = SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF
         // The first 14 fields retain their historical positions. Schema v52
         // appends the neutral OKF projection-revision sum as field 15; v56
-        // appends the wiki-strategy revision as field 16.
-        let expected = "0:0:0:0:\(expectedHash):0:1:0:0:0:0:0:0:0:0:0"
+        // appends the wiki-strategy revision as field 16; v57 appends the
+        // change revision as field 17 (0: the fresh schema creates its
+        // triggers after the seed rows).
+        let expected = "0:0:0:0:\(expectedHash):0:1:0:0:0:0:0:0:0:0:0:0"
         #expect(token.rawString == expected)
     }
 

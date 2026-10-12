@@ -1,5 +1,7 @@
 #if os(macOS)  // File Provider extension — macOS-only (FileProvider framework)
 import FileProvider
+import os
+import WikiFSTypes
 
 /// Enumerates the children of one container from the SQLite projection, and
 /// tracks change via a LIVE sync anchor (Phase 3 — the v0 ship gate).
@@ -10,8 +12,8 @@ import FileProvider
 /// fit a single page; by-id/by-title paginate cleanly for large wikis.
 ///
 /// Change signaling (the crux): the sync anchor is the live whole-database
-/// change token (`Projection.changeToken()` — count:sum over pages, advancing
-/// on ANY edit). When the app saves a page it calls `signalEnumerator`; the
+/// change token (`Projection.checkedChangeToken()` — per-table folds plus the
+/// v57 change revision, which advances on every write). When the app saves a page it calls `signalEnumerator`; the
 /// File Provider then asks `enumerateChanges` from its last anchor. If the token has
 /// advanced we re-emit the container's items — now carrying higher
 /// `itemVersion`s (`contentVersion = page.version`) — so the File Provider discards its
@@ -62,6 +64,13 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
     }
     private static let knownItems = KnownItemSet()
 
+    /// Process-wide record of the last change token each wiki's store
+    /// returned. `currentSyncAnchor` falls back to it when the store cannot be
+    /// read, instead of reporting a placeholder as a real anchor. An old
+    /// anchor is safe: `enumerateChanges` from it re-emits the current items
+    /// and diffs against the known-item set, so it can only over-report.
+    private static let lastAnchors = OSAllocatedUnfairLock(initialState: [String: Data]())
+
     /// Unique key for the per-(wiki, container) known-item cache.
     private var cacheKey: String { "\(projection.wikiID)/\(container.rawValue)" }
 
@@ -73,7 +82,16 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
     func invalidate() {}
 
     func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt page: NSFileProviderPage) {
-        let all = currentItems()
+        let all: [WikiFSItem]
+        do {
+            all = try currentItems()
+        } catch {
+            // Unknown, not empty: do not seed an empty baseline (a later
+            // `enumerateChanges` would then miss real deletions) and do not
+            // report an empty folder. The system retries the enumeration.
+            observer.finishEnumeratingWithError(Self.retryableError(error))
+            return
+        }
         // Seed the File Provider's known-item baseline so a later `enumerateChanges` can
         // diff and report deletions (#111). `all` is always the FULL child set
         // (pagination only slices it for serving), so this is correct on every
@@ -94,7 +112,6 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
     }
 
     func enumerateChanges(for observer: NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
-        let current = currentSyncAnchorData()
         let incoming = anchor.rawValue
 
         // A legacy/unparseable anchor predates this scheme: expire it so the
@@ -102,6 +119,19 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
         guard incoming != Self.legacyAnchor,
               String(data: incoming, encoding: .utf8) != nil else {
             observer.finishEnumeratingWithError(Self.expiredError)
+            return
+        }
+
+        // A store that cannot be read says nothing about what changed. Before
+        // this check a failed read gave the `"0:0"` token and an empty item
+        // list, so every known item was reported deleted and the anchor moved
+        // to `"0:0"`. Report a retryable error instead: no deletions, and the
+        // system keeps its anchor.
+        let current: Data
+        do {
+            current = try currentSyncAnchorData()
+        } catch {
+            observer.finishEnumeratingWithError(Self.retryableError(error))
             return
         }
 
@@ -114,7 +144,15 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
         // Something changed: re-emit this container's items. They now carry
         // higher itemVersions (contentVersion derives from the bumped per-page
         // version), so the File Provider invalidates materialized copies and re-fetches.
-        let items = currentItems()
+        // Resolved only after the no-change fast path: building `.workingSet`
+        // is the expensive enumeration (#291).
+        let items: [WikiFSItem]
+        do {
+            items = try currentItems()
+        } catch {
+            observer.finishEnumeratingWithError(Self.retryableError(error))
+            return
+        }
         let currentIDs = Set(items.map(\.itemIdentifier))
 
         // Baseline-missing guard (#277): the known-item set is process-static —
@@ -148,21 +186,47 @@ final class WikiFSEnumerator: NSObject, NSFileProviderEnumerator {
         observer.finishEnumeratingChanges(upTo: NSFileProviderSyncAnchor(current), moreComing: false)
     }
 
+    /// The current anchor. When the store cannot be read, the last anchor
+    /// this process read for the wiki, or nil if there is none. Never a
+    /// placeholder such as `"0:0"`: the system would store it as a real
+    /// position and diff later changes against it.
     func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
-        completionHandler(NSFileProviderSyncAnchor(currentSyncAnchorData()))
+        do {
+            completionHandler(NSFileProviderSyncAnchor(try currentSyncAnchorData()))
+        } catch {
+            DebugLog.fileprovider("currentSyncAnchor \(cacheKey): \(error)")
+            let key = projection.wikiID.rawValue
+            completionHandler(Self.lastAnchors.withLock { $0[key] }.map { NSFileProviderSyncAnchor($0) })
+        }
     }
 
     // MARK: - Helpers
 
     /// The current items for this container, freshly resolved from this wiki's
-    /// SQLite DB.
-    private func currentItems() -> [WikiFSItem] {
-        projection.children(of: container).map { WikiFSItem(node: $0) }
+    /// SQLite DB. Throws `Projection.StoreUnavailable` when the store could
+    /// not be read.
+    private func currentItems() throws -> [WikiFSItem] {
+        try projection.checkedChildren(of: container).map { WikiFSItem(node: $0) }
     }
 
-    /// The live anchor bytes: this wiki's whole-database change token (count:sum).
-    private func currentSyncAnchorData() -> Data {
-        Data(projection.changeToken().utf8)
+    /// The live anchor bytes: this wiki's whole-database change token. Throws
+    /// `Projection.StoreUnavailable` when the store could not be read.
+    private func currentSyncAnchorData() throws -> Data {
+        let anchor = Data(try projection.checkedChangeToken().utf8)
+        let key = projection.wikiID.rawValue
+        Self.lastAnchors.withLock { $0[key] = anchor }
+        return anchor
+    }
+
+    /// The error for a failed store read. See
+    /// `Projection.StoreUnavailable.fileProviderError` for why it is a
+    /// transient Cocoa error and not `serverUnreachable`.
+    private static func retryableError(_ error: Error) -> NSError {
+        DebugLog.fileprovider("enumeration failed, system will retry: \(error)")
+        if let failure = error as? Projection.StoreUnavailable {
+            return failure.fileProviderError
+        }
+        return Projection.StoreUnavailable(reason: "\(error)").fileProviderError
     }
 
     private static var expiredError: NSError {
