@@ -136,7 +136,12 @@ struct QuitBackstopEndToEndTests {
         }
 
         let outcome = try await quitBackstopOutcome()
-        #expect(outcome.terminatedGroupCount == 1)
+        // #1402: parallel suites may register a collateral group in the
+        // window between the drain check above and the sweep; terminating
+        // it is production-correct sweep behavior. The safety property is
+        // that OUR in-flight group died — proven below by the executor
+        // observing its own process die by signal.
+        #expect(outcome.terminatedGroupCount >= 1)
 
         // The executor sees its own process die by signal — the in-band
         // proof that the group really died, not just that a signal was sent.
