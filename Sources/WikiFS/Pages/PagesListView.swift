@@ -83,6 +83,9 @@ struct PagesListCallbacks {
     /// Bookmark a multi-row selection (or a single row) into a folder the user
     /// picks in the target-picker sheet. Opens `BookmarkTargetPickerSheet`.
     var onAddToBookmarks: ([PageID]) -> Void
+    /// Create a durable new chat with the selection attached as composer
+    /// chips, opening it focused. The ids arrive in row order.
+    var onNewChat: ([PageID]) -> Void
 }
 
 /// Carries the right-clicked row + the effective selection (selected ∪ clicked)
@@ -343,6 +346,10 @@ extension PagesListViewController {
         }
 
         menu.addItem(menuItem(
+            title: isBatch ? "New Chat with \(count) Pages" : "New Chat with Page",
+            systemImage: "plus.bubble", action: #selector(newChatAction(_:)), payload: payload))
+
+        menu.addItem(menuItem(
             title: isBatch ? "Add \(count) Pages to Bookmarks…" : "Add to Bookmarks…",
             systemImage: ResourceKind.bookmark.systemImageName, action: #selector(addToBookmarksAction(_:)), payload: payload))
 
@@ -405,6 +412,9 @@ extension PagesListViewController {
         item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
         item.target = self
         item.representedObject = payload
+        // Test seam: the SF Symbol name doubles as the accessibility identifier,
+        // so hosted menu tests can assert the icon without image comparison.
+        item.setAccessibilityIdentifier(systemImage)
         return item
     }
 
@@ -452,6 +462,11 @@ extension PagesListViewController {
     @objc private func addToBookmarksAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload {
             callbacks?.onAddToBookmarks(p.effectiveIDs)
+        }
+    }
+    @objc private func newChatAction(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? PagesMenuPayload {
+            callbacks?.onNewChat(p.effectiveIDs)
         }
     }
 }
