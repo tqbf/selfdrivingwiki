@@ -304,7 +304,8 @@ public actor ACPBackend: AgentBackend {
         drainGraceTimeout: Duration = .seconds(3),
         maxConcurrentExecutors: Int = 1,
         resolveBunRuntime: @escaping @Sendable () async -> RuntimeCommandResolution? = ACPBackend.defaultResolveBunRuntime,
-        probeExecutable: @escaping @Sendable (URL) -> RuntimeExecutableProbeOutcome = RuntimeFileProbe.probe
+        probeExecutable: @escaping @Sendable (URL) -> RuntimeExecutableProbeOutcome = RuntimeFileProbe.probe,
+        recentSandboxDenials: @escaping @Sendable (Date, [String]) async -> [String] = ACPBackend.defaultSandboxDenials
     ) {
         self.permissionPolicy = permissionPolicy
         self.permissionBudget = budget
@@ -316,6 +317,13 @@ public actor ACPBackend: AgentBackend {
         self.maxConcurrentExecutors = max(1, maxConcurrentExecutors)
         self.resolveBunRuntime = resolveBunRuntime
         self.probeExecutable = probeExecutable
+        self.recentSandboxDenials = recentSandboxDenials
+    }
+
+    /// The #1409 production denial query: one bounded unified-log `log show`
+    /// over the launch window (same reporter the model probe uses).
+    static let defaultSandboxDenials: @Sendable (Date, [String]) async -> [String] = { since, tokens in
+        await SandboxDenialReporter.recentDenials(since: since, tokens: tokens)
     }
 
     /// Resolves the bun runtime used to canonicalize JS-adapter launches
@@ -338,6 +346,11 @@ public actor ACPBackend: AgentBackend {
     /// (injectable so the memoization contract is testable without a real
     /// file on disk).
     private let probeExecutable: @Sendable (URL) -> RuntimeExecutableProbeOutcome
+    /// #1409 injectable seam: the bounded unified-log denial query run when
+    /// the chat launch/initialize window fails (production default pins
+    /// `SandboxDenialReporter.recentDenials`). Same shape as the probe's
+    /// seam so both failure paths share one reporter.
+    private let recentSandboxDenials: SandboxDenialReporter.DenialQuery
 
     /// Memoized bun resolution lifecycle. `notAttempted` defers the
     /// (potentially slow, login-shell) locate until an adapter-shaped launch
@@ -642,6 +655,8 @@ public actor ACPBackend: AgentBackend {
             }
         }
 
+        // #1409: the denial query window starts at the launch attempt.
+        let launchStart = Date()
         let initResponse: InitializeResponse
         do {
             try await client.launch(
@@ -672,11 +687,30 @@ public actor ACPBackend: AgentBackend {
             stderrTask.cancel()
             let stderr = earlyStderrBuffer.flush()
             let hint = Self.launchHint(for: spawn)
+            // #1409: a Seatbelt denial is the frequent real cause of a
+            // sandboxed launch failing with a cryptic adapter error. Query
+            // the bounded unified-log window for denials matching the spawn
+            // tokens and carry them on the typed error (rendered by
+            // `errorDescription`) + the log. Skipped on cancellation — a
+            // cancelled start is unwinding anyway and the query is a
+            // multi-second store scan.
+            var sandboxDenials: [String] = []
+            if !Task.isCancelled {
+                sandboxDenials = await recentSandboxDenials(
+                    launchStart,
+                    SandboxDenialReporter.sandboxDenialTokens(
+                        executablePath: effectiveSpawn.executablePath,
+                        arguments: effectiveSpawn.arguments))
+                for denial in sandboxDenials {
+                    DebugLog.agent("ACPBackend.startProcess: sandbox denial: \(denial)")
+                }
+            }
             DebugLog.agent("ACPBackend.startProcess: launch/initialize failed: \(error.localizedDescription)\nstderr: \(stderr ?? "<nil>")")
             throw ACPBackendError.launchFailed(
                 executable: spawn.executablePath,
                 stderr: stderr,
-                hint: hint)
+                hint: hint,
+                sandboxDenials: sandboxDenials)
         }
 
         DebugLog.agent("ACPBackend.startProcess: initialize OK agent=\(initResponse.agentInfo?.name ?? "?") authMethods=\(initResponse.authMethods?.count ?? 0)")
@@ -3036,8 +3070,14 @@ enum ACPBackendError: Error, LocalizedError {
     /// captures whatever the subprocess wrote before dying (may be nil if the
     /// process never started); `hint` carries the env-var workaround
     /// (`CLAUDE_CODE_EXECUTABLE` / `CODEX_PATH`) when the command matches a
-    /// known provider, or nil for generic failures.
-    case launchFailed(executable: String, stderr: String?, hint: ProviderEnvHint?)
+    /// known provider, or nil for generic failures. `sandboxDenials` (#1409)
+    /// carries the normalized Seatbelt denials captured in the launch window
+    /// (empty when none were found or the query was skipped).
+    case launchFailed(
+        executable: String,
+        stderr: String?,
+        hint: ProviderEnvHint?,
+        sandboxDenials: [String])
 
     var errorDescription: String? {
         switch self {
@@ -3083,11 +3123,12 @@ enum ACPBackendError: Error, LocalizedError {
         case .quotaExhausted(let provider, let resetTime):
             let resetStr = resetTime.map { " until \($0)" } ?? ""
             return "Provider \(provider) quota exhausted\(resetStr)."
-        case .launchFailed(let executable, let stderr, let hint):
+        case .launchFailed(let executable, let stderr, let hint, let sandboxDenials):
             var msg = "Failed to launch \(executable)."
             if let stderr, !stderr.isEmpty {
                 msg += "\n\n\(stderr)"
             }
+            msg = SandboxDenialReporter.appending(msg, denials: sandboxDenials)
             if let hint {
                 msg += "\n\nHint: set \(hint.envVar) to the full path of your \(hint.description) binary, or edit the provider's command/env in agent-providers.json."
             }
