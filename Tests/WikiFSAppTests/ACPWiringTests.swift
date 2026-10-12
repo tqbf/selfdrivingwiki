@@ -528,6 +528,21 @@ import ACPModel
             executablePath: "/usr/local/bin/gemini", arguments: ["--experimental-acp"]) == [".gemini"])
         #expect(ACPBackend.providerHomeSubpaths(
             executablePath: "/usr/local/bin/hermes", arguments: ["acp"]) == [])
+        // pi-acp writes ~/.pi (captured Seatbelt denial:
+        // file-write-create ~/.pi/agent/settings.json.lock at session/new).
+        // The exact `pi` basename covers the agent's own `pi acp` shape; a
+        // package merely CONTAINING "pi" (api, pip) must not match.
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["pi-acp@0.0.34"]) == [".npm", ".pi"])
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/opt/homebrew/bin/bun",
+            arguments: ["x", "pi-acp@0.0.34"]) == [".bun", ".cache/.bun", ".pi"])
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/Users/me/.local/bin/pi", arguments: ["acp"]) == [".pi"])
+        #expect(ACPBackend.providerHomeSubpaths(
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["some-api-tool@1.0"]) == [".npm"])
         // A bare `bun`/`npm` with a NON-runner subcommand is not a
         // package-runner launch — no cache allowance.
         #expect(ACPBackend.providerHomeSubpaths(

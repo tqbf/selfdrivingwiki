@@ -2483,9 +2483,9 @@ public actor ACPBackend: AgentBackend {
     /// `.local` or `$HOME` as a whole, and no `.local/bin` without a
     /// captured Seatbelt denial from a production-shaped cold run).
     /// Provider config homes stay command-token derived: codex writes
-    /// `~/.codex`, gemini `~/.gemini`. Unknown commands get no extras — a
-    /// denied config-home write surfaces as a visible failure and lands here
-    /// as a new mapping entry.
+    /// `~/.codex`, gemini `~/.gemini`, and pi writes `~/.pi`. Unknown
+    /// commands get no extras — a denied config-home write surfaces as a
+    /// visible failure and lands here as a new mapping entry.
     ///
     /// The security boundary this expresses (issue #1279 AC.13): these homes
     /// are an EXPLICIT writable-and-executable package-runner exception.
@@ -2512,6 +2512,17 @@ public actor ACPBackend: AgentBackend {
         }
         if fullCommand.contains("gemini") {
             subpaths.append(".gemini")
+        }
+        // pi writes its agent settings under `~/.pi`; the captured denial is
+        // `file-write-create ~/.pi/agent/settings.json.lock` mid-session-new
+        // (2026-10-12, probe refresh). The bare "pi" substring would
+        // over-grant ("api", "pip"), so match the `pi-acp` package spec or
+        // an exact `pi` basename (the agent's own `pi acp` launch shape).
+        if fullCommand.contains("pi-acp")
+            || ([executablePath] + arguments).contains(where: {
+                ($0 as NSString).lastPathComponent == "pi"
+            }) {
+            subpaths.append(".pi")
         }
         return subpaths
     }
