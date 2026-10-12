@@ -94,10 +94,13 @@ public enum ACPAgentVersionPredicate: Codable, Hashable, Sendable {
     }
 }
 
-private struct SemanticAgentVersion: Comparable {
+/// Parsed, comparable semantic version core (major.minor[.patch], build and
+/// prerelease suffixes stripped). Shared by `ACPAgentVersionPredicate` and the
+/// adapter-upgrade decision code so both compare versions identically.
+public struct SemanticAgentVersion: Comparable {
     let components: [Int]
 
-    init?(_ rawValue: String) {
+    public init?(_ rawValue: String) {
         let core = rawValue.split(separator: "+", maxSplits: 1).first?
             .split(separator: "-", maxSplits: 1).first ?? Substring(rawValue)
         let parts = core.split(separator: ".", omittingEmptySubsequences: false)
@@ -108,7 +111,7 @@ private struct SemanticAgentVersion: Comparable {
         components = parsed + Array(repeating: 0, count: 3 - parts.count)
     }
 
-    static func < (lhs: Self, rhs: Self) -> Bool {
+    public static func < (lhs: Self, rhs: Self) -> Bool {
         lhs.components.lexicographicallyPrecedes(rhs.components)
     }
 }
