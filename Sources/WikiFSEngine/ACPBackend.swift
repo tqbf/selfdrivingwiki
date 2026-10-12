@@ -2482,10 +2482,20 @@ public actor ACPBackend: AgentBackend {
     /// (the cache/data trees uv's own env contract names; deliberately NOT
     /// `.local` or `$HOME` as a whole, and no `.local/bin` without a
     /// captured Seatbelt denial from a production-shaped cold run).
-    /// Provider config homes stay command-token derived: codex writes
-    /// `~/.codex`, gemini `~/.gemini`, and pi writes `~/.pi`. Unknown
-    /// commands get no extras — a denied config-home write surfaces as a
-    /// visible failure and lands here as a new mapping entry.
+    /// Provider config homes are deny-driven, one captured Seatbelt
+    /// denial per entry — that evidence bar is the design, so the table
+    /// grows only when an adapter genuinely needs it. Per-entry match
+    /// rules differ: codex (`~/.codex`) and gemini (`~/.gemini`) are
+    /// lowercased substring matches (no known dangerous collisions
+    /// today); pi (`~/.pi`) is stricter — the `pi-acp` package spec or
+    /// an exact `pi` basename, because the bare "pi" substring collides
+    /// with "api" and "pip". Unknown commands get no extras: a missing
+    /// entry surfaces as an adapter-level failure (today often a cryptic
+    /// stream error — denial-surfacing is the planned follow-up, issue
+    /// #1409), and the captured denial lands here as a new mapping
+    /// entry. A fourth entry is the trigger to promote these matches to
+    /// a typed classifier keyed on `ACPPackageCommandParser.parse` plus
+    /// basename, migrating all entries with fresh denial evidence.
     ///
     /// The security boundary this expresses (issue #1279 AC.13): these homes
     /// are an EXPLICIT writable-and-executable package-runner exception.

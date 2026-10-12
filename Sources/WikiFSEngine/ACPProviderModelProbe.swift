@@ -50,9 +50,13 @@ public struct ACPProviderModelProbe: Sendable {
     /// spawn sandbox.
     ///
     /// - `sandboxedProduction` (default): the fail-closed sandbox-exec
-    ///   launch plan — required for probes that run unattended or carry an
-    ///   injected Keychain credential (chat-launch model capture, the
-    ///   summarizer tier, the upgrade manager's candidate probe).
+    ///   launch plan — the fail-safe tier for any caller that does not
+    ///   explicitly choose. Today's only explicit unsandboxed caller is
+    ///   the Settings "Refresh Models" action: chat-launch model capture
+    ///   reads the cached catalog and the summarizer lane spawns through
+    ///   its own path (neither probes through this type), and the upgrade
+    ///   manager's candidate probe stays sandboxed via its own launch
+    ///   path (`ACPAdapterCandidateProbe`).
     /// - `manualRefreshUnsandboxed`: Paseo parity for the EXPLICIT
     ///   "Refresh Models" action — the canonicalized command spawns
     ///   directly, so every ACP works without a per-adapter home
@@ -169,6 +173,14 @@ public struct ACPProviderModelProbe: Sendable {
     /// for an adapter with a verified compatibility contract; every other
     /// tier passes the caller's key through unchanged. Pure — unit-tested
     /// without spawning.
+    ///
+    /// Source priority: the package identity lives in the STORED command
+    /// (bare runner argv[0] — `"npx"`, `"bun"`, `"uvx"`); the PATH-resolved
+    /// argv carries an absolute argv[0] the parser does not match, so the
+    /// normal path verifies via `providerCommand`, and the
+    /// `resolvedCommand` leg covers a bare-name resolve-miss fallback.
+    /// Resolution preserves the package argument, so both agree on
+    /// identity.
     static func effectiveAPIKey(
         apiKey: String?,
         launchIsolation: LaunchIsolation,
@@ -240,6 +252,12 @@ public struct ACPProviderModelProbe: Sendable {
         if launchIsolation == .manualRefreshUnsandboxed, apiKey != nil, effectiveAPIKey == nil {
             DebugLog.agent("ACPProviderModelProbe: unsandboxed manual refresh — Keychain key withheld (no verified contract for provider=\(provider.id))")
         }
+        // THE application point of the secrets rule: withholding here means
+        // ACPAuthResolver sees no key against the candidate's authMethods
+        // and authenticate is skipped (.missingCredentials) — an
+        // auth-required unverified adapter fails with a clear auth error.
+        // The key travels in-band to the authenticate call, never in the
+        // child environment (`acpAgentApiKey` has no `env.` prefix).
         let hints = AgentBackendFactory.providerHints(
             provider: provider,
             resolvedCommand: resolvedCommand,
