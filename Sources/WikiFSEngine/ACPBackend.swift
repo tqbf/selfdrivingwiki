@@ -1840,6 +1840,15 @@ public actor ACPBackend: AgentBackend {
         let forkedSessionId = response.sessionId
         DebugLog.agent("ACPBackend.forkSession: forked → session=\(forkedSessionId.value)")
 
+        // Some agents fork only the persisted transcript and never hold the
+        // new session live (claude-agent-acp 0.88.0: the first prompt then
+        // fails with "Session not found"). Resume — or load — the forked id
+        // so the agent holds it before the first prompt. For an agent that
+        // already holds the fork live, resume returns that same session. A
+        // failure here throws, and the caller falls back to a fresh start.
+        let activated = try await activateForkedSession(
+            forkedSessionId, warm: warm, cwd: workingDir)
+
         // The forked session inherits the parent's conversation context —
         // including the already-injected system prompt. Mark it as injected so
         // `send()` doesn't re-inject it on the first turn.
@@ -1848,8 +1857,8 @@ public actor ACPBackend: AgentBackend {
             client: warm.client,
             sessionId: forkedSessionId,
             permissionDelegate: warm.permissionDelegate,
-            modelsInfo: parent.modelsInfo,
-            configOptions: parent.configOptions,
+            modelsInfo: activated.modelsInfo ?? parent.modelsInfo,
+            configOptions: activated.configOptions ?? parent.configOptions,
             notificationFanout: warm.notificationFanout,
             drainTask: nil,
             systemPrompt: parent.systemPrompt,
@@ -1858,6 +1867,30 @@ public actor ACPBackend: AgentBackend {
 
         DebugLog.agent("ACPBackend.forkSession: forked session \(forkedSessionId.value) (handle \(sessionID)) ready")
         return SessionHandle(id: sessionID)
+    }
+
+    /// Makes a forked session live on the warm process: `session/resume`
+    /// when the agent advertises it, else `session/load`. Returns the
+    /// session's models and config options when the agent reports them
+    /// (nil fields keep the parent's). When the agent advertises neither,
+    /// the fork response is trusted as a live session.
+    private func activateForkedSession(
+        _ sessionId: SessionId,
+        warm: WarmProcess,
+        cwd: String
+    ) async throws -> (modelsInfo: ModelsInfo?, configOptions: [SessionConfigOption]?) {
+        if warm.canResume {
+            DebugLog.agent("ACPBackend.forkSession: resuming forked session=\(sessionId.value)")
+            let response = try await warm.client.resumeSession(sessionId: sessionId, cwd: cwd)
+            return (response.models, response.configOptions)
+        }
+        if warm.canLoadSession {
+            DebugLog.agent("ACPBackend.forkSession: loading forked session=\(sessionId.value)")
+            let response = try await warm.client.loadSession(sessionId: sessionId, cwd: cwd)
+            return (response.models, response.configOptions)
+        }
+        DebugLog.agent("ACPBackend.forkSession: agent supports neither resume nor load — using the fork response as-is")
+        return (nil, nil)
     }
 
     // MARK: - Debug logging
