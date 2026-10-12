@@ -504,10 +504,10 @@ import ACPModel
         // bun x adapters get the bun install cache instead.
         #expect(ACPBackend.providerHomeSubpaths(
             executablePath: "/opt/homebrew/bin/bun",
-            arguments: ["x", "@agentclientprotocol/claude-agent-acp"]) == [".bun"])
+            arguments: ["x", "@agentclientprotocol/claude-agent-acp"]) == [".bun", ".cache/.bun"])
         #expect(ACPBackend.providerHomeSubpaths(
             executablePath: "/opt/homebrew/bin/bunx",
-            arguments: ["@agentclientprotocol/claude-agent-acp"]) == [".bun"])
+            arguments: ["@agentclientprotocol/claude-agent-acp"]) == [".bun", ".cache/.bun"])
         // uv launches (issue #1279 Phase 3): ONLY the bounded cache/data
         // pair — no `.local`, no `$HOME`, no `.local/bin`.
         #expect(ACPBackend.providerHomeSubpaths(
@@ -830,7 +830,7 @@ import ACPModel
         // layering drops ~/.npm and layers ~/.bun instead.
         #expect(ACPBackend.providerHomeSubpaths(
             executablePath: canonical.executablePath,
-            arguments: canonical.arguments) == [".bun"])
+            arguments: canonical.arguments) == [".bun", ".cache/.bun"])
     }
 
     /// `npm exec` in both flag orders and the `npm x` alias rewrite; npx-only
@@ -1015,7 +1015,7 @@ import ACPModel
         // behavior from the substring era, now with the runner half typed).
         #expect(ACPBackend.providerHomeSubpaths(
             executablePath: canonical.executablePath,
-            arguments: canonical.arguments) == [".bun", ".codex"])
+            arguments: canonical.arguments) == [".bun", ".cache/.bun", ".codex"])
 
         // A declined rewrite (untranslatable runner flags) keeps the
         // configured npx command → npm policy, and the staged bun path does

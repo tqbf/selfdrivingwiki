@@ -817,7 +817,7 @@ struct AgentSandboxProcessTests {
         let subpaths = ACPBackend.providerHomeSubpaths(
             executablePath: "/resolved/bun",
             arguments: ["x", "@agentclientprotocol/claude-agent-acp"])
-        #expect(subpaths == [".bun"])
+        #expect(subpaths == [".bun", ".cache/.bun"])
         let invocation = SandboxProfile.invocation(scratch.sandbox, addingHomeSubpaths: subpaths)
 
         // The production lease allocation, anchored at the fixture home so

@@ -33,9 +33,8 @@ public enum ShellQuoting {
 /// login-shell startup semantics (`plans/sandbox-agent.md`).
 ///
 /// The resolver degrades gracefully: an unknown shell, a failed hop, or an
-/// output that is not a plausible PATH (empty, or containing whitespace —
-/// e.g. fish renders `$PATH` space-separated) returns nil and the caller falls
-/// back to the inherited process PATH. Injectable `runProcess` for tests.
+/// output `PathPreflight.isPlausiblePATH` rejects returns nil and the caller
+/// falls back to the inherited process PATH. Injectable `runProcess` for tests.
 public enum UserEnvironmentPath {
     /// The result of one lookup: the resolved PATH, or nil (caller falls back).
     public static func userPATH(
@@ -49,55 +48,22 @@ public enum UserEnvironmentPath {
         return await loginShellPATH(shellPath: shell, runProcess: runProcess)
     }
 
-    /// The account's configured login shell: `$SHELL` when set and absolute,
-    /// else the passwd record's `pw_shell`. nil when neither names an absolute
-    /// path (an absolute path is required to exec it directly).
+    /// The account's configured login shell. Forwards to
+    /// `PathPreflight.configuredShell`.
     public static func configuredShell(
         environment: [String: String],
         uid: uid_t = getuid()
     ) -> String? {
-        if let shell = environment["SHELL"], shell.hasPrefix("/") {
-            return shell
-        }
-        #if os(macOS)
-        guard let passwd = getpwuid(uid) else { return nil }
-        guard let raw = passwd.pointee.pw_shell else { return nil }
-        let shell = String(cString: raw)
-        return shell.hasPrefix("/") ? shell : nil
-        #else
-        // Linux diagnostics-only builds: no passwd lookup — $SHELL or nothing.
-        return nil
-        #endif
+        PathPreflight.configuredShell(environment: environment, uid: uid)
     }
 
-    /// Run `<shell> -l -c 'printf %s "$PATH"'` and return the trimmed stdout.
-    /// Login mode (`-l`) sources the account's startup files — that is the
-    /// PATH the user's interactive shell would have. nil on a non-zero exit,
-    /// a throw, or an implausible output (empty / whitespace, which is not a
-    /// colon-separated PATH — fish renders `$PATH` space-separated).
+    /// The login-shell PATH for `shellPath`. Forwards to
+    /// `PathPreflight.loginShellPATH(shellPath:using:)`.
     public static func loginShellPATH(
         shellPath: String,
         runProcess: (AsyncProcessRequest) async throws -> AsyncProcessResult = AsyncProcessRunner.run
     ) async -> String? {
-        let request = AsyncProcessRequest(
-            executableURL: URL(fileURLWithPath: shellPath),
-            arguments: ["-l", "-c", "printf %s \"$PATH\""])
-        do {
-            let result = try await runProcess(request)
-            guard result.terminationStatus == 0 else { return nil }
-            let path = String(data: result.stdoutData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let path, !path.isEmpty else { return nil }
-            // A plausible PATH is colon-separated with no whitespace. A space
-            // (fish list rendering, or a shell error banner) means the output
-            // is not usable as PATH.
-            guard !path.contains(where: { $0 == " " || $0 == "\t" || $0 == "\n" }) else {
-                return nil
-            }
-            return path
-        } catch {
-            return nil
-        }
+        await PathPreflight.loginShellPATH(shellPath: shellPath, using: runProcess)
     }
 }
 

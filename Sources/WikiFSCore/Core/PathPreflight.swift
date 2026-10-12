@@ -83,8 +83,8 @@ public enum PathPreflight {
         )
     }
 
-    /// The login-shell PATH (`zsh -lc 'printf %s "$PATH"'`), or nil if the
-    /// hop fails.
+    /// The login-shell PATH from the account's configured shell, or nil if
+    /// the hop fails. See `loginShellPATH(shellPath:using:)`.
     ///
     /// Deliberately unbounded: the hop runs on user-triggered discovery paths
     /// (provider readiness, catalog probe, one per agent run or extraction
@@ -97,21 +97,68 @@ public enum PathPreflight {
     }
 
     static func loginShellPATH(
+        using runProcess: (AsyncProcessRequest) async throws -> AsyncProcessResult,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        uid: uid_t = getuid()
+    ) async -> String? {
+        let shell = configuredShell(environment: environment, uid: uid) ?? "/bin/zsh"
+        return await loginShellPATH(shellPath: shell, using: runProcess)
+    }
+
+    /// The account's configured login shell: `$SHELL` when set and absolute,
+    /// else the passwd record's `pw_shell`. nil when neither names an absolute
+    /// path (an absolute path is required to exec it directly).
+    public static func configuredShell(
+        environment: [String: String],
+        uid: uid_t = getuid()
+    ) -> String? {
+        if let shell = environment["SHELL"], shell.hasPrefix("/") {
+            return shell
+        }
+        #if os(macOS)
+        guard let passwd = getpwuid(uid) else { return nil }
+        guard let raw = passwd.pointee.pw_shell else { return nil }
+        let shell = String(cString: raw)
+        return shell.hasPrefix("/") ? shell : nil
+        #else
+        // Linux diagnostics-only builds: no passwd lookup — $SHELL or nothing.
+        return nil
+        #endif
+    }
+
+    /// Run `<shell> -l -c '/usr/bin/printenv PATH'` and return the trimmed
+    /// stdout. Login mode (`-l`) sources the account's startup files — that is
+    /// the PATH the user's interactive shell would have. `printenv` reads the
+    /// exported (always colon-joined) PATH, so the output does not depend on
+    /// the shell's own list syntax. nil on a non-zero exit, a throw, or an
+    /// output `isPlausiblePATH` rejects.
+    public static func loginShellPATH(
+        shellPath: String,
         using runProcess: (AsyncProcessRequest) async throws -> AsyncProcessResult
     ) async -> String? {
         let request = AsyncProcessRequest(
-            executableURL: URL(fileURLWithPath: "/bin/zsh"),
-            arguments: ["-lc", "printf %s \"$PATH\""])
-
+            executableURL: URL(fileURLWithPath: shellPath),
+            arguments: ["-l", "-c", "/usr/bin/printenv PATH"])
         do {
             let result = try await runProcess(request)
             guard result.terminationStatus == 0 else { return nil }
             let path = String(data: result.stdoutData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            return (path?.isEmpty == false) ? path : nil
+            guard let path, isPlausiblePATH(path) else { return nil }
+            return path
         } catch {
             return nil
         }
+    }
+
+    /// A plausible PATH is a single non-empty line of colon-separated absolute
+    /// directories. Spaces are legal inside an entry (e.g.
+    /// `/Applications/Visual Studio Code.app/...`); a newline or a relative
+    /// entry means a shell banner or error leaked into stdout.
+    public static func isPlausiblePATH(_ path: String) -> Bool {
+        !path.isEmpty
+            && !path.contains(where: { $0 == "\n" || $0 == "\r" })
+            && path.split(separator: ":").allSatisfy { $0.hasPrefix("/") }
     }
 
     public static func resolve(

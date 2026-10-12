@@ -2444,7 +2444,7 @@ public actor ACPBackend: AgentBackend {
     /// arrays. The package-runner caches come from the TYPED
     /// `PackageRunnerKind` (issue #1279) — never a substring scan, so a
     /// package spec that merely contains "npx"/"bun" cannot widen the
-    /// allowances: npx/npm → `~/.npm`, `bun x`/`bunx` → `~/.bun`, and
+    /// allowances: npx/npm → `~/.npm`, `bun x`/`bunx` → `bunHomeSubpaths`, and
     /// uv launches → the bounded uv pair `.cache/uv` + `.local/share/uv`
     /// (the cache/data trees uv's own env contract names; deliberately NOT
     /// `.local` or `$HOME` as a whole, and no `.local/bin` without a
@@ -2467,7 +2467,7 @@ public actor ACPBackend: AgentBackend {
         case .npm:
             subpaths.append(".npm")
         case .bun:
-            subpaths.append(".bun")
+            subpaths.append(contentsOf: bunHomeSubpaths)
         case .uv:
             subpaths.append(contentsOf: uvHomeSubpaths)
         case .none:
@@ -2489,6 +2489,12 @@ public actor ACPBackend: AgentBackend {
     /// is auditable in one place; both subtrees must exist in the effective
     /// profile ONLY for launches `PackageRunnerKind.classify` maps to `.uv`.
     static let uvHomeSubpaths = [".cache/uv", ".local/share/uv"]
+
+    /// The bun write paths: `~/.bun` by default, and `~/.cache/.bun` when the
+    /// user sets `XDG_CACHE_HOME=~/.cache` (bun then keeps its install cache
+    /// at `$XDG_CACHE_HOME/.bun`). Without the second entry `bun x` fails at
+    /// startup with "bun is unable to write files to tempdir: EPERM".
+    static let bunHomeSubpaths = [".bun", ".cache/.bun"]
 
     // MARK: - Launch failure diagnostics (#733 + #737)
 

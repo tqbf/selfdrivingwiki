@@ -321,6 +321,21 @@ struct AgentRunContextTests {
         #expect(invokedExecutable == "/bin/bash")
     }
 
+    @Test func loginShellPATHAcceptsEntriesContainingSpaces() async {
+        // Spaces are legal inside a PATH entry; rejecting them dropped the
+        // whole user PATH (and with it `node`) for a VS Code-style entry.
+        let expected = "/opt/homebrew/bin:/Applications/Visual Studio Code.app/Contents/Resources/app/bin:/usr/bin"
+        var invokedArguments: [String] = []
+        let path = await UserEnvironmentPath.loginShellPATH(
+            shellPath: "/run/current-system/sw/bin/fish",
+            runProcess: { request in
+                invokedArguments = request.arguments
+                return Self.result(0, expected + "\n")
+            })
+        #expect(path == expected)
+        #expect(invokedArguments == ["-l", "-c", "/usr/bin/printenv PATH"])
+    }
+
     @Test func loginShellPATHRejectsImplausibleOutput() async {
         // Non-zero exit → nil.
         let failed = await UserEnvironmentPath.loginShellPATH(
@@ -328,11 +343,17 @@ struct AgentRunContextTests {
             runProcess: { _ in Self.result(1, "anything") })
         #expect(failed == nil)
 
-        // Whitespace (fish list rendering / an error banner) is not a PATH.
-        let spaced = await UserEnvironmentPath.loginShellPATH(
+        // A shell banner leaked ahead of the PATH line is not a PATH.
+        let banner = await UserEnvironmentPath.loginShellPATH(
             shellPath: "/bin/sh",
-            runProcess: { _ in Self.result(0, "/opt/homebrew/bin /usr/bin") })
-        #expect(spaced == nil)
+            runProcess: { _ in Self.result(0, "Welcome!\n/opt/homebrew/bin:/usr/bin") })
+        #expect(banner == nil)
+
+        // A relative entry is not a plausible PATH.
+        let relative = await UserEnvironmentPath.loginShellPATH(
+            shellPath: "/bin/sh",
+            runProcess: { _ in Self.result(0, "command not found:/usr/bin") })
+        #expect(relative == nil)
 
         // Empty → nil.
         let empty = await UserEnvironmentPath.loginShellPATH(

@@ -279,6 +279,30 @@ struct AsyncProcessRunnerTests {
         #expect(path == "/opt/homebrew/bin:/usr/local/bin")
     }
 
+    @Test func loginShellPathUsesConfiguredShellAndKeepsSpacedEntries() async {
+        let expected = "/opt/homebrew/bin:/Applications/Visual Studio Code.app/Contents/Resources/app/bin:/usr/bin"
+        var invoked: AsyncProcessRequest?
+        let path = await PathPreflight.loginShellPATH(
+            using: { request in
+                invoked = request
+                return AsyncProcessResult(
+                    terminationStatus: 0,
+                    output: .separate(stdout: Data((expected + "\n").utf8), stderr: Data()))
+            },
+            environment: ["SHELL": "/run/current-system/sw/bin/fish"])
+
+        #expect(path == expected)
+        #expect(invoked?.executableURL.path == "/run/current-system/sw/bin/fish")
+        #expect(invoked?.arguments == ["-l", "-c", "/usr/bin/printenv PATH"])
+    }
+
+    @Test func plausiblePathRejectsBannersAndRelativeEntries() {
+        #expect(PathPreflight.isPlausiblePATH("/usr/bin:/Applications/A B.app/bin"))
+        #expect(!PathPreflight.isPlausiblePATH(""))
+        #expect(!PathPreflight.isPlausiblePATH("Welcome!\n/usr/bin"))
+        #expect(!PathPreflight.isPlausiblePATH("command not found:/usr/bin"))
+    }
+
     @Test func resolveOnLoginShellFallsBackAfterRunnerFailure() async {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
