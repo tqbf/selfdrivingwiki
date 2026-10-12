@@ -127,6 +127,12 @@ struct ProcessSignalSafetyAuditTests {
             .init(path: "Sources/WikiFSEngine/ACPProviderModelProbe.swift",
                   primitive: .processTermination):
                 (1, "terminates a held ACP client object, not a PID"),
+            .init(path: "Sources/WikiFSEngine/ACPAdapterCandidateProbe.swift",
+                  primitive: .processTermination):
+                (1, "terminates a held ACP client object, not a PID. The candidate "
+                    + "probe creates the client, launches the candidate through the "
+                    + "typed sandboxed plan, and terminates it outside the timeout "
+                    + "race on every exit path (initialize-only handshake)"),
 
             // --- Liveness probe only ----------------------------------------
             .init(path: "Sources/WikiFSEngine/ACPBackend.swift",

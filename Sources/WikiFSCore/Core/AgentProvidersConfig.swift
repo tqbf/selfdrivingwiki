@@ -62,6 +62,7 @@ public actor AgentProvidersConfigStore {
                 ingestStageModelIds: prior.ingestStageModelIds == updated.ingestStageModelIds ? latest.ingestStageModelIds : updated.ingestStageModelIds,
                 stageProviderIds: prior.stageProviderIds == updated.stageProviderIds ? latest.stageProviderIds : updated.stageProviderIds,
                 catalogObservations: prior.catalogObservations == updated.catalogObservations ? latest.catalogObservations : updated.catalogObservations,
+                adapterUpgrades: prior.adapterUpgrades == updated.adapterUpgrades ? latest.adapterUpgrades : updated.adapterUpgrades,
                 generation: latest.generation)
         }
     }
@@ -255,6 +256,11 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// Missing data is expected for legacy files and means identity is unknown.
     public var catalogObservations: [String: ACPProviderCatalogObservation]
 
+    /// Adapter upgrade manager state keyed by configured provider ID
+    /// (findings, adoption records, probe backoff, ownership). Forward-
+    /// compatible: a pre-upgrade-manager file decodes to `[:]`.
+    public var adapterUpgrades: [String: AdapterUpgradeState]
+
     /// Monotonic sidecar revision. The locked mutation store increments this
     /// exactly once for every committed logical mutation.
     public var generation: UInt64
@@ -268,6 +274,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         ingestStageModelIds: [String: ModelID] = [:],
         stageProviderIds: [String: ProviderID] = [:],
         catalogObservations: [String: ACPProviderCatalogObservation] = [:],
+        adapterUpgrades: [String: AdapterUpgradeState] = [:],
         generation: UInt64 = 0
     ) {
         let normalizedProviders = AgentProvidersConfig.normalized(providers)
@@ -279,6 +286,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         self.ingestStageModelIds = ingestStageModelIds
         self.stageProviderIds = stageProviderIds
         self.catalogObservations = catalogObservations
+        self.adapterUpgrades = adapterUpgrades
         self.generation = generation
     }
 
@@ -293,6 +301,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         case ingestStageModelIds
         case stageProviderIds
         case catalogObservations
+        case adapterUpgrades
         case generation
     }
 
@@ -320,6 +329,11 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         self.stageProviderIds = try c.decodeIfPresent([String: ProviderID].self, forKey: .stageProviderIds) ?? [:]
         self.catalogObservations = try c.decodeIfPresent(
             [String: ACPProviderCatalogObservation].self, forKey: .catalogObservations) ?? [:]
+        // Forward-compatible: pre-upgrade-manager files have no
+        // `adapterUpgrades` key. `[:]` → no recorded findings or adoptions
+        // (the legacy behavior — no migration, no behavior change).
+        self.adapterUpgrades = try c.decodeIfPresent(
+            [String: AdapterUpgradeState].self, forKey: .adapterUpgrades) ?? [:]
         self.generation = try c.decodeIfPresent(UInt64.self, forKey: .generation) ?? 0
         // NOTE: a legacy `stageAssignments` key in `agent-providers.json` is
         // silently ignored — it is not in `CodingKeys`, so `JSONDecoder`
@@ -396,6 +410,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             ingestStageModelIds: ingestStageModelIds,
             stageProviderIds: stageProviderIds,
             catalogObservations: catalogObservations,
+            adapterUpgrades: adapterUpgrades,
             generation: generation)
     }
 
@@ -668,6 +683,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             ingestStageModelIds: stages,
             stageProviderIds: stageProviderIds,
             catalogObservations: catalogObservations,
+            adapterUpgrades: adapterUpgrades,
             generation: generation)
     }
 
@@ -709,6 +725,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             ingestStageModelIds: stages,
             stageProviderIds: pins,
             catalogObservations: catalogObservations,
+            adapterUpgrades: adapterUpgrades,
             generation: generation)
     }
 
@@ -739,6 +756,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             ingestStageModelIds: ingestStageModelIds,
             stageProviderIds: stageProviderIds,
             catalogObservations: catalogObservations,
+            adapterUpgrades: adapterUpgrades,
             generation: generation)
     }
 
@@ -787,6 +805,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             ingestStageModelIds: ingestStageModelIds,
             stageProviderIds: stageProviderIds,
             catalogObservations: observations,
+            adapterUpgrades: adapterUpgrades,
             generation: generation)
     }
 
@@ -819,6 +838,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             ingestStageModelIds: ingestStageModelIds,
             stageProviderIds: stageProviderIds,
             catalogObservations: catalogObservations,
+            adapterUpgrades: adapterUpgrades,
             generation: generation)
     }
 
@@ -843,6 +863,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             ingestStageModelIds: ingestStageModelIds,
             stageProviderIds: stageProviderIds,
             catalogObservations: catalogObservations,
+            adapterUpgrades: adapterUpgrades,
             generation: generation)
     }
 
@@ -884,6 +905,131 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             ingestStageModelIds: ingestStageModelIds,
             stageProviderIds: stageProviderIds,
             catalogObservations: catalogObservations,
+            adapterUpgrades: adapterUpgrades,
+            generation: generation)
+    }
+
+    // MARK: - Adapter upgrade manager state (agent-adapter-upgrade-manager plan)
+
+    /// The upgrade state for `providerID`, or `nil` when the manager has
+    /// never evaluated this provider. PURE.
+    public func adapterUpgradeState(for providerID: ProviderID) -> AdapterUpgradeState? {
+        adapterUpgrades[providerID.rawValue]
+    }
+
+    /// A PURE mutator: replaces the whole upgrade state for `providerID`.
+    /// Used by the manager's check loop to persist findings, probe failures,
+    /// and suppression in one mutation.
+    public func settingAdapterUpgradeState(
+        _ state: AdapterUpgradeState, forProvider providerID: ProviderID
+    ) -> AgentProvidersConfig {
+        var upgrades = adapterUpgrades
+        upgrades[providerID.rawValue] = state
+        return AgentProvidersConfig(
+            providers: providers,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds,
+            maxConcurrent: maxConcurrent,
+            ingestStageModelIds: ingestStageModelIds,
+            stageProviderIds: stageProviderIds,
+            catalogObservations: catalogObservations,
+            adapterUpgrades: upgrades,
+            generation: generation)
+    }
+
+    /// A PURE mutator that commits an adoption: swaps `providerID`'s command
+    /// to the adopted pin's argv and records the adoption + ownership in the
+    /// SAME value, so command and rollback record can never diverge. Returns
+    /// `nil` when the provider is gone (the caller's CAS recheck inside
+    /// `AgentProvidersConfigStore.mutate` decides what to do).
+    ///
+    /// Only `command` changes — the user's label, env, enabled/default state,
+    /// and model selections are preserved verbatim.
+    public func adoptingAdapter(
+        _ adoption: AdapterAdoptionRecord, forProvider providerID: ProviderID
+    ) -> AgentProvidersConfig? {
+        guard let index = providers.firstIndex(where: { $0.id == providerID }) else { return nil }
+        let newCommand = adoption.toSpec.launchCommand
+        var updated = providers
+        updated[index].command = newCommand
+        let state = AdapterUpgradeState(
+            finding: .upToDate,
+            checkedAt: adoption.adoptedAt,
+            lastAdoption: adoption,
+            probeFailure: nil,
+            suppressedCandidateVersion: nil,
+            ownership: .managed(baseline: newCommand))
+        var upgrades = adapterUpgrades
+        upgrades[providerID.rawValue] = state
+        return AgentProvidersConfig(
+            providers: updated,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds,
+            maxConcurrent: maxConcurrent,
+            ingestStageModelIds: ingestStageModelIds,
+            stageProviderIds: stageProviderIds,
+            catalogObservations: catalogObservations,
+            adapterUpgrades: upgrades,
+            generation: generation)
+    }
+
+    /// A PURE mutator behind the one-click **Restore previous command**
+    /// action: puts back the last adoption's exact from-command and records
+    /// the adopted version as suppressed so the automatic loop cannot undo
+    /// the restore on its next check (a strictly newer candidate, or an
+    /// explicit manual check, clears the suppression path). Returns `nil`
+    /// when the provider is gone or has no adoption to roll back.
+    public func restoringPreviousAdapterCommand(
+        forProvider providerID: ProviderID
+    ) -> AgentProvidersConfig? {
+        guard let index = providers.firstIndex(where: { $0.id == providerID }),
+              let adoption = adapterUpgrades[providerID.rawValue]?.lastAdoption else { return nil }
+        var updated = providers
+        updated[index].command = adoption.fromCommand
+        let state = AdapterUpgradeState(
+            finding: nil,
+            checkedAt: adapterUpgrades[providerID.rawValue]?.checkedAt,
+            lastAdoption: nil,
+            probeFailure: nil,
+            suppressedCandidateVersion: adoption.toSpec.version,
+            ownership: .managed(baseline: adoption.fromCommand))
+        var upgrades = adapterUpgrades
+        upgrades[providerID.rawValue] = state
+        return AgentProvidersConfig(
+            providers: updated,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds,
+            maxConcurrent: maxConcurrent,
+            ingestStageModelIds: ingestStageModelIds,
+            stageProviderIds: stageProviderIds,
+            catalogObservations: catalogObservations,
+            adapterUpgrades: upgrades,
+            generation: generation)
+    }
+
+    /// A PURE mutator marking the provider's command as user-owned after the
+    /// Settings editor saves an edited command. A user-owned provider is
+    /// never auto-adopted (package recognition is not ownership).
+    public func markingAdapterCommandUserEdited(
+        forProvider providerID: ProviderID
+    ) -> AgentProvidersConfig {
+        var state = adapterUpgrades[providerID.rawValue] ?? AdapterUpgradeState()
+        state.ownership = .userOwned
+        var upgrades = adapterUpgrades
+        upgrades[providerID.rawValue] = state
+        return AgentProvidersConfig(
+            providers: providers,
+            providerModels: providerModels,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds,
+            maxConcurrent: maxConcurrent,
+            ingestStageModelIds: ingestStageModelIds,
+            stageProviderIds: stageProviderIds,
+            catalogObservations: catalogObservations,
+            adapterUpgrades: upgrades,
             generation: generation)
     }
 
@@ -982,6 +1128,7 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
                 ingestStageModelIds: config.ingestStageModelIds,
                 stageProviderIds: config.stageProviderIds,
                 catalogObservations: config.catalogObservations,
+                adapterUpgrades: config.adapterUpgrades,
                 generation: config.generation)
         }
         // Missing, corrupt, or empty: return the seed without an unlocked write.

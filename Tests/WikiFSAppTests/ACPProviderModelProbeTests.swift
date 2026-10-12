@@ -420,7 +420,12 @@ struct ACPProviderModelProbeTests {
             selectedModelIds: ["hermes": ModelID(rawValue: "glm-4.7")],
             favoriteModelIds: ["hermes": [ModelID(rawValue: "glm-4.7")]],
             maxConcurrent: ["hermes": 3])
-        try original.save(to: tmp)
+        // Adapter-upgrade state — the field a reconstruction site once
+        // dropped. Seed it through the pure mutator and pin that
+        // `settingCachedModels` carries it to disk and back.
+        let withUpgradeState = original.markingAdapterCommandUserEdited(
+            forProvider: ProviderID(rawValue: "hermes"))
+        try withUpgradeState.save(to: tmp)
 
         // The probe's discovered list.
         let discovered = [
@@ -430,7 +435,7 @@ struct ACPProviderModelProbeTests {
 
         // The persist path the sheet's `onRefreshModels` closure drives —
         // identical to `AgentsSettingsView.persistDiscoveredModels` body.
-        let updated = original.settingCachedModels(discovered, forProvider: ProviderID(rawValue: "hermes"))
+        let updated = withUpgradeState.settingCachedModels(discovered, forProvider: ProviderID(rawValue: "hermes"))
         try updated.save(to: tmp)
 
         // Reload from disk and assert the discovered list round-tripped AND
@@ -443,6 +448,9 @@ struct ACPProviderModelProbeTests {
         #expect(reloaded.maxConcurrent["hermes"] == 3)
         #expect(reloaded.selectedModelId(forProvider: ProviderID(rawValue: "hermes")) == ModelID(rawValue: "glm-4.7"))
         #expect(reloaded.favoriteModels(forProvider: ProviderID(rawValue: "hermes")) == [ModelID(rawValue: "glm-4.7")])
+        // The upgrade state survived the model-cache persist AND the disk
+        // round-trip.
+        #expect(reloaded.adapterUpgrades["hermes"]?.ownership == .userOwned)
     }
 
     /// The probe's success → cachedModels path: a sheet that already has a

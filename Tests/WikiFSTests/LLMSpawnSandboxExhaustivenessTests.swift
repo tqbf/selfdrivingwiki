@@ -149,6 +149,16 @@ struct LLMSpawnSandboxExhaustivenessTests {
             // plan built in discoverObservation (sandboxedSpawnPlan).
             "probe launch consumes the typed sandboxed plan, not this profile"
         ),
+        (
+            "ACPAdapterCandidateProbe.swift",
+            "BackendProfile(providerHints: hints, loginShellPATH: loginShellPATH)",
+            // Configuration-only, same shape as the model probe above: the
+            // profile exists so ACPBackend.resolveSpawnConfig can extract the
+            // candidate path/args/env. The candidate launch consumes the
+            // typed sandboxed launch plan (sandboxedSpawnPlan) and performs
+            // only the initialize handshake.
+            "candidate-probe launch consumes the typed sandboxed plan, not this profile"
+        ),
     ]
 
     /// Scan `source` for every `receiver.launch(...)` CALL — line comments and
@@ -252,6 +262,7 @@ struct LLMSpawnSandboxExhaustivenessTests {
             "AgentProviderRuntime.swift": 2,
             "ACPExtractionClient.swift": 1,
             "ACPProviderModelProbe.swift": 1,
+            "ACPAdapterCandidateProbe.swift": 1,
         ]
         var actualCounts: [String: Int] = [:]
         for occurrence in all {
