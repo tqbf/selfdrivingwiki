@@ -447,6 +447,15 @@ struct Projection {
         private var cachedUsageSignals: [String: GRDBWikiStore.SourceUsageSignal]?
         private var cachedHeadProducers: [String: GRDBWikiStore.SourceHeadProducer]?
 
+        /// Why this scope could not read the store, or nil when every read
+        /// that decides existence succeeded. Set when the DB cannot be
+        /// opened, the change token cannot be read, or a `storeRead` fails
+        /// with anything other than not-found. The checked entry points
+        /// (`checkedChildren`, `checkedNode`, `checkedContents`,
+        /// `checkedChangeToken`) throw when it is set, so a transient failure
+        /// is never reported as an empty folder or a deleted item.
+        private var failure: String?
+
         init(databaseURL: URL?, wikiID: WikiID) {
             self.databaseURL = databaseURL
             self.wikiID = wikiID
@@ -459,10 +468,31 @@ struct Projection {
                 let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID.rawValue)
                 if let url, FileManager.default.fileExists(atPath: url.path) {
                     DebugLog.fileprovider("ReadScope opening cached read-only connection wikiID=\(wikiID.rawValue) thread=\(Thread.current)")
-                    cachedStore = DebugLog.trying("GRDBWikiStore.init", operation: { try GRDBWikiStore(readOnlyURL: url) })
+                    do {
+                        cachedStore = try GRDBWikiStore(readOnlyURL: url)
+                    } catch {
+                        DebugLog.fileprovider("ReadScope open failed wikiID=\(wikiID.rawValue): \(error)")
+                        failure = failure ?? "open failed: \(error)"
+                    }
+                } else {
+                    DebugLog.fileprovider("ReadScope no database wikiID=\(wikiID.rawValue) url=\(url?.path ?? "nil")")
+                    failure = failure ?? "no database at \(url?.path ?? "nil")"
                 }
             }
             return cachedStore
+        }
+
+        /// Why the scope could not read the store, or nil if it could.
+        var failureReason: String? {
+            lock.lock(); defer { lock.unlock() }
+            return failure
+        }
+
+        /// Record a read failure. The first reason wins; later ones are
+        /// usually consequences of it.
+        func markFailed(_ reason: String) {
+            lock.lock(); defer { lock.unlock() }
+            failure = failure ?? reason
         }
 
         /// The cached token, or nil if not yet computed.
@@ -573,6 +603,36 @@ struct Projection {
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
         DebugLog.fileprovider("openReadStore opening short-lived read-only connection wikiID=\(wikiID.rawValue) thread=\(Thread.current)")
         return DebugLog.trying("GRDBWikiStore.init", operation: { try GRDBWikiStore(readOnlyURL: url) })
+    }
+
+    /// Run a store read whose nil result means "this row or folder is gone".
+    /// A not-found error returns nil: the row is really gone. Any other error
+    /// (for example a transient `SQLITE_BUSY`, see #332) also returns nil, so
+    /// the non-throwing callers degrade as before, but it marks the read scope
+    /// failed. The checked entry points then throw instead of reporting an
+    /// empty folder or a missing item.
+    ///
+    /// Use it only for reads that decide existence or membership (list and
+    /// get calls). Rendering failures keep their per-item fallbacks: a
+    /// deterministic failure in one item must not block a whole folder.
+    private func storeRead<T>(_ label: String, _ operation: () throws -> T) -> T? {
+        do {
+            return try operation()
+        } catch let error as WikiStoreError where Self.isNotFound(error) {
+            return nil
+        } catch {
+            DebugLog.fileprovider("\(label) failed wikiID=\(wikiID.rawValue): \(error)")
+            readStoreHolder?.markFailed("\(label): \(error)")
+            return nil
+        }
+    }
+
+    /// Whether `error` says the requested row does not exist.
+    private static func isNotFound(_ error: WikiStoreError) -> Bool {
+        switch error {
+        case .notFound, .chatNotFound, .sourceNotFound: return true
+        default: return false
+        }
     }
 
     // MARK: - System prompt (CLAUDE.md / AGENTS.md)
@@ -752,8 +812,10 @@ struct Projection {
     /// The whole-database change token used as the File Provider sync anchor.
     /// Advances on ANY page create/update/delete (count:sum — see
     /// `GRDBWikiStore.changeToken()`). Opens a short-lived read store; returns
-    /// a safe `"0:0"` default if the DB is unavailable so the enumerator can
-    /// still answer (and a later real token simply differs → re-sync).
+    /// `"0:0"` if the DB is unavailable so the node builders that fold the
+    /// token into cache keys can still answer. Within a read scope the failure
+    /// is recorded, so `checkedChangeToken()` throws instead: the enumerator
+    /// must never report `"0:0"` as a real sync anchor.
     ///
     /// Within a read scope the token is computed once and cached, so every node
     /// built during one enumeration pass gets a CONSISTENT version (previously
@@ -763,8 +825,15 @@ struct Projection {
         if let scope = readStoreHolder, let cached = scope.token {
             return cached
         }
-        guard let store = openReadStore(),
-              let token = DebugLog.trying("changeToken", operation: { try store.changeToken() }) else { return "0:0" }
+        guard let store = openReadStore() else { return "0:0" }
+        let token: ChangeToken
+        do {
+            token = try store.changeToken()
+        } catch {
+            DebugLog.fileprovider("changeToken failed wikiID=\(wikiID.rawValue): \(error)")
+            readStoreHolder?.markFailed("changeToken: \(error)")
+            return "0:0"
+        }
         let raw = token.rawString
         readStoreHolder?.cacheToken(raw)
         return raw
@@ -813,7 +882,7 @@ struct Projection {
         in store: GRDBWikiStore, sourceIDs allIDs: [SourceID]? = nil
     ) {
         guard readStoreHolder != nil else { return }
-        let ids = allIDs ?? ((DebugLog.trying("listAllSources", operation: { try store.listAllSourcesOrderedByID() })) ?? [])
+        let ids = allIDs ?? ((storeRead("listAllSources", { try store.listAllSourcesOrderedByID() })) ?? [])
             .map { SourceID(rawValue: $0.id) }
         do {
             _ = try credibilitySignals(for: ids, in: store)
@@ -913,7 +982,7 @@ struct Projection {
         var citedIDs: [SourceID] = []
         var sourcesByID: [SourceID: SourceSummary] = [:]
         for link in links where sourcesByID[link.sourceID] == nil {
-            guard let source = DebugLog.trying("getSource", operation: { try store.getSource(id: link.sourceID) }) else {
+            guard let source = storeRead("getSource", { try store.getSource(id: link.sourceID) }) else {
                 continue
             }
             sourcesByID[link.sourceID] = source
@@ -1068,7 +1137,7 @@ struct Projection {
         nodeForLeaf: { projection, id in
             guard let ulid = Identity.pageULID(from: id),
                   let store = projection.openReadStore(),
-                  let page = DebugLog.trying("getPage", operation: { try store.getPage(id: PageID(rawValue: ulid)) }) else { return nil }
+                  let page = projection.storeRead("getPage", { try store.getPage(id: PageID(rawValue: ulid)) }) else { return nil }
             guard let projected = DebugLog.trying("pageOKFContent", operation: {
                 try projection.pageContent(for: page, in: store)
             }) else { return nil }
@@ -1090,7 +1159,7 @@ struct Projection {
         contentForLeaf: { projection, id in
             guard let ulid = Identity.pageULID(from: id),
                   let store = projection.openReadStore(),
-                  let page = DebugLog.trying("getPage", operation: { try store.getPage(id: PageID(rawValue: ulid)) }) else { return nil }
+                  let page = projection.storeRead("getPage", { try store.getPage(id: PageID(rawValue: ulid)) }) else { return nil }
             guard let projected = DebugLog.trying("pageOKFContent", operation: {
                 try projection.pageContent(for: page, in: store)
             }) else { return nil }
@@ -1116,7 +1185,7 @@ struct Projection {
             // verbatim source prefixes, but checked first for clarity).
             if let ulid = Identity.sourceMarkdownULID(from: id) {
                 guard let store = projection.openReadStore(),
-                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }),
+                      let file = projection.storeRead("getSource", { try store.getSource(id: SourceID(rawValue: ulid)) }),
                       let head = projection.cachedHeadsBySource()[ulid] else {
                     return nil
                 }
@@ -1138,7 +1207,7 @@ struct Projection {
             }
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
-                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }) else { return nil }
+                      let file = projection.storeRead("getSource", { try store.getSource(id: SourceID(rawValue: ulid)) }) else { return nil }
                 // Byteless (#1375): single-item resolution must project the
                 // SAME shape enumeration did — the `.webloc` shortcut in the
                 // source's own identifier slot. Checked before the by-name
@@ -1172,7 +1241,7 @@ struct Projection {
         contentForLeaf: { projection, id in
             if let ulid = Identity.sourceMarkdownULID(from: id) {
                 guard let store = projection.openReadStore(),
-                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }),
+                      let file = projection.storeRead("getSource", { try store.getSource(id: SourceID(rawValue: ulid)) }),
                       let head = projection.cachedHeadsBySource()[ulid] else {
                     return nil
                 }
@@ -1188,7 +1257,7 @@ struct Projection {
             }
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
-                      let file = DebugLog.trying("getSource", operation: { try store.getSource(id: SourceID(rawValue: ulid)) }) else { return nil }
+                      let file = projection.storeRead("getSource", { try store.getSource(id: SourceID(rawValue: ulid)) }) else { return nil }
                 // Byteless (#1375): serve the SAME webloc bytes the shortcut
                 // node's documentSize was computed from — a size/content
                 // mismatch truncates `cat`. Checked before the by-name
@@ -1209,7 +1278,7 @@ struct Projection {
                    !MimeType.isText(file.mimeType) {
                     return nil
                 }
-                guard let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: SourceID(rawValue: ulid)) }) else { return nil }
+                guard let data = projection.storeRead("sourceContent", { try store.sourceContent(id: SourceID(rawValue: ulid)) }) else { return nil }
                 if id.rawValue.hasPrefix(Identity.sourceByNamePrefix),
                    let rewritten = projection.rewrittenVerbatimSourceContent(
                        id: SourceID(rawValue: ulid), mimeType: file.mimeType,
@@ -1231,7 +1300,7 @@ struct Projection {
         nodeForLeaf: { projection, id in
             guard let ulid = Identity.chatULID(from: id),
                   let store = projection.openReadStore(),
-                  let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: ChatID(rawValue: ulid)) }) else { return nil }
+                  let chat = projection.storeRead("getChat", { try store.getChat(id: ChatID(rawValue: ulid)) }) else { return nil }
             // Size from the cached transcript bytes so size==content holds for
             // both by-id and by-name views (#503 P1).
             let data = projection.cachedChatTranscript(for: id, chat: chat, in: store)
@@ -1240,7 +1309,7 @@ struct Projection {
         contentForLeaf: { projection, id in
             guard let ulid = Identity.chatULID(from: id),
                   let store = projection.openReadStore(),
-                  let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: ChatID(rawValue: ulid)) }) else { return nil }
+                  let chat = projection.storeRead("getChat", { try store.getChat(id: ChatID(rawValue: ulid)) }) else { return nil }
             // Serve the cached transcript bytes (rendered + cached during
             // `nodeForLeaf` sizing or `chatNodes` enumeration) instead of
             // re-rendering (#503 P1).
@@ -1369,11 +1438,11 @@ struct Projection {
         id: Identity.manifest, name: "manifest.json", parent: .rootContainer,
         generate: { projection in
             guard let store = projection.openReadStore(),
-                  let pages = DebugLog.trying("listAllPages", operation: { try store.listAllPagesOrderedByID() }) else { return nil }
+                  let pages = projection.storeRead("listAllPages", { try store.listAllPagesOrderedByID() }) else { return nil }
             // file_count must be resilient to a pre-migration `ingested_files`:
             // a `nil` read → 0, so the manifest still generates.
-            let sourceCount = (DebugLog.trying("listAllSources", operation: { try store.listAllSourcesOrderedByID() }))?.count ?? 0
-            let chatCount = (DebugLog.trying("listAllChats", operation: { try store.listAllChatsOrderedByID() }))?.count ?? 0
+            let sourceCount = (projection.storeRead("listAllSources", { try store.listAllSourcesOrderedByID() }))?.count ?? 0
+            let chatCount = (projection.storeRead("listAllChats", { try store.listAllChatsOrderedByID() }))?.count ?? 0
             return IndexGenerators.manifest(pages: pages, sourceCount: sourceCount,
                                             chatCount: chatCount, generatedAt: Date())
         }
@@ -1383,7 +1452,7 @@ struct Projection {
         id: Identity.indexPagesJSONL, name: "pages.jsonl", parent: Identity.indexes,
         generate: { projection in
             guard let store = projection.openReadStore(),
-                  let pages = DebugLog.trying("listAllPages", operation: { try store.listAllPagesOrderedByID() }) else { return nil }
+                  let pages = projection.storeRead("listAllPages", { try store.listAllPagesOrderedByID() }) else { return nil }
             return IndexGenerators.pagesJSONL(pages: pages)
         }
     )
@@ -1405,7 +1474,7 @@ struct Projection {
             guard let store = projection.openReadStore() else { return nil }
             // Resilient to the table not existing yet → empty index, never nil,
             // so enumeration of `indexes/` never errors pre-migration.
-            let files = (DebugLog.trying("listAllSources", operation: { try store.listAllSourcesOrderedByID() })) ?? []
+            let files = (projection.storeRead("listAllSources", { try store.listAllSourcesOrderedByID() })) ?? []
             return IndexGenerators.sourcesJSONL(sources: files)
         }
     )
@@ -1416,7 +1485,7 @@ struct Projection {
             guard let store = projection.openReadStore() else { return nil }
             // Resilient to the `chats` table not existing yet → empty index,
             // never nil, so enumeration of `indexes/` never errors pre-migration.
-            let chats = (DebugLog.trying("listAllChats", operation: { try store.listAllChatsOrderedByID() })) ?? []
+            let chats = (projection.storeRead("listAllChats", { try store.listAllChatsOrderedByID() })) ?? []
             return IndexGenerators.chatsJSONL(chats: chats)
         }
     )
@@ -1533,7 +1602,7 @@ struct Projection {
         case .folder(let label):
             return .folder(id: id, parent: parent, name: label)
         case .page(let targetID):
-            if let page = DebugLog.trying("getPage", operation: { try store.getPage(id: targetID) }) {
+            if let page = storeRead("getPage", { try store.getPage(id: targetID) }) {
                 let baseDir = bookmarkBaseDir(for: node, in: allNodes)
                 guard let projected = DebugLog.trying("bookmarkPageOKFContent", operation: {
                     try pageContent(for: page, in: store)
@@ -1556,7 +1625,7 @@ struct Projection {
                          size: body.count, version: version, metadataVersion: version,
                          created: nil, modified: nil)
         case .source(let targetID):
-            if let source = DebugLog.trying("getSource", operation: { try store.getSource(id: targetID) }) {
+            if let source = storeRead("getSource", { try store.getSource(id: targetID) }) {
                 let humanName = source.displayName ?? source.filename
                 return .file(id: id, parent: parent,
                              name: Self.sanitizeFilename(humanName),
@@ -1570,7 +1639,7 @@ struct Projection {
                          size: body.count, version: version, metadataVersion: version,
                          created: nil, modified: nil)
         case .chat(let targetID):
-            if let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: targetID) }) {
+            if let chat = storeRead("getChat", { try store.getChat(id: targetID) }) {
                 let messages = (DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chat.id) })) ?? []
                 let baseDir = bookmarkBaseDir(for: node, in: allNodes)
                 let raw = ChatTranscriptRenderer.render(summary: chat, messages: messages)
@@ -1591,7 +1660,7 @@ struct Projection {
     private func bookmarkNode(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
         guard let ulid = Identity.bookmarkULID(from: id),
               let store = openReadStore(),
-              let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }),
+              let nodes = storeRead("listBookmarkNodes", { try store.listBookmarkNodes() }),
               let node = nodes.first(where: { $0.id.rawValue == ulid }) else { return nil }
         return bookmarkNodeItem(for: node, in: store, maps: cachedLinkMaps(), allNodes: nodes)
     }
@@ -1609,7 +1678,7 @@ struct Projection {
             return []
         }
         guard let store = openReadStore(),
-              let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }) else { return [] }
+              let nodes = storeRead("listBookmarkNodes", { try store.listBookmarkNodes() }) else { return [] }
         let maps = cachedLinkMaps()
         return nodes
             .filter { $0.parentID == parentID }
@@ -1622,13 +1691,13 @@ struct Projection {
     private func bookmarkContent(for id: NSFileProviderItemIdentifier) -> Data? {
         guard let ulid = Identity.bookmarkULID(from: id),
               let store = openReadStore(),
-              let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }),
+              let nodes = storeRead("listBookmarkNodes", { try store.listBookmarkNodes() }),
               let node = nodes.first(where: { $0.id.rawValue == ulid }) else { return nil }
         switch node.content {
         case .folder:
             return nil
         case .page(let targetID):
-            guard let page = DebugLog.trying("getPage", operation: { try store.getPage(id: targetID) }) else {
+            guard let page = storeRead("getPage", { try store.getPage(id: targetID) }) else {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
             }
             guard let projected = DebugLog.trying("bookmarkPageOKFContent", operation: {
@@ -1638,10 +1707,10 @@ struct Projection {
                                 maps: cachedLinkMaps(),
                                 baseDir: bookmarkBaseDir(for: node, in: nodes))
         case .source(let targetID):
-            return DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: targetID) })
+            return storeRead("sourceContent", { try store.sourceContent(id: targetID) })
                 ?? Data("# Stale reference\n\nThis bookmark points to a deleted source.".utf8)
         case .chat(let targetID):
-            guard let chat = DebugLog.trying("getChat", operation: { try store.getChat(id: targetID) }) else {
+            guard let chat = storeRead("getChat", { try store.getChat(id: targetID) }) else {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted chat.".utf8)
             }
             let messages = (DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chat.id) })) ?? []
@@ -1654,7 +1723,7 @@ struct Projection {
     /// Emit ALL bookmark nodes at every depth (for the working set).
     private func allBookmarkNodes() -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let nodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }) else { return [] }
+              let nodes = storeRead("listBookmarkNodes", { try store.listBookmarkNodes() }) else { return [] }
         let maps = cachedLinkMaps()
         return nodes.compactMap { bookmarkNodeItem(for: $0, in: store, maps: maps, allNodes: nodes) }
     }
@@ -2220,7 +2289,7 @@ struct Projection {
         guard MimeType.isText(mimeType),
               let siblingMap = maps.siblingImages[id], !siblingMap.isEmpty,
               let store = openReadStore(),
-              let raw = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: id) }),
+              let raw = storeRead("sourceContent", { try store.sourceContent(id: id) }),
               let text = String(data: raw, encoding: .utf8) else { return nil }
         let resolver = maps.imageResolver(forSource: id, baseDir: Self.sourcesByNameDir)
         let rewritten = SourceImageRewriter.rewrite(text, resolver: resolver)
@@ -2249,14 +2318,17 @@ struct Projection {
     /// whole folder (that would make a rebuild O(N²)). Other containers have
     /// names that do not carry the full ULID (by-title, by-name, bookmarks)
     /// or are small (root, `pages`, `indexes`), so they scan `children(of:)`.
-    func child(named name: String, in container: NSFileProviderItemIdentifier) -> ProjectedNode? {
+    ///
+    /// Throws `StoreUnavailable` when the store could not be read, so the
+    /// caller can ask the daemon to retry instead of rejecting the item.
+    func child(named name: String, in container: NSFileProviderItemIdentifier) throws -> ProjectedNode? {
         guard let candidates = Self.byIDCandidates(named: name, in: container) else {
-            return children(of: container).first { $0.name == name }
+            return try checkedChildren(of: container).first { $0.name == name }
         }
         // By-id names are fully determined by the ULID: if no candidate
         // resolves to this exact name and parent, the folder has no such child.
         for id in candidates {
-            if let node = node(for: id), node.parent == container, node.name == name {
+            if let node = try checkedNode(for: id), node.parent == container, node.name == name {
                 return node
             }
         }
@@ -2380,7 +2452,7 @@ struct Projection {
     /// derivation never re-queries them (#927).
     private func pageNodes(byTitle: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let pages = DebugLog.trying("listAllPages", operation: { try store.listAllPagesOrderedByID() }) else { return [] }
+              let pages = storeRead("listAllPages", { try store.listAllPagesOrderedByID() }) else { return [] }
         prefetchCredibilitySignals(in: store)
         let maps = byTitle ? cachedLinkMaps() : nil
         return pages.map { page in
@@ -2434,7 +2506,7 @@ struct Projection {
     ///   `[[wikilink]]` targets.
     private func sourceNodes(byName: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let files = DebugLog.trying("listAllSources", operation: { try store.listAllSourcesOrderedByID() }) else { return [] }
+              let files = storeRead("listAllSources", { try store.listAllSourcesOrderedByID() }) else { return [] }
         let heads = cachedHeadsBySource()
         let originCandidates = cachedOriginCandidates()
         prefetchCredibilitySignals(
@@ -2536,7 +2608,7 @@ struct Projection {
     /// enumeration never errors.
     private func chatNodes(byName: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let chats = DebugLog.trying("listAllChats", operation: { try store.listAllChatsOrderedByID() }) else { return [] }
+              let chats = storeRead("listAllChats", { try store.listAllChatsOrderedByID() }) else { return [] }
         // `cachedChatTranscript` handles both by-id (raw) and by-name (rewritten)
         // paths, caching the bytes so `contentForLeaf` serves the same Data
         // instead of re-rendering (#503 P1). Link maps are built lazily inside
@@ -2618,6 +2690,95 @@ struct Projection {
         var scoped = self
         scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
         return scoped.contentsResolved(for: id)
+    }
+
+    // MARK: - Checked entry points
+
+    /// The store could not be opened, or a read that decides whether an item
+    /// exists failed (see `storeRead`). The data is unknown, not empty:
+    /// callers must report a retryable error, never an empty folder, a
+    /// deletion, or `noSuchItem`.
+    struct StoreUnavailable: Error, CustomStringConvertible {
+        let reason: String
+        var description: String { "wiki store unavailable: \(reason)" }
+
+        /// The error the extension reports to the system for this failure.
+        ///
+        /// The FileProvider headers (`NSFileProviderReplicatedExtension.h`,
+        /// `NSFileProviderEnumerating.h`) give three outcomes:
+        /// - `noSuchItem`: the system deletes the item from disk. That is the
+        ///   drift this error exists to prevent.
+        /// - `notAuthenticated` / `serverUnreachable`: the system "will
+        ///   present an appropriate error message and back off until the next
+        ///   time it is signalled".
+        /// - "Any other error ... will be considered to be transient and will
+        ///   cause the enumeration [download, lookup] to be retried." Errors
+        ///   must be in `NSCocoaErrorDomain` or `NSFileProviderErrorDomain`.
+        ///
+        /// A failed local SQLite read (a transient `SQLITE_BUSY`, see #332) is
+        /// the third case. `serverUnreachable` would show a "server" error for
+        /// a local file and then wait for the next signal, and the app sends
+        /// signals only when it writes. If nothing is written after the
+        /// failure, the folder would stay stale. A plain Cocoa read error
+        /// makes the system retry by itself, with no error shown to the user.
+        var fileProviderError: NSError {
+            NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
+                    userInfo: [NSLocalizedDescriptionKey: "The wiki database could not be read. The system will retry. (\(reason))"])
+        }
+    }
+
+    /// A copy of this projection with a fresh read scope.
+    private func withReadScope() -> Projection {
+        var scoped = self
+        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        return scoped
+    }
+
+    /// Throws `StoreUnavailable` if this scope recorded a read failure.
+    private func throwIfReadFailed() throws {
+        if let reason = readStoreHolder?.failureReason {
+            throw StoreUnavailable(reason: reason)
+        }
+    }
+
+    /// `children(of:)`, but throws `StoreUnavailable` instead of returning
+    /// the partial or empty result of a failed read. The enumerator uses it.
+    func checkedChildren(of container: NSFileProviderItemIdentifier) throws -> [ProjectedNode] {
+        let scoped = withReadScope()
+        let nodes = scoped.childrenResolved(of: container)
+        try scoped.throwIfReadFailed()
+        return nodes
+    }
+
+    /// `node(for:)`, but throws `StoreUnavailable` when the store could not
+    /// be read. A nil result means the store was read and the item is gone.
+    func checkedNode(for id: NSFileProviderItemIdentifier) throws -> ProjectedNode? {
+        let scoped = withReadScope()
+        let node = scoped.nodeResolved(for: id)
+        try scoped.throwIfReadFailed()
+        return node
+    }
+
+    /// `changeToken()`, but throws `StoreUnavailable` instead of returning
+    /// the `"0:0"` placeholder. The enumerator uses it for sync anchors.
+    func checkedChangeToken() throws -> String {
+        let scoped = withReadScope()
+        let token = scoped.changeToken()
+        try scoped.throwIfReadFailed()
+        return token
+    }
+
+    /// The node and bytes for a file, resolved in one read scope. Returns nil
+    /// when the store was read and the item does not exist. `data` is nil
+    /// when the item exists but its bytes could not be produced. Throws
+    /// `StoreUnavailable` when the store could not be read.
+    func checkedContents(for id: NSFileProviderItemIdentifier) throws -> (node: ProjectedNode, data: Data?)? {
+        let scoped = withReadScope()
+        let node = scoped.nodeResolved(for: id)
+        let data = node == nil ? nil : scoped.contentsResolved(for: id)
+        try scoped.throwIfReadFailed()
+        guard let node else { return nil }
+        return (node, data)
     }
 
     /// Store-sharing implementation of `contents(for:)`.

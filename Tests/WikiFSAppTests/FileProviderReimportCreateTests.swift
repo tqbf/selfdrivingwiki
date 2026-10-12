@@ -47,10 +47,10 @@ struct FileProviderReimportCreateTests {
         let pagesName = try name(of: Projection.Identity.pages, in: projection)
         let byIDName = try name(of: Projection.Identity.pagesByID, in: projection)
 
-        let pages = FileProviderExtension.existingNode(
+        let pages = try FileProviderExtension.existingNode(
             forReimportOf: Template(pagesName, in: .rootContainer),
             options: .mayAlreadyExist, in: projection)
-        let byID = FileProviderExtension.existingNode(
+        let byID = try FileProviderExtension.existingNode(
             forReimportOf: Template(byIDName, in: Projection.Identity.pages),
             options: .mayAlreadyExist, in: projection)
 
@@ -62,7 +62,7 @@ struct FileProviderReimportCreateTests {
         let (projection, page) = try seed()
         let filename = FilenameEscaping.byTitleFilename(title: page.title, pageID: page.id.rawValue)
 
-        let node = FileProviderExtension.existingNode(
+        let node = try FileProviderExtension.existingNode(
             forReimportOf: Template(filename, in: Projection.Identity.pagesByTitle),
             options: .mayAlreadyExist, in: projection)
 
@@ -76,7 +76,7 @@ struct FileProviderReimportCreateTests {
         let (projection, page) = try seed()
         let filename = FilenameEscaping.byIDFilename(pageID: page.id.rawValue)
 
-        let node = FileProviderExtension.existingNode(
+        let node = try FileProviderExtension.existingNode(
             forReimportOf: Template(filename, in: Projection.Identity.pagesByID),
             options: .mayAlreadyExist, in: projection)
 
@@ -90,7 +90,7 @@ struct FileProviderReimportCreateTests {
         let source = try store.addSource(filename: "notes.txt", data: Data("abc".utf8), mimeType: "text/plain")
         let filename = FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: source.ext)
 
-        let node = FileProviderExtension.existingNode(
+        let node = try FileProviderExtension.existingNode(
             forReimportOf: Template(filename, in: Projection.Identity.sourcesByID),
             options: .mayAlreadyExist, in: projection)
 
@@ -102,13 +102,13 @@ struct FileProviderReimportCreateTests {
     @Test func byIDNameThatResolvesToNoNodeStaysRejected() throws {
         let (projection, page) = try seed()
 
-        let unknown = FileProviderExtension.existingNode(
+        let unknown = try FileProviderExtension.existingNode(
             forReimportOf: Template("01ZZZZZZZZZZZZZZZZZZZZZZZZ.md", in: Projection.Identity.pagesByID),
             options: .mayAlreadyExist, in: projection)
-        let wrongSuffix = FileProviderExtension.existingNode(
+        let wrongSuffix = try FileProviderExtension.existingNode(
             forReimportOf: Template("\(page.id.rawValue).txt", in: Projection.Identity.pagesByID),
             options: .mayAlreadyExist, in: projection)
-        let tooShort = FileProviderExtension.existingNode(
+        let tooShort = try FileProviderExtension.existingNode(
             forReimportOf: Template("x.md", in: Projection.Identity.pagesByID),
             options: .mayAlreadyExist, in: projection)
 
@@ -121,7 +121,7 @@ struct FileProviderReimportCreateTests {
         let (projection, _) = try seed()
         let pagesName = try name(of: Projection.Identity.pages, in: projection)
 
-        let node = FileProviderExtension.existingNode(
+        let node = try FileProviderExtension.existingNode(
             forReimportOf: Template(pagesName, in: .rootContainer),
             options: [], in: projection)
 
@@ -131,7 +131,7 @@ struct FileProviderReimportCreateTests {
     @Test func reimportOfAnItemTheProjectionLacksStaysRejected() throws {
         let (projection, _) = try seed()
 
-        let node = FileProviderExtension.existingNode(
+        let node = try FileProviderExtension.existingNode(
             forReimportOf: Template("not-a-projected-file.md", in: .rootContainer),
             options: .mayAlreadyExist, in: projection)
 
