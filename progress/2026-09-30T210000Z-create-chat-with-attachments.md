@@ -102,9 +102,11 @@ known output-interleaving quirk of `--parallel`). Triage, with evidence:
   `DiagramEmbedTests` — pinned renderer packages not present in this
   sandbox), `DefuddleExtractionServiceTests`, `SameSchemeSubresourceProbeTests`,
   `MetadataPanelHostedTests`, `ExtractionErrorTests`.
-- **Contention flakes (pass standalone)**: `DaemonChatControllerTests`,
-  `ChatViewD2Tests` (1-in-3 standalone on this branch; `resolveChat`/
-  `createChat` untouched; the base run passed by luck of the same coin).
+- **Flaky / pre-existing, unrelated to the diff**: `DaemonChatControllerTests`
+  (passes standalone), `ChatViewD2Tests` (fails standalone consistently on
+  this machine — corrected per independent review; assessed pre-existing
+  because no failing assertion intersects this diff and `resolveChat`/
+  `createChat` are untouched by it).
 - None of the failing assertions intersect this diff; every suite this
   feature adds or extends is green in both tiers.
 
