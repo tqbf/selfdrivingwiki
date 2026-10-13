@@ -1008,6 +1008,32 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Replaces a chat's persisted attachment targets (the composer's chips).
+    /// Non-fatal by design: a failure is logged through `DebugLog.store` and
+    /// the in-memory chips stay authoritative — the next mutation retries the
+    /// write. A failed chip write must never take the composer down, but it
+    /// must never be silent either.
+    public func setChatAttachments(chatID: ChatID, targets: [ChatAttachmentTarget]) {
+        do {
+            try store.setChatAttachments(chatID: chatID, targets: targets)
+        } catch {
+            DebugLog.store(
+                "WikiStoreModel.setChatAttachments failed for \(chatID.rawValue): \(error)")
+        }
+    }
+
+    /// A chat's ordered attachment targets. Empty on any read failure: the
+    /// composer then restores to nothing rather than failing the mount.
+    public func chatAttachments(chatID: ChatID) -> [ChatAttachmentTarget] {
+        do {
+            return try store.chatAttachments(chatID: chatID)
+        } catch {
+            DebugLog.store(
+                "WikiStoreModel.chatAttachments failed for \(chatID.rawValue): \(error)")
+            return []
+        }
+    }
+
     /// Resolve a page title to its id (lowest-ULID on a duplicate-title
     /// collision, matching the link graph). Best-effort: `nil` on any error or
     /// when no page matches. Used by "Copy File Path" to build the mount path.
