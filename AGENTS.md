@@ -442,7 +442,7 @@ sqlite3 "$C/<ulid>.sqlite" ".tables"     # pages, chats, chat_messages, …
 
 Schema lives in `Sources/WikiFSCore/Store/GRDBWikiStore.swift`
 (`createFreshSchema` / `createChatTablesV23` / the version ladder in
-`migrate(from:)`, currently at v53). Persistent chats are THREE tables:
+`migrate(from:)`, currently at v58). Persistent chats are THREE tables:
 `chat_transcript_items` is the durable transcript the app reads;
 `chat_messages` is the flat compatibility projection (export, search index,
 summarizer source); `chats` holds the per-chat row (title, config, ordering).
