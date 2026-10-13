@@ -167,5 +167,57 @@ struct ChatComposerAttachmentModelTests {
         draft.add(ChatAttachment(target: .page(PageID(rawValue: "01HV")), store: store))
         #expect(try grdb.chatAttachments(chatID: chat.id).isEmpty)
     }
+
+    // MARK: - AC.1 write-through, per mutation
+
+    /// The mutation each parametrized write-through case performs on a bound,
+    /// armed model seeded with two persisted chips (page + source).
+    enum WriteThroughOp: CaseIterable, Sendable {
+        /// Remove the first chip.
+        case remove
+        /// Clear the whole set (the send/queue paths).
+        case clear
+        /// Swap the whole set for a single chat chip.
+        case replace
+        /// Apply one new page target as a deduped batch.
+        case applyTargets
+    }
+
+    @Test("bound write-through: every mutation persists the resulting set", arguments: WriteThroughOp.allCases)
+    func boundMutationPersistsTheResultingRows(op: WriteThroughOp) throws {
+        let (model, grdb) = try makeModel()
+        let pageA = try grdb.createPage(title: "W Page A")
+        let pageB = try grdb.createPage(title: "W Page B")
+        let chat = try grdb.createChat(kind: .edit, title: "")
+
+        // Seed two persisted chips through the bound model.
+        let composerModel = ChatComposerAttachmentModel()
+        composerModel.bind(store: model, chatID: chat.id)
+        composerModel.restoreFromStore()
+        composerModel.armPersistence()
+        composerModel.applyTargets([
+            .page(pageA.id),
+            .source(SourceID(rawValue: "01HWSRC")),
+        ], store: model)
+        #expect(try grdb.chatAttachments(chatID: chat.id).count == 2)
+
+        // Perform the parametrized mutation through the bound model.
+        switch op {
+        case .remove:
+            composerModel.remove(composerModel.attachments[0])
+        case .clear:
+            composerModel.clear()
+        case .replace:
+            composerModel.replace(with: [
+                ChatAttachment(target: .chat(chat.id), store: model),
+            ])
+        case .applyTargets:
+            composerModel.applyTargets([.page(pageB.id)], store: model)
+        }
+
+        // The SQLite rows match the model's resulting set (AC.1's letter).
+        #expect(try grdb.chatAttachments(chatID: chat.id) == composerModel.attachments
+            .map(\.attachmentTarget))
+    }
 }
 #endif
