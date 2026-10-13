@@ -634,7 +634,7 @@ import Testing
     }
 
     @Test func headerPickersMountWhenBookmarksExist() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let (model, store) = try tempModel()
@@ -680,7 +680,7 @@ import Testing
     }
 
     @Test func headerControlsAbsentWhenNoBookmarks() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let (model, _) = try tempModel()

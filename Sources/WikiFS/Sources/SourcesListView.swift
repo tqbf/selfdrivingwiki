@@ -100,6 +100,9 @@ struct SourcesListCallbacks {
     /// Bookmark a multi-row selection (or a single row) into a folder the user
     /// picks in the target-picker sheet. Opens `BookmarkTargetPickerSheet`.
     var onAddToBookmarks: ([SourceID]) -> Void
+    /// Create a durable new chat with the selection attached as composer
+    /// chips, opening it focused. The ids arrive in row order.
+    var onNewChat: ([SourceID]) -> Void
 }
 
 private struct SourcesMenuPayload {
@@ -450,6 +453,10 @@ extension SourcesListViewController {
         }
 
         menu.addItem(item(
+            title: isMulti ? "New Chat with \(count) Sources" : "New Chat with Source",
+            systemImage: "plus.bubble", action: #selector(newChatAction(_:)), payload: payload))
+
+        menu.addItem(item(
             title: isMulti ? "Add \(count) Sources to Bookmarks…" : "Add to Bookmarks…",
             systemImage: ResourceKind.bookmark.systemImageName, action: #selector(addToBookmarksAction(_:)), payload: payload))
 
@@ -571,6 +578,9 @@ extension SourcesListViewController {
         i.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
         i.target = self
         i.representedObject = payload
+        // Test seam: the SF Symbol name doubles as the accessibility identifier,
+        // so hosted menu tests can assert the icon without image comparison.
+        i.setAccessibilityIdentifier(systemImage)
         return i
     }
 
@@ -643,6 +653,11 @@ extension SourcesListViewController {
     @objc private func addToBookmarksAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? SourcesMenuPayload {
             callbacks?.onAddToBookmarks(p.effective.map(\.id))
+        }
+    }
+    @objc private func newChatAction(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? SourcesMenuPayload {
+            callbacks?.onNewChat(p.effective.map(\.id))
         }
     }
 }

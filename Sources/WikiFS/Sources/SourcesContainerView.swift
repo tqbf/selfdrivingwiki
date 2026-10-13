@@ -360,6 +360,9 @@ struct SourcesContainerView: View {
             },
             onAddToBookmarks: { ids in
                 addToBookmarksContext = BookmarkTargetPickerContext(targets: .sources(ids))
+            },
+            onNewChat: { ids in
+                store.beginNewChat(attachments: ChatAttachmentTarget.sources(ids))
             })
     }
 

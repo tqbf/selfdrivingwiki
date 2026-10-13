@@ -175,8 +175,8 @@ struct EditorAutocompleteHostedTests {
         return (window, textView, coordinator)
     }
 
-    @Test func canonicalLinksAreDisplayedWithoutULID() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func canonicalLinksAreDisplayedWithoutULID() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         let pageID = "01HXXXXXXXXXXXXXXXXXXXXXXX"
         var text = "[[page:\(pageID)|Home]]"
@@ -212,8 +212,8 @@ struct EditorAutocompleteHostedTests {
 
     // MARK: - Trigger fires (mirror of chat suite's openTriggerFiresFetchAndAppliesResults)
 
-    @Test func openTriggerFiresFetchAndAppliesResults() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func openTriggerFiresFetchAndAppliesResults() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -249,8 +249,8 @@ struct EditorAutocompleteHostedTests {
 
     // MARK: - AC #5: debounce cancels stale in-flight partials (typos / fast typing)
 
-    @Test func debouncedQueryCancelsStaleInFlightPartial() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func debouncedQueryCancelsStaleInFlightPartial() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -288,8 +288,8 @@ struct EditorAutocompleteHostedTests {
 
     // MARK: - No trigger → no fetch
 
-    @Test func noOpenTriggerDoesNotFireFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func noOpenTriggerDoesNotFireFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -314,8 +314,8 @@ struct EditorAutocompleteHostedTests {
         #expect(calls.isEmpty, "no fetch should fire without an open-link trigger")
     }
 
-    @Test func closingTheBracketsHidesTheTriggerAndDoesNotFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func closingTheBracketsHidesTheTriggerAndDoesNotFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -342,8 +342,8 @@ struct EditorAutocompleteHostedTests {
 
     // MARK: - Reviewer correction #4: newline/paste guards (chat suite has these too)
 
-    @Test func newlineInTriggerDoesNotFireFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func newlineInTriggerDoesNotFireFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -368,8 +368,8 @@ struct EditorAutocompleteHostedTests {
         #expect(calls.isEmpty, "newline in the trigger should bail (paste/multi-line guard)")
     }
 
-    @Test func overlongPartialDoesNotFireFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func overlongPartialDoesNotFireFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -400,8 +400,8 @@ struct EditorAutocompleteHostedTests {
     /// Plain Return while the dropdown is open: consume (the controller will
     /// commit the selected row). Shift/Option/Cmd+Return: fall through.
     /// Dropdown closed: never consume (let the editor insert a newline).
-    @Test func shouldConsumeReturnFalseWhenDropdownClosed() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func shouldConsumeReturnFalseWhenDropdownClosed() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         // No trigger → no fetch → dropdown stays closed → Return is NOT
         // consumed by autocomplete (editor inserts a newline).
@@ -426,8 +426,8 @@ struct EditorAutocompleteHostedTests {
         #expect(consume == false, "Return with dropdown closed should fall through (insert newline)")
     }
 
-    @Test func shouldConsumeReturnTrueWhenDropdownOpenAndPlainReturn() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func shouldConsumeReturnTrueWhenDropdownOpenAndPlainReturn() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         // Drive the trigger → fetch → render → THEN call doCommandBy: with
         // plain Return. Should consume + commit the top row.
@@ -467,8 +467,8 @@ struct EditorAutocompleteHostedTests {
                 "commit should replace the trigger span with the canonical form; got \(textView.string)")
     }
 
-    @Test func shouldConsumeReturnFalseWhenDropdownOpenButShiftOptionCmd() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func shouldConsumeReturnFalseWhenDropdownOpenButShiftOptionCmd() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         // Shift/Option/Cmd+Return while the dropdown is open should fall
         // through (let NSTextView insert a literal newline) — same as the
@@ -548,8 +548,8 @@ struct EditorAutocompleteHostedTests {
     /// `[[source:` prefix should fetch with kind=`.source`. Verifies the
     /// `WikiLinkPrefixScanner` ↔ hooks plumbing routes by kind correctly
     /// through the editor's coordinator (the chat suite covers only `.page`).
-    @Test func sourceKindPrefixRoutesToSourceFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func sourceKindPrefixRoutesToSourceFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -580,8 +580,8 @@ struct EditorAutocompleteHostedTests {
         #expect(calls.first?.kind == .source)
     }
 
-    @Test func chatKindPrefixRoutesToChatFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func chatKindPrefixRoutesToChatFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })
@@ -612,8 +612,8 @@ struct EditorAutocompleteHostedTests {
 
     // MARK: - No hooks → no fetch (parity with chat composer's "no wiki open" path)
 
-    @Test func nilHooksDoesNotFireFetch() async {
-        let lease = await AutocompleteHostedTestGate.shared.acquire()
+    @Test func nilHooksDoesNotFireFetch() async throws {
+        let lease = try await AutocompleteHostedTestGate.shared.acquire()
         defer { lease.release() }
         var text = ""
         let textBinding = Binding(get: { text }, set: { text = $0 })

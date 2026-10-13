@@ -166,7 +166,7 @@ struct ActivityWindowWorkspaceHostedTests {
     /// The shared mount, hosting it on first use.
     private func workspace() async throws -> Mounted {
         if let mounted = Self.sharedMount { return mounted }
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let targets = (0..<300).map { index in
             QueueReportTargetRecord(

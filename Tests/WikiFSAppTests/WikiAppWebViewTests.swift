@@ -130,7 +130,7 @@ struct WikiAppWebViewTests {
 
     @Test("a below-cap pinned input admits the installed renderer before session start")
     func belowCapPinnedInputReturnsView() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = NSApplication.shared
         let ceiling = WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
@@ -196,7 +196,7 @@ struct WikiAppWebViewTests {
 
     @Test("factory binds the pinned input, trusted links, and failure recorder to one hosted session")
     func factoryWiresPinnedInputAndLifecycleContracts() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = NSApplication.shared
         let store = try GRDBWikiStore()
@@ -334,7 +334,7 @@ struct WikiAppWebViewTests {
 
     @Test("hosted production root expands an inline renderer through its disclosure control")
     func productionRootExpandsInlineRendererThroughDisclosure() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = NSApplication.shared
 
@@ -430,7 +430,7 @@ struct WikiAppWebViewTests {
 
     @Test("hosted SwiftUI mount exposes the session WebView and tears it down")
     func hostedMountAndDismantle() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = NSApplication.shared
         let webView = WKWebView()

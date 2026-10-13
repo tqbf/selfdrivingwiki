@@ -33,8 +33,8 @@ struct SidebarSelectAllShortcutTests {
             keyCode: 0)
     }
 
-    private func makeWindow() async -> (HostedAppKitTestGate.Lease, NSWindow) {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+    private func makeWindow() async throws -> (HostedAppKitTestGate.Lease, NSWindow) {
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
             styleMask: [.titled, .closable],
@@ -75,7 +75,7 @@ struct SidebarSelectAllShortcutTests {
 
     @Test func pagesTableDoesNotStealCmdAFromOmniboxField() async throws {
         let event = try #require(cmdAEvent())
-        let (lease, window) = await makeWindow()
+        let (lease, window) = try await makeWindow()
         defer { window.orderOut(nil); lease.release() }
         let table = PagesNSTableView()
         window.contentView?.addSubview(table)
@@ -95,7 +95,7 @@ struct SidebarSelectAllShortcutTests {
 
     @Test func sourcesTableDoesNotStealCmdAFromOmniboxField() async throws {
         let event = try #require(cmdAEvent())
-        let (lease, window) = await makeWindow()
+        let (lease, window) = try await makeWindow()
         defer { window.orderOut(nil); lease.release() }
         let table = SourcesNSTableView()
         window.contentView?.addSubview(table)
@@ -116,7 +116,7 @@ struct SidebarSelectAllShortcutTests {
             with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
             windowNumber: 0, context: nil, characters: "b",
             charactersIgnoringModifiers: "b", isARepeat: false, keyCode: 11))
-        let (lease, window) = await makeWindow()
+        let (lease, window) = try await makeWindow()
         defer { window.orderOut(nil); lease.release() }
         let table = PagesNSTableView()
         window.contentView?.addSubview(table)

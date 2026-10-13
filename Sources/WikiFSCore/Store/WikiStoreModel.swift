@@ -286,6 +286,22 @@ public final class WikiStoreModel {
     /// doesn't steal focus again.
     public private(set) var pendingComposerFocusChatID: ChatID?
 
+    /// The attachment hand-off from the most recent successful
+    /// ``beginNewChat(prefill:attachments:)``: the chat it created plus the
+    /// typed targets for its composer. `nil` means no request is pending.
+    ///
+    /// Lifecycle (mirrors the `pendingChatQuestion` ordering rule at
+    /// ``beginNewChat(prefill:)``): installed only AFTER the store write
+    /// succeeds, so a failed creation never leaves a request behind. Every
+    /// successful creation UNCONDITIONALLY overwrites this value — including
+    /// a creation with empty targets — so an outstanding request for a prior
+    /// chat is never inherited by, or stranded behind, a newer one. Consumed
+    /// exactly once by ``consumePendingChatAttachmentRequest(for:)``, which
+    /// only ever matches the request's own chat; independent of
+    /// ``pendingComposerFocusChatID``, which the composer clears on its own
+    /// schedule.
+    public private(set) var pendingChatAttachmentRequest: PendingChatAttachmentRequest?
+
     /// Rebuild `chats` from the store. Best-effort (`try?`) — the history list
     /// degrading to empty on a store hiccup must never crash the sidebar.
     ///
@@ -319,7 +335,14 @@ public final class WikiStoreModel {
     ///
     /// `prefill` (the omnibox "Ask" question) is installed only AFTER the
     /// store write succeeds, so a failed creation never leaks the question
-    /// into an unrelated chat later.
+    /// into an unrelated chat later. `attachments` follows the same rule: the
+    /// request is installed only after the row exists, and it always names
+    /// the chat it was created for.
+    ///
+    /// Every successful creation replaces ``pendingChatAttachmentRequest``
+    /// wholesale — an empty `attachments` installs an empty-targets request,
+    /// which both retargets the hand-off to the newest chat and cancels any
+    /// still-outstanding request from a prior creation.
     ///
     /// The new `ChatSummary` is inserted into the local array before the tab
     /// opens (same synchronous-cache pattern as `startChat`): the event bus
@@ -329,9 +352,10 @@ public final class WikiStoreModel {
     ///
     /// Empty chats are durable resources: they survive tab closure until the
     /// user deletes them. On a store failure, no tab, sidebar row, reveal,
-    /// selection, or prefill happens — the existing `storeError` alert
-    /// surfaces the failure instead.
-    public func beginNewChat(prefill: String? = nil) {
+    /// selection, prefill, or attachment request happens — the existing
+    /// `storeError` alert surfaces the failure instead.
+    public func beginNewChat(prefill: String? = nil,
+                             attachments: [ChatAttachmentTarget] = []) {
         let chat: ChatSummary
         do {
             chat = try store.createChat(kind: .edit, title: "")
@@ -345,6 +369,10 @@ public final class WikiStoreModel {
         if let prefill {
             pendingChatQuestion = prefill
         }
+        // Unconditional replace (see doc comment above): the request always
+        // describes the most recent successful creation.
+        pendingChatAttachmentRequest = PendingChatAttachmentRequest(
+            chatID: chat.id, targets: attachments)
         chats.insert(chat, at: 0)
         // One-shot composer-focus request: the new chat's detail view is built
         // with `chatID != nil`, so the legacy draft autofocus doesn't apply —
@@ -365,6 +393,29 @@ public final class WikiStoreModel {
     public func consumeComposerFocusRequest(for chatID: ChatID?) {
         guard let chatID, pendingComposerFocusChatID == chatID else { return }
         pendingComposerFocusChatID = nil
+    }
+
+    /// One-shot consumption of ``pendingChatAttachmentRequest``: returns the
+    /// request's targets and clears it, but only when `chatID` is non-nil and
+    /// matches the request's own chat. Any nil or foreign chat id gets an
+    /// empty array and leaves the request untouched — a request can only ever
+    /// be applied by the chat it was created for, never by whichever chat
+    /// surface happens to render first.
+    ///
+    /// Atomic by construction: the read-and-clear happens in one call on the
+    /// main-actor model, so a re-entrant or repeated consume after a match
+    /// returns `[]`. Independent of ``consumeComposerFocusRequest(for:)`` —
+    /// the composer may clear the focus marker before or after the chat
+    /// surface consumes its attachments; neither consumes the other.
+    @discardableResult
+    public func consumePendingChatAttachmentRequest(
+        for chatID: ChatID?
+    ) -> [ChatAttachmentTarget] {
+        guard let chatID,
+              let request = pendingChatAttachmentRequest,
+              request.chatID == chatID else { return [] }
+        pendingChatAttachmentRequest = nil
+        return request.targets
     }
 
     /// Write the provisional first-line title for a chat the app just sent

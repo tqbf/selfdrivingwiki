@@ -297,6 +297,9 @@ struct PagesContainerView: View {
             },
             onAddToBookmarks: { ids in
                 addToBookmarksContext = BookmarkTargetPickerContext(targets: .pages(ids))
+            },
+            onNewChat: { ids in
+                store.beginNewChat(attachments: ChatAttachmentTarget.pages(ids))
             })
     }
 

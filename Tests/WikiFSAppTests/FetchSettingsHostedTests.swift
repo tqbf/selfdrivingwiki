@@ -172,7 +172,7 @@ struct FetchSettingsHostedTests {
     /// row from a mixed snapshot (one extractor + one fetcher installed).
     @Test("fetch tab lists only fetcher packages")
     func fetchTabListsOnlyFetcherRows() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let dir = try tempDirectory("fetch-settings-packages")
         let snapshot = try mixedSnapshot()
@@ -204,7 +204,7 @@ struct FetchSettingsHostedTests {
     /// choices come from the fetcher registration only.
     @Test("fetch tab route table lists claimed fetcher routes")
     func fetchTabRouteTableListsFetcherRoutes() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let dir = try tempDirectory("fetch-settings-routes")
         let snapshot = try mixedSnapshot()
@@ -238,7 +238,7 @@ struct FetchSettingsHostedTests {
     /// extractor route.
     @Test("fetch tab never shows the ACP provider section")
     func fetchTabHidesACPProviderSection() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let dir = try tempDirectory("fetch-settings-acp")
         // A saved ACP host selection on the canonical PDF route.

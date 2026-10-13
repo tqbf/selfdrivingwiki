@@ -113,7 +113,7 @@ struct DurableNewChatHostedTests {
     // MARK: - AC.2
 
     @Test func durableNewChatSurvivesPageNavigationWithoutDeletedState() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let (session, coordinator) = try makeFixture()
         let store = session.store

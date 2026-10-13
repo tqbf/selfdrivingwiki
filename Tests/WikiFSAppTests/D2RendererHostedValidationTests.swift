@@ -22,7 +22,7 @@ struct D2RendererHostedValidationTests {
             print("→ skip: no generated D2 package; run make d2-renderer-package first")
             return
         }
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         Self.prepareApplication()
 
@@ -176,7 +176,7 @@ struct D2RendererHostedValidationTests {
             print("→ skip: no generated D2 package; run make d2-renderer-package first")
             return
         }
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         Self.prepareApplication()
 
@@ -327,7 +327,7 @@ struct D2RendererHostedValidationTests {
             print("→ skip: no generated D2 package; run make d2-renderer-package first")
             return
         }
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         Self.prepareApplication()
 

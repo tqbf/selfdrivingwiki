@@ -14,7 +14,7 @@ import WikiFSCore
 struct Phase6RendererHostedValidationTests {
     @Test("Excalidraw loads through the restrictive package session and renders authorized input")
     func excalidrawLoadsAuthorizedInputThroughHostedSession() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         Self.prepareApplication()
 
@@ -140,7 +140,7 @@ struct Phase6RendererHostedValidationTests {
     /// makes.
     @Test("Excalidraw renders from the package's own startup input request")
     func excalidrawRendersWithoutAReplayedBridgeRequest() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         Self.prepareApplication()
 

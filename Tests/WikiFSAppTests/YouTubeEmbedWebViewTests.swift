@@ -78,7 +78,7 @@ struct YouTubeEmbedWebViewTests {
     @MainActor
     private func hostedReader(markdown: String, store: WikiStoreModel) async throws
         -> (lease: HostedAppKitTestGate.Lease, window: NSWindow, webView: WKWebView) {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         let view = WikiReaderView(markdown: markdown, currentSelection: store.selection, store: store)
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)

@@ -114,7 +114,7 @@ final class RendererHostedWebKitHarness {
     /// Creates the intentionally permissive configuration used only by the
     /// live-receiver health check. Production renderer sessions must not use it.
     static func permissive() async throws -> RendererHostedWebKitHarness {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -127,7 +127,7 @@ final class RendererHostedWebKitHarness {
     /// The harness installs its own navigation recorder but keeps every
     /// delegate/handler the configuration already carries.
     static func custom(configuration: WKWebViewConfiguration) async throws -> RendererHostedWebKitHarness {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         return RendererHostedWebKitHarness(lease: lease, configuration: configuration)
     }
 

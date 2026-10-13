@@ -147,7 +147,7 @@ struct AddURLAndTranscribeHostedTests {
 
     @Test("a hosted Fetch with an active YouTube claim enqueues one captions job")
     func addURLFetchAutoEnqueuesCaptionsJob() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
 
@@ -190,7 +190,7 @@ struct AddURLAndTranscribeHostedTests {
 
     @Test("the hosted Transcribe button enqueues exactly one job")
     func transcribeButtonEnqueuesOneJob() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
 
