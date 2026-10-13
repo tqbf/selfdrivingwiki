@@ -964,16 +964,20 @@ public final class WikiStoreModel {
     }
 
     /// Replaces a chat's persisted attachment targets (the composer's chips).
-    /// Non-fatal by design: a failure is logged through `DebugLog.store` and
-    /// the in-memory chips stay authoritative — the next mutation retries the
-    /// write. A failed chip write must never take the composer down, but it
-    /// must never be silent either.
+    /// Failures surface through the same non-fatal `storeError` alert the
+    /// composed-create failure path uses — a chip write that did not persist
+    /// means the chips would silently vanish at restart, so the user must
+    /// see it. The in-memory chips stay authoritative either way; the next
+    /// mutation retries the write.
     public func setChatAttachments(chatID: ChatID, targets: [ChatAttachmentTarget]) {
         do {
             try store.setChatAttachments(chatID: chatID, targets: targets)
         } catch {
             DebugLog.store(
                 "WikiStoreModel.setChatAttachments failed for \(chatID.rawValue): \(error)")
+            storeError = StoreError(
+                title: "Couldn't Save Chat Attachments",
+                message: "The attachments could not be saved: \(error.localizedDescription)")
         }
     }
 
