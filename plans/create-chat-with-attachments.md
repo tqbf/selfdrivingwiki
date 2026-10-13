@@ -117,6 +117,14 @@ target (`Package.swift:640-655`) under the opt-in env var (section 5).
 
 ### 2.5 Consumption path (no hydration dependency)
 
+> **SUPERSEDED (lifetime only).** `plans/chat-attachment-persistence.md`
+> replaces this feature's one-shot consumption with persisted per-chat
+> attachments: `PendingChatAttachmentRequest` and this consume path are
+> removed there, and the mount path becomes bind + restore from SQLite. The
+> synchronous-at-mount and no-hydration-dependency properties carry over.
+> The rest of this plan (menus, targets, creation flow, window semantics)
+> stands.
+
 `ChatDetailView` consumes in `.onAppear`, synchronously on the main actor.
 It does NOT consume inside the hydration task, whose
 `await coordinator.rehydrate` (`ChatDetailView.swift:237`, task body
@@ -599,5 +607,8 @@ opt-in tier):**
   window, matching the Add Chat workflow; no separate composer window.
 - Chip persistence (recorded in 2.5): view-state lifetime, matching
   drop-added chips; no draft persistence for attachments in this feature.
+  **SUPERSEDED** by `plans/chat-attachment-persistence.md`: chips are now
+  persisted per chat in SQLite (schema v57→v58) and restore on reopen and
+  restart.
 - Scope (recorded in section 1): Pages and Sources lists only. A Chats-list
   variant would be a separate, later change.
