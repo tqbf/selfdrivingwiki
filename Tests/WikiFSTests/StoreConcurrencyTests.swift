@@ -236,9 +236,10 @@ private final class ConcurrentEventCounter: @unchecked Sendable {
         }
     }
     /// Bounded poll: waits (nonblocking sleeps) until BOTH counts hold, then
-    /// reports the final match.
+    /// reports the final match. The 5s budget absorbs full-suite load, where
+    /// the main-actor event dispatch can lag the write by seconds.
     func waitCounts(created expectedCreated: Int, updated expectedUpdated: Int) async -> Bool {
-        for _ in 0..<40 {
+        for _ in 0..<200 {
             if created == expectedCreated && updated == expectedUpdated { return true }
             try? await Task.sleep(for: .milliseconds(25))
         }
