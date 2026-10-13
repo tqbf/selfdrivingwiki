@@ -15,8 +15,11 @@ struct ChatAttachmentTargetTests {
     func pageAndSourceWithIdenticalRawTextStayDistinct() {
         let page = ChatAttachmentTarget.page(PageID(rawValue: "01HIDENTICALRAW"))
         let source = ChatAttachmentTarget.source(SourceID(rawValue: "01HIDENTICALRAW"))
-        #expect(page != source,
-                "the case tag, not the raw text, defines identity")
+        let chat = ChatAttachmentTarget.chat(ChatID(rawValue: "01HIDENTICALRAW"))
+        #expect(page != source)
+        #expect(page != chat)
+        #expect(source != chat,
+                "all three namespaces stay apart on identical raw text")
 
         // Same-case equality still holds.
         #expect(page == ChatAttachmentTarget.page(PageID(rawValue: "01HIDENTICALRAW")))

@@ -165,14 +165,18 @@ struct ChatAttachmentHostedScenarioTests {
     @MainActor
     final class PropsCapture {
         private(set) var latest: ChatComposerPaneProps?
+        private(set) var history: [[String]] = []
+        private(set) var resetCount = 0
         var attachments: [ChatAttachment] { latest?.attachments ?? [] }
 
         func record(_ props: ChatComposerPaneProps) {
             latest = props
+            history.append(props.attachments.map(\.displayName))
         }
 
         func reset() {
             latest = nil
+            resetCount += 1
         }
     }
 
@@ -212,6 +216,9 @@ struct ChatAttachmentHostedScenarioTests {
         let latch: HydrationLatch
         let capture: PropsCapture
         let store: WikiStoreModel
+        /// The session's SQLite file — the restart tests reopen it with a
+        /// fresh store + model.
+        let dbURL: URL
     }
 
     private func makeFixture(latchTimeout: Duration = .seconds(5)) throws -> Fixture {
@@ -229,13 +236,17 @@ struct ChatAttachmentHostedScenarioTests {
             extractionCoordinator: extractionCoordinator,
             queueEngine: try makeScenarioQueueEngine(),
             extractionProvider: ScenarioStubExtractionProvider())
+        let dbURL = try #require(
+            (try FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil))
+            .first { $0.pathExtension == "sqlite" })
         let latch = HydrationLatch(timeout: latchTimeout)
         let coordinator = ChatDaemonCoordinator(
             client: LatchedChatDaemonCommands(base: StubChatDaemonCommands(), latch: latch),
             eventSink: DaemonQueueEventSink())
         return Fixture(
             session: session, coordinator: coordinator, latch: latch,
-            capture: PropsCapture(), store: session.store)
+            capture: PropsCapture(), store: session.store, dbURL: dbURL)
     }
 
     /// A page to attach, from the refreshed summaries cache.
@@ -252,10 +263,17 @@ struct ChatAttachmentHostedScenarioTests {
     }
 
     private func mount(_ fixture: Fixture) -> (NSHostingController<CaptureRouteView>, NSWindow) {
+        mount(fixture, store: fixture.store, capture: fixture.capture)
+    }
+
+    /// Mount the routing surface over an arbitrary store (the restart tests
+    /// mount over a fresh model reopened from the same DB file).
+    private func mount(
+        _ fixture: Fixture, store: WikiStoreModel, capture: PropsCapture
+    ) -> (NSHostingController<CaptureRouteView>, NSWindow) {
         _ = Self.app
-        let capture = fixture.capture
         let view = CaptureRouteView(
-            store: fixture.store,
+            store: store,
             session: fixture.session,
             coordinator: fixture.coordinator,
             fileProvider: FileProviderFacade(),
@@ -385,10 +403,15 @@ struct ChatAttachmentHostedScenarioTests {
         defer { window.orderOut(nil) }
         _ = await waitUntil { !fixture.capture.attachments.isEmpty }
 
-        // Navigate away (discards the chat view) and back (remounts it with a
-        // fresh @State model) while hydration is STILL suspended.
+        // Navigate away to a page tab, then REOPEN the chat by closing and
+        // reopening its tab (a fresh surface) while hydration is STILL
+        // suspended. A render pass between close and reopen makes the
+        // surface genuinely remount.
+        let hostTabID = fixture.store.activeTabID
         fixture.store.openTab(.page(page.id))
         fixture.capture.reset()
+        fixture.store.closeTab(id: hostTabID!)
+        try await Task.sleep(for: .milliseconds(200))
         fixture.store.openTab(.chat(chatID))
         let relanded = await waitUntil { !fixture.capture.attachments.isEmpty }
         #expect(relanded, "the remounted chat rebuilds its composer")
@@ -450,6 +473,135 @@ struct ChatAttachmentHostedScenarioTests {
             }
             #expect(responderReady, "the composer text view holds keyboard focus")
         }
+    }
+
+    // MARK: - Chat targets (picker/drop) + restart
+
+    @Test("a picker/drop-attached chat target survives reopen and restart")
+    func chatPayloadAttachmentSurvivesReopenAndRestart() async throws {
+        let fixture = try makeFixture()
+        // Chat B is the attach TARGET; chat A receives the chip.
+        fixture.store.beginNewChat()
+        let targetChatID: ChatID
+        if case .chat(let id) = fixture.store.selection { targetChatID = id } else {
+            Issue.record("beginNewChat must open the chat route")
+            return
+        }
+        fixture.store.beginNewChat()
+        guard case .chat(let hostChatID) = fixture.store.selection else {
+            Issue.record("beginNewChat must open the chat route")
+            return
+        }
+
+        let (hosting, window) = mount(fixture)
+        defer { window.orderOut(nil) }
+        _ = hosting
+
+        // Picker and drop share this one callback (ChatComposerPaneView's
+        // onAddAttachment); drive it with a `.chat` payload — the exact shape
+        // both entry points produce.
+        let ready = await waitUntil { fixture.capture.latest != nil }
+        #expect(ready)
+        let props = try #require(fixture.capture.latest)
+        props.onAddAttachment(ChatAttachment(
+            payload: SidebarDragPayload(kind: .chat, id: targetChatID.rawValue),
+            store: fixture.store))
+        let persisted = await waitUntil {
+            fixture.store.chatAttachments(chatID: hostChatID) == [.chat(targetChatID)]
+        }
+        #expect(persisted, "the chat-tagged target row is in SQLite")
+
+        // Reopen the chat: CLOSE the tab (destroying the surface) and reopen
+        // it — with a render pass between, so the surface is genuinely
+        // destroyed and remounted.
+        fixture.store.closeTab(id: fixture.store.activeTabID!)
+        try await Task.sleep(for: .milliseconds(200))
+        fixture.store.openTab(.chat(hostChatID))
+        let remounted = await waitUntil {
+            fixture.capture.latest?.attachments.map(\.id)
+                == ["chat:\(targetChatID.rawValue)"]
+        }
+        #expect(remounted, "the chat chip restores on reopen")
+
+        // RESTART: a fresh store + model over the same DB file, and the real
+        // mounted view restores the chip through its own bind/restore path.
+        let freshStore = try GRDBWikiStore(databaseURL: fixture.dbURL)
+        freshStore.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
+        let freshModel = WikiStoreModel(store: freshStore)
+        #expect(freshModel.chatAttachments(chatID: hostChatID) == [.chat(targetChatID)])
+        freshModel.openTab(.chat(hostChatID))
+        let restartCapture = PropsCapture()
+        let (_, restartWindow) = mount(fixture, store: freshModel, capture: restartCapture)
+        defer { restartWindow.orderOut(nil) }
+        let restored = await waitUntil {
+            restartCapture.latest?.attachments.map(\.id)
+                == ["chat:\(targetChatID.rawValue)"]
+        }
+        #expect(restored, "the chat chip restores after restart in the real view")
+    }
+
+    @Test("renamed page, source, and chat targets restore with fresh names")
+    func renamedTargetsRestoreWithFreshNames() async throws {
+        let fixture = try makeFixture()
+        let page = try firstPage(fixture)
+        fixture.store.addSource(filename: "before.pdf", data: Data("b".utf8))
+        fixture.store.reloadFromStore()
+        let source = try #require(
+            fixture.store.sources.first { $0.isPrimary },
+            "the fixture's only source")
+        fixture.store.beginNewChat()
+        let chatB: ChatID
+        if case .chat(let id) = fixture.store.selection { chatB = id } else {
+            Issue.record("beginNewChat must open the chat route")
+            return
+        }
+        fixture.store.beginNewChat(attachments: [.page(page.id), .source(source.id)])
+        guard case .chat(let hostChatID) = fixture.store.selection else {
+            Issue.record("beginNewChat must open the chat route")
+            return
+        }
+
+        let (hosting, window) = mount(fixture)
+        defer { window.orderOut(nil) }
+        _ = hosting
+        let ready = await waitUntil {
+            fixture.capture.latest?.attachments.count == 2
+        }
+        #expect(ready, "the two creation targets restore as chips")
+        let props = try #require(fixture.capture.latest)
+        props.onAddAttachment(ChatAttachment(
+            payload: SidebarDragPayload(kind: .chat, id: chatB.rawValue),
+            store: fixture.store))
+        _ = await waitUntil { fixture.capture.latest?.attachments.count == 3 }
+
+        // Rename all three through the model's cache-refreshing paths, then
+        // remount: the restore must resolve the NEW display names. Bounded
+        // retries absorb single-transition timing gaps.
+        fixture.store.rename(page.id, to: "Renamed Page")
+        fixture.store.renameSource(id: source.id, to: "renamed.pdf")
+        fixture.store.renameChat(id: chatB, to: "Renamed Chat")
+        fixture.store.reloadFromStore()
+        let expectedNames = ["Renamed Page", "renamed.pdf", "Renamed Chat"]
+        var restoredNames: [String]?
+        var sawFreshNames = false
+        for _ in 0..<3 {
+            // Reopen = CLOSE the tab (destroy the surface) and reopen it. The
+            // close and the reopen must land in DIFFERENT render passes — a
+            // synchronous close+reopen never renders the interlude, so the
+            // view identity (and its armed state) survives.
+            fixture.store.closeTab(id: fixture.store.activeTabID!)
+            try? await Task.sleep(for: .milliseconds(200))
+            fixture.store.openTab(.chat(hostChatID))
+            sawFreshNames = await waitUntil(timeout: .seconds(3)) {
+                restoredNames = fixture.capture.latest?.attachments.map(\.displayName)
+                return restoredNames == expectedNames
+            }
+            if sawFreshNames { break }
+        }
+        let diagRows = fixture.store.chatAttachments(chatID: hostChatID)
+        let diagChips = fixture.capture.latest?.attachments
+            .map { "\($0.kind.rawValue):\( $0.itemID.prefix(6))=\($0.displayName)" }
+        #expect(sawFreshNames, "names resolve fresh at restore; last=\(String(describing: restoredNames)) rows=\(diagRows) chips=\(String(describing: diagChips))")
     }
 }
 #endif
