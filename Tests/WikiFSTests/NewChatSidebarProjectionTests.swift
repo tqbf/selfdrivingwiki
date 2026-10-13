@@ -408,10 +408,11 @@ struct NewChatSidebarProjectionTests {
         #expect(row.effectiveThinkingOptionID == configured)
     }
 
-    // MARK: - Attachment hand-off (create-chat-with-attachments)
+    // MARK: - Attachment persistence (create-chat-with-attachments →
+    // chat-attachment-persistence)
 
-    @Test("beginNewChat with attachments persists the row and installs the chat-scoped request")
-    func beginNewChatWithAttachmentsPersistsRowAndInstallsRequest() throws {
+    @Test("beginNewChat with attachments persists the chat row AND the ordered chips")
+    func beginNewChatWithAttachmentsPersistsChatAndAttachmentRows() throws {
         let (model, store) = try makeModel()
         let page = try store.createPage(title: "Attach Me")
         // Constructing the SourceID from raw text is deliberate: this test
@@ -425,86 +426,77 @@ struct NewChatSidebarProjectionTests {
 
         let chatID = try #require(activeChatID(model))
         #expect(try store.listChats().map(\.id) == [chatID])
-        #expect(model.pendingChatAttachmentRequest
-            == PendingChatAttachmentRequest(chatID: chatID, targets: targets))
+        // The composed store write persisted the ordered rows, and the model
+        // read resolves them back to typed targets.
+        #expect(model.chatAttachments(chatID: chatID) == targets)
+        #expect(try store.chatAttachments(chatID: chatID) == targets)
         #expect(model.pendingSidebarReveal == .chat(chatID))
     }
 
-    @Test("a failed beginNewChat with attachments leaves no request and opens no tab")
-    func failedBeginNewChatWithAttachmentsLeavesNoRequestAndOpensNoTab() throws {
+    @Test("a failed beginNewChat with attachments leaves no chat and no rows")
+    func failedBeginNewChatWithAttachmentsLeavesNoChatAndNoRows() throws {
         let (model, _, _) = try makeReadOnlyModel()
 
         model.beginNewChat(attachments: [.page(PageID(rawValue: "01HANY"))])
 
         #expect(model.storeError != nil, "the failure must surface the store error alert")
         #expect(model.tabs.isEmpty)
-        #expect(model.pendingChatAttachmentRequest == nil)
+        #expect(model.chats.isEmpty)
+        // Nothing to read back: no chat ever existed.
+        #expect(model.chatAttachments(chatID: ChatID(rawValue: "01HMISSING")).isEmpty)
     }
 
-    @Test("the attachment request is consumed once, by its own chat only")
-    func attachmentRequestConsumedByItsOwnChatOnly() throws {
-        let (model, _) = try makeModel()
-        let targets: [ChatAttachmentTarget] = [.page(PageID(rawValue: "01HSELF"))]
-        model.beginNewChat(attachments: targets)
-        let chatID = try #require(activeChatID(model))
-
-        // A nil chat (legacy draft surface) and a foreign chat both get
-        // nothing, and the request stays installed.
-        #expect(model.consumePendingChatAttachmentRequest(for: nil).isEmpty)
-        #expect(model.consumePendingChatAttachmentRequest(for: ChatID(rawValue: "other")).isEmpty)
-        #expect(model.pendingChatAttachmentRequest != nil)
-
-        // The own chat consumes exactly once.
-        #expect(model.consumePendingChatAttachmentRequest(for: chatID) == targets)
-        #expect(model.pendingChatAttachmentRequest == nil)
-        #expect(model.consumePendingChatAttachmentRequest(for: chatID).isEmpty)
-    }
-
-    @Test("the attachment consume works after the composer focus marker is cleared")
-    func attachmentConsumeWorksAfterComposerFocusCleared() throws {
-        let (model, _) = try makeModel()
-        let targets: [ChatAttachmentTarget] = [.source(SourceID(rawValue: "01HAFTERCLEAR"))]
-        model.beginNewChat(attachments: targets)
-        let chatID = try #require(activeChatID(model))
-
-        // The composer cleared the focus marker before the surface consumed
-        // its attachments: the two hand-offs do not proxy each other.
-        model.consumeComposerFocusRequest(for: chatID)
-        #expect(model.pendingComposerFocusChatID == nil)
-        #expect(model.consumePendingChatAttachmentRequest(for: chatID) == targets)
-        #expect(model.pendingChatAttachmentRequest == nil)
-    }
-
-    @Test("a second beginNewChat replaces the attachment request")
-    func secondBeginNewChatReplacesAttachmentRequest() throws {
-        let (model, _) = try makeModel()
-        model.beginNewChat(attachments: [.page(PageID(rawValue: "01HFIRST"))])
-        let firstID = try #require(activeChatID(model))
-        model.beginNewChat(attachments: [.source(SourceID(rawValue: "01HSECOND"))])
-        let secondID = try #require(activeChatID(model))
-
-        #expect(firstID != secondID)
-        #expect(model.pendingChatAttachmentRequest == PendingChatAttachmentRequest(
-            chatID: secondID, targets: [.source(SourceID(rawValue: "01HSECOND"))]))
-        // The first chat can no longer consume anything.
-        #expect(model.consumePendingChatAttachmentRequest(for: firstID).isEmpty)
-    }
-
-    @Test("a second beginNewChat with empty attachments replaces the outstanding request")
-    func secondBeginNewChatWithEmptyAttachmentsReplacesRequest() throws {
-        let (model, _) = try makeModel()
-        model.beginNewChat(attachments: [.page(PageID(rawValue: "01HOLD"))])
-        let firstID = try #require(activeChatID(model))
+    @Test("a chat created without attachments has an empty persisted set")
+    func chatCreatedWithoutAttachmentsHasEmptySet() throws {
+        let (model, store) = try makeModel()
 
         model.beginNewChat()
-        let secondID = try #require(activeChatID(model))
 
-        // The empty creation retargets (and thereby cancels) the request; the
-        // first chat's targets can neither be inherited nor stranded.
-        #expect(model.pendingChatAttachmentRequest
-            == PendingChatAttachmentRequest(chatID: secondID, targets: []))
-        #expect(model.consumePendingChatAttachmentRequest(for: firstID).isEmpty)
-        #expect(model.consumePendingChatAttachmentRequest(for: secondID).isEmpty)
-        #expect(model.pendingChatAttachmentRequest == nil)
+        let chatID = try #require(activeChatID(model))
+        #expect(model.chatAttachments(chatID: chatID).isEmpty)
+        #expect(try store.chatAttachments(chatID: chatID).isEmpty)
+    }
+
+    @Test("setChatAttachments replaces the whole set, ordered, through the model")
+    func setChatAttachmentsReplacesWholeSetInOrder() throws {
+        let (model, store) = try makeModel()
+        let pageB = try store.createPage(title: "B")
+        model.beginNewChat(attachments: [.source(SourceID(rawValue: "01HA"))])
+        let chatID = try #require(activeChatID(model))
+
+        // Replace: the whole set swaps (never appends).
+        model.setChatAttachments(
+            chatID: chatID,
+            targets: [.source(SourceID(rawValue: "01HS1")), .page(pageB.id)])
+        #expect(model.chatAttachments(chatID: chatID)
+            == [.source(SourceID(rawValue: "01HS1")), .page(pageB.id)])
+
+        // Clearing persists the empty set.
+        model.setChatAttachments(chatID: chatID, targets: [])
+        #expect(model.chatAttachments(chatID: chatID).isEmpty)
+        _ = store
+    }
+
+    @Test("persisted chips survive reopen and a fresh model over the same DB")
+    func persistedAttachmentsSurviveReopenAndFreshModel() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attach-reopen-\(UUID().uuidString).sqlite")
+        let store = try GRDBWikiStore(databaseURL: url)
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
+        let model = WikiStoreModel(store: store)
+        let page = try store.createPage(title: "Sticky")
+        model.beginNewChat(attachments: [.page(page.id)])
+        let chatID = try #require(activeChatID(model))
+
+        // Reopen through the same model (tab navigation).
+        model.openTab(.page(page.id))
+        model.openTab(.chat(chatID))
+        #expect(model.chatAttachments(chatID: chatID) == [.page(page.id)])
+
+        // Restart: a fresh store + model over the SAME DB file.
+        let freshStore = try GRDBWikiStore(databaseURL: url)
+        freshStore.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
+        let freshModel = WikiStoreModel(store: freshStore)
+        #expect(freshModel.chatAttachments(chatID: chatID) == [.page(page.id)])
     }
 }

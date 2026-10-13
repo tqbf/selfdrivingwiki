@@ -329,11 +329,11 @@ struct ChatAttachmentHostedScenarioTests {
         defer { window.orderOut(nil) }
 
         // Hydration is still suspended on the latch, yet the props already
-        // carry the chip: consumption ran synchronously at first mount.
+        // carry the chip: the restore ran synchronously at first mount, from
+        // SQLite — the persisted rows are the only source.
         let landed = await waitUntil { !fixture.capture.attachments.isEmpty }
         #expect(landed, "chips must appear without waiting for daemon hydration")
         #expect(fixture.latch.released == false, "hydration is still suspended")
-        #expect(fixture.store.pendingChatAttachmentRequest == nil, "consumed exactly once")
         #expect(fixture.capture.attachments.map(\.displayName) == [page.title])
 
         fixture.latch.releaseAll()
@@ -353,7 +353,8 @@ struct ChatAttachmentHostedScenarioTests {
         let (_, window) = mount(fixture)
         defer { window.orderOut(nil) }
         _ = await waitUntil { !fixture.capture.attachments.isEmpty }
-        #expect(fixture.store.pendingChatAttachmentRequest == nil)
+        #expect(fixture.store.chatAttachments(chatID: attachedChatID) == [.page(page.id)],
+                "the attached chat's rows are the restore source")
 
         // Navigate to a plain page tab (no attachment request involved).
         fixture.store.openTab(.page(page.id))

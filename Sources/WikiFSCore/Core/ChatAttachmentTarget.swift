@@ -1,16 +1,19 @@
 import Foundation
 
 /// A typed attachment target for a chat composer chip: one sidebar row the
-/// user wants the agent to see. The case tag keeps the `PageID` and
-/// `SourceID` namespaces apart (see `BookmarkNode.Content` for the same
-/// mixed-target pattern), so a page id and a source id with identical raw
-/// text can never compare equal.
+/// user wants the agent to see. The case tag keeps the `PageID`, `SourceID`,
+/// and `ChatID` namespaces apart (see `BookmarkNode.Content` for the same
+/// mixed-target pattern), so a page id, a source id, and a chat id with
+/// identical raw text can never compare equal.
 ///
-/// This is model-layer state; it crosses `beginNewChat(attachments:)` and the
-/// one-shot `PendingChatAttachmentRequest` hand-off. The app layer converts a
-/// target to a composer chip in exactly one place (`ChatAttachment.init(
-/// target:store:)`); pasteboard transport stays `SidebarDragPayload`, whose
-/// raw-String ids are an external-format compatibility contract.
+/// This is model-layer state; it crosses `beginNewChat(attachments:)`,
+/// `setChatAttachments`, and the composer's chip model. The app layer
+/// converts a target to a composer chip in exactly one place
+/// (`ChatAttachment.init(target:store:)`), and a chip back to a target in
+/// the persistence hook; pasteboard transport stays `SidebarDragPayload`,
+/// whose raw-String ids are an external-format compatibility contract.
+/// `kindTag` / `rawID` / `decode(kindTag:rawID:)` are the SQLite boundary
+/// for the `chat_attachments` table.
 public enum ChatAttachmentTarget: Hashable, Sendable {
     /// A page row from the `pages` table.
     case page(PageID)
@@ -61,21 +64,5 @@ public enum ChatAttachmentTarget: Hashable, Sendable {
             throw WikiStoreError.unexpected(
                 "chat_attachments: unknown kind tag '\(kindTag)'")
         }
-    }
-}
-
-/// The one-shot hand-off from `WikiStoreModel.beginNewChat(attachments:)` to
-/// the chat surface: the chat the request belongs to, plus the typed targets
-/// to attach to its composer. The chatID makes consumption chat-scoped — a
-/// request can only ever be applied by its own chat's first mount.
-public struct PendingChatAttachmentRequest: Equatable, Sendable {
-    /// The chat this request was created for.
-    public let chatID: ChatID
-    /// The ordered attachment targets for that chat's composer.
-    public let targets: [ChatAttachmentTarget]
-
-    public init(chatID: ChatID, targets: [ChatAttachmentTarget]) {
-        self.chatID = chatID
-        self.targets = targets
     }
 }

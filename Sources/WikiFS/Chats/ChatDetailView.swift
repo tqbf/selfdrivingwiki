@@ -269,10 +269,13 @@ struct ChatDetailView: View {
         .onAppear {
             installOutgoingEnvironment()
             updateRightSidebarRegistration()
-            // One-shot attachment hand-off (beginNewChat(attachments:)),
-            // applied synchronously at this chat's first mount — NOT inside
-            // the hydration task, whose awaits can be cancelled or superseded.
-            applyPendingChatAttachments()
+            // Per-chat persisted chips: ONE binding operation per mount —
+            // bind disarms persistence, the restore applies the chat's
+            // persisted targets as one nonpersisting batch, then write-through
+            // arms. Repeat mounts read once and write nothing.
+            attachmentModel.bind(store: store, chatID: chatID)
+            attachmentModel.restoreFromStore()
+            attachmentModel.armPersistence()
         }
         // The right sidebar renders the last accepted registration's payload
         // value. The payload now carries the outline entries themselves, so
@@ -769,18 +772,6 @@ struct ChatDetailView: View {
 
     private func removeAttachment(_ attachment: ChatAttachment) {
         attachmentModel.remove(attachment)
-    }
-
-    /// Consume the one-shot attachment request from `beginNewChat(attachments:)`
-    /// at this chat's FIRST mount, synchronously on the main actor — before any
-    /// hydration await can matter, and immune to the hydration task's
-    /// cancellation (navigating away mid-hydration cannot strand or misapply
-    /// the request). The model-side consume is atomic: a re-appear after a tab
-    /// switch gets an empty array and adds nothing.
-    private func applyPendingChatAttachments() {
-        let targets = store.consumePendingChatAttachmentRequest(for: chatID)
-        guard !targets.isEmpty else { return }
-        attachmentModel.applyTargets(targets, store: store)
     }
 
     private var hasDraftText: Bool {
