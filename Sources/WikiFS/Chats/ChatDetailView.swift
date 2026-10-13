@@ -1094,10 +1094,10 @@ struct ChatAttachment: Identifiable, Hashable {
     }
 
     /// The typed model-target boundary: converts a `ChatAttachmentTarget`
-    /// (the shape `beginNewChat(attachments:)` and
-    /// `PendingChatAttachmentRequest` carry) into a composer chip. The
-    /// `PageID`/`SourceID` to raw-String conversion happens exactly here,
-    /// once; the name lookup reuses the same resolver as the drop path.
+    /// (the shape `beginNewChat(attachments:)` and `setChatAttachments`
+    /// carry) into a composer chip. The `PageID`/`SourceID`/`ChatID` to
+    /// raw-String conversion happens exactly here, once; the name lookup
+    /// reuses the same resolver as the drop path.
     @MainActor
     init(target: ChatAttachmentTarget, store: WikiStoreModel) {
         let payload: SidebarDragPayload
@@ -1106,6 +1106,8 @@ struct ChatAttachment: Identifiable, Hashable {
             payload = SidebarDragPayload(kind: .page, id: id.rawValue)
         case .source(let id):
             payload = SidebarDragPayload(kind: .source, id: id.rawValue)
+        case .chat(let id):
+            payload = SidebarDragPayload(kind: .chat, id: id.rawValue)
         }
         self.init(
             kind: payload.kind,

@@ -135,7 +135,7 @@ struct ChangeRevisionTests {
 
         let migrated = try GRDBWikiStore(databaseURL: url)
         defer { migrated.close() }
-        #expect(migrated.pragmaValue("user_version") == "57")
+        #expect(migrated.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         expectAllTriggers(in: migrated)
         #expect(try migrated.getPage(id: page.id).title == "Kept")
 
