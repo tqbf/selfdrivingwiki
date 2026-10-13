@@ -42,6 +42,36 @@ struct StoreEmissionExhaustivenessTests {
         }
     }
 
+    /// The chat-attachment mutators (plans/chat-attachment-persistence.md):
+    /// the composed create and the set-replacement both route through `mutate`
+    /// — one top-level transaction, one post-commit event. The behavioral
+    /// exactly-one/zero-event contract lives in
+    /// `ChatAttachmentPersistenceTests`.
+    @Test func chatAttachmentPublicMutatorsRouteThroughMutate() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Store/GRDBWikiStore.swift"),
+            encoding: .utf8)
+
+        for signature in [
+            "public func createChat(\n        kind: ChatKind, title: String, attachments: [ChatAttachmentTarget]",
+            "public func setChatAttachments(",
+        ] {
+            guard let start = source.range(of: signature)?.lowerBound else {
+                Issue.record("missing classified public mutator \(signature)")
+                continue
+            }
+            let afterSignature = source[start...]
+            let end = afterSignature.dropFirst().range(of: "\n    public func ")?.lowerBound
+                ?? source.endIndex
+            let implementation = source[start..<end]
+            #expect(
+                implementation.contains("mutate("),
+                "\(signature) must use mutate")
+        }
+    }
+
     /// The protected deletion (issue #219 hardening) is the one batch mutator:
     /// impact recheck → provenance gate → rewrites → bookmark cleanup → target
     /// deletion, all in ONE `mutateBatch` transaction with post-commit events.
