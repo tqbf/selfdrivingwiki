@@ -110,12 +110,23 @@ public struct AgentEventTranscriptTranslator: Sendable {
                         inputSummary: ""
                     )
                     : runningToolCalls.removeFirst()
+                // A failed row must carry its cause (#1417): when the provider
+                // supplied no input descriptor, the (bounded) failure text
+                // becomes the row detail instead of an empty descriptor that
+                // hides why the tool failed. Completed rows keep the input
+                // descriptor unchanged.
+                let detail: String
+                if isError, toolCall.inputSummary.isEmpty, let summary, !summary.isEmpty {
+                    detail = ACPToolFailureClassification.bounded(summary)
+                } else {
+                    detail = toolCall.inputSummary
+                }
                 return .toolCallUpsert(ChatTranscriptToolCallItem(
                     toolCallID: toolCall.toolCallID,
                     turnID: turnID,
                     toolName: toolCall.toolName,
                     status: isError ? .failed : .completed,
-                    detail: toolCall.inputSummary,
+                    detail: detail,
                     output: summary,
                     permissionRequestID: nil,
                     updatedAt: Date()
