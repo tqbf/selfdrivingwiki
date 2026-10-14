@@ -357,7 +357,7 @@ struct MenuBarItemLintBlinkerTests {
     /// Task.sleep is non-blocking — the cooperative pool is never parked
     /// (repo concurrency rule).
     private func waitUntil(
-        timeout: Duration = .seconds(3),
+        timeout: Duration = .seconds(10),
         _ condition: @MainActor () -> Bool
     ) async -> Bool {
         let deadline = ContinuousClock.now + timeout

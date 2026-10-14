@@ -62,12 +62,13 @@ struct RealSpeechAnalyzerIntegrationTests {
         return url
     }
 
-    @Test func sayFixtureTranscribes() async throws {
-        guard ProcessInfo.processInfo.environment["WIKIFS_REAL_SPEECH"] == "1" else {
-            // Ungated runs SKIP with a visible marker: the CI gate stays on
-            // the deterministic injected-engine suites.
-            throw SkipTest()
-        }
+    @Test(
+        "say fixture transcribes",
+        .enabled(
+            if: ProcessInfo.processInfo.environment["WIKIFS_REAL_SPEECH"] == "1",
+            "Real speech transcription is gated behind WIKIFS_REAL_SPEECH=1 (the CI gate stays on the deterministic injected-engine suites)"
+        ))
+    func sayFixtureTranscribes() async throws {
         let engine = SystemSpeechTranscriber()
         let fixture = try await Self.makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture) }
@@ -94,7 +95,4 @@ struct RealSpeechAnalyzerIntegrationTests {
         #expect(lowered.contains("speaking"))
     }
 }
-
-/// Swift Testing's skip signal for the ungated run.
-private struct SkipTest: Error {}
 #endif

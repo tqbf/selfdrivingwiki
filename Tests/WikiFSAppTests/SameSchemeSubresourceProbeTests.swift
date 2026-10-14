@@ -62,7 +62,10 @@ struct SameSchemeSubresourceProbeTests {
             try await Task.sleep(for: .milliseconds(20))
         }
         try await Task.sleep(for: .milliseconds(200))
-        Issue.record("parent started: \(parent.started.map(\.absoluteString))")
+        // Proven behavior (now the shipped design — see WikiReaderDocumentOrigin):
+        // the custom-scheme handler serves the parent navigation.
+        #expect(parent.started.count == 1, "parent navigation must be served by the reader handler; got \(parent.started.map(\.absoluteString))")
+        #expect(parent.started.first.map { $0.scheme == "wiki-reader" && $0.host == "reader" && $0.path == "/document.html" } == true)
 
         let frameURL = URL(string: "\(RendererPackageScheme.name)://0123456789abcdef0123456789abcdef/org.example.pkg/1.0.0/index.html")!
         let result = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
@@ -82,20 +85,25 @@ struct SameSchemeSubresourceProbeTests {
                 cont.resume(returning: e.map { "JS-ERROR: \($0.localizedDescription)" } ?? (r as? String ?? "nil"))
             }
         }
-        Issue.record("injection: \(result)")
+        #expect(result == "injected", "injection script failed: \(result)")
 
         // Give both requests a generous window.
         let deadline = ContinuousClock.now + .seconds(5)
         while package.started.count < 2, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }
-        Issue.record("package handler started: \(package.started.count) [\(package.started.map { $0.absoluteString })]")
+        // Both same-scheme subresources (iframe + img) reach the package handler.
+        #expect(package.started.count == 2, "expected 2 package-handler starts; got \(package.started.map(\.absoluteString))")
+        #expect(package.started.allSatisfy { $0.absoluteString == frameURL.absoluteString })
         let frameState = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
             webView.evaluateJavaScript(
                 "(function(){var f=document.getElementById('probe-frame');try{return 'href='+f.contentWindow.location.href;}catch(e){return 'isolated-or-blocked';}})()"
             ) { r, _ in cont.resume(returning: r as? String ?? "nil") }
         }
-        Issue.record("frame state: \(frameState)")
+        // The package frame is cross-origin isolated from the reader parent's
+        // script: content loads through the handler, but parent JS cannot
+        // reach into the frame (per-frame renderer origins).
+        #expect(frameState == "isolated-or-blocked", "package frame must stay isolated from parent script; got \"\(frameState)\"")
     }
 }
 #endif
