@@ -13,6 +13,10 @@ import Testing
 /// `noteSuspectedExternalWrite(forWikiID:)`) emits onto that bus, the model's
 /// subscription calls `reloadFromStore()`, and the rebuilt render context
 /// resolves the `[[source:…]]` citation the chat wrote.
+///
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened reload waits (`EventBusDeliveryWaits.budget`).
+@Suite(.serialized, .timeLimit(.minutes(2)))
 @MainActor
 struct ChatExternalWriteRefreshTests {
 
@@ -41,9 +45,12 @@ struct ChatExternalWriteRefreshTests {
         _ = try store.addSource(
             filename: "000- Prologue - Sample Book | Site.html",
             data: Data("<html><body><p>prologue</p></body></html>".utf8))
-        for _ in 0..<200 {
-            if model.sources.count == 1 { break }
-            await Task.yield()
+        // Shared budget: absorbs full-suite main-actor lag (issue #1425);
+        // the old 200-yield spin carried no time bound at all.
+        let settleDeadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while model.sources.count != 1, ContinuousClock.now < settleDeadline,
+              !Task.isCancelled {
+            try await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
         #expect(model.sources.count == 1)
 
@@ -65,10 +72,13 @@ struct ChatExternalWriteRefreshTests {
         // (`WikiChangeBridge.flush` performs exactly this emit).
         bus.emit(ResourceChangeEvent(wikiID: wikiID, kind: nil, id: "", change: .updated))
 
-        // The subscription's reload lands asynchronously — yield until it does.
-        for _ in 0..<200 {
-            if model.sources.contains(where: { $0.id == added.id }) { break }
-            await Task.yield()
+        // The subscription's reload lands asynchronously — wait until it
+        // does. Shared budget: absorbs full-suite main-actor lag (#1425);
+        // the old 200-yield spin carried no time bound at all.
+        let reloadDeadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while !model.sources.contains(where: { $0.id == added.id }),
+              ContinuousClock.now < reloadDeadline, !Task.isCancelled {
+            try await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
 
         // The sidebar projection now carries the source…

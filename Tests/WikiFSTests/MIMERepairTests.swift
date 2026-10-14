@@ -5,7 +5,9 @@ import WikiFSTypes
 @testable import WikiFSCore
 @testable import WikiCtlCore
 
-@Suite(.serialized)
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened delivery waits (`EventBusDeliveryWaits.budget`).
+@Suite(.serialized, .timeLimit(.minutes(2)))
 struct MIMERepairTests {
     @Test func dryRunDoesNotWrite() throws {
         let fixture = try makeFixture(sourceMIMEIsNull: true, versionMIMEIsNull: true)
@@ -168,14 +170,19 @@ struct MIMERepairTests {
         let activeVersionID: SourceVersionID
     }
 
+    /// Bounded by `EventBusDeliveryWaits.budget`: absorbs full-suite
+    /// main-actor lag (issue #1425) instead of claiming dispatch latency.
+    /// Returns whatever arrived — the caller's assertions report the
+    /// shortfall.
     private func waitForEvents(
         _ recorder: EventRecorder,
         expected: Int
     ) async -> [ResourceChangeEvent] {
-        for _ in 0..<100 {
-            if recorder.snapshot.count >= expected { return recorder.snapshot }
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while recorder.snapshot.count < expected,
+              ContinuousClock.now < deadline, !Task.isCancelled {
             await flushBusDeliveries()
-            try? await Task.sleep(for: .milliseconds(2))
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
         return recorder.snapshot
     }

@@ -9,6 +9,9 @@ import Foundation
 /// manual scheduler stands in for the window so the collapse is asserted
 /// deterministically (no real File Provider domain is touched — that path is
 /// untestable, as today).
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened delivery waits (`EventBusDeliveryWaits.budget`).
+@Suite(.serialized, .timeLimit(.minutes(2)))
 @MainActor
 struct FPIfSubscriberDebounceTests {
 
@@ -58,12 +61,15 @@ struct FPIfSubscriberDebounceTests {
 
     /// Wait until `box` has recorded `expected` bus deliveries (bounded). The bus
     /// dispatches each handler async via `Task { @MainActor in … }`, so the test
-    /// must let the run loop spin before firing the fake scheduler.
-    private func awaitDeliveries(_ box: SignalBox, expected: Int, timeoutMs: Int = 1000) async throws {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while Date() < deadline {
-            if box.noteCount >= expected { return }
-            try await Task.sleep(for: .milliseconds(5))
+    /// must let the run loop spin before firing the fake scheduler. Budget from
+    /// `EventBusDeliveryWaits`: absorbs full-suite main-actor lag (issue
+    /// #1425) instead of claiming dispatch latency.
+    private func awaitDeliveries(_ box: SignalBox, expected: Int) async throws {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while box.noteCount < expected {
+            guard ContinuousClock.now < deadline else { return }
+            try Task.checkCancellation()
+            try await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
     }
 

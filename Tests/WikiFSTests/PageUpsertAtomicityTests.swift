@@ -35,20 +35,23 @@ struct PageUpsertAtomicityTests {
 
     /// Poll-bounded wait until the recorders have delivered at least
     /// `expected` events in total, then return. Throws on timeout so a
-    /// missing delivery is a diagnosed failure, not a hang.
+    /// missing delivery is a diagnosed failure, not a hang. Budget from
+    /// `EventBusDeliveryWaits`: absorbs full-suite main-actor lag (issue
+    /// #1425) instead of claiming dispatch latency.
     private func awaitDeliveredTotal(
-        _ recorders: [SignalRecorder], expected: Int, timeoutMs: Int = 2000
+        _ recorders: [SignalRecorder], expected: Int
     ) async throws {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
         while recorders.reduce(0, { $0 + $1.count }) < expected {
-            guard Date() < deadline else {
+            guard ContinuousClock.now < deadline else {
                 throw EventBusDeliveryWaitError.timedOut(
                     expectedCount: expected,
                     actualCount: recorders.reduce(0, { $0 + $1.count }),
-                    timeoutMs: timeoutMs)
+                    timeout: EventBusDeliveryWaits.budget)
             }
+            try Task.checkCancellation()
             await flushBusDeliveries()
-            await Task.yield()
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
     }
 

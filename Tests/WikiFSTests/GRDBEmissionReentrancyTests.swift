@@ -19,6 +19,10 @@ import Foundation
 /// These file-backed tests complement the in-memory
 /// `StoreEmissionReentrancyTests` by exercising the production `DatabasePool`
 /// configuration that originally exposed the crash.
+///
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened delivery waits (`EventBusDeliveryWaits.budget`).
+@Suite(.serialized, .timeLimit(.minutes(3)))
 struct GRDBEmissionReentrancyTests {
 
     /// Thread-safe event recorder (subscribers fire on the main actor).
@@ -30,12 +34,16 @@ struct GRDBEmissionReentrancyTests {
         var count: Int { snapshot.count }
     }
 
-    private func awaitCount(_ recorder: Recorder, _ expected: Int, timeoutMs: Int = 1000) async throws {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while Date() < deadline {
-            if recorder.count >= expected { return }
+    /// Budget from `EventBusDeliveryWaits`: absorbs full-suite main-actor lag
+    /// (issue #1425) instead of claiming dispatch latency. Returns silently
+    /// on timeout — the caller's assertions report the shortfall.
+    private func awaitCount(_ recorder: Recorder, _ expected: Int) async throws {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while recorder.count < expected {
+            guard ContinuousClock.now < deadline else { return }
+            try Task.checkCancellation()
             await flushBusDeliveries()
-            try? await Task.sleep(for: .milliseconds(2))
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
     }
 
@@ -82,10 +90,10 @@ struct GRDBEmissionReentrancyTests {
         }
 
         let created = try store.createPage(title: "Committed")
-        let deadline = Date().addingTimeInterval(1.0)
-        while Date() < deadline, slot.get() == nil {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while ContinuousClock.now < deadline, slot.get() == nil, !Task.isCancelled {
             await flushBusDeliveries()
-            try? await Task.sleep(for: .milliseconds(2))
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
         let read = slot.get()
         #expect(read != nil, "re-entrant read returned nothing (trap or pre-commit flush)")
@@ -150,10 +158,10 @@ struct GRDBEmissionReentrancyTests {
 
         try store.updatePage(id: page.id, title: "Updated", body: "new body text", lastEditedBy: nil)
         try await awaitCount(rec, 2)
-        let deadline = Date().addingTimeInterval(1.0)
-        while Date() < deadline, bodySlot.get() == nil {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while ContinuousClock.now < deadline, bodySlot.get() == nil, !Task.isCancelled {
             await flushBusDeliveries()
-            try? await Task.sleep(for: .milliseconds(2))
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
         #expect(rec.snapshot.last?.change == .updated)
         #expect(bodySlot.get() == "new body text",

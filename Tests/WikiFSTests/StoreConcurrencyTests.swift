@@ -6,7 +6,11 @@ import Testing
 /// method-atomic (internal recursive lock), transactions nest via savepoints,
 /// `renameSource` is atomic, and `WikiReadService` provides off-main read-only
 /// snapshot access. These tests pin each of those properties.
-@Suite("Store concurrency & transactions (graph-model Phase 0)")
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened event waits (three `waitCounts` polls of
+/// `EventBusDeliveryWaits.budget` worst case in the attachment test).
+@Suite("Store concurrency & transactions (graph-model Phase 0)",
+       .serialized, .timeLimit(.minutes(3)))
 struct StoreConcurrencyTests {
 
     private func makeStore() throws -> (store: GRDBWikiStore, url: URL) {
@@ -236,12 +240,19 @@ private final class ConcurrentEventCounter: @unchecked Sendable {
         }
     }
     /// Bounded poll: waits (nonblocking sleeps) until BOTH counts hold, then
-    /// reports the final match. The 5s budget absorbs full-suite load, where
-    /// the main-actor event dispatch can lag the write by seconds.
+    /// reports the final match. The budget comes from
+    /// `EventBusDeliveryWaits.budget`: under full-suite load the main-actor
+    /// event dispatch can lag the write by seconds, and the old fixed
+    /// 5-second budget expired while events were still in flight (issue
+    /// #1425). This test asserts the count progression, not dispatch latency.
+    /// The `Task.isCancelled` check ends the loop when the suite's
+    /// `.timeLimit` tears the test down, so cancellation never becomes a
+    /// hot spin.
     func waitCounts(created expectedCreated: Int, updated expectedUpdated: Int) async -> Bool {
-        for _ in 0..<200 {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while ContinuousClock.now < deadline, !Task.isCancelled {
             if created == expectedCreated && updated == expectedUpdated { return true }
-            try? await Task.sleep(for: .milliseconds(25))
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
         return created == expectedCreated && updated == expectedUpdated
     }

@@ -24,7 +24,10 @@ import Testing
 /// Fast-tier: these are quick (no file I/O, no migration-heavy seeding). They
 /// do NOT carry `.tags(.integration)` — they're the canary that the in-memory
 /// path compiles + works on every PR, not gated behind the slow integration job.
-@Suite("In-memory store init correctness (#651)")
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened delivery waits (`EventBusDeliveryWaits.budget`).
+@Suite("In-memory store init correctness (#651)",
+       .serialized, .timeLimit(.minutes(2)))
 struct InMemoryStoreTests {
 
     // MARK: - 1. CRUD on :memory:
@@ -149,17 +152,19 @@ struct InMemoryStoreTests {
     /// delivers on the main actor via `Task`, so we flush the runloop between
     /// checks. Returns silently on timeout (the caller's `#expect` then
     /// surfaces the actual count); mirrors the existing pattern in
-    /// `StoreEmissionReentrancyTests.awaitCount`.
+    /// `StoreEmissionReentrancyTests.awaitCount`. Budget from
+    /// `EventBusDeliveryWaits`: absorbs full-suite main-actor lag (issue
+    /// #1425) instead of claiming dispatch latency.
     private static func awaitCount(
         _ recorder: LockRecorder,
-        expected: Int,
-        timeoutMs: Int = 3000
+        expected: Int
     ) async throws {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while Date() < deadline {
-            if recorder.count >= expected { return }
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while recorder.count < expected {
+            guard ContinuousClock.now < deadline else { return }
+            try Task.checkCancellation()
             await flushBusDeliveries()
-            try? await Task.sleep(for: .milliseconds(2))
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
     }
 }

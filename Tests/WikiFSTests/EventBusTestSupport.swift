@@ -1,13 +1,30 @@
 import Foundation
 import WikiFSCore
 
+/// Shared wait budget for "the bus delivered the events" polls in WikiFSTests.
+/// The bus dispatches each handler as `Task { @MainActor in … }`, so under
+/// full-suite load the delivery can trail the committing write by many
+/// seconds: StoreConcurrencyTests failed its old 5-second budget exactly this
+/// way (issue #1425). The budget absorbs that lag while staying far below the
+/// waiting suites' per-test `.timeLimit` values, so a real emission regression
+/// still fails, and fails fast, instead of racing the scheduler.
+enum EventBusDeliveryWaits {
+    /// Ceiling for one wait-for-delivery poll. Sized above any main-actor
+    /// dispatch delay observed under full-suite load.
+    static let budget: Duration = .seconds(30)
+
+    /// Sleep between polls. Cooperative (`Task.sleep`), never a parked
+    /// thread — the #1051 rule.
+    static let pollInterval: Duration = .milliseconds(25)
+}
+
 enum EventBusDeliveryWaitError: Error, CustomStringConvertible {
-    case timedOut(expectedCount: Int, actualCount: Int, timeoutMs: Int)
+    case timedOut(expectedCount: Int, actualCount: Int, timeout: Duration)
 
     var description: String {
         switch self {
-        case let .timedOut(expectedCount, actualCount, timeoutMs):
-            "Timed out after \(timeoutMs)ms waiting for \(expectedCount) event(s); received \(actualCount)."
+        case let .timedOut(expectedCount, actualCount, timeout):
+            "Timed out after \(timeout) waiting for \(expectedCount) event(s), received \(actualCount)."
         }
     }
 }
@@ -27,19 +44,19 @@ final class SignalRecorder: @unchecked Sendable {
 
     /// Wait until at least one event has been delivered. A missing delivery
     /// throws with the observed count instead of silently returning.
-    func awaitNonEmpty(timeoutMs: Int = 1000) async throws {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while true {
-            if count > 0 { return }
-            guard Date() < deadline else {
+    func awaitNonEmpty(timeout: Duration = EventBusDeliveryWaits.budget) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while count == 0 {
+            guard ContinuousClock.now < deadline else {
                 throw EventBusDeliveryWaitError.timedOut(
                     expectedCount: 1,
                     actualCount: count,
-                    timeoutMs: timeoutMs
+                    timeout: timeout
                 )
             }
+            try Task.checkCancellation()
             await MainActor.run { }
-            await Task.yield()
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
     }
 }

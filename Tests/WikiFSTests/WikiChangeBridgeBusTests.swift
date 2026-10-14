@@ -8,6 +8,10 @@ import Foundation
 /// event on the in-process model. Phase E: the model reloads on **all** events
 /// — both local (in-app writes) and coarse (bridge/`wikictl`). The "FP signals"
 /// half of AC.5 is covered by `FPIfSubscriberDebounceTests`.
+///
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened delivery waits (`EventBusDeliveryWaits.budget`).
+@Suite(.serialized, .timeLimit(.minutes(2)))
 struct WikiChangeBridgeBusTests {
 
     private func tempDatabaseURL() -> URL {
@@ -30,14 +34,16 @@ struct WikiChangeBridgeBusTests {
     }
 
     /// Poll the model's summary titles on the main actor until `expected` holds
-    /// (bounded), mirroring the async delivery of bus events.
+    /// (bounded), mirroring the async delivery of bus events. Budget from
+    /// `EventBusDeliveryWaits`: absorbs full-suite main-actor lag (issue
+    /// #1425) instead of claiming dispatch latency.
     @MainActor
-    private func awaitTitles(_ model: WikiStoreModel, expected: Set<String>, timeoutMs: Int = 800) async throws {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while Date() < deadline {
+    private func awaitTitles(_ model: WikiStoreModel, expected: Set<String>) async throws {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while ContinuousClock.now < deadline, !Task.isCancelled {
             let titles = Set(model.summaries.map(\.title))
             if expected.isSubset(of: titles) { return }
-            try await Task.sleep(for: .milliseconds(5))
+            try await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
     }
 

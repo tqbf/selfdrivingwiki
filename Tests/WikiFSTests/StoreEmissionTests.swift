@@ -8,7 +8,9 @@ import Foundation
 /// `Task`), so a lock-guarded collector is polled until the event lands; because
 /// events arrive a runloop tick after `emit`, prerequisite mutations are awaited
 /// (then the collector cleared) before the mutation under test runs.
-@Suite
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened delivery waits (`EventBusDeliveryWaits.budget`).
+@Suite(.serialized, .timeLimit(.minutes(2)))
 struct StoreEmissionTests {
 
     /// Lock-guarded, synchronous collector — the `@MainActor` handler appends
@@ -23,12 +25,15 @@ struct StoreEmissionTests {
     }
 
     /// Wait until `recorder` holds `expected` events (bounded), returning them.
-    private func awaitEvents(_ recorder: Recorder, expected: Int = 1, timeoutMs: Int = 800) async throws -> [ResourceChangeEvent] {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while Date() < deadline {
-            if recorder.count >= expected { return recorder.snapshot }
+    /// Budget from `EventBusDeliveryWaits`: absorbs full-suite main-actor lag
+    /// (issue #1425) instead of claiming dispatch latency.
+    private func awaitEvents(_ recorder: Recorder, expected: Int = 1) async throws -> [ResourceChangeEvent] {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while recorder.count < expected {
+            guard ContinuousClock.now < deadline else { return recorder.snapshot }
+            try Task.checkCancellation()
             await flushBusDeliveries()
-            try? await Task.sleep(for: .milliseconds(2))
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
         return recorder.snapshot
     }
