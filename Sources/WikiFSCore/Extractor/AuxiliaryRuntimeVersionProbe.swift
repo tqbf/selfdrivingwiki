@@ -125,7 +125,15 @@ public enum AuxiliaryRuntimeProbeLimits {
 /// environment, bounded output, and a startup timeout. The probe never
 /// follows a PATH and never passes arguments beside `--version`.
 public struct AuxiliaryRuntimeVersionProbe: AuxiliaryRuntimeVersionProbing, Sendable {
-    public init() {}
+    private let timeout: Duration
+
+    /// - Parameters:
+    ///   - timeout: How long the version subprocess may run before the
+    ///     probe gives up and reports `.failed`. Defaults to the production
+    ///     bound, `AuxiliaryRuntimeProbeLimits.timeout`.
+    public init(timeout: Duration = AuxiliaryRuntimeProbeLimits.timeout) {
+        self.timeout = timeout
+    }
 
     public func probe(executableURL: URL) async -> RuntimeVersionProbeOutcome {
         let handle: RaceFreeProcessGroupHandle
@@ -143,8 +151,7 @@ public struct AuxiliaryRuntimeVersionProbe: AuxiliaryRuntimeVersionProbing, Send
         }
         let execution: ProcessGroupExecutionResult
         do {
-            execution = try await handle.result(
-                timeout: AuxiliaryRuntimeProbeLimits.timeout)
+            execution = try await handle.result(timeout: timeout)
         } catch {
             return .failed
         }

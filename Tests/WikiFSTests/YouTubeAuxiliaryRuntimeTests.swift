@@ -90,6 +90,16 @@ struct YouTubeAuxiliaryRuntimeTests {
             diagnostics: DebugLogExtractorDiagnosticsSink())
     }
 
+    /// The real probe with a generous timeout (issue #1412). Under CI load
+    /// a fixture `--version` subprocess can exceed the production 10-second
+    /// bound; the probe then reports `.failed`, which surfaces as
+    /// `.versionProbeFailed` where the version gate would decide. This
+    /// suite verifies the gate decision, not the probe's timeout
+    /// resilience, so every real probe here gets 60 seconds.
+    private func realProber() -> AuxiliaryRuntimeVersionProbe {
+        AuxiliaryRuntimeVersionProbe(timeout: .seconds(60))
+    }
+
     // MARK: - Pinned policy
 
     @Test("the host pins the same Bun minimum the pinned library documents")
@@ -108,7 +118,7 @@ struct YouTubeAuxiliaryRuntimeTests {
     func versionGateAcceptsAndRejects() async throws {
         let root = try tempDirectory("version")
         defer { try? FileManager.default.removeItem(at: root) }
-        let prober = AuxiliaryRuntimeVersionProbe()
+        let prober = realProber()
 
         let current = try resolution(for: try makeFakeRuntime(
             versionLine: "1.2.11", in: root, name: "bun-current"))
@@ -153,7 +163,7 @@ struct YouTubeAuxiliaryRuntimeTests {
 
         let outcome = await ProcessExtractorProvider.resolveAuxiliaryRuntime(
             locator: ScriptedLocator(outcome: .resolved(resolved)),
-            prober: AuxiliaryRuntimeVersionProbe())
+            prober: realProber())
 
         guard case .unavailable(.versionProbeFailed) = outcome else {
             Issue.record("expected versionProbeFailed")
@@ -167,7 +177,7 @@ struct YouTubeAuxiliaryRuntimeTests {
     func bunRuntimeNoPath() async throws {
         let outcome = await ProcessExtractorProvider.resolveAuxiliaryRuntime(
             locator: commandAbsentLocator(),
-            prober: AuxiliaryRuntimeVersionProbe())
+            prober: realProber())
 
         guard case .unavailable(.resolutionFailed(.commandAbsent)) = outcome else {
             Issue.record("expected commandAbsent, got \(outcome)")
