@@ -323,6 +323,155 @@ import ACPModel
         ])
     }
 
+    // MARK: - Exec kernel sandbox startup failure (#1417)
+
+    /// Issue #1417's captured payload, verbatim: the node_repl kernel exited
+    /// at startup (code 71) when macOS denied the nested `sandbox-exec`
+    /// sandbox it tried to apply, and the agent carried the full diagnostics
+    /// in the failed tool call's output.
+    private static let kernelSandboxDiagnostics = """
+    node_repl kernel exited unexpectedly
+
+    node_repl diagnostics: {"kernel_pid":85011,"kernel_status":"exited(code=71)","kernel_stderr_tail":"sandbox-exec: sandbox_apply: Operation not permitted","reason":"stdout_eof","stream_error":null}
+    """
+
+    /// JSON-escape text for embedding inside a JSON string literal.
+    private static func jsonEscaped(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+    }
+
+    /// A failed `tool_call_update` decoded from the real wire shape: the
+    /// agent tunneled the kernel diagnostics through `rawOutput` as an MCP
+    /// result envelope (`result.content[].text`) with no rendered `content`.
+    private static func kernelSandboxFailureUpdate() throws -> SessionUpdate {
+        try JSONDecoder().decode(SessionUpdate.self, from: Data("""
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "tc-kernel-sandbox",
+          "status": "failed",
+          "title": "Bash",
+          "rawOutput": {
+            "result": {
+              "content": [
+                {"type": "text", "text": "\(jsonEscaped(kernelSandboxDiagnostics))"}
+              ]
+            }
+          }
+        }
+        """.utf8))
+    }
+
+    /// The captured payload is recognized as the kernel-sandbox signature.
+    @Test func classifyRecognizesCapturedKernelSandboxPayload() {
+        #expect(
+            ACPToolFailureClassification.classify(Self.kernelSandboxDiagnostics)
+                == .execKernelSandboxDenied
+        )
+    }
+
+    /// Kernel exit codes alone are not the signature; unrelated error text
+    /// classifies as unknown.
+    @Test func classifyRejectsKernelExitCodeAndUnrelatedErrorText() {
+        #expect(ACPToolFailureClassification.classify(
+            "node_repl diagnostics: {\"kernel_status\":\"exited(code=71)\"}"
+        ) == nil)
+        #expect(ACPToolFailureClassification.classify("Disk quota exceeded") == nil)
+        #expect(ACPToolFailureClassification.classify("") == nil)
+    }
+
+    /// End-to-end on the captured wire payload: the MCP-enveloped diagnostics
+    /// survive extraction and the summary carries both the actionable reason
+    /// (operator + model wording) and the verbatim cause.
+    @Test func failedKernelSandboxPayloadCarriesDiagnosticsWithActionableReason() throws {
+        let events = ACPEventTranslator().translate(try Self.kernelSandboxFailureUpdate())
+
+        guard case .toolResult(true, let summary)? = events.first else {
+            Issue.record("expected one failed toolResult, got \(events)")
+            return
+        }
+        #expect(summary?.contains("node_repl kernel exited unexpectedly") == true)
+        #expect(summary?.contains("sandbox-exec: sandbox_apply: Operation not permitted") == true)
+        #expect(summary?.hasPrefix("Exec kernel could not start:") == true)
+        #expect(summary?.contains("not a workspace-permission denial") == true)
+        #expect(summary?.contains("terminal-exec path may still work") == true)
+    }
+
+    /// A completed call with the same envelope keeps its unannotated output —
+    /// classification only annotates failed calls.
+    @Test func completedKernelSandboxEnvelopeStaysUnannotated() throws {
+        let update = try JSONDecoder().decode(SessionUpdate.self, from: Data("""
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "tc-kernel-sandbox-completed",
+          "status": "completed",
+          "rawOutput": {
+            "result": {
+              "content": [
+                {"type": "text", "text": "\(Self.jsonEscaped(Self.kernelSandboxDiagnostics))"}
+              ]
+            }
+          }
+        }
+        """.utf8))
+
+        #expect(ACPEventTranslator().translate(update) == [
+            .toolResult(isError: false, summary: Self.kernelSandboxDiagnostics)
+        ])
+    }
+
+    /// A failed call whose output matches no known signature keeps its text
+    /// verbatim — no annotation is invented.
+    @Test func failedUnclassifiedErrorTextStaysVerbatim() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-unclassified-failed",
+            status: .failed,
+            rawOutput: AnyCodable("Disk quota exceeded")
+        ))
+
+        #expect(translator.translate(update) == [
+            .toolResult(isError: true, summary: "Disk quota exceeded")
+        ])
+    }
+
+    /// A failed call with no output at all produces a nil summary (empty stays
+    /// empty — no synthesized annotation).
+    @Test func failedWithoutOutputEmitsNilSummary() {
+        let translator = ACPEventTranslator()
+        let update = SessionUpdate.toolCallUpdate(ToolCallUpdateDetails(
+            toolCallId: "tc-failed-no-output",
+            status: .failed
+        ))
+
+        #expect(translator.translate(update) == [.toolResult(isError: true, summary: nil)])
+    }
+
+    /// Cause text over the persistence bound is hard-truncated at the named
+    /// constant with an explicit marker; text within the bound and empty text
+    /// pass through unchanged.
+    @Test func boundedCauseTruncatesAtNamedConstant() {
+        let bound = ACPToolFailureClassification.maxCauseTextLength
+        let oversized = String(repeating: "x", count: bound + 100)
+
+        let truncated = ACPToolFailureClassification.bounded(oversized)
+        #expect(truncated.hasPrefix(String(repeating: "x", count: bound)))
+        #expect(truncated.hasSuffix("[truncated at \(bound) characters]"))
+        #expect(truncated.count == bound + "\n[truncated at \(bound) characters]".count)
+
+        #expect(ACPToolFailureClassification.bounded(
+            String(repeating: "x", count: bound)
+        ) == String(repeating: "x", count: bound))
+        #expect(ACPToolFailureClassification.bounded("") == "")
+    }
+
+    /// Empty cause text produces an empty annotated detail — no synthesized
+    /// annotation for absent diagnostics.
+    @Test func annotatedDetailOfEmptyTextStaysEmpty() {
+        #expect(ACPToolFailureClassification.annotatedDetail(for: "") == "")
+    }
+
     @Test func toolCallUpdatePrefersRenderedContentOverRawOutput() {
         let translator = ACPEventTranslator()
         let rawOutput: [String: any Sendable] = [

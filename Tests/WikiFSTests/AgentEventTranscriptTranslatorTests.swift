@@ -102,6 +102,99 @@ struct AgentEventTranscriptTranslatorTests {
         #expect(toolCalls.allSatisfy { $0.output == nil })
     }
 
+    // MARK: - Failed-call cause persistence (#1417)
+
+    /// Issue #1417's captured kernel diagnostics, verbatim: the node_repl
+    /// kernel died at startup when macOS denied its nested `sandbox-exec`
+    /// sandbox, and the persisted row previously showed an empty detail.
+    private static let kernelSandboxCause = """
+    node_repl kernel exited unexpectedly
+
+    node_repl diagnostics: {"kernel_pid":85011,"kernel_status":"exited(code=71)","kernel_stderr_tail":"sandbox-exec: sandbox_apply: Operation not permitted","reason":"stdout_eof","stream_error":null}
+    """
+
+    /// A failed result with no input descriptor falls back to the bounded
+    /// cause text as the row detail — the persisted row must say why the tool
+    /// failed, not show `detail: ""`.
+    @Test func failedToolResultWithoutInputSummaryCarriesCauseInDetail() {
+        let turnID = ChatTurnID(rawValue: "turn-failed-cause")
+        var translator = AgentEventTranscriptTranslator()
+        let deltas = translator.translate([
+            .toolResult(isError: true, summary: Self.kernelSandboxCause),
+        ], turnID: turnID)
+        let toolCalls = ChatTranscriptReducer.reducing(items: [], with: deltas).compactMap { item -> ChatTranscriptToolCallItem? in
+            guard case .toolCall(let toolCall) = item else { return nil }
+            return toolCall
+        }
+
+        guard toolCalls.count == 1 else {
+            Issue.record("expected one tool call row")
+            return
+        }
+        #expect(toolCalls[0].status == .failed)
+        #expect(toolCalls[0].detail?.contains("node_repl kernel exited unexpectedly") == true)
+        #expect(toolCalls[0].detail?.contains("sandbox-exec: sandbox_apply: Operation not permitted") == true)
+        #expect(toolCalls[0].output == Self.kernelSandboxCause)
+    }
+
+    /// Cause text over the persistence bound is truncated in `detail` at the
+    /// named constant — oversized diagnostics cannot bloat the transcript.
+    @Test func oversizedFailedCauseIsTruncatedInDetail() {
+        let turnID = ChatTurnID(rawValue: "turn-failed-cause-truncated")
+        let oversized = String(repeating: "x", count: ACPToolFailureClassification.maxCauseTextLength + 100)
+        var translator = AgentEventTranscriptTranslator()
+        let deltas = translator.translate([
+            .toolResult(isError: true, summary: oversized),
+        ], turnID: turnID)
+        let toolCalls = ChatTranscriptReducer.reducing(items: [], with: deltas).compactMap { item -> ChatTranscriptToolCallItem? in
+            guard case .toolCall(let toolCall) = item else { return nil }
+            return toolCall
+        }
+
+        let bound = ACPToolFailureClassification.maxCauseTextLength
+        #expect(toolCalls.count == 1)
+        #expect(toolCalls[0].detail == ACPToolFailureClassification.bounded(oversized))
+        #expect(toolCalls[0].detail?.count == bound + "\n[truncated at \(bound) characters]".count)
+    }
+
+    /// An empty failed cause leaves the detail empty (no synthesized text),
+    /// and a failed result paired with an input descriptor keeps that
+    /// descriptor as the detail.
+    @Test func emptyOrDescribedFailedCauseKeepsExistingDetailBehavior() {
+        // Empty cause on an unmatched result: the FIFO fallback row keeps an
+        // empty detail/output (each turn gets a fresh translator).
+        let emptyTurn = ChatTurnID(rawValue: "turn-failed-cause-empty")
+        var emptyTranslator = AgentEventTranscriptTranslator()
+        let emptyItems = ChatTranscriptReducer.reducing(items: [], with: emptyTranslator.translate([
+            .toolResult(isError: true, summary: ""),
+        ], turnID: emptyTurn))
+
+        // Described call: the input descriptor stays the row detail even when
+        // the result carries a failure cause.
+        let describedTurn = ChatTurnID(rawValue: "turn-failed-cause-described")
+        var describedTranslator = AgentEventTranscriptTranslator()
+        let describedItems = ChatTranscriptReducer.reducing(items: [], with: describedTranslator.translate([
+            .toolUse(name: "Bash", inputSummary: "wikictl version"),
+            .toolResult(isError: true, summary: Self.kernelSandboxCause),
+        ], turnID: describedTurn))
+
+        let emptyCalls = emptyItems.compactMap { item -> ChatTranscriptToolCallItem? in
+            guard case .toolCall(let toolCall) = item else { return nil }
+            return toolCall
+        }
+        let describedCalls = describedItems.compactMap { item -> ChatTranscriptToolCallItem? in
+            guard case .toolCall(let toolCall) = item else { return nil }
+            return toolCall
+        }
+
+        #expect(emptyCalls.count == 1)
+        #expect(emptyCalls[0].detail == "")
+        #expect(emptyCalls[0].output == "")
+        #expect(describedCalls.count == 1)
+        #expect(describedCalls[0].detail == "wikictl version")
+        #expect(describedCalls[0].output == Self.kernelSandboxCause)
+    }
+
     @Test func unmatchedToolResultPreservesTheLegacyFallbackIdentity() {
         let turnID = ChatTurnID(rawValue: "turn-tool-fallback")
         var translator = AgentEventTranscriptTranslator()

@@ -156,8 +156,22 @@ struct ACPEventTranslator: Sendable {
             // A terminal status always closes its matching tool row. Renderable
             // output is optional: absent or whitespace-only provider output
             // remains nil instead of becoming synthesized transcript text.
+            // Failed calls additionally carry their cause (#1417): the tool
+            // loop lives inside the agent subprocess, so this transcript text
+            // is the app's only surface for the failure — known kernel-startup
+            // signatures get an actionable reason, and the carried text is
+            // bounded. Completed calls keep their unannotated output.
             if let status = details.status, status == .completed || status == .failed {
-                return [.toolResult(isError: status == .failed, summary: Self.toolOutput(for: details))]
+                let isError = status == .failed
+                let extracted = Self.toolOutput(for: details)
+                let summary: String?
+                if isError {
+                    let annotated = ACPToolFailureClassification.annotatedDetail(for: extracted ?? "")
+                    summary = annotated.isEmpty ? nil : annotated
+                } else {
+                    summary = extracted
+                }
+                return [.toolResult(isError: isError, summary: summary)]
             }
             // Non-terminal updates are not transcript rows, even if they carry
             // output; only completed/failed updates close a tool lifecycle.
@@ -210,6 +224,11 @@ struct ACPEventTranslator: Sendable {
             candidates.append(value["formatted_output"] as? String)
             candidates.append(value["output"] as? String)
             candidates.append((value["metadata"] as? [String: any Sendable])?["output"] as? String)
+            // MCP-bridge tools tunnel their result envelope through rawOutput:
+            // `{"result": {"content": [{"type": "text", "text": …}]}}`. The
+            // node_repl kernel diagnostics in issue #1417 arrived in exactly
+            // this shape and were dropped, leaving failed rows with no cause.
+            candidates.append(Self.mcpResultText(in: value))
         }
 
         return candidates.lazy.compactMap { candidate in
@@ -223,6 +242,16 @@ struct ACPEventTranslator: Sendable {
         let trimmedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedOutput.isEmpty, trimmedOutput != "(no output)" else { return nil }
         return trimmedOutput
+    }
+
+    /// Join the text blocks of an MCP `tools/call` result envelope nested in a
+    /// structured `rawOutput` (`{"result": {"content": [{"type": "text",
+    /// "text": …}]}}`). An absent or textless envelope → nil.
+    private static func mcpResultText(in rawOutput: [String: any Sendable]) -> String? {
+        guard let result = rawOutput["result"] as? [String: any Sendable],
+              let content = result["content"] as? [[String: any Sendable]] else { return nil }
+        let text = content.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        return text.isEmpty ? nil : text
     }
 }
 
