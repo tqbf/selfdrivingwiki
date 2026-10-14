@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 import WikiFSTypes
 #if canImport(Darwin)
@@ -161,6 +162,9 @@ struct ExtractorOrphanWrapperReaperTests {
     /// at observed exit. Owner pid 9_999_999 sits past the macOS pid range,
     /// so the liveness probe always reads it as dead.
     @Test func sweepKillsARealOrphanWrapperGroup() async throws {
+        // Real process-group launch under the cross-suite gate (#1412 family).
+        let subprocessGate = try await SubprocessGate.shared.acquire()
+        defer { subprocessGate.release() }
         let fakeRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("orphan-reaper-\(UUID().uuidString)", isDirectory: true)
         let deadOwnerPath = (fakeRoot.path + "/extractors/v1/operations")

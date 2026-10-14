@@ -2,6 +2,7 @@ import Cordis
 import CordisLoader
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSEngine
 @testable import WikiFSExtractorStore
 @testable import WikiFSCore
@@ -326,6 +327,8 @@ struct ExtractorGeneratedPluginTests {
     }
 
     @Test func generatedPluginActivatesRegistersAndStopsQuiescently() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let environment = try await GeneratedPluginFixtures.InstalledEnvironment.install()
         defer { environment.cleanup() }
         try await environment.supplyAll()
@@ -360,6 +363,8 @@ struct ExtractorGeneratedPluginTests {
     }
 
     @Test func waitingRunActivatesWhenHostServicesAppear() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let environment = try await GeneratedPluginFixtures.InstalledEnvironment.install()
         defer { environment.cleanup() }
         // Deliberately no supplies: every declared dependency is missing.

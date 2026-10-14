@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 import WikiFSTypes
 #if canImport(Darwin)
@@ -39,6 +40,12 @@ struct QuitBackstopEndToEndTests {
     /// would stall for its full 60 s limit — the in-process shape of an
     /// orphaned `uv run` wrapper outliving its supervisor.
     @Test func quitBackstopKillsAnInFlightManagedOperation() async throws {
+        // Cross-suite subprocess gate first (outermost), then the sweep gate:
+        // this test spawns a real stalled fixture operation, and its spawn +
+        // sweep must not stack on the other spawning suites' processes
+        // (#1412 family). Every gated suite takes the slots in this order.
+        let subprocessGate = try await SubprocessGate.shared.acquire()
+        defer { subprocessGate.release() }
         // The gate spans every attempt: the real global sweep below must not
         // interleave with the other gated suites' registry registrations or
         // sweeps.

@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 import WikiFSTypes
 
@@ -34,6 +35,8 @@ import WikiFSTypes
 struct CredentialKeychainMultiprocessTests {
 
     @Test func parentAndHelperProcessRoundTripAUniqueItem() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let service = KeychainCredentialService()
 
         // 0. ABSENCE is distinct from failure on the live keychain: a read

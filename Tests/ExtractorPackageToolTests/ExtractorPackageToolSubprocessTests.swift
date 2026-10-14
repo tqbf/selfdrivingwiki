@@ -2,11 +2,14 @@ import ExtractorPackageToolCore
 import Foundation
 import Synchronization
 import Testing
+import WikiFSTestSupport
 import WikiFSTypes
 
 @Suite("Extractor package tool subprocess", .serialized, .timeLimit(.minutes(1)))
 struct ExtractorPackageToolSubprocessTests {
     @Test func validateEmitsOneJSONObjectAndNoDiagnostic() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try SubprocessFixture()
         defer { fixture.cleanup() }
         let result = try await run(arguments: ["validate", fixture.packageRoot.path])
@@ -23,6 +26,8 @@ struct ExtractorPackageToolSubprocessTests {
     }
 
     @Test func invalidArgumentsEmitStableDiagnosticAndFailureStatus() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let result = try await run(arguments: [])
 
         #expect(result.status != 0)

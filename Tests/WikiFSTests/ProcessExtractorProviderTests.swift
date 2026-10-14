@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSEngine
 @testable import WikiFSExtractorStore
 @testable import WikiFSCore
@@ -11,6 +12,8 @@ import Darwin
 @Suite("Process extractor provider", .serialized, .timeLimit(.minutes(3)))
 struct ProcessExtractorProviderTests {
     @Test func pdfPreparationConvertsWithStreamedProgress() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let environment = try await InstalledFixtureEnvironment.install()
         defer { environment.cleanup() }
         let progress = ProgressRecorder()
@@ -31,6 +34,8 @@ struct ProcessExtractorProviderTests {
     }
 
     @Test func htmlExtractionCarriesMetadataAndSurfacesFailure() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let environment = try await InstalledFixtureEnvironment.install()
         defer { environment.cleanup() }
 
@@ -49,6 +54,8 @@ struct ProcessExtractorProviderTests {
     }
 
     @Test func docxPreparationRunsTheManagedFixtureAndCarriesProvenance() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let environment = try await InstalledFixtureEnvironment.install()
         defer { environment.cleanup() }
 
@@ -68,6 +75,8 @@ struct ProcessExtractorProviderTests {
     }
 
     @Test func preparedSnapshotSurvivesRemovalAndFuturePreparationFails() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let environment = try await InstalledFixtureEnvironment.install()
         defer { environment.cleanup() }
 
@@ -94,6 +103,8 @@ struct ProcessExtractorProviderTests {
     }
 
     @Test func pdfConversionPreservesCancellationIdentity() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let environment = try await InstalledFixtureEnvironment.install(
             executor: CancellingManagedProcessExecutor())
         defer { environment.cleanup() }
@@ -120,6 +131,8 @@ struct ProcessExtractorProviderTests {
     /// only trips on the hang it guards against, not on load jitter; on
     /// small-core CI runners it scales via `TestTimingScale`.
     @Test func repeatedConversionsConcludePromptlyAfterTerminalFrame() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let environment = try await InstalledFixtureEnvironment.install()
         defer { environment.cleanup() }
         let preparation = try await environment.provider.preparePDF(
@@ -181,6 +194,8 @@ struct ProcessExtractorProviderTests {
     /// Preparation resolves the runtime exactly once; readiness and repeated
     /// executions never resolve again.
     @Test func runtimeResolutionOccursOncePerPreparedOperation() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let environment = try await InstalledFixtureEnvironment.install(
             launch: .runtime(
                 command: ExtractorRuntimeName(validating: "fixture-runtime"),
@@ -207,6 +222,8 @@ struct ProcessExtractorProviderTests {
     /// failure reports setup guidance and throws the matching typed
     /// managed-process error, without a second resolution.
     @Test func readinessAndExecutionShareRetainedResolution() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let spy = SpyRuntimeLocator()
         spy.queueOutcomes = [.failed(.commandAbsent)]
         let environment = try await InstalledFixtureEnvironment.install(
@@ -239,6 +256,8 @@ struct ProcessExtractorProviderTests {
     /// AC.9: a newly prepared operation resolves again, so a runtime
     /// installed after an earlier failure works without an app restart.
     @Test func newPreparationRetriesRuntimeResolutionAfterEarlierFailure() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let spy = SpyRuntimeLocator()
         spy.queueOutcomes = [.failed(.commandAbsent)]
         let environment = try await InstalledFixtureEnvironment.install(

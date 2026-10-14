@@ -77,7 +77,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CordisTests",
-            dependencies: ["Cordis"],
+            dependencies: ["Cordis", "WikiFSTestSupport"],
             path: "Tests/CordisTests",
             swiftSettings: strictSwiftSettings
         ),
@@ -134,7 +134,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RendererPackageToolTests",
-            dependencies: ["RendererPackageToolCore", "RendererPackageTool"],
+            dependencies: ["RendererPackageToolCore", "RendererPackageTool", "WikiFSTestSupport"],
             path: "Tests/RendererPackageToolTests",
             swiftSettings: strictSwiftSettings
         ),
@@ -153,7 +153,7 @@ let package = Package(
         ),
         .testTarget(
             name: "RendererAssetReferenceExtractorHelperTests",
-            dependencies: ["RendererAssetReferenceExtractorHelper", "WikiFSCore", "WikiFSTypes"],
+            dependencies: ["RendererAssetReferenceExtractorHelper", "WikiFSCore", "WikiFSTypes", "WikiFSTestSupport"],
             path: "Tests/RendererAssetReferenceExtractorHelperTests",
             swiftSettings: strictSwiftSettings
         ),
@@ -173,7 +173,7 @@ let package = Package(
         ),
         .testTarget(
             name: "ExtractorPackageToolTests",
-            dependencies: ["ExtractorPackageToolCore", "WikiFSTypes"],
+            dependencies: ["ExtractorPackageToolCore", "WikiFSTypes", "WikiFSTestSupport"],
             path: "Tests/ExtractorPackageToolTests",
             swiftSettings: strictSwiftSettings
         ),
@@ -586,12 +586,23 @@ let package = Package(
                 ]),
             ]
         ),
+        // Shared test-support utilities. Deliberately production-free: this
+        // target is linked only by test targets. Currently hosts the
+        // cross-suite subprocess gate (Tests/TestSupport/SubprocessGate.swift)
+        // that subprocess-spawning suites hold while forking real processes
+        // (#1412 family).
+        .target(
+            name: "WikiFSTestSupport",
+            path: "Tests/TestSupport",
+            swiftSettings: strictSwiftSettings
+        ),
         // Portable logic tests — store, links, markdown algebra, registry,
         // shellwords, ranks, chunking, embeddings-meta, concurrency, queue/engine,
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
             dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiFSExtractorStore", "WikiCtlCore", "ProviderConfigMutationHelper", "ExtractorPackageStoreProcessHelper", "WikiStrategyEval",
+                           "WikiFSTestSupport",
                            // WikiFSEngine is macOS-only at build time because it
                            // depends on the `ACP` product (macOS-only). On Linux
                            // the test target still builds — the ACP-backed tests
@@ -640,7 +651,7 @@ let package = Package(
         .testTarget(
             name: "WikiFSAppTests",
             dependencies: [
-                "WikiFSCore", "WikiCtlCore", "WikiDaemonContract",
+                "WikiFSCore", "WikiCtlCore", "WikiDaemonContract", "WikiFSTestSupport",
                 "WikiFSCodeHighlighting",
                 .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFS", condition: .when(platforms: [.macOS])),

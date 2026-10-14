@@ -1,6 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 @testable import WikiFSExtractorStore
 
@@ -75,6 +76,8 @@ struct ExtractorPackageStoreMultiprocessTests {
     }
 
     @Test func writerCrashReleasesKernelLockForFreshWriter() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let root = try temporaryRoot("writer-crash")
         let ready = root.appendingPathComponent("crash-ready")
         try await withHelper(arguments: ["crash-with-lock", root.path, ready.path]) { helper in

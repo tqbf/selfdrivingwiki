@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 import WikiFSTypes
 #if canImport(Darwin)
@@ -9,6 +10,8 @@ import Darwin
 @Suite("Managed extractor process executor", .serialized, .timeLimit(.minutes(2)))
 struct ManagedExtractorProcessExecutorTests {
     @Test func directExecutionStreamsProgressAndReturnsTerminalResult() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(mode: "success", maximumDurationMilliseconds: 60_000)
         defer { fixture.cleanup() }
         let frames = FrameCollector()
@@ -25,6 +28,8 @@ struct ManagedExtractorProcessExecutorTests {
     }
 
     @Test func environmentIsAllowlistedAndCapabilityGated() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         setenv("PARENT_SECRET", "must-not-leak", 1)
         setenv("MISE_DATA_DIR", "/must-not-leak", 1)
         setenv("MISE_CONFIG_DIR", "/must-not-leak", 1)
@@ -57,6 +62,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// cache and CPython install dirs at the durable shared root, so the
     /// runtime is downloaded once and reused across operations.
     @Test func sharedRuntimeCacheGrantsUVCacheDirectories() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let shared = FileManager.default.temporaryDirectory
             .appendingPathComponent("managed-extractor-shared-\(UUID().uuidString)", isDirectory: true)
         let fixture = try Fixture(
@@ -80,6 +87,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// copy of the protocol fixture placed in a private bin directory; the
     /// executor never searches a directory.
     @Test func runtimeLaunchUsesRetainedAbsoluteURLWithAllowlistedEnvironment() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         setenv("MISE_DATA_DIR", "/must-not-leak", 1)
         defer { unsetenv("MISE_DATA_DIR") }
         let fixture = try Fixture(
@@ -101,6 +110,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// A runtime launch without a retained resolution is a typed failure;
     /// the executor never searches for the command itself.
     @Test func runtimeLaunchWithoutRetainedResolutionIsTyped() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(
             mode: "success",
             launch: .runtime(
@@ -119,6 +130,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// A retained resolution naming a different command is an invalid
     /// request, never a launch.
     @Test func runtimeLaunchWithMismatchedResolutionIsRejected() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(
             mode: "success",
             launch: .runtime(
@@ -136,6 +149,8 @@ struct ManagedExtractorProcessExecutorTests {
 
     /// A direct entry point must be an executable regular file.
     @Test func directEntryRequiresExecutableRegularFile() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(mode: "success", entryPermissions: 0o400)
         defer { fixture.cleanup() }
 
@@ -155,6 +170,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// `malformedProtocolAndNonzeroExitAreTyped` already received — so the
     /// startup window no longer trips the executor's deadline.
     @Test func runtimeEntryAllowsReadableNonExecutableFile() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(
             mode: "success",
             launch: .runtime(
@@ -173,6 +190,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// observed `uv run` hang — must be killed by the completion hook, not
     /// run the operation to its timeout.
     @Test func terminalFrameCompletesALingeringWrapper() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(mode: "linger", maximumDurationMilliseconds: 30_000)
         defer { fixture.cleanup() }
 
@@ -194,6 +213,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// reaped by the verified SIGKILL escalation, well inside the operation
     /// limit — the terminal frame remains the operation's completion (#1286).
     @Test func terminalFrameEscalatesToSIGKILLWhenSIGTERMIsIgnored() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(mode: "linger-stubborn", maximumDurationMilliseconds: 30_000)
         defer { fixture.cleanup() }
 
@@ -215,6 +236,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// Issue #1217: the production login-shell resolution and real bun runtime
     /// preserve terminal-frame completion and process-group cleanup.
     @Test func bunRuntimeCompletesTerminalFrameAndReapsChild() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let bun = try ExtractorRuntimeName(validating: "bun")
         guard case .resolved(let resolution) = await RuntimeCommandLocator().locate(bun) else {
             // Bun is optional for local development. CI installs it so this
@@ -253,6 +276,8 @@ struct ManagedExtractorProcessExecutorTests {
 
     /// Package payload rejects symlinks in every launch mode.
     @Test func symlinkedPackageEntryIsRejected() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(
             mode: "success",
             launch: .runtime(
@@ -268,6 +293,8 @@ struct ManagedExtractorProcessExecutorTests {
 
     /// Package payload rejects hard links in every launch mode.
     @Test func hardLinkedPackageEntryIsRejected() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(
             mode: "success",
             entryHardLinked: true)
@@ -284,6 +311,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// spawn: replacing the runtime binary after resolution fails closed and
     /// no child starts.
     @Test func runtimeIdentityChangePreventsSpawn() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(
             mode: "success",
             launch: .runtime(
@@ -302,6 +331,8 @@ struct ManagedExtractorProcessExecutorTests {
     // MARK: - Process behavior
 
     @Test func malformedProtocolAndNonzeroExitAreTyped() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         // The typed-error assertions are event-driven, not deadline-driven;
         // the generous limit only keeps process spawn from timing out on a
         // loaded runner (the default 5 s was exceeded under full-suite
@@ -330,6 +361,8 @@ struct ManagedExtractorProcessExecutorTests {
     }
 
     @Test func malformedProtocolTerminatesHoldingProcessPromptly() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(mode: "malformed-hold", maximumDurationMilliseconds: 10_000)
         defer { fixture.cleanup() }
         let clock = ContinuousClock()
@@ -342,6 +375,8 @@ struct ManagedExtractorProcessExecutorTests {
     }
 
     @Test func timeoutTerminatesAndReapsProcessGroup() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(mode: "hold", maximumDurationMilliseconds: 50)
         defer { fixture.cleanup() }
 
@@ -353,6 +388,8 @@ struct ManagedExtractorProcessExecutorTests {
     }
 
     @Test func cancellationTerminatesAndReapsProcessGroup() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fixture = try Fixture(mode: "hold", maximumDurationMilliseconds: 10_000)
         defer { fixture.cleanup() }
         let task = Task {
@@ -374,6 +411,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// while its in-root output write still succeeds. The fixture attempts
     /// the escape itself and records the verdict in the report markdown.
     @Test func sandboxedProcessCannotWriteOutsideOperationRoot() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         // The escape target is a sibling of the whole fixture root —
         // deliberately outside the operation root — and is created up front
         // so a failure is the seatbelt denial, never ENOENT.
@@ -402,6 +441,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// denied — the child reports the denial AND the listener observed no
     /// connection.
     @Test func networkDeniedWithoutCapability() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let listener = try LocalListener()
         defer { listener.close() }
         let fixture = try Fixture(
@@ -421,6 +462,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// connect succeeds end to end — the child reports success and the
     /// listener observed the real connection.
     @Test func networkAllowedWithCapability() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let listener = try LocalListener()
         defer { listener.close() }
         let fixture = try Fixture(
@@ -441,6 +484,8 @@ struct ManagedExtractorProcessExecutorTests {
     /// AC.8: every successful macOS spawn logs whether it was confined, and
     /// the flag mirrors the manifest's network capability.
     @Test func sandboxAppliedDiagnosticMirrorsManifestCapability() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let deniedDiagnostics = CapturingExtractorDiagnosticsSink()
         let denied = try Fixture(mode: "success")
         defer { denied.cleanup() }
