@@ -599,11 +599,16 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     /// inside the summarizer scratch, and the strict trailer's W^X
     /// `process-exec*` deny on the scratch kills the spawn — warm cache as
     /// well as cold; `uvx` adapters die on denied `~/.cache/uv` writes
-    /// (no `uv` entry in `providerHomeSubpaths`). Re-default-on requires
-    /// the design reopen (TMPDIR relocation for package-runner spawns) and
-    /// a re-run of the matrix. When strict is on and an adapter fails to
-    /// launch, summarization degrades to default truncation (never silently
-    /// disappears; see the model-summary call sites).
+    /// (no `uv` entry in `providerHomeSubpaths`). Both mechanisms are fixed
+    /// since: `PackageRunnerTempLease` relocates the effective Bun runner's
+    /// staging `TMPDIR` into the writable-and-executable `~/.bun` home, and
+    /// `providerHomeSubpaths` layers the bounded uv pair on `uvx` / `uv
+    /// tool run` launches. Re-default-on requires a full eight-cell matrix
+    /// pass (the last round covered 6 of 8 cells; the two claude and two uv
+    /// cells need valid credentials) and the promotion wiring documented on
+    /// `strictSummarizerEnabled(environment:)`. When strict is on and an
+    /// adapter fails to launch, summarization degrades to default truncation
+    /// (never silently disappears; see the model-summary call sites).
     public static let strictSummarizerEnabled: Bool =
         ProcessInfo.processInfo.environment["WIKIFS_SUMMARIZER_STRICT"] == "1"
 
