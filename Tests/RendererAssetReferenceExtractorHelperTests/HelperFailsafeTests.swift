@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 import WikiFSTypes
 
@@ -25,6 +26,8 @@ struct HelperFailsafeTests {
 
     @Test("self-deadline exits a never-terminating extractor with no parent interaction")
     func selfDeadlineExitsNeverTerminatingExtractor() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let helper = try locateHelper()
         let frame = try frame(Self.neverTerminatingExtractor, primaryInput: Data("{}".utf8))
 
@@ -54,6 +57,8 @@ struct HelperFailsafeTests {
         .disabled(
             "Load-flaky under parallel build/test load: the child PID frame can miss its read window (.childPIDFrameMissing) and the 3s exit bound assumes an idle machine — same class as the #1296 graceful-shutdown disable. Re-enable with a deterministic parent-death signal or a load-scaled bound"))
     func orphanedHelperExitsItself() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let helper = try locateHelper()
         let fixture = try fixtureExecutable()
         let frame = try frame(Self.neverTerminatingExtractor, primaryInput: Data("{}".utf8))
@@ -100,6 +105,8 @@ struct HelperFailsafeTests {
 
     @Test("legitimate extraction completes under shortened failsafe timings")
     func legitimateExtractionUnaffected() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let helper = try locateHelper()
         let extractor = Data("""
         __sdw_extract = function (input) {
@@ -137,6 +144,8 @@ struct HelperFailsafeTests {
 
     @Test("unrecognized arguments fail fast with a usage error")
     func unrecognizedArgumentFailsFast() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let helper = try locateHelper()
         let frame = try frame(
             Data("__sdw_extract = function (input) { return { records: [] }; };".utf8),

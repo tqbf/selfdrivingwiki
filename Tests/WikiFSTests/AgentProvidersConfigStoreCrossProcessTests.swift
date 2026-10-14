@@ -1,10 +1,13 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 
 @Suite(.serialized, .timeLimit(.minutes(2)))
 struct AgentProvidersConfigStoreCrossProcessTests {
     @Test func twoIndependentProcessesPreserveBothMutationsAndGenerationOrder() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("provider-store-processes-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -48,6 +51,8 @@ struct AgentProvidersConfigStoreCrossProcessTests {
     }
 
     @Test func helperHandshakeTimeoutIsBounded() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("provider-store-timeout-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 import WikiFSTypes
 #if canImport(Darwin)
@@ -90,6 +91,8 @@ struct RuntimeCommandLocatorIntegrationTests {
     /// zsh resolves through its own login + interactive configuration root
     /// (ZDOTDIR), never the developer's real one or the repository.
     @Test func zshResolvesFixtureFromItsOwnConfigurationRoot() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         guard FileManager.default.isExecutableFile(atPath: "/bin/zsh") else {
             throw IntegrationFailure("/bin/zsh is missing")
         }
@@ -110,6 +113,8 @@ struct RuntimeCommandLocatorIntegrationTests {
 
     /// bash resolves through a temporary login profile (HOME).
     @Test func bashResolvesFixtureFromItsOwnConfigurationRoot() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         guard FileManager.default.isExecutableFile(atPath: "/bin/bash") else {
             throw IntegrationFailure("/bin/bash is missing")
         }
@@ -142,6 +147,8 @@ struct RuntimeCommandLocatorIntegrationTests {
             "fish is not installed; exact fish syntax stays covered by unit tests")
     )
     func fishResolvesFixtureFromItsOwnConfigurationRoot() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let fishPath = try #require(Self.fishShellPath)
         let home = try ShellHome.make(shellFamily: "fish")
         defer { home.cleanup() }
@@ -169,6 +176,8 @@ struct RuntimeCommandLocatorIntegrationTests {
     /// operation directory outside the repository, with no tool-manager
     /// configuration and no inherited PATH.
     @Test func launchesFixtureOutsideRepositoryConfiguration() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let home = try ShellHome.make(shellFamily: "launch")
         defer { home.cleanup() }
         try Data("export PATH=\"\(home.bin.path):$PATH\"\n".utf8)
@@ -280,6 +289,8 @@ struct RuntimeCommandLocatorIntegrationTests {
     /// A shell that hangs during startup times out typed, and its process
     /// group is terminated and reaped.
     @Test func startupTimeoutTerminatesAndReapsShellProcessGroup() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("runtime-hang-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(

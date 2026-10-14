@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import WikiFSTestSupport
 import WikiFSCore
 @testable import WikiFSEngine
 
@@ -113,6 +114,8 @@ struct ACPAdapterCandidateProbeTests {
     // MARK: - The failure table
 
     @Test func successfulCandidateReportsContractIdentityAndVersion() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let sandbox = try makeSandbox(mode: "success")
         defer { cleanup(sandbox.root) }
         let probe = makeProbe(sandbox: sandbox)
@@ -126,6 +129,8 @@ struct ACPAdapterCandidateProbeTests {
     }
 
     @Test func identityMismatchCandidateIsRejected() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let sandbox = try makeSandbox(mode: "mismatch")
         defer { cleanup(sandbox.root) }
         let probe = makeProbe(sandbox: sandbox)
@@ -138,6 +143,8 @@ struct ACPAdapterCandidateProbeTests {
     }
 
     @Test func outOfRangeCandidateVersionIsRejected() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         // Defense in depth: the probe reads what the CANDIDATE reports, not
         // what the registry claimed.
         let sandbox = try makeSandbox(mode: "badversion")
@@ -152,6 +159,8 @@ struct ACPAdapterCandidateProbeTests {
     }
 
     @Test func wrongProtocolCandidateIsRejected() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let sandbox = try makeSandbox(mode: "badprotocol")
         defer { cleanup(sandbox.root) }
         let probe = makeProbe(sandbox: sandbox)
@@ -165,6 +174,8 @@ struct ACPAdapterCandidateProbeTests {
     }
 
     @Test func missingAgentInfoCandidateIsRejectedIdentityMissing() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let sandbox = try makeSandbox(mode: "noinfo")
         defer { cleanup(sandbox.root) }
         let probe = makeProbe(sandbox: sandbox)
@@ -174,6 +185,8 @@ struct ACPAdapterCandidateProbeTests {
     }
 
     @Test func silentCandidateTimesOutAndThrows() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let sandbox = try makeSandbox(mode: "no-response")
         defer { cleanup(sandbox.root) }
         let probe = makeProbe(sandbox: sandbox)
@@ -183,6 +196,8 @@ struct ACPAdapterCandidateProbeTests {
     }
 
     @Test func malformedResponseThrowsLaunchFailed() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let sandbox = try makeSandbox(mode: "malformed")
         defer { cleanup(sandbox.root) }
         let probe = makeProbe(sandbox: sandbox)
@@ -195,6 +210,8 @@ struct ACPAdapterCandidateProbeTests {
     }
 
     @Test func earlyExitCandidateThrowsLaunchFailed() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let sandbox = try makeSandbox(mode: "early-exit")
         defer { cleanup(sandbox.root) }
         let probe = makeProbe(sandbox: sandbox)
@@ -204,6 +221,8 @@ struct ACPAdapterCandidateProbeTests {
     }
 
     @Test func cancelledProbeThrowsAndDoesNotHang() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let sandbox = try makeSandbox(mode: "no-response")
         defer { cleanup(sandbox.root) }
         let probe = makeProbe(sandbox: sandbox)

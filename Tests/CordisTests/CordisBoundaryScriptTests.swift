@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 
 @Suite("Cordis boundary script", .serialized, .timeLimit(.minutes(1)))
 struct CordisBoundaryScriptTests {
@@ -12,6 +13,8 @@ struct CordisBoundaryScriptTests {
 
     @Test("current source tree satisfies strict boundaries", arguments: [[], ["--strict"]])
     func currentTreeSatisfiesStrictBoundaries(arguments: [String]) async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let result = try await runBoundaryCheck(arguments: arguments)
         #expect(result.status == 0, "Boundary check failed: \(result.standardError)")
     }
@@ -42,6 +45,8 @@ struct CordisBoundaryScriptTests {
         "let value = AgentLauncher(",
     ])
     func rejectsPrivilegedConstruction(source: String) async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let root = repositoryRoot()
         let fixtureRoot = root.appendingPathComponent("tmp/cordis-boundary-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
@@ -102,6 +107,8 @@ struct CordisBoundaryScriptTests {
             source: "let launcher = AgentLauncher("),
     ])
     func migratedProductionPathsRemainProtected(fixture: ProtectedConstruction) async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let root = repositoryRoot()
         let fixtureRoot = root.appendingPathComponent(
             "tmp/cordis-protected-path-\(UUID().uuidString)",
@@ -135,6 +142,8 @@ struct CordisBoundaryScriptTests {
     func documentedAllowlistedPathIsAcceptedInFixtureMode(
         fixture: ProtectedConstruction
     ) async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let result = try await runSyntheticBoundaryCheck(fixture)
         #expect(result.status == 0, "Boundary check failed: \(result.standardError)")
     }

@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 import WikiFSTypes
+import WikiFSTestSupport
 @testable import WikiFSCore
 @testable import WikiFSEngine
 
@@ -116,6 +117,11 @@ struct YouTubeAuxiliaryRuntimeTests {
 
     @Test("Bun 1.2.11 resolves; 1.2.10 and 1.0.31 are rejected")
     func versionGateAcceptsAndRejects() async throws {
+        // Three real `--version` subprocesses; hold a cross-suite gate slot
+        // so parallel spawning suites cannot stack their probes on top
+        // (#1412 family).
+        let subprocessGate = try await SubprocessGate.shared.acquire()
+        defer { subprocessGate.release() }
         let root = try tempDirectory("version")
         defer { try? FileManager.default.removeItem(at: root) }
         let prober = realProber()
@@ -152,6 +158,8 @@ struct YouTubeAuxiliaryRuntimeTests {
 
     @Test("a failed version probe is a typed unavailable outcome")
     func failedProbeIsTyped() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire()
+        defer { subprocessGate.release() }
         let root = try tempDirectory("probe-fail")
         defer { try? FileManager.default.removeItem(at: root) }
         // A script that exits nonzero: no usable version line.

@@ -1,11 +1,14 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 import WikiFSTypes
 
 @Suite("Race-free process group runner", .serialized, .timeLimit(.minutes(1)))
 struct RaceFreeProcessGroupRunnerTests {
     @Test func protocolExchangeClosesInputAndReturnsOneResult() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let executable = try fixtureExecutable()
         let input = Data("{\"version\":1,\"requestID\":\"success\",\"mode\":\"success\"}\n".utf8)
         let handle = try RaceFreeProcessGroupRunner.launch(.init(
@@ -24,6 +27,8 @@ struct RaceFreeProcessGroupRunnerTests {
     }
 
     @Test func stdoutObserverReceivesEveryByteInOrder() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let executable = try fixtureExecutable()
         let input = Data("{\"version\":1,\"requestID\":\"observe\",\"mode\":\"success\"}\n".utf8)
         let observed = ObservedBytes()
@@ -41,6 +46,8 @@ struct RaceFreeProcessGroupRunnerTests {
     }
 
     @Test func verifiedGroupTerminationKillsFixtureChild() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let executable = try fixtureExecutable()
         let input = Data("{\"version\":1,\"requestID\":\"hold\",\"mode\":\"holdWithChild\"}\n".utf8)
         let handle = try RaceFreeProcessGroupRunner.launch(.init(
@@ -58,6 +65,8 @@ struct RaceFreeProcessGroupRunnerTests {
     }
 
     @Test func immediateResultCancellationNeverLeavesARegisteredWaiter() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         for index in 0 ..< 20 {
             let executable = try fixtureExecutable()
             let input = Data("{\"version\":1,\"requestID\":\"cancel-\(index)\",\"mode\":\"holdWithChild\"}\n".utf8)
@@ -75,6 +84,8 @@ struct RaceFreeProcessGroupRunnerTests {
     }
 
     @Test func resultTimeoutKillsFixtureGroup() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let executable = try fixtureExecutable()
         let input = Data("{\"version\":1,\"requestID\":\"timeout\",\"mode\":\"holdWithChild\"}\n".utf8)
         let handle = try RaceFreeProcessGroupRunner.launch(.init(
@@ -98,6 +109,8 @@ struct RaceFreeProcessGroupRunnerTests {
     /// a timeout killed one side. Both tasks sleep to one shared deadline
     /// so the two spawns land in the same instant — the collision window.
     @Test func concurrentLaunchesDoNotStarveEachOthersStdinEOF() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let clock = ContinuousClock()
         for round in 0 ..< 10 {
             let spawnDeadline = clock.now.advanced(by: .milliseconds(50))
