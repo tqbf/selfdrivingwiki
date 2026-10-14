@@ -8,6 +8,10 @@ import Foundation
 /// `Task { @MainActor in … }`. The tests use a lock-guarded collector and a
 /// bounded condition wait (rather than sleeps) so they wait exactly until the
 /// expected events land — no timing flakes.
+///
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened delivery waits (`EventBusDeliveryWaits.budget`).
+@Suite(.serialized, .timeLimit(.minutes(3)))
 struct WikiEventBusTests {
 
     /// Lock-guarded, synchronous collector — handlers append from the main
@@ -26,20 +30,22 @@ struct WikiEventBusTests {
     }
 
     /// Wait until `collector` holds at least `expected` events (bounded so a
-    /// missing delivery fails the test rather than hanging).
-    private func awaitCount(_ collector: Collector, _ expected: Int, timeoutMs: Int = 800) async throws {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while true {
-            if collector.count >= expected { return }
-            guard Date() < deadline else {
+    /// missing delivery fails the test rather than hanging). The budget is
+    /// `EventBusDeliveryWaits.budget`, which absorbs full-suite main-actor
+    /// lag (issue #1425) instead of claiming dispatch latency.
+    private func awaitCount(_ collector: Collector, _ expected: Int) async throws {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while collector.count < expected {
+            guard ContinuousClock.now < deadline else {
                 throw EventBusDeliveryWaitError.timedOut(
                     expectedCount: expected,
                     actualCount: collector.count,
-                    timeoutMs: timeoutMs
+                    timeout: EventBusDeliveryWaits.budget
                 )
             }
+            try Task.checkCancellation()
             await flushBusDeliveries()
-            await Task.yield()
+            try await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
     }
 

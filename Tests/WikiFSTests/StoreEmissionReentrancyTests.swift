@@ -12,7 +12,9 @@ import Foundation
 /// or GRDB savepoints instead of opening a nested writer operation. The
 /// per-method `StoreEmissionTests` prove each top-level mutator emits exactly
 /// once (no double-emit).
-@Suite
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened delivery waits (`EventBusDeliveryWaits.budget`).
+@Suite(.serialized, .timeLimit(.minutes(3)))
 struct StoreEmissionReentrancyTests {
 
     final class Recorder: @unchecked Sendable {
@@ -23,12 +25,16 @@ struct StoreEmissionReentrancyTests {
         var count: Int { snapshot.count }
     }
 
-    private func awaitCount(_ recorder: Recorder, _ expected: Int, timeoutMs: Int = 800) async throws {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while Date() < deadline {
-            if recorder.count >= expected { return }
+    /// Budget from `EventBusDeliveryWaits`: absorbs full-suite main-actor lag
+    /// (issue #1425) instead of claiming dispatch latency. Returns silently
+    /// on timeout — the caller's assertions report the shortfall.
+    private func awaitCount(_ recorder: Recorder, _ expected: Int) async throws {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while recorder.count < expected {
+            guard ContinuousClock.now < deadline else { return }
+            try Task.checkCancellation()
             await flushBusDeliveries()
-            try? await Task.sleep(for: .milliseconds(2))
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
     }
 
@@ -112,11 +118,12 @@ struct StoreEmissionReentrancyTests {
         }
 
         let created = try store.createPage(title: "Committed")
-        // Wait for the handler's read to land.
-        let deadline = Date().addingTimeInterval(0.8)
-        while Date() < deadline, slot.get() == nil {
+        // Wait for the handler's read to land. Shared budget: absorbs
+        // full-suite main-actor lag (issue #1425).
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while ContinuousClock.now < deadline, slot.get() == nil, !Task.isCancelled {
             await flushBusDeliveries()
-            try? await Task.sleep(for: .milliseconds(2))
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
         let read = slot.get()
         #expect(read != nil, "re-entrant read returned nothing (deadlock or pre-commit flush)")
