@@ -58,10 +58,11 @@ struct PackageFenceReaderPlanTests {
             options: Self.options(claims: claims))
 
         #expect(html.contains("sdw-renderer-card"))
-        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.d2-readonly/1.0.0/d2\""))
+        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.d2-readonly/1.0.1/d2\""))
         #expect(html.contains("aria-label=\"D2 renderer\""))
-        // Derived presentation: display name, not a per-format host string.
-        #expect(html.contains("D2 fence"))
+        // Derived presentation: the card title is the descriptor display name
+        // (the rich-fence summary phrase is hidden since #1200).
+        #expect(html.contains("title=\"D2\""))
         #expect(html.contains("Expand D2 renderer"))
         // The claim's alias and MIME ride on the authorized inline artifact.
         #expect(html.contains("&quot;fenceAlias&quot;:&quot;d2&quot;"))
@@ -159,7 +160,7 @@ struct PackageFenceReaderPlanTests {
             "```mermaid\ngraph TD\nA-->B\n```",
             options: Self.options(claims: claims))
         #expect(html.contains("sdw-renderer-card__row"))
-        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.mermaid-readonly/1.0.0/mermaid\""))
+        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.mermaid-readonly/1.0.1/mermaid\""))
         #expect(html.contains("aria-label=\"Mermaid renderer\""))
         #expect(html.contains("aria-label=\"Expand Mermaid renderer\""))
         #expect(html.contains("Mermaid renderer"))
@@ -185,13 +186,19 @@ struct PackageFenceReaderPlanTests {
 
     @Test("jsoncanvas fence plan carries its pinned presentation")
     func jsonCanvasGolden() throws {
+        // JSON Canvas is a renderer-package source (#1195): the reviewed
+        // package claims the alias at install time, so the fence renders the
+        // generic package card derived from the package descriptor.
         let claims = RendererFenceClaimResolver.resolve(
-            builtInDescriptors: BuiltInRendererDescriptors.all)
+            builtInDescriptors: BuiltInRendererDescriptors.all,
+            availableInstalledDescriptors: [
+                PackageFenceTestSupport.installedJSONCanvasDescriptor(),
+            ])
         let html = MarkdownHTMLRenderer.render(
             "```jsoncanvas\n{\"nodes\":[],\"edges\":[]}\n```",
             options: Self.options(claims: claims))
-        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.builtin/1.0.0/json-canvas\""))
-        #expect(html.contains("JSON Canvas document fence"))
+        #expect(html.contains(
+            "data-renderer-reference=\"org.selfdrivingwiki.json-canvas-readonly/1.0.1/json-canvas\""))
         #expect(html.contains("aria-label=\"JSON Canvas renderer\""))
         #expect(html.contains("aria-label=\"Expand JSON Canvas renderer\""))
         if let payload = rendererBridgeInputJSONPayload(in: html) {
@@ -211,8 +218,9 @@ struct PackageFenceReaderPlanTests {
             "```excalidraw\n{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n```",
             options: Self.options(claims: claims))
         #expect(html.contains(
-            "data-renderer-reference=\"org.selfdrivingwiki.excalidraw-readonly/1.0.5/excalidraw\""))
-        #expect(html.contains("Excalidraw fence"))
+            "data-renderer-reference=\"org.selfdrivingwiki.excalidraw-readonly/1.1.0/excalidraw\""))
+        // The card title is the descriptor display name (summary hidden since #1200).
+        #expect(html.contains("title=\"Excalidraw\""))
         #expect(html.contains("aria-label=\"Excalidraw renderer\""))
         #expect(html.contains("aria-label=\"Expand Excalidraw renderer\""))
     }

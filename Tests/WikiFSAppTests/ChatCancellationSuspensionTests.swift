@@ -133,9 +133,13 @@ struct ChatCancellationSuspensionTests {
         }
 
         func waitUntil(_ predicate: @Sendable () async -> Bool) async throws {
-            for _ in 0..<200 {
+            // 30s bounded, non-blocking poll. The old 2s bound assumed an idle
+            // machine: under the full opt-in run the main actor and the
+            // cooperative pool are contended, and the bounded wait expired
+            // before the state change was delivered (issue #1397).
+            for _ in 0..<1000 {
                 if await predicate() { return }
-                try await Task.sleep(for: .milliseconds(10))
+                try await Task.sleep(for: .milliseconds(30))
             }
             Issue.record("bounded wait timed out")
         }

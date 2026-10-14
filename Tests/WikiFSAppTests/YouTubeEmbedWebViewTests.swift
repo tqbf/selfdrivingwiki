@@ -129,27 +129,38 @@ struct YouTubeEmbedWebViewTests {
 
         // 2. THE wiring fix: the live document is loaded under the real reader
         //    origin, NOT the opaque `null` of about:blank (the direct cause of 153).
+        //    The reader document moved to the dedicated custom-scheme origin
+        //    (`WikiReaderDocumentOrigin`) when the synthetic https origin was
+        //    retired — the anti-153 property that matters here is "not null".
         let origin = await evalString(webView, "String(window.origin)") ?? ""
-        #expect(origin == WikiReaderOrigin.string,
-                "document origin is \"\(origin)\" (expected \(WikiReaderOrigin.string)); a null/about:blank origin is what triggers YouTube error 153")
+        #expect(origin == "\(WikiReaderDocumentOrigin.scheme)://\(WikiReaderDocumentOrigin.host)",
+                "document origin is \"\(origin)\"; a null/about:blank origin is what triggers YouTube error 153")
 
-        // 3. And the embed's origin param matches that document origin — the two
-        //    MUST agree for the player to accept the embed.
+        // 3. The embed URL builder still stamps the synthetic https origin
+        //    (`WikiReaderOrigin.string`, the retired reader origin) into the
+        //    `?origin=` param. No external player validates it on this
+        //    residual inline surface (see WikiReaderDocumentOrigin's note);
+        //    the player-side origin-match contract lives in the window
+        //    player, which loads its own document under WikiReaderOrigin.url.
+        //    This pins the stamp so its removal is a conscious decision.
         let encodedOrigin = WikiReaderOrigin.string.addingPercentEncoding(
             withAllowedCharacters: {
                 var a = CharacterSet.urlQueryAllowed; a.remove(charactersIn: ":/"); return a
             }()) ?? WikiReaderOrigin.string
         #expect(src.contains("origin=\(encodedOrigin)"),
-                "embed origin param does not match the document origin; src=\"\(src)\"")
+                "embed URL lost the stamped ?origin= param; src=\"\(src)\"")
 
-        // 4. The YouTube iframe is eager-loaded (no lazy suspension racing the
-        //    player init) and carries a referrer policy.
+        // 4. The inline reader iframe's current contract: the external-frame
+        //    embed is lazy-loaded and carries no referrer policy (the eager +
+        //    strict-origin-when-cross-origin YouTube contract lives in
+        //    MediaEmbedPlayerHTML's window-player document, covered by
+        //    MediaEmbedPlayerTests).
         let attrs = await evalString(webView, """
         (function(){ var f=document.querySelector("iframe.wiki-embed");
           return f ? (f.getAttribute("loading")||"none")+"|"+(f.getAttribute("referrerpolicy")||"none") : "no-iframe"; })()
         """) ?? ""
-        #expect(attrs == "none|strict-origin-when-cross-origin",
-                "YouTube iframe should be eager-loaded with a referrer policy; got \"\(attrs)\"")
+        #expect(attrs == "lazy|none",
+                "inline YouTube iframe should render the reader's lazy external-frame contract; got \"\(attrs)\"")
     }
 }
 #endif

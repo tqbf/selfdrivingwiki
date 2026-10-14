@@ -386,7 +386,9 @@ import Testing
             let desc = err.errorDescription ?? ""
             #expect(desc.contains("uv is not installed"))
             #expect(desc.contains("PATH="))
-            #expect(desc.contains("curl"))
+            // The remediation hint names the mise flow (the curl installer is
+            // gone from the error text).
+            #expect(desc.contains("mise install"))
         }
 
         @Test func conversionFailedGeneric() {

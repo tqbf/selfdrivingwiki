@@ -322,7 +322,7 @@ struct MarkdownImageTargetProjectionTests {
                 options: .disabled)
 
             #expect(html.contains("class=\"sdw-inline-renderer\""))
-            #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.excalidraw-readonly/1.0.5/excalidraw\""))
+            #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.excalidraw-readonly/1.1.0/excalidraw\""))
             #expect(!html.contains("<img src=\"\(authoredPath)\""))
             #expect(!html.contains("data-renderer-admitted=\"true\""))
         }

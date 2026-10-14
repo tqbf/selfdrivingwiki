@@ -79,7 +79,16 @@ struct ChatViewD2Tests {
         let chat = try store.createChat(kind: .edit, title: "Created outside the model")
 
         #expect(model.chats.contains { $0.id == chat.id } == false)
-        #expect(model.resolveChat(id: chat.id) == .available(chat))
+        // resolveChat reads through to the store, so the stale cache cannot
+        // hide the row. Assert the resolution contract: the row is AVAILABLE
+        // under the created ID. (Comparing the full ChatSummary value would
+        // pin the store's timestamp round-trip, not the cache rule.)
+        guard case .available(let resolved) = model.resolveChat(id: chat.id) else {
+            Issue.record("resolveChat did not find the persisted chat: \(model.resolveChat(id: chat.id))")
+            return
+        }
+        #expect(resolved.id == chat.id)
+        #expect(resolved.title == "Created outside the model")
     }
 
     @Test func absentPersistedChatResolvesAsNotFound() throws {

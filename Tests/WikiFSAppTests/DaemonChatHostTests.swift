@@ -548,14 +548,18 @@ struct DaemonChatHostTests {
 
     // MARK: - RC3: Shared generation gate
 
-    @Test func profileLauncherFactoryReturnsDistinctOperationObjects() async throws {
+    @Test func profileLauncherFactorySharesGateAcrossLauncherPairs() async throws {
         let dir = makeTempDir()
         let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
 
         let identities = try await daemon.distinctLauncherPairIdentitiesForTesting(
             wikiID: wiki.id)
 
-        #expect(identities.firstGate != identities.secondGate)
+        // All launchers of one wiki share ONE generation gate (SessionsPlugin
+        // builds it once per wiki services boot) so admission limits count
+        // every launcher together. Each factory call still builds a distinct
+        // launcher object around that shared gate.
+        #expect(identities.firstGate == identities.secondGate)
         #expect(identities.firstLauncher != identities.secondLauncher)
     }
 
