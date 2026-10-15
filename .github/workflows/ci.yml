@@ -126,7 +126,7 @@ jobs:
         timeout-minutes: 15
         env:
           WIKIFS_APP_TESTS: "1"
-        run: xcrun swift test --parallel --num-workers 1 --filter 'ChatPresentationAPIManifestTests|DaemonChatUsageTests|DaemonChatControllerMetadataTests|DaemonChatControllerTests|WikiChangeBridgeTests'
+        run: xcrun swift test --parallel --num-workers 1 --filter 'ChatPresentationAPIManifestTests|DaemonChatUsageTests|DaemonChatControllerMetadataTests|DaemonChatControllerTests|DaemonWorkloadClientTimeoutTests|WikiChangeBridgeTests'
       - name: Test Phase 5 portable WebKit-facing security suites
         # This enables the macOS app-test target, then runs only the portable
         # Phase 5 bridge, package-scheme, external-activation, and host/session
