@@ -173,7 +173,6 @@ public actor ExtractorPackageStoreCoordinator {
             }
             guard extractorCatalogFlock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
                 let code = errno
-                close(descriptor)
                 if code == EWOULDBLOCK || code == EAGAIN {
                     throw ExtractorPackageStoreLockContention.contended
                 }
@@ -184,7 +183,17 @@ public actor ExtractorPackageStoreCoordinator {
             close(roots.derived); close(roots.operations)
             return descriptor
         } catch {
-            if fcntl(descriptor, F_GETFD) != -1 { close(descriptor) }
+            // The descriptor has exactly one owner on every path: this catch.
+            // The body above must never close it before throwing. A close here
+            // plus a close in the body left a reuse window: between the two
+            // closes another thread (libsqlite3 guards its database fds, and
+            // concurrent suites open them constantly) can take the freed
+            // descriptor number, and this catch then closed the foreign
+            // descriptor — libsqlite3's guarded fds kill the process with
+            // EXC_GUARD (CLOSE) on that close, which is how swiftpm-testing-
+            // helper died mid-run with exit 0 (#1422). Same hazard class the
+            // prepareStoreRoots failure path was already written to avoid.
+            close(descriptor)
             throw error
         }
     }
