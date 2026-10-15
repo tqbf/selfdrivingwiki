@@ -195,10 +195,12 @@ public actor DaemonTransportRuntime {
         acceptanceTask = nil
         switch acceptance.outcome {
         case .connected:
+            DebugLog.store("Daemon transport candidate \(expectedID) accepted — connected")
             state = .connected(expectedID)
             publish(.connected(expectedID))
             installConnectedHealthTask(id: expectedID)
         case .retry:
+            DebugLog.store("Daemon transport candidate \(expectedID) rejected — retrying admission")
             invalidateCurrentCandidate()
             publish(.candidateRejected(expectedID))
             beginRetrying(invalidateCurrent: false, publishDisconnect: true)
@@ -260,6 +262,8 @@ public actor DaemonTransportRuntime {
                 }
                 admissionTask = nil
                 state = .awaitingAcceptance(id)
+                DebugLog.store(
+                    "Daemon transport candidate \(id) awaiting acceptance (deadline \(configuration.acceptanceDeadline))")
                 publish(.awaitingAcceptance(id))
                 installAcceptanceDeadline(id: id)
                 return
@@ -298,6 +302,7 @@ public actor DaemonTransportRuntime {
     private func acceptanceExpired(id: DaemonTransportCandidateID) {
         guard case .awaitingAcceptance(id) = state, candidate?.id == id else { return }
         acceptanceTask = nil
+        DebugLog.store("Daemon transport acceptance deadline expired for \(id) — retrying admission")
         invalidateCurrentCandidate()
         publish(.acceptanceExpired(id))
         beginRetrying(invalidateCurrent: false, publishDisconnect: true)
@@ -319,6 +324,7 @@ public actor DaemonTransportRuntime {
         guard candidate?.id == id else { return }
         switch state {
         case .awaitingAcceptance(id), .connected(id):
+            DebugLog.store("Daemon transport candidate \(id) invalidated in state \(state) — retrying admission")
             invalidatedCandidateIDs.insert(id)
             candidate = nil
             beginRetrying(invalidateCurrent: false, publishDisconnect: true)

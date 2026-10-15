@@ -17,7 +17,7 @@ public enum DaemonXPCError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .timeout:
-            return "Daemon XPC call timed out after 30s"
+            return "Daemon XPC call timed out"
         case .failure(let msg):
             return msg
         case .unexpectedReply:
@@ -28,6 +28,94 @@ public enum DaemonXPCError: Error, LocalizedError {
             return "Daemon diagnostic snapshot could not be decoded"
         case .diagnosticVersion(let error):
             return "Daemon diagnostic snapshot version failure: \(error)"
+        }
+    }
+}
+
+/// Resume-once carrier for one daemon XPC reply (#1428).
+///
+/// The XPC reply callback fulfils the box; a timeout or a task cancellation
+/// releases it with a failure. Whichever happens first wins, exactly one
+/// continuation resume ever occurs (a straggling reply is discarded instead
+/// of double-resuming, which traps), and the waiting task always finishes —
+/// so the ``DaemonWorkloadClient/withTimeout`` task group can actually return
+/// its timeout instead of suspending forever on an abandoned continuation.
+///
+/// This is the production sibling of the resume-once box
+/// `WikiDaemonConnection` has used for its health check since #884; see the
+/// comment above `WikiDaemonConnection.healthCheck` for why a plain
+/// task-group race without this box cannot work.
+// NSLock protects the only mutable field and each continuation resumes at most once.
+// swiftlint:disable:next unchecked_sendable
+private final class DaemonXPCReplyBox<Value: Sendable>: @unchecked Sendable {
+
+    private enum Payload {
+        case idle
+        case waiting(CheckedContinuation<Value, Error>)
+        case settled(Result<Value, Error>)
+    }
+
+    private let lock = NSLock()
+    private var payload: Payload = .idle
+
+    /// Deliver the XPC reply. A no-op if the box was already settled by a
+    /// timeout or cancellation.
+    func fulfill(_ value: Value) {
+        settle(.success(value))
+    }
+
+    /// Release a pending (or future) waiter with a failure.
+    private func fail(_ error: Error) {
+        settle(.failure(error))
+    }
+
+    private func settle(_ result: Result<Value, Error>) {
+        lock.lock()
+        switch payload {
+        case .idle:
+            // No waiter yet — the reply raced ahead of the wait, or
+            // cancellation fired before the wait installed its continuation.
+            // Remember the outcome for the wait that follows.
+            payload = .settled(result)
+            lock.unlock()
+        case .waiting(let continuation):
+            payload = .idle
+            lock.unlock()
+            continuation.resume(with: result)
+        case .settled:
+            // Resume-once: a late reply after timeout/cancellation is
+            // discarded rather than resumed twice (which traps).
+            lock.unlock()
+        }
+    }
+
+    /// Wait for the reply. Cancellation-aware: when the surrounding task is
+    /// cancelled while waiting (the `withTimeout` timer won), the box is
+    /// released with `CancellationError` and this call throws immediately,
+    /// letting the task group finish instead of parking on a continuation
+    /// that XPC will never answer.
+    func wait() async throws -> Value {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Value, Error>) in
+                lock.lock()
+                switch payload {
+                case .idle:
+                    payload = .waiting(continuation)
+                    lock.unlock()
+                case .settled(let result):
+                    // Already settled before the waiter arrived.
+                    lock.unlock()
+                    continuation.resume(with: result)
+                case .waiting:
+                    // One box serves exactly one reply and one waiter; this
+                    // is a caller bug. Fail the newcomer rather than risk a
+                    // lost or double resume.
+                    lock.unlock()
+                    continuation.resume(throwing: DaemonXPCError.unexpectedReply)
+                }
+            }
+        } onCancel: {
+            fail(CancellationError())
         }
     }
 }
@@ -44,29 +132,46 @@ public enum DaemonXPCError: Error, LocalizedError {
 /// See `plans/daemon-workloads.md` Phase 0 §5.
 public final class DaemonWorkloadClient: @unchecked Sendable {
 
+    /// Production bound for one daemon XPC round trip. Every workload call
+    /// waits at most this long for its reply — see ``withTimeout``.
+    public static let defaultTimeout: TimeInterval = 30
+
     private let proxy: WikiDaemonProtocol
+    private let xpcTimeout: TimeInterval
 
     /// Create a workload client from an existing daemon connection (shares the
     /// same `NSXPCConnection` — no second connection). Throws if the connection
     /// can't vend a valid daemon proxy (e.g. it was already invalidated).
-    public init(connection: WikiDaemonConnection) throws {
+    ///
+    /// - Parameter xpcTimeout: per-call reply bound in seconds. Tests inject a
+    ///   short value so fault-injection scenarios stay bounded; production
+    ///   callers use the ``defaultTimeout`` default.
+    public init(
+        connection: WikiDaemonConnection,
+        xpcTimeout: TimeInterval = DaemonWorkloadClient.defaultTimeout
+    ) throws {
         self.proxy = try connection.daemonProxy()
+        self.xpcTimeout = xpcTimeout
     }
 
-    init(proxy: WikiDaemonProtocol) {
+    init(
+        proxy: WikiDaemonProtocol,
+        xpcTimeout: TimeInterval = DaemonWorkloadClient.defaultTimeout
+    ) {
         self.proxy = proxy
+        self.xpcTimeout = xpcTimeout
     }
 
     // MARK: - Timeout helper
 
     private func withTimeout<T: Sendable>(
-        _ seconds: TimeInterval = 30,
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
+        let timeout = xpcTimeout
+        return try await withThrowingTaskGroup(of: T.self) { group in
             group.addTask { try await operation() }
             group.addTask {
-                try await Task.sleep(for: .seconds(seconds))
+                try await Task.sleep(for: .seconds(timeout))
                 throw DaemonXPCError.timeout
             }
             guard let result = try await group.next() else {
@@ -75,6 +180,30 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
             group.cancelAll()
             return result
         }
+    }
+
+    /// Send one XPC request and await its reply through the resume-once box.
+    ///
+    /// `send` registers the request with the daemon and receives the reply
+    /// closure to invoke with the response data. The reply may never come (a
+    /// wedged or dead daemon) — the caller's timeout or cancellation releases
+    /// the wait, and a reply straggling in afterwards is discarded.
+    private func xpcReply<Value: Sendable>(
+        _ send: @escaping @Sendable (_ reply: @escaping @Sendable (Value) -> Void) -> Void
+    ) async throws -> Value {
+        let box = DaemonXPCReplyBox<Value>()
+        send { box.fulfill($0) }
+        return try await box.wait()
+    }
+
+    /// Void-reply variant of ``xpcReply`` for the daemon methods whose XPC
+    /// reply closure carries no payload (`stopChat`, `resolveChatPermission`).
+    private func xpcVoidReply(
+        _ send: @escaping @Sendable (_ reply: @escaping @Sendable () -> Void) -> Void
+    ) async throws {
+        let box = DaemonXPCReplyBox<Void>()
+        send { box.fulfill(()) }
+        try await box.wait()
     }
 
     // MARK: - Queue envelope
@@ -107,9 +236,9 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// reconnect. In Phase 0 the daemon serves an empty snapshot (the stub
     /// factory produces no workers).
     public func queueSnapshot() async throws -> QueueSnapshot {
-        let data = try await withCheckedThrowingContinuation { cont in
-            proxy.queueSnapshot { data in
-                cont.resume(returning: data)
+        let data = try await withTimeout {
+            try await self.xpcReply { reply in
+                self.proxy.queueSnapshot { reply($0) }
             }
         }
         let payload = try decodeQueuePayload(QueueDataPayload.self, from: data)
@@ -136,10 +265,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID {
         let requestData = try JSONEncoder().encode(request)
         return try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.enqueueItem(request: requestData) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.enqueueItem(request: requestData) { reply($0) }
             }
             let payload = try self.decodeQueuePayload(QueueItemIDPayload.self, from: replyData)
             return QueueItemID(rawValue: payload.itemID)
@@ -149,8 +276,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Cancel a specific queued or running item.
     public func cancelItem(_ id: QueueItem.ID) async throws {
         try await withTimeout {
-            let data = await withCheckedContinuation { cont in
-                self.proxy.cancelItem(id: id.rawValue) { cont.resume(returning: $0) }
+            let data = try await self.xpcReply { reply in
+                self.proxy.cancelItem(id: id.rawValue) { reply($0) }
             }
             _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: data)
         }
@@ -159,8 +286,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Cancel all in-flight items. Returns the count cancelled.
     public func cancelAllInFlight() async throws -> Int {
         try await withTimeout {
-            let data = await withCheckedContinuation { cont in
-                self.proxy.cancelAllInFlight { cont.resume(returning: $0) }
+            let data = try await self.xpcReply { reply in
+                self.proxy.cancelAllInFlight { reply($0) }
             }
             return try self.decodeQueuePayload(QueueCountPayload.self, from: data).count
         }
@@ -169,10 +296,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Retry a failed item.
     public func retryItem(_ id: QueueItem.ID) async throws {
         try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.retryItem(id: id.rawValue) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.retryItem(id: id.rawValue) { reply($0) }
             }
             _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: replyData)
         }
@@ -183,8 +308,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Pause a queue (stop dispatching new items).
     public func pause(_ queue: QueueKind) async throws {
         try await withTimeout {
-            let data = await withCheckedContinuation { cont in
-                self.proxy.pauseQueue(queue: queue.rawValue) { cont.resume(returning: $0) }
+            let data = try await self.xpcReply { reply in
+                self.proxy.pauseQueue(queue: queue.rawValue) { reply($0) }
             }
             _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: data)
         }
@@ -193,8 +318,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Resume a queue (restart dispatch).
     public func resume(_ queue: QueueKind) async throws {
         try await withTimeout {
-            let data = await withCheckedContinuation { cont in
-                self.proxy.resumeQueue(queue: queue.rawValue) { cont.resume(returning: $0) }
+            let data = try await self.xpcReply { reply in
+                self.proxy.resumeQueue(queue: queue.rawValue) { reply($0) }
             }
             _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: data)
         }
@@ -203,8 +328,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Halt a queue (pause + cancel all in-flight items for this queue kind).
     public func halt(_ queue: QueueKind) async throws {
         try await withTimeout {
-            let data = await withCheckedContinuation { cont in
-                self.proxy.haltQueue(queue: queue.rawValue) { cont.resume(returning: $0) }
+            let data = try await self.xpcReply { reply in
+                self.proxy.haltQueue(queue: queue.rawValue) { reply($0) }
             }
             _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: data)
         }
@@ -213,9 +338,9 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Reorder a queued item (move before `beforeItemID`, or end if nil).
     public func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async throws {
         try await withTimeout {
-            let data = await withCheckedContinuation { cont in
+            let data = try await self.xpcReply { reply in
                 self.proxy.reorderItem(id: id.rawValue, beforeItemID: beforeItemID?.rawValue) {
-                    cont.resume(returning: $0)
+                    reply($0)
                 }
             }
             _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: data)
@@ -227,8 +352,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Whether the daemon has queued or running items for the given wiki.
     public func hasActiveWork(for wikiID: WikiID) async throws -> Bool {
         try await withTimeout {
-            let data = await withCheckedContinuation { cont in
-                self.proxy.hasActiveWork(wikiID: wikiID.rawValue) { cont.resume(returning: $0) }
+            let data = try await self.xpcReply { reply in
+                self.proxy.hasActiveWork(wikiID: wikiID.rawValue) { reply($0) }
             }
             return try self.decodeQueuePayload(QueueBoolPayload.self, from: data).value
         }
@@ -240,10 +365,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// throw. The returned payload preserves the queue item's domain result.
     public func waitForCompletion(of id: QueueItem.ID) async throws -> QueueCompletionPayload {
         try await withTimeout {
-            let replyData = await withCheckedContinuation { cont in
-                self.proxy.waitForCompletion(id: id.rawValue) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.waitForCompletion(id: id.rawValue) { reply($0) }
             }
             return try self.decodeQueuePayload(QueueCompletionPayload.self, from: replyData)
         }
@@ -252,10 +375,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Load persisted typed transcript items for a queue item.
     public func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] {
         try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.loadTranscript(itemID: itemID.rawValue) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.loadTranscript(itemID: itemID.rawValue) { reply($0) }
             }
             let payload = try self.decodeQueuePayload(QueueDataPayload.self, from: replyData)
             do {
@@ -269,10 +390,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Load all persisted activity snapshots for rehydration.
     public func loadAllActivitySnapshots() async throws -> [String: QueueEngine.ActivitySnapshotData] {
         try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.loadAllActivitySnapshots { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.loadAllActivitySnapshots { reply($0) }
             }
             let payload = try self.decodeQueuePayload(QueueDataPayload.self, from: replyData)
             do {
@@ -292,10 +411,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// reports and capability failures both arrive as typed values.
     public func loadQueueReport(for itemID: QueueItem.ID) async throws -> QueueReportLoadResult {
         try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.loadQueueReport(itemID: itemID.rawValue) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.loadQueueReport(itemID: itemID.rawValue) { reply($0) }
             }
             let payload = try self.decodeQueuePayload(QueueDataPayload.self, from: replyData)
             do {
@@ -313,10 +430,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     ) async throws -> QueueReportSummariesResult {
         let requestData = try JSONEncoder().encode(itemIDs.map(\.rawValue))
         return try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.loadQueueReportSummaries(itemIDs: requestData) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.loadQueueReportSummaries(itemIDs: requestData) { reply($0) }
             }
             let payload = try self.decodeQueuePayload(QueueDataPayload.self, from: replyData)
             do {
@@ -330,8 +445,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Read the daemon queue ownership epoch without constructing queue resources.
     public func queueOwnershipStatus() async throws -> QueueOwnershipStatusPayload {
         try await withTimeout {
-            let replyData = await withCheckedContinuation { cont in
-                self.proxy.queueOwnershipStatus { cont.resume(returning: $0) }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.queueOwnershipStatus { reply($0) }
             }
             let decoded = try self.decodeQueueEnvelope(
                 QueueOwnershipStatusPayload.self,
@@ -356,8 +471,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
                 epoch: expectedEpoch,
                 hostState: .serving))
         return try await withTimeout {
-            let replyData = await withCheckedContinuation { cont in
-                self.proxy.relinquishQueue(request: request) { cont.resume(returning: $0) }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.relinquishQueue(request: request) { reply($0) }
             }
             let success = try self.decodeQueuePayload(
                 QueueRelinquishmentSuccess.self,
@@ -380,10 +495,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func startChat(_ request: ChatStartRequest) async throws -> ChatID {
         let requestData = try JSONEncoder().encode(request)
         return try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.startChat(request: requestData) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.startChat(request: requestData) { reply($0) }
             }
             guard let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any] else {
                 throw DaemonXPCError.unexpectedReply
@@ -405,10 +518,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID {
         let requestData = try JSONEncoder().encode(request)
         return try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.submitChatTurn(request: requestData) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.submitChatTurn(request: requestData) { reply($0) }
             }
             guard let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any] else {
                 throw DaemonXPCError.unexpectedReply
@@ -427,10 +538,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func continueChat(_ request: ChatContinueRequest) async throws {
         let requestData = try JSONEncoder().encode(request)
         try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.continueChat(request: requestData) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.continueChat(request: requestData) { reply($0) }
             }
             if let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any],
                let error = dict["error"] as? String, !error.isEmpty {
@@ -444,10 +553,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         let requestData = try JSONEncoder().encode(
             ChatMessageRequest(wikiID: wikiID, chatID: chatID, message: message))
         try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.sendChatMessage(request: requestData) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.sendChatMessage(request: requestData) { reply($0) }
             }
             if let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any],
                let error = dict["error"] as? String, !error.isEmpty {
@@ -460,8 +567,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func stopChat(wikiID: WikiID, chatID: ChatID) async throws {
         let requestData = try JSONEncoder().encode(ChatStopRequest(wikiID: wikiID, chatID: chatID))
         try await withTimeout {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.stopChat(request: requestData) { cont.resume() }
+            try await self.xpcVoidReply { reply in
+                self.proxy.stopChat(request: requestData) { reply() }
             }
         }
     }
@@ -470,10 +577,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func chatSessionState(wikiID: WikiID, chatID: ChatID) async throws -> ChatSyncSnapshot {
         let requestData = try JSONEncoder().encode(ChatSessionStateRequest(wikiID: wikiID, chatID: chatID))
         return try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.chatSessionState(request: requestData) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.chatSessionState(request: requestData) { reply($0) }
             }
             do {
                 return try ChatSyncSnapshotEnvelope.decodeData(replyData)
@@ -493,10 +598,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     ) async throws -> ChatDiagnosticSnapshotEnvelope {
         let requestData = try JSONEncoder().encode(request)
         return try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.chatDiagnosticSnapshot(request: requestData) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.chatDiagnosticSnapshot(request: requestData) { reply($0) }
             }
             let snapshot: ChatDiagnosticSnapshotEnvelope
             do {
@@ -518,10 +621,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func resetChatDiagnostics(_ request: ChatDiagnosticResetRequest) async throws {
         let requestData = try JSONEncoder().encode(request)
         try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.resetChatDiagnostics(request: requestData) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.resetChatDiagnostics(request: requestData) { reply($0) }
             }
             guard replyData.isEmpty == false else { throw DaemonXPCError.unexpectedReply }
         }
@@ -531,8 +632,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws {
         let requestData = try JSONEncoder().encode(request)
         try await withTimeout {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.resolveChatPermission(request: requestData) { cont.resume() }
+            try await self.xpcVoidReply { reply in
+                self.proxy.resolveChatPermission(request: requestData) { reply() }
             }
         }
     }
@@ -541,10 +642,8 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     public func setChatConfigOption(_ request: ChatConfigOptionRequest) async throws {
         let requestData = try JSONEncoder().encode(request)
         try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.setChatConfigOption(request: requestData) { data in
-                    cont.resume(returning: data)
-                }
+            let replyData = try await self.xpcReply { reply in
+                self.proxy.setChatConfigOption(request: requestData) { reply($0) }
             }
             if let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any],
                let error = dict["error"] as? String, !error.isEmpty {
