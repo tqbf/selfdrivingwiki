@@ -1416,5 +1416,43 @@ import ACPModel
         #expect(TurnLivenessPolicy.queuedIdleStallTimeout > 0)
         #expect(TurnLivenessPolicy.queuedIdleStallTimeout < TurnLivenessPolicy.queuedIngestCeiling)
     }
+
+    // MARK: - Launch-failure cause rendering (#1409)
+
+    /// The chat launch failure renders its cause — the underlying launch
+    /// error's OS status plus the denial annotation — so a sandboxed launch
+    /// denial no longer surfaces as a bare "Failed to launch X." The cause
+    /// leads; stderr and the env-var hint follow.
+    @Test
+    func launchFailedRendersCauseStderrAndHint() {
+        let hint = ProviderEnvHint(envVar: "CLAUDE_CODE_EXECUTABLE", description: "Claude Code")
+        let error = ACPBackendError.launchFailed(
+            executable: "/usr/bin/sandbox-exec",
+            stderr: "node: kernel exited unexpectedly",
+            cause: "Launch denied: macOS refused to start the sandbox front-end\n\n"
+                + "launch /usr/bin/sandbox-exec: Operation not permitted (POSIX errno 1)",
+            hint: hint)
+        let description = error.errorDescription ?? ""
+        #expect(description.contains("Failed to launch /usr/bin/sandbox-exec."))
+        #expect(description.contains("Cause: Launch denied"))
+        #expect(description.contains("POSIX errno 1"))
+        #expect(description.contains("node: kernel exited unexpectedly"))
+        #expect(description.contains("Hint: set CLAUDE_CODE_EXECUTABLE"))
+    }
+
+    /// A launch failure with no captured cause keeps the legacy shape — no
+    /// empty "Cause:" section appears when the failure carried no payload.
+    @Test
+    func launchFailedWithoutCauseKeepsLegacyShape() {
+        let error = ACPBackendError.launchFailed(
+            executable: "/usr/local/bin/claude",
+            stderr: "env: node: No such file or directory",
+            cause: nil,
+            hint: nil)
+        let description = error.errorDescription ?? ""
+        #expect(description.contains("Failed to launch /usr/local/bin/claude."))
+        #expect(!description.contains("Cause:"))
+        #expect(description.contains("env: node: No such file or directory"))
+    }
 }
 #endif

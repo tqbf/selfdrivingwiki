@@ -688,6 +688,82 @@ struct ACPProviderModelProbeTests {
         #expect(elapsed < .seconds(10),
                 "the hard bound must unblock the caller promptly, took \(elapsed)")
     }
+
+    // MARK: - Spawn-denial fault injection (#1409)
+
+    /// Forced nested-sandbox-exec denial: the launch fails with POSIX EPERM —
+    /// the OS refusing to start `sandbox-exec` (the plan's executable). The
+    /// surfaced `.launchFailed` detail must CARRY the failure: the errno, the
+    /// failing operation, and the launch-denial annotation. Pre-fix, the
+    /// detail was only `error.localizedDescription` ("Operation not
+    /// permitted."), leaving the Settings row with no denial context.
+    @Test func injectedEPERMLaunchSurfacesDenialDetail() async throws {
+        let probe = ACPProviderModelProbe(
+            provider: AgentProvider(
+                id: ProviderID(rawValue: "claude"),
+                label: "Claude",
+                command: ["/usr/local/bin/claude"]),
+            resolvedCommand: ["/usr/local/bin/claude"],
+            apiKey: nil,
+            sandboxUsability: { _ in true },
+            resolveBunRuntime: { nil },
+            makeClient: { Client() },
+            performLaunch: { _, _, _ in
+                throw NSError(
+                    domain: NSPOSIXErrorDomain,
+                    code: Int(SpawnFailureDetail.eperm),
+                    userInfo: [NSLocalizedDescriptionKey: "Operation not permitted"])
+            })
+
+        do {
+            _ = try await probe.discoverObservation(timeout: .seconds(10))
+            Issue.record("expected the injected EPERM launch failure to surface")
+        } catch let error as ACPProviderModelProbeError {
+            guard case .launchFailed(let detail, _, _) = error else {
+                Issue.record("expected .launchFailed, got \(error)")
+                return
+            }
+            #expect(detail.contains("POSIX errno 1"), "the errno must ride the detail: \(detail)")
+            #expect(detail.contains("/usr/bin/sandbox-exec"), "the failing operation must ride the detail: \(detail)")
+            #expect(detail.contains("Launch denied"), "the denial classification must annotate the detail: \(detail)")
+            #expect(detail.contains("asynchronously"), "the async unified-log limitation must be documented: \(detail)")
+        }
+    }
+
+    /// A generic (non-denial) launch failure passes through with its
+    /// structural payload — nothing may silently flatten an unknown error
+    /// into the generic Foundation sentence.
+    @Test func injectedGenericLaunchFailureKeepsPayload() async throws {
+        struct StubAdapterError: Error, Equatable {
+            let reason: String
+        }
+        let probe = ACPProviderModelProbe(
+            provider: AgentProvider(
+                id: ProviderID(rawValue: "claude"),
+                label: "Claude",
+                command: ["/usr/local/bin/claude"]),
+            resolvedCommand: ["/usr/local/bin/claude"],
+            apiKey: nil,
+            sandboxUsability: { _ in true },
+            resolveBunRuntime: { nil },
+            makeClient: { Client() },
+            performLaunch: { _, _, _ in
+                throw StubAdapterError(reason: "adapter exploded at startup")
+            })
+
+        do {
+            _ = try await probe.discoverObservation(timeout: .seconds(10))
+            Issue.record("expected the injected stub failure to surface")
+        } catch let error as ACPProviderModelProbeError {
+            guard case .launchFailed(let detail, _, _) = error else {
+                Issue.record("expected .launchFailed, got \(error)")
+                return
+            }
+            #expect(detail.contains("adapter exploded at startup"), "got: \(detail)")
+            #expect(detail.contains("StubAdapterError"), "the structural payload must ride the detail: \(detail)")
+            #expect(!detail.contains("denied"), "a non-denial failure must not be annotated as one")
+        }
+    }
 }
 
 private final class Counter: Sendable {

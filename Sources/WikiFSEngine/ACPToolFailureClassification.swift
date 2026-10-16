@@ -1,6 +1,7 @@
 // pattern: Functional Core
 
 import Foundation
+import WikiFSCore
 
 /// Structured classification of the diagnostics text a failed ACP tool call
 /// carries in its output (`rawOutput` or rendered content).
@@ -31,6 +32,21 @@ public enum ACPToolFailureClassification: Equatable, Sendable {
     /// still work.
     case execKernelSandboxDenied
 
+    /// Spawn-time denial (#1409): the OS refused to start `sandbox-exec`
+    /// itself — spawning the seatbelt front-end failed with `EPERM`. The
+    /// sandbox never applied; nothing of the agent ran. Same shape as
+    /// `.sandboxUnavailable` (front-end missing) but a policy denial instead
+    /// of an absent binary.
+    case sandboxExecLaunchDenied
+
+    /// Spawn-time denial (#1409 + #1417): the launched child applied its own
+    /// nested `sandbox-exec` sandbox and macOS denied the apply
+    /// (`sandbox_apply` → EPERM), killing the child at startup. This is the
+    /// spawn-boundary form of `.execKernelSandboxDenied`: the signature
+    /// arrives in the failing child's stderr instead of a failed tool call's
+    /// cause text.
+    case sandboxExecNestedDenial
+
     /// Classify a failed tool call's cause text. Returns nil when the text
     /// matches no known failure signature.
     public static func classify(_ causeText: String) -> ACPToolFailureClassification? {
@@ -38,6 +54,60 @@ public enum ACPToolFailureClassification: Equatable, Sendable {
             return .execKernelSandboxDenied
         }
         return nil
+    }
+
+    /// Classify a spawn/launch failure from its synchronously available
+    /// diagnostics (#1409). The POSIX errno and the sandbox-apply stderr
+    /// signature are all that is available at spawn time — Seatbelt denial
+    /// records reach the unified log asynchronously (issue #1279), so no
+    /// synchronous classification can quote them. Returns nil when the
+    /// failure matches no known denial signature.
+    public static func classifySpawn(
+        error: Error,
+        causeText: String,
+        stderr: String?,
+        executablePath: String
+    ) -> ACPToolFailureClassification? {
+        // The seatbelt front-end itself was denied its spawn — macOS refused
+        // `sandbox_apply` before any child code ran.
+        if SpawnFailureDetail.isPosixError(error, code: SpawnFailureDetail.eperm),
+           isSandboxExecPath(executablePath) {
+            return .sandboxExecLaunchDenied
+        }
+        // A child started and then died applying its own nested sandbox.
+        if causeText.contains(sandboxApplySignature)
+            || (stderr?.contains(sandboxApplySignature) ?? false) {
+            return .sandboxExecNestedDenial
+        }
+        return nil
+    }
+
+    /// Render + classify a spawn failure into one bounded cause string for a
+    /// user-visible error: the OS status (`SpawnFailureDetail.render`) with
+    /// the actionable denial reason prefixed when a signature matches. Empty
+    /// stderr contributes nothing; the text is bounded at
+    /// `maxCauseTextLength` either way.
+    public static func annotatedSpawnCause(
+        error: Error,
+        stderr: String?,
+        executablePath: String,
+        operation: String
+    ) -> String {
+        let cause = bounded(SpawnFailureDetail.render(error, operation: operation))
+        guard
+            let classification = classifySpawn(
+                error: error,
+                causeText: cause,
+                stderr: stderr,
+                executablePath: executablePath)
+        else { return cause }
+        return "\(classification.actionableReason)\n\n\(cause)"
+    }
+
+    /// True when `executablePath` names the seatbelt front-end regardless of
+    /// its directory (production resolves `/usr/bin/sandbox-exec`).
+    private static func isSandboxExecPath(_ executablePath: String) -> Bool {
+        (executablePath as NSString).lastPathComponent == "sandbox-exec"
     }
 
     /// The literal `sandbox-exec` denial line, matched as a substring so
@@ -55,6 +125,21 @@ public enum ACPToolFailureClassification: Equatable, Sendable {
                 + "it tried to apply (sandbox-exec: sandbox_apply: Operation not permitted). "
                 + "This is a kernel startup failure, not a workspace-permission denial; "
                 + "retrying the same tool will fail the same way. The terminal-exec path may still work."
+        case .sandboxExecLaunchDenied:
+            return "Launch denied: macOS refused to start the sandbox front-end "
+                + "(/usr/bin/sandbox-exec) with EPERM, so the process never ran. "
+                + "This is a sandbox-policy denial, not a missing binary; check the "
+                + "sandbox profile and any Seatbelt policy changes. Denial records "
+                + "reach the unified log asynchronously — this message carries only "
+                + "what the spawn itself reported."
+        case .sandboxExecNestedDenial:
+            return "Launch failed: the process applied its own nested sandbox-exec "
+                + "sandbox and macOS denied it (sandbox_apply: Operation not permitted), "
+                + "killing the process at startup. Nested sandbox applies are denied "
+                + "when the parent is already confined; the outer wrapper fences this "
+                + "subtree, so the nested sandbox is unnecessary. Denial records reach "
+                + "the unified log asynchronously — this message carries only what the "
+                + "failing process reported synchronously."
         }
     }
 

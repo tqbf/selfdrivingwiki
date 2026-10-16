@@ -668,14 +668,24 @@ public actor ACPBackend: AgentBackend {
         } catch {
             // The process either failed to start or died before the ACP
             // handshake completed. Drain the buffered stderr and surface an
-            // actionable error (#733 + #737).
+            // actionable error (#733 + #737). The underlying launch error's
+            // OS status (errno, domain, failing path) rides in `cause`
+            // (#1409) — previously it reached only this DebugLog line and
+            // the thrown error could be bare ("Failed to launch X.") when
+            // the child produced no stderr.
             stderrTask.cancel()
             let stderr = earlyStderrBuffer.flush()
             let hint = Self.launchHint(for: spawn)
-            DebugLog.agent("ACPBackend.startProcess: launch/initialize failed: \(error.localizedDescription)\nstderr: \(stderr ?? "<nil>")")
+            let cause = ACPToolFailureClassification.annotatedSpawnCause(
+                error: error,
+                stderr: stderr,
+                executablePath: spawnExecutablePath,
+                operation: "launch \(spawnExecutablePath)")
+            DebugLog.agent("ACPBackend.startProcess: launch/initialize failed: \(cause)\nstderr: \(stderr ?? "<nil>")")
             throw ACPBackendError.launchFailed(
                 executable: spawn.executablePath,
                 stderr: stderr,
+                cause: cause,
                 hint: hint)
         }
 
@@ -3034,10 +3044,14 @@ enum ACPBackendError: Error, LocalizedError {
     /// ACP handshake completed (e.g. `bun` started but `claude` / `codex` was
     /// not on PATH). `executable` is the resolved binary path; `stderr`
     /// captures whatever the subprocess wrote before dying (may be nil if the
-    /// process never started); `hint` carries the env-var workaround
-    /// (`CLAUDE_CODE_EXECUTABLE` / `CODEX_PATH`) when the command matches a
-    /// known provider, or nil for generic failures.
-    case launchFailed(executable: String, stderr: String?, hint: ProviderEnvHint?)
+    /// process never started); `cause` carries the underlying launch error's
+    /// OS status — errno, domain, failing path — plus the actionable denial
+    /// reason when the failure matches a sandbox-denial signature (#1409; a
+    /// Seatbelt denial's own unified-log record arrives asynchronously, so
+    /// only this synchronous detail exists here); `hint` carries the env-var
+    /// workaround (`CLAUDE_CODE_EXECUTABLE` / `CODEX_PATH`) when the command
+    /// matches a known provider, or nil for generic failures.
+    case launchFailed(executable: String, stderr: String?, cause: String?, hint: ProviderEnvHint?)
 
     var errorDescription: String? {
         switch self {
@@ -3083,8 +3097,11 @@ enum ACPBackendError: Error, LocalizedError {
         case .quotaExhausted(let provider, let resetTime):
             let resetStr = resetTime.map { " until \($0)" } ?? ""
             return "Provider \(provider) quota exhausted\(resetStr)."
-        case .launchFailed(let executable, let stderr, let hint):
+        case .launchFailed(let executable, let stderr, let cause, let hint):
             var msg = "Failed to launch \(executable)."
+            if let cause, !cause.isEmpty {
+                msg += "\n\nCause: \(cause)"
+            }
             if let stderr, !stderr.isEmpty {
                 msg += "\n\n\(stderr)"
             }
