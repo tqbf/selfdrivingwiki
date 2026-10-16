@@ -200,9 +200,10 @@ public struct ACPProviderModelProbe: Sendable {
         do {
             scratch = try LLMSandboxScratch.make(namePrefix: "acp-probe")
         } catch {
-            DebugLog.agent("ACPProviderModelProbe: FAIL could not create probe scratch: \(error.localizedDescription)")
+            // #1409: carry the OS status instead of the flattened phrase.
+            DebugLog.agent("ACPProviderModelProbe: FAIL could not create probe scratch: \(SpawnFailureDetail.render(error, operation: "create the probe scratch directory"))")
             throw ACPProviderModelProbeError.launchFailed(
-                "Could not create the probe scratch directory: \(error.localizedDescription)",
+                SpawnFailureDetail.render(error, operation: "create the probe scratch directory"),
                 stderr: nil, hint: nil)
         }
         // Sweep the scratch on every exit path (success / failure / timeout /
@@ -418,11 +419,20 @@ public struct ACPProviderModelProbe: Sendable {
             stderrTask.cancel()
             _ = earlyStderrBuffer.flush()
         } catch {
-            DebugLog.agent("ACPProviderModelProbe.runProbe: launch/initialize failed: \(error.localizedDescription)")
+            // #1409: the surfaced detail carries the underlying launch
+            // error's OS status (errno, domain, failing path) plus the
+            // actionable denial reason for a sandbox-denial signature —
+            // not just the localized phrase, and not only this log line.
             let stderr = earlyStderrBuffer.flush()
             let hint = ACPBackend.launchHint(for: configuredSpawn)
+            let detail = ACPToolFailureClassification.annotatedSpawnCause(
+                error: error,
+                stderr: stderr,
+                executablePath: plan.executablePath,
+                operation: "launch \(plan.executablePath)")
+            DebugLog.agent("ACPProviderModelProbe.runProbe: launch/initialize failed: \(detail)")
             throw ACPProviderModelProbeError.launchFailed(
-                error.localizedDescription,
+                detail,
                 stderr: stderr,
                 hint: hint)
         }
@@ -636,10 +646,11 @@ public enum ACPProviderModelProbeError: Error, LocalizedError, Equatable {
     /// `Client.launch` or `Client.initialize` threw — the binary is missing /
     /// not executable / spawn failed for some OS reason, OR the process started
     /// but died before the ACP handshake completed (e.g. `bun` started but
-    /// `claude`/`codex` wasn't on PATH). `detail` is the error's
-    /// `localizedDescription`; `stderr` carries any subprocess stderr captured
-    /// before death; `hint` carries the env-var workaround when the command
-    /// matches a known provider (#733 + #737).
+    /// `claude`/`codex` wasn't on PATH). `detail` is the underlying error's
+    /// rendered OS status (errno, domain, failing path) with the actionable
+    /// denial reason prefixed for a sandbox-denial signature (#1409); `stderr`
+    /// carries any subprocess stderr captured before death; `hint` carries the
+    /// env-var workaround when the command matches a known provider (#733 + #737).
     case launchFailed(String, stderr: String?, hint: ProviderEnvHint?)
     /// `availableModels` is empty/nil but the probe completed successfully —
     /// older agents that predate the models capability. The probe throws this

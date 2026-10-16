@@ -192,7 +192,12 @@ public struct ACPExtractionClient: MarkdownExtractor {
                 systemPrompt: ExtractionPrompts.system,
                 onExit: { _ in })
         } catch {
-            throw Error.spawnFailed(error.localizedDescription)
+            // #1409: keep the OS status of the spawn failure instead of the
+            // flattened localized phrase. An `.launchFailed` from the backend
+            // is a LocalizedError, so its enriched description leads the text;
+            // anything else renders with its structural payload.
+            throw Error.spawnFailed(
+                SpawnFailureDetail.render(error, operation: "start the extraction agent"))
         }
 
         // Send the extraction turn — the prompt references the temp PDF path.

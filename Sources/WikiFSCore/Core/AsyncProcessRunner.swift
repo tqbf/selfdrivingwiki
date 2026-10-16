@@ -162,7 +162,10 @@ public enum AsyncProcessRunner {
         } catch let error as AsyncProcessRunnerError {
             throw error
         } catch {
-            throw AsyncProcessRunnerError.pipeSetupFailed(error.localizedDescription)
+            // #1409: keep the OS status (errno, domain, failing path) instead
+            // of flattening the error through localizedDescription.
+            throw AsyncProcessRunnerError.pipeSetupFailed(
+                SpawnFailureDetail.render(error, operation: "set up process pipes"))
         }
 
         let finish: @Sendable (CheckedContinuation<AsyncProcessResult, Error>) -> Void = { continuation in
@@ -235,7 +238,13 @@ public enum AsyncProcessRunner {
                                 sendSignal: hooks.sendSignal)
                         }
                     } catch {
-                        if state.recordLaunchFailure(error.localizedDescription) {
+                        // #1409: the launch failure cause must carry the OS
+                        // status and the failing executable, not just a bare
+                        // localized phrase.
+                        if state.recordLaunchFailure(
+                            SpawnFailureDetail.render(
+                                error,
+                                operation: "spawn \(request.executableURL.path)")) {
                             stdoutDrainer.abortBeforeLaunch()
                             stderrDrainer?.abortBeforeLaunch()
                             completionSignal.signal()
