@@ -93,6 +93,20 @@ if [ "$TIMED_OUT" -ne 1 ]; then
     EXIT_CODE=$WAIT_STATUS
 fi
 
+# #1398 gate: when this run opted into the app test tier, the log must show
+# executed WikiFSAppTests tests, or the invocation fails even if `swift test`
+# exited 0. Filtered runs narrow the expectation via OPTIN_TEST_EXPECT (see
+# scripts/lib/optin-app-test-gate.sh).
+if [ "${WIKIFS_APP_TESTS:-}" = "1" ]; then
+    # shellcheck source=scripts/lib/optin-app-test-gate.sh
+    source "$REPO_ROOT/scripts/lib/optin-app-test-gate.sh"
+    if ! optin_gate_assert_executed "$LOG_FILE" "test-with-watchdog"; then
+        if [ "$EXIT_CODE" -eq 0 ]; then
+            EXIT_CODE=1
+        fi
+    fi
+fi
+
 perl -ne '
     if (/Test (.+\(.*\)) started\./) { $started{$1} = 1 }
     if (/Test (.+\(.*\))(?: with \d+ test cases)? (passed|failed) after ([0-9.]+) seconds/) {
