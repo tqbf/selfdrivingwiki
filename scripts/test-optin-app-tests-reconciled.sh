@@ -3,7 +3,7 @@
 # detection (#1422).
 #
 # Usage:
-#   scripts/test-optin-app-tests-reconciled.sh [swift test args...]
+#   scripts/test-optin-app-tests-reconciled.sh [--expect REGEX] [swift test args...]
 #   SWIFT_TEST_NUM_WORKERS=2 scripts/test-optin-app-tests-reconciled.sh
 #
 # The script sets WIKIFS_APP_TESTS=1 itself, runs `swift test --parallel
@@ -20,18 +20,40 @@
 # Nonzero — swift test failed, or the gate found a summary deficit (or an
 # empty log).
 #
-# Stacking with #1427 (opt-in gate, executed-evidence): #1427 was open and
-# unmerged when this script shipped. Its runner
-# (scripts/test-optin-app-tests.sh) proves the opt-in target executed at
-# least one test; this runner proves every started run finished. When #1427
-# merges, the two gates can be applied to the same log — neither depends on
-# the other, and this script deliberately does not source #1427's library
-# (its sentinel test does not exist on main).
+# The executed-evidence gate (#1427) and run-summary gate (#1431) both
+# inspect this invocation's log. For a filtered run, pass --expect REGEX with
+# an app suite expected to execute; an unfiltered run expects the sentinel.
 
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
+
+EXPECT=""
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --expect)
+            if [ $# -lt 2 ]; then
+                echo "✗ --expect requires a regex argument" >&2
+                exit 2
+            fi
+            EXPECT="$2"
+            shift 2
+            ;;
+        --expect=*)
+            EXPECT="${1#--expect=}"
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+if [ -n "$EXPECT" ]; then
+    export OPTIN_TEST_EXPECT="$EXPECT"
+fi
 
 # This script's contract IS the opt-in tier; setting the flag here makes the
 # invocation self-contained instead of requiring an env prefix that can be
@@ -43,12 +65,19 @@ LOG_DIR="tmp/test-logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/optin-app-tests-reconciled-$(date +%Y%m%d-%H%M%S).log"
 
-echo "==> swift test --parallel --num-workers ${WORKERS} $* (WIKIFS_APP_TESTS=1)"
+echo "==> swift test --parallel --num-workers ${WORKERS} ${ARGS[*]+"${ARGS[*]}"} (WIKIFS_APP_TESTS=1)"
 echo "==> log: $LOG_FILE"
 
 set -o pipefail
-swift test --parallel --num-workers "$WORKERS" "$@" 2>&1 | tee "$LOG_FILE"
+swift test --parallel --num-workers "$WORKERS" ${ARGS[@]+"${ARGS[@]}"} 2>&1 | tee "$LOG_FILE"
 STATUS=$?
+
+source "$REPO_ROOT/scripts/lib/optin-app-test-gate.sh"
+if optin_gate_assert_executed "$LOG_FILE" "test-optin-app-tests-reconciled"; then
+    OPTIN_GATE_OK=1
+else
+    OPTIN_GATE_OK=0
+fi
 
 source "$REPO_ROOT/scripts/lib/test-run-summary-gate.sh"
 if test_run_summary_gate_assert "$LOG_FILE" "test-optin-app-tests-reconciled"; then
@@ -61,10 +90,10 @@ if [ "$STATUS" -ne 0 ]; then
     echo "==> Exiting ${STATUS} (swift test failed)."
     exit "$STATUS"
 fi
-if [ "$GATE_OK" -ne 1 ]; then
-    echo "==> Exiting 1 (run summary gate: a started test run never summarized — #1422)."
+if [ "$GATE_OK" -ne 1 ] || [ "$OPTIN_GATE_OK" -ne 1 ]; then
+    echo "==> Exiting 1 (opt-in execution or run-summary gate failed)."
     exit 1
 fi
 
-echo "==> ✓ run summary gate passed: every started test run produced a summary."
+echo "==> ✓ opt-in execution and run-summary gates passed."
 exit 0

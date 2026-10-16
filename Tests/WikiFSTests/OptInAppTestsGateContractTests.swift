@@ -66,12 +66,14 @@ struct OptInAppTestsGateContractTests {
     @Test func guardedRunnerEnforcesTheGate() throws {
         let runner = try String(
             contentsOf: Self.repositoryRoot
-                .appendingPathComponent("scripts/test-optin-app-tests.sh"),
+                .appendingPathComponent("scripts/test-optin-app-tests-reconciled.sh"),
             encoding: .utf8
         )
         #expect(runner.contains("export WIKIFS_APP_TESTS=1"))
         #expect(runner.contains("optin_gate_assert_executed"))
         #expect(runner.contains("optin-app-test-gate.sh"))
+        #expect(runner.contains("test_run_summary_gate_assert"))
+        #expect(runner.contains("test-run-summary-gate.sh"))
     }
 
     @Test func makeRecipesRouteOptInRunsThroughTheGuard() throws {
@@ -84,7 +86,7 @@ struct OptInAppTestsGateContractTests {
         // spot would reintroduce the unguarded false green.
         #expect(makefile.contains("test-app: deps prompts version keychain extractor-packages"))
         #expect(
-            makefile.contains("SWIFT_TEST_NUM_WORKERS=\"$(SWIFT_TEST_NUM_WORKERS)\" scripts/test-optin-app-tests.sh")
+            makefile.contains("SWIFT_TEST_NUM_WORKERS=\"$(SWIFT_TEST_NUM_WORKERS)\" scripts/test-optin-app-tests-reconciled.sh")
         )
         #expect(makefile.contains(#"if [ "$${WIKIFS_APP_TESTS-}" = "1" ]"#))
     }

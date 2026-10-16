@@ -6,7 +6,7 @@ import Testing
 /// proof that the target ran.
 ///
 /// The opt-in gate (`scripts/lib/optin-app-test-gate.sh`, enforced by
-/// `scripts/test-optin-app-tests.sh`, `make test-app`, and `make test` under
+/// `scripts/test-optin-app-tests-reconciled.sh`, `make test-app`, and `make test` under
 /// `WIKIFS_APP_TESTS=1`) asserts this suite's executed "passed after" line in
 /// the run log. If the app target is dropped from the graph, dies before
 /// running, or is otherwise skipped, the sentinel line is absent and the

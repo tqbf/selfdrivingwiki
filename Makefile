@@ -303,24 +303,22 @@ check-release: deps prompts version keychain extractor-packages
 # `scripts/test-with-watchdog.sh` for the timeout path. If a helper is orphaned,
 # reap it by hand; a broad matcher must fail closed rather than pick a stranger.
 # When WIKIFS_APP_TESTS=1, this recipe delegates to the guarded opt-in runner
-# (scripts/test-optin-app-tests.sh), which fails the invocation loudly when
-# the run log shows no executed WikiFSAppTests tests — the #1398 false-green
-# contract: the opt-in tier either demonstrably runs or the invocation fails.
+# (scripts/test-optin-app-tests-reconciled.sh), which requires both app-target
+# execution evidence (#1398) and a summary for every started run (#1422).
 test: deps prompts version keychain extractor-packages
 	@if [ "$${WIKIFS_APP_TESTS-}" = "1" ]; then \
-		SWIFT_TEST_NUM_WORKERS="$(SWIFT_TEST_NUM_WORKERS)" scripts/test-optin-app-tests.sh; \
+		SWIFT_TEST_NUM_WORKERS="$(SWIFT_TEST_NUM_WORKERS)" scripts/test-optin-app-tests-reconciled.sh; \
 	else \
 		swift test --parallel --num-workers "$(SWIFT_TEST_NUM_WORKERS)"; \
 	fi
 	@echo "✓ tests pass"
 
-# The opt-in app test tier (WikiFSAppTests) with the #1398 gate. Sets
-# WIKIFS_APP_TESTS=1 itself, so no env prefix is needed. Narrowed runs go
-# through the script directly:
-#   scripts/test-optin-app-tests.sh --expect REGEX --filter SomeSuite
-# Log: tmp/test-logs/optin-app-tests-*.log.
+# The opt-in app test tier (WikiFSAppTests) with execution and summary gates.
+# Sets WIKIFS_APP_TESTS=1 itself. Narrowed runs go through the script directly:
+#   scripts/test-optin-app-tests-reconciled.sh --expect REGEX --filter SomeSuite
+# Log: tmp/test-logs/optin-app-tests-reconciled-*.log.
 test-app: deps prompts version keychain extractor-packages
-	SWIFT_TEST_NUM_WORKERS="$(SWIFT_TEST_NUM_WORKERS)" scripts/test-optin-app-tests.sh
+	SWIFT_TEST_NUM_WORKERS="$(SWIFT_TEST_NUM_WORKERS)" scripts/test-optin-app-tests-reconciled.sh
 	@echo "✓ opt-in app tests pass"
 
 # Same default SwiftPM test graph as `test`, but with a hard wall-clock timeout and a
