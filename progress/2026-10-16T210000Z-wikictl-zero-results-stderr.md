@@ -9,6 +9,8 @@ status: complete
 
 Addresses [#1230](https://github.com/tqbf/selfdrivingwiki/issues/1230).
 
+## Progress
+
 ## Gap
 
 List and search verbs that matched nothing printed nothing and exited 0. An
@@ -52,7 +54,7 @@ Deliberately unchanged:
 - `workspace conflicts` — keeps its pre-existing stdout `(no conflicts)`
   marker byte-identical and adds the stderr notice with the workspace id.
 
-## Tests
+## Verification
 
 `Tests/WikiFSTests/WikiCtlZeroResultsTests.swift` pins, per verb: the exact
 stderr notice, byte-identical stdout in both modes, no notice on non-empty
