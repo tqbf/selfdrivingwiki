@@ -14,13 +14,17 @@ public enum ChatCommand {
 
     /// What a command produced: text to print and whether it COMMITTED a write.
     /// Read commands have `didCommit = false`; `rename` commits.
+    /// `stderrOutput` carries the zero-results notice (#1230) — the process
+    /// layer writes it to stderr so stdout stays byte-identical.
     public struct Result: Equatable {
         public var output: String
         public var didCommit: Bool
+        public var stderrOutput: String?
 
-        public init(output: String, didCommit: Bool) {
+        public init(output: String, didCommit: Bool, stderrOutput: String? = nil) {
             self.output = output
             self.didCommit = didCommit
+            self.stderrOutput = stderrOutput
         }
     }
 
@@ -75,11 +79,15 @@ public enum ChatCommand {
 
     private static func list(in store: WikiStore, json: Bool) throws -> Result {
         let chats = try store.listAllChatsOrderedByID()
+        // #1230 (axi.md principle 5): a zero-row run says so on stderr while
+        // stdout keeps its exact bytes (empty TSV, empty JSON-lines stream).
+        let emptyNote = chats.isEmpty ? ZeroResults.note("chat list") : nil
         if json {
             let data = IndexGenerators.chatsJSONL(chats: chats)
             return Result(
                 output: String(decoding: data, as: UTF8.self),
-                didCommit: false
+                didCommit: false,
+                stderrOutput: emptyNote
             )
         }
         // TSV: id <tab> title <tab> kind <tab> messages, one chat per line.
@@ -88,7 +96,8 @@ public enum ChatCommand {
         }
         return Result(
             output: lines.joined(separator: "\n"),
-            didCommit: false
+            didCommit: false,
+            stderrOutput: emptyNote
         )
     }
 
@@ -122,7 +131,13 @@ public enum ChatCommand {
             let title = chat.title.replacingOccurrences(of: "\t", with: " ")
             return "\(chat.id.rawValue)\t\(title)\t\(chat.kind.rawValue)\t\(chat.messageCount)"
         }.joined(separator: "\n")
-        return Result(output: output, didCommit: false)
+        // #1230 (axi.md principle 5): name the query in the zero-results
+        // notice so "0 results" states what matched nothing. stdout is
+        // byte-identical in both cases.
+        return Result(
+            output: output, didCommit: false,
+            stderrOutput: results.isEmpty
+                ? ZeroResults.note("chat search \(query.debugDescription)") : nil)
     }
 
     // MARK: - rename

@@ -366,10 +366,14 @@ func execute(
             containerDirectory: containerDirectory)
     case .bookmark(let action):
         let r = try BookmarkCommand.run(action, in: store)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+        return SourceCommand.Result(
+            payload: .text(r.output), didCommit: r.didCommit,
+            stderrOutput: r.stderrOutput)
     case .workspace(let action):
         let r = try WorkspaceCommand.run(action, in: store)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+        return SourceCommand.Result(
+            payload: .text(r.output), didCommit: r.didCommit,
+            stderrOutput: r.stderrOutput)
     case .strategy(let action):
         let r = try StrategyCommand.run(action, in: store)
         return SourceCommand.Result(
@@ -736,6 +740,13 @@ private func runJobCommand(
     case .list:
         output = try JobCommand.renderList(
             items: selectedItems, completedSourceIDs: completedSourceIDs, json: json)
+        if selectedItems.isEmpty {
+            // #1230 (axi.md principle 5): zero jobs is an answer, not a
+            // silence (today's stdout is just the TSV header, or `[]` for
+            // --json — both stay byte-identical). The stderr notice says so;
+            // exit stays 0.
+            FileHandle.standardError.write(Data(ZeroResults.note("job list").utf8))
+        }
     case .get:
         output = try JobCommand.renderGet(
             item: selectedItems[0], completedSourceIDs: completedSourceIDs, json: json)
@@ -762,7 +773,9 @@ private func runChatCommand(
         leg = nil
     }
     let r = try ChatCommand.run(action, in: store, bm25Leg: leg)
-    return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
+    return SourceCommand.Result(
+        payload: .text(r.output), didCommit: r.didCommit,
+        stderrOutput: r.stderrOutput)
 }
 
 /// #637: inspect a `SourceCommand.Action` and, when it's `.search`, resolve a
@@ -865,6 +878,12 @@ func runWikiList() async -> Int32 {
         let registry = WikiRegistry.load(from: resolver.containerDirectory)
         for wiki in registry.wikis {
             print("\(wiki.id)\t\(wiki.displayName)")
+        }
+        if registry.wikis.isEmpty {
+            // #1230 (axi.md principle 5): zero wikis is an answer, not a
+            // silence. The stderr notice says so; stdout stays empty; exit
+            // stays 0.
+            FileHandle.standardError.write(Data(ZeroResults.note("wiki list").utf8))
         }
         return 0
     } catch {

@@ -6,13 +6,17 @@ import WikiFSCore
 public enum WorkspaceCommand {
 
     /// What a command produced: text to print and whether it COMMITTED a write.
+    /// `stderrOutput` carries the zero-results notice (#1230) — the process
+    /// layer writes it to stderr so stdout stays byte-identical.
     public struct Result: Equatable {
         public var output: String
         public var didCommit: Bool
+        public var stderrOutput: String?
 
-        public init(output: String, didCommit: Bool) {
+        public init(output: String, didCommit: Bool, stderrOutput: String? = nil) {
             self.output = output
             self.didCommit = didCommit
+            self.stderrOutput = stderrOutput
         }
     }
 
@@ -118,7 +122,13 @@ public enum WorkspaceCommand {
     private static func conflicts(id: WorkspaceID, in store: WikiStore) throws -> Result {
         let conflicts = try store.workspaceConflicts(workspaceID: id)
         if conflicts.isEmpty {
-            return Result(output: "(no conflicts)", didCommit: false)
+            // #1230 (axi.md principle 5): the stdout "(no conflicts)" marker
+            // predates the zero-results convention and stays byte-identical;
+            // the stderr notice adds the workspace scope so an agent piping
+            // stdout still sees the definitive empty state.
+            return Result(
+                output: "(no conflicts)", didCommit: false,
+                stderrOutput: ZeroResults.note("workspace conflicts \(id.rawValue)"))
         }
         let lines = conflicts.map { c in
             let page = c.pageID.rawValue
