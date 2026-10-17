@@ -224,6 +224,9 @@ public enum SourceCommand {
 
     private static func list(in store: WikiStore, json: Bool) throws -> Result {
         let summaries = try store.listSources()
+        // #1230 (axi.md principle 5): a zero-row run says so on stderr while
+        // stdout keeps its exact bytes (empty TSV, empty JSON-lines stream).
+        let emptyNote = summaries.isEmpty ? ZeroResults.note("source list") : nil
         if json {
             // Sort by id (ULID = ingest order) to match indexes/sources.jsonl.
             let sorted = summaries.sorted { $0.id.rawValue < $1.id.rawValue }
@@ -246,7 +249,8 @@ public enum SourceCommand {
             let data = IndexGenerators.sourcesJSONL(sources: rows)
             return Result(
                 payload: .text(String(decoding: data, as: UTF8.self)),
-                didCommit: false
+                didCommit: false,
+                stderrOutput: emptyNote
             )
         }
         // TSV: id <tab> name <tab> size <tab> mime, one file per line.
@@ -260,7 +264,8 @@ public enum SourceCommand {
         }
         return Result(
             payload: .text(lines.joined(separator: "\n")),
-            didCommit: false
+            didCommit: false,
+            stderrOutput: emptyNote
         )
     }
 
@@ -420,7 +425,13 @@ public enum SourceCommand {
             let name = summary.effectiveName.replacingOccurrences(of: "\t", with: " ")
             return "\(summary.id.rawValue)\t\(name)"
         }.joined(separator: "\n")
-        return Result(payload: .text(output), didCommit: false)
+        // #1230 (axi.md principle 5): name the query in the zero-results
+        // notice so "0 results" states what matched nothing. stdout is
+        // byte-identical in both cases.
+        return Result(
+            payload: .text(output), didCommit: false,
+            stderrOutput: results.isEmpty
+                ? ZeroResults.note("source search \(query.debugDescription)") : nil)
     }
 
     // MARK: - set-active

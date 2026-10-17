@@ -12,13 +12,17 @@ import WikiFSCore
 public enum BookmarkCommand {
 
     /// What a command produced: text to print and whether it COMMITTED a write.
+    /// `stderrOutput` carries the zero-results notice (#1230) — the process
+    /// layer writes it to stderr so stdout stays byte-identical.
     public struct Result: Equatable {
         public var output: String
         public var didCommit: Bool
+        public var stderrOutput: String?
 
-        public init(output: String, didCommit: Bool) {
+        public init(output: String, didCommit: Bool, stderrOutput: String? = nil) {
             self.output = output
             self.didCommit = didCommit
+            self.stderrOutput = stderrOutput
         }
     }
 
@@ -63,6 +67,9 @@ public enum BookmarkCommand {
 
     private static func list(in store: WikiStore, json: Bool) throws -> Result {
         let nodes = try store.listBookmarkNodes()
+        // #1230 (axi.md principle 5): a zero-row run says so on stderr while
+        // stdout keeps its exact bytes (empty TSV, empty JSON-lines stream).
+        let emptyNote = nodes.isEmpty ? ZeroResults.note("bookmark list") : nil
         if json {
             // Manual JSONL — BookmarkNode isn't Codable.
             let lines = nodes.map { node in
@@ -73,7 +80,8 @@ public enum BookmarkCommand {
             }
             return Result(
                 output: lines.joined(separator: "\n"),
-                didCommit: false
+                didCommit: false,
+                stderrOutput: emptyNote
             )
         }
         // TSV: id <tab> parentID <tab> position <tab> kind <tab> label <tab> targetID
@@ -82,7 +90,8 @@ public enum BookmarkCommand {
         }
         return Result(
             output: lines.joined(separator: "\n"),
-            didCommit: false
+            didCommit: false,
+            stderrOutput: emptyNote
         )
     }
 
