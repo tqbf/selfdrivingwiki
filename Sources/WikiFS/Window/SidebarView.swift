@@ -69,10 +69,7 @@ struct SidebarView: View {
             Divider()
             bookmarksOrList
             Divider()
-            wikiSwitcherRow
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-            strategyFooterRow
+            wikiFooterRow
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
         }
@@ -151,10 +148,10 @@ struct SidebarView: View {
             Image(systemName: section.systemImage)
                 .font(.body)
                 .frame(maxWidth: .infinity)
-                .frame(height: 26)
+                .frame(height: SidebarMetrics.selectorButtonSide)
                 .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                 .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 6))
+                            in: RoundedRectangle(cornerRadius: SidebarMetrics.selectorButtonCornerRadius))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -196,60 +193,69 @@ struct SidebarView: View {
         session.descriptor.displayName
     }
 
-    /// The wiki switcher pill — the top-level container switch (each wiki is
-    /// its own DB + File Provider domain). Sits directly above the Strategy
-    /// row so the sidebar footer reads as one cluster: which wiki you are in,
-    /// then that wiki's editorial strategy.
-    private var wikiSwitcherRow: some View {
-        WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
-            .frame(maxWidth: .infinity, alignment: .leading)
+    /// The sidebar footer: the wiki switcher pill — the top-level container
+    /// switch (each wiki is its own DB + File Provider domain) — with the
+    /// Strategy button beside it, so the footer reads as one cluster: which
+    /// wiki you are in, then that wiki's editorial strategy.
+    private var wikiFooterRow: some View {
+        HStack(spacing: SidebarMetrics.footerSpacing) {
+            WikiSwitcher(registry: registry, currentWikiID: session.wikiID)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            strategyButton
+        }
     }
 
-    /// The wiki-scoped Strategy entry: a pinned footer row below the section
-    /// lists. The row names the ACTIVE wiki — it edits that wiki's strategy,
-    /// not a global setting — and shows an "Edited" marker while a strategy
-    /// draft has unsaved changes, so the draft is visible from anywhere in
-    /// the sidebar. Opens (or focuses) the Strategy tab through the normal
-    /// `openTab` dedup.
-    private var strategyFooterRow: some View {
+    /// The wiki-scoped Strategy entry: a compact button beside the switcher.
+    /// It edits the ACTIVE wiki's strategy, not a global setting, and shows a
+    /// dirty dot while a strategy draft has unsaved changes (the full
+    /// "Edited" marker lives in the editor itself), so the draft is visible
+    /// from anywhere in the sidebar. Opens (or focuses) the Strategy tab
+    /// through the normal `openTab` dedup. Styling mirrors the section
+    /// selector bar at the top of the sidebar so the two read as one system.
+    private var strategyButton: some View {
         let isSelected = store.selection == .strategy
         return Button {
             store.openTab(.strategy)
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "text.book.closed")
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Strategy")
-                        .font(.callout.weight(.medium))
-                    Text(activeWikiName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+            Image(systemName: "text.book.closed")
+                .font(.body)
+                .accessibilityHidden(true)
+                .frame(width: SidebarMetrics.selectorButtonSide,
+                       height: SidebarMetrics.selectorButtonSide)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                .background(
+                    isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: SidebarMetrics.selectorButtonCornerRadius))
+                .overlay(alignment: .topTrailing) {
+                    if store.isStrategyDraftDirty {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: SidebarMetrics.dirtyDotSize,
+                                   height: SidebarMetrics.dirtyDotSize)
+                            .offset(x: 3, y: -3)
+                    }
                 }
-                Spacer()
-                if store.isStrategyDraftDirty {
-                    Text("Edited")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, WikiStrategyEditorMetrics.editedCapsuleHorizontalPadding)
-                        .padding(.vertical, WikiStrategyEditorMetrics.editedCapsuleVerticalPadding)
-                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-            .background(
-                isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Strategy for \(activeWikiName)")
-        .help("Edit the editorial strategy for \(activeWikiName)")
+        .help(store.isStrategyDraftDirty
+              ? "Strategy for \(activeWikiName) — unsaved edits"
+              : "Edit the editorial strategy for \(activeWikiName)")
     }
+}
+
+/// Shared tuning values for the sidebar's icon-selector buttons — the section
+/// bar at the top and the footer's Strategy button — so the two read as one
+/// system.
+private enum SidebarMetrics {
+    /// Icon buttons are square; this is the side of the square.
+    static let selectorButtonSide: CGFloat = 26
+    static let selectorButtonCornerRadius: CGFloat = 6
+    /// Marks an unsaved strategy draft on the footer's Strategy button.
+    static let dirtyDotSize: CGFloat = 6
+    /// Gap between the switcher and the Strategy button in the footer row.
+    static let footerSpacing: CGFloat = 6
 }
 
 /// Presents the bookmark item-picker sheet. Lives as a `ViewModifier` on
