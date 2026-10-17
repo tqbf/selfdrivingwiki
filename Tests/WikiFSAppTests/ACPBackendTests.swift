@@ -1431,7 +1431,8 @@ import ACPModel
             stderr: "node: kernel exited unexpectedly",
             cause: "Launch denied: macOS refused to start the sandbox front-end\n\n"
                 + "launch /usr/bin/sandbox-exec: Operation not permitted (POSIX errno 1)",
-            hint: hint)
+            hint: hint,
+            sandboxDenials: [])
         let description = error.errorDescription ?? ""
         #expect(description.contains("Failed to launch /usr/bin/sandbox-exec."))
         #expect(description.contains("Cause: Launch denied"))
@@ -1448,7 +1449,8 @@ import ACPModel
             executable: "/usr/local/bin/claude",
             stderr: "env: node: No such file or directory",
             cause: nil,
-            hint: nil)
+            hint: nil,
+            sandboxDenials: [])
         let description = error.errorDescription ?? ""
         #expect(description.contains("Failed to launch /usr/local/bin/claude."))
         #expect(!description.contains("Cause:"))

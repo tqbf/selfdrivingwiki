@@ -133,16 +133,14 @@ struct YouTubeAuxiliaryRuntimeTests {
         let ancient = try resolution(for: try makeFakeRuntime(
             versionLine: "1.0.31", in: root, name: "bun-ancient"))
 
-        let outcome = await ProcessExtractorProvider.resolveAuxiliaryRuntime(
-            locator: ScriptedLocator(outcome: .resolved(current)), prober: prober)
+        let outcome = await gateOutcome(for: current, prober: prober)
         guard case .resolved = outcome else {
             Issue.record("1.2.11 must resolve")
             return
         }
 
         for rejected in [older, ancient] {
-            let rejectedOutcome = await ProcessExtractorProvider.resolveAuxiliaryRuntime(
-                locator: ScriptedLocator(outcome: .resolved(rejected)), prober: prober)
+            let rejectedOutcome = await gateOutcome(for: rejected, prober: prober)
             guard case .unavailable(.unsupportedVersion(let reported, let minimum)) = rejectedOutcome else {
                 Issue.record("expected an unsupportedVersion outcome")
                 continue
@@ -154,6 +152,26 @@ struct YouTubeAuxiliaryRuntimeTests {
                 retained: rejectedOutcome,
                 revision: ReviewedExtractorPackages.youtubeTranscript.revision) == nil)
         }
+    }
+
+    /// #1412: under CI load the probe's 10-second bound can fire, yielding
+    /// an outcome that is probe latency, not the version gate's decision.
+    /// Retry bounded — the property under test is the gate decision; a
+    /// timeout that survives two retries is recorded as-is.
+    private func gateOutcome(
+        for resolution: RuntimeCommandResolution,
+        prober: AuxiliaryRuntimeVersionProbe
+    ) async -> AuxiliaryRuntimeOutcome {
+        var outcome = await ProcessExtractorProvider.resolveAuxiliaryRuntime(
+            locator: ScriptedLocator(outcome: .resolved(resolution)), prober: prober)
+        for _ in 0..<2 {
+            if case .resolved = outcome { return outcome }
+            if case .unavailable(.unsupportedVersion) = outcome { return outcome }
+            try? await Task.sleep(for: .seconds(2))
+            outcome = await ProcessExtractorProvider.resolveAuxiliaryRuntime(
+                locator: ScriptedLocator(outcome: .resolved(resolution)), prober: prober)
+        }
+        return outcome
     }
 
     @Test("a failed version probe is a typed unavailable outcome")
