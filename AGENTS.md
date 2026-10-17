@@ -26,6 +26,12 @@ Last verified: 2026-08-13
 
 * Record progress in `progress/`. I should be able to tell a future agent
   "read PLAN.md and progress/" and trust it is up to speed with this codebase.
+  Every note in `progress/` must follow the template that
+  `DocumentationContractTests.progressEntriesFollowTemplate` enforces: begin
+  with YAML front matter containing `timestamp:`, `title:`, `branch:`, and
+  `status:`, then a `#` title heading, then `## Progress` and `## Verification`
+  sections. CI fails on non-conforming notes — get the template right before
+  pushing, or a docs-only change burns a 20-minute CI run.
 
 * `PLAN.md` and `PROGRESS.md` document features and design-relevant refactorings only.
   Do not add bug-fix entries to either file.
