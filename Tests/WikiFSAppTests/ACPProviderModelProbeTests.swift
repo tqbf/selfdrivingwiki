@@ -586,7 +586,8 @@ struct ACPProviderModelProbeTests {
                 // Stop the flow deterministically before any initialize runs;
                 // `timedOut` passes through mapProbeError untouched.
                 throw ACPProviderModelProbeError.timedOut
-            })
+            },
+            recentSandboxDenials: { _, _ in [] })
     }
 
     /// Defense at the DIRECT probe seam: an unusable sandbox front-end throws
@@ -675,7 +676,8 @@ struct ACPProviderModelProbeTests {
                     try? await Task.sleep(for: .milliseconds(50))
                 }
                 throw ACPProviderModelProbeError.underlying(CancellationError())
-            })
+            },
+            recentSandboxDenials: { _, _ in [] })
 
         let started = ContinuousClock.now
         do {
@@ -689,7 +691,95 @@ struct ACPProviderModelProbeTests {
                 "the hard bound must unblock the caller promptly, took \(elapsed)")
     }
 
-    // MARK: - Spawn-denial fault injection (#1409)
+    // MARK: - Sandbox denial surfacing (#1409)
+
+    /// A thread-safe capture for the denial-query seam.
+    private final class DenialQueryCapture: Sendable {
+        private let storage = Mutex<(Date, [String])?>(nil)
+        var value: (Date, [String])? { storage.withLock { $0 } }
+        func set(_ newValue: (Date, [String])) { storage.withLock { $0 = newValue } }
+    }
+
+    /// #1409: when the launch/initialize window fails, the bounded
+    /// unified-log denial query runs with the spawn tokens, and a non-empty
+    /// result is appended to the surfaced `.launchFailed` message — the
+    /// kernel's denial line, not just the adapter's cryptic error.
+    @Test func launchFailureSurfacesSandboxDenials() async throws {
+        let capture = DenialQueryCapture()
+        let probe = ACPProviderModelProbe(
+            provider: AgentProvider(
+                id: ProviderID(rawValue: "claude"),
+                label: "Claude",
+                command: ["/usr/local/bin/claude"]),
+            resolvedCommand: ["/usr/local/bin/claude"],
+            apiKey: nil,
+            sandboxUsability: { _ in true },
+            resolveBunRuntime: { nil },
+            makeClient: { Client() },
+            performLaunch: { _, _, _ in
+                throw ACPProviderModelProbeError.underlying(
+                    NSError(
+                        domain: "probe-test",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Cannot call write after a stream was destroyed"]))
+            },
+            recentSandboxDenials: { since, tokens in
+                capture.set((since, tokens))
+                return ["deny file-write-create /Users/wsargent/.pi/agent/settings.json.lock"]
+            })
+
+        do {
+            _ = try await probe.discoverObservation()
+            Issue.record("expected .launchFailed")
+        } catch let error as ACPProviderModelProbeError {
+            guard case .launchFailed(let detail, _, _) = error else {
+                Issue.record("expected .launchFailed, got \(error)")
+                return
+            }
+            #expect(detail.contains("Cannot call write after a stream was destroyed"))
+            #expect(detail.contains("Sandbox denials:"))
+            #expect(detail.contains("deny file-write-create /Users/wsargent/.pi/agent/settings.json.lock"))
+        }
+        let captured = try #require(capture.value, "the denial query seam must run")
+        #expect(captured.1.contains("claude"), "argv basenames become tokens, got \(captured.1)")
+    }
+
+    /// #1409: an empty denial result leaves the failure message without a
+    /// dangling section — the header only appears with denials under it.
+    @Test func launchFailureWithoutDenialsHasNoDenialSection() async throws {
+        let probe = ACPProviderModelProbe(
+            provider: AgentProvider(
+                id: ProviderID(rawValue: "claude"),
+                label: "Claude",
+                command: ["/usr/local/bin/claude"]),
+            resolvedCommand: ["/usr/local/bin/claude"],
+            apiKey: nil,
+            sandboxUsability: { _ in true },
+            resolveBunRuntime: { nil },
+            makeClient: { Client() },
+            performLaunch: { _, _, _ in
+                throw ACPProviderModelProbeError.underlying(
+                    NSError(
+                        domain: "probe-test",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "spawn failed"]))
+            },
+            recentSandboxDenials: { _, _ in [] })
+
+        do {
+            _ = try await probe.discoverObservation()
+            Issue.record("expected .launchFailed")
+        } catch let error as ACPProviderModelProbeError {
+            guard case .launchFailed(let detail, _, _) = error else {
+                Issue.record("expected .launchFailed, got \(error)")
+                return
+            }
+            #expect(detail.contains("spawn failed"))
+            #expect(detail.contains("Sandbox denials:") == false)
+        }
+    }
+
+// MARK: - Spawn-denial fault injection (#1409)
 
     /// Forced nested-sandbox-exec denial: the launch fails with POSIX EPERM —
     /// the OS refusing to start `sandbox-exec` (the plan's executable). The
@@ -713,7 +803,8 @@ struct ACPProviderModelProbeTests {
                     domain: NSPOSIXErrorDomain,
                     code: Int(SpawnFailureDetail.eperm),
                     userInfo: [NSLocalizedDescriptionKey: "Operation not permitted"])
-            })
+            },
+            recentSandboxDenials: { _, _ in [] })
 
         do {
             _ = try await probe.discoverObservation(timeout: .seconds(10))
@@ -749,7 +840,8 @@ struct ACPProviderModelProbeTests {
             makeClient: { Client() },
             performLaunch: { _, _, _ in
                 throw StubAdapterError(reason: "adapter exploded at startup")
-            })
+            },
+            recentSandboxDenials: { _, _ in [] })
 
         do {
             _ = try await probe.discoverObservation(timeout: .seconds(10))

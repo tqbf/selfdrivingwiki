@@ -86,6 +86,12 @@ public struct ACPProviderModelProbe: Sendable {
     /// executable/argument values cannot pass through this seam. The
     /// production default drives the SDK client with the plan's fields.
     let performLaunch: @Sendable (Client, ACPBackend.SandboxedSpawnPlan, String) async throws -> Void
+    /// #1409 injectable seam: the bounded unified-log denial query run when
+    /// the launch/initialize window fails (production default pins
+    /// `SandboxDenialReporter.recentDenials`). Takes the recorded launch
+    /// instant and the lowercase match tokens; returns the normalized,
+    /// capped denial lines (empty when none).
+    let recentSandboxDenials: @Sendable (Date, [String]) async -> [String]
 
     /// The production usability check (public because it is this public
     /// initializer's default argument).
@@ -117,6 +123,12 @@ public struct ACPProviderModelProbe: Sendable {
             environment: plan.environment)
     }
 
+    /// The #1409 production denial query (public because it is this public
+    /// initializer's default argument): one bounded unified-log `log show`.
+    public static let defaultSandboxDenialReporter: @Sendable (Date, [String]) async -> [String] = { since, tokens in
+        await SandboxDenialReporter.recentDenials(since: since, tokens: tokens)
+    }
+
     public init(
         provider: AgentProvider,
         resolvedCommand: [String],
@@ -125,7 +137,8 @@ public struct ACPProviderModelProbe: Sendable {
         sandboxUsability: @escaping @Sendable (String) -> Bool = ACPProviderModelProbe.defaultSandboxUsability,
         resolveBunRuntime: @escaping @Sendable () async -> RuntimeCommandResolution? = ACPProviderModelProbe.defaultBunResolver,
         makeClient: @escaping @Sendable () -> Client = { Client() },
-        performLaunch: @escaping @Sendable (Client, ACPBackend.SandboxedSpawnPlan, String) async throws -> Void = ACPProviderModelProbe.defaultLaunch
+        performLaunch: @escaping @Sendable (Client, ACPBackend.SandboxedSpawnPlan, String) async throws -> Void = ACPProviderModelProbe.defaultLaunch,
+        recentSandboxDenials: @escaping @Sendable (Date, [String]) async -> [String] = ACPProviderModelProbe.defaultSandboxDenialReporter
     ) {
         self.provider = provider
         self.resolvedCommand = resolvedCommand
@@ -135,6 +148,7 @@ public struct ACPProviderModelProbe: Sendable {
         self.resolveBunRuntime = resolveBunRuntime
         self.makeClient = makeClient
         self.performLaunch = performLaunch
+        self.recentSandboxDenials = recentSandboxDenials
     }
 
     /// Discover the models the provider's agent advertises, WITHOUT a
@@ -393,6 +407,9 @@ public struct ACPProviderModelProbe: Sendable {
         // single-consumer, so this ONE task both buffers and discards on
         // success.
         let earlyStderrBuffer = EarlyStderrBuffer()
+        // #1409: the denial query window starts at the launch attempt, not at
+        // discovery entry — the spawn is what provokes the kernel denials.
+        let launchStart = Date()
         let initResponse: InitializeResponse
         do {
             // THE launch consumes ONLY the typed plan (issue #1276).
@@ -425,11 +442,21 @@ public struct ACPProviderModelProbe: Sendable {
             // not just the localized phrase, and not only this log line.
             let stderr = earlyStderrBuffer.flush()
             let hint = ACPBackend.launchHint(for: configuredSpawn)
-            let detail = ACPToolFailureClassification.annotatedSpawnCause(
+            var detail = ACPToolFailureClassification.annotatedSpawnCause(
                 error: error,
                 stderr: stderr,
                 executablePath: plan.executablePath,
                 operation: "launch \(plan.executablePath)")
+            if !Task.isCancelled {
+                let tokens = SandboxDenialReporter.sandboxDenialTokens(
+                    executablePath: configuredSpawn.executablePath,
+                    arguments: configuredSpawn.arguments)
+                let denials = await recentSandboxDenials(launchStart, tokens)
+                for denial in denials {
+                    DebugLog.agent("ACPProviderModelProbe.runProbe: sandbox denial: \(denial)")
+                }
+                detail = SandboxDenialReporter.appending(detail, denials: denials)
+            }
             DebugLog.agent("ACPProviderModelProbe.runProbe: launch/initialize failed: \(detail)")
             throw ACPProviderModelProbeError.launchFailed(
                 detail,
