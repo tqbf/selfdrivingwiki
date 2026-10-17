@@ -1,8 +1,17 @@
+---
+timestamp: 2026-10-16T040000Z
+title: "Opt-in app-test helper exit: highlighting-suite bisect"
+branch: bugfix/optin-helper-death-root-cause
+status: diagnostic negative — root cause open
+---
+
 # Opt-in app-test helper exit: highlighting-suite bisect (2026-10-16)
 
 PR #1432 connects the executed-test gate and the run-summary gate to Make and CI. The helper exit still needs a root-cause fix. This note records a negative bisect on the same branch.
 
-## Identify the missing run
+## Progress
+
+### Identify the missing run
 
 The full log `tmp/test-logs/optin-app-tests-reconciled-20261015-205113.log` has 11 run starts and 10 summaries. The third run starts at line 10940 and executes `WikiFSAppTests`. The fourth run starts at line 17128 without a summary for the third run. The missing summary belongs to `WikiFSAppTests`.
 
@@ -10,7 +19,7 @@ The prior lldb capture stopped the app helper (PID 25771) at `exit`. Its main-th
 
 That snapshot did not show a task spawned by the test. `Tests/WikiFSAppTests/CodeHighlightPerformanceTests.swift:16-69` defines a synchronous test. Its `measure` loop at lines 122-131 calls each operation inline. The Scala highlighter call at lines 44-49 has `isCancelled: { false }`. The test does not create a `Task`, dispatch queue, or subprocess. It writes a measurement file only after all calls return (lines 55-64). In the saved full log, both tests and the suite finish before the app helper exits (lines 16508-16511). The observed worker was inside a test call, not evidence of escaped work.
 
-## Exclude the suspected suite
+### Exclude the suspected suite
 
 Command: `scripts/test-optin-app-tests-reconciled.sh --skip CodeHighlightPerformanceTests`
 
@@ -18,13 +27,15 @@ Log: `tmp/test-logs/optin-app-tests-reconciled-20261015-205913.log`. No `CodeHig
 
 The highlighting suite is not necessary to reproduce this helper exit. Do not change its synchronous measurement loop to structured concurrency. The `scope.parent.invalid` message appeared under `CordisTests`, not on the terminating app-helper stack. No evidence connects it to this exit.
 
-## Next diagnostic
+### Next diagnostic
 
 Attach lldb to the app helper before the hosted tests finish. Stop at the Swift Testing runner's completion and event-recording path, not only at `exit`. Capture its plan, outstanding test tasks, and event-delivery state. Compare the last app-test event with the unfinished test list in the full log. Then use smaller `--skip` subsets to isolate the group that changes the result. Do not infer a culprit from one worker stack: the exclusion test already refuted that inference.
 
 No death fix or five-run verification is claimed. The run-summary gate continues to fail this defect loudly.
 
-## Final bounded probe: app bundle alone
+## Verification
+
+### Final bounded probe: app bundle alone
 
 Toolchain: Apple Swift 6.4 (`swiftlang-6.4.0.34.1`), Testing Library Version 2084. `Package.resolved` does not pin Swift Testing. The library ships with the toolchain.
 
@@ -32,7 +43,7 @@ Toolchain: Apple Swift 6.4 (`swiftlang-6.4.0.34.1`), Testing Library Version 208
 
 lldb attached to the app helper PID 71729. A scoped `libsystem_c.dylib` breakpoint stopped the main thread at `exit`. Full `bt` showed `exit → _swift_exit → swift_task_asyncMainDrainQueue → WikiFSAppTests main at test_entry_point.swift:0 → swiftpm-testing-helper`. `thread backtrace all` captured other active threads. `frame variable` produced no useful state. No run summary appeared in stdout before the stop or after detach. The physical stack has no Swift Testing runner frame between the drain function and `exit`: the suspended async call chain cannot identify the runner decision from this stop alone. See ignored `tmp/issue1422-alone-lldb.log`.
 
-### Suite groups
+#### Suite groups
 
 `swift test list` found 314 app-suite identifiers. Disjoint filters used the listed `WikiFSAppTests.<suite>/` names. Every reproducing group executed tests, so these are not empty-filter results.
 
@@ -49,7 +60,7 @@ lldb attached to the app helper PID 71729. A scoped `libsystem_c.dylib` breakpoi
 
 The two disjoint 39-suite groups had different unfinished tests. This bisection does not isolate one suite. It suggests multiple sufficient triggers or a runner/load interaction. The first-half signal-5 crash is a distinct defect and not evidence for this exit-0 mechanism.
 
-### Time limits and next step
+#### Time limits and next step
 
 Upstream Swift Testing documents suite `.timeLimit` as a limit on **each test case**, not the suite as a whole. Its runner records `.timeLimitExceeded` as a test issue and posts `runEnded` after its test task group completes. The reproducing 39-suite logs show no time-limit issue. These are upstream-main semantics, not a source-level match to installed Testing 2084. DeepWiki returned `Repository not found` for `apple/swift-testing`, so it supplied no evidence.
 
