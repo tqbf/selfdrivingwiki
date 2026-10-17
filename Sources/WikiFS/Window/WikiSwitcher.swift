@@ -6,8 +6,8 @@ import WikiFSCore
 /// listing every wiki to select between them, with "New Wiki…", Rename,
 /// Export, Delete, and Import affordances. Each wiki is an independent
 /// knowledge base (its own DB + File Provider domain), so this is the
-/// top-level container switch — hosted in the sidebar footer directly above
-/// the Strategy row (`SidebarView.wikiSwitcherRow`).
+/// top-level container switch — hosted in the sidebar footer beside the
+/// Strategy button (`SidebarView.wikiFooterRow`).
 ///
 /// `.headline` gives the active name prominence over the `.caption`-styled
 /// section headers and `.body` rows below it, without hardcoding sizes.
