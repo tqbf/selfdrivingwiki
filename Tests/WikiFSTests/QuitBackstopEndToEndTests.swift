@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 import WikiFSTypes
 #if canImport(Darwin)
@@ -39,6 +40,12 @@ struct QuitBackstopEndToEndTests {
     /// would stall for its full 60 s limit — the in-process shape of an
     /// orphaned `uv run` wrapper outliving its supervisor.
     @Test func quitBackstopKillsAnInFlightManagedOperation() async throws {
+        // Cross-suite subprocess gate first (outermost), then the sweep gate:
+        // this test spawns a real stalled fixture operation, and its spawn +
+        // sweep must not stack on the other spawning suites' processes
+        // (#1412 family). Every gated suite takes the slots in this order.
+        let subprocessGate = try await SubprocessGate.shared.acquire()
+        defer { subprocessGate.release() }
         // The gate spans every attempt: the real global sweep below must not
         // interleave with the other gated suites' registry registrations or
         // sweeps.
@@ -136,7 +143,18 @@ struct QuitBackstopEndToEndTests {
         }
 
         let outcome = try await quitBackstopOutcome()
-        #expect(outcome.terminatedGroupCount == 1)
+        // Membership, not a global count (#1402): the registry is
+        // process-global, so a parallel suite can register a fixture group
+        // between this test's soleRegisteredGroup observation and the sweep.
+        // The sweep is then correct to terminate that group too — that is
+        // production quit-backstop semantics, and a count assertion misreads
+        // the collateral kill as failure. This test proves its own group was
+        // among the terminated. Exact-count precision stays in
+        // OwnedProcessGroupRegistryTests, which sweeps behind the sweep gate
+        // with fake closures.
+        #expect(
+            outcome.terminatedGroupProcessIDs.contains(groupLeaderPID),
+            "the sweep terminated \(outcome.terminatedGroupProcessIDs) but not this test's group leader \(groupLeaderPID)")
 
         // The executor sees its own process die by signal — the in-band
         // proof that the group really died, not just that a signal was sent.

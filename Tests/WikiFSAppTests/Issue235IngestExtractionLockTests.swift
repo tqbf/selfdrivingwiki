@@ -64,12 +64,13 @@ struct Issue235IngestExtractionLockTests {
 
     @Test func captionVisibleWhenAwaitingSlot() {
         // The core #235 UI fix: waiting for the generation gate shows VISIBLE
-        // text (was previously only a hidden .help() tooltip).
+        // text (was previously only a hidden .help() tooltip). #1384 shortened
+        // the queued caption to "Waiting to send…".
         let caption = ChatDetailView.composerCaptionText(
             runState: .queued,
             isLiveChat: true,
             isChatOperationConfigured: true)
-        #expect(caption == "Waiting for the other session to finish before sending…")
+        #expect(caption == "Waiting to send…")
     }
 
     @Test func captionVisibleWhenAwaitingSlotDraftState() {
@@ -78,7 +79,7 @@ struct Issue235IngestExtractionLockTests {
             runState: .queued,
             isLiveChat: false,
             isChatOperationConfigured: true)
-        #expect(caption == "Waiting for the other session to finish before sending…")
+        #expect(caption == "Waiting to send…")
     }
 
     @Test func captionNilWhenIdle() {
@@ -111,12 +112,13 @@ struct Issue235IngestExtractionLockTests {
 
     @Test func awaitingSlotOverridesPersistedBusy() {
         // Queued is its own state, so the gate wait message remains the most
-        // actionable outcome without contradictory Boolean inputs.
+        // actionable outcome without contradictory Boolean inputs. #1384
+        // shortened the queued caption to "Waiting to send…".
         let caption = ChatDetailView.composerCaptionText(
             runState: .queued,
             isLiveChat: false,
             isChatOperationConfigured: true)
-        #expect(caption == "Waiting for the other session to finish before sending…")
+        #expect(caption == "Waiting to send…")
     }
 }
 #endif

@@ -44,7 +44,7 @@ struct ChatTranscriptHostedTests {
     }
 
     @Test func hostedDocumentPreservesSemanticRowsFocusAndSelectionAcrossAnUpdate() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
         let window = NSWindow(
@@ -111,7 +111,7 @@ struct ChatTranscriptHostedTests {
     }
 
     @Test func hostedCommandsUseStableRowIdentityAndReportMissingRows() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
         let window = NSWindow(
@@ -162,7 +162,7 @@ struct ChatTranscriptHostedTests {
     }
 
     @Test func hostedExpandedToolRowsStackAndDisplayTheUnfencedPayload() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1_600, height: 480))
         let window = NSWindow(
@@ -220,7 +220,7 @@ struct ChatTranscriptHostedTests {
     }
 
     @Test func hostedExpandedReasoningRowsPlaceTheirBodyBelowTheSummary() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
         let window = NSWindow(
@@ -268,7 +268,7 @@ struct ChatTranscriptHostedTests {
     }
 
     @Test func hostedOutgoingEchoRowsRenderInTranscriptDOM() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
         let window = NSWindow(
@@ -397,7 +397,7 @@ struct ChatTranscriptHostedTests {
     }
 
     @Test func hostedExpandedToolGroupSurvivesLiveReplacement() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
         let window = NSWindow(
@@ -452,7 +452,7 @@ struct ChatTranscriptHostedTests {
     }
 
     @Test func hostedToolGroupSupportsKeyboardDisclosureAndBoundedScrolling() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
         let window = NSWindow(

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 
 /// Runs small fixtures through `swiftc -typecheck` against the modules that
 /// SwiftPM built for this test run. This proves the namespace boundary at the
@@ -516,12 +517,19 @@ struct IdentifierBoundaryTypecheckTests {
 
     @Test(arguments: positiveFixtures)
     func positiveFixturesCompile(fixtureName: String) async throws {
+        // Each case spawns the real Swift compiler — the heaviest spawn in
+        // the target; gate it so parallel suites do not stack on top (#1412
+        // family).
+        let subprocessGate = try await SubprocessGate.shared.acquire()
+        defer { subprocessGate.release() }
         let result = try await runTypecheck(fixtureName: fixtureName)
         #expect(result.status == 0, "positive fixture failed to typecheck:\n\(result.output)")
     }
 
     #if canImport(WikiFSEngine)
     @Test func positiveChatDomainFixturesCompile() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let result = try await runTypecheck(fixtureName: "positive-chat-domain.swift")
         #expect(result.status == 0, "positive chat-domain fixture failed to typecheck:\n\(result.output)")
     }
@@ -529,12 +537,16 @@ struct IdentifierBoundaryTypecheckTests {
 
     #if os(macOS)
     @Test func launcherPositiveFixturesCompile() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let result = try await runTypecheck(fixtureName: "positive-launcher-macos.swift")
         #expect(result.status == 0, "launcher positive fixture failed to typecheck:\n\(result.output)")
     }
     #endif
 
     @Test func negativeFixturesCompileAndMapBoundaries() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         for batch in Self.batchFixtures {
             let result = try await runTypecheck(batch)
             #expect(

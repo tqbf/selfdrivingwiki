@@ -69,7 +69,7 @@ struct SplitDiffSnapshotTests {
     // MARK: - SplitDiffView in isolation
 
     @Test func renderDiffPaneToPNG() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let left = SampleDiff.left, right = SampleDiff.right
         let view = SplitDiffView(leftLabel: "Legacy", rightLabel: "Unknown",
@@ -81,7 +81,7 @@ struct SplitDiffSnapshotTests {
     // MARK: - Full ExtractionCompareSheet (chrome + HSplitView context + nominate)
 
     @Test func renderFullSheetBothModesAndNominate() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let store = try makeTwoBackendStore()
         let sourceID = store.sources.first { $0.filename.hasSuffix(".pdf") }!.id

@@ -59,6 +59,12 @@ public enum OwnedProcessGroupRegistry {
     public struct TerminationOutcome: Sendable, Equatable {
         /// Groups that received SIGTERM (and SIGKILL when still alive).
         public let terminatedGroupCount: Int
+        /// The group leader pids that received SIGTERM (and SIGKILL when
+        /// still alive), in sweep order (ascending pid). Test and diagnostics
+        /// surface: a test can assert its own group is among the terminated
+        /// without asserting a global count, which parallel fixture groups
+        /// legitimately inflate (#1402).
+        public let terminatedGroupProcessIDs: [Int32]
         /// Groups whose leader already exited, so no signal was needed.
         public let alreadyEndedGroupCount: Int
         /// Entries whose pid now wears a different process. Never signaled.
@@ -91,6 +97,7 @@ public enum OwnedProcessGroupRegistry {
         guard !snapshot.isEmpty else {
             return TerminationOutcome(
                 terminatedGroupCount: 0,
+                terminatedGroupProcessIDs: [],
                 alreadyEndedGroupCount: 0,
                 unverifiedGroupCount: 0)
         }
@@ -117,6 +124,7 @@ public enum OwnedProcessGroupRegistry {
                 "OwnedProcessGroupRegistry: quit termination found no live owned group (\(snapshot.count) registered)")
             return TerminationOutcome(
                 terminatedGroupCount: 0,
+                terminatedGroupProcessIDs: [],
                 alreadyEndedGroupCount: ended,
                 unverifiedGroupCount: unverified)
         }
@@ -130,6 +138,7 @@ public enum OwnedProcessGroupRegistry {
             "OwnedProcessGroupRegistry: quit termination signaled \(liveEntries.count) owned group(s) with SIGTERM, then SIGKILL where still alive")
         return TerminationOutcome(
             terminatedGroupCount: liveEntries.count,
+            terminatedGroupProcessIDs: liveEntries.map(\.processID),
             alreadyEndedGroupCount: ended,
             unverifiedGroupCount: unverified)
     }

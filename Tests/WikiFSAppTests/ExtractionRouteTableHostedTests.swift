@@ -166,7 +166,7 @@ struct ExtractionRouteTableHostedTests {
 
     @Test("the defaults pane mounts the route table")
     func rendersRouteTableWithoutCrash() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let dir = try tempDirectory("route-table-render")
         // Packages is the opening pane now, so mount the defaults pane
@@ -213,7 +213,7 @@ struct ExtractionRouteTableHostedTests {
 
     @Test("the package table mounts active and failed revisions as rows")
     func rendersPackageTableWithoutCrash() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let dir = try tempDirectory("package-table-render")
         var loaded = snapshot(failedPackageIDs: ["org.example.broken"])
@@ -256,7 +256,7 @@ struct ExtractionRouteTableHostedTests {
     /// content instead, and the Settings form is the only scroll authority.
     @Test("a packages table past the visible-row ceiling keeps every row reachable")
     func packagesTableBeyondCeilingKeepsEveryRowReachable() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let dir = try tempDirectory("package-table-reachability")
         var loaded = snapshot()
@@ -302,7 +302,7 @@ struct ExtractionRouteTableHostedTests {
 
     @Test("a non-ready route status dialog mounts with recovery controls")
     func nonReadyStatusOpensRecoverySheet() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let presentation = ExtractorRouteRecoveryPresentation(
             route: .canonicalPDF,
@@ -335,7 +335,7 @@ struct ExtractionRouteTableHostedTests {
 
     @Test("a package credential configuration dialog mounts")
     func packageCredentialConfigurationDialogMounts() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let requirement = ExtractorCredentialRequirementSummary(
             packageID: "org.example.extractor",
@@ -371,7 +371,7 @@ struct ExtractionRouteTableHostedTests {
 
     @Test("the table keeps a constrained height at the Settings minimum size")
     func tableUsesConstrainedScrollableLayout() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let dir = try tempDirectory("route-table-scroll")
         let view = makeView(directory: dir, snapshot: snapshot())

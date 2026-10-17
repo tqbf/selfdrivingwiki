@@ -1,11 +1,14 @@
 import Foundation
 import RendererPackageToolCore
 import Testing
+import WikiFSTestSupport
 
 @Suite("Renderer package tool subprocess", .serialized, .timeLimit(.minutes(1)))
 struct RendererPackageToolSubprocessTests {
     @Test("validate command emits JSON on stdout and exits zero")
     func validateCommandEmitsJSONAndExitsZero() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let result = try await run(arguments: ["validate", Self.templateRoot.path])
         let output = try JSONDecoder().decode(RendererPackageValidationOutput.self, from: result.stdout)
 
@@ -19,6 +22,8 @@ struct RendererPackageToolSubprocessTests {
 
     @Test("invalid package emits only an actionable stderr diagnostic and exits nonzero")
     func invalidPackageEmitsDiagnosticAndExitsNonzero() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let missing = Self.repositoryRoot.appending(path: "missing-renderer-package")
         let result = try await run(arguments: ["validate", missing.path])
         let diagnostic = try #require(String(data: result.stderr, encoding: .utf8))
@@ -30,6 +35,8 @@ struct RendererPackageToolSubprocessTests {
 
     @Test("validate command accepts the reviewed mermaid package and reports its registration")
     func validateCommandAcceptsReviewedMermaidPackage() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let result = try await run(arguments: ["validate", Self.mermaidPackageRoot.path])
         let output = try JSONDecoder().decode(RendererPackageValidationOutput.self, from: result.stdout)
 

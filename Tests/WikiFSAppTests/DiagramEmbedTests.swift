@@ -177,7 +177,7 @@ struct DiagramEmbedTests {
 
         #expect(body.contains("class=\"sdw-inline-renderer\""))
         #expect(body.contains("data-renderer-role=\"inlineContent\""))
-        #expect(body.contains("data-renderer-reference=\"org.selfdrivingwiki.excalidraw-readonly/1.0.5/excalidraw\""))
+        #expect(body.contains("data-renderer-reference=\"org.selfdrivingwiki.excalidraw-readonly/1.1.0/excalidraw\""))
         #expect(body.contains("data-renderer-admitted=\"true\""))
         #expect(body.contains("class=\"sdw-inline-renderer__fallback\""))
         #expect(body.contains("![[source:"))

@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Testing
+import WikiFSTestSupport
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -91,6 +92,8 @@ struct AsyncProcessRunnerTests {
     }
 
     @Test func capturesSeparateOutputAndStatus() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let request = AsyncProcessRequest(
             executableURL: URL(fileURLWithPath: "/bin/sh"),
             arguments: ["-c", "printf 'out-head\\nout-tail'; printf 'err-head\\nerr-tail' >&2; exit 7"])
@@ -103,6 +106,8 @@ struct AsyncProcessRunnerTests {
     }
 
     @Test func capturesOutputLargerThanPipeCapacity() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let request = AsyncProcessRequest(
             executableURL: URL(fileURLWithPath: "/bin/sh"),
             arguments: ["-c", "perl -e 'print \"A\" x 1024 for 1..256; print STDERR \"B\" x 1024 for 1..128'"])
@@ -115,7 +120,9 @@ struct AsyncProcessRunnerTests {
         }
     }
 
-    @Test func launchFailureReturnsOnce() async {
+    @Test func launchFailureReturnsOnce() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let request = AsyncProcessRequest(
             executableURL: URL(fileURLWithPath: "/bin/sh"))
 
@@ -143,6 +150,8 @@ struct AsyncProcessRunnerTests {
     }
 
     @Test func cancellationBeforeLaunchDoesNotSpawnChild() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let gate = LaunchGate()
         let launched = Flag()
         let request = AsyncProcessRequest(
@@ -169,6 +178,8 @@ struct AsyncProcessRunnerTests {
     }
 
     @Test func cancellationEscalatesWhenChildIgnoresTermination() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let readyFile = try makeMarkerFile()
         let request = AsyncProcessRequest(
             executableURL: URL(fileURLWithPath: "/bin/sh"),
@@ -187,6 +198,8 @@ struct AsyncProcessRunnerTests {
     }
 
     @Test func cancellationReturnsWhenDescendantKeepsPipeOpen() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let readyFile = try makeMarkerFile()
         let holdFile = try makeMarkerFile()
         if FileManager.default.fileExists(atPath: holdFile.path) {
@@ -233,6 +246,8 @@ struct AsyncProcessRunnerTests {
     }
 
     @Test func cancellationDuringOutputCleansUpOnce() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let readyFile = try makeMarkerFile()
         let terminations = Counter()
         let request = AsyncProcessRequest(
@@ -269,7 +284,9 @@ struct AsyncProcessRunnerTests {
         #expect(terminations.get() == 1)
     }
 
-    @Test func loginShellPathUsesAsyncRunner() async {
+    @Test func loginShellPathUsesAsyncRunner() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let path = await PathPreflight.loginShellPATH(using: { _ in
             AsyncProcessResult(
                 terminationStatus: 0,
@@ -279,7 +296,9 @@ struct AsyncProcessRunnerTests {
         #expect(path == "/opt/homebrew/bin:/usr/local/bin")
     }
 
-    @Test func loginShellPathUsesConfiguredShellAndKeepsSpacedEntries() async {
+    @Test func loginShellPathUsesConfiguredShellAndKeepsSpacedEntries() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let expected = "/opt/homebrew/bin:/Applications/Visual Studio Code.app/Contents/Resources/app/bin:/usr/bin"
         var invoked: AsyncProcessRequest?
         let path = await PathPreflight.loginShellPATH(
@@ -303,7 +322,9 @@ struct AsyncProcessRunnerTests {
         #expect(!PathPreflight.isPlausiblePATH("command not found:/usr/bin"))
     }
 
-    @Test func resolveOnLoginShellFallsBackAfterRunnerFailure() async {
+    @Test func resolveOnLoginShellFallsBackAfterRunnerFailure() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         do {

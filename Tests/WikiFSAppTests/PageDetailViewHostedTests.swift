@@ -47,7 +47,7 @@ struct PageDetailViewHostedTests {
     /// NSView subtree. WKWebView presence ⇒ the reader branch rendered; its
     /// absence ⇒ the editor branch rendered.
     private func hasWebViewAfterMount<V: View>(_ view: V, expectWebView: Bool) async throws -> Bool {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let hosting = NSHostingController(rootView: view)

@@ -9,6 +9,9 @@ import Testing
 /// post-commit event batch. The model-level tests cover the one protected
 /// delete path per resource type; the coordinator-level routing lives in
 /// `Tests/WikiFSAppTests/DeletionConfirmationCoordinatorTests.swift`.
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened delivery waits (`EventBusDeliveryWaits.budget`).
+@Suite(.serialized, .timeLimit(.minutes(2)))
 @MainActor
 struct DeletionIncomingReferenceTests {
 
@@ -37,12 +40,15 @@ struct DeletionIncomingReferenceTests {
     }
 
     /// Wait until `recorder` holds `expected` events (bounded), returning them.
-    private func awaitEvents(_ recorder: Recorder, expected: Int, timeoutMs: Int = 800) async throws -> [ResourceChangeEvent] {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while Date() < deadline {
-            if recorder.count >= expected { return recorder.snapshot }
+    /// Budget from `EventBusDeliveryWaits`: absorbs full-suite main-actor lag
+    /// (issue #1425) instead of claiming dispatch latency.
+    private func awaitEvents(_ recorder: Recorder, expected: Int) async throws -> [ResourceChangeEvent] {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while recorder.count < expected {
+            guard ContinuousClock.now < deadline else { return recorder.snapshot }
+            try Task.checkCancellation()
             await flushBusDeliveries()
-            try? await Task.sleep(for: .milliseconds(2))
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
         return recorder.snapshot
     }

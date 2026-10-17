@@ -219,7 +219,7 @@ struct ChatStuckRunningBeachballReproTests {
     /// daemon synthesizes a persisted-only state), then measure main-thread
     /// CPU while the run loop pumps.
     private func measureHostedChatCPURatio(items: [ChatTranscriptItem]) async throws -> Double {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
 

@@ -15,7 +15,7 @@ struct JSONCanvasRendererPackageHostedValidationTests {
     func startupInputRendersSceneAndKeyboardTransforms() async throws {
         let fixture = try JSONCanvasHostedFixture()
         defer { fixture.remove() }
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         NSApplication.shared.setActivationPolicy(.accessory)
 
@@ -109,7 +109,7 @@ struct JSONCanvasRendererPackageHostedValidationTests {
     func rendersGeometryMarkersAndText() async throws {
         let fixture = try JSONCanvasHostedFixture()
         defer { fixture.remove() }
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         NSApplication.shared.setActivationPolicy(.accessory)
 
@@ -193,7 +193,7 @@ struct JSONCanvasRendererPackageHostedValidationTests {
     func coloredEdgesRenderWithColorAndMarkers() async throws {
         let fixture = try JSONCanvasHostedFixture()
         defer { fixture.remove() }
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         NSApplication.shared.setActivationPolicy(.accessory)
 
@@ -277,7 +277,7 @@ struct JSONCanvasRendererPackageHostedValidationTests {
     func coloredEdgeStemsAndArrowheadsPaintMatchingPixels() async throws {
         let fixture = try JSONCanvasHostedFixture()
         defer { fixture.remove() }
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         NSApplication.shared.setActivationPolicy(.accessory)
 
@@ -433,7 +433,7 @@ struct JSONCanvasRendererPackageHostedValidationTests {
     func malformedInputPreservesSource() async throws {
         let fixture = try JSONCanvasHostedFixture()
         defer { fixture.remove() }
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         NSApplication.shared.setActivationPolicy(.accessory)
 

@@ -683,17 +683,22 @@ public actor ACPBackend: AgentBackend {
         } catch {
             // The process either failed to start or died before the ACP
             // handshake completed. Drain the buffered stderr and surface an
-            // actionable error (#733 + #737).
+            // actionable error (#733 + #737). The underlying launch error's
+            // OS status (errno, domain, failing path) rides in `cause`
+            // (#1409) — previously it reached only this DebugLog line and
+            // the thrown error could be bare ("Failed to launch X.") when
+            // the child produced no stderr.
             stderrTask.cancel()
             let stderr = earlyStderrBuffer.flush()
             let hint = Self.launchHint(for: spawn)
-            // #1409: a Seatbelt denial is the frequent real cause of a
-            // sandboxed launch failing with a cryptic adapter error. Query
-            // the bounded unified-log window for denials matching the spawn
-            // tokens and carry them on the typed error (rendered by
-            // `errorDescription`) + the log. Skipped on cancellation — a
-            // cancelled start is unwinding anyway and the query is a
-            // multi-second store scan.
+            // #1409: surface both the OS-level launch cause and matching
+            // Seatbelt denials. The unified-log query is bounded and skipped
+            // during cancellation.
+            let cause = ACPToolFailureClassification.annotatedSpawnCause(
+                error: error,
+                stderr: stderr,
+                executablePath: spawnExecutablePath,
+                operation: "launch \(spawnExecutablePath)")
             var sandboxDenials: [String] = []
             if !Task.isCancelled {
                 sandboxDenials = await recentSandboxDenials(
@@ -705,10 +710,11 @@ public actor ACPBackend: AgentBackend {
                     DebugLog.agent("ACPBackend.startProcess: sandbox denial: \(denial)")
                 }
             }
-            DebugLog.agent("ACPBackend.startProcess: launch/initialize failed: \(error.localizedDescription)\nstderr: \(stderr ?? "<nil>")")
+            DebugLog.agent("ACPBackend.startProcess: launch/initialize failed: \(cause)\nstderr: \(stderr ?? "<nil>")")
             throw ACPBackendError.launchFailed(
                 executable: spawn.executablePath,
                 stderr: stderr,
+                cause: cause,
                 hint: hint,
                 sandboxDenials: sandboxDenials)
         }
@@ -3068,14 +3074,13 @@ enum ACPBackendError: Error, LocalizedError {
     /// ACP handshake completed (e.g. `bun` started but `claude` / `codex` was
     /// not on PATH). `executable` is the resolved binary path; `stderr`
     /// captures whatever the subprocess wrote before dying (may be nil if the
-    /// process never started); `hint` carries the env-var workaround
-    /// (`CLAUDE_CODE_EXECUTABLE` / `CODEX_PATH`) when the command matches a
-    /// known provider, or nil for generic failures. `sandboxDenials` (#1409)
-    /// carries the normalized Seatbelt denials captured in the launch window
-    /// (empty when none were found or the query was skipped).
+    /// process never started); `cause` carries the underlying OS launch detail;
+    /// `hint` carries the provider env-var workaround, and `sandboxDenials`
+    /// carries matching Seatbelt denials captured in the launch window.
     case launchFailed(
         executable: String,
         stderr: String?,
+        cause: String?,
         hint: ProviderEnvHint?,
         sandboxDenials: [String])
 
@@ -3123,8 +3128,11 @@ enum ACPBackendError: Error, LocalizedError {
         case .quotaExhausted(let provider, let resetTime):
             let resetStr = resetTime.map { " until \($0)" } ?? ""
             return "Provider \(provider) quota exhausted\(resetStr)."
-        case .launchFailed(let executable, let stderr, let hint, let sandboxDenials):
+        case .launchFailed(let executable, let stderr, let cause, let hint, let sandboxDenials):
             var msg = "Failed to launch \(executable)."
+            if let cause, !cause.isEmpty {
+                msg += "\n\nCause: \(cause)"
+            }
             if let stderr, !stderr.isEmpty {
                 msg += "\n\n\(stderr)"
             }

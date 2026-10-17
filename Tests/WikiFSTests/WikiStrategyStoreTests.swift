@@ -11,7 +11,11 @@ import Testing
 /// `StoreEmissionTests`: bus delivery hops to the main actor, so tests await
 /// a bounded flush instead of sleeping; "no event" checks flush several times
 /// so a queued delivery cannot hide.
-@Suite(.serialized, .timeLimit(.minutes(1)))
+/// Suite discipline (#1051): serialized. The per-test time limit was raised
+/// from 1 to 3 minutes because `unchangedSaveDoesNotEmit` performs three
+/// delivery waits, so the widened `EventBusDeliveryWaits.budget` ceiling
+/// (issue #1425) needs 90 seconds of worst-case headroom.
+@Suite(.serialized, .timeLimit(.minutes(3)))
 struct WikiStrategyStoreTests {
 
     /// Creates a uniquely named disposable database under the project scratch directory.
@@ -52,13 +56,16 @@ struct WikiStrategyStoreTests {
         return (store, recorder)
     }
 
-    /// Bounded wait until `recorder` holds `expected` events.
-    private func awaitEvents(_ recorder: Recorder, expected: Int, timeoutMs: Int = 800) async throws -> [ResourceChangeEvent] {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
-        while Date() < deadline {
-            if recorder.snapshot.count >= expected { return recorder.snapshot }
+    /// Bounded wait until `recorder` holds `expected` events. Budget from
+    /// `EventBusDeliveryWaits`: absorbs full-suite main-actor lag (issue
+    /// #1425) instead of claiming dispatch latency.
+    private func awaitEvents(_ recorder: Recorder, expected: Int) async throws -> [ResourceChangeEvent] {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while recorder.snapshot.count < expected {
+            guard ContinuousClock.now < deadline else { return recorder.snapshot }
+            try Task.checkCancellation()
             await flushBusDeliveries()
-            await Task.yield()
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
         }
         return recorder.snapshot
     }
@@ -82,7 +89,7 @@ struct WikiStrategyStoreTests {
     @Test func migrationDefaults() throws {
         // Fresh schema: the table exists, unseeded, reads Default.
         let fresh = try TestStoreFactory.inMemory()
-        #expect(fresh.pragmaValue("user_version") == "57")
+        #expect(fresh.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         #expect(fresh.scalarText(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wiki_strategy';") == "1")
         #expect(try fresh.getWikiStrategy() == nil)
@@ -97,7 +104,7 @@ struct WikiStrategyStoreTests {
         PRAGMA user_version = 55;
         """, at: pair.url)
         let migrated = try GRDBWikiStore(databaseURL: pair.url)
-        #expect(migrated.pragmaValue("user_version") == "57")
+        #expect(migrated.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
         #expect(migrated.scalarText(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wiki_strategy';") == "1")
         #expect(try migrated.getWikiStrategy() == nil)

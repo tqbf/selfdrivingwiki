@@ -158,7 +158,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// `PRAGMA user_version` up to 37, and this store must recognize them as
     /// already-migratable so the ladder is a no-op on re-open (the proven
     /// `if version < N`)
-    private static let currentSchemaVersion = 57
+    private static let currentSchemaVersion = 58
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1688,6 +1688,22 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             version = 57
         }
 
+        // v57→v58: per-chat composer attachments (`chat_attachments`). One row
+        // per attached target, ordered by `position`, so the composer's chips
+        // survive tab close and app restart. The target is stored as a checked
+        // kind tag ('page' | 'source' | 'chat') plus the raw ULID text — raw
+        // strings at this boundary only; display names resolve fresh at
+        // restore. Existing chats migrate to an empty set (nothing to
+        // backfill).
+        if version < 58 {
+            try db.inTransaction(.immediate) {
+                try Self.createChatAttachmentsTableV58(in: db)
+                try db.execute(sql: "PRAGMA user_version = 58;")
+                return .commit
+            }
+            version = 58
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -2232,6 +2248,27 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         try db.execute(sql: """
         CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_draft_handle
             ON chat_messages(draft_handle) WHERE draft_handle IS NOT NULL;
+        """)
+    }
+
+    /// v58: per-chat composer attachment targets (create-chat-with-
+    /// attachments persistence). `kind` is a checked tag — 'page', 'source',
+    /// or 'chat' — and `raw_id` the target's raw ULID text; display names are
+    /// NOT stored (they resolve fresh at restore). `position` preserves chip
+    /// order. Created in BOTH the ladder step and the fresh schema.
+    private static func createChatAttachmentsTableV58(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS chat_attachments (
+            chat_id   TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+            kind      TEXT NOT NULL,
+            raw_id    TEXT NOT NULL,
+            position  INTEGER NOT NULL,
+            PRIMARY KEY (chat_id, position)
+        );
+        """)
+        try db.execute(sql: """
+        CREATE INDEX IF NOT EXISTS chat_attachments_by_chat
+            ON chat_attachments(chat_id);
         """)
     }
 
@@ -3717,6 +3754,10 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_draft_handle
             ON chat_messages(draft_handle) WHERE draft_handle IS NOT NULL;
         """)
+
+        // v58: per-chat composer attachment targets (see
+        // `createChatAttachmentsTableV58` — same DDL as the ladder step).
+        try Self.createChatAttachmentsTableV58(in: db)
 
         // v28: chat semantic search (chat_chunks) + the `chat_search` sidecar
         // (kept as an ordinary table post-#634 — written by `upsertChatSearch`,
@@ -10192,29 +10233,130 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         try mutate(event: { chat in
             self.localEvent(.chat, id: chat.id.rawValue, change: .created)
         }) { db in
-            let id = ChatID(rawValue: ULID.generate())
-            let now = Date()
-            try db.execute(sql: """
-            INSERT INTO chats (
-                id, kind, title, created_at, updated_at,
-                model_provider_id, model_id,
-                configured_thinking_option_id, effective_thinking_option_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-            """, arguments: [
-                id.rawValue, kind.rawValue, title,
-                now.timeIntervalSince1970, now.timeIntervalSince1970,
-                modelProviderId?.rawValue, modelProviderId == nil ? nil : modelId?.rawValue,
-                configuredThinkingOptionID?.rawValue, effectiveThinkingOptionID?.rawValue
-            ])
-            return ChatSummary(
-                id: id, kind: kind, title: title,
-                createdAt: now, updatedAt: now, messageCount: 0,
-                modelProviderId: modelProviderId,
-                modelId: modelProviderId == nil ? nil : modelId,
+            try self.insertChatLocked(
+                kind: kind, title: title,
+                modelProviderId: modelProviderId, modelId: modelId,
                 configuredThinkingOptionID: configuredThinkingOptionID,
-                effectiveThinkingOptionID: effectiveThinkingOptionID
-            )
+                effectiveThinkingOptionID: effectiveThinkingOptionID,
+                in: db)
         }
+    }
+
+    /// Composed create: persists the chats row AND the ordered attachment
+    /// targets in ONE `mutate` savepoint, so the persist-first contract is
+    /// atomic — an attachment-insert failure rolls the chat back too. Per the
+    /// composition guard (:484-496) the body uses only the non-emitting
+    /// `*Locked` helpers; this method is the single emit site.
+    public func createChat(
+        kind: ChatKind, title: String, attachments: [ChatAttachmentTarget]
+    ) throws -> ChatSummary {
+        try mutate(event: { chat in
+            self.localEvent(.chat, id: chat.id.rawValue, change: .created)
+        }) { db in
+            let chat = try self.insertChatLocked(
+                kind: kind, title: title,
+                modelProviderId: nil, modelId: nil,
+                configuredThinkingOptionID: nil,
+                effectiveThinkingOptionID: nil,
+                in: db)
+            try Self.insertChatAttachmentsLocked(
+                chatID: chat.id, targets: attachments, in: db)
+            return chat
+        }
+    }
+
+    /// Replaces a chat's whole attachment-target set, ordered. The chat must
+    /// exist. One savepoint; one `.chat`/`.updated` event post-commit.
+    public func setChatAttachments(
+        chatID: ChatID, targets: [ChatAttachmentTarget]
+    ) throws {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            let exists = try Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM chats WHERE id = ?;",
+                arguments: [chatID.rawValue]
+            ) ?? 0
+            guard exists != 0 else {
+                throw WikiStoreError.chatNotFound(chatID)
+            }
+            try Self.insertChatAttachmentsLocked(
+                chatID: chatID, targets: targets, in: db)
+        }
+    }
+
+    /// Non-emitting helper (never wraps `mutate`): the DELETE + ordered INSERT
+    /// for one chat's attachment set. Runs inside the caller's savepoint.
+    private static func insertChatAttachmentsLocked(
+        chatID: ChatID, targets: [ChatAttachmentTarget], in db: Database
+    ) throws {
+        try db.execute(
+            sql: "DELETE FROM chat_attachments WHERE chat_id = ?;",
+            arguments: [chatID.rawValue])
+        for (position, target) in targets.enumerated() {
+            try db.execute(sql: """
+            INSERT INTO chat_attachments (chat_id, kind, raw_id, position)
+            VALUES (?, ?, ?, ?);
+            """, arguments: [
+                chatID.rawValue, target.kindTag, target.rawID, position
+            ])
+        }
+    }
+
+    /// The ordered attachment targets for one chat. Empty for a chat with no
+    /// persisted chips.
+    public func chatAttachments(chatID: ChatID) throws -> [ChatAttachmentTarget] {
+        try dbWriter.read { db in
+            guard chatsSchemaIsReady(in: db),
+                  try db.tableExists("chat_attachments") else { return [] }
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT kind, raw_id FROM chat_attachments
+                WHERE chat_id = ? ORDER BY position;
+                """,
+                arguments: [chatID.rawValue])
+            return try rows.map { row in
+                let tag: String = row["kind"]
+                let rawID: String = row["raw_id"]
+                return try ChatAttachmentTarget.decode(
+                    kindTag: tag, rawID: rawID)
+            }
+        }
+    }
+
+    /// Non-emitting helper (never wraps `mutate`): inserts the chats row.
+    /// Runs inside the caller's savepoint; the caller owns the event.
+    private func insertChatLocked(
+        kind: ChatKind, title: String,
+        modelProviderId: ProviderID?, modelId: ModelID?,
+        configuredThinkingOptionID: ChatConfigurationValueID?,
+        effectiveThinkingOptionID: ChatConfigurationValueID?,
+        in db: Database
+    ) throws -> ChatSummary {
+        let id = ChatID(rawValue: ULID.generate())
+        let now = Date()
+        try db.execute(sql: """
+        INSERT INTO chats (
+            id, kind, title, created_at, updated_at,
+            model_provider_id, model_id,
+            configured_thinking_option_id, effective_thinking_option_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, arguments: [
+            id.rawValue, kind.rawValue, title,
+            now.timeIntervalSince1970, now.timeIntervalSince1970,
+            modelProviderId?.rawValue, modelProviderId == nil ? nil : modelId?.rawValue,
+            configuredThinkingOptionID?.rawValue, effectiveThinkingOptionID?.rawValue
+        ])
+        return ChatSummary(
+            id: id, kind: kind, title: title,
+            createdAt: now, updatedAt: now, messageCount: 0,
+            modelProviderId: modelProviderId,
+            modelId: modelProviderId == nil ? nil : modelId,
+            configuredThinkingOptionID: configuredThinkingOptionID,
+            effectiveThinkingOptionID: effectiveThinkingOptionID
+        )
     }
 
 

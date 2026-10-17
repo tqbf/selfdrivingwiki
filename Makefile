@@ -143,8 +143,9 @@ help:
 	@echo "  check             Compile only (swift build) — no bundle/sign; CI/agent gate"
 	@echo "  check-cordis      Verify the current Cordis composition boundary baseline"
 	@echo "  check-release     Compile only in release mode (swift build -c release)"
-	@echo "  test              Run the default SwiftPM test graph (WikiFSAppTests require WIKIFS_APP_TESTS=1)"
+	@echo "  test              Run the default SwiftPM test graph (guarded opt-in tier when WIKIFS_APP_TESTS=1, #1398)"
 	@echo "  test-watchdog     Same default graph as test, with a wall-clock timeout + hang/slow-test report"
+	@echo "  test-app          Opt-in WikiFSAppTests graph with the #1398 executed-evidence gate"
 	@echo "  test-fast         Fast default-graph tier (debug) — skips selected integration suites"
 	@echo "  test-fast-release Fast test tier in release mode (faster runtime, slower compile)"
 	@echo "  test-linux        Run the optional, nonblocking Linux Swift diagnostic"
@@ -301,9 +302,24 @@ check-release: deps prompts version keychain extractor-packages
 # `ProcessSignalSafety` for the product-side rule and
 # `scripts/test-with-watchdog.sh` for the timeout path. If a helper is orphaned,
 # reap it by hand; a broad matcher must fail closed rather than pick a stranger.
+# When WIKIFS_APP_TESTS=1, this recipe delegates to the guarded opt-in runner
+# (scripts/test-optin-app-tests-reconciled.sh), which requires both app-target
+# execution evidence (#1398) and a summary for every started run (#1422).
 test: deps prompts version keychain extractor-packages
-	swift test --parallel --num-workers $(SWIFT_TEST_NUM_WORKERS)
+	@if [ "$${WIKIFS_APP_TESTS-}" = "1" ]; then \
+		SWIFT_TEST_NUM_WORKERS="$(SWIFT_TEST_NUM_WORKERS)" scripts/test-optin-app-tests-reconciled.sh; \
+	else \
+		swift test --parallel --num-workers "$(SWIFT_TEST_NUM_WORKERS)"; \
+	fi
 	@echo "✓ tests pass"
+
+# The opt-in app test tier (WikiFSAppTests) with execution and summary gates.
+# Sets WIKIFS_APP_TESTS=1 itself. Narrowed runs go through the script directly:
+#   scripts/test-optin-app-tests-reconciled.sh --expect REGEX --filter SomeSuite
+# Log: tmp/test-logs/optin-app-tests-reconciled-*.log.
+test-app: deps prompts version keychain extractor-packages
+	SWIFT_TEST_NUM_WORKERS="$(SWIFT_TEST_NUM_WORKERS)" scripts/test-optin-app-tests-reconciled.sh
+	@echo "✓ opt-in app tests pass"
 
 # Same default SwiftPM test graph as `test`, but with a hard wall-clock timeout and a
 # post-run summary of the slowest tests + whichever test started but never

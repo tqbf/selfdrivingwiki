@@ -319,7 +319,11 @@ public final class WikiStoreModel {
     ///
     /// `prefill` (the omnibox "Ask" question) is installed only AFTER the
     /// store write succeeds, so a failed creation never leaks the question
-    /// into an unrelated chat later.
+    /// into an unrelated chat later. `attachments` rides the same composed
+    /// store write: the chats row and the `chat_attachments` rows persist in
+    /// ONE transaction, so a failure leaves nothing behind and a success
+    /// means the chips are already durable (the composer restores them from
+    /// SQLite at mount).
     ///
     /// The new `ChatSummary` is inserted into the local array before the tab
     /// opens (same synchronous-cache pattern as `startChat`): the event bus
@@ -329,12 +333,14 @@ public final class WikiStoreModel {
     ///
     /// Empty chats are durable resources: they survive tab closure until the
     /// user deletes them. On a store failure, no tab, sidebar row, reveal,
-    /// selection, or prefill happens — the existing `storeError` alert
-    /// surfaces the failure instead.
-    public func beginNewChat(prefill: String? = nil) {
+    /// selection, prefill, or attachment rows happen — the existing
+    /// `storeError` alert surfaces the failure instead.
+    public func beginNewChat(prefill: String? = nil,
+                             attachments: [ChatAttachmentTarget] = []) {
         let chat: ChatSummary
         do {
-            chat = try store.createChat(kind: .edit, title: "")
+            chat = try store.createChat(
+                kind: .edit, title: "", attachments: attachments)
         } catch {
             DebugLog.store("WikiStoreModel.beginNewChat failed: \(error)")
             storeError = StoreError(
@@ -954,6 +960,36 @@ public final class WikiStoreModel {
             return sources.first { $0.id.rawValue == pageID.rawValue }?.effectiveName
         case .chat:
             return chats.first { $0.id.rawValue == pageID.rawValue }?.title
+        }
+    }
+
+    /// Replaces a chat's persisted attachment targets (the composer's chips).
+    /// Failures surface through the same non-fatal `storeError` alert the
+    /// composed-create failure path uses — a chip write that did not persist
+    /// means the chips would silently vanish at restart, so the user must
+    /// see it. The in-memory chips stay authoritative either way; the next
+    /// mutation retries the write.
+    public func setChatAttachments(chatID: ChatID, targets: [ChatAttachmentTarget]) {
+        do {
+            try store.setChatAttachments(chatID: chatID, targets: targets)
+        } catch {
+            DebugLog.store(
+                "WikiStoreModel.setChatAttachments failed for \(chatID.rawValue): \(error)")
+            storeError = StoreError(
+                title: "Couldn't Save Chat Attachments",
+                message: "The attachments could not be saved: \(error.localizedDescription)")
+        }
+    }
+
+    /// A chat's ordered attachment targets. Empty on any read failure: the
+    /// composer then restores to nothing rather than failing the mount.
+    public func chatAttachments(chatID: ChatID) -> [ChatAttachmentTarget] {
+        do {
+            return try store.chatAttachments(chatID: chatID)
+        } catch {
+            DebugLog.store(
+                "WikiStoreModel.chatAttachments failed for \(chatID.rawValue): \(error)")
+            return []
         }
     }
 

@@ -21,7 +21,7 @@ import WikiFSCore
 struct RendererSessionIsolationTests {
     @Test("fresh sessions isolate cookies and local storage, and close discards them")
     func sessionsIsolateTransientBrowserStorage() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         Self.prepareApplication()
 
@@ -118,7 +118,7 @@ struct RendererSessionIsolationTests {
 
     @Test("sessions reject file entries, navigation, and content exposure")
     func sessionsRejectFileNavigationAndContentExposure() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         Self.prepareApplication()
 

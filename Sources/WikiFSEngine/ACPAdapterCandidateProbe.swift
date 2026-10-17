@@ -100,9 +100,10 @@ public struct ACPAdapterCandidateProbe: Sendable {
             scratch = try LLMSandboxScratch.make(
                 under: scratchParent, namePrefix: "acp-candidate-probe")
         } catch {
-            DebugLog.agent("ACPAdapterCandidateProbe: FAIL could not create probe scratch: \(error.localizedDescription)")
+            // #1409: carry the OS status instead of the flattened phrase.
+            DebugLog.agent("ACPAdapterCandidateProbe: FAIL could not create probe scratch: \(SpawnFailureDetail.render(error, operation: "create the candidate-probe scratch directory"))")
             throw ACPProviderModelProbeError.launchFailed(
-                "Could not create the probe scratch directory: \(error.localizedDescription)",
+                SpawnFailureDetail.render(error, operation: "create the candidate-probe scratch directory"),
                 stderr: nil, hint: nil)
         }
         defer { scratch.remove() }
@@ -199,10 +200,18 @@ public struct ACPAdapterCandidateProbe: Sendable {
             stderrTask.cancel()
             _ = earlyStderrBuffer.flush()
         } catch {
-            DebugLog.agent("ACPAdapterCandidateProbe: launch/initialize failed: \(error.localizedDescription)")
+            // #1409: keep the underlying launch error's OS status instead of
+            // the localized phrase (which is the generic Foundation sentence
+            // for a non-localized error).
+            DebugLog.agent("ACPAdapterCandidateProbe: launch/initialize failed: \(SpawnFailureDetail.render(error, operation: "launch candidate"))")
             let stderr = earlyStderrBuffer.flush()
             throw ACPProviderModelProbeError.launchFailed(
-                error.localizedDescription, stderr: stderr, hint: nil)
+                ACPToolFailureClassification.annotatedSpawnCause(
+                    error: error,
+                    stderr: stderr,
+                    executablePath: plan.executablePath,
+                    operation: "launch \(plan.executablePath)"),
+                stderr: stderr, hint: nil)
         }
 
         let report = ACPAdapterCandidateReport(

@@ -1139,6 +1139,22 @@ public protocol WikiStore: AnyObject, Sendable {
         effectiveThinkingOptionID: ChatConfigurationValueID?
     ) throws -> ChatSummary
 
+    /// `createChat(kind:title:)` composed with the chat's initial attachment
+    /// targets: the chats row and the ordered `chat_attachments` rows persist
+    /// in ONE transaction, so a failure leaves nothing behind.
+    @discardableResult
+    func createChat(
+        kind: ChatKind, title: String, attachments: [ChatAttachmentTarget]
+    ) throws -> ChatSummary
+
+    /// A chat's ordered attachment targets (kind + raw id; names resolve
+    /// fresh at restore). Empty for a chat with no persisted chips.
+    func chatAttachments(chatID: ChatID) throws -> [ChatAttachmentTarget]
+
+    /// Replaces a chat's whole attachment-target set, ordered, in one
+    /// transaction. Throws `.chatNotFound` if the chat has no row.
+    func setChatAttachments(chatID: ChatID, targets: [ChatAttachmentTarget]) throws
+
     /// Append the given events as new `chat_messages` rows, in one transaction:
     /// each row gets the next dense `seq` (continuing from the chat's current
     /// max), `role` from `event.chatRole`, `event_json` from encoding `event`,

@@ -271,8 +271,10 @@ struct WikiLinkMenuNSItemsTests {
         webView.hoveredLinkHref = "wiki://missing?title=Ghost"
         let missingMenu = linkMenu()
         webView.willOpenMenu(missingMenu, with: try rightClickEvent())
+        // The composed chat menu's native section grew "Open in New Tab" and
+        // "Open in Background" alongside WebKit's "Open Link".
         #expect(missingMenu.items.filter { !$0.isSeparatorItem }.map(\.title)
-            == ["Suggest…", "Open Link"])
+            == ["Suggest…", "Open Link", "Open in New Tab", "Open in Background"])
 
         webView.hoveredLinkHref = "https://example.com/post"
         let externalMenu = linkMenu()

@@ -129,8 +129,8 @@ struct DropLinkTextViewDropTests {
     /// moment it appears. Pin that: put the view in a window WITHOUT ever making
     /// it first responder or calling `registerForDraggedTypes` by hand, and the
     /// sidebar type must already be registered.
-    @Test func viewDidMoveToWindow_eagerlyRegistersSidebarType() async {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+    @Test func viewDidMoveToWindow_eagerlyRegistersSidebarType() async throws {
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         let tv = ScrollableTextEditor.makeConfiguredTextView(
             font: .monospacedSystemFont(ofSize: 13, weight: .regular))

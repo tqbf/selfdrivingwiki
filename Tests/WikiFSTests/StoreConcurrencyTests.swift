@@ -6,7 +6,11 @@ import Testing
 /// method-atomic (internal recursive lock), transactions nest via savepoints,
 /// `renameSource` is atomic, and `WikiReadService` provides off-main read-only
 /// snapshot access. These tests pin each of those properties.
-@Suite("Store concurrency & transactions (graph-model Phase 0)")
+/// Suite discipline (#1051): serialized, with a per-test time limit that
+/// dominates the widened event waits (three `waitCounts` polls of
+/// `EventBusDeliveryWaits.budget` worst case in the attachment test).
+@Suite("Store concurrency & transactions (graph-model Phase 0)",
+       .serialized, .timeLimit(.minutes(3)))
 struct StoreConcurrencyTests {
 
     private func makeStore() throws -> (store: GRDBWikiStore, url: URL) {
@@ -210,5 +214,211 @@ struct StoreConcurrencyTests {
             }
         }
         #expect(try store.listSources().count == 60)
+    }
+}
+
+// MARK: - Chat attachments (plans/chat-attachment-persistence.md, AC.12)
+
+/// Lock-protected event tallies, safe to update from `@MainActor` bus handlers.
+private final class ConcurrentEventCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _created = 0
+    private var _updated = 0
+    var created: Int { lock.withLock { _created } }
+    var updated: Int { lock.withLock { _updated } }
+    /// Attach to the bus; counts post-commit `.chat` events by change kind.
+    func attach(to bus: WikiEventBus) {
+        _ = bus.subscribe(.chat) { [weak self] event in
+            guard let self else { return }
+            self.lock.lock()
+            switch event.change {
+            case .created: self._created += 1
+            case .updated: self._updated += 1
+            default: break
+            }
+            self.lock.unlock()
+        }
+    }
+    /// Bounded poll: waits (nonblocking sleeps) until BOTH counts hold, then
+    /// reports the final match. The budget comes from
+    /// `EventBusDeliveryWaits.budget`: under full-suite load the main-actor
+    /// event dispatch can lag the write by seconds, and the old fixed
+    /// 5-second budget expired while events were still in flight (issue
+    /// #1425). This test asserts the count progression, not dispatch latency.
+    /// The `Task.isCancelled` check ends the loop when the suite's
+    /// `.timeLimit` tears the test down, so cancellation never becomes a
+    /// hot spin.
+    func waitCounts(created expectedCreated: Int, updated expectedUpdated: Int) async -> Bool {
+        let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
+        while ContinuousClock.now < deadline, !Task.isCancelled {
+            if created == expectedCreated && updated == expectedUpdated { return true }
+            try? await Task.sleep(for: EventBusDeliveryWaits.pollInterval)
+        }
+        return created == expectedCreated && updated == expectedUpdated
+    }
+}
+
+/// Lock-protected tallies for `@Sendable` task closures.
+private final class ConcurrencyTallies: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _setA = 0
+    private var _setB = 0
+    private var _partial = 0
+    private var _reads = 0
+    var setA: Int { lock.withLock { _setA } }
+    var setB: Int { lock.withLock { _setB } }
+    var partial: Int { lock.withLock { _partial } }
+    var reads: Int { lock.withLock { _reads } }
+    func tally(_ targets: [ChatAttachmentTarget], setA: [ChatAttachmentTarget], setB: [ChatAttachmentTarget]) {
+        lock.lock()
+        if targets == setA {
+            _setA += 1
+        } else if targets == setB {
+            _setB += 1
+        } else {
+            _partial += 1
+        }
+        lock.unlock()
+    }
+    func countRead() {
+        lock.withLock { _reads += 1 }
+    }
+}
+
+extension StoreConcurrencyTests {
+
+    /// AC.12(a): concurrent attachment READS vs `setChatAttachments`
+    /// replacements. Each write is one savepoint (DELETE + ordered INSERT),
+    /// so every read — however contended — must observe exactly one COMPLETE
+    /// set (never a partial or interleaved one), and the final state must be
+    /// one of the two written sets.
+    @Test func concurrentAttachmentReadsVsReplacementsStayConsistent() async throws {
+        let (store, _) = try makeStore()
+        let chat = try store.createChat(kind: .edit, title: "")
+        let setA: [ChatAttachmentTarget] = [
+            .page(PageID(rawValue: "01HCONCA")),
+            .page(PageID(rawValue: "01HCONCB")),
+        ]
+        let setB: [ChatAttachmentTarget] = [
+            .source(SourceID(rawValue: "01HCONCS")),
+            .chat(ChatID(rawValue: "01HCONCC")),
+        ]
+        try store.setChatAttachments(chatID: chat.id, targets: setA)
+
+        let tallies = ConcurrencyTallies()
+        await withTaskGroup(of: Void.self) { group in
+            // 4 readers × 60 reads under replacement pressure.
+            for _ in 0..<4 {
+                group.addTask {
+                    for _ in 0..<60 {
+                        let targets = (try? store.chatAttachments(chatID: chat.id)) ?? []
+                        tallies.tally(targets, setA: setA, setB: setB)
+                    }
+                }
+            }
+            // 1 writer alternating between two COMPLETE sets.
+            group.addTask {
+                for i in 0..<60 {
+                    try? store.setChatAttachments(
+                        chatID: chat.id, targets: i % 2 == 0 ? setA : setB)
+                }
+            }
+        }
+
+        #expect(tallies.partial == 0, "no read may observe a partial or interleaved set")
+        #expect(tallies.setA + tallies.setB > 0, "reads must observe complete sets")
+        let final = try store.chatAttachments(chatID: chat.id)
+        #expect(final == setA || final == setB, "final state is one complete written set")
+    }
+
+    /// AC.12(b): the new mutators nest inside `withTransaction` (savepoint —
+    /// the outer rollback discards only the nested work), and a failed write
+    /// under a contended store — an ABORT trigger on `chat_attachments`
+    /// installed on a separate connection, the ChatAttachmentPersistenceTests
+    /// pattern — rolls back with the old rows intact and ZERO events. The
+    /// gate emits again after the trigger is dropped.
+    @Test func attachmentMutatorsNestRollBackAndEmitUnderContention() async throws {
+        let (store, url) = try makeStore()
+        store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
+        let counter = ConcurrentEventCounter()
+        counter.attach(to: store.eventBus!)
+
+        let chat = try store.createChat(kind: .edit, title: "")
+        let setA: [ChatAttachmentTarget] = [.page(PageID(rawValue: "01HNESTA"))]
+        try store.setChatAttachments(chatID: chat.id, targets: setA)
+        #expect(await counter.waitCounts(created: 1, updated: 1),
+                "seed writes land: one .created, one .updated")
+
+        // Contended store: a detached reader hammers the same rows while the
+        // writer nests mutators inside outer transactions.
+        let reads = ConcurrencyTallies()
+        let reader = Task.detached {
+            for _ in 0..<80 {
+                _ = try? store.chatAttachments(chatID: chat.id)
+                reads.countRead()
+            }
+        }
+
+        // Nesting + rollback: the inner replacement attaches in a savepoint;
+        // the outer throw discards the ROWS. Per the composition guard's
+        // nesting note (:484-496) the inner `mutate` already EMITTED its
+        // `.updated` event when its savepoint returned — an outer rollback
+        // cannot suppress an emitted event. Rows roll back; the event escapes
+        // (documented hazard — exactly why the composed create uses one
+        // top-level mutate with *Locked helpers instead).
+        do {
+            try store.withTransaction {
+                try store.setChatAttachments(chatID: chat.id, targets: [
+                    .source(SourceID(rawValue: "01HNEST")),
+                ])
+                throw WikiStoreError.unexpected("outer boom")
+            }
+        } catch { /* best-effort caller: inner work must be gone */ }
+        #expect(try store.chatAttachments(chatID: chat.id) == setA,
+                "the nested set rolled back with the outer transaction")
+        #expect(await counter.waitCounts(created: 1, updated: 2),
+                "the nested write's .updated escaped the outer rollback (:484-496)")
+
+        // Nesting + commit: the nested replacement and a sibling write both
+        // commit together.
+        let sibling = try store.createPage(title: "Sibling")
+        try store.withTransaction {
+            try store.setChatAttachments(chatID: chat.id, targets: [
+                .page(sibling.id),
+            ])
+            _ = try store.createPage(title: "Sibling Anchor")
+        }
+        #expect(try store.chatAttachments(chatID: chat.id) == [.page(sibling.id)])
+        #expect(try store.listPages(sortBy: .titleAZ).contains { $0.title == "Sibling Anchor" })
+
+        // Injected failure under contention: the ABORT trigger fails the
+        // replacement mid-write; the body throws BEFORE the event is
+        // computed, so the savepoint rolls back with the old rows intact and
+        // ZERO events (unlike the nested-escape above, here the failure is
+        // the mutator's own body, not an outer rollback).
+        try MetadataSQLiteFixtureSupport.execute(
+            """
+            CREATE TRIGGER fail_chat_attachments_insert_conc
+            BEFORE INSERT ON chat_attachments
+            BEGIN SELECT RAISE(ABORT, 'injected'); END;
+            """,
+            at: url)
+        do {
+            try store.setChatAttachments(chatID: chat.id, targets: [
+                .source(SourceID(rawValue: "01HNEVER")),
+            ])
+            Issue.record("the replacement must fail under the injected trigger")
+        } catch { /* expected */ }
+        #expect(try store.chatAttachments(chatID: chat.id) == [.page(sibling.id)],
+                "old rows survive the rolled-back replacement")
+        try MetadataSQLiteFixtureSupport.execute(
+            "DROP TRIGGER IF EXISTS fail_chat_attachments_insert_conc;", at: url)
+
+        _ = await reader.value
+        #expect(reads.reads > 0, "the contended reader ran")
+
+        // Event discipline: exactly one .updated per successful write (setA,
+        // nested commit, post-drop), zero for the rollback and the failure.
+        #expect(await counter.waitCounts(created: 1, updated: 3))
     }
 }

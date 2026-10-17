@@ -69,7 +69,7 @@ struct InspectorOutlineHostedTests {
     }
 
     @Test func pageOutlineRendersInsideRealInspectorHost() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
 
@@ -241,7 +241,7 @@ struct InspectorOutlineHostedTests {
     private func hostedSourceOutlinePixels(
         dropRendererPreferenceTable: Bool
     ) async throws -> (registered: Bool, payload: InspectorOutlinePayload?, brightPixels: Int) {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
 
@@ -489,7 +489,7 @@ struct InspectorOutlineHostedTests {
     /// swap the accepted payload's kind AND render visible outline rows at
     /// every step — no blank first frame on any boundary.
     @Test func crossTypeSubjectSwapsKeepTheOutlinePopulated() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
 
@@ -672,7 +672,7 @@ struct InspectorOutlineHostedTests {
     /// accepted payload's `highlightedItemID` follows — the page editor half
     /// of AC.10.
     @Test func pageEditorCaretMoveUpdatesAcceptedPayloadHighlight() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
 
@@ -746,7 +746,7 @@ struct InspectorOutlineHostedTests {
     /// chain must hold for the source editor, entered through the view's real
     /// edit-mode restore path (mark the tab editing, switch away, switch back).
     @Test func sourceEditorCaretMoveUpdatesAcceptedPayloadHighlight() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
 
@@ -843,7 +843,7 @@ struct InspectorOutlineHostedTests {
     /// use: the empty state's secondary-gray label draws pixels but never
     /// crosses the bright threshold.
     @Test func emptyPayloadRendersExplicitEmptyStateInsteadOfBlankSpace() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
 

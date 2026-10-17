@@ -17,6 +17,11 @@ struct ChatDetailView: View {
     var coordinator: ChatDaemonCoordinator
     var session: any WikiSessionProtocol
     let fileProvider: FileProviderFacade
+    /// Test seam (default off): invoked once per composer-props build with the
+    /// exact `ChatComposerPaneProps` about to be handed to
+    /// `ChatComposerPaneView`. Hosted tests capture these and assert the real
+    /// chip contents at the rendering seam.
+    var onComposerPanePropsBuilt: ((ChatComposerPaneProps) -> Void)? = nil
     @Environment(WindowRightInspectorController.self) private var rightInspector
     @Environment(\.addURLHandler) private var addURLHandler
     @Environment(\.addBookmarkHandler) private var addBookmarkHandler
@@ -24,7 +29,7 @@ struct ChatDetailView: View {
     @State private var showsInternals = false
     @State private var composerHeight: CGFloat = ComposerTextView.oneLineHeight(for: ChatMetrics.composerFont)
     @State private var persistedTranscriptState = PersistedChatTranscriptState.loading
-    @State private var attachments: [ChatAttachment] = []
+    @State private var attachmentModel = ChatComposerAttachmentModel()
     @AppStorage("chat.zoom") private var chatZoom = Double(ZoomScale.defaultScale)
     @AppStorage("chatInspectorTab") private var inspectorTab: InspectorTab = .metadata
     @AppStorage("chatOutlineWidth") private var outlineWidth: Double = 240
@@ -264,6 +269,13 @@ struct ChatDetailView: View {
         .onAppear {
             installOutgoingEnvironment()
             updateRightSidebarRegistration()
+            // Per-chat persisted chips: ONE binding operation per mount —
+            // bind disarms persistence, the restore applies the chat's
+            // persisted targets as one nonpersisting batch, then write-through
+            // arms. Repeat mounts read once and write nothing.
+            attachmentModel.bind(store: store, chatID: chatID)
+            attachmentModel.restoreFromStore()
+            attachmentModel.armPersistence()
         }
         // The right sidebar renders the last accepted registration's payload
         // value. The payload now carries the outline entries themselves, so
@@ -530,7 +542,7 @@ struct ChatDetailView: View {
         let onRemoveAttachment: (ChatAttachment) -> Void = { attachment in removeAttachment(attachment) }
         let composerHeightBinding = $composerHeight
         let permissionModeBinding = $permissionModeRaw
-        return ChatComposerPaneProps(
+        let props = ChatComposerPaneProps(
             composer: presentation.composer,
             queuedMessages: queuedMessages,
             // Legacy draft surface focuses unconditionally. A durable chat
@@ -541,7 +553,7 @@ struct ChatDetailView: View {
             onAutoFocused: chatID == nil ? nil : { [weak store] in
                 store?.consumeComposerFocusRequest(for: chatID)
             },
-            attachments: attachments,
+            attachments: attachmentModel.attachments,
             remoteSession: remoteSession,
             store: store,
             composerHeight: composerHeightBinding,
@@ -557,6 +569,8 @@ struct ChatDetailView: View {
             onAddAttachment: onAddAttachment,
             onRemoveAttachment: onRemoveAttachment
         )
+        onComposerPanePropsBuilt?(props)
+        return props
     }
 
     private func updateRightSidebarRegistration(
@@ -753,13 +767,11 @@ struct ChatDetailView: View {
     }
 
     private func addAttachment(_ attachment: ChatAttachment) {
-        if !attachments.contains(attachment) {
-            attachments.append(attachment)
-        }
+        attachmentModel.add(attachment)
     }
 
     private func removeAttachment(_ attachment: ChatAttachment) {
-        attachments.removeAll { $0.id == attachment.id }
+        attachmentModel.remove(attachment)
     }
 
     private var hasDraftText: Bool {
@@ -790,10 +802,10 @@ struct ChatDetailView: View {
         let payload = ChatOutgoingMessagesController.OutgoingPayload(
             wireMessage: buildWireMessage(from: message),
             draftText: message,
-            attachments: attachments
+            attachments: attachmentModel.attachments
         )
         store.clearActiveChatDraft()
-        attachments = []
+        attachmentModel.clear()
         // The durable row's provisional title appears the moment the user
         // sends — no cross-process round trip.
         if let chatID {
@@ -813,11 +825,11 @@ struct ChatDetailView: View {
             ChatOutgoingMessagesController.makePendingQueuedMessage(
                 draftText: message,
                 wireMessage: buildWireMessage(from: message),
-                attachments: attachments
+                attachments: attachmentModel.attachments
             )
         )
         store.clearActiveChatDraft()
-        attachments = []
+        attachmentModel.clear()
     }
 
     private func recallQueuedMessage() {
@@ -830,7 +842,7 @@ struct ChatDetailView: View {
         else { return }
         queuedMessages.removeLast()
         store.draftChatMessage = restore.draftText
-        attachments = restore.attachments
+        attachmentModel.replace(with: restore.attachments)
     }
 
     private func editQueuedMessage(_ index: Int) {
@@ -843,7 +855,7 @@ struct ChatDetailView: View {
         ) else { return }
         queuedMessages.remove(at: index)
         store.draftChatMessage = restore.draftText
-        attachments = restore.attachments
+        attachmentModel.replace(with: restore.attachments)
     }
 
     private func removeQueuedMessage(_ index: Int) {
@@ -868,8 +880,8 @@ struct ChatDetailView: View {
     }
 
     private func buildWireMessage(from message: String) -> String {
-        guard !attachments.isEmpty else { return message }
-        let refs = attachments.map(\.referenceText).joined(separator: "\n")
+        guard !attachmentModel.attachments.isEmpty else { return message }
+        let refs = attachmentModel.attachments.map(\.referenceText).joined(separator: "\n")
         return "\(refs)\n\n\(message)"
     }
 
@@ -890,7 +902,7 @@ struct ChatDetailView: View {
     private func currentComposerSnapshot() -> ChatOutgoingMessagesController.ComposerSnapshot {
         ChatOutgoingMessagesController.ComposerSnapshot(
             trimmedText: store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines),
-            attachmentIDs: attachments.map(\.id)
+            attachmentIDs: attachmentModel.attachments.map(\.id)
         )
     }
 
@@ -921,12 +933,12 @@ struct ChatDetailView: View {
                 ChatOutgoingMessagesController.ComposerSnapshot(
                     trimmedText: store.draftChatMessage
                         .trimmingCharacters(in: .whitespacesAndNewlines),
-                    attachmentIDs: self.attachments.map(\.id)
+                    attachmentIDs: attachmentModel.attachments.map(\.id)
                 )
             },
             restoreDraft: { [store] draftText, restoredAttachments in
                 store.draftChatMessage = draftText
-                self.attachments = restoredAttachments
+                attachmentModel.replace(with: restoredAttachments)
             },
             setPreflightError: { [remoteSession] message in
                 remoteSession.preflightError = message
@@ -1065,6 +1077,29 @@ struct ChatAttachment: Identifiable, Hashable {
 
     @MainActor
     init(payload: SidebarDragPayload, store: WikiStoreModel) {
+        self.init(
+            kind: payload.kind,
+            itemID: payload.id,
+            displayName: store.resolveAttachmentName(for: payload) ?? payload.id
+        )
+    }
+
+    /// The typed model-target boundary: converts a `ChatAttachmentTarget`
+    /// (the shape `beginNewChat(attachments:)` and `setChatAttachments`
+    /// carry) into a composer chip. The `PageID`/`SourceID`/`ChatID` to
+    /// raw-String conversion happens exactly here, once; the name lookup
+    /// reuses the same resolver as the drop path.
+    @MainActor
+    init(target: ChatAttachmentTarget, store: WikiStoreModel) {
+        let payload: SidebarDragPayload
+        switch target {
+        case .page(let id):
+            payload = SidebarDragPayload(kind: .page, id: id.rawValue)
+        case .source(let id):
+            payload = SidebarDragPayload(kind: .source, id: id.rawValue)
+        case .chat(let id):
+            payload = SidebarDragPayload(kind: .chat, id: id.rawValue)
+        }
         self.init(
             kind: payload.kind,
             itemID: payload.id,

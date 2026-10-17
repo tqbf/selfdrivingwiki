@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 import WikiFSTypes
 #if canImport(Darwin)
@@ -181,6 +182,10 @@ struct OwnedProcessGroupRegistryTests {
     /// still takes the sweep gate, because its real registration must not
     /// be visible to a gated global sweep in another suite.
     @Test func launchedGroupIsRegisteredKilledAndDeregistered() async throws {
+        // Real process launch: hold a cross-suite gate slot (#1412 family);
+        // SubprocessGate sits outside the sweep gate in every gated suite.
+        let subprocessGate = try await SubprocessGate.shared.acquire()
+        defer { subprocessGate.release() }
         try await OwnedProcessGroupSweepGate.withExclusiveSweep {
             let handle = try RaceFreeProcessGroupRunner.launch(
                 .init(

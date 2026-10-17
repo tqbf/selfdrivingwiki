@@ -64,7 +64,7 @@ struct MetadataCrossProcessRefreshTests {
     }
 
     private func host<V: View>(_ view: V) async throws -> HostedView<V> {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         _ = Self.app
         let host = NSHostingController(rootView: view)
         let window = NSWindow(

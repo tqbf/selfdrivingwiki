@@ -817,7 +817,7 @@ struct WikiStrategyEditorScenarioTests {
     // MARK: - AC.4 saveCancelReset
 
     @Test func saveCancelReset() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let databaseURL = try tempDatabaseURL()
@@ -900,7 +900,7 @@ struct WikiStrategyEditorScenarioTests {
     /// throughout: the strategy tab exists BEFORE the user edits in it (the
     /// editor lives inside that tab).
     @Test func switchProtectsDraft() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let databaseURL = try tempDatabaseURL()
@@ -987,7 +987,7 @@ struct WikiStrategyEditorScenarioTests {
     // MARK: - AC.4 conflictPreservesDraft
 
     @Test func conflictPreservesDraft() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let databaseURL = try tempDatabaseURL()
@@ -1082,7 +1082,7 @@ struct WikiStrategyEditorScenarioTests {
     // MARK: - AC.4 templateCopiesWithoutLiveDependency
 
     @Test func templateCopiesWithoutLiveDependency() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let databaseURL = try tempDatabaseURL()
@@ -1147,7 +1147,7 @@ struct WikiStrategyEditorScenarioTests {
     // MARK: - AC.4 saveDoesNotModifyPages
 
     @Test func saveDoesNotModifyPages() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let databaseURL = try tempDatabaseURL()
@@ -1302,7 +1302,7 @@ struct WikiStrategyEditorScenarioTests {
     /// ordinary window sizes and absorbed every extra window point as empty
     /// space between the name field and the Instructions label.
     @Test func instructionsEditorFillsWindowAndControlsStayAnchored() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         let databaseURL = try tempDatabaseURL()
@@ -1404,7 +1404,7 @@ struct WikiStrategyEditorScenarioTests {
     /// structural: every authored control renders in BOTH appearances and a
     /// real Save press works in each.
     @Test func controlsRenderInBothAppearances() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = Self.app
         for appearance in [NSAppearance(named: .aqua), NSAppearance(named: .darkAqua)] {

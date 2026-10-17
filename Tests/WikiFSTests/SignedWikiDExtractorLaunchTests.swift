@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Testing
+import WikiFSTestSupport
 @testable import WikiFSCore
 
 /// Opt-in signed integration test for the production app and embedded XPC service.
@@ -16,6 +17,8 @@ struct SignedWikiDExtractorLaunchTests {
 
     @Test(.enabled(if: enabled))
     func productionServiceSpawnsExchangesAndCancelsFixture() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
         let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
         let script = root.appendingPathComponent("scripts/test-signed-wikid-extractor.sh")
         #expect(FileManager.default.isExecutableFile(atPath: script.path))

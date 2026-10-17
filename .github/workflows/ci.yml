@@ -113,7 +113,7 @@ jobs:
         timeout-minutes: 15
         env:
           WIKIFS_APP_TESTS: "1"
-        run: xcrun swift test --parallel --num-workers 1 --filter 'SearchCordisBoundaryPolicyTests|SessionManagerTests|CLITantivyLegResolverTests|TantivyAutocompleteTests|TantivyBM25LegCutoverTests'
+        run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect SessionManagerTests --filter 'SearchCordisBoundaryPolicyTests|SessionManagerTests|CLITantivyLegResolverTests|TantivyAutocompleteTests|TantivyBM25LegCutoverTests'
       - name: Test opt-in chat lifecycle suites
         # This opt-in app target contains source-contract and daemon lifecycle
         # tests only. It does not host AppKit or WebKit views, so it avoids the
@@ -126,7 +126,7 @@ jobs:
         timeout-minutes: 15
         env:
           WIKIFS_APP_TESTS: "1"
-        run: xcrun swift test --parallel --num-workers 1 --filter 'ChatPresentationAPIManifestTests|DaemonChatUsageTests|DaemonChatControllerMetadataTests|DaemonChatControllerTests|WikiChangeBridgeTests'
+        run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect ChatPresentationAPIManifestTests --filter 'ChatPresentationAPIManifestTests|DaemonChatUsageTests|DaemonChatControllerMetadataTests|DaemonChatControllerTests|DaemonWorkloadClientTimeoutTests|WikiChangeBridgeTests'
       - name: Test Phase 5 portable WebKit-facing security suites
         # This enables the macOS app-test target, then runs only the portable
         # Phase 5 bridge, package-scheme, external-activation, and host/session
@@ -137,7 +137,7 @@ jobs:
         timeout-minutes: 15
         env:
           WIKIFS_APP_TESTS: "1"
-        run: xcrun swift test --parallel --num-workers 1 --filter 'RendererPackageSchemeHandlerTests|RendererContentWorldBridgeTests|RendererExternalLinkRedemptionGateTests|WikiAppWebViewSessionTests|WikiAppWebViewTests'
+        run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect 'configuration factory creates fresh ephemeral components' --filter 'RendererPackageSchemeHandlerTests|RendererContentWorldBridgeTests|RendererExternalLinkRedemptionGateTests|WikiAppWebViewSessionTests|WikiAppWebViewTests'
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.0'

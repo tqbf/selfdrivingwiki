@@ -26,6 +26,12 @@ Last verified: 2026-08-13
 
 * Record progress in `progress/`. I should be able to tell a future agent
   "read PLAN.md and progress/" and trust it is up to speed with this codebase.
+  Every note in `progress/` must follow the template that
+  `DocumentationContractTests.progressEntriesFollowTemplate` enforces: begin
+  with YAML front matter containing `timestamp:`, `title:`, `branch:`, and
+  `status:`, then a `#` title heading, then `## Progress` and `## Verification`
+  sections. CI fails on non-conforming notes — get the template right before
+  pushing, or a docs-only change burns a 20-minute CI run.
 
 * `PLAN.md` and `PROGRESS.md` document features and design-relevant refactorings only.
   Do not add bug-fix entries to either file.
@@ -442,7 +448,7 @@ sqlite3 "$C/<ulid>.sqlite" ".tables"     # pages, chats, chat_messages, …
 
 Schema lives in `Sources/WikiFSCore/Store/GRDBWikiStore.swift`
 (`createFreshSchema` / `createChatTablesV23` / the version ladder in
-`migrate(from:)`, currently at v53). Persistent chats are THREE tables:
+`migrate(from:)`, currently at v58). Persistent chats are THREE tables:
 `chat_transcript_items` is the durable transcript the app reads;
 `chat_messages` is the flat compatibility projection (export, search index,
 summarizer source); `chats` holds the per-chat row (title, config, ordering).

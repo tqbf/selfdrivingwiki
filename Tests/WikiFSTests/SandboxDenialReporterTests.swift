@@ -349,6 +349,7 @@ struct SandboxDenialReporterTests {
         let error = ACPBackendError.launchFailed(
             executable: "/Users/dev/.bun/bin/bun",
             stderr: nil,
+            cause: nil,
             hint: nil,
             sandboxDenials: [
                 "deny file-write-create /Users/wsargent/.pi/agent/settings.json.lock",
@@ -365,6 +366,7 @@ struct SandboxDenialReporterTests {
         let error = ACPBackendError.launchFailed(
             executable: "/usr/local/bin/claude",
             stderr: "env: node: No such file or directory",
+            cause: nil,
             hint: ProviderEnvHint(envVar: "CLAUDE_CODE_EXECUTABLE", description: "Claude Code (claude)"),
             sandboxDenials: [])
         let rendered = error.errorDescription ?? ""

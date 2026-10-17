@@ -80,8 +80,8 @@ struct ComposerTextViewTests {
         text: Binding<String>,
         isEditable: Bool,
         measuredHeight: Binding<CGFloat>
-    ) async -> (lease: HostedAppKitTestGate.Lease, window: NSWindow, textView: NSTextView, coordinator: ComposerTextView.Coordinator) {
-        let lease = await HostedAppKitTestGate.shared.acquire()
+    ) async throws -> (lease: HostedAppKitTestGate.Lease, window: NSWindow, textView: NSTextView, coordinator: ComposerTextView.Coordinator) {
+        let lease = try await HostedAppKitTestGate.shared.acquire()
         let parent = ComposerTextView(
             text: text,
             isEditable: isEditable,
@@ -104,13 +104,13 @@ struct ComposerTextViewTests {
         return (lease, window, textView, coordinator)
     }
 
-    @Test func largePasteClampsToSixLineMaximum() async {
+    @Test func largePasteClampsToSixLineMaximum() async throws {
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (lease, window, textView, coordinator) = await makeHostedComposer(
+        let (lease, window, textView, coordinator) = try await makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
         defer { window.orderOut(nil); lease.release() }
 
@@ -148,14 +148,14 @@ struct ComposerTextViewTests {
         }
     }
 
-    private func makePendingWriteFixture() async -> (
+    private func makePendingWriteFixture() async throws -> (
         lease: HostedAppKitTestGate.Lease, window: NSWindow, textView: NSTextView,
         coordinator: ComposerTextView.Coordinator, height: HeightBox
     ) {
         let height = HeightBox(ComposerTextView.oneLineHeight(for: bodyFont))
         let text = ""
         let textBinding = Binding(get: { text }, set: { _ in })
-        let (lease, window, textView, coordinator) = await makeHostedComposer(
+        let (lease, window, textView, coordinator) = try await makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: height.binding)
         return (lease, window, textView, coordinator, height)
     }
@@ -181,8 +181,8 @@ struct ComposerTextViewTests {
     /// on every frame; measured live at ~75 spawns/second against the
     /// 2026-10-03 beachball). Five recomputes before any drain must produce
     /// exactly one binding write.
-    @Test func repeatedRecomputeWithSameHeightWritesOnce() async {
-        let (lease, window, textView, coordinator, height) = await makePendingWriteFixture()
+    @Test func repeatedRecomputeWithSameHeightWritesOnce() async throws {
+        let (lease, window, textView, coordinator, height) = try await makePendingWriteFixture()
         defer { window.orderOut(nil); lease.release() }
 
         textView.string = pastedLongText
@@ -207,8 +207,8 @@ struct ComposerTextViewTests {
     /// text clears back to the already-published height: the pending
     /// max-height write is superseded (dropped, not landed), so the binding
     /// never receives a stale value.
-    @Test func desiredHeightChangeWhilePendingWritesLatestValueOnly() async {
-        let (lease, window, textView, coordinator, height) = await makePendingWriteFixture()
+    @Test func desiredHeightChangeWhilePendingWritesLatestValueOnly() async throws {
+        let (lease, window, textView, coordinator, height) = try await makePendingWriteFixture()
         defer { window.orderOut(nil); lease.release() }
         let seedHeight = height.value
 
@@ -228,8 +228,8 @@ struct ComposerTextViewTests {
     /// When the binding already equals the pending value by the time the
     /// deferred task drains (e.g. an external reset converged it), the task
     /// must skip the redundant write instead of publishing again.
-    @Test func stalePendingValueSkipsWriteWhenAlreadyConverged() async {
-        let (lease, window, textView, coordinator, height) = await makePendingWriteFixture()
+    @Test func stalePendingValueSkipsWriteWhenAlreadyConverged() async throws {
+        let (lease, window, textView, coordinator, height) = try await makePendingWriteFixture()
         defer { window.orderOut(nil); lease.release() }
 
         textView.string = pastedLongText
@@ -249,8 +249,8 @@ struct ComposerTextViewTests {
     /// The in-flight dedupe keys on the pending value, not on "a write ever
     /// happened": after a completed cycle for height H, an external change
     /// away from H followed by the same measurement H must write again.
-    @Test func futureSameHeightUpdateIsNotLostAfterConvergedWrite() async {
-        let (lease, window, textView, coordinator, height) = await makePendingWriteFixture()
+    @Test func futureSameHeightUpdateIsNotLostAfterConvergedWrite() async throws {
+        let (lease, window, textView, coordinator, height) = try await makePendingWriteFixture()
         defer { window.orderOut(nil); lease.release() }
 
         textView.string = pastedLongText
@@ -275,7 +275,7 @@ struct ComposerTextViewTests {
     /// The deferred task holds the coordinator weakly: a coordinator released
     /// before its write drains must not crash and must not write through a
     /// stale binding.
-    @Test func coordinatorDeallocationBeforeDrainSkipsWrite() async {
+    @Test func coordinatorDeallocationBeforeDrainSkipsWrite() async throws {
         let height = HeightBox(ComposerTextView.oneLineHeight(for: bodyFont))
         let parent = ComposerTextView(
             text: .constant(""),
@@ -297,13 +297,13 @@ struct ComposerTextViewTests {
         #expect(height.setCount == 0)
     }
 
-    @Test func editPropagatesToBoundText() async {
+    @Test func editPropagatesToBoundText() async throws {
         var text = "initial"
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (lease, window, textView, coordinator) = await makeHostedComposer(
+        let (lease, window, textView, coordinator) = try await makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
         defer { window.orderOut(nil); lease.release() }
 
@@ -313,13 +313,13 @@ struct ComposerTextViewTests {
         #expect(textBinding.wrappedValue == "edited by the user")
     }
 
-    @Test func narrowingWidthRecomputesHeightViaFrameObserver() async {
+    @Test func narrowingWidthRecomputesHeightViaFrameObserver() async throws {
         var text = ""
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (lease, window, textView, coordinator) = await makeHostedComposer(
+        let (lease, window, textView, coordinator) = try await makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
         defer { window.orderOut(nil); lease.release() }
         textView.postsFrameChangedNotifications = true
@@ -344,13 +344,13 @@ struct ComposerTextViewTests {
         #expect(heightBinding.wrappedValue == expectedMax)
     }
 
-    @Test func isEditableTogglesTextViewEditability() async {
+    @Test func isEditableTogglesTextViewEditability() async throws {
         var text = "hello"
         var measuredHeight: CGFloat = ComposerTextView.oneLineHeight(for: bodyFont)
         let textBinding = Binding(get: { text }, set: { text = $0 })
         let heightBinding = Binding(get: { measuredHeight }, set: { measuredHeight = $0 })
 
-        let (lease, window, textView, _) = await makeHostedComposer(
+        let (lease, window, textView, _) = try await makeHostedComposer(
             text: textBinding, isEditable: true, measuredHeight: heightBinding)
         defer { window.orderOut(nil); lease.release() }
         #expect(textView.isEditable == true)

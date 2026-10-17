@@ -175,6 +175,9 @@ public enum PageCommand {
 
     private static func list(in store: WikiStore, json: Bool) throws -> Result {
         let summaries = try store.listPages(sortBy: .lastUpdated)
+        // #1230 (axi.md principle 5): a zero-row run says so on stderr while
+        // stdout keeps its exact bytes (empty TSV, empty JSON-lines stream).
+        let emptyNote = summaries.isEmpty ? ZeroResults.note("page list") : nil
         if json {
             let rows = summaries.map { summary in
                 JSONRow(
@@ -189,14 +192,14 @@ public enum PageCommand {
                 let data = try encoder.encode(row)
                 return String(decoding: data, as: UTF8.self)
             }
-            return Result(output: lines.joined(separator: "\n"), didCommit: false)
+            return Result(output: lines.joined(separator: "\n"), didCommit: false, stderrOutput: emptyNote)
         }
         // TSV: id <tab> title <tab> path, one page per line.
         let lines = summaries.map { summary in
             [summary.id.rawValue, summary.title, pagePath(for: summary)]
                 .joined(separator: "\t")
         }
-        return Result(output: lines.joined(separator: "\n"), didCommit: false)
+        return Result(output: lines.joined(separator: "\n"), didCommit: false, stderrOutput: emptyNote)
     }
 
     /// One JSON line for `page list --json`.
@@ -477,7 +480,13 @@ public enum PageCommand {
             let title = summary.title.replacingOccurrences(of: "\t", with: " ")
             return "\(summary.id.rawValue)\t\(title)"
         }.joined(separator: "\n")
-        return Result(output: output, didCommit: false)
+        // #1230 (axi.md principle 5): name the query in the zero-results
+        // notice so "0 results" states what matched nothing. stdout is
+        // byte-identical in both cases.
+        return Result(
+            output: output, didCommit: false,
+            stderrOutput: results.isEmpty
+                ? ZeroResults.note("page search \(query.debugDescription)") : nil)
     }
 
     // MARK: - history (W0, PR #312)

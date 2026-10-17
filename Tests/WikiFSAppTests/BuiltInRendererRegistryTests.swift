@@ -294,7 +294,9 @@ import WikiFSTypes
         // Source fallback.
         #expect(BuiltInRendererFactoryMap.factory(for: .pdf) != nil)
         #expect(BuiltInRendererFactoryMap.factories.keys.contains(.pdf))
-        #expect(BuiltInRendererFactoryMap.factories.keys.count == 4)
+        // Mermaid (#1193), JSON Canvas (#1195), and SVG (#1198) moved to
+        // renderer packages; the native factory map keeps pdf/html/media.
+        #expect(BuiltInRendererFactoryMap.factories.keys.count == 3)
     }
 
     @Test("Characterization: NULL-MIME standalone diagram bytes stay readable")
