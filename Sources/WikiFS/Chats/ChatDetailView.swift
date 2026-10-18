@@ -169,22 +169,9 @@ struct ChatDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack(alignment: .topTrailing) {
-                content
-                ChatDetailControlsView(
-                    showsDebugControls: presentation.controls.showsDebugControls,
-                    isAnswering: remoteSession.runState.isAnswering,
-                    showsInternals: $showsInternals,
-                    exitStatus: remoteSession.exitStatus,
-                    debugFolderURL: remoteSession.debugFolderURL,
-                    copyDiagnostics: copyDiagnostics,
-                    writeDiagnosticsJSONL: writeDiagnosticsJSONL
-                )
-                .padding(.top, ChatMetrics.debugTopInset)
-                .padding(.trailing, ChatMetrics.contentInset)
-            }
-            .frame(minWidth: PageEditorMetrics.detailMinWidth)
-            .background(Color(nsColor: .textBackgroundColor))
+            content
+                .frame(minWidth: PageEditorMetrics.detailMinWidth)
+                .background(Color(nsColor: .textBackgroundColor))
         }
         .zoomShortcuts($chatZoom)
         .zoomScroll($chatZoom)
@@ -399,6 +386,16 @@ struct ChatDetailView: View {
                 addBookmark: addBookmarkHandler)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .topTrailing) {
+            // The counterpart of the old floating Activity menu's toggle:
+            // while the raw activity view replaces the transcript, this is
+            // the way back.
+            Button("Show Transcript") {
+                showsInternals = false
+            }
+            .padding(.top, ChatMetrics.debugTopInset)
+            .padding(.trailing, ChatMetrics.contentInset)
+        }
         .padding(ChatMetrics.contentInset)
     }
 
@@ -453,11 +450,17 @@ struct ChatDetailView: View {
                 fileProviderAvailable: fileProvider.path != nil,
                 revealDebugFolderEnabled: currentDebugFolderURL != nil,
                 revealDebugFolderHelp: Self.debugFolderButtonHelpText(debugURL: currentDebugFolderURL),
+                showsDebugControls: presentation.controls.showsDebugControls,
+                showsInternals: $showsInternals,
+                exitStatus: remoteSession.exitStatus,
+                debugFolderURL: remoteSession.debugFolderURL,
                 onRename: { store.renameChat(id: chatSummary.id, to: $0) },
                 onShowInList: showInList,
                 onShare: shareChat,
                 onRevealInFinder: revealChatInFinder,
-                onRevealDebugFolder: revealDebugFolder
+                onRevealDebugFolder: revealDebugFolder,
+                onCopyDiagnostics: copyDiagnostics,
+                onWriteDiagnosticsJSONL: writeDiagnosticsJSONL
             )
             Divider().opacity(PageEditorMetrics.dividerOpacity)
         }
