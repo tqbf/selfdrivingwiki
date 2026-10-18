@@ -41,9 +41,11 @@ struct SidebarMenuIconHostedTests {
             }
             previousWasSeparator = false
             #expect(item.image != nil, "missing image on “\(item.title)”")
+            #if compiler(>=6.4)
             if #available(macOS 27.0, *) {
                 #expect(item.preferredImageVisibility == .visible, "image not forced visible on “\(item.title)”")
             }
+            #endif
             if let submenu = item.submenu {
                 assertRenderableMenu(submenu)
             }

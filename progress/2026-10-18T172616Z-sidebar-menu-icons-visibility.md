@@ -7,7 +7,7 @@ status: complete
 
 # Sidebar context menus show icons again and share one skeleton
 
-## Gap
+## Progress
 
 The four sidebar row menus (Pages, Sources, Bookmarks, Chats) always set an
 SF Symbol image on every item, yet the operator saw no icons at all. The
@@ -21,10 +21,13 @@ there" report.
 ## Contract
 
 - New `NSMenuItem.setSymbolImage(_:)` sets the symbol and forces
-  `preferredImageVisibility = .visible` under `#available(macOS 27.0, *)`.
-  All four menu builders, the three Open With parent items, and the Open
-  With submenu route through it. On macOS 26 the visibility property does
-  not exist and symbols stay hidden; nothing can change that there.
+  `preferredImageVisibility = .visible` under `#available(macOS 27.0, *)`,
+  itself wrapped in `#if compiler(>=6.4)`: the property only exists in the
+  macOS 27 SDK (Xcode 27, Swift 6.4), and CI builds with Xcode 26.6
+  (Swift 6.3.3, macOS 26 SDK) where the symbol is absent entirely. When
+  CI's image gains an Xcode with the 27 SDK, the gate lights up on its
+  own. On macOS 26 runtimes the property does not exist and symbols stay
+  hidden; nothing can change that there.
 - The Open With submenu gains an `app.dashed` icon for "Other…" and skips
   its leading separator when no apps are registered, so no menu shows a
   leading separator.

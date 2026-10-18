@@ -46,9 +46,11 @@ enum OpenWithMenu {
                 icon.size = NSSize(width: 16, height: 16)
                 item.image = icon
             }
+            #if compiler(>=6.4)
             if #available(macOS 27.0, *) {
                 item.preferredImageVisibility = .visible
             }
+            #endif
             menu.addItem(item)
 
             // Separator after the default (matches Finder: default on its own,

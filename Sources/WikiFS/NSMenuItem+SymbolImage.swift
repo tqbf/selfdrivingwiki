@@ -12,8 +12,14 @@ import AppKit
 extension NSMenuItem {
     func setSymbolImage(_ systemImage: String) {
         image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        // The visibility property ships in the macOS 27 SDK (Xcode 27 /
+        // Swift 6.4). Older toolchains — CI builds with Xcode 26.6 — do not
+        // declare it at all, so the call is compiled only where the SDK has
+        // it; #available keeps the runtime check for macOS 26.
+        #if compiler(>=6.4)
         if #available(macOS 27.0, *) {
             preferredImageVisibility = .visible
         }
+        #endif
     }
 }
