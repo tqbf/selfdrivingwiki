@@ -60,12 +60,26 @@ struct ACPSmokeTests {
             Issue.record("ACP agent executable '\(agentPath)' not found: \(reason)")
             return
         }
+        let configuredArguments = ShellArgv.tokenize(agentArgs)
+        let configuredSpawn = ACPBackend.AgentSpawnConfig(
+            executablePath: resolvedAgentPath,
+            arguments: configuredArguments)
+        let resolvedBunPath = ACPBackend.isJSAdapterLaunch(
+            executablePath: resolvedAgentPath,
+            arguments: configuredArguments)
+            ? await ACPBackend.defaultResolveBunRuntime()?.executableURL.path
+            : nil
+        let effectiveSpawn = ACPBackend.canonicalizedSpawn(
+            configuredSpawn,
+            resolvedBunPath: resolvedBunPath) ?? configuredSpawn
 
         // A per-run scratch dir is the agent's cwd (mirrors the launcher).
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-smoke-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let processGroup = try ACPTestProcessGroup(directory: scratch)
         defer {
+            processGroup.killGroup()
             do {
                 try FileManager.default.removeItem(at: scratch)
             } catch {
@@ -74,9 +88,13 @@ struct ACPSmokeTests {
         }
 
         var hints: [String: String] = [
-            HintKey.acpAgentPath.rawValue: resolvedAgentPath,
-            HintKey.acpAgentArgs.rawValue: agentArgs,
+            HintKey.acpAgentPath.rawValue: processGroup.perlURL.path,
+            HintKey.acpAgentArgs.rawValue: processGroup.serializedWrapperArguments(
+                for: effectiveSpawn.arguments),
         ]
+        for (key, value) in processGroup.setRealAgent(effectiveSpawn.executablePath) {
+            hints[HintKey.env(key)] = value
+        }
         if let apiKey { hints[HintKey.acpAgentApiKey.rawValue] = apiKey }
 
         let profile = BackendProfile(
