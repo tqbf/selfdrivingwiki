@@ -161,6 +161,16 @@ struct ProcessSignalSafetyAuditTests {
                     + "parent. The PID comes from waitForPIDFile, which polls until it "
                     + "parses a valid PID and throws on timeout — it never substitutes "
                     + "a sentinel. The child writes the file by atomic rename"),
+            .init(path: "Tests/WikiFSAppTests/ACPTestProcessGroup.swift",
+                  primitive: .posixSignal):
+                (2, "guarded: the test pins the child group leader's PID, parent PID, "
+                    + "and kernel start time before releasing the wrapper. Cleanup "
+                    + "refuses a changed leader identity. The zero signal checks group "
+                    + "liveness after leader exit; SIGKILL targets that pinned group"),
+            .init(path: "Tests/WikiFSAppTests/ACPTestProcessGroupTests.swift",
+                  primitive: .posixSignal):
+                (2, "liveness probes only: zero signals check that the exact group "
+                    + "created by ACPTestProcessGroup has ended after verified cleanup"),
 
             // --- Developer app lifecycle, not test helpers -------------------
             // NOT a safety approval. These match by absolute installed-app path

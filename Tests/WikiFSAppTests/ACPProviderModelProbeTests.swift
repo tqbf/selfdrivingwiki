@@ -911,13 +911,34 @@ struct ACPProviderModelProbeLiveTests {
             return
         }
 
+        let cleanupDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-probe-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: cleanupDirectory, withIntermediateDirectories: true)
+        let processGroup = try ACPTestProcessGroup(directory: cleanupDirectory)
+        defer {
+            processGroup.killGroup()
+            do {
+                try FileManager.default.removeItem(at: cleanupDirectory)
+            } catch {
+                Issue.record("Failed to remove ACP probe cleanup directory: \(error.localizedDescription)")
+            }
+        }
         let provider = AgentProvider(
             id: ProviderID(rawValue: "claude-acp-live"), label: "Claude (live probe)",
             command: [resolvedAgentPath] + ShellArgv.tokenize(agentArgs))
         let probe = ACPProviderModelProbe(
             provider: provider,
             resolvedCommand: [resolvedAgentPath] + ShellArgv.tokenize(agentArgs),
-            apiKey: apiKey)
+            apiKey: apiKey,
+            performLaunch: { client, plan, workingDirectory in
+                let environment = plan.environment.merging(
+                    processGroup.setRealAgent(plan.executablePath)) { _, testValue in testValue }
+                try await client.launch(
+                    agentPath: processGroup.perlURL.path,
+                    arguments: processGroup.wrapperArguments(for: plan.arguments),
+                    workingDirectory: workingDirectory,
+                    environment: environment)
+            })
 
         do {
             let models = try await probe.discoverModels(timeout: .seconds(60))

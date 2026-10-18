@@ -668,6 +668,7 @@ let package = Package(
             // fixture construction remains outside timed samples; it is not a
             // SwiftPM runtime resource.
             exclude: ["Fixtures"],
+            resources: [.copy("Resources/ACPTestProcessGroupWrapper.pl")],
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
