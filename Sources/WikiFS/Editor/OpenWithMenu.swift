@@ -46,6 +46,9 @@ enum OpenWithMenu {
                 icon.size = NSSize(width: 16, height: 16)
                 item.image = icon
             }
+            if #available(macOS 27.0, *) {
+                item.preferredImageVisibility = .visible
+            }
             menu.addItem(item)
 
             // Separator after the default (matches Finder: default on its own,
@@ -56,10 +59,13 @@ enum OpenWithMenu {
             }
         }
 
-        menu.addItem(.separator())
+        if !menu.items.isEmpty {
+            menu.addItem(.separator())
+        }
         let other = NSMenuItem(title: "Other…", action: action, keyEquivalent: "")
         other.target = target
         other.representedObject = payload(nil)
+        other.setSymbolImage("app.dashed")
         menu.addItem(other)
 
         return menu

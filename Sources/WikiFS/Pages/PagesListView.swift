@@ -339,11 +339,12 @@ extension PagesListViewController {
                     OpenWithIDsRef(appURL: appURL, ids: payload.effectiveIDs)
                 })
             let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
-            parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
-                                   accessibilityDescription: nil)
+            parent.setSymbolImage("rectangle.portrait.and.arrow.right")
             parent.submenu = submenu
             menu.addItem(parent)
         }
+
+        menu.addItem(.separator())
 
         menu.addItem(menuItem(
             title: isBatch ? "New Chat with \(count) Pages" : "New Chat with Page",
@@ -391,6 +392,7 @@ extension PagesListViewController {
                     title: "Set as Home Page",
                     systemImage: "house", action: #selector(setHomePageAction(_:)), payload: payload))
             }
+            menu.addItem(.separator())
         }
 
         menu.addItem(menuItem(
@@ -409,7 +411,7 @@ extension PagesListViewController {
     private func menuItem(title: String, systemImage: String,
                           action: Selector, payload: PagesMenuPayload) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        item.setSymbolImage(systemImage)
         item.target = self
         item.representedObject = payload
         // Test seam: the SF Symbol name doubles as the accessibility identifier,
