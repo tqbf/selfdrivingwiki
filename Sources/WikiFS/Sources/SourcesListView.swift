@@ -446,11 +446,12 @@ extension SourcesListViewController {
                     SourceOpenWithIDsRef(appURL: appURL, ids: payload.effective.map(\.id))
                 })
             let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
-            parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
-                                   accessibilityDescription: nil)
+            parent.setSymbolImage("rectangle.portrait.and.arrow.right")
             parent.submenu = submenu
             menu.addItem(parent)
         }
+
+        menu.addItem(.separator())
 
         menu.addItem(item(
             title: isMulti ? "New Chat with \(count) Sources" : "New Chat with Source",
@@ -527,6 +528,7 @@ extension SourcesListViewController {
         if !isMulti {
             menu.addItem(item(title: "Rename", systemImage: "pencil",
                               action: #selector(renameAction(_:)), payload: payload))
+            menu.addItem(.separator())
         }
         menu.addItem(item(title: isMulti ? "Delete \(count) Sources" : "Delete",
                           systemImage: "trash", action: #selector(deleteAction(_:)), payload: payload))
@@ -575,7 +577,7 @@ extension SourcesListViewController {
     private func item(title: String, systemImage: String,
                       action: Selector, payload: SourcesMenuPayload) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        i.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        i.setSymbolImage(systemImage)
         i.target = self
         i.representedObject = payload
         // Test seam: the SF Symbol name doubles as the accessibility identifier,

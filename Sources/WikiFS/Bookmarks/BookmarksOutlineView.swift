@@ -875,8 +875,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
                         OpenWithBookmarkRef(appURL: appURL, node: clicked)
                     })
                 let parent = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
-                parent.image = NSImage(systemSymbolName: "rectangle.portrait.and.arrow.right",
-                                       accessibilityDescription: nil)
+                parent.setSymbolImage("rectangle.portrait.and.arrow.right")
                 parent.submenu = submenu
                 menu.addItem(parent)
             }
@@ -912,7 +911,7 @@ extension BookmarksOutlineViewController: NSOutlineViewDelegate {
     private func menuItem(_ title: String, systemImage: String,
                           action: Selector, payload: BookmarksMenuPayload) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        item.setSymbolImage(systemImage)
         item.target = self
         item.representedObject = payload
         return item

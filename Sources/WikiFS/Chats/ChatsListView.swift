@@ -343,6 +343,7 @@ extension ChatsListViewController {
             menu.addItem(menuItem(
                 title: "Rename Chat…",
                 systemImage: "pencil", action: #selector(renameAction(_:)), payload: payload))
+            menu.addItem(.separator())
         }
 
         menu.addItem(menuItem(
@@ -355,7 +356,7 @@ extension ChatsListViewController {
     private func menuItem(title: String, systemImage: String,
                           action: Selector, payload: ChatsMenuPayload) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        item.setSymbolImage(systemImage)
         item.target = self
         item.representedObject = payload
         return item
