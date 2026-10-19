@@ -616,6 +616,7 @@ import Testing
             rootView: BookmarksContainerView(
                 store: model,
                 fileProvider: FileProviderFacade(),
+                sortOrder: .constant(.manual),
                 onShowPicker: { _ in },
                 onEdit: { _ in },
                 onNewFolder: {}))

@@ -1,9 +1,11 @@
 import Foundation
 import WikiFSCore
 
-/// Display sort for the Bookmarks outline (issue #241). View-level only —
+/// Display sort for the Bookmarks outline (issue #241). Display-only —
 /// the persisted `position` column (manual drag-and-drop order) is never
 /// rewritten by sorting; `.manual` is the default and renders it directly.
+/// The chosen value persists at the `SidebarView` level, above the section
+/// switch.
 enum BookmarkSortOrder: String, CaseIterable, Sendable {
     /// Manual drag-and-drop order: `position` ascending (the persisted default).
     case manual

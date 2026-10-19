@@ -9,12 +9,16 @@ import WikiFSCore
 ///
 /// Sorting and filtering (issue #241) are display-only: they select and order
 /// what the outline renders but never rewrite the persisted `position`
-/// column that manual drag-and-drop order uses. Like the Sources filter, the
-/// choices live in `@State` here, so they reset when the user switches
-/// sidebar sections.
+/// column that manual drag-and-drop order uses. The sort choice is owned by
+/// `SidebarView`, above the section switch, so it survives switching sidebar
+/// sections; the kind filter stays view-local `@State` and resets.
 struct BookmarksContainerView: View {
     let store: WikiStoreModel
     let fileProvider: FileProviderFacade
+    /// Display sort backing the "Sort by" picker (issue #241). Display-only —
+    /// never rewrites the persisted `position` column. Owned by `SidebarView`
+    /// so the choice survives section switches.
+    @Binding var sortOrder: BookmarkSortOrder
     // All closures are main-actor-isolated: they touch the @MainActor
     // WikiStoreModel or present sheets/state on the main actor.
     var onShowPicker: (@MainActor @Sendable (PickerContext) -> Void)
@@ -25,9 +29,6 @@ struct BookmarksContainerView: View {
     /// Kind filter backing the "Show" menu (issue #241). View-level state,
     /// like `SourceFilter` in `SourcesContainerView`.
     @State private var kindFilter: BookmarkKindFilter = .all
-    /// Display sort backing the "Sort by" picker (issue #241). Display-only —
-    /// never rewrites the persisted `position` column.
-    @State private var sortOrder: BookmarkSortOrder = .manual
 
     var body: some View {
         VStack(spacing: 0) {
