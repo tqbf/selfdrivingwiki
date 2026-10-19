@@ -50,7 +50,6 @@ struct ChatDetailView: View {
     /// Durable data is refreshed by the keyed read task. Daemon snapshots only
     /// re-project this cache; they never cause a SQLite read from the inspector.
     @State private var durableChatMetadata: ChatMetadataInput?
-    @AppStorage(AgentLauncher.PermissionModeKey.chat) private var permissionModeRaw = PermissionPolicy.bypass.rawValue
 
     private var isLiveChat: Bool {
         guard let chatID else { return false }
@@ -549,7 +548,6 @@ struct ChatDetailView: View {
         let onAddAttachment: (ChatAttachment) -> Void = { attachment in addAttachment(attachment) }
         let onRemoveAttachment: (ChatAttachment) -> Void = { attachment in removeAttachment(attachment) }
         let composerHeightBinding = $composerHeight
-        let permissionModeBinding = $permissionModeRaw
         let props = ChatComposerPaneProps(
             composer: presentation.composer,
             queuedMessages: queuedMessages,
@@ -566,7 +564,6 @@ struct ChatDetailView: View {
             store: store,
             composerHeight: composerHeightBinding,
             composerFont: composerFont,
-            permissionModeRaw: permissionModeBinding,
             autocomplete: chatAutocompleteHooks,
             onSubmit: onSubmit,
             onQueue: onQueue,

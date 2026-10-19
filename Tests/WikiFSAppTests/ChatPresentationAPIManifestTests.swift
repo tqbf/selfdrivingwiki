@@ -4,6 +4,15 @@ import Testing
 @testable import WikiFS
 
 struct ChatPresentationAPIManifestTests {
+    @Test func chatComposerDoesNotExposePermissionModeSelector() throws {
+        let composer = try source(named: "ChatComposerPaneView.swift")
+        let detail = try source(named: "ChatDetailView.swift")
+
+        #expect(composer.contains("PermissionModeSelector") == false)
+        #expect(composer.contains("permissionModeRaw") == false)
+        #expect(detail.contains("PermissionModeKey.chat") == false)
+    }
+
     @Test func presentationContractCannotRegressToEventsOrTimestampArrays() throws {
         let presentation = try source(named: "ChatDetailPresentation.swift")
         let sync = try source(named: "ChatClientSync.swift", directory: "Sources/WikiFSEngine")

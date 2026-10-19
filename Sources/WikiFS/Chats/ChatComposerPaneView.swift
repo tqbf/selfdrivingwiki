@@ -18,7 +18,6 @@ struct ChatComposerPaneProps {
     let store: WikiStoreModel
     let composerHeight: Binding<CGFloat>
     let composerFont: NSFont
-    let permissionModeRaw: Binding<String>
     let autocomplete: ComposerTextView.AutocompleteHooks?
     let onSubmit: () -> Void
     let onQueue: () -> Void
@@ -117,7 +116,6 @@ struct ChatComposerPaneView: View {
             }
             ProviderSelector(remoteSession: props.remoteSession, store: props.store)
             ThinkingEffortSelector(remoteSession: props.remoteSession, store: props.store)
-            PermissionModeSelector(rawValue: props.permissionModeRaw)
             Spacer(minLength: 0)
             if props.composer.showsStopButton {
                 if props.composer.showsQueueButton && hasDraftText {

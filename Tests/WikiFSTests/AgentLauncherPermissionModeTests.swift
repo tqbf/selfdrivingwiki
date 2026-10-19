@@ -4,16 +4,10 @@ import Foundation
 import WikiFSEngine
 @testable import WikiFSEngine
 
-/// #607 regression suite: per-operation permission policy. Pre-split a single
-/// shared `agentPermissionMode` key fed chat + ingest + lint — a user who chose
-/// `alwaysAsk` for chat got the same gating on an unattended ingest/lint,
-/// guaranteeing a stall on the first prompt needing a permission. Now three
-/// independent keys (`PermissionModeKey.chat`/`.ingest`/`.lint`) feed three
-/// independent `resolvePermissionMode(for:)` branches.
-///
-/// Plus the one-time idempotent migration of the legacy `agentPermissionMode`
-/// value into `chatPermissionMode` (test #9). See `plans/acp-permissions.md`
-/// §5.1, §5.2, §5.3, §8.2 (#7-#10).
+/// Per-operation permission policy tests. Chat always bypasses client-side
+/// permission prompts. Ingest and lint keep independent Settings preferences.
+/// The legacy chat preference key remains for one-time migration compatibility.
+/// See `plans/acp-permissions.md` §5.1, §5.2, §5.3, §8.2.
 @Suite @MainActor struct AgentLauncherPermissionModeTests {
 
     /// A fresh, isolated defaults suite (unique per call so tests never observe
@@ -33,15 +27,15 @@ import WikiFSEngine
     private func makeLauncher(defaults: UserDefaults) -> AgentLauncher {
         let launcher = AgentLauncher()
         launcher.resolvePermissionMode = { op in
-            let key: String
-            let fallback: PermissionPolicy
             switch op {
-            case .chat:   key = AgentLauncher.PermissionModeKey.chat;   fallback = .bypass
-            case .ingest: key = AgentLauncher.PermissionModeKey.ingest; fallback = .bypass
-            case .lint:   key = AgentLauncher.PermissionModeKey.lint;   fallback = .bypass
+            case .chat: return PermissionPolicy.bypass
+            case .ingest:
+                let raw = defaults.string(forKey: AgentLauncher.PermissionModeKey.ingest) ?? ""
+                return PermissionPolicy(rawValue: raw) ?? .bypass
+            case .lint:
+                let raw = defaults.string(forKey: AgentLauncher.PermissionModeKey.lint) ?? ""
+                return PermissionPolicy(rawValue: raw) ?? .bypass
             }
-            let raw = defaults.string(forKey: key) ?? ""
-            return PermissionPolicy(rawValue: raw) ?? fallback
         }
         return launcher
     }
@@ -60,18 +54,17 @@ import WikiFSEngine
         #expect(launcher.resolvePermissionMode(.ingest) == .bypass)
     }
 
-    /// #8 — Symmetric to #7: the chat policy MUST stay `alwaysAsk` even when
-    /// ingest is `bypass`. The split is bidirectional.
-    @Test func chatPolicyIndependentOfIngest() {
+    /// Chats always bypass client-side permission prompts, even when the legacy
+    /// chat preference contains `alwaysAsk`. Ingest keeps its own setting.
+    @Test func chatPolicyAlwaysBypassesRegardlessOfStoredPreference() {
         let defaults = makeDefaults()
         defaults.set(PermissionPolicy.alwaysAsk.rawValue, forKey: AgentLauncher.PermissionModeKey.chat)
-        defaults.set(PermissionPolicy.bypass.rawValue,     forKey: AgentLauncher.PermissionModeKey.ingest)
+        defaults.set(PermissionPolicy.alwaysAsk.rawValue, forKey: AgentLauncher.PermissionModeKey.ingest)
 
         let launcher = makeLauncher(defaults: defaults)
 
-        #expect(launcher.resolvePermissionMode(.chat) == .alwaysAsk)
-        #expect(launcher.resolvePermissionMode(.ingest) == .bypass)
-        // Lint isn't set here either → defaults to .bypass (the §5.2 fallback).
+        #expect(launcher.resolvePermissionMode(.chat) == .bypass)
+        #expect(launcher.resolvePermissionMode(.ingest) == .alwaysAsk)
         #expect(launcher.resolvePermissionMode(.lint) == .bypass)
     }
 
