@@ -26,6 +26,10 @@ struct ChatComposerPaneProps {
     let onRecallQueued: (() -> Void)?
     let onEditQueuedMessage: (Int) -> Void
     let onRemoveQueuedMessage: (Int) -> Void
+    /// Sends one queued message now: the manual path when auto-drain does
+    /// not fire (#1443).
+    let onSendQueuedMessageNow: (Int) -> Void
+    let canSendQueuedMessageNow: Bool
     let onAddAttachment: (ChatAttachment) -> Void
     let onRemoveAttachment: (ChatAttachment) -> Void
 }
@@ -205,18 +209,31 @@ struct ChatComposerPaneView: View {
 
     private func queuedMessageRow(_ pending: PendingQueuedMessage, isFirst: Bool, index: Int) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            if isFirst {
-                Text("Next:")
+            if let failure = pending.dispatchFailure {
+                // A held message: auto-drain skips it until the user acts.
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                Text("Not sent:")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .bold()
+                    .help(failure)
+                    .accessibilityLabel("Not sent: \(failure)")
             } else {
-                Text("#\(index + 1):")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if isFirst {
+                    Text("Next:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .bold()
+                } else {
+                    Text("#\(index + 1):")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
             Text(pending.preview)
                 .font(.caption)
@@ -235,6 +252,17 @@ struct ChatComposerPaneView: View {
             .composerButtonPointer()
             .help("Edit this queued message")
             .disabled(hasDraftText)
+            Button {
+                props.onSendQueuedMessageNow(index)
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.borderless)
+            .help("Send this queued message now")
+            .accessibilityLabel("Send queued message now")
+            .disabled(!props.canSendQueuedMessageNow)
             Button {
                 props.onRemoveQueuedMessage(index)
             } label: {

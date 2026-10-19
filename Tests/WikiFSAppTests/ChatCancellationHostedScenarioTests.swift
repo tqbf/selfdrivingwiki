@@ -108,6 +108,53 @@ struct ChatCancellationHostedScenarioTests {
         #expect(recorder.submitted.first?.attachments.count == 1)
     }
 
+    /// A settled cancellation closes the daemon runtime, so the projection is
+    /// not live and the run state is `.idle`. That state must still be ready,
+    /// or a locally queued message strands (#1443).
+    @Test func settledCancellationWithClosedRuntimeIsReadyForLocalQueueDrain() {
+        let chatID = ChatID(rawValue: "01HOSTEDCANCELCLOSED00000000")
+        let session = makeSession(chatID: chatID)
+        let turnID = ChatTurnID(rawValue: "turn-closed-active")
+
+        // Before any projection arrives the daemon state is unknown.
+        #expect(session.runState == .idle)
+        #expect(session.isReadyForLocalQueueDrain == false)
+
+        // Closed runtime, cancellation not settled yet: not ready.
+        session.hydrate(from: snapshot(
+            chatID: chatID, lifecycle: .closed, activeTurn: turn(turnID, state: .cancelling)))
+        #expect(session.runState == .idle)
+        #expect(session.isReadyForLocalQueueDrain == false)
+
+        // Closed runtime with a blocking cancellation attention: not ready.
+        session.hydrate(from: snapshot(
+            chatID: chatID, lifecycle: .closed, activeTurn: turn(turnID, state: .cancelling),
+            attention: .runtimeCleanupFailed(turnID, message: "cleanup"), sequence: 2))
+        #expect(session.isReadyForLocalQueueDrain == false)
+
+        // Closed runtime with a daemon follower still queued: not ready.
+        let follower = ChatQueuedTurn(
+            ordinal: 2,
+            submission: ChatTurnSubmission(
+                commandID: ChatCommandID(rawValue: "command-follower"),
+                turnID: ChatTurnID(rawValue: "turn-closed-follower"),
+                userText: "follower",
+                contextReferences: [],
+                submittedAt: Date(timeIntervalSince1970: 2)),
+            editedAt: nil)
+        session.hydrate(from: snapshot(
+            chatID: chatID, lifecycle: .closed, activeTurn: turn(turnID, state: .terminal(.cancelled)),
+            queuedTurns: [follower], sequence: 3))
+        #expect(session.isReadyForLocalQueueDrain == false)
+
+        // Settled: terminal cancelled turn, closed runtime, nothing queued.
+        session.hydrate(from: snapshot(
+            chatID: chatID, lifecycle: .closed, activeTurn: turn(turnID, state: .terminal(.cancelled)),
+            sequence: 4))
+        #expect(session.runState == .idle)
+        #expect(session.isReadyForLocalQueueDrain)
+    }
+
     @Test func queuedMessagesRenderFIFO() async throws {
         let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
@@ -148,6 +195,7 @@ struct ChatCancellationHostedScenarioTests {
 
     private func snapshot(
         chatID: ChatID,
+        lifecycle: ChatSessionLifecycle = .ready,
         activeTurn: ChatTurnSnapshot?,
         queuedTurns: [ChatQueuedTurn] = [],
         attention: ChatAttentionState = .none,
@@ -157,7 +205,7 @@ struct ChatCancellationHostedScenarioTests {
             projection: ChatSyncProjection(
                 chatID: chatID,
                 generation: ChatSessionGenerationID(rawValue: "hosted-generation"),
-                lifecycle: .ready,
+                lifecycle: lifecycle,
                 activeTurn: activeTurn,
                 queuedTurns: queuedTurns,
                 attention: attention,

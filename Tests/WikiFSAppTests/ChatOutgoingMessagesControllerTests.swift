@@ -489,5 +489,59 @@ struct ChatOutgoingMessagesControllerTests {
         #expect(Self.failedMessage(harness.controller.pendingOutgoing.first) == "send failed")
         #expect(harness.controller.pendingOutgoing.count == 1)
     }
+
+    @Test func queuedDispatchFailureReturnsToQueueWithoutEchoOrDraftRestore() async {
+        let harness = SendHarness()
+        harness.installEnvironment()
+        let pending = ChatOutgoingMessagesController.makePendingQueuedMessage(
+            draftText: "Queued follow-up",
+            wireMessage: "Queued follow-up",
+            attachments: []
+        )
+        var returnedErrors: [String] = []
+
+        harness.controller.send(
+            chatID: Self.existingChatID,
+            payload: ChatOutgoingMessagesController.outgoingPayload(from: pending),
+            recovery: .returnToQueue { message in returnedErrors.append(message) },
+            makeRequest: { submission in
+                ChatSubmitRequest(
+                    wikiID: WikiID(rawValue: "wiki-harness"),
+                    chatID: Self.existingChatID,
+                    submission: submission
+                )
+            }
+        )
+        await harness.waitUntil { harness.suspendedSubmitCount == 1 }
+        #expect(harness.controller.pendingOutgoing.count == 1, "the echo renders while the submit is in flight")
+        harness.resumeNextSubmit(with: .failure(SendError(message: "daemon unavailable")))
+        await harness.waitUntil { returnedErrors.count == 1 }
+
+        #expect(returnedErrors == ["daemon unavailable"])
+        #expect(harness.controller.pendingOutgoing.isEmpty, "the queue row, not an echo, holds the failed message")
+        #expect(harness.restoredDrafts.isEmpty, "a queued failure never writes into the composer")
+        #expect(harness.preflightErrors == ["daemon unavailable"], "the error is surfaced")
+        #expect(harness.optimisticFailures.count == 1, "the optimistic overlay is rolled back")
+    }
+
+    @Test func failedQueuedMessageReturnsToTheFrontMarkedWithItsError() {
+        let failed = ChatOutgoingMessagesController.makePendingQueuedMessage(
+            draftText: "first", wireMessage: "first", attachments: [])
+        let second = ChatOutgoingMessagesController.makePendingQueuedMessage(
+            draftText: "second", wireMessage: "second", attachments: [])
+
+        let queue = ChatOutgoingMessagesController.returningFailedQueuedMessage(
+            failed, errorMessage: "send failed", to: [second])
+
+        #expect(queue.map(\.id) == [failed.id, second.id])
+        #expect(queue.first?.dispatchFailure == "send failed")
+        #expect(queue.last?.dispatchFailure == nil)
+
+        // A re-failure of a message still in the queue does not duplicate it.
+        let refailed = ChatOutgoingMessagesController.returningFailedQueuedMessage(
+            failed, errorMessage: "again", to: queue)
+        #expect(refailed.map(\.id) == [failed.id, second.id])
+        #expect(refailed.first?.dispatchFailure == "again")
+    }
 }
 #endif

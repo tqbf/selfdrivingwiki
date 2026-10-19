@@ -192,12 +192,16 @@ struct ChatDetailView: View {
                 chatResolution = store.resolveChat(id: chatID)
                 store.reloadChats()
             }
-            // Queue draining is a local decision, and it must observe the
-            // derived readiness value rather than any single run state: a
-            // promoted daemon follower and an unfinished cancellation both
-            // keep this chat not ready even when it is not answering.
-            guard remoteSession.isReadyForLocalQueueDrain, !queuedMessages.isEmpty else { return }
-            firePendingQueuedMessage()
+        }
+        // Queue draining is a local decision, and it must observe the derived
+        // readiness value rather than any single run state: a promoted daemon
+        // follower and an unfinished cancellation both keep this chat not
+        // ready even when it is not answering. Readiness can also turn true
+        // with no run-state change (a settled cancel leaves `.idle` before and
+        // after its attention clears), so watch the value itself (#1443).
+        .onChange(of: remoteSession.isReadyForLocalQueueDrain) { _, isReady in
+            guard isReady else { return }
+            drainQueuedMessageIfReady()
         }
         .task(id: ChatResolutionTaskKey(
             chatID: chatID,
@@ -541,6 +545,7 @@ struct ChatDetailView: View {
         let onRecallQueued: (() -> Void)? = queuedMessages.isEmpty ? nil : { recallQueuedMessage() }
         let onEditQueuedMessage: (Int) -> Void = { index in editQueuedMessage(index) }
         let onRemoveQueuedMessage: (Int) -> Void = { index in removeQueuedMessage(index) }
+        let onSendQueuedMessageNow: (Int) -> Void = { index in sendQueuedMessageNow(index) }
         let onAddAttachment: (ChatAttachment) -> Void = { attachment in addAttachment(attachment) }
         let onRemoveAttachment: (ChatAttachment) -> Void = { attachment in removeAttachment(attachment) }
         let composerHeightBinding = $composerHeight
@@ -569,6 +574,8 @@ struct ChatDetailView: View {
             onRecallQueued: onRecallQueued,
             onEditQueuedMessage: onEditQueuedMessage,
             onRemoveQueuedMessage: onRemoveQueuedMessage,
+            onSendQueuedMessageNow: onSendQueuedMessageNow,
+            canSendQueuedMessageNow: isChatOperationConfigured,
             onAddAttachment: onAddAttachment,
             onRemoveAttachment: onRemoveAttachment
         )
@@ -859,25 +866,60 @@ struct ChatDetailView: View {
         queuedMessages.remove(at: index)
         store.draftChatMessage = restore.draftText
         attachmentModel.replace(with: restore.attachments)
+        // The front may now be a message that can auto-send.
+        drainQueuedMessageIfReady()
     }
 
     private func removeQueuedMessage(_ index: Int) {
         guard queuedMessages.indices.contains(index) else { return }
         queuedMessages.remove(at: index)
+        // Removing a held (failed) front lets the next message auto-send.
+        drainQueuedMessageIfReady()
     }
 
-    private func firePendingQueuedMessage() {
+    /// The manual delivery path (#1443): it sends one queued message now,
+    /// whatever the readiness. The daemon queues a submit that arrives while
+    /// a turn is active, so this cannot interrupt or drop the active turn.
+    private func sendQueuedMessageNow(_ index: Int) {
+        dispatchQueuedMessage(at: index)
+    }
+
+    /// Auto-drain: sends the front message when the session is ready. A front
+    /// message whose last dispatch failed is held for the user, so a failing
+    /// submit cannot retry in a loop.
+    private func drainQueuedMessageIfReady() {
+        guard remoteSession.isReadyForLocalQueueDrain,
+              let front = queuedMessages.first,
+              front.dispatchFailure == nil
+        else { return }
+        dispatchQueuedMessage(at: 0)
+    }
+
+    /// Removes the message before dispatch. If the submit fails, the message
+    /// goes back to the front of the queue with its error (Paseo precedent).
+    private func dispatchQueuedMessage(at index: Int) {
         // Retain the pending user message when Settings becomes invalid while
         // another turn is running; only a valid resolved provider/model may
         // consume it.
-        guard isChatOperationConfigured, let pending = queuedMessages.first else { return }
-        queuedMessages.removeFirst()
+        guard isChatOperationConfigured, queuedMessages.indices.contains(index) else { return }
+        let pending = queuedMessages.remove(at: index)
         if let chatID {
             store.applyProvisionalChatTitle(chatID: chatID, userText: pending.wireMessage)
         }
+        var cleared = pending
+        cleared.dispatchFailure = nil
         outgoing.send(
             chatID: chatID,
-            payload: ChatOutgoingMessagesController.outgoingPayload(from: pending),
+            payload: ChatOutgoingMessagesController.outgoingPayload(from: cleared),
+            recovery: .returnToQueue { errorMessage in
+                DebugLog.agent(
+                    "ChatDetailView queued dispatch failed; message returned to the queue front "
+                        + "(chat=\(chatID?.rawValue ?? "draft")): \(errorMessage)"
+                )
+                queuedMessages = ChatOutgoingMessagesController.returningFailedQueuedMessage(
+                    cleared, errorMessage: errorMessage, to: queuedMessages
+                )
+            },
             makeRequest: makeSubmitRequest
         )
     }
@@ -1062,6 +1104,9 @@ struct PendingQueuedMessage: Identifiable, Equatable {
     let draftText: String
     /// The structured attachments captured when the message was queued.
     let attachments: [ChatAttachment]
+    /// The error from the last failed dispatch, or nil. Auto-drain holds a
+    /// failed message; the user sends it again with Send Now (#1443).
+    var dispatchFailure: String? = nil
 }
 
 struct ChatAttachment: Identifiable, Hashable {
