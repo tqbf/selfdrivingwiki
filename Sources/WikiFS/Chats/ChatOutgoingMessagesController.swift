@@ -11,9 +11,10 @@ import WikiFSEngine
 /// `RemoteChatSession.installHistoryLoader`), which keeps the lifecycle
 /// testable without a daemon.
 ///
-/// The controller never removes a failed entry. A failed send stays visible in
-/// the transcript until the view remounts; a later send never bulk-deletes it.
-/// Retry is edit-and-resend.
+/// The controller never removes a failed composer send. A failed send stays
+/// visible in the transcript until the view remounts; a later send never
+/// bulk-deletes it. Retry is edit-and-resend. A failed queued dispatch is the
+/// one exception: it returns to the queue (`FailureRecovery.returnToQueue`).
 @MainActor
 @Observable
 final class ChatOutgoingMessagesController {
@@ -57,6 +58,17 @@ final class ChatOutgoingMessagesController {
         let setPreflightError: @MainActor (String?) -> Void
     }
 
+    /// Where a failed send goes back to.
+    enum FailureRecovery {
+        /// Composer sends: keep the failed echo row and restore the composer
+        /// when it is untouched.
+        case restoreDraft
+        /// Queued dispatches (#1443): the queue row is the message's home, so
+        /// drop the echo row and give the error to the caller, which puts the
+        /// message back at the front of its queue.
+        case returnToQueue(@MainActor (_ errorMessage: String) -> Void)
+    }
+
     /// Ignored by observation: the environment is fixed wiring, not state the
     /// view renders from.
     @ObservationIgnored private(set) var environment: Environment?
@@ -77,6 +89,7 @@ final class ChatOutgoingMessagesController {
     func send(
         chatID: ChatID?,
         payload: OutgoingPayload,
+        recovery: FailureRecovery = .restoreDraft,
         makeRequest: (ChatTurnSubmission) -> ChatSubmitRequest
     ) {
         guard let environment else {
@@ -124,6 +137,7 @@ final class ChatOutgoingMessagesController {
                     chatID: chatID,
                     error: error,
                     payload: payload,
+                    recovery: recovery,
                     environment: environment
                 )
             }
@@ -160,20 +174,33 @@ final class ChatOutgoingMessagesController {
         chatID: ChatID?,
         error: Error,
         payload: OutgoingPayload,
+        recovery: FailureRecovery,
         environment: Environment
     ) {
         let message = error.localizedDescription
-        if let index = pendingOutgoing.firstIndex(where: { $0.id == turnID }) {
-            pendingOutgoing[index].status = .failed(message: message)
+        switch recovery {
+        case .restoreDraft:
+            if let index = pendingOutgoing.firstIndex(where: { $0.id == turnID }) {
+                pendingOutgoing[index].status = .failed(message: message)
+            }
+        case .returnToQueue:
+            // The message goes back to the queue, so a failed echo row would
+            // show it twice.
+            pendingOutgoing.removeAll { $0.id == turnID }
         }
         if chatID != nil {
             environment.optimisticSubmitFailed(turnID)
         }
         environment.setPreflightError(message)
-        // Conservative restore: never overwrite composer content the user
-        // added while the send was in flight.
-        if environment.readComposer().isUntouched {
-            environment.restoreDraft(payload.draftText, payload.attachments)
+        switch recovery {
+        case .restoreDraft:
+            // Conservative restore: never overwrite composer content the user
+            // added while the send was in flight.
+            if environment.readComposer().isUntouched {
+                environment.restoreDraft(payload.draftText, payload.attachments)
+            }
+        case .returnToQueue(let returnToQueue):
+            returnToQueue(message)
         }
         DebugLog.agent(
             "ChatOutgoingMessagesController send failed "
@@ -208,6 +235,20 @@ extension ChatOutgoingMessagesController {
             draftText: pending.draftText,
             attachments: pending.attachments
         )
+    }
+
+    /// Puts a queued message whose dispatch failed back at the front of the
+    /// queue, marked with the error. Auto-drain holds a marked message until
+    /// the user sends, edits, or removes it, so a failing dispatch cannot
+    /// retry in a loop.
+    static func returningFailedQueuedMessage(
+        _ pending: PendingQueuedMessage,
+        errorMessage: String,
+        to queue: [PendingQueuedMessage]
+    ) -> [PendingQueuedMessage] {
+        var failed = pending
+        failed.dispatchFailure = errorMessage
+        return [failed] + queue.filter { $0.id != pending.id }
     }
 
     /// Conservative queue restore: returns the queued draft only when the live

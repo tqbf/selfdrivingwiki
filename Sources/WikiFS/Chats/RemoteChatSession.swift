@@ -354,8 +354,21 @@ public final class RemoteChatSession {
     ///
     /// Cancellation and its failure attentions are never ready: the cancelled
     /// turn still owns pending status until its settlement commits.
+    ///
+    /// A settled cancellation closes the runtime, so its projection is not
+    /// live and the run state is `.idle`, not `.warm`. That closed projection
+    /// is ready too: the next submit starts a fresh runtime (#1443). Only an
+    /// `.idle` with no projection at all is not ready, because the daemon
+    /// state is not known yet.
     public var isReadyForLocalQueueDrain: Bool {
-        guard runState == .warm else { return false }
+        switch runState {
+        case .warm:
+            break
+        case .idle:
+            guard syncState?.projection != nil else { return false }
+        case .queued, .answering, .cancelling:
+            return false
+        }
         switch attention {
         case .cancellationPersistenceFailed, .runtimeCleanupFailed:
             return false
