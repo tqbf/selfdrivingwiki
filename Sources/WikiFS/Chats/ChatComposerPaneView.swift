@@ -145,6 +145,7 @@ struct ChatComposerPaneView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.borderless)
+                        .composerButtonPointer()
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -168,6 +169,7 @@ struct ChatComposerPaneView: View {
                 .background(Color.accentColor.opacity(0.9), in: Circle())
         }
         .buttonStyle(.borderless)
+        .composerButtonPointer()
         .disabled(!hasDraftText)
         .keyboardShortcut(.return, modifiers: .command)
         .help("Queue for when the response finishes")
@@ -182,6 +184,7 @@ struct ChatComposerPaneView: View {
                 .background(Color.red.opacity(0.85), in: Circle())
         }
         .buttonStyle(.borderless)
+        .composerButtonPointer()
         .help("Stop the current response")
     }
 
@@ -194,6 +197,7 @@ struct ChatComposerPaneView: View {
                 .background(active ? Color.green : Color(nsColor: .quaternaryLabelColor).opacity(0.4), in: Circle())
         }
         .buttonStyle(.borderless)
+        .composerButtonPointer()
         .disabled(!active)
         .keyboardShortcut(.return, modifiers: .command)
         .help(props.composer.sendButtonTitle)
@@ -228,6 +232,7 @@ struct ChatComposerPaneView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
+            .composerButtonPointer()
             .help("Edit this queued message")
             .disabled(hasDraftText)
             Button {
@@ -238,11 +243,21 @@ struct ChatComposerPaneView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
+            .composerButtonPointer()
             .help("Cancel this queued message")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(Color.secondary.opacity(0.10), in: Capsule())
         .transition(.opacity)
+    }
+}
+
+private extension View {
+    /// Shows the arrow over a composer button (#1440). The composer's
+    /// `NSTextView` sets the I-beam, and the borderless buttons next to it
+    /// do not reset the cursor, so the I-beam stays over them.
+    func composerButtonPointer() -> some View {
+        pointerStyle(.default)
     }
 }
