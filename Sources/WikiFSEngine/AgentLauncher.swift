@@ -2653,7 +2653,7 @@ public final class AgentLauncher {
                     let session: SessionHandle
                     if let parentHandle = parentHandle, let acp = acp {
                         DebugLog.agent("runACPIngest[\(phaseName)]: attempting fork from parent session")
-                        if let forked = await DebugLog.trying("forkSession", operation: { try await acp.forkSession(from: parentHandle, cwd: workDir) }) {
+                        if let forked = await DebugLog.trying("forkSession", operation: { try await acp.forkSession(from: parentHandle, cwd: workDir, executionAccess: profile.executionAccess) }) {
                             DebugLog.agent("runACPIngest[\(phaseName)]: fork succeeded")
                             session = forked
                             // §4.5: apply the executor's stage model with the
@@ -3043,7 +3043,7 @@ public final class AgentLauncher {
             if let parentHandle = forkFrom, let acp = backend as? ACPBackend {
                 DebugLog.agent("runACPIngest[\(phaseName)]: attempting fork from parent session")
                 let workingDir = profile.scratchDirectory?.path
-                if let forked = await DebugLog.trying("forkSession", operation: { try await acp.forkSession(from: parentHandle, cwd: workingDir) }) {
+                if let forked = await DebugLog.trying("forkSession", operation: { try await acp.forkSession(from: parentHandle, cwd: workingDir, executionAccess: profile.executionAccess) }) {
                     DebugLog.agent("runACPIngest[\(phaseName)]: fork succeeded, using forked session")
                     session = forked
                     // §4.5: apply the executor's stage model with the planner's
