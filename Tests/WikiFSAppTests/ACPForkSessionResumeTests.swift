@@ -42,6 +42,7 @@ struct ACPForkSessionResumeTests {
 
         fail_resume = "\(Fixture.failResumeFlag)" in sys.argv
         live = set()
+        config_log = sys.argv[sys.argv.index("--config-log") + 1] if "--config-log" in sys.argv else None
 
         def send(payload):
             print(json.dumps(dict(jsonrpc="2.0", **payload)), flush=True)
@@ -59,10 +60,17 @@ struct ACPForkSessionResumeTests {
             if method == "initialize":
                 send({"id": request_id, "result": {
                     "protocolVersion": 1,
-                    "agentCapabilities": {"sessionCapabilities": {"fork": {}, "resume": {}}}}})
+                    "agentCapabilities": {"sessionCapabilities": {"fork": {}, "resume": {}}},
+                    "authMethods": []}})
             elif method == "session/new":
                 live.add("\(Fixture.parentSessionID)")
-                send({"id": request_id, "result": {"sessionId": "\(Fixture.parentSessionID)"}})
+                send({"id": request_id, "result": {
+                    "sessionId": "\(Fixture.parentSessionID)",
+                    "configOptions": [{"id": "mode", "name": "Mode", "kind": {
+                        "type": "select", "currentValue": "agent",
+                        "options": [
+                            {"value": "agent", "name": "Agent"},
+                            {"value": "agent-full-access", "name": "Full access"}]}}]}})
             elif method == "session/fork":
                 send({"id": request_id, "result": {"sessionId": "\(Fixture.forkedSessionID)"}})
             elif method == "session/resume":
@@ -70,7 +78,20 @@ struct ACPForkSessionResumeTests {
                     send({"id": request_id, "error": {"code": -32603, "message": "Resume failed"}})
                 else:
                     live.add(params.get("sessionId"))
-                    send({"id": request_id, "result": {}})
+                    send({"id": request_id, "result": {
+                        "configOptions": [{"id": "mode", "name": "Mode", "kind": {
+                            "type": "select", "currentValue": "agent",
+                            "options": [
+                                {"value": "agent", "name": "Agent"},
+                                {"value": "agent-full-access", "name": "Full access"}]}}]}})
+            elif method == "session/set_config_option":
+                if config_log:
+                    with open(config_log, "a") as output:
+                        output.write(json.dumps(params) + "\\n")
+                send({"id": request_id, "result": {"configOptions": [{"id": "mode", "name": "Mode", "kind": {
+                    "type": "select", "currentValue": params.get("value", "agent"),
+                    "options": [{"value": "agent", "name": "Agent"},
+                                {"value": "agent-full-access", "name": "Full access"}]}}]}})
             elif method == "session/prompt":
                 if params.get("sessionId") in live:
                     send({"id": request_id, "result": {"stopReason": "end_turn"}})
@@ -86,7 +107,8 @@ struct ACPForkSessionResumeTests {
 
     private func makeBackendAndParent(
         dir: URL,
-        extraArgs: [String] = []
+        extraArgs: [String] = [],
+        executionAccess: AgentExecutionAccess = .standard
     ) async throws -> (ACPBackend, SessionHandle) {
         let scriptURL = try writeFakeAgentScript(to: dir)
         let backend = ACPBackend()
@@ -99,6 +121,7 @@ struct ACPForkSessionResumeTests {
             ],
             scratchDirectory: dir,
             isReadOnly: false,
+            executionAccess: executionAccess,
             cli: nil)
         let parent = try await backend.start(profile: profile, systemPrompt: "", onExit: { _ in })
         return (backend, parent)
@@ -153,6 +176,33 @@ struct ACPForkSessionResumeTests {
             return false
         }
         #expect(failures.isEmpty, "forked prompt failed: \(collected)")
+    }
+
+    @Test("a full-access fork applies the advertised mode to the forked session")
+    func forkedSessionAppliesFullAccessMode() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let configLog = dir.appendingPathComponent("config-options.jsonl")
+        let (backend, parent) = try await makeBackendAndParent(
+            dir: dir,
+            extraArgs: ["--config-log", configLog.path],
+            executionAccess: .fullAccess)
+
+        let forked = try await backend.forkSession(
+            from: parent, cwd: dir.path, executionAccess: .fullAccess)
+        _ = try #require(forked)
+        await backend.cancel(parent)
+
+        let requests = try String(contentsOf: configLog, encoding: .utf8)
+            .split(separator: "\n")
+            .compactMap { line in
+                try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+            }
+        #expect(requests.contains {
+            $0["sessionId"] as? String == Fixture.forkedSessionID
+                && $0["configId"] as? String == "mode"
+                && $0["value"] as? String == "agent-full-access"
+        })
     }
 
     @Test("a failed resume of the forked session throws so the caller starts fresh")

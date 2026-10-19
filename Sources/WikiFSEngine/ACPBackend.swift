@@ -1855,7 +1855,8 @@ public actor ACPBackend: AgentBackend {
     ///   is not supported.
     func forkSession(
         from parentHandle: SessionHandle,
-        cwd: String? = nil
+        cwd: String? = nil,
+        executionAccess: AgentExecutionAccess = .standard
     ) async throws -> SessionHandle? {
         guard let warm = warmProcess else {
             DebugLog.agent("ACPBackend.forkSession: no warm process — cannot fork")
@@ -1893,17 +1894,22 @@ public actor ACPBackend: AgentBackend {
         // including the already-injected system prompt. Mark it as injected so
         // `send()` doesn't re-inject it on the first turn.
         let sessionID = UUID().uuidString
+        let forkConfigOptions = activated.configOptions ?? parent.configOptions
         sessions[sessionID] = ACPSession(
             client: warm.client,
             sessionId: forkedSessionId,
             permissionDelegate: warm.permissionDelegate,
             modelsInfo: activated.modelsInfo ?? parent.modelsInfo,
-            configOptions: activated.configOptions ?? parent.configOptions,
+            configOptions: forkConfigOptions,
             notificationFanout: warm.notificationFanout,
             drainTask: nil,
             systemPrompt: parent.systemPrompt,
             systemPromptInjected: true
         )
+        try await applyExecutionAccessIfNeeded(
+            session: SessionHandle(id: sessionID),
+            access: executionAccess,
+            configOptions: forkConfigOptions)
 
         DebugLog.agent("ACPBackend.forkSession: forked session \(forkedSessionId.value) (handle \(sessionID)) ready")
         return SessionHandle(id: sessionID)
