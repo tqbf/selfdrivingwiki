@@ -186,7 +186,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         // agent work succeeded and the item must still complete.
         let stampIDs = QueueIngestionReporting.stampableSourceIDs(
             requested: stagingOutcomes,
-            attemptSucceeded: !Task.isCancelled)
+            attemptSucceeded: results.exitStatus == 0 && results.preflightError == nil)
         for id in stampIDs {
             do {
                 try store.markSourceIngested(id: id)

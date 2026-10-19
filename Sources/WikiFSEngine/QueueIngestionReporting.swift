@@ -54,7 +54,7 @@ public enum QueueIngestionReporting {
     /// all-or-nothing).
     public static func stampableSourceIDs(
         requested: [(id: SourceID, outcome: StagingOutcome)],
-        attemptSucceeded: Bool = true
+        attemptSucceeded: Bool
     ) -> [SourceID] {
         guard attemptSucceeded else { return [] }
         return requested.compactMap { request in

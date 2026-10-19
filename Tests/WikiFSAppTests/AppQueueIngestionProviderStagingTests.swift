@@ -186,7 +186,8 @@ import WikiFSTypes
                 (id: staged.id, outcome: .staged(name: "staged.pdf")),
                 (id: bytesUnavailable.id, outcome: .bytesUnavailable),
             ],
-            store: model)
+            store: model,
+            attemptSucceeded: true)
 
         #expect(try store.markedSourceIDs() == [staged.id.rawValue])
     }
@@ -205,6 +206,34 @@ import WikiFSTypes
             requested: [(id: staged.id, outcome: .staged(name: "staged.pdf"))],
             store: model,
             attemptSucceeded: false)
+
+        #expect(try store.markedSourceIDs().isEmpty)
+    }
+
+    @MainActor
+    @Test("failed launcher outcome after staging does not stamp sources")
+    func failedLauncherOutcomeDoesNotStampStagedSources() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-app-provider-failed-stamp-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let staged = try store.addSource(filename: "staged.pdf", data: Data("%PDF staged".utf8))
+        let model = WikiStoreModel(store: store)
+
+        do {
+            try AppQueueIngestionProvider.validateLauncherOutcome(
+                exitStatus: 1,
+                preflightError: nil,
+                turnFailure: .none)
+            Issue.record("Expected failed launcher outcome")
+        } catch QueueIngestionError.spawnFailed {
+            AppQueueIngestionProvider.stampIngestedSources(
+                requested: [(id: staged.id, outcome: .staged(name: "staged.pdf"))],
+                store: model,
+                attemptSucceeded: false)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
 
         #expect(try store.markedSourceIDs().isEmpty)
     }

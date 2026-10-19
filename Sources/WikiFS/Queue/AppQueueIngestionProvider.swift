@@ -328,7 +328,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         Self.stampIngestedSources(
             requested: stagingOutcomes,
             store: store,
-            attemptSucceeded: !Task.isCancelled)
+            attemptSucceeded: launcher.exitStatus == 0 && launcher.preflightError == nil)
         // Snapshot the actual post-run citation evidence. Workspace merging
         // has already completed (or logged its best-effort failure) before
         // `runAgent` returns, so this records only pages visible afterward.
@@ -530,7 +530,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     static func stampIngestedSources(
         requested: [(id: SourceID, outcome: QueueIngestionReporting.StagingOutcome)],
         store: WikiStoreModel,
-        attemptSucceeded: Bool = true
+        attemptSucceeded: Bool
     ) {
         for id in QueueIngestionReporting.stampableSourceIDs(
             requested: requested,

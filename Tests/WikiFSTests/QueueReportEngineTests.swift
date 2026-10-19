@@ -359,20 +359,29 @@ struct QueueReportEngineTests {
             (id: SourceID(rawValue: "a"), outcome: .staged(name: "Alpha")),
             (id: SourceID(rawValue: "b"), outcome: .bytesUnavailable),
             (id: SourceID(rawValue: "c"), outcome: .staged(name: "Gamma")),
-        ])
+        ], attemptSucceeded: true)
         // Request order, staged only: `b` was never handed to the agent, so a
         // retry must still be able to re-run it honestly.
         #expect(ids == [SourceID(rawValue: "a"), SourceID(rawValue: "c")])
-        #expect(QueueIngestionReporting.stampableSourceIDs(requested: []).isEmpty)
+        #expect(QueueIngestionReporting.stampableSourceIDs(requested: [], attemptSucceeded: true).isEmpty)
     }
 
-    @Test("Cancelled ingestion attempts do not stamp staged sources")
-    func cancelledAttemptDoesNotStampSources() {
+    @Test("Cancelled or failed ingestion attempts do not stamp staged sources")
+    func unsuccessfulAttemptsDoNotStampSources() {
         let requested: [(id: SourceID, outcome: QueueIngestionReporting.StagingOutcome)] = [
             (id: SourceID(rawValue: "a"), outcome: .staged(name: "Alpha")),
             (id: SourceID(rawValue: "b"), outcome: .staged(name: "Beta")),
         ]
-        #expect(QueueIngestionReporting.stampableSourceIDs(requested: requested, attemptSucceeded: false).isEmpty)
+        // Cancellation has no successful terminal outcome; a failed launcher
+        // outcome is equally unsuccessful even when staging completed.
+        let cancelledAttemptSucceeded = false
+        let failedAttemptSucceeded = false
+        #expect(QueueIngestionReporting.stampableSourceIDs(
+            requested: requested,
+            attemptSucceeded: cancelledAttemptSucceeded).isEmpty)
+        #expect(QueueIngestionReporting.stampableSourceIDs(
+            requested: requested,
+            attemptSucceeded: failedAttemptSucceeded).isEmpty)
         #expect(QueueIngestionReporting.stampableSourceIDs(requested: requested, attemptSucceeded: true) == [
             SourceID(rawValue: "a"), SourceID(rawValue: "b")])
     }
