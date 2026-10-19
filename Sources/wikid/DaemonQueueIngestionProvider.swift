@@ -184,7 +184,9 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         // `.submitted` below (per-source completion is never inferred from
         // agent exit there). Stamp failures are logged and never throw: the
         // agent work succeeded and the item must still complete.
-        let stampIDs = QueueIngestionReporting.stampableSourceIDs(requested: stagingOutcomes)
+        let stampIDs = QueueIngestionReporting.stampableSourceIDs(
+            requested: stagingOutcomes,
+            attemptSucceeded: !Task.isCancelled)
         for id in stampIDs {
             do {
                 try store.markSourceIngested(id: id)

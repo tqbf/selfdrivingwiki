@@ -366,6 +366,17 @@ struct QueueReportEngineTests {
         #expect(QueueIngestionReporting.stampableSourceIDs(requested: []).isEmpty)
     }
 
+    @Test("Cancelled ingestion attempts do not stamp staged sources")
+    func cancelledAttemptDoesNotStampSources() {
+        let requested: [(id: SourceID, outcome: QueueIngestionReporting.StagingOutcome)] = [
+            (id: SourceID(rawValue: "a"), outcome: .staged(name: "Alpha")),
+            (id: SourceID(rawValue: "b"), outcome: .staged(name: "Beta")),
+        ]
+        #expect(QueueIngestionReporting.stampableSourceIDs(requested: requested, attemptSucceeded: false).isEmpty)
+        #expect(QueueIngestionReporting.stampableSourceIDs(requested: requested, attemptSucceeded: true) == [
+            SourceID(rawValue: "a"), SourceID(rawValue: "b")])
+    }
+
     @Test("Agent completion reports notReported availability; lint wording never claims page results")
     func agentCompletionDoesNotInventTargetResults() {
         let lintCompletion = QueueIngestionReporting.agentCompletionMutation(operation: .lint, usage: nil)

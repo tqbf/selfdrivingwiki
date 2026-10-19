@@ -325,7 +325,10 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // fact for the sources this job staged. Report truth rules are
         // separate: report targets still stay `.submitted` (per-source
         // completion is never inferred from agent exit there).
-        Self.stampIngestedSources(requested: stagingOutcomes, store: store)
+        Self.stampIngestedSources(
+            requested: stagingOutcomes,
+            store: store,
+            attemptSucceeded: !Task.isCancelled)
         // Snapshot the actual post-run citation evidence. Workspace merging
         // has already completed (or logged its best-effort failure) before
         // `runAgent` returns, so this records only pages visible afterward.
@@ -526,9 +529,12 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     /// unstamped source stays visibly unmarked, which is honest.
     static func stampIngestedSources(
         requested: [(id: SourceID, outcome: QueueIngestionReporting.StagingOutcome)],
-        store: WikiStoreModel
+        store: WikiStoreModel,
+        attemptSucceeded: Bool = true
     ) {
-        for id in QueueIngestionReporting.stampableSourceIDs(requested: requested) {
+        for id in QueueIngestionReporting.stampableSourceIDs(
+            requested: requested,
+            attemptSucceeded: attemptSucceeded) {
             store.markSourceIngested(id: id)
         }
     }

@@ -191,6 +191,24 @@ import WikiFSTypes
         #expect(try store.markedSourceIDs() == [staged.id.rawValue])
     }
 
+    @MainActor
+    @Test("cancelled attempt does not stamp staged sources")
+    func cancelledAttemptDoesNotStampStagedSources() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-app-provider-cancel-stamp-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let staged = try store.addSource(filename: "staged.pdf", data: Data("%PDF staged".utf8))
+        let model = WikiStoreModel(store: store)
+
+        AppQueueIngestionProvider.stampIngestedSources(
+            requested: [(id: staged.id, outcome: .staged(name: "staged.pdf"))],
+            store: model,
+            attemptSucceeded: false)
+
+        #expect(try store.markedSourceIDs().isEmpty)
+    }
+
     // MARK: - Fixtures
 
     private let sourceID = SourceID(rawValue: "01J00000000000000000000FX")
