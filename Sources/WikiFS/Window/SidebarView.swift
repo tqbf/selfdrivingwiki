@@ -31,16 +31,18 @@ struct SidebarView: View {
     @State private var showingNewBookmarkFolder = false
     @State private var newBookmarkFolderName = ""
 
-    /// The three sections' display sorts. They live HERE — above the
-    /// section switch in `bookmarksOrList` — because the switch tears the
-    /// section view down and rebuilds it on every section change; a
-    /// section-local `@State` would reset the choice each time. (The Pages
-    /// sort has the same lifetime guarantee a different way: it is
-    /// `store.pageSortOrder`, model-level.) Defaults match each section's
-    /// former view-local defaults.
+    /// The three sections' display sorts and the Bookmarks/Chats filters.
+    /// They live HERE — above the section switch in `bookmarksOrList` —
+    /// because the switch tears the section view down and rebuilds it on
+    /// every section change; a section-local `@State` would reset the choice
+    /// each time. (The Pages sort has the same lifetime guarantee a different
+    /// way: it is `store.pageSortOrder`, model-level.) Defaults match each
+    /// choice's former view-local defaults.
     @State private var sourceSort: SourcesContainerView.SourceSortOrder = .lastUpdated
     @State private var bookmarkSortOrder: BookmarkSortOrder = .manual
+    @State private var bookmarkKindFilter: BookmarkKindFilter = .all
     @State private var chatSortOrder: ChatSortOrder = .lastUpdated
+    @State private var chatDateFilter: ChatDateFilter = .all
 
     /// Which section is currently shown. Like Xcode's navigator, the icon bar at
     /// the top of the sidebar is a mutually-exclusive selector — exactly one
@@ -189,6 +191,7 @@ struct SidebarView: View {
         case .bookmarks:
             BookmarksContainerView(store: store, fileProvider: fileProvider,
                 sortOrder: $bookmarkSortOrder,
+                kindFilter: $bookmarkKindFilter,
                 onShowPicker: { bookmarkPickerContext = $0 },
                 onEdit: { editBookmarkNodeID = EditBookmarkContext(nodeID: $0) },
                 onNewFolder: {
@@ -196,7 +199,8 @@ struct SidebarView: View {
                     newBookmarkFolderName = ""
                 })
         case .chats:
-            AgentToolsView(store: store, sortOrder: $chatSortOrder)
+            AgentToolsView(store: store, dateFilter: $chatDateFilter,
+                           sortOrder: $chatSortOrder)
         }
     }
 
