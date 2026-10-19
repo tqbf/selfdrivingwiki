@@ -24,9 +24,16 @@ import ACPModel
 
     // MARK: - Execution access
 
-    /// Queued mutation workflows must request the ACP agent's advertised
-    /// full-access mode before their first tool call. This is separate from
-    /// the app's ACP permission policy, which keeps its own audit trail.
+    /// Agent runs must request the ACP agent's advertised full-access mode
+    /// before their first tool call. This is separate from the app's ACP
+    /// permission policy, which keeps its own audit trail.
+    @Test func chatExecutionAccessRequestsFullAccess() {
+        #expect(PermissionOperationKind.chat.executionAccess == .fullAccess)
+        #expect(PermissionOperationKind.ingest.executionAccess == .fullAccess)
+        #expect(PermissionOperationKind.lint.executionAccess == .fullAccess)
+    }
+
+    /// The resolver applies the advertised mode only when the agent exposes it.
     @Test func fullAccessSelectsAdvertisedBypassPermissionsMode() {
         let options = [
             SessionConfigOption(

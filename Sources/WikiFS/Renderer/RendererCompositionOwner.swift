@@ -272,7 +272,7 @@ final class AppProcessPluginCatalog {
                         resolvePermissionPolicy: { operation in
                             let key: String
                             switch operation {
-                            case .chat: key = AgentLauncher.PermissionModeKey.chat
+                            case .chat: return .bypass
                             case .ingest: key = AgentLauncher.PermissionModeKey.ingest
                             case .lint: key = AgentLauncher.PermissionModeKey.lint
                             }
