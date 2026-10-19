@@ -355,20 +355,46 @@ struct SourcesTests {
     }
 
     @MainActor
-    @Test func modelTracksWhetherFileHasBeenAgentIngested() throws {
+    @Test func cancelledIngestionDoesNotMarkSourcesIngested() throws {
         let store = try tempStore()
-        let raw = try store.addSource(filename: "source.pdf", data: Data("%PDF".utf8))
-        let untouched = try store.addSource(filename: "notes.txt", data: Data("notes".utf8))
-
+        let running = try store.addSource(filename: "running.pdf", data: Data("%PDF-running".utf8))
+        let pending = try store.addSource(filename: "pending.pdf", data: Data("%PDF-pending".utf8))
+        let completed = try store.addSource(filename: "completed.pdf", data: Data("%PDF-completed".utf8))
         let model = WikiStoreModel(store: store)
-        #expect(model.isSourceIngested(raw) == false)
-        #expect(model.isSourceIngested(untouched) == false)
 
-        _ = try store.appendLog(kind: .ingest, title: "files/by-id/\(raw.id.rawValue).pdf", note: nil)
+        let queue = try QueueStore(databaseURL: tempDatabaseURL())
+        let wikiID = WikiID(rawValue: "cancel-ingest-test")
+        let runningItem = try queue.enqueue(QueueItemRequest(
+            queue: .ingestion, wikiID: wikiID,
+            payload: QueueItemPayload(sourceIDs: [running.id])))
+        let pendingItem = try queue.enqueue(QueueItemRequest(
+            queue: .ingestion, wikiID: wikiID,
+            payload: QueueItemPayload(sourceIDs: [pending.id])))
+        try queue.markRunning(id: runningItem.id, providerID: ProviderID(rawValue: "test"))
+
+        // An agent may write a matching log before the queue run is canceled.
+        _ = try store.appendLog(
+            kind: .ingest, title: "files/by-id/\(running.id.rawValue).pdf", note: nil)
+        _ = try store.appendLog(
+            kind: .ingest, title: "files/by-id/\(pending.id.rawValue).pdf", note: nil)
+        try queue.markCancelled(id: runningItem.id)
+        try queue.markCancelled(id: pendingItem.id)
+
+        // A durable completion stamp is the success fact and survives unrelated
+        // canceled work.
+        model.markSourceIngested(id: completed.id)
         model.reloadFromStore()
 
-        #expect(model.isSourceIngested(raw) == true)
-        #expect(model.isSourceIngested(untouched) == false)
+        #expect(try queue.getItem(runningItem.id)?.state == .cancelled)
+        #expect(try queue.getItem(pendingItem.id)?.state == .cancelled)
+        #expect(model.isSourceIngested(running) == false)
+        #expect(model.isSourceIngested(pending) == false)
+        #expect(model.isSourceIngested(completed) == true)
+
+        _ = try store.appendContentVersion(
+            sourceID: completed.id, data: Data("%PDF-updated".utf8))
+        model.reloadFromStore()
+        #expect(model.isSourceIngested(completed) == false)
     }
 
     /// #1344: the host's main-actor stamp path (pipeline-job completion)

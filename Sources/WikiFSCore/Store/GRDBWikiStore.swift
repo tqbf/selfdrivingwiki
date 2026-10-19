@@ -6545,7 +6545,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             //    mime_type — keep addSource dedup consistent with the new blob).
             try db.execute(sql: """
             UPDATE sources SET byte_size = ?, content_hash = ?, mime_type = ?, updated_at = ?,
-                                version = version + 1
+                                version = version + 1, ingested_at = NULL
             WHERE id = ?;
             """, arguments: [Int64(data.count), contentHash, resolvedMime, nowTS,
                             sourceID.rawValue])
@@ -13456,7 +13456,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
 
             try db.execute(sql: """
             UPDATE sources SET byte_size = ?, content_hash = ?, updated_at = ?,
-                                version = version + 1
+                                version = version + 1, ingested_at = NULL
             WHERE id = ?;
             """, arguments: [byteSize, blobHash, nowTS, sourceID.rawValue])
             if let mime {
