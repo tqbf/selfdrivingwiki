@@ -617,6 +617,7 @@ import Testing
                 store: model,
                 fileProvider: FileProviderFacade(),
                 sortOrder: .constant(.manual),
+                kindFilter: .constant(.all),
                 onShowPicker: { _ in },
                 onEdit: { _ in },
                 onNewFolder: {}))

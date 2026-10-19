@@ -7,8 +7,8 @@ import WikiFSCore
 /// native multi-selection (Shift / Cmd / right-click), double-click to open,
 /// drag-out, and batch context menus — so all four sidebar sections share the
 /// same selection semantics — plus the same header filter/sort menu icons
-/// (display-only state; the sort choice is owned by `SidebarView` so it
-/// survives section switches, while the date filter is view-local).
+/// (display-only state; the sort and the date filter are owned by
+/// `SidebarView` so they survive section switches).
 /// Maintenance/diagnostic surfaces (Lint, Instructions, Activity) moved to
 /// the app's maintenance menu (issue #282).
 struct AgentToolsView: View {
@@ -23,10 +23,11 @@ struct AgentToolsView: View {
     /// confirm.
     @State private var renamingChat: ChatSummary?
     @State private var renameDraft: String = ""
-    /// Date-window "Show" filter backing the filter menu. `all` is the
-    /// default and returns the list unchanged — view-level state like
-    /// `PageDateFilter` in `PagesContainerView`.
-    @State private var dateFilter: ChatDateFilter = .all
+    /// Date-window "Show" filter backing the filter menu. Owned by
+    /// `SidebarView` — above the section switch — so the choice survives
+    /// switching sidebar sections. `all` is the default and returns the
+    /// list unchanged.
+    @Binding var dateFilter: ChatDateFilter
     /// Display order backing the "Sort by" menu. Owned by `SidebarView` —
     /// above the section switch — so the choice survives switching sidebar
     /// sections. `lastUpdated` is the store's native
@@ -78,17 +79,29 @@ struct AgentToolsView: View {
             Text("Enter a new title for this chat.")
         }
         // A sidebar reveal ("Show in Sidebar" from a chat's detail view) must
-        // land on a visible row — drop the date filter if it hides the target.
-        // (SidebarView drops the search query the same way; the filter is
-        // view-local so it resets here. @State resets on section switch, so
-        // only the already-mounted case needs this.)
+        // land on a visible row — drop the date filter if it hides the target
+        // (SidebarView drops the search query the same way). The filter now
+        // persists across section switches, so BOTH arrival paths need the
+        // drop: the already-mounted case fires onChange; the switched-here
+        // case mounts fresh with the persisted filter, and a fresh mount
+        // never sees the version change. The onAppear check is safe against
+        // stale reveals: the pending reveal is nil unless one is actually in
+        // flight (the list consumes it once the row lands).
+        .onAppear { dropDateFilterIfHidingReveal() }
         .onChange(of: store.pendingSidebarRevealVersion) { _, _ in
-            guard case .chat(let id) = store.pendingSidebarReveal,
-                  dateFilter != .all,
-                  !visibleChats.contains(where: { $0.id == id })
-            else { return }
-            dateFilter = .all
+            dropDateFilterIfHidingReveal()
         }
+    }
+
+    /// Drops the date filter when a pending sidebar reveal targets a chat the
+    /// filter would hide. A hidden row can never be scrolled to or selected,
+    /// so the reveal would never be consumed.
+    private func dropDateFilterIfHidingReveal() {
+        guard case .chat(let id) = store.pendingSidebarReveal,
+              dateFilter != .all,
+              !visibleChats.contains(where: { $0.id == id })
+        else { return }
+        dateFilter = .all
     }
 
     // MARK: - Chats header
