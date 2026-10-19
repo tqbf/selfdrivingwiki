@@ -233,10 +233,9 @@ public final class WikiStoreModel {
     /// ALWAYS rebuilt from `store.listSources()` after a change, never
     /// incrementally patched (§3.1). Most-recent-first.
     public private(set) var sources: [SourceSummary] = []
-    /// Best-effort UI status for whether a raw source has already been processed
-    /// by an agent Ingest run. The source of truth is the append-only log; agents
-    /// can choose their log title, so matching accepts the filename, id, by-id
-    /// projection leaf, or path in either the log title or note.
+    /// UI status for whether the source's current content has completed an
+    /// agent Ingest run. The store's `ingested_at` marker is cleared whenever
+    /// source content changes; free-text logs are not completion evidence.
     private var sourceIngestedStatus: [SourceID: Bool] = [:]
 
     /// Monotonic counter bumped on every `reloadSources()`. Extraction and
@@ -4350,37 +4349,13 @@ public final class WikiStoreModel {
         // counter (#1179), so the bump must not depend on the array changing.
         sourcesVersion &+= 1
         sources = DebugLog.trying("listSources", operation: { try store.listSources() }) ?? []
-        // Authoritative source: the `ingested_at` stamp — set by the host at
-        // pipeline-job completion (#1344) and by the agent's ad-hoc CLI path
-        // (`wikictl log append --kind ingest --source <id>`). First stamp wins.
+        // The explicit completion marker is written only after a validated
+        // successful pipeline run. Log text is not completion evidence: an
+        // agent can append a log before its run is canceled or fails.
         let markedIDs = DebugLog.trying("markedSourceIDs", operation: { try store.markedSourceIDs() }) ?? []
 
-        // Legacy fallback: wikis ingested before the flag existed only have the
-        // free-text log entry, so keep the old best-effort title/path match —
-        // BUT only for sources that are NOT already marked (issue #477: avoid
-        // loading 10K log rows when every source is already flagged).
-        let unmarkedSources = sources.filter { !markedIDs.contains($0.id.rawValue) }
-        let ingestTexts: [String] = unmarkedSources.isEmpty
-            ? []
-            : (DebugLog.trying("recentLogEntries", operation: { try store.recentLogEntries(limit: 10_000) }) ?? [])
-                .filter { $0.kind == .ingest }
-                .map { "\($0.title) \($0.note ?? "")".lowercased() }
-
         sourceIngestedStatus = Dictionary(uniqueKeysWithValues: sources.map { file in
-            if markedIDs.contains(file.id.rawValue) {
-                return (file.id, true)
-            }
-            let filename = file.filename.lowercased()
-            let byIDLeaf = FilenameEscaping
-                .byIDSourceFilename(sourceID: file.id, ext: file.ext)
-                .lowercased()
-            let path = "sources/by-id/\(byIDLeaf)"
-            let matchers = [filename, file.id.rawValue.lowercased(), byIDLeaf, path]
-                .filter { !$0.isEmpty }
-            let hasLogEntry = ingestTexts.contains { text in
-                matchers.contains { text.contains($0) }
-            }
-            return (file.id, hasLogEntry)
+            (file.id, markedIDs.contains(file.id.rawValue))
         })
         // Phase A.1: any source mutation invalidates the memoized render context.
         renderContextGeneration &+= 1
