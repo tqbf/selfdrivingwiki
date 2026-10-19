@@ -23,13 +23,15 @@ struct SourcesContainerView: View {
     let extractionProvider: any QueueExtractionProvider
     var ingestingSourceIDs: Set<SourceID> = []
 
+    /// Display order backing the "Sort by" menu. Owned by `SidebarView` —
+    /// above the section switch — so the choice survives switching sidebar
+    /// sections. This view is torn down and rebuilt on every switch.
+    /// `lastUpdated` is the store's native order — the default.
+    @Binding var sourceSort: SourceSortOrder
     @Binding var showingImportMarkdown: Bool
     var onAddFromURL: () -> Void
 
     @State private var sourceFilter: SourceFilter = .all
-    /// Display order backing the "Sort by" menu. `lastUpdated` is the
-    /// store's native order — today's default.
-    @State private var sourceSort: SourceSortOrder = .lastUpdated
     @State private var renameTarget: SourceSummary?
     @State private var renameText = ""
     /// Non-nil while the re-ingest confirmation sheet is up for a batch that
@@ -54,7 +56,8 @@ struct SourcesContainerView: View {
     /// Display order for the source list (follow-up to #241's Bookmarks
     /// header). `lastUpdated` is the store's native `ORDER BY updated_at
     /// DESC` — today's behavior — and the default. Raw value matches the
-    /// case name, mirroring `PageSortOrder`, should the choice persist later.
+    /// case name, mirroring `PageSortOrder`. The chosen value persists at
+    /// the `SidebarView` level, above the section switch.
     enum SourceSortOrder: String, CaseIterable {
         /// Most recently updated first — the store's native order (default).
         case lastUpdated

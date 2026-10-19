@@ -2,9 +2,11 @@ import Foundation
 import WikiFSCore
 
 /// Display sort for the Chats sidebar list, mirroring the "Sort by" menu in
-/// the Pages/Sources/Bookmarks sections. View-level only — the store's
+/// the Pages/Sources/Bookmarks sections. Display-only — the store's
 /// `chats` array (native `ORDER BY updated_at DESC`) is never rewritten;
-/// `.lastUpdated` is the default and reproduces that native order.
+/// `.lastUpdated` is the default and reproduces that native order. The
+/// chosen value persists at the `SidebarView` level, above the section
+/// switch.
 enum ChatSortOrder: String, CaseIterable, Sendable {
     /// Most recently updated first — the store's native order (default).
     /// `updatedAt` bumps on every message append, so this is

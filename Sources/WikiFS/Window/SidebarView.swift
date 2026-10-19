@@ -31,6 +31,17 @@ struct SidebarView: View {
     @State private var showingNewBookmarkFolder = false
     @State private var newBookmarkFolderName = ""
 
+    /// The three sections' display sorts. They live HERE — above the
+    /// section switch in `bookmarksOrList` — because the switch tears the
+    /// section view down and rebuilds it on every section change; a
+    /// section-local `@State` would reset the choice each time. (The Pages
+    /// sort has the same lifetime guarantee a different way: it is
+    /// `store.pageSortOrder`, model-level.) Defaults match each section's
+    /// former view-local defaults.
+    @State private var sourceSort: SourcesContainerView.SourceSortOrder = .lastUpdated
+    @State private var bookmarkSortOrder: BookmarkSortOrder = .manual
+    @State private var chatSortOrder: ChatSortOrder = .lastUpdated
+
     /// Which section is currently shown. Like Xcode's navigator, the icon bar at
     /// the top of the sidebar is a mutually-exclusive selector — exactly one
     /// section's "window" is visible at a time. Pure UI state — not persisted.
@@ -172,10 +183,12 @@ struct SidebarView: View {
                                  queueEngine: session.queueEngine,
                                  extractionProvider: session.extractionProvider,
                                  ingestingSourceIDs: ingestingSourceIDs,
+                                 sourceSort: $sourceSort,
                                  showingImportMarkdown: $showingImportMarkdown,
                                  onAddFromURL: onAddFromURL)
         case .bookmarks:
             BookmarksContainerView(store: store, fileProvider: fileProvider,
+                sortOrder: $bookmarkSortOrder,
                 onShowPicker: { bookmarkPickerContext = $0 },
                 onEdit: { editBookmarkNodeID = EditBookmarkContext(nodeID: $0) },
                 onNewFolder: {
@@ -183,7 +196,7 @@ struct SidebarView: View {
                     newBookmarkFolderName = ""
                 })
         case .chats:
-            AgentToolsView(store: store)
+            AgentToolsView(store: store, sortOrder: $chatSortOrder)
         }
     }
 

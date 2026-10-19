@@ -7,7 +7,8 @@ import WikiFSCore
 /// native multi-selection (Shift / Cmd / right-click), double-click to open,
 /// drag-out, and batch context menus — so all four sidebar sections share the
 /// same selection semantics — plus the same header filter/sort menu icons
-/// (display-only, view-level state like Sources/Bookmarks).
+/// (display-only state; the sort choice is owned by `SidebarView` so it
+/// survives section switches, while the date filter is view-local).
 /// Maintenance/diagnostic surfaces (Lint, Instructions, Activity) moved to
 /// the app's maintenance menu (issue #282).
 struct AgentToolsView: View {
@@ -26,9 +27,11 @@ struct AgentToolsView: View {
     /// default and returns the list unchanged — view-level state like
     /// `PageDateFilter` in `PagesContainerView`.
     @State private var dateFilter: ChatDateFilter = .all
-    /// Display order backing the "Sort by" menu. `lastUpdated` is the store's
-    /// native `ORDER BY updated_at DESC` — today's default.
-    @State private var sortOrder: ChatSortOrder = .lastUpdated
+    /// Display order backing the "Sort by" menu. Owned by `SidebarView` —
+    /// above the section switch — so the choice survives switching sidebar
+    /// sections. `lastUpdated` is the store's native
+    /// `ORDER BY updated_at DESC` — the default.
+    @Binding var sortOrder: ChatSortOrder
 
     var body: some View {
         // Touch the daemon's running-state token so SwiftUI re-renders (and
