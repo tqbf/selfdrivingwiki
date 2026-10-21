@@ -2,7 +2,9 @@
 
 ## Ownership
 
-The daemon owns one persistent Tantivy runtime per wiki. The app and `wikictl` query that runtime through XPC. Neither client opens a Tantivy writer or creates a temporary index.
+The daemon owns one persistent Tantivy runtime per wiki. The app uses embedded XPC. Standalone `wikictl` uses a search-only Unix socket in the App Group container. Both transports call the same runtime. Neither client opens a Tantivy writer or creates a temporary index.
+
+Embedded XPC lookup is relative to the calling app bundle. It does not let the standalone CLI reach the host app's service. The CLI must not use `NSXPCConnection(serviceName:)` for this connection.
 
 The runtime uses the existing `search-index/<wikiID>` location. SQLite remains the source of truth. The daemon builds a missing index before it admits a query.
 

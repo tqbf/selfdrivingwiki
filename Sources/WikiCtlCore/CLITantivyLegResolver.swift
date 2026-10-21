@@ -239,9 +239,8 @@ public struct WikiCtlRunner {
 /// `source search`, `chat search`) onto the daemon's index — the same BM25
 /// leg the app's sidebar / omnibox use (#637), served by the daemon as the
 /// sole index owner. The CLI never touches a Tantivy index directory and
-/// never boots a search runtime of its own: each request is one timed XPC
-/// round trip through ``DaemonSearchClient``
-/// (`WikiDaemonProtocol.search(request:reply:)`), deduplicated per
+/// never boots a search runtime of its own. Requests use the daemon's local
+/// socket through ``DaemonSearchClient``, deduplicated per
 /// (wiki, query, kind, limit) while a request is in flight.
 ///
 /// Hits are mapped best-first to typed summaries (`WikiPageSummary` /
@@ -270,13 +269,13 @@ public enum CLITantivyLegResolver {
         private var inFlightSearches: [SearchRequestKey: InFlightSearch] = [:]
         private var daemonClient: DaemonSearchClient?
 
-        /// The daemon client is constructed once per process: `connect()`
-        /// creates the embedded XPC service connection and the client vends
-        /// its daemon proxy. A failed construction is NOT cached — a daemon
-        /// that appears later must be reachable on the next call.
+        /// The standalone CLI uses the daemon's shared local socket.
+        /// Embedded XPC service lookup is available only to the host app.
         private func daemonBackend() throws -> DaemonSearchClient {
             if let daemonClient { return daemonClient }
-            let client = try DaemonSearchClient(connection: WikiDaemonConnection.connect())
+            let directory = try DatabaseLocation.appGroupContainerDirectory()
+            let transport = try DaemonSearchSocketClient.transport(containerDirectory: directory)
+            let client = DaemonSearchClient(transport: transport)
             daemonClient = client
             return client
         }

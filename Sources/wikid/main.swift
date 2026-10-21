@@ -743,8 +743,12 @@ let daemon = WikiDaemon(
     containerDirectory: containerDirectory,
     profileOwner: profileOwner,
     storeBootstrap: StoreBootstrap())
+let searchSocket = try DaemonSearchSocketServer(containerDirectory: containerDirectory) { request in
+    await daemon.searchData(request: request)
+}
 let processLifetime = DaemonProcessLifetimeCoordinator(
     shutdown: {
+        searchSocket.stop()
         await daemon.shutdown()
     },
     didShutdown: {
@@ -801,7 +805,12 @@ let bootDeadline = Date().addingTimeInterval(60)
 while !bootstrap.isSettled && runLoop.run(mode: .default, before: bootDeadline) {}
 switch bootstrap.state {
 case .ready:
-    break
+    do {
+        try searchSocket.start()
+    } catch {
+        DebugLog.store("wikid: search socket startup failed: \(error)")
+        Darwin.exit(EXIT_FAILURE)
+    }
 case .failed:
     Darwin.exit(EXIT_FAILURE)
 case .booting:
