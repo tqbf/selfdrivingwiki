@@ -34,6 +34,18 @@ struct SandboxProfileTests {
     #expect(p.contains("(allow file-write* (literal (param \"WIKI_DB\")))"))
   }
 
+  @Test func searchIndexAllowanceIsScopedToActiveWiki() {
+    let invocation = SandboxProfile.invocation(
+      homePath: "/Users/me", scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    let root = "/Users/me/Library/Group Containers/group.x/search-index"
+    #expect(invocation.defines.contains { $0.0 == "SEARCH_INDEX_ROOT" && $0.1 == root })
+    #expect(invocation.defines.contains { $0.0 == "WIKI_SEARCH_INDEX" && $0.1 == root + "/01WIKI" })
+    #expect(invocation.profile.contains("(allow file-write-create (literal (param \"SEARCH_INDEX_ROOT\")))"))
+    #expect(invocation.profile.contains("(allow file-write* (subpath (param \"WIKI_SEARCH_INDEX\")))"))
+    #expect(!invocation.profile.contains("(subpath (param \"SEARCH_INDEX_ROOT\"))"))
+    #expect(!readOnlyProfile().contains("SEARCH_INDEX"))
+  }
+
   // MARK: - SQLite sidecars
 
   @Test func allowsDBPlusWalShmJournalSidecars() {
@@ -163,7 +175,7 @@ struct SandboxProfileTests {
       scratchDir: Self.scratchDir,
       wikiDBPath: Self.wikiDB,
       claudeTempBase: "/private/tmp/claude-999")
-    #expect(inv.defines.count == 4)
+    #expect(inv.defines.count == 6)
     // Order matters for the argv emit.
     #expect(inv.defines[0].0 == "HOME")
     #expect(inv.defines[0].1 == "/Users/me")
@@ -287,10 +299,10 @@ struct SandboxProfileTests {
       wikiDBPath: Self.wikiDB,
       claudeTempBase: "/private/tmp/claude-999",
       pdf2mdScriptPath: "/Users/me/app/Contents/Helpers/pdf2md")
-    #expect(inv.defines.count == 5)
+    #expect(inv.defines.count == 7)
     // Order matters for the argv emit — PDF2MD_SCRIPT is appended last.
-    #expect(inv.defines[4].0 == "PDF2MD_SCRIPT")
-    #expect(inv.defines[4].1 == "/Users/me/app/Contents/Helpers/pdf2md")
+    #expect(inv.defines[6].0 == "PDF2MD_SCRIPT")
+    #expect(inv.defines[6].1 == "/Users/me/app/Contents/Helpers/pdf2md")
     // The define alone is useless without the deny rules in the profile text.
     #expect(inv.profile.contains("(deny process-exec* (literal (param \"PDF2MD_SCRIPT\")))"))
     #expect(inv.profile.contains("(deny file-read* (literal (param \"PDF2MD_SCRIPT\")))"))

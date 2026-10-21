@@ -210,6 +210,36 @@ struct AgentSandboxProcessTests {
 
     struct WikictlNotFound: Error {}
 
+    @Test func coldSearchBuildsOnlyActiveWikiIndex() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let page = try fixture.storeA.createPage(title: "Ironworkers union organization")
+        let indexRoot = fixture.container.appendingPathComponent("search-index", isDirectory: true)
+        // Start with no shared parent, not merely a missing per-wiki directory.
+        if FileManager.default.fileExists(atPath: indexRoot.path) {
+            try FileManager.default.removeItem(at: indexRoot)
+        }
+        let result = try await runSandboxed(
+            fixture, executablePath: try wikictlPath(),
+            arguments: ["--wiki", fixture.wikiA.id.rawValue,
+                        "page", "search", "--query", "ironworkers", "--json"])
+        #expect(result.status == 0, "\(result.errorText)")
+        #expect(result.outputText.contains(page.id.rawValue), "\(result.outputText) \(result.errorText)")
+        let activeIndex = indexRoot.appendingPathComponent(fixture.wikiA.id.rawValue)
+        #expect(FileManager.default.fileExists(atPath: activeIndex.path))
+
+        let siblingIndex = indexRoot.appendingPathComponent(fixture.wikiB.id.rawValue)
+        let denied = try await runSandboxed(
+            fixture, executablePath: "/bin/mkdir", arguments: ["-p", siblingIndex.path])
+        #expect(denied.status != 0)
+        #expect(!FileManager.default.fileExists(atPath: siblingIndex.path))
+        let unrelated = fixture.container.appendingPathComponent("unrelated.txt")
+        let deniedFile = try await runSandboxed(
+            fixture, executablePath: "/usr/bin/touch", arguments: [unrelated.path])
+        #expect(deniedFile.status != 0)
+        #expect(!FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
     // MARK: - AC.1: the POSIX /bin/sh baseline
 
     @Test func posixShTransformsInsideScratchAndRejectsOutsideWrite() async throws {
