@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import WikiFSCore
 import WikiFSEngine
+import WikiFSSearch
 @testable import WikiFSEngine
 
 /// Live macOS Seatbelt suite (`plans/sandbox-agent.md` §live-sandbox): runs the
@@ -210,34 +211,36 @@ struct AgentSandboxProcessTests {
 
     struct WikictlNotFound: Error {}
 
-    @Test func coldSearchBuildsOnlyActiveWikiIndex() async throws {
+    @Test func failedWriterOpenPreservesLiveIndex() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let page = try fixture.storeA.createPage(title: "Ironworkers union organization")
-        let indexRoot = fixture.container.appendingPathComponent("search-index", isDirectory: true)
-        // Start with no shared parent, not merely a missing per-wiki directory.
-        if FileManager.default.fileExists(atPath: indexRoot.path) {
-            try FileManager.default.removeItem(at: indexRoot)
+        _ = try fixture.storeA.createPage(title: "Ironworkers")
+        let directory = fixture.scratch.appendingPathComponent("live-index")
+        let source = StoreBackedTantivyContentSource(store: fixture.storeA)
+        let writer = try TantivyIndexer(indexDirectory: directory, contentSource: source)
+        try await writer.rebuild()
+        let markerURL = directory.appendingPathComponent("preserve.txt")
+        try Data("must remain".utf8).write(to: markerURL)
+        #expect(throws: (any Error).self) {
+            _ = try TantivyIndexer(indexDirectory: directory, contentSource: source)
         }
+        #expect(try String(contentsOf: markerURL, encoding: .utf8) == "must remain")
+        let hits = try await writer.search(query: "ironworkers", kind: .page, limit: 10)
+        #expect(!hits.isEmpty)
+    }
+
+    @Test func unavailableSearchIsNotReportedAsZeroResults() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        // The disposable wiki is absent from the installed daemon's registry.
         let result = try await runSandboxed(
             fixture, executablePath: try wikictlPath(),
             arguments: ["--wiki", fixture.wikiA.id.rawValue,
-                        "page", "search", "--query", "ironworkers", "--json"])
-        #expect(result.status == 0, "\(result.errorText)")
-        #expect(result.outputText.contains(page.id.rawValue), "\(result.outputText) \(result.errorText)")
-        let activeIndex = indexRoot.appendingPathComponent(fixture.wikiA.id.rawValue)
-        #expect(FileManager.default.fileExists(atPath: activeIndex.path))
-
-        let siblingIndex = indexRoot.appendingPathComponent(fixture.wikiB.id.rawValue)
-        let denied = try await runSandboxed(
-            fixture, executablePath: "/bin/mkdir", arguments: ["-p", siblingIndex.path])
-        #expect(denied.status != 0)
-        #expect(!FileManager.default.fileExists(atPath: siblingIndex.path))
-        let unrelated = fixture.container.appendingPathComponent("unrelated.txt")
-        let deniedFile = try await runSandboxed(
-            fixture, executablePath: "/usr/bin/touch", arguments: [unrelated.path])
-        #expect(deniedFile.status != 0)
-        #expect(!FileManager.default.fileExists(atPath: unrelated.path))
+                        "page", "search", "--query", "ironworkers"])
+        #expect(result.status == 1, "\(result.errorText)")
+        #expect(!result.errorText.contains("0 results"))
+        #expect(!result.errorText.isEmpty)
+        #expect(result.outputText.isEmpty)
     }
 
     // MARK: - AC.1: the POSIX /bin/sh baseline

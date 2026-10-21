@@ -4,6 +4,7 @@ import CordisLoader
 import Foundation
 import Testing
 import WikiFSCore
+import WikiFSSearch
 @testable import WikiFSEngine
 
 @Suite("App profile boot", .serialized, .timeLimit(.minutes(1)))
@@ -116,7 +117,8 @@ struct AppProfileBootTests {
             descriptor: descriptor,
             containerDirectory: directory,
             catalog: try ProfileBootFixture.appCatalog(),
-            extractionProvider: ProfileBootFixture.extractionProvider())
+            extractionProvider: ProfileBootFixture.extractionProvider(),
+            searchServices: UnavailableSearchServices())
 
         #expect(facade.wikiID == wikiID)
         #expect(facade.descriptor.displayName == "Profile Wiki")

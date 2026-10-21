@@ -132,7 +132,7 @@ extension AppProcessProfileOwner {
         containerDirectory: URL,
         catalog: PluginCatalog,
         extractionProvider: any QueueExtractionProvider,
-        searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
+        searchServices: any SearchServices,
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
@@ -150,9 +150,8 @@ extension AppProcessProfileOwner {
             FenceSyntaxValidationService(
                 layout: try RendererPackageStoreLayout(appGroupContainerRoot: containerDirectory))
         })
-        let searchOwner = childServices.searchFactory.makeOwner(registry: searchRuntimeRegistry)
-        model.searchServices = searchOwner.services
-        searchOwner.start()
+        // The daemon owns the persistent index. App sessions only query its facade.
+        model.searchServices = searchServices
         let pair = childServices.launcherFactory(wikiID: wikiID)
         pair.launcher.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         pair.launcher.onInteractiveUsage = interactiveUsageRecorder
@@ -204,7 +203,7 @@ extension AppProcessProfileOwner {
             wikiID: wikiID,
             descriptor: descriptor,
             store: model,
-            searchCompositionOwner: searchOwner,
+            searchServices: searchServices,
             generationGate: pair.gate,
             agentLauncher: pair.launcher,
             extractionCoordinator: extractionCoordinator,

@@ -290,7 +290,6 @@ struct WikiFSApp: App {
         _fileProviderBox = State(initialValue: fileProviderBox)
         _activityTracker = State(initialValue: activityTracker)
 
-        let searchRuntimeRegistry = SearchRuntimeRegistry()
         let appCatalog = {
             do {
                 return try AppPluginCatalog.build(factories: AppPluginCatalogFactories(
@@ -306,7 +305,6 @@ struct WikiFSApp: App {
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
-            searchRuntimeRegistry: searchRuntimeRegistry,
             providerServices: providerServices,
             htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlSelectionLabel },
             interactiveUsageRecorder: { [weak activityTracker] usage in
@@ -322,7 +320,7 @@ struct WikiFSApp: App {
                     containerDirectory: directory,
                     catalog: appCatalog,
                     extractionProvider: extractionProvider,
-                    searchRuntimeRegistry: searchRuntimeRegistry,
+                    searchServices: try DaemonSearchServices(wikiID: wikiID),
                     htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlSelectionLabel },
                     interactiveUsageRecorder: { usage in
                         activityTracker?.recordInteractiveUsage(usage)

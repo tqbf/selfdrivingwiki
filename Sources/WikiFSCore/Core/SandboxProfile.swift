@@ -150,10 +150,6 @@ public enum SandboxProfile {
             "(allow file-write* (subpath (param \"CLAUDE_TMP\")))",
             // The active wiki DB and its SQLite sidecars are exact files.
             "(allow file-write* (literal (param \"WIKI_DB\")))",
-            // CLI search builds its derived index on first use. Permit creating the
-            // shared parent, but only the active wiki's subtree is writable.
-            "(allow file-write-create (literal (param \"SEARCH_INDEX_ROOT\")))",
-            "(allow file-write* (subpath (param \"WIKI_SEARCH_INDEX\")))",
         ]
         if queueDBPath != nil {
             // Acquisition sync writes its durable job to the central queue DB.
@@ -410,11 +406,6 @@ public enum SandboxProfile {
         let resolvedHome = realPath(homePath)
         let resolvedScratch = realPath(scratchDir)
         let resolvedDB = realPath(wikiDBPath)
-        let databaseURL = URL(fileURLWithPath: resolvedDB)
-        let searchIndexRoot = databaseURL.deletingLastPathComponent()
-            .appendingPathComponent("search-index", isDirectory: true)
-        let wikiSearchIndex = searchIndexRoot.appendingPathComponent(
-            databaseURL.deletingPathExtension().lastPathComponent, isDirectory: true)
         let resolvedQueueDB = queueDBPath.map(realPath)
         let resolvedClaudeTemp = realPath(claudeTempBase)
         // The script file exists when the launcher hands it to us (it probed
@@ -431,16 +422,14 @@ public enum SandboxProfile {
         )
         // NOTE: these are profile parameters, NOT child env vars. `-D WIKI_DB=<path>`
         // is consumed by `(param "WIKI_DB")`; it does not touch the `WIKI_DB=<ulid>`
-        // env var the agent/wikictl use. Search paths grant access only to the
-        // derived index for this database. `PDF2MD_SCRIPT` is appended only when
-        // the caller supplies a path.
+        // env var the agent/wikictl use. Search runs through the daemon, so the
+        // child needs no index write permission. `PDF2MD_SCRIPT` is appended only
+        // when the caller supplies a path.
         var defines: [(String, String)] = [
             ("HOME", resolvedHome),
             ("SCRATCH_DIR", resolvedScratch),
             ("WIKI_DB", resolvedDB),
             ("CLAUDE_TMP", resolvedClaudeTemp),
-            ("SEARCH_INDEX_ROOT", realPath(searchIndexRoot.path)),
-            ("WIKI_SEARCH_INDEX", realPath(wikiSearchIndex.path)),
         ]
         if let resolvedQueueDB {
             defines.append(("QUEUE_DB", resolvedQueueDB))

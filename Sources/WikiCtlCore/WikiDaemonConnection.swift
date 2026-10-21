@@ -82,6 +82,19 @@ public final class WikiDaemonConnection: @unchecked Sendable {
         return p
     }
 
+    /// Vend a daemon proxy whose TRANSPORT-level failures (dead or invalidated
+    /// connection) are delivered to `errorHandler` instead of silently
+    /// dropping the reply — the same per-call pattern `healthCheck` uses.
+    /// Returns `nil` when the connection can't vend the protocol at all; the
+    /// caller should treat that as `WikiDaemonError.connectionFailed`. Search
+    /// (`DaemonSearchClient`) vends one of these per call so a mid-flight
+    /// connection death surfaces as a thrown error, not only as a timeout.
+    internal func daemonProxy(
+        errorHandler: @escaping @Sendable (Error) -> Void
+    ) -> WikiDaemonProtocol? {
+        connection.remoteObjectProxyWithErrorHandler(errorHandler) as? WikiDaemonProtocol
+    }
+
     private init(connection: NSXPCConnection) {
         self.connection = connection
     }

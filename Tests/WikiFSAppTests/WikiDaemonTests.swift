@@ -293,7 +293,7 @@ struct WikiDaemonTests {
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
         _ = await daemon.openStore(wikiID: descriptor.id)
-        daemon.closeStore(wikiID: descriptor.id)
+        await daemon.closeStore(wikiID: descriptor.id)
 
         #expect(await daemon.openStore(wikiID: descriptor.id))
     }
@@ -330,7 +330,7 @@ struct WikiDaemonTests {
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
         // Force the transient-open path (store not held in `openStores`)
-        daemon.closeStore(wikiID: descriptor.id)
+        await daemon.closeStore(wikiID: descriptor.id)
 
         // Corrupt the DB so StoreBackend.current.makeStore(databaseURL:) throws (SQLITE_NOTADB)
         let dbURL = dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite", isDirectory: false)

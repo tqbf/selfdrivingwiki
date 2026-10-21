@@ -121,8 +121,8 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     /// blob and activity orphans; cleared on Cancel / Vacuum.
     public var pendingVacuumAll: VacuumReport?
 
-    /// Stable search facade. It remains unavailable until asynchronous runtime
-    /// startup and event catch-up complete, then delegates to the private child.
+    /// Stable query facade. Production sessions use the daemon-owned index.
+    /// Test sessions can supply an isolated local runtime.
     public let searchServices: any SearchServices
 
     /// Cross-window deferred `wiki://` navigation. Set by
@@ -137,7 +137,7 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     /// layer never references the app-layer `WikiLinkRoute`). Same
     /// "set once / consume once" discipline as `pendingBlobVacuum`.
     public var pendingWikiLink: (url: URL, openInNewTab: Bool)?
-    @ObservationIgnored private let searchCompositionOwner: SearchCompositionOwner
+    @ObservationIgnored private let searchCompositionOwner: SearchCompositionOwner?
 
     // MARK: - Init
 
@@ -173,7 +173,7 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         wikiID: WikiID,
         descriptor: WikiDescriptor,
         store: WikiStoreModel,
-        searchCompositionOwner: SearchCompositionOwner,
+        searchServices: any SearchServices,
         generationGate: GenerationGate,
         agentLauncher: AgentLauncher,
         extractionCoordinator: ExtractionCoordinator,
@@ -189,8 +189,8 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         self.queueEngine = queueEngine
         self.extractionProvider = extractionProvider
         self.store = store
-        self.searchCompositionOwner = searchCompositionOwner
-        self.searchServices = searchCompositionOwner.services
+        self.searchCompositionOwner = nil
+        self.searchServices = searchServices
         self.generationGate = generationGate
         self.agentLauncher = agentLauncher
 
@@ -334,7 +334,7 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     }
 
     public func shutdownSearchRuntime() async {
-        await searchCompositionOwner.shutdown()
+        await searchCompositionOwner?.shutdown()
     }
 
     public func shutdown() async {

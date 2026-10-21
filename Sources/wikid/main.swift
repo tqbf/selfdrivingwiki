@@ -117,7 +117,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func closeStore(wikiID: String, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            daemon.closeStore(wikiID: WikiID(rawValue: wikiID))
+            await daemon.closeStore(wikiID: WikiID(rawValue: wikiID))
             sendableReply.reply()
         }
     }
@@ -134,6 +134,13 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
             sendableReply.reply(await daemon.signedExtractorProbeData(request: request))
+        }
+    }
+
+    func search(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            sendableReply.reply(await daemon.searchData(request: request))
         }
     }
 
@@ -546,6 +553,13 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         reply(unavailableQueueReply(QueueDataPayload.self))
     }
 
+    func search(request: Data, reply: @escaping (Data) -> Void) {
+        let replyData = DebugLog.trying("SearchRPCWire.encode", operation: {
+            try SearchRPCWire.encode(SearchRPCReply.failure(.unavailable, "Search is unavailable"))
+        })
+        reply(replyData ?? Data())
+    }
+
     // Chat stubs (Phase C — chat is macOS-only via WikiFSEngine).
     func startChat(request: Data, reply: @escaping (Data) -> Void) {
         let envelope: [String: String?] = ["chatID": nil, "error": "chat unavailable on Linux"]
@@ -925,7 +939,7 @@ while let line = readLine() {
         result = await daemon.openStore(wikiID: wikiID)
     case "closeStore":
         let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
-        daemon.closeStore(wikiID: wikiID)
+        await daemon.closeStore(wikiID: wikiID)
         result = nil
     case "changeToken":
         let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")

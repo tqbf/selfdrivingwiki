@@ -236,42 +236,26 @@ public struct WikiCtlRunner {
 }
 
 /// Bridges the wikictl CLI's three search commands (`page search`,
-/// `source search`, `chat search`) onto the SAME Tantivy BM25 leg the app's
-/// sidebar / omnibox use (#637).
+/// `source search`, `chat search`) onto the daemon's index — the same BM25
+/// leg the app's sidebar / omnibox use (#637), served by the daemon as the
+/// sole index owner. The CLI never touches a Tantivy index directory and
+/// never boots a search runtime of its own: each request is one timed XPC
+/// round trip through ``DaemonSearchClient``
+/// (`WikiDaemonProtocol.search(request:reply:)`), deduplicated per
+/// (wiki, query, kind, limit) while a request is in flight.
 ///
-/// wikictl opens a `GRDBWikiStore` directly and prior to #637 called the
-/// 2-arg `store.searchSimilar(query:limit:)` overloads, which forward to the
-/// 3-arg path with `bm25Leg: nil` — meaning the store ran its OWN FTS5 leg
-/// (now history: #634 dropped FTS5) and never queried the on-disk Tantivy
-/// index at `<appGroupContainer>/search-index/<wikiID>/`. That bypassed the
-/// Tantivy `fuzzyFields` (edit-distance 1 on title + body, already
-/// configured at `Sources/WikiFSSearch/TantivyIndexer.swift:108-111`) and
-/// post-#634 means `bm25Leg: nil` has NO BM25 leg at all (cosine-only, empty
-/// under `swift test` where NLEmbedding is app-gated).
+/// Hits are mapped best-first to typed summaries (`WikiPageSummary` /
+/// `SourceSummary` / `ChatSummary`) via the store's list APIs, preserving
+/// rank order. Hits naming ids absent from the current catalog are dropped.
 ///
-/// This resolver assembles a request-owned search runtime over the SAME on-disk
-/// index the app builds and maintains. The index is a derived artifact, so
-/// concurrently opening it read-only is safe — SQLite remains the source of
-/// truth), runs the kind-scoped search asynchronously via the actor, and resolves the
-/// hits to typed summaries (`WikiPageSummary` / `SourceSummary` / `ChatSummary`)
-/// via the store's list APIs — preserving Tantivy's best-first rank order, the
-/// same mapping `WikiStoreModel.resolveTantivyLeg(query:kind:limit:catalog:)`
-/// performs for the sidebar.
-///
-/// Returns `nil` when Tantivy is unavailable, the index returned nothing, or
-/// every hit was missing from the catalog. Post-#634, `nil` means "no BM25
-/// leg" — the store's FTS5 fallback was dropped (#634); the cosine leg still
-/// answers when NLEmbedding/MLX is available (Swift-side `VectorCosine`,
-/// issue #628 — no C scalar). Request-scoped runtime startup rebuilds an empty
-/// derived index before querying, including for wikis not yet opened by the app.
+/// A successful search with no hits — or with no hit resolving to the
+/// catalog — returns `nil` (no BM25 leg). Daemon connection, timeout, and
+/// wire failures throw to the CLI, which reports a runtime error instead of
+/// a false successful no-hit result. There is no local fallback: an
+/// unreachable daemon fails loudly.
 public enum CLITantivyLegResolver {
-    private enum ProfileSearchError: Error, Sendable {
-        case missingTantivyProvider
-    }
-
     struct SearchRequestKey: Hashable, Sendable {
         let wikiID: WikiID
-        let containerPath: String
         let query: String
         let kind: TantivyDocumentKind
         let limit: Int
@@ -279,312 +263,190 @@ public enum CLITantivyLegResolver {
 
     private struct InFlightSearch: Sendable {
         let token: UUID
-        let task: Task<[TantivyShadowSearchResult], Never>
+        let task: Task<Result<[TantivyShadowSearchResult], any Error>, Never>
     }
 
     private actor SearchServicePool {
         private var inFlightSearches: [SearchRequestKey: InFlightSearch] = [:]
+        private var daemonClient: DaemonSearchClient?
 
-        func search(
-            wikiID: WikiID,
-            containerDirectory: URL,
-            store: WikiStore,
-            query: String,
-            kind: TantivyDocumentKind,
-            limit: Int
-        ) async -> [TantivyShadowSearchResult] {
-            let key = SearchRequestKey(
-                wikiID: wikiID,
-                containerPath: containerDirectory.standardizedFileURL.path,
-                query: query,
-                kind: kind,
-                limit: limit)
+        /// The daemon client is constructed once per process: `connect()`
+        /// creates the embedded XPC service connection and the client vends
+        /// its daemon proxy. A failed construction is NOT cached — a daemon
+        /// that appears later must be reachable on the next call.
+        private func daemonBackend() throws -> DaemonSearchClient {
+            if let daemonClient { return daemonClient }
+            let client = try DaemonSearchClient(connection: WikiDaemonConnection.connect())
+            daemonClient = client
+            return client
+        }
 
-            await runTestSearchHook(key)
-
+        func search(key: SearchRequestKey) async throws -> [TantivyShadowSearchResult] {
             if let existing = inFlightSearches[key] {
-                return await existing.task.value
+                return try await existing.task.value.get()
             }
 
             let token = UUID()
-            let task: Task<[TantivyShadowSearchResult], Never> = Task {
-                if let testResults = await CLITantivyLegResolver.runTestSearchExecutor(key) {
-                    return testResults
-                }
+            let task: Task<Result<[TantivyShadowSearchResult], any Error>, Never> = Task {
+                do {
+                    #if DEBUG
+                    if let injected = try await CLITantivyLegResolver.runTestSearchBackend(key) {
+                        return .success(injected)
+                    }
+                    #endif
 
-                return await CLITantivyLegResolver.runEphemeralSearch(
-                    wikiID: wikiID,
-                    containerDirectory: containerDirectory,
-                    store: store,
-                    query: query,
-                    kind: kind,
-                    limit: limit)
+                    let client = try daemonBackend()
+                    return .success(try await client.search(
+                        wikiID: key.wikiID,
+                        query: key.query,
+                        kinds: [key.kind],
+                        limit: key.limit))
+                } catch {
+                    return .failure(error)
+                }
             }
             inFlightSearches[key] = InFlightSearch(token: token, task: task)
 
-            let results = await task.value
+            let result = await task.value
             if inFlightSearches[key]?.token == token {
                 inFlightSearches.removeValue(forKey: key)
             }
-            return results
+            return try result.get()
         }
     }
 
     private static let searchServicePool = SearchServicePool()
 
     #if DEBUG
-    private actor TestSearchHookBox {
-        private var hook: (@Sendable (SearchRequestKey) async -> Void)?
+    /// Test seam: the injected backend replaces the daemon call entirely —
+    /// when one is installed, no XPC connection is ever created. Tests use it
+    /// to exercise summary mapping, dedup, and error propagation without a
+    /// daemon.
+    private actor TestSearchBackendBox {
+        typealias Backend = @Sendable (SearchRequestKey) async throws -> [TantivyShadowSearchResult]
 
-        func install(_ hook: @escaping @Sendable (SearchRequestKey) async -> Void) {
-            self.hook = hook
+        private var backend: Backend?
+
+        func install(_ backend: @escaping Backend) {
+            self.backend = backend
         }
 
         func reset() {
-            hook = nil
+            backend = nil
         }
 
-        func run(_ key: SearchRequestKey) async {
-            await hook?(key)
-        }
-    }
-
-    private actor TestSearchExecutorBox {
-        typealias Executor = @Sendable (SearchRequestKey) async -> [TantivyShadowSearchResult]?
-
-        private var executor: Executor?
-
-        func install(_ executor: @escaping Executor) {
-            self.executor = executor
-        }
-
-        func reset() {
-            executor = nil
-        }
-
-        func run(_ key: SearchRequestKey) async -> [TantivyShadowSearchResult]? {
-            guard let executor else { return nil }
-            return await executor(key)
+        /// `nil` when no backend is installed (fall through to the daemon);
+        /// otherwise the backend's result IS the answer.
+        func run(_ key: SearchRequestKey) async throws -> [TantivyShadowSearchResult]? {
+            guard let backend else { return nil }
+            return try await backend(key)
         }
     }
 
-    private static let testSearchHookBox = TestSearchHookBox()
-    private static let testSearchExecutorBox = TestSearchExecutorBox()
+    private static let testSearchBackendBox = TestSearchBackendBox()
 
-    static func installTestSearchHook(
-        _ hook: @escaping @Sendable (SearchRequestKey) async -> Void
+    static func installTestSearchBackend(
+        _ backend: @escaping @Sendable (SearchRequestKey) async throws -> [TantivyShadowSearchResult]
     ) async {
-        await testSearchHookBox.install(hook)
+        await testSearchBackendBox.install(backend)
     }
 
-    static func resetTestSearchHook() async {
-        await testSearchHookBox.reset()
+    static func resetTestSearchBackend() async {
+        await testSearchBackendBox.reset()
     }
 
-    static func installTestSearchExecutor(
-        _ executor: @escaping @Sendable (SearchRequestKey) async -> [TantivyShadowSearchResult]?
-    ) async {
-        await testSearchExecutorBox.install(executor)
+    static func runTestSearchBackend(
+        _ key: SearchRequestKey
+    ) async throws -> [TantivyShadowSearchResult]? {
+        try await testSearchBackendBox.run(key)
     }
 
-    static func resetTestSearchExecutor() async {
-        await testSearchExecutorBox.reset()
-    }
-
-    static func withTestSearchExecutor<Result: Sendable>(
-        _ executor: @escaping @Sendable (SearchRequestKey) async -> [TantivyShadowSearchResult]?,
+    static func withTestSearchBackend<Result: Sendable>(
+        _ backend: @escaping @Sendable (SearchRequestKey) async throws -> [TantivyShadowSearchResult],
         operation: () async throws -> Result
     ) async rethrows -> Result {
-        await installTestSearchExecutor(executor)
+        await installTestSearchBackend(backend)
         do {
             let result = try await operation()
-            await resetTestSearchExecutor()
+            await resetTestSearchBackend()
             return result
         } catch {
-            await resetTestSearchExecutor()
+            await resetTestSearchBackend()
             throw error
         }
     }
-
-    private static func runTestSearchHook(_ key: SearchRequestKey) async {
-        await testSearchHookBox.run(key)
-    }
-
-    private static func runTestSearchExecutor(
-        _ key: SearchRequestKey
-    ) async -> [TantivyShadowSearchResult]? {
-        await testSearchExecutorBox.run(key)
-    }
     #else
-    private static func runTestSearchHook(_ key: SearchRequestKey) async {}
-    private static func runTestSearchExecutor(
+    static func runTestSearchBackend(
         _ key: SearchRequestKey
-    ) async -> [TantivyShadowSearchResult]? { nil }
+    ) async throws -> [TantivyShadowSearchResult]? { nil }
     #endif
 
-    /// Resolve a Tantivy BM25 leg for `wikictl page search`. Returns `nil`
-    /// when the index is unavailable/empty — post-#634 that means no BM25
-    /// leg (FTS5 was dropped in #634; the cosine leg still answers when
+    /// Resolve the daemon's BM25 leg for `wikictl page search`. Returns `nil`
+    /// when the daemon answers no hits — that means no BM25 leg (the store
+    /// runs without a lexical leg; the cosine leg still answers when
     /// NLEmbedding/MLX is loaded).
     public static func resolvePageLeg(
         wikiID: WikiID,
-        containerDirectory: URL,
         store: WikiStore,
         query: String,
         limit: Int
-    ) async -> [WikiPageSummary]? {
-        let hits = await searchServicePool.search(
+    ) async throws -> [WikiPageSummary]? {
+        let hits = try await searchServicePool.search(key: SearchRequestKey(
             wikiID: wikiID,
-            containerDirectory: containerDirectory,
-            store: store,
             query: query,
             kind: .page,
-            limit: limit)
+            limit: limit))
         guard !hits.isEmpty else { return nil }
-        let catalog: [WikiPageSummary]
-        do {
-            catalog = try store.listPages(sortBy: .lastUpdated)
-        } catch {
-            DebugLog.store("wikictl: listPages(leg) failed for wiki \(wikiID): \(error)")
-            return nil
-        }
+        let catalog = try store.listPages(sortBy: .lastUpdated)
         return resolveHits(hits, catalog: catalog, idFromRawValue: { PageID(rawValue: $0) })
     }
 
-    /// Resolve a Tantivy BM25 leg for `wikictl source search`. Same contract
-    /// as ``resolvePageLeg(wikiID:containerDirectory:store:query:limit:)``.
+    /// Resolve the daemon's BM25 leg for `wikictl source search`. Same contract
+    /// as ``resolvePageLeg(wikiID:store:query:limit:)``.
     public static func resolveSourceLeg(
         wikiID: WikiID,
-        containerDirectory: URL,
         store: WikiStore,
         query: String,
         limit: Int
-    ) async -> [SourceSummary]? {
-        let hits = await searchServicePool.search(
+    ) async throws -> [SourceSummary]? {
+        let hits = try await searchServicePool.search(key: SearchRequestKey(
             wikiID: wikiID,
-            containerDirectory: containerDirectory,
-            store: store,
             query: query,
             kind: .source,
-            limit: limit)
+            limit: limit))
         guard !hits.isEmpty else { return nil }
-        let catalog: [SourceSummary]
-        do {
-            catalog = try store.listSources()
-        } catch {
-            DebugLog.store("wikictl: listSources(leg) failed for wiki \(wikiID): \(error)")
-            return nil
-        }
+        let catalog = try store.listSources()
         return resolveHits(hits, catalog: catalog, idFromRawValue: SourceID.init(rawValue:))
     }
 
-    /// Resolve a Tantivy BM25 leg for `wikictl chat search`. Same contract as
-    /// ``resolvePageLeg(wikiID:containerDirectory:store:query:limit:)``.
+    /// Resolve the daemon's BM25 leg for `wikictl chat search`. Same contract as
+    /// ``resolvePageLeg(wikiID:store:query:limit:)``.
     public static func resolveChatLeg(
         wikiID: WikiID,
-        containerDirectory: URL,
         store: WikiStore,
         query: String,
         limit: Int
-    ) async -> [ChatSummary]? {
-        let hits = await searchServicePool.search(
+    ) async throws -> [ChatSummary]? {
+        let hits = try await searchServicePool.search(key: SearchRequestKey(
             wikiID: wikiID,
-            containerDirectory: containerDirectory,
-            store: store,
             query: query,
             kind: .chat,
-            limit: limit)
+            limit: limit))
         guard !hits.isEmpty else { return nil }
-        let catalog: [ChatSummary]
-        do {
-            catalog = try store.listChats()
-        } catch {
-            DebugLog.store("wikictl: listChats(leg) failed for wiki \(wikiID): \(error)")
-            return nil
-        }
+        let catalog = try store.listChats()
         return resolveHits(hits, catalog: catalog, idFromRawValue: { ChatID(rawValue: $0) })
     }
 
     // MARK: - Internal
 
-    /// Assemble one request-scoped root and child, await deterministic startup,
-    /// query once, then dispose child before root. Failures remain fail-soft at
-    /// the CLI boundary and produce no BM25 leg.
-    private static func runEphemeralSearch(
-        wikiID: WikiID,
-        containerDirectory: URL,
-        store: WikiStore,
-        query: String,
-        kind: TantivyDocumentKind,
-        limit: Int
-    ) async -> [TantivyShadowSearchResult] {
-        var profile: BootedProfile?
-        var handle: SearchRuntimeHandle?
-        do {
-            let booted = try await CordisBoot.boot(.init(
-                catalog: try CLIPluginCatalog.build(),
-                layers: [PatchFile(entries: try ProductionProfiles.cli(homeDirectory: containerDirectory))]))
-            profile = booted
-            let providers = try await booted.context.require(SearchServiceKeys.providers)
-            guard let registration = await providers.resolve(TantivySearchPlugin.key),
-                  case .tantivy(let provider) = registration.adapter else {
-                throw ProfileSearchError.missingTantivyProvider
-            }
-            let child = try await booted.context.child()
-            let runtime = provider.runtime(
-                identity: SearchRuntimeIdentity(
-                    wikiID: wikiID,
-                    containerDirectory: containerDirectory),
-                contentSource: StoreBackedTantivyContentSource(store: store),
-                changeStreamFactory: FinishedSearchChangeStreamFactory())
-            let assembled = try await runtime.assemble(in: child)
-            handle = assembled
-            let hits = try await assembled.services.search(
-                query: query,
-                kinds: [kind],
-                limit: limit)
-            await dispose(handle: assembled, profile: booted, wikiID: wikiID)
-            return hits
-        } catch {
-            DebugLog.store("wikictl: Tantivy search unavailable for wiki \(wikiID.rawValue): \(error)")
-            await dispose(handle: handle, profile: profile, wikiID: wikiID)
-            return []
-        }
-    }
-
-    private static func dispose(
-        handle: SearchRuntimeHandle?,
-        profile: BootedProfile?,
-        wikiID: WikiID
-    ) async {
-        if let handle {
-            do {
-                try await handle.dispose()
-            } catch {
-                DebugLog.store("wikictl: search child cleanup failed for wiki \(wikiID.rawValue): \(error)")
-            }
-        }
-        if let profile {
-            do {
-                try await profile.shutdown()
-            } catch {
-                DebugLog.store("wikictl: search profile cleanup failed for wiki \(wikiID.rawValue): \(error)")
-            }
-        }
-    }
-
     /// Map best-first Tantivy hits to typed summaries via the supplied catalog,
-    /// preserving Tantivy's rank order. Mirrors
-    /// `WikiStoreModel.resolveTantivyLeg(query:kind:limit:catalog:)` at
-    /// `Sources/WikiFSCore/Store/WikiStoreModel.swift:2938` — Tantivy scores
-    /// are dropped here because the store's `searchSimilar(query:limit:bm25Leg:)`
-    /// treats the leg as a pre-ranked BM25 source and fuses it with the
-    /// semantic cosine leg via `RankFusion.rrf`. Returns `nil` (not `[]`)
-    /// when nothing resolves so the store runs WITHOUT a BM25 leg (post-#634:
-    /// FTS5 is dropped, so a `nil`/empty leg means no lexical results — cosine
-    /// still answers when NLEmbedding/MLX is loaded). This matches the
-    /// model's contract and is the post-#634 reality all callers route
-    /// through: a missing Tantivy leg = "no BM25 leg" (no fallback path), not
+    /// preserving rank order. Mirrors
+    /// `WikiStoreModel.resolveTantivyLeg(query:kind:limit:catalog:)` — Tantivy
+    /// scores are dropped here because the store's
+    /// `searchSimilar(query:limit:bm25Leg:)` treats the leg as a pre-ranked
+    /// BM25 source and fuses it with the semantic cosine leg via
+    /// `RankFusion.rrf`. Returns `nil` (not `[]`) when nothing resolves so the
+    /// store runs WITHOUT a BM25 leg — a missing leg is "no BM25 results", not
     /// an error.
     private static func resolveHits<T: Identifiable & Sendable>(
         _ hits: [TantivyShadowSearchResult],
@@ -633,18 +495,18 @@ public enum CLIStoreProfile {
 /// Linux stub: Tantivy is unavailable. All resolvers return nil (no BM25 leg).
 public enum CLITantivyLegResolver {
     public static func resolvePageLeg(
-        wikiID: WikiID, containerDirectory: URL, store: WikiStore,
+        wikiID: WikiID, store: WikiStore,
         query: String, limit: Int
-    ) async -> [WikiPageSummary]? { nil }
+    ) async throws -> [WikiPageSummary]? { nil }
 
     public static func resolveSourceLeg(
-        wikiID: WikiID, containerDirectory: URL, store: WikiStore,
+        wikiID: WikiID, store: WikiStore,
         query: String, limit: Int
-    ) async -> [SourceSummary]? { nil }
+    ) async throws -> [SourceSummary]? { nil }
 
     public static func resolveChatLeg(
-        wikiID: WikiID, containerDirectory: URL, store: WikiStore,
+        wikiID: WikiID, store: WikiStore,
         query: String, limit: Int
-    ) async -> [ChatSummary]? { nil }
+    ) async throws -> [ChatSummary]? { nil }
 }
 #endif

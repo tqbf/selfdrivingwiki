@@ -51,6 +51,14 @@ import Foundation
     /// Request and reply values use the versioned JSON envelopes below.
     func runSignedExtractorProbe(request: Data, reply: @escaping (Data) -> Void)
 
+    /// Unified search + autocomplete. `request` is JSON-encoded
+    /// `SearchRPCRequest`; the reply is ALWAYS JSON-encoded `SearchRPCReply`
+    /// (failures carry its `error`, never a nil/empty Data). The daemon owns
+    /// the per-wiki search runtime and synchronizes it against the store's
+    /// change token before serving, so replies include other processes'
+    /// committed writes. See `SearchRPCWire`.
+    func search(request: Data, reply: @escaping (Data) -> Void)
+
     // MARK: - Workload: event sink registration (Phase 0)
 
     /// Tell the daemon which object to push live workload events to. The app

@@ -62,7 +62,7 @@ struct DaemonStoreEventBusTests {
     @Test func prepareWikiAttachesEventBus() async throws {
         let daemon = WikiDaemon(containerDirectory: makeTempDir())
         let wikiID = try makeWiki(daemon)
-        daemon.closeStore(wikiID: wikiID)
+        await daemon.closeStore(wikiID: wikiID)
 
         try await daemon.prepareWiki(wikiID)
         let store = try daemon.resolvePreparedStore(wikiID: wikiID)
@@ -84,7 +84,7 @@ struct DaemonStoreEventBusTests {
     @Test func storeMutationFiresBusListener() async throws {
         let daemon = WikiDaemon(containerDirectory: makeTempDir())
         let wikiID = try makeWiki(daemon)
-        daemon.closeStore(wikiID: wikiID)
+        await daemon.closeStore(wikiID: wikiID)
         try await daemon.prepareWiki(wikiID)
 
         let store = try daemon.resolvePreparedStore(wikiID: wikiID)
@@ -108,7 +108,7 @@ struct DaemonStoreEventBusTests {
     @Test func busDeliversToMultipleListenersAfterMutation() async throws {
         let daemon = WikiDaemon(containerDirectory: makeTempDir())
         let wikiID = try makeWiki(daemon)
-        daemon.closeStore(wikiID: wikiID)
+        await daemon.closeStore(wikiID: wikiID)
         try await daemon.prepareWiki(wikiID)
 
         let store = try daemon.resolvePreparedStore(wikiID: wikiID)
