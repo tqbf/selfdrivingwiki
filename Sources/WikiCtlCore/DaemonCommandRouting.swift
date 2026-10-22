@@ -4,12 +4,13 @@ import WikiDaemonContract
 import WikiFSCore
 
 // Phase 3 of plans/cli-domain-commands.md: the per-family routing seam. A
-// parsed command is mapped to a daemon call here — ONLY the migrated
-// read-only actions; everything else (Phase 4 writes, `--database-path`
-// fixtures) returns nil and keeps the in-process path. The daemon EXECUTES
-// the same command layer against its prepared services and answers with a
-// uniform `DaemonCommandOutcome`, so the CLI's stdout bytes are whatever the
-// command code produced — no formatting is duplicated client-side.
+// parsed command is mapped to a daemon call here — Phase 3 reads AND Phase 4
+// writes. Since Phase 5, every registry-selected command MUST map here (an
+// unmapped one fails in the runner instead of opening a local store); the
+// in-process path serves only explicit `--database-path` fixture runs. The
+// daemon EXECUTES the same command layer against its prepared services and
+// answers with a uniform `DaemonCommandOutcome`, so the CLI's stdout bytes are
+// whatever the command code produced — no formatting is duplicated client-side.
 
 /// One routed daemon call: family + operation + a payload writer that embeds
 /// the resolved wiki id. The wiki id is unknown at mapping time (the selector
@@ -39,9 +40,13 @@ public struct DaemonCommandCall: Sendable {
 }
 
 /// Command → daemon-call mapping for the migrated commands — Phase 3 reads AND
-/// Phase 4 writes. `nil` means "not migrated — run in-process" (only
-/// `--database-path` fixture runs land there now; every registry-selected
-/// command rides the daemon).
+/// Phase 4 writes. `nil` means "no daemon route": since Phase 5 of
+/// plans/cli-domain-commands.md a registry-selected command without a route
+/// FAILS in `WikiCtlRunner.runOrdinary` (no local fallback) — only an explicit
+/// `--database-path` fixture run takes the in-process path, and the commands
+/// that return nil here (`wiki` verbs, queue/transcribe/job, `extractor
+/// list`, help/version/dump-config) are all dispatched before `runOrdinary`
+/// in wikictl's `run()`.
 public enum DaemonCommandRoute {
 
     public static func call(for command: ArgumentParser.Command) -> DaemonCommandCall? {

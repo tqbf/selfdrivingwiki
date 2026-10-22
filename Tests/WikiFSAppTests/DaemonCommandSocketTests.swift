@@ -14,8 +14,9 @@ import WikiFSCore
 // as the daemon boot wires it. The daemon EXECUTES the CLI's command layer
 // against its prepared store, so every assertion pins the byte-stable stdout
 // the in-process path produced. The trailing `WikiCtlRunner` tests prove the
-// routing seam: a migrated read never reaches the store executor, an
-// unmigrated write still does.
+// routing seam: a registry-selected command — read OR write — never reaches
+// the store executor, and a command with no daemon route fails instead of
+// opening one (Phase 5: no local fallback).
 //
 // Suite discipline per AGENTS.md #1051: `.serialized` + `.timeLimit`, and
 // every scenario runs under a short injected timeout — never the production
@@ -666,6 +667,32 @@ struct DaemonCommandSocketTests {
             try store.listPages(sortBy: .lastUpdated).map(\.title)
         }
         #expect(titles.contains("Routed Write"))
+    }
+
+    /// Phase 5: a registry-selected command with NO daemon route FAILS the
+    /// runner instead of booting the in-process store — the local store path
+    /// exists only for explicit `--database-path` fixture runs. `.wikiList`
+    /// never reaches `runOrdinary` in wikictl's `run()` (it dispatches before),
+    /// so reaching it here is exactly the wiring bug the guard exists for.
+    @Test func registrySelectionWithoutDaemonRouteFailsInsteadOfBootingStore() async throws {
+        let container = makeContainer()
+        let runner = WikiCtlRunner(
+            resolveContainer: { WikiResolver(containerDirectory: container) },
+            daemonCommandRouter: DaemonCommandRouter(),
+            execute: { _, _, _, _ in
+                Issue.record("a registry-selected command must not open the in-process store")
+                return SourceCommand.Result(payload: .text(""), didCommit: false)
+            })
+        do {
+            _ = try await runner.runOrdinary(
+                command: .wikiList,
+                wikiSelector: "any-wiki",
+                environment: [:])
+            Issue.record("expected the no-route guard")
+        } catch let error as PageCommand.Failure {
+            #expect(error.description.contains("no daemon route") == true)
+            #expect(error.description.contains("no local fallback") == true)
+        }
     }
 
     // MARK: - Absent daemon
