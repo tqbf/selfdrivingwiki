@@ -349,6 +349,59 @@ Reply: `{"version": 1, "requestID": "<echo>", "family": "<family>",
   — which rides the request — and replies with just the path). Chunked
   replies remain out of scope: no real payload hit the cap.
 
+## The fixture binary
+
+The migration's last local-database carve-out is gone: the shipping `wikictl`
+has NO local database pathway at all, and disposable fixture runs get their
+own build-only binary.
+
+- **`wikictl-fixture` (new executable target, `Sources/wikictl-fixture`).**
+  It owns everything `wikictl` must never have: the `--database-path`/
+  `WIKI_DB_PATH` selector parsing (`FixtureArgumentParser`), the typed
+  explicit-database validation and resolution (`FixtureWikiResolver` —
+  absolute, `.sqlite`, outside the App Group container), the in-process
+  `CLIStoreProfile` boot (CordisBoot over the explicit database), the local
+  command executor, and the fixture extractor sync/fetch leg (the moved
+  `ExtractorFixtureLeg.swift`, with its direct `QueueStore` write). Commands
+  reuse WikiCtlCore's `ArgumentParser.parseCommand` verbatim — one command
+  grammar, two binaries. It is NEVER bundled into the app (build.sh stages
+  only `wikictl` into `Contents/Helpers`) and is a developer/CI tool: its
+  `--help` documents the selector.
+- **`wikictl` rejects the selector.** `--database-path` and `WIKI_DB_PATH`
+  are usage errors (exit 2) naming the fixture binary; help never mentions
+  them; `Invocation.databasePath` is gone; `runOrdinary` routes EVERY command
+  through the daemon (the in-process branch is deleted, and `WikiCtlRunner`
+  no longer takes a store profile or executor); `WikiResolver` keeps only
+  App Group container resolution — the explicit-database machinery moved to
+  the fixture target. `--wiki`/`WIKI_DB` are the only selectors.
+- **The boundary allowlist is gone.** `scripts/check-cordis-boundaries`
+  rejects `QueueStore(`, `WikiRegistry.load(`, AND `GRDBWikiStore(`
+  unconditionally in `Sources/WikiCtlCore` and `Sources/wikictl`. The
+  `wikictl-fixture` TARGET is exempt the same way test targets are (it is
+  outside the scoped CLI rules; its store profile joins the named
+  `makeStore`/`BootedProfile` facade boundaries). The check fails if the
+  fixture leg's old file reappears inside `wikictl`.
+- **The eval harness runs on REAL throwaway wikis.** Each live leg creates
+  its wiki through the daemon's registry over the socket
+  (`DaemonWikiRegistryClient.createWiki` — bootstrap + seed + registry row)
+  and deletes it afterwards (full daemon eviction), on success and failure.
+  The harness's measurement boot opens the daemon-created database
+  in-process for loop-trace hooks — a second WAL-mode writer, the same
+  posture as any daemon command — while the agent's commands resolve through
+  `--wiki` daemon-side. A missing daemon is a typed `daemonUnavailable`
+  stop, never a local fallback. `AgentLauncher.wikiDatabaseOverride` and
+  `AgentRunContext.databasePath` are removed: every launcher-side derivation
+  targets `<container>/<wikiID>.sqlite`, every trusted selector renders
+  `--wiki`, and `WIKI_DB_PATH` leaves the exported run environment. See
+  `plans/wiki-strategy-evaluation-harness.md`.
+- **Tests.** The explicit-database-path suite moved to the fixture target's
+  own `WikiCtlFixtureTests` target (in-process, same harness style);
+  `wikictl` tests gained the rejection cases
+  (`WikiCtlFixtureFlagRejectionTests`); the boundary tests cover the removed
+  allowlist (the old allowlisted file back inside `wikictl` FAILS — the
+  negative proof), the fixture-target exemption, and the new `GRDBWikiStore(`
+  rule shape.
+
 ## CAS and exit codes
 
 CAS crosses the wire as typed error codes, not strings: `casConflict`
