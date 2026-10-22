@@ -146,9 +146,9 @@ func run() async -> Int32 {
     }
 
     // The transcribe family enqueues on-device speech jobs through the same
-    // live daemon surface; waiting jobs block on the daemon's completion
-    // wait. No writable wiki-store profile is opened unless a source
-    // existence check needs one.
+    // live daemon surface; waiting jobs poll the daemon's queue item-state
+    // snapshots (Phase 5 of plans/cli-domain-commands.md). No wiki-store
+    // profile and no queue database is ever opened in this process.
     if case .transcribe(let action) = invocation.command {
         do {
             print(try await runTranscribeCommand(action, wikiSelector: invocation.wikiSelector))
@@ -529,12 +529,12 @@ private struct QueueCommandUnsupportedError: LocalizedError {
 /// Enqueue the EXPLICIT on-device speech job for one source through the live
 /// daemon workload surface, mirroring the app's provenance-chip menu action:
 /// same payload intent, same speech arm, same typed failures (YouTube
-/// sources only; no caption fallback). `--wiki` resolves the owning wiki
-/// through the ordinary registry; the source must exist there and be a
-/// YouTube source — a wrong-source mistake fails BEFORE anything is
-/// enqueued. With the default `--wait`, the command blocks on the daemon's
-/// completion wait and prints the typed outcome (success, or the queue
-/// item's redacted error).
+/// sources only; no caption fallback). `--wiki` resolves the owning wiki and
+/// the source is preflighted BOTH over the daemon's socket (Phase 5 of
+/// plans/cli-domain-commands.md) — a wrong-source mistake fails BEFORE
+/// anything is enqueued, and this process opens no database. With the default
+/// `--wait`, the command polls the daemon's queue item-state snapshots and
+/// prints the typed outcome (success, or the queue item's redacted error).
 private func runTranscribeCommand(
     _ action: TranscribeCommand.Action,
     wikiSelector: String
@@ -546,31 +546,29 @@ private func runTranscribeCommand(
             throw TranscribeCommand.Failure(
                 "transcribe on-device: pass --wiki <id> before the subcommand (the wiki that owns the source)")
         }
-        let resolver = try WikiResolver.appGroupContainer()
-        // Phase 2 of plans/cli-domain-commands.md: --wiki resolution goes
-        // through the daemon's registry over the socket (resolveWiki), so the
-        // selector resolves against the live registry and fails fast with the
-        // not-running error when the app is closed. There is no local
-        // fallback.
-        let target: ResolvedWikiTarget
+        // Phases 2 and 5 of plans/cli-domain-commands.md: --wiki resolution
+        // AND the source preflight ride the daemon over the socket —
+        // resolveWiki for the owning wiki, transcribePreflight for the
+        // YouTube-scope check (the daemon reads its own prepared store; this
+        // process opens nothing). Both fail fast with the not-running error
+        // when the app is closed. There is no local fallback.
+        let container = try DatabaseLocation.appGroupContainerDirectory()
+        let descriptor: WikiDescriptor
         do {
-            let descriptor = try await makeRegistryClient().resolveWiki(selector: wikiSelector)
-            target = ResolvedWikiTarget(
-                databaseURL: resolver.databaseURL(for: descriptor),
-                wikiID: descriptor.id,
-                containerDirectory: resolver.containerDirectory)
+            descriptor = try await makeRegistryClient().resolveWiki(selector: wikiSelector)
         } catch let error as DaemonDomainError where error.code == .notFound {
             throw TranscribeCommand.Failure(
                 "no wiki matching \(wikiSelector.debugDescription) in the registry")
         }
 
-        // Pre-flight the source against the owning wiki: the queue path
-        // would fail anyway, but the typed message reads better here and
-        // nothing is enqueued for a mistake.
+        // Pre-flight the source against the owning wiki, DAEMON-side: the
+        // queue path would fail anyway, but the typed message reads better
+        // here and nothing is enqueued for a mistake.
         let sourceID = SourceID(rawValue: source)
+        let client = try DaemonWorkloadClient(socketContainerDirectory: container)
         do {
-            let inScope = try GRDBWikiStore.youtubeSpeechPreflight(
-                readOnlyURL: target.databaseURL, sourceID: sourceID)
+            let inScope = try await client.transcribePreflight(
+                wikiID: descriptor.id, sourceID: sourceID)
             guard inScope else {
                 throw TranscribeCommand.Failure(
                     "source \(source) is not a YouTube video in wiki \(wikiSelector) — on-device speech supports YouTube videos only")
@@ -578,14 +576,12 @@ private func runTranscribeCommand(
         } catch let error as TranscribeCommand.Failure {
             throw error
         } catch {
-            // A read failure of the owning wiki is surfaced, not swallowed:
-            // the agent should see WHY the source could not be verified.
+            // A failed preflight read is surfaced, not swallowed: the agent
+            // should see WHY the source could not be verified.
             throw TranscribeCommand.Failure(
                 "could not verify source \(source) in wiki \(wikiSelector): \(error.localizedDescription)")
         }
 
-        let client = try DaemonWorkloadClient(
-            socketContainerDirectory: try DatabaseLocation.appGroupContainerDirectory())
         // The enqueue write is durable in the daemon's queue store even if
         // its reply is slow (the handler runs the dispatch scan inline). A
         // CLI cannot leak a parked continuation — it would never exit — so
@@ -593,7 +589,7 @@ private func runTranscribeCommand(
         // exits with a clear note if the reply misses it.
         let request = QueueItemRequest(
             queue: .extraction,
-            wikiID: target.wikiID,
+            wikiID: descriptor.id,
             payload: QueueItemPayload(
                 sourceIDs: [sourceID],
                 transcriptionIntent: .onDeviceSpeech))
