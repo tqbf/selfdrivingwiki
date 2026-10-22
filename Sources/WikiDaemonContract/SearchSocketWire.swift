@@ -167,6 +167,43 @@ public enum SearchSocketError: Error, Equatable, Sendable {
     case serverAlreadyStarted
 }
 
+extension SearchSocketError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .daemonNotRunning:
+            // The explicit fail-fast contract (plans/cli-domain-commands.md):
+            // app closed ⇒ socket unlinked ⇒ every domain command names the
+            // cause. Never imply "no wiki exists".
+            return "the wikid daemon is not running — launch the app"
+        case .pathTooLong(let limit, let actual):
+            return "socket path is \(actual) bytes; sockaddr_un allows at most \(limit)"
+        case .frameTooLarge(let length):
+            return "frame of \(length) bytes exceeds the \(SearchSocketWire.maxFrameSize)-byte cap"
+        case .incompleteFrame:
+            return "the daemon closed the connection before the frame completed"
+        case .timeout(let operation):
+            return "socket \(operation) exceeded its deadline"
+        case .posix(let operation, let errno):
+            return "socket \(operation) failed (errno \(errno))"
+        case .serverAlreadyRunning(let path):
+            return "another daemon already owns the socket at \(path)"
+        case .peerNotSameUser(let uid, let peerUID):
+            return "peer uid \(peerUID) differs from ours \(uid); connection refused"
+        case .serverStopped:
+            return "the socket server is stopped and cannot restart"
+        case .serverAlreadyStarted:
+            return "the socket server is already running"
+        }
+    }
+
+    /// True when the failure is the explicit "no live daemon" signal — the
+    /// case every CLI command maps to exit 1 with the launch-the-app message.
+    public var isDaemonNotRunning: Bool {
+        if case .daemonNotRunning = self { return true }
+        return false
+    }
+}
+
 /// Low-level nonblocking socket routines shared by the client and the server.
 /// Everything here is nonblocking: a would-block read/write becomes an await
 /// on a one-shot Dispatch source raced against a deadline timer, so no

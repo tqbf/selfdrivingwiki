@@ -117,8 +117,11 @@ func run() async -> Int32 {
         }
     }
 
-    // The queue family runs against the LIVE daemon over the workload XPC
-    // surface — no writable wiki-store profile involved.
+    // The queue family runs against the LIVE daemon over its local socket —
+    // the versioned domain envelope transport (Phase 1 of
+    // plans/cli-domain-commands.md). The app-only XPC surface is unreachable
+    // from a standalone binary. App closed ⇒ socket unlinked ⇒ this fails
+    // fast with the explicit not-running error; there is no local fallback.
     if case .queue(let action) = invocation.command {
         do {
             print(try await runQueueCommand(action))
@@ -467,15 +470,15 @@ private func runExtractorFetch(
     return SourceCommand.Result(payload: .text(output), didCommit: true)
 }
 
-/// Read durable job state without creating, migrating, or checkpointing either
 /// `wikictl queue status|pause|resume|halt` — runs against the live daemon
-/// over the workload XPC surface. `status` renders per-lane truth from the
+/// over its local socket (`DaemonWorkloadClient`'s socket backend, Phase 1 of
+/// plans/cli-domain-commands.md). `status` renders per-lane truth from the
 /// daemon's queue snapshot; the lane controls are pass-through verbs whose
 /// effect is durable in the daemon's queue store.
 private func runQueueCommand(_ action: QueueCommand.Action) async throws -> String {
     #if os(macOS)
-    let connection = try WikiDaemonConnection.connect()
-    let client = try DaemonWorkloadClient(connection: connection)
+    let client = try DaemonWorkloadClient(
+        socketContainerDirectory: try DatabaseLocation.appGroupContainerDirectory())
     switch action {
     case .status(let json):
         let snapshot = try await client.queueSnapshot()
@@ -507,7 +510,7 @@ private func runQueueCommand(_ action: QueueCommand.Action) async throws -> Stri
 }
 
 private struct QueueCommandUnsupportedError: LocalizedError {
-    var errorDescription: String? { "wikictl queue requires macOS (the wikid daemon XPC surface)" }
+    var errorDescription: String? { "wikictl queue requires macOS (the wikid daemon socket surface)" }
 }
 
 /// Enqueue the EXPLICIT on-device speech job for one source through the live
@@ -553,8 +556,8 @@ private func runTranscribeCommand(
                 "could not verify source \(source) in wiki \(wikiSelector): \(error.localizedDescription)")
         }
 
-        let connection = try WikiDaemonConnection.connect()
-        let client = try DaemonWorkloadClient(connection: connection)
+        let client = try DaemonWorkloadClient(
+            socketContainerDirectory: try DatabaseLocation.appGroupContainerDirectory())
         // The enqueue write is durable in the daemon's queue store even if
         // its reply is slow (the handler runs the dispatch scan inline). A
         // CLI cannot leak a parked continuation — it would never exit — so
@@ -671,7 +674,7 @@ private func runTranscribeCommand(
     }
     #else
     throw TranscribeCommand.Failure(
-        "wikictl transcribe requires macOS (the wikid daemon XPC surface)")
+        "wikictl transcribe requires macOS (the wikid daemon socket surface)")
     #endif
 }
 
