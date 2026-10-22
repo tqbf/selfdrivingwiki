@@ -75,6 +75,23 @@ public struct DaemonDomainSocketClient: Sendable {
         self.timeout = timeout
     }
 
+    /// Binds the client to an EXPLICIT socket path — the scoped-run client's
+    /// shape (plans/agent-sandbox-scoping.md §4): the run endpoint path is
+    /// delivered out of band, not derived from the container. Throws eagerly
+    /// when the path cannot fit `sockaddr_un`.
+    public init(
+        socketPath: String,
+        timeout: TimeInterval = DaemonWorkloadClient.defaultTimeout
+    ) throws {
+        let byteCount = socketPath.utf8.count
+        guard byteCount <= SearchSocketWire.maxPathBytes else {
+            throw SearchSocketError.pathTooLong(
+                limit: SearchSocketWire.maxPathBytes, actual: byteCount)
+        }
+        self.socketPath = socketPath
+        self.timeout = timeout
+    }
+
     /// One envelope round trip. Throws `DaemonDomainError` for daemon
     /// rejections and `SearchSocketError` for transport faults. `version` and
     /// `authorization` default to the uncredentialed current-version request

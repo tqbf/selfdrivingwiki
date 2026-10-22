@@ -85,9 +85,27 @@ public final class DaemonSearchSocketServer: @unchecked Sendable {
 
     // Immutable after init.
     public let socketPath: String
-    private let containerPath: String
-    private let guardPath: String
+    /// The directory tightened to 0700 at start(): the App Group container
+    /// for the ordinary socket, the runs directory for a run endpoint.
+    private let directoryPath: String
+    /// The process-lifetime flock guard path. `nil` for a run endpoint —
+    /// its lifecycle is the broker's (bind at activation, unlink at
+    /// revocation) and a leftover file must never be resurrected or removed
+    /// behind the broker's back.
+    private let guardPath: String?
+    /// Which bind/lifecycle contract this instance follows.
+    private let kind: EndpointKind
     private let handler: @Sendable (Data) async -> Data
+
+    private enum EndpointKind {
+        /// The ordinary App Group CLI socket: guard flock + stale-socket
+        /// cleanup (provably-ownerless sockets only), container tightening.
+        case searchSocket
+        /// One scoped run's endpoint: explicit path, NO flock, NO stale
+        /// unlink — a pre-existing file at the path fails the bind
+        /// (fail closed; the broker unlinks at revocation).
+        case runEndpoint
+    }
 
     /// Locked mutable state. Lock ordering: NEVER hold `stateLock` while
     /// calling into a `Connection`, and never hold a connection's lock while
@@ -110,8 +128,9 @@ public final class DaemonSearchSocketServer: @unchecked Sendable {
         handler: @escaping @Sendable (Data) async -> Data
     ) throws {
         self.socketPath = try SearchSocketWire.socketPath(inContainerDirectory: containerDirectory)
-        self.containerPath = containerDirectory.path
+        self.directoryPath = containerDirectory.path
         self.guardPath = SearchSocketWire.guardPath(inContainerDirectory: containerDirectory)
+        self.kind = .searchSocket
         self.handler = handler
 
         // The guard file lives in the container; create the directory so a
@@ -119,19 +138,55 @@ public final class DaemonSearchSocketServer: @unchecked Sendable {
         try FileManager.default.createDirectory(
             at: containerDirectory, withIntermediateDirectories: true)
 
-        let fd = open(guardPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-        guard fd >= 0 else {
-            throw SearchSocketError.posix(operation: "open(guard)", errno: errno)
-        }
-        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
-            let code = errno
-            close(fd)
-            if code == EWOULDBLOCK {
-                throw SearchSocketError.serverAlreadyRunning(path: socketPath)
+        if let guardPath {
+            let fd = open(guardPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+            guard fd >= 0 else {
+                throw SearchSocketError.posix(operation: "open(guard)", errno: errno)
             }
-            throw SearchSocketError.posix(operation: "flock(guard)", errno: code)
+            guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+                let code = errno
+                close(fd)
+                if code == EWOULDBLOCK {
+                    throw SearchSocketError.serverAlreadyRunning(path: socketPath)
+                }
+                throw SearchSocketError.posix(operation: "flock(guard)", errno: code)
+            }
+            guardFD = fd
         }
-        guardFD = fd
+    }
+
+    /// Run-lifetime endpoint support (plans/agent-sandbox-scoping.md §4):
+    /// bind a listener at an EXPLICIT short path — the broker's
+    /// `r/<opaque>.sock` under the App Group container — with the same-user
+    /// gate, framing, size bounds, deadlines, and one-request/one-reply
+    /// contract shared with the ordinary socket. Two fail-closed differences:
+    /// - NO guard flock and NO stale-socket unlink. A file already at the
+    ///   path (a live sibling listener, or a leftover from a crashed daemon)
+    ///   makes `start()` throw
+    ///   ``SearchSocketError/endpointInUse(path:)`` — never resurrected,
+    ///   never removed behind the broker's revoke.
+    /// - The path is length-validated against `sockaddr_un` here: the
+    ///   endpoint is composed by the broker (§4 requires validating the
+    ///   complete UTF-8 path), and this is the last guard before bind.
+    public init(
+        runEndpointPath: String,
+        handler: @escaping @Sendable (Data) async -> Data
+    ) throws {
+        let byteCount = runEndpointPath.utf8.count
+        guard byteCount <= SearchSocketWire.maxPathBytes else {
+            throw SearchSocketError.pathTooLong(
+                limit: SearchSocketWire.maxPathBytes, actual: byteCount)
+        }
+        self.socketPath = runEndpointPath
+        // The endpoint's parent (the runs directory) is what gets created
+        // and tightened; the container above it is the ordinary server's.
+        self.directoryPath = (runEndpointPath as NSString).deletingLastPathComponent
+        self.guardPath = nil
+        self.kind = .runEndpoint
+        self.handler = handler
+
+        try FileManager.default.createDirectory(
+            atPath: directoryPath, withIntermediateDirectories: true)
     }
 
     deinit {
@@ -150,10 +205,10 @@ public final class DaemonSearchSocketServer: @unchecked Sendable {
     /// throws ``SearchSocketError/serverStopped``; a second `start()` on a
     /// running server throws ``SearchSocketError/serverAlreadyStarted``.
     public func start() throws {
-        // Tighten the directory when looser than 0o700 (defense in depth;
-        // the getpeereid check remains the gate). Failure only logs: a
-        // permissions-stubborn mount must not block search.
-        Self.tightenDirectoryPermissionsIfLoose(path: containerPath)
+        // Tighten the endpoint's directory when looser than 0o700 (defense
+        // in depth; the getpeereid check remains the gate). Failure only
+        // logs: a permissions-stubborn mount must not block the daemon.
+        Self.tightenDirectoryPermissionsIfLoose(path: directoryPath)
 
         // The state check, stale-socket cleanup, and bind happen under ONE
         // lock hold: a concurrent second start() must never reach the
@@ -170,17 +225,29 @@ public final class DaemonSearchSocketServer: @unchecked Sendable {
                 break
             }
 
-            // Stale-socket cleanup — safe BECAUSE init already owns the guard
-            // flock and no listener of ours is bound yet: any socket file
-            // still at this path outlived its process, and a live server
-            // would have failed this init on the flock.
-            if FileManager.default.fileExists(atPath: socketPath) {
-                do {
-                    try FileManager.default.removeItem(atPath: socketPath)
-                } catch {
-                    DebugLog.store(
-                        "wikid: could not remove stale search socket \(socketPath): \(error)")
-                    throw SearchSocketError.posix(operation: "unlink(stale socket)", errno: errno)
+            switch kind {
+            case .searchSocket:
+                // Stale-socket cleanup — safe BECAUSE init already owns the
+                // guard flock and no listener of ours is bound yet: any
+                // socket file still at this path outlived its process, and a
+                // live server would have failed this init on the flock.
+                if FileManager.default.fileExists(atPath: socketPath) {
+                    do {
+                        try FileManager.default.removeItem(atPath: socketPath)
+                    } catch {
+                        DebugLog.store(
+                            "wikid: could not remove stale search socket \(socketPath): \(error)")
+                        throw SearchSocketError.posix(operation: "unlink(stale socket)", errno: errno)
+                    }
+                }
+            case .runEndpoint:
+                // Fail closed on ANY pre-existing file: a run endpoint is
+                // never resurrected and never unlinked here — a live sibling
+                // listener (or a leftover from a crashed daemon) means this
+                // bind must not happen. The broker's revoke is the only
+                // unlink.
+                if FileManager.default.fileExists(atPath: socketPath) {
+                    throw SearchSocketError.endpointInUse(path: socketPath)
                 }
             }
 

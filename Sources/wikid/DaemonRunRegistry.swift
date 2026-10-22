@@ -47,6 +47,46 @@ public struct DaemonRunID: Hashable, Codable, Sendable, RawRepresentable,
     public var description: String { rawValue }
 }
 
+/// The opaque per-run endpoint name (plans/agent-sandbox-scoping.md §4):
+/// the socket FILE name inside the container's runs directory
+/// (`r/<name>.sock`). Deliberately NOT the run id — endpoints name a
+/// separate random token, so a leaked run id confers no knowledge of (or
+/// ability to guess) a live endpoint path, and a leaked endpoint path
+/// confers no run identity.
+public struct DaemonRunEndpointName: Hashable, Codable, Sendable,
+    RawRepresentable, CustomStringConvertible
+{
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    /// Random byte count behind one name: 12 bytes = 96 random bits (24
+    /// lowercase-hex characters). Endpoint paths are length-budgeted
+    /// (`SearchSocketWire.maxPathBytes`), so the leaf stays short while the
+    /// collision space stays astronomically beyond enumeration.
+    static let randomByteCount = 12
+
+    public enum GenerationError: Error, Equatable {
+        case randomSourceUnavailable(OSStatus)
+    }
+
+    /// A fresh opaque name from the system random source (`SecRandomCopyBytes`
+    /// — the same source the capability uses).
+    public static func generate() throws -> DaemonRunEndpointName {
+        var bytes = [UInt8](repeating: 0, count: randomByteCount)
+        let status = SecRandomCopyBytes(kSecRandomDefault, randomByteCount, &bytes)
+        guard status == errSecSuccess else {
+            throw GenerationError.randomSourceUnavailable(status)
+        }
+        let hex = bytes.map { String(format: "%02x", $0) }.joined()
+        return DaemonRunEndpointName(rawValue: hex)
+    }
+
+    public var description: String { rawValue }
+}
+
 /// 256 random capability bits from the system random source
 /// (`SecRandomCopyBytes`). The printable form (base64) is the ONLY form that
 /// crosses a boundary — wire envelope (``DaemonDomainAuthorization``) or the
@@ -153,6 +193,10 @@ public struct DaemonRunLease: Sendable {
     public let scope: DaemonRunScope
     public let operationClasses: Set<DaemonRunOperationClass>
     public let digest: DaemonRunCapabilityDigest
+    /// The run's endpoint identity (§5: stored per run). `nil` for a lease
+    /// registered without an endpoint — direct registry use that never binds
+    /// a listener (the Phase 1 tests). The BROKER always names the endpoint.
+    public let endpointName: DaemonRunEndpointName?
     /// Owner-renewed expiry bound (crash protection).
     public fileprivate(set) var state: DaemonRunLeaseState
     public fileprivate(set) var expiresAt: Date
@@ -162,6 +206,7 @@ public struct DaemonRunLease: Sendable {
         scope: DaemonRunScope,
         operationClasses: Set<DaemonRunOperationClass>,
         digest: DaemonRunCapabilityDigest,
+        endpointName: DaemonRunEndpointName?,
         state: DaemonRunLeaseState,
         expiresAt: Date
     ) {
@@ -169,6 +214,7 @@ public struct DaemonRunLease: Sendable {
         self.scope = scope
         self.operationClasses = operationClasses
         self.digest = digest
+        self.endpointName = endpointName
         self.state = state
         self.expiresAt = expiresAt
     }
@@ -217,9 +263,13 @@ public actor DaemonRunRegistry {
     /// Register a run for ONE wiki: generate the capability, store the
     /// digest, start the lease `prepared` with a bounded expiry. Returns the
     /// registration carrying the printable capability — the only copy.
+    /// `endpointName` stores the run's endpoint identity (§5) — the BROKER
+    /// mints it and binds the matching listener; direct registry use may
+    /// omit it (a lease with no endpoint).
     public func prepareRun(
         scope: DaemonRunScope,
         operationClasses: Set<DaemonRunOperationClass>,
+        endpointName: DaemonRunEndpointName? = nil,
         lifetime: Duration = DaemonRunRegistry.defaultLeaseLifetime
     ) throws -> DaemonRunRegistration {
         guard !operationClasses.isEmpty else {
@@ -233,6 +283,7 @@ public actor DaemonRunRegistry {
             scope: scope,
             operationClasses: operationClasses,
             digest: digest,
+            endpointName: endpointName,
             state: .prepared,
             expiresAt: Self.advance(.now, by: lifetime))
         leases[runID] = lease
