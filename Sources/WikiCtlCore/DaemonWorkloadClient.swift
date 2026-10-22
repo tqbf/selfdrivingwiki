@@ -195,6 +195,17 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
             timeout: timeout)
     }
 
+    /// Socket-backed client bound to an ALREADY-CONFIGURED domain client —
+    /// the scoped-run shape (§7): the endpoint + v2 authorization come from
+    /// `DaemonScopedRunEnvironment.domainSocketClient`, so queue verbs ride
+    /// the run endpoint instead of the ordinary socket.
+    public convenience init(
+        socket: DaemonDomainSocketClient,
+        timeout: TimeInterval = DaemonWorkloadClient.defaultTimeout
+    ) {
+        self.init(backend: .socket(socket), timeout: timeout)
+    }
+
     private init(backend: Backend, timeout: TimeInterval) {
         self.backend = backend
         self.timeout = timeout

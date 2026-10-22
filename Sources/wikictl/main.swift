@@ -290,7 +290,9 @@ func run() async -> Int32 {
 private func runQueueCommand(_ action: QueueCommand.Action) async throws -> String {
     #if os(macOS)
     let client = try DaemonWorkloadClient(
-        socketContainerDirectory: try DatabaseLocation.appGroupContainerDirectory())
+        socket: DaemonScopedRunEnvironment.domainSocketClient(
+            environment: ProcessInfo.processInfo.environment,
+            containerDirectory: try DatabaseLocation.appGroupContainerDirectory()))
     switch action {
     case .status(let json):
         let snapshot = try await client.queueSnapshot()
@@ -364,7 +366,10 @@ private func runTranscribeCommand(
         // queue path would fail anyway, but the typed message reads better
         // here and nothing is enqueued for a mistake.
         let sourceID = SourceID(rawValue: source)
-        let client = try DaemonWorkloadClient(socketContainerDirectory: container)
+        let client = try DaemonWorkloadClient(
+            socket: DaemonScopedRunEnvironment.domainSocketClient(
+                environment: ProcessInfo.processInfo.environment,
+                containerDirectory: container))
         do {
             let inScope = try await client.transcribePreflight(
                 wikiID: descriptor.id, sourceID: sourceID)
@@ -550,10 +555,13 @@ func runDumpConfig(overlay: String?) -> Int32 {
     }
 }
 
-/// The container-scoped registry client for the wiki subcommands.
+/// The container-scoped registry client for the wiki subcommands. §7: the
+/// shared scoped-run factory resolves the credential environment, so a
+/// managed child's wiki commands ride the run endpoint with v2 authorization.
 private func makeRegistryClient() throws -> DaemonWikiRegistryClient {
-    try DaemonWikiRegistryClient(
-        containerDirectory: try DatabaseLocation.appGroupContainerDirectory())
+    DaemonWikiRegistryClient(socket: try DaemonScopedRunEnvironment.domainSocketClient(
+        environment: ProcessInfo.processInfo.environment,
+        containerDirectory: try DatabaseLocation.appGroupContainerDirectory()))
 }
 
 func runWikiList() async -> Int32 {

@@ -24,7 +24,7 @@ import WikiFSCore
 /// `SearchSocketError.daemonNotRunning` from the transport. No local
 /// fallback, ever.
 //
-// Immutable Sendable value (socket path + timeout).
+// Immutable Sendable value (socket client + timeout).
 public struct DaemonWikiRegistryClient: Sendable {
 
     private let socket: DaemonDomainSocketClient
@@ -36,6 +36,14 @@ public struct DaemonWikiRegistryClient: Sendable {
         self.socket = try DaemonDomainSocketClient(
             containerDirectory: containerDirectory,
             timeout: timeout)
+    }
+
+    /// Bind to an ALREADY-CONFIGURED socket client — the scoped-run shape
+    /// (§7): `DaemonScopedRunEnvironment.domainSocketClient` resolves the
+    /// credential environment once and every family client shares the same
+    /// bound endpoint + v2 authorization.
+    public init(socket: DaemonDomainSocketClient) {
+        self.socket = socket
     }
 
     /// All wikis, MRU-ordered (the daemon's registry view). An empty registry

@@ -47,7 +47,8 @@ public enum DaemonSearchSocketClient {
     ///     remains the visible failure.
     public static func transport(
         containerDirectory: URL,
-        timeout: TimeInterval = DaemonSearchClient.defaultTimeout
+        timeout: TimeInterval = DaemonSearchClient.defaultTimeout,
+        authorization: DaemonDomainAuthorization? = nil
     ) throws -> DaemonSearchTransport {
         let socketPath = try SearchSocketWire.socketPath(inContainerDirectory: containerDirectory)
         return { request, reply in
@@ -68,11 +69,14 @@ public enum DaemonSearchSocketClient {
                     // Phase 1 of plans/cli-domain-commands.md: the search
                     // payload rides inside the versioned domain envelope; the
                     // SearchRPCRequest/SearchRPCReply bytes are unchanged.
+                    // §6: a scoped run's authorization rides the SAME
+                    // envelope — no legacy search frame may bypass it.
                     let envelope = DaemonDomainRequest(
                         requestID: UUID().uuidString,
                         family: .search,
                         operation: DaemonDomainOperation.Search.search,
-                        payload: request)
+                        payload: request,
+                        authorization: authorization)
                     let replyBytes = try await DaemonSocketRoundTrip.perform(
                         socketPath: socketPath,
                         requestBytes: try DaemonDomainWire.encode(envelope),

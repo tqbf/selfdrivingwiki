@@ -153,10 +153,15 @@ public enum CLITantivyLegResolver {
 
         /// The standalone CLI uses the daemon's shared local socket.
         /// Embedded XPC service lookup is available only to the host app.
+        /// §6: a scoped managed run's search rides the SAME envelope
+        /// authorization as every other family — resolved once here.
         private func daemonBackend() throws -> DaemonSearchClient {
             if let daemonClient { return daemonClient }
             let directory = try DatabaseLocation.appGroupContainerDirectory()
-            let transport = try DaemonSearchSocketClient.transport(containerDirectory: directory)
+            let transport = try DaemonSearchSocketClient.transport(
+                containerDirectory: directory,
+                authorization: try DaemonScopedRunEnvironment.authorization(
+                    from: ProcessInfo.processInfo.environment))
             let client = DaemonSearchClient(transport: transport)
             daemonClient = client
             return client
