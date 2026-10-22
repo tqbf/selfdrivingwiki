@@ -106,6 +106,59 @@ final class WikiDaemon: @unchecked Sendable {
     // MARK: - State (accessed on `queue`)
 
     private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid")
+
+    // MARK: - Scoped managed runs (plans/agent-sandbox-scoping.md §5/§7)
+
+    /// The scoped-run lease manager installed by the daemon HOST at boot
+    /// (``installScopedRunLeaseManager``) — the in-process broker-backed
+    /// actor. Nil (tests, app hosts) keeps every launch unscoped. Guarded by
+    /// `queue`; written once at boot before any wiki prepares, read from
+    /// launcher-configuration sites.
+    private var scopedRunLeaseManager: DaemonScopedRunLeaseManager?
+
+    /// Install the broker-backed lease manager. Idempotent: the FIRST install
+    /// wins (the manager owns one registry; a second install would orphan it).
+    func installScopedRunLeaseManager(_ manager: DaemonScopedRunLeaseManager) {
+        queue.sync {
+            guard scopedRunLeaseManager == nil else {
+                DebugLog.agent("scoped run: manager already installed — ignoring re-install")
+                return
+            }
+            scopedRunLeaseManager = manager
+            DebugLog.agent("scoped run: lease manager installed — managed launches will register scoped runs")
+        }
+    }
+
+    /// The installed manager, if any.
+    func scopedRunManager() -> DaemonScopedRunLeaseManager? {
+        queue.sync { scopedRunLeaseManager }
+    }
+
+    /// Revoke every live scoped run (daemon shutdown). No-op without a
+    /// manager; otherwise hands off to the manager's revoke-all.
+    func revokeAllScopedRuns() async {
+        guard let manager = queue.sync(execute: { scopedRunLeaseManager }) else { return }
+        await manager.revokeAll()
+    }
+
+    /// Wrap a resolved launcher factory so EVERY launcher it hands out carries
+    /// the scoped-run lease manager (the ingestion queue resolver and the chat
+    /// host both build launchers per run/session — the manager must ride each
+    /// one). Without a manager (nil), the base factory passes through
+    /// unchanged.
+    func scopedRunConfiguredFactory(
+        _ baseFactory: LauncherFactory
+    ) -> LauncherFactory {
+        guard let manager = queue.sync(execute: { scopedRunLeaseManager }) else {
+            return baseFactory
+        }
+        return LauncherFactory { wikiID in
+            let pair = baseFactory(wikiID: wikiID)
+            pair.launcher.scopedRunLeaseManager = manager
+            return pair
+        }
+    }
+
     private var registry: WikiRegistry
     #if canImport(WikiFSEngine)
     private var preparedServices: [WikiID: AppServices] = [:]
@@ -1821,7 +1874,11 @@ final class WikiDaemon: @unchecked Sendable {
                 guard let self else {
                     throw DaemonStoreResolutionError.unavailable(wikiID)
                 }
-                return try await self.prepareAndResolveWikiServices(wikiID: wikiID).launcherFactory
+                // §5: every launcher the daemon hosts carries the scoped-run
+                // lease manager, so ingestion runs register + revoke through
+                // the in-process broker.
+                let baseFactory = try await self.prepareAndResolveWikiServices(wikiID: wikiID).launcherFactory
+                return self.scopedRunConfiguredFactory(baseFactory)
             },
             queueStore: queueStore,
             resolveSelectedProvider: {
@@ -1956,7 +2013,11 @@ final class WikiDaemon: @unchecked Sendable {
         let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
         let runtime = try await runtimeServices()
         let launcherPair = await MainActor.run {
-            services.launcherFactory(wikiID: wikiID)
+            // §5: the chat host's launcher carries the scoped-run lease
+            // manager.
+            let pair = services.launcherFactory(wikiID: wikiID)
+            pair.launcher.scopedRunLeaseManager = scopedRunManager()
+            return pair
         }
         let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] requestedWikiID in
             guard requestedWikiID == wikiID else { return nil }
@@ -1973,8 +2034,13 @@ final class WikiDaemon: @unchecked Sendable {
                 },
                 diagnosticTrace: daemonChatDiagnostics,
                 providerServices: runtime.provider,
-                makeLauncher: {
-                    services.launcherFactory(wikiID: wikiID).launcher
+                makeLauncher: { [weak self] in
+                    // §5: replacement launchers carry the lease manager too.
+                    let base = services.launcherFactory(wikiID: wikiID).launcher
+                    if let manager = self?.scopedRunManager() {
+                        base.scopedRunLeaseManager = manager
+                    }
+                    return base
                 })
         }
         try Task.checkCancellation()

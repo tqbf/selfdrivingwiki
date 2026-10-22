@@ -89,6 +89,12 @@ public enum UserEnvironmentPath {
 /// boundary. No executable stored in agent-writable scratch is ever generated
 /// or trusted.
 ///
+/// The exception is the §7 scoped-run credential pair
+/// (`WIKI_DAEMON_RUN_ENDPOINT` / `WIKI_DAEMON_RUN_CAPABILITY`): those are
+/// CAPABILITIES, exported only when the trusted host issued a lease, never
+/// rendered into prompts, and required for every command when present — the
+/// CLI fails typed rather than falling back to the ordinary endpoint.
+///
 /// `Sendable` + `Equatable`: built once per run/preparation on the main actor,
 /// then captured by backend profiles and prompt builders.
 public struct AgentRunContext: Sendable, Equatable {
@@ -123,6 +129,14 @@ public struct AgentRunContext: Sendable, Equatable {
     public let stateFilePath: String?
     /// Absolute scratch paths of the staged raw source(s), when any.
     public let stagedSourcePaths: [String]
+    /// The scoped daemon-run credentials for THIS managed run (§7), when the
+    /// trusted host issued a lease. Exported through DEDICATED environment
+    /// keys (`WIKI_DAEMON_RUN_ENDPOINT` / `WIKI_DAEMON_RUN_CAPABILITY`) that
+    /// ride the protected overwrite set — provider hints cannot strip or
+    /// replace them. Deliberately NOT part of `promptContextSection()` or
+    /// `diagnosticDescription`: the capability is a secret, and the CLI reads
+    /// it from the environment at execution time.
+    public let scopedRun: AgentScopedRunCredentials?
 
     /// The scratch-relative leaf the temp roots live under.
     public static let tempRelocationLeaf = ".tmp"
@@ -136,7 +150,8 @@ public struct AgentRunContext: Sendable, Equatable {
         userPATH: String,
         resolvedLoginShellPATH: String? = nil,
         stateFilePath: String? = nil,
-        stagedSourcePaths: [String] = []
+        stagedSourcePaths: [String] = [],
+        scopedRun: AgentScopedRunCredentials? = nil
     ) {
         self.scratchDirectory = scratchDirectory
         self.tempDirectory = scratchDirectory
@@ -151,6 +166,7 @@ public struct AgentRunContext: Sendable, Equatable {
         self.resolvedLoginShellPATH = resolvedLoginShellPATH
         self.stateFilePath = stateFilePath
         self.stagedSourcePaths = stagedSourcePaths
+        self.scopedRun = scopedRun
     }
 
     /// The directory holding the trusted helper (the PATH head).
@@ -197,8 +213,13 @@ public struct AgentRunContext: Sendable, Equatable {
     /// environment is merged, so provider hints cannot redirect wiki routing,
     /// the scratch, or temp relocation. Order in the returned array is the
     /// overwrite order (irrelevant — the keys are disjoint).
+    ///
+    /// §7: the scoped-run credential keys ride the SAME protected set when a
+    /// lease was issued — a provider `env.WIKI_DAEMON_RUN_CAPABILITY` hint
+    /// cannot forge or replace the trusted capability, and the keys cannot be
+    /// silently dropped by the merge.
     public var protectedEnvironment: [String: String] {
-        [
+        var keys = [
             EnvironmentKey.wikictl: wikictlPath,
             EnvironmentKey.wikiScratch: scratchDirectory.path,
             EnvironmentKey.path: effectivePATH,
@@ -209,6 +230,12 @@ public struct AgentRunContext: Sendable, Equatable {
             // a run can export.
             EnvironmentKey.wikiDB: wikiID.rawValue,
         ]
+        if let scopedRun {
+            for (key, value) in scopedRun.childEnvironment {
+                keys[key] = value
+            }
+        }
+        return keys
     }
 
     /// Named constants for the env keys this type owns. Same pattern as
@@ -338,9 +365,12 @@ public struct AgentRunContext: Sendable, Equatable {
 
     /// A copy of this context re-rooted at a derived scratch directory (the
     /// fallback-provider sub-scratch). Everything else — wiki id, trusted
-    /// helper, resolved user PATH (raw and fallback-applied) — is inherited
-    /// so the derived run keeps the same capability contract. Fallback run
-    /// directories get INDEPENDENT temp roots under their own scratch.
+    /// helper, resolved user PATH (raw and fallback-applied), and the scoped
+    /// run credentials — is inherited so the derived run keeps the same
+    /// capability contract (§5: the lease belongs to the MANAGED SESSION, so
+    /// provider fallback keeps the run's lease; revocation happens at run
+    /// teardown). Fallback run directories get INDEPENDENT temp roots under
+    /// their own scratch.
     public func withScratch(_ newScratch: URL) -> AgentRunContext {
         AgentRunContext(
             scratchDirectory: newScratch,
@@ -349,7 +379,8 @@ public struct AgentRunContext: Sendable, Equatable {
             userPATH: userPATH,
             resolvedLoginShellPATH: resolvedLoginShellPATH,
             stateFilePath: stateFilePath,
-            stagedSourcePaths: stagedSourcePaths)
+            stagedSourcePaths: stagedSourcePaths,
+            scopedRun: scopedRun)
     }
 
     /// Create the scratch temp directories the relocated `TMPDIR` (and the

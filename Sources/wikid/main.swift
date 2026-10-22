@@ -743,13 +743,44 @@ let daemon = WikiDaemon(
     containerDirectory: containerDirectory,
     profileOwner: profileOwner,
     storeBootstrap: StoreBootstrap())
-let domainDispatcher = DaemonDomainSocketDispatcher(daemon: daemon)
+// Scoped managed runs (plans/agent-sandbox-scoping.md §5): ONE run registry
+// shared by the ordinary domain dispatcher and the trusted registration
+// broker, so a scoped run registered by the broker authorizes on the same
+// dispatcher the ordinary socket serves. The broker-backed lease manager is
+// installed on the daemon BEFORE any wiki prepares, so every launcher the
+// daemon hosts (ingestion queue, interactive chats) issues, renews, and
+// revokes scoped runs in-process. Nothing here crosses a wire: the Phase 2
+// §5 audit found the XPC channel unauthenticated, and registration stays an
+// in-process API.
+let runRegistry = DaemonRunRegistry()
+let domainDispatcher = DaemonDomainSocketDispatcher(daemon: daemon, runRegistry: runRegistry)
+let scopedRunBroker = DaemonRunRegistrationBroker(
+    registry: runRegistry,
+    dispatcher: domainDispatcher,
+    containerDirectory: containerDirectory)
+do {
+    let leaseManager = try DaemonScopedRunLeaseManager(
+        broker: scopedRunBroker,
+        containerDirectory: containerDirectory)
+    daemon.installScopedRunLeaseManager(leaseManager)
+} catch {
+    // A container whose ordinary endpoint path cannot fit `sockaddr_un`
+    // cannot serve scoped runs at all — fail boot with the operator-actionable
+    // error (the socket bind below would fail the same way).
+    DebugLog.store("wikid: scoped-run lease manager unavailable: \(error)")
+    throw error
+}
 let daemonSocket = try DaemonSearchSocketServer(containerDirectory: containerDirectory) { request in
     await domainDispatcher.handle(request)
 }
 let processLifetime = DaemonProcessLifetimeCoordinator(
     shutdown: {
         daemonSocket.stop()
+        // §5: revoke every live scoped run before the daemon goes away —
+        // endpoint unlink + terminal lease revocation, so no authority
+        // outlives the process (the bounded lease would expire it anyway;
+        // a clean shutdown must not wait out the bound).
+        await daemon.revokeAllScopedRuns()
         await daemon.shutdown()
     },
     didShutdown: {
