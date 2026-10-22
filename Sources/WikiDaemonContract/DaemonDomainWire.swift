@@ -381,6 +381,11 @@ public enum DaemonDomainOperation {
         /// Phase 3: the durable per-wiki item read `wikictl job list/get` is
         /// built on (full terminal history, not the bounded snapshot window).
         public static let queueWikiItems = "queueWikiItems"
+        /// Phase 5: the one-item state snapshot the transcribe completion wait
+        /// loops on — a SHORT bounded read per round trip (one connection per
+        /// call, the standard per-call deadlines), never a hours-long open
+        /// socket (`plans/cli-domain-commands.md` Phase 5).
+        public static let queueItemState = "queueItemState"
     }
 
     public enum Wiki {

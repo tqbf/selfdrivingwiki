@@ -491,6 +491,37 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         }
     }
 
+    /// One SHORT item-state snapshot for a polling completion wait (Phase 5 of
+    /// plans/cli-domain-commands.md). The socket-backed CLI client loops on
+    /// this — sleep between calls — so no single connection stays open for a
+    /// hours-long speech job and each round trip is bounded by the standard
+    /// per-call deadline. The XPC backend has the app's own `waitForCompletion`
+    /// continuation surface and never polls; the call is a typed failure there.
+    public func queueItemState(
+        of id: QueueItem.ID
+    ) async throws -> (state: String, error: String?) {
+        guard case .socket(let client) = backend else {
+            throw DaemonXPCError.failure(
+                "queueItemState requires the CLI socket backend (the app uses waitForCompletion)")
+        }
+        let data = try await withTimeout {
+            try await self.queueSocketData(
+                client,
+                operation: DaemonDomainOperation.Queue.queueItemState,
+                payload: try JSONEncoder().encode(DaemonQueueItemStateRequest(
+                    itemID: id.rawValue)))
+        }
+        // The state snapshot crosses as PLAIN JSON (the queueWikiItems
+        // convention), not inside a QueueRPCEnvelope.
+        let reply: DaemonQueueItemStateReply
+        do {
+            reply = try JSONDecoder().decode(DaemonQueueItemStateReply.self, from: data)
+        } catch {
+            throw DaemonXPCError.unexpectedReply
+        }
+        return (state: reply.state, error: reply.error)
+    }
+
     /// Load persisted typed transcript items for a queue item.
     public func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] {
         try await withTimeout {

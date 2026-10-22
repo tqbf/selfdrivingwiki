@@ -198,6 +198,10 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             // Phase 3: the durable per-wiki read behind `wikictl job list/get`
             // — full terminal history + the extraction-completed wiki leg.
             replyData = try await commands.queueWikiItemsReply(for: request)
+        case DaemonDomainOperation.Queue.queueItemState:
+            // Phase 5: the one-item state snapshot the transcribe completion
+            // wait polls — one short read per round trip.
+            replyData = try await commands.queueItemStateReply(for: request)
         default:
             throw DaemonDomainError(
                 code: .invalidRequest,

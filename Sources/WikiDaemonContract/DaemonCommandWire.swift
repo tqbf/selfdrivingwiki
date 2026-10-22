@@ -359,6 +359,35 @@ public struct DaemonQueueWikiItemsReply: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - queue family: queueItemState (transcribe completion wait, Phase 5)
+
+/// The one-item state snapshot behind the transcribe completion wait. The CLI
+/// loops on this operation with a sleep BETWEEN calls, so no single socket
+/// connection stays open for the (possibly hours-long) speech job and the
+/// standard per-call deadlines bound every round trip.
+public struct DaemonQueueItemStateRequest: Codable, Equatable, Sendable {
+    public let itemID: String
+
+    public init(itemID: String) {
+        self.itemID = itemID
+    }
+}
+
+/// Reply payload: the item's lifecycle state as its `QueueItemState` raw
+/// string, plus the recorded failure text when the state is terminal-with-
+/// error (`failed`). The contract target cannot name `QueueItemState`, so the
+/// raw value crosses and the CLI compares against the raw strings — the same
+/// encoded-JSON convention `queueWikiItems` uses for `[QueueItem]`.
+public struct DaemonQueueItemStateReply: Codable, Equatable, Sendable {
+    public let state: String
+    public let error: String?
+
+    public init(state: String, error: String?) {
+        self.state = state
+        self.error = error
+    }
+}
+
 // MARK: - Phase 4 write payloads (plans/cli-domain-commands.md)
 //
 // Same principle as the Phase 3 payloads: the daemon EXECUTES the CLI's

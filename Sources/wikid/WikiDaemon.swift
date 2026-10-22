@@ -1254,6 +1254,33 @@ final class WikiDaemon: @unchecked Sendable {
         return (selected, completedSourceIDs)
     }
 
+    /// The one-item queue state snapshot behind the transcribe completion wait
+    /// (Phase 5 of plans/cli-domain-commands.md). The CLI polls this over the
+    /// socket with a sleep between calls instead of holding its own read-only
+    /// queue connection open for the job's duration — the queue store opens
+    /// HERE, read-only beside the engine's writer (the same WAL pattern
+    /// `queueWikiItems` uses), and each answer is a complete snapshot, so a
+    /// poll round trip is as short as any other queue read. An unknown item is
+    /// a typed `notFound`: the durable terminal history is never deleted, so a
+    /// missing row mid-wait is a genuine anomaly, not a "still running".
+    func queueItemState(
+        itemID: QueueItemID
+    ) async throws -> (state: String, error: String?) {
+        guard FileManager.default.fileExists(atPath: queueDatabaseURL.path) else {
+            throw DaemonDomainError(
+                code: .notFound,
+                message: "no queue item matching \(itemID.rawValue)")
+        }
+        let queueStore = try QueueStore(readOnlyDatabaseURL: queueDatabaseURL)
+        defer { queueStore.close() }
+        guard let item = try queueStore.getItem(itemID) else {
+            throw DaemonDomainError(
+                code: .notFound,
+                message: "no queue item matching \(itemID.rawValue)")
+        }
+        return (state: item.state.rawValue, error: item.error)
+    }
+
     private func preparedStoreIfAvailable(wikiID: WikiID) -> GRDBWikiStore? {
         do {
             return try resolvePreparedStore(wikiID: wikiID)

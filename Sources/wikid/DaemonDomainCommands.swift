@@ -806,6 +806,20 @@ final class DaemonDomainCommands: @unchecked Sendable {
         return try JSONEncoder().encode(reply)
     }
 
+    // MARK: - queue family: queueItemState (transcribe completion wait)
+
+    func queueItemStateReply(for request: DaemonDomainRequest) async throws -> Data {
+        let payload = try decode(DaemonQueueItemStateRequest.self, request)
+        let snapshot = try await daemon.queueItemState(
+            itemID: QueueItemID(rawValue: payload.itemID))
+        let reply = DaemonQueueItemStateReply(
+            state: snapshot.state,
+            error: snapshot.error)
+        // The PAYLOAD only — the dispatcher's shared reply encoder wraps it in
+        // the envelope (and guards the frame cap).
+        return try JSONEncoder().encode(reply)
+    }
+
     // MARK: - Shared helpers
 
     /// The package-driven fence validator, resolved from the daemon's
