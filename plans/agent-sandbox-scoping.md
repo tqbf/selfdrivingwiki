@@ -1,6 +1,7 @@
 # Agent sandbox invocation scoping
 
 Status: approved (operator decisions recorded 2026-10-22 — see §13).
+Implementation: Phases 0–1 implemented on `feature/agent-sandbox-scoping` (PR #1470) — Phase 0 at `da3b8b74`, Phase 1 at `2ece6a4b`. Scoped production launches remain DISABLED; per-run endpoints, Seatbelt rules, managed-run wiring, and credential delivery are Phases 2–3. Deviations recorded in §11 under each phase.
 Author: OpenAI-family (codex/gpt-6.1-sol), reviewing GLM-family migration work.
 Baseline: `ab44c06d`, branch `feature/wikictl-fixture-target`. Recheck line numbers after the stacked branches land.
 Decision record: all five §13 decisions approved as recommended on 2026-10-22. Implementation queues behind the fixture-binary split; rollout per §11 (Phase 0 lands with the stack, Phases 1–4 as their own stacked change).
@@ -354,6 +355,8 @@ Use Swift Testing. Keep subprocess waits nonblocking and timeout-bounded. Do not
 
 ### Phase 0: correct the evidence
 
+Status: IMPLEMENTED (`da3b8b74`). `productionSandboxPreventsCrossWikiMutation` became `crossWikiMutationReachesDaemonWithoutAuthorization`: the fixture daemon starts, the wiki-A-sandboxed child's `source edit-markdown` genuinely reaches it, and the test asserts the cross-wiki write SUCCEEDS (new wiki B head, history 1→2, raw bytes untouched) — the migration regression recorded, not faked. No known-issue annotation: the test is an accurate characterization, and a green run states "the gap is present," never "the fence holds." Phases 2–3 flip this assertion to a typed `scopeDenied`.
+
 Land an accurate test description with the migration stack. Start the fixture daemon where transport success is required.
 
 Replace the old cross-wiki claim with a test that records the current missing authorization boundary. Do not preserve a false green test.
@@ -362,7 +365,14 @@ Use a temporary known-issue annotation only if the stack cannot land the scope r
 
 ### Phase 1: protocol and authorization core
 
-Add v2 credentials, typed errors, run registry, and exhaustive operation classification. Keep scoped production launches disabled.
+Status: IMPLEMENTED (`2ece6a4b`). Envelope v2 with the optional authorization object; v1 stays served on the ordinary listener through the compatibility window; typed errors `authorizationRequired` / `authorizationInvalid` / `authorizationExpired` / `scopeDenied`; `DaemonRunRegistry` (actor) with typed run identity/capability/digest/scope/classes, prepared→active→revoked, idempotent revoke, owner-renewed bounded lease, `SecRandomCopyBytes` capability, digest-only storage, nothing persisted; dispatcher `handle(_:context:)` with the exhaustive `DaemonScopedOperationPolicy` table; scoped `source export` and `source refresh` denied. Scoped production launches remain disabled — exercised by `DaemonRunRegistryTests`, `DaemonScopePolicyContractTests` (source-parsed exhaustiveness), and `DaemonScopedSocketTests` over the real socket + dispatcher with a context-stamped handler standing in for the Phase 2 listener.
+
+Deviations from the letter of the plan (all conservative):
+
+- A REVOKED lease answers `authorizationExpired` (the lease is over), and a PREPARED (registered, never activated) lease answers `authorizationInvalid` (not yet valid). Both replies use the one fixed generic message, so lease state does not leak.
+- A CREDENTIALED scoped `hello` still passes authorization and receives the full capabilities answer; only the UNcredentialed hello is version-only, per §9. Malformed credentials on hello are `authorizationInvalid`.
+- Scoped `wiki resolveWiki` with a foreign selector answers the fixed `scopeDenied` text (no wiki name, no existence signal); the assigned wiki resolves by id or its own display name.
+- The policy table classifies the OKF `status`/`freshness`/`verify`/`correct` operations as `wikiEdit` (they mutate), not reads; only `okfInspect` and the explicit reads are `wikiRead`.
 
 Add unit tests for all family routes, queue ownership, malformed requests, and revocation. Deny scoped export before exposing scoped listeners.
 

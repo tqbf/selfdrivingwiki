@@ -1,0 +1,26 @@
+---
+timestamp: 2026-10-22T090000Z
+title: Agent sandbox scoping Phases 0–1
+branch: feature/agent-sandbox-scoping
+status: active
+---
+
+# Agent sandbox scoping Phases 0–1
+
+## Progress
+
+Phases 0 and 1 of `plans/agent-sandbox-scoping.md` are implemented on `feature/agent-sandbox-scoping` (PR #1470): Phase 0 at `da3b8b74`, Phase 1 at `2ece6a4b`. Scoped production launches remain disabled; per-run endpoints, Seatbelt endpoint rules, managed-run wiring, and credential delivery stay with later agents (Phases 2–3).
+
+Phase 0 replaced the false-green `productionSandboxPreventsCrossWikiMutation` with `crossWikiMutationReachesDaemonWithoutAuthorization`. The old test never started a fixture daemon, so the child's command died on a dead socket and the transport failure looked like a Seatbelt denial. The new test starts the daemon, confirms the wiki-A-sandboxed child's cross-wiki `source edit-markdown` genuinely reaches it, and asserts what is true today: the write succeeds at the same-user daemon (new wiki B head, history 1→2, raw bytes untouched). No known-issue annotation — the test accurately records the #1464 regression, so a green run means "the gap is present", never "the fence holds". Phases 2–3 flip the assertion to a typed `scopeDenied`.
+
+Phase 1 added the protocol and authorization core. The domain envelope is version 2 with an optional `DaemonDomainAuthorization` carrying the printable capability; v1 stays served on the ordinary listener through the compatibility window, while a v1 data operation on a scoped listener answers typed `unsupportedVersion`. Four typed errors (`authorizationRequired`, `authorizationInvalid`, `authorizationExpired`, `scopeDenied`) travel as domain replies with one fixed generic message, so denials leak no wiki name and no existence. `DaemonRunRegistry` is an actor holding typed run identity, capability, one-wiki scope, and `wikiRead`/`wikiEdit`/`wikiAcquire` operation classes; the lease moves prepared→active→revoked with idempotent revocation and an owner-renewed bounded expiry; capabilities come from `SecRandomCopyBytes` (256 bits) and the daemon stores only the SHA-256 digest of the printable form; nothing persists across a daemon restart; registration, renewal, and scope expansion are owner-side actor APIs with no wire family, so a same-user child cannot mint or widen a run through the CLI socket. The dispatcher's `handle(_:context:)` accepts a trusted connection context (ordinary | scoped run) and validates scoped requests after the version gate and before family dispatch through the exhaustive `DaemonScopedOperationPolicy` table: every family/operation pair classified, unknown pairs deny fail-closed, the target wiki must equal the registered scope (names resolve only within the assigned wiki), item-only queue reads resolve the owning wiki first (`WikiDaemon.queueItemOwningWiki`), scoped `source export` and `source refresh` are denied (§13.3/§13.4), registry mutation and enumeration, global queue controls, and admin maintenance are denied, and scoped `wiki resolveWiki` answers only the assigned descriptor. The ordinary path is behaviorally unchanged for uncredentialed v1/v2 requests.
+
+Documented deviations (recorded in the plan §11): revoked leases answer `authorizationExpired` and prepared-but-unactivated leases answer `authorizationInvalid` (same generic message either way); a credentialed scoped `hello` still receives the full capabilities answer, only the uncredentialed one is version-only; foreign `resolveWiki` selectors get the fixed `scopeDenied` text; the OKF `status`/`freshness`/`verify`/`correct` operations classify as `wikiEdit` because they mutate.
+
+## Verification
+
+`make build` green. New suites (via `scripts/test-optin-app-tests-reconciled.sh`): 30 tests in 3 suites passed — `DaemonRunRegistryTests` (lease state machine, idempotent revocation, expiry/renewal, digest-not-secret redaction), `DaemonScopePolicyContractTests` (parses every operation constant out of the contract source and requires an explicit policy row, plus the §6/§13 anchors), and `DaemonScopedSocketTests` (real AF_UNIX round trips over the real dispatcher with a context-stamped listener: allowed read/edit, wrong-wiki `scopeDenied`, missing/malformed/expired/revoked capabilities, cross-run capability, v1-on-scoped, version-only hello, queue-item ownership, no-leak denials).
+
+Regression gates: the seven named daemon suites (`DaemonDomainSocketTests`, `DaemonCommandSocketTests`, `DaemonWikiSocketTests`, `DaemonSearchSocketTests`, `DaemonWorkloadClientTimeoutTests`, `DaemonSearchTests`, `DaemonCommandWriteSocketTests`) passed 82 tests in 7 suites — the ordinary path is unchanged. The full `AgentSandboxProcessTests` suite passed 15 tests, including the rewritten cross-wiki test at 0.8 s with the daemon live. `make test` (default graph) passed. SwiftLint reported 0 violations across 753 files, and the pre-commit bare-`try?` gate stayed green.
+
+Remaining for later agents (Phases 2–3): run-lifetime listeners and the trusted registration broker, the Seatbelt endpoint deny/allow rules, registration-before-spawn and revocation through every teardown path, credential delivery to adapters, and flipping `crossWikiMutationReachesDaemonWithoutAuthorization` to assert the typed denial.
