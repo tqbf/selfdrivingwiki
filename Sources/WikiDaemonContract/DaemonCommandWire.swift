@@ -307,6 +307,26 @@ public struct DaemonWorkspaceRequest: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - search commands (server-side resolution)
+
+/// The request for `page search` / `source search` / `chat search` — the FULL
+/// command runs on the daemon: the daemon resolves the BM25 leg with its own
+/// per-wiki Tantivy runtime, resolves hits against the store catalog, fuses
+/// with the semantic cosine leg via the store's `searchSimilar`, and returns
+/// the byte-stable rendered output + zero-results note. The CLI does no
+/// catalog work at all.
+public struct DaemonSearchCommandRequest: Codable, Equatable, Sendable {
+    public let wikiID: String
+    public let query: String
+    public let limit: Int
+
+    public init(wikiID: String, query: String, limit: Int) {
+        self.wikiID = wikiID
+        self.query = query
+        self.limit = limit
+    }
+}
+
 // MARK: - queue family: queueWikiItems (job list/get)
 
 /// The durable per-wiki queue read behind `wikictl job list/get`. Unlike

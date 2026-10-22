@@ -326,6 +326,11 @@ public enum DaemonDomainOperation {
         public static let okfStatus = "okfStatus"
         public static let okfFreshness = "okfFreshness"
         public static let okfVerify = "okfVerify"
+        /// The FULL search command, server-side: the daemon resolves the BM25
+        /// leg with its own per-wiki runtime, fuses with the semantic leg, and
+        /// returns the byte-stable rendered output (Phase 3 search
+        /// store-freedom).
+        public static let search = "search"
     }
 
     public enum Source {
@@ -333,6 +338,8 @@ public enum DaemonDomainOperation {
         public static let cat = "cat"
         public static let export = "export"
         public static let info = "info"
+        /// Server-side search — see `Page.search`.
+        public static let search = "search"
     }
 
     public enum Chat {

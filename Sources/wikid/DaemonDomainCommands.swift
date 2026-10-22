@@ -131,6 +131,22 @@ final class DaemonDomainCommands: @unchecked Sendable {
                 input: OKFVerificationInput(
                     verifier: verifier, verifiedAt: payload.verifiedAt,
                     basis: basis, freshness: freshness))
+        case DaemonDomainOperation.Page.search:
+            // The FULL search command, server-side: the daemon owns the BM25
+            // runtime AND the store, so the leg resolution, RRF fusion, and
+            // hit→summary mapping all happen here; the CLI does no catalog
+            // work.
+            let payload = try decode(DaemonSearchCommandRequest.self, request)
+            let wikiID = try resolveWikiID(payload.wikiID)
+            store = try await daemon.domainCommandStore(wikiID: wikiID)
+            let leg = try await searchLeg(
+                kind: .page, query: payload.query, limit: payload.limit,
+                wikiID: wikiID, store: store,
+                catalog: { try store.listPages(sortBy: .lastUpdated) },
+                id: { PageID(rawValue: $0) })
+            return Self.outcome(try PageCommand.run(
+                .search(query: payload.query, limit: payload.limit),
+                in: store, linter: nil, bm25Leg: leg))
         default:
             throw DaemonDomainError(
                 code: .invalidRequest,
@@ -174,6 +190,20 @@ final class DaemonDomainCommands: @unchecked Sendable {
             store = try await storeForWikiID(payload.wikiID)
             action = .info(try sourceSelector(payload.selector))
             cwd = FileManager.default.currentDirectoryPath
+        case DaemonDomainOperation.Source.search:
+            let payload = try decode(DaemonSearchCommandRequest.self, request)
+            let wikiID = try resolveWikiID(payload.wikiID)
+            store = try await daemon.domainCommandStore(wikiID: wikiID)
+            let leg = try await searchLeg(
+                kind: .source, query: payload.query, limit: payload.limit,
+                wikiID: wikiID, store: store,
+                catalog: { try store.listSources() },
+                id: { SourceID(rawValue: $0) })
+            return try Self.outcome(SourceCommand.run(
+                .search(query: payload.query, limit: payload.limit),
+                in: store,
+                cwd: FileManager.default.currentDirectoryPath,
+                bm25Leg: leg))
         default:
             throw DaemonDomainError(
                 code: .invalidRequest,
@@ -196,6 +226,18 @@ final class DaemonDomainCommands: @unchecked Sendable {
             let payload = try decode(DaemonChatGetRequest.self, request)
             store = try await storeForWikiID(payload.wikiID)
             action = .get(try chatSelector(payload.selector))
+        case DaemonDomainOperation.Chat.search:
+            let payload = try decode(DaemonSearchCommandRequest.self, request)
+            let wikiID = try resolveWikiID(payload.wikiID)
+            store = try await daemon.domainCommandStore(wikiID: wikiID)
+            let leg = try await searchLeg(
+                kind: .chat, query: payload.query, limit: payload.limit,
+                wikiID: wikiID, store: store,
+                catalog: { try store.listChats() },
+                id: { ChatID(rawValue: $0) })
+            return Self.outcome(try ChatCommand.run(
+                .search(query: payload.query, limit: payload.limit),
+                in: store, bm25Leg: leg))
         default:
             throw DaemonDomainError(
                 code: .invalidRequest,
@@ -265,6 +307,31 @@ final class DaemonDomainCommands: @unchecked Sendable {
     }
 
     // MARK: - Shared helpers
+
+    /// The daemon-side BM25 leg for the CLI search commands: the daemon's own
+    /// per-wiki Tantivy runtime ranks ulids; the store catalog resolves them
+    /// to typed summaries (hits naming absent ids are dropped; an all-empty
+    /// resolution is NO leg — "no BM25 results", never an error). Mirrors
+    /// `CLITantivyLegResolver.resolveHits`, server-side, so the CLI does no
+    /// catalog work.
+    #if canImport(WikiFSEngine)
+    private func searchLeg<Summary: Identifiable & Sendable>(
+        kind: TantivyDocumentKind,
+        query: String,
+        limit: Int,
+        wikiID: WikiID,
+        store: WikiStore,
+        catalog: () throws -> [Summary],
+        id: (String) -> Summary.ID
+    ) async throws -> [Summary]? {
+        let runtime = try await daemon.ensureSearchRuntime(wikiID: wikiID)
+        let hits = try await runtime.search(query: query, kinds: [kind], limit: max(0, limit))
+        guard !hits.isEmpty else { return nil }
+        let byID = Dictionary(try catalog().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let resolved = hits.compactMap { byID[id($0.ulid)] }
+        return resolved.isEmpty ? nil : resolved
+    }
+    #endif
 
     /// Resolve + admit the wiki's store. `payloadWikiID` is the resolved ULID
     /// the CLI sent (it resolved the selector over the `wiki` family first);

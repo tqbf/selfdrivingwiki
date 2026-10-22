@@ -140,9 +140,16 @@ public enum DaemonCommandRoute {
                     basisJSON: try JSONEncoder().encode(input.basis),
                     ttlSeconds: ttlSeconds))
             }
+        case .search(let query, let limit):
+            // Server-side search: the daemon resolves the BM25 leg, fuses,
+            // maps, and renders — the CLI does no catalog work.
+            return DaemonCommandCall(
+                family: .page, operation: DaemonDomainOperation.Page.search) { wikiID in
+                try JSONEncoder().encode(DaemonSearchCommandRequest(
+                    wikiID: wikiID, query: query, limit: limit))
+            }
         default:
-            // add/delete/revert/search/okfCorrect: not migrated here (search
-            // lands with its server-side resolution; writes are Phase 4).
+            // add/delete/revert/okfCorrect: not migrated here (Phase 4).
             return nil
         }
     }
@@ -184,10 +191,14 @@ public enum DaemonCommandRoute {
                 try JSONEncoder().encode(DaemonSourceInfoRequest(
                     wikiID: wikiID, selector: wireSelector))
             }
+        case .search(let query, let limit):
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.search) { wikiID in
+                try JSONEncoder().encode(DaemonSearchCommandRequest(
+                    wikiID: wikiID, query: query, limit: limit))
+            }
         default:
-            // addURL/addFile/editMarkdown/rename/setActive/refresh/search/okf*:
-            // not migrated here (search lands with its server-side
-            // resolution; writes are Phase 4).
+            // addURL/addFile/editMarkdown/rename/setActive/refresh/okf*: not migrated here (Phase 4).
             return nil
         }
     }
@@ -206,9 +217,14 @@ public enum DaemonCommandRoute {
                 try JSONEncoder().encode(DaemonChatGetRequest(
                     wikiID: wikiID, selector: wireSelector))
             }
+        case .search(let query, let limit):
+            return DaemonCommandCall(
+                family: .chat, operation: DaemonDomainOperation.Chat.search) { wikiID in
+                try JSONEncoder().encode(DaemonSearchCommandRequest(
+                    wikiID: wikiID, query: query, limit: limit))
+            }
         default:
-            // search/rename: not migrated here (search lands with its
-            // server-side resolution; rename is Phase 4).
+            // rename: not migrated here (Phase 4).
             return nil
         }
     }

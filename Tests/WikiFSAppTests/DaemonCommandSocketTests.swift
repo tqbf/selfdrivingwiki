@@ -466,6 +466,71 @@ struct DaemonCommandSocketTests {
         }
     }
 
+    // MARK: - search (server-side resolution)
+
+    /// `page search` runs ENTIRELY on the daemon — BM25 leg via the daemon's
+    /// own runtime, catalog mapping, fusion, rendering. The CLI does no
+    /// catalog work; the assertion pins the byte-stable TSV and the
+    /// zero-results stderr note.
+    @Test func pageSearchRunsServerSideOverRealSocket() async throws {
+        let container = makeContainer()
+        let (server, fixture, daemon) = try await makeSeededWiki(container: container)
+        defer { server.stop() }
+        try await seed(daemon, wikiID: fixture.id) { store in
+            _ = try store.createPage(title: "Ironworkers Hall", body: "union hall minutes", createdBy: nil, provenance: [])
+        }
+
+        let client = try makeSocketClient(container: container)
+        let reply = try await client.send(
+            family: .page,
+            operation: DaemonDomainOperation.Page.search,
+            payload: try JSONEncoder().encode(DaemonSearchCommandRequest(
+                wikiID: fixture.id.rawValue, query: "Ironworkers", limit: 10)))
+        let outcome = try DaemonCommandOutcome.decode(reply.payload)
+        #expect(outcome.text?.contains("Ironworkers Hall") == true)
+        #expect(outcome.stderr == nil)
+
+        // A query matching nothing: empty stdout (byte-stable) + the named
+        // zero-results note on stderr.
+        let emptyReply = try await client.send(
+            family: .page,
+            operation: DaemonDomainOperation.Page.search,
+            payload: try JSONEncoder().encode(DaemonSearchCommandRequest(
+                wikiID: fixture.id.rawValue, query: "zzz-no-such-thing", limit: 10)))
+        let empty = try DaemonCommandOutcome.decode(emptyReply.payload)
+        #expect(empty.text == "")
+        #expect(empty.stderr?.contains("zzz-no-such-thing") == true)
+    }
+
+    /// The routing seam covers the search commands too: `page search` goes
+    /// over the socket and the in-process store executor is never reached.
+    @Test func runnerRoutesSearchThroughDaemonWithoutOpeningStore() async throws {
+        let container = makeContainer()
+        let (server, fixture, daemon) = try await makeSeededWiki(container: container)
+        defer { server.stop() }
+        try await seed(daemon, wikiID: fixture.id) { store in
+            _ = try store.createPage(title: "Ironworkers Hall", body: "union minutes", createdBy: nil, provenance: [])
+        }
+
+        let runner = WikiCtlRunner(
+            resolveContainer: { WikiResolver(containerDirectory: container) },
+            daemonCommandRouter: DaemonCommandRouter(),
+            execute: { _, _, _, _ in
+                Issue.record("routed search must not open the in-process store")
+                return SourceCommand.Result(payload: .text(""), didCommit: false)
+            })
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", fixture.displayName, "page", "search", "--query", "Ironworkers"],
+            env: { _ in nil })
+        let output = try await runner.runOrdinary(
+            command: invocation.command,
+            wikiSelector: invocation.wikiSelector,
+            databasePath: invocation.databasePath,
+            environment: [:])
+        #expect(String(decoding: output.stdout, as: UTF8.self).contains("Ironworkers Hall"))
+        #expect(output.changedWikiID == nil)
+    }
+
     // MARK: - Typed failures
 
     @Test func unknownWikiIsTypedNotFoundWithByteStableText() async throws {
