@@ -50,8 +50,8 @@ deadlines) and `DaemonSearchSocketServer` are already proven on this branch.
 | page/source/chat/bookmark/workspace — READS | CLI boots Cordis profile in-process, opens the store | ✅ daemon executes the same command layer over the envelope (Phase 3) |
 | page/source/chat search | daemon BM25 via socket; semantic leg, fusion, hit mapping still local | ✅ full command runs server-side; search commands are store-free (Phase 3) |
 | `job list/get` | direct `queue.sqlite` reads | ✅ daemon `queueWikiItems` (full history + extraction-completed leg) |
-| `extractor sync/fetch` | direct `queue.sqlite` writes | daemon `enqueueItem` |
-| page/source/chat/bookmark/workspace/strategy/log/admin — WRITES | CLI boots Cordis profile in-process, opens the store | Phase 4: the same command-layer execution Phase 3 landed, extended to mutations with typed CAS codes |
+| `extractor sync/fetch` | direct `queue.sqlite` writes | ✅ daemon executes the whole command; durable enqueue through the daemon's queue engine (Phase 4) |
+| page/source/chat/bookmark/workspace/strategy/log/admin — WRITES | CLI boots Cordis profile in-process, opens the store | ✅ daemon executes the same command layer with typed CAS codes (Phase 4) |
 | `chat new/send/stop` | retired | may return over the existing daemon chat endpoints |
 | `extractor list`, `version`, `--dump-config` | container files / no DB | stay local |
 | `--database-path` fixtures | local by design (refuses container paths) | unchanged |
@@ -84,13 +84,20 @@ Reply: `{"version": 1, "requestID": "<echo>", "family": "<family>",
   is not a domain envelope at all (an old daemon) decodes as
   `unsupportedVersion` on the client with "quit and relaunch (or reinstall)
   the app" guidance.
-- Families today: `hello`, `search`, `queue`, `wiki`, plus Phase 3's
-  `page`, `source`, `chat`, `bookmark`, `workspace` (an unknown family string
-  or unknown operation still decodes to a typed `invalidRequest` reply —
-  never a transport fault).
+- Families today: `hello`, `search`, `queue`, `wiki`, Phase 3's `page`,
+  `source`, `chat`, `bookmark`, `workspace`, and Phase 4's `strategy`, `log`,
+  `admin`, `extractor` (an unknown family string or unknown operation still
+  decodes to a typed `invalidRequest` reply — never a transport fault).
 - Error codes: `invalidRequest`, `unsupportedVersion`, `notFound`,
-  `unavailable`, `operationFailed`. Phase 4's CAS codes (`casConflict`,
-  `createOnly`, `expectedTargetMissing`, `strategyRevision`) extend this enum.
+  `unavailable`, `operationFailed`, plus Phase 4's typed CAS codes
+  `casConflict` (kind `page` or `sourceMarkdown`, carrying expected + actual
+  heads), `createOnlyConflict`, `expectedTargetMissing`, and
+  `strategyRevisionConflict` (expected/actual revisions, nil = absent). Each
+  CAS error carries a structured `DaemonConflictDetail`; the CLI rebuilds the
+  SAME typed store error (`PageConflictError`,
+  `SourceMarkdownConflictError`, `PageCreateConflictError`,
+  `PageExpectedTargetMissingError`, `WikiStrategyConflictError`) so the
+  existing exit-3 catch paths print the byte-stable conflict text.
 - Family payloads ride unchanged inside `payload`:
   - `hello` / `capabilities` → reply payload is `DaemonHelloPayload`
     `{version, protocolVersion, families: [sorted strings], appVersion,
@@ -171,6 +178,65 @@ Reply: `{"version": 1, "requestID": "<echo>", "family": "<family>",
   proactive handshake per command: a version-mismatch surfaces as
   `unsupportedVersion` with relaunch guidance; `hello`/`capabilities` is
   served and tested for clients that want to negotiate explicitly.
+
+## Deviations from the plan (Phase 4)
+
+- **The daemon executes the CLI's write command layer too.** Same pattern as
+  Phase 3 — one executor (`DaemonDomainCommands`), uniform
+  `DaemonCommandOutcome` — extended to mutations. Bodies cross RESOLVED: the
+  CLI resolves every `BodySource` (file path or `-` = stdin) BEFORE the wire,
+  because the daemon has no caller stdin. `WorkspaceCommand.Action.resolve`
+  became `body: BodySource` for the same reason (a raw `bodyFile: String`
+  would have been treated as a PATH server-side).
+- **Bodies and bytes ride inline.** `page add` body, `source add` raw bytes
+  (base64), `editMarkdown` content, `strategy save` instructions, `workspace
+  resolve` content, `index set` body — all resolved CLI-side, capped by the
+  4 MiB request frame (an oversized `source add` fails on the CLIENT with
+  `frameTooLarge` before connecting, the same ceiling family as `source cat`
+  replies).
+- **CAS expectations ride the request; the store evaluates them inside the
+  write, server-side.** No pre-check round trip. The server executor catches
+  the five typed store errors and replies with the typed CAS code + structured
+  detail — never a stringified stderr guess. The CLI's
+  `DaemonCommandRouter.conflictError(from:)` rebuilds the typed error, so
+  main.swift's existing catch clauses keep their exact byte-stable conflict
+  text and exit 3; successes never throw, keeping exit 0.
+- **`page add` runs with the SAME write tooling as the in-process path**: the
+  markdown linter (which AUTO-FIXES the body — nil would silently change what
+  gets stored) and the package-driven fence validator resolved from the
+  daemon's container. Reads keep Phase 3's nil tooling.
+- **Extractor sync/fetch: the ENTIRE command runs daemon-side.** The daemon
+  builds its own package catalog (the durable machine catalog the app
+  publishes, plus its reviewed overlay — the same posture as the app-bundled
+  CLI helper) and the durable enqueue goes through the daemon's queue ENGINE
+  (the exact `engine.enqueue` closure the `enqueueItem` queue-family
+  operation's handler runs). The CLI sends only parameters and never opens
+  `queue.sqlite`; these two commands now REQUIRE the app running (fail fast).
+  The CLI's old direct-write path survives only for `--database-path`
+  fixtures until Phase 5 strips it. Tests inject a catalog double via the
+  fixture-daemon seam (`testExtractorCatalog`).
+- **Source okf family + `page okfCorrect` + `chat rename` ride along.** The
+  Phase 4 charter is "every mutating command", and Phase 3's note said the
+  remaining okf writes wait "until Phase 4" — so the source
+  okfInspect/Status/Freshness/Verify/Correct ops (mirroring the page family's
+  Phase 3 payloads) and the two leftover writes migrated too. `strategy read`
+  migrated with save/reset for family completeness (it is the strategy
+  family's only read; leaving it local would keep a store-opening read
+  behind).
+- **Per-endpoint handler budgets** (`DaemonDomainBudgets`, the documented
+  choice from §"Long-running operations"): the whole `admin` family and
+  `workspace merge`/`reap` run under a 600 s SERVER handler budget with a 660
+  s CLIENT deadline (client above server, so the true outcome rides back
+  instead of the client giving up first); everything else keeps the socket's
+  standard posture (60 s server / 30 s client). The server peeks the decoded
+  envelope at handler start (`Connection.startProcessing`) and races the
+  handler against its operation's budget — an undecodable frame keeps the
+  standard bound, and the race still fires on an oversized budget, so a stuck
+  handler cannot pin an fd. No async-job pattern: the budget sufficed in
+  testing.
+- **Frame cap** (unchanged 4 MiB, guarded in the dispatcher's shared reply
+  encoder): covers every new family. `page get` on a >~4 MiB page still fails
+  typed `operationFailed` naming the cap.
 
 ## Deviations from the plan (Phase 3)
 
@@ -253,6 +319,18 @@ byte-stable stdout formats are scripting contracts; preserve both.
    direct queue write, or durable enqueue is lost when the app is closed),
    admin maintenance. Source `addURL`/`refresh` network fetching moves into the
    daemon. Typed CAS codes throughout.
+   ✅ **Implemented** (see §"Deviations from the plan (Phase 4)"): every
+   mutating wikictl command now rides the daemon — page
+   add/delete/revert/okfCorrect, source
+   addURL/addFile/editMarkdown/rename/setActive/refresh + the source okf
+   family, chat rename, bookmark createFolder/addRef/rename/delete/move,
+   workspace create/abandon/merge/refresh/resolve/retry/reap, strategy
+   read/save/reset, log append + index set, admin vacuums + MIME repair, and
+   `extractor sync/fetch` (durable enqueue through the daemon's queue engine).
+   CAS crosses as typed codes (`casConflict`, `createOnlyConflict`,
+   `expectedTargetMissing`, `strategyRevisionConflict`) that the CLI maps back
+   to the byte-stable exit-3 conflict text. The CLI is store-free for every
+   registry-selected command.
 5. **Completion + enforcement** — transcribe waits via a daemon poll endpoint;
    retire CLI `queue.sqlite` reads; strip store/queue/registry construction
    from `WikiCtlCore`/`wikictl`; extend the boundary script to reject
@@ -270,6 +348,12 @@ per-endpoint budgets, or use the async enqueue + daemon-poll pattern (the
 transcribe flow already demonstrates it). Audit the largest read payloads
 against the 4 MiB frame cap before finalizing; add chunked replies only if a
 payload can exceed it.
+
+Phase 4 landed the per-endpoint budget: `DaemonDomainBudgets` gives the admin
+family and workspace merge/reap a 600 s server handler budget (660 s client
+deadline); everything else keeps the socket's 60 s/30 s posture. The budget
+sufficed — no async-job pattern was needed. `transcribe`'s wait already uses
+its own durable poll and is untouched.
 
 ## Test strategy
 
