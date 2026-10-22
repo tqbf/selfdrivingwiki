@@ -269,11 +269,11 @@ func run() async -> Int32 {
 /// body read (`-` = stdin, else a file path) happens inside the action's `run`
 /// via `resolveBodySource` — the only I/O the parser left for execution time.
 ///
-/// `wikiID` + `containerDirectory` thread the on-disk Tantivy index path
-/// (`<container>/search-index/<wikiID>/`) to the three search cases so they
-/// can resolve a Tantivy BM25 leg via `CLITantivyLegResolver` before invoking
-/// the kind-specific `*Command.run(..., bm25Leg:)` (#637). Non-search cases
-/// ignore them.
+/// `wikiID` routes the three search cases to the daemon's index via
+/// `CLITantivyLegResolver` so they can resolve a Tantivy BM25 leg before
+/// invoking the kind-specific `*Command.run(..., bm25Leg:)` (#637).
+/// Non-search cases ignore it. `containerDirectory` feeds the fence validator
+/// and the extractor commands.
 func execute(
     _ command: ArgumentParser.Command,
     in store: GRDBWikiStore,
@@ -282,10 +282,9 @@ func execute(
 ) async throws -> SourceCommand.Result {
     switch command {
     case .page(let action):
-        let leg = await cliPageLegIfSearch(
+        let leg = try await cliPageLegIfSearch(
             action,
             wikiID: wikiID,
-            containerDirectory: containerDirectory,
             store: store)
         // The package-driven fence validator resolves from the machine
         // renderer package store. An unresolvable layout skips validation
@@ -334,10 +333,9 @@ func execute(
         return try SourceCommand.run(
             action, in: store,
             cwd: FileManager.default.currentDirectoryPath,
-            bm25Leg: await cliSourceLegIfSearch(
+            bm25Leg: try await cliSourceLegIfSearch(
                 action,
                 wikiID: wikiID,
-                containerDirectory: containerDirectory,
                 store: store))
     case .admin(let action):
         return try AdminCommand.run(action, in: store)
@@ -362,8 +360,7 @@ func execute(
         return try await runChatCommand(
             action,
             in: store,
-            wikiID: wikiID,
-            containerDirectory: containerDirectory)
+            wikiID: wikiID)
     case .bookmark(let action):
         let r = try BookmarkCommand.run(action, in: store)
         return SourceCommand.Result(
@@ -761,14 +758,12 @@ private func runJobCommand(
 private func runChatCommand(
     _ action: ChatCommand.Action,
     in store: GRDBWikiStore,
-    wikiID: WikiID,
-    containerDirectory: URL
+    wikiID: WikiID
 ) async throws -> SourceCommand.Result {
     let leg: [ChatSummary]?
     if case .search(let query, let limit) = action {
-        leg = await CLITantivyLegResolver.resolveChatLeg(
-            wikiID: wikiID, containerDirectory: containerDirectory,
-            store: store, query: query, limit: limit)
+        leg = try await CLITantivyLegResolver.resolveChatLeg(
+            wikiID: wikiID, store: store, query: query, limit: limit)
     } else {
         leg = nil
     }
@@ -785,13 +780,11 @@ private func runChatCommand(
 private func cliSourceLegIfSearch(
     _ action: SourceCommand.Action,
     wikiID: WikiID,
-    containerDirectory: URL,
     store: GRDBWikiStore
-) async -> [SourceSummary]? {
+) async throws -> [SourceSummary]? {
     guard case .search(let query, let limit) = action else { return nil }
-    return await CLITantivyLegResolver.resolveSourceLeg(
-        wikiID: wikiID, containerDirectory: containerDirectory,
-        store: store, query: query, limit: limit)
+    return try await CLITantivyLegResolver.resolveSourceLeg(
+        wikiID: wikiID, store: store, query: query, limit: limit)
 }
 
 /// #637: inspect a `PageCommand.Action` and, when it's `.search`, resolve a
@@ -801,13 +794,11 @@ private func cliSourceLegIfSearch(
 private func cliPageLegIfSearch(
     _ action: PageCommand.Action,
     wikiID: WikiID,
-    containerDirectory: URL,
     store: GRDBWikiStore
-) async -> [WikiPageSummary]? {
+) async throws -> [WikiPageSummary]? {
     guard case .search(let query, let limit) = action else { return nil }
-    return await CLITantivyLegResolver.resolvePageLeg(
-        wikiID: wikiID, containerDirectory: containerDirectory,
-        store: store, query: query, limit: limit)
+    return try await CLITantivyLegResolver.resolvePageLeg(
+        wikiID: wikiID, store: store, query: query, limit: limit)
 }
 
 /// Read an upsert body: `-` reads stdin to EOF; anything else is a file path.

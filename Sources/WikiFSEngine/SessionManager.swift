@@ -95,8 +95,6 @@ public final class SessionManager {
     /// headless queue engine to `@MainActor` types.
     public let extractionProvider: any QueueExtractionProvider
 
-    /// Owns the private process search root and per-wiki child lifetimes.
-    public let searchRuntimeRegistry: SearchRuntimeRegistry
     private struct SearchRelease: Sendable {
         let token: UUID
         let task: Task<Void, Never>
@@ -152,7 +150,6 @@ public final class SessionManager {
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
-        searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
         providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
@@ -166,7 +163,6 @@ public final class SessionManager {
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
         self.extractionProvider = extractionProvider
-        self.searchRuntimeRegistry = searchRuntimeRegistry
         self.providerServices = providerServices
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         self.htmlMarkdownExtractorFactory = htmlMarkdownExtractorFactory
@@ -345,7 +341,6 @@ public final class SessionManager {
         let releases = Array(searchReleaseTasks.values)
         for release in releases { await release.task.value }
         searchReleaseTasks.removeAll()
-        await searchRuntimeRegistry.shutdown()
     }
 
     /// Flush pending saves for ONE session (used by the registry's

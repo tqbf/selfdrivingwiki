@@ -85,6 +85,8 @@ binding step.
 
 ## `wikictl` consequence (app-only reachability)
 
+Search now has a separate local socket transport into the existing daemon. This does not make embedded XPC reachable from the CLI. See `plans/daemon-search-ownership.md`.
+
 A bundled `.xpc` under `Contents/XPCServices/` is reachable **only from within
 the host app's process** — `NSXPCConnection(serviceName:)` resolves against the
 *calling* process's bundle, and the bare `wikictl` Mach-O has no `XPCServices/`

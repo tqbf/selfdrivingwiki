@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import WikiFSCore
 import WikiFSEngine
+import WikiFSSearch
 @testable import WikiFSEngine
 
 /// Live macOS Seatbelt suite (`plans/sandbox-agent.md` §live-sandbox): runs the
@@ -209,6 +210,38 @@ struct AgentSandboxProcessTests {
     }
 
     struct WikictlNotFound: Error {}
+
+    @Test func failedWriterOpenPreservesLiveIndex() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        _ = try fixture.storeA.createPage(title: "Ironworkers")
+        let directory = fixture.scratch.appendingPathComponent("live-index")
+        let source = StoreBackedTantivyContentSource(store: fixture.storeA)
+        let writer = try TantivyIndexer(indexDirectory: directory, contentSource: source)
+        try await writer.rebuild()
+        let markerURL = directory.appendingPathComponent("preserve.txt")
+        try Data("must remain".utf8).write(to: markerURL)
+        #expect(throws: (any Error).self) {
+            _ = try TantivyIndexer(indexDirectory: directory, contentSource: source)
+        }
+        #expect(try String(contentsOf: markerURL, encoding: .utf8) == "must remain")
+        let hits = try await writer.search(query: "ironworkers", kind: .page, limit: 10)
+        #expect(!hits.isEmpty)
+    }
+
+    @Test func unavailableSearchIsNotReportedAsZeroResults() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        // The disposable wiki is absent from the installed daemon's registry.
+        let result = try await runSandboxed(
+            fixture, executablePath: try wikictlPath(),
+            arguments: ["--wiki", fixture.wikiA.id.rawValue,
+                        "page", "search", "--query", "ironworkers"])
+        #expect(result.status == 1, "\(result.errorText)")
+        #expect(!result.errorText.contains("0 results"))
+        #expect(!result.errorText.isEmpty)
+        #expect(result.outputText.isEmpty)
+    }
 
     // MARK: - AC.1: the POSIX /bin/sh baseline
 

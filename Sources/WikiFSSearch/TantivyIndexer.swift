@@ -15,15 +15,11 @@ import TantivySwift
 /// statement handle crossing a boundary" — the two concerns are on different
 /// threads/locks entirely.
 ///
-/// **Phase 1:** the indexer is built and kept up to date, but search results
-/// are not surfaced to the user yet (FTS5 stays primary). The `search(...)`
-/// method exists for shadow-mode validation and the smoke test.
+/// Each instance owns an exclusive writer. The daemon owns the persistent
+/// index and serves app and CLI queries through its search endpoint.
 public actor TantivyIndexer {
-    /// The underlying Tantivy index. `nil` when the index failed to open or
-    /// was marked for rebuild; callers degrade gracefully (shadow mode — a
-    /// missing index just means no shadow results, FTS5 still answers).
-    private var index: TantivySwiftIndex<TantivySearchDocument>?
-    private let indexPath: String
+    /// The writer remains owned by this actor. Failed opens throw without changing shared files.
+    private let index: TantivySwiftIndex<TantivySearchDocument>
     private let contentSource: any TantivyContentSource
 
     public init(indexDirectory: URL, contentSource: any TantivyContentSource) throws {
@@ -33,18 +29,11 @@ public actor TantivyIndexer {
         // exists so a fresh `<container>/search-index/<wikiID>/` path works
         // even when neither component exists yet.
         try fm.createDirectory(at: indexDirectory, withIntermediateDirectories: true)
-        self.indexPath = path
         self.contentSource = contentSource
 
-        do {
-            self.index = try TantivySwiftIndex<TantivySearchDocument>(path: path)
-        } catch {
-            // Don't crash the app over a derived, rebuildable index. Log and
-            // degrade; rebuildIndex() can retry. (Never use bare try? — see
-            // project rules. This catch logs via DebugLog.store.)
-            DebugLog.store("TantivyIndexer: failed to open index at \(path): \(error)")
-            self.index = nil
-        }
+        // Opening failures include writer-lock contention and permission errors.
+        // Propagate them. Neither failure proves that the shared index is corrupt.
+        self.index = try TantivySwiftIndex<TantivySearchDocument>(path: path)
     }
 
     // MARK: - Mutations (driven by the event bus)
@@ -53,7 +42,6 @@ public actor TantivyIndexer {
     /// snapshot from the content source; if the source returns `nil`, the
     /// resource was deleted upstream and we delete it from the index too.
     public func upsert(ulid: String, kind: TantivyDocumentKind) async {
-        guard let index else { return }
         do {
             if let snapshot = try await contentSource.snapshot(ulid: ulid, kind: kind) {
                 try await index.index(doc: .from(snapshot))
@@ -69,7 +57,6 @@ public actor TantivyIndexer {
 
     /// Remove a document from the index by kind+ulid.
     public func delete(ulid: String, kind: TantivyDocumentKind) async {
-        guard let index else { return }
         let id = kind.documentID(for: ulid)
         do {
             try await index.deleteDoc(id: DocumentField(name: "id", value: .text(id)))
@@ -81,7 +68,6 @@ public actor TantivyIndexer {
     /// Remove every document from the index (segment store is reset). Used by
     /// the rebuild path and the corruption self-heal.
     public func clear() async throws {
-        guard let index else { return }
         try await index.clear()
     }
 
@@ -99,7 +85,7 @@ public actor TantivyIndexer {
     /// with a `.term` on the `kind` facet field so the engine filters before
     /// scoring/limit.
     public func search(query: String, kind: TantivyDocumentKind?, limit: Int) async throws -> [TantivyShadowSearchResult] {
-        guard let index, !query.isEmpty else { return [] }
+        guard !query.isEmpty else { return [] }
         let fetchLimit = kind == nil ? limit : limit * 5
         var q = TantivySwiftSearchQuery<TantivySearchDocument>(
             queryStr: query,
@@ -152,7 +138,7 @@ public actor TantivyIndexer {
         distance: UInt8 = 2,
         limit: Int = 8
     ) async throws -> [TantivyShadowSearchResult] {
-        guard let index, !partial.isEmpty, !kinds.isEmpty else { return [] }
+        guard !partial.isEmpty, !kinds.isEmpty else { return [] }
         // Over-fetch to give the Swift-side kind post-filter a fair pool to
         // draw from (same shape as `search()` `:102`). `min(limit*5, 1_000)`
         // matches the existing cap.
@@ -185,21 +171,12 @@ public actor TantivyIndexer {
     /// Number of indexed documents. Used by the service to detect an empty
     /// index that needs an initial build.
     public func count() async -> UInt64 {
-        guard let index else { return 0 }
-        return await index.count()
+        await index.count()
     }
 
-    /// Full rebuild from the content source: clear, then index every snapshot
-    /// in one batch commit. Used for the initial build and for crash-recovery
-    /// self-heal (plans/tantivy-search-sidecar.md §3.3–§3.4).
+    /// Clear this writer's index, then index every snapshot in one batch commit.
+    /// This does not remove the directory or attempt recovery from a failed open.
     public func rebuild() async throws {
-        // If the index never opened, retry once after deleting the (possibly
-        // corrupt) on-disk directory. If reopen still fails, give up (shadow
-        // mode — FTS5 still answers).
-        if index == nil {
-            try await reopen()
-        }
-        guard let index else { return }
         try await index.clear()
         let snapshots = try await contentSource.allSnapshots()
         if snapshots.isEmpty { return }
@@ -207,24 +184,6 @@ public actor TantivyIndexer {
         // (each single-doc index(doc:) auto-commits and creates a segment).
         let docs = snapshots.map(TantivySearchDocument.from)
         try await index.index(docs: docs)
-    }
-
-    // MARK: - Private
-
-    /// Re-open the index after `index` was nilled (e.g. on open failure or
-    /// corruption recovery). Deletes the on-disk directory first so a corrupt
-    /// segment store can't poison the reopen.
-    private func reopen() async throws {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: indexPath) {
-            do {
-                try fm.removeItem(atPath: indexPath)
-            } catch {
-                DebugLog.store("TantivyIndexer: could not remove corrupt index dir \(indexPath): \(error)")
-            }
-        }
-        try fm.createDirectory(atPath: indexPath, withIntermediateDirectories: true)
-        self.index = try TantivySwiftIndex<TantivySearchDocument>(path: indexPath)
     }
 }
 #endif // os(macOS)

@@ -34,6 +34,14 @@ struct SandboxProfileTests {
     #expect(p.contains("(allow file-write* (literal (param \"WIKI_DB\")))"))
   }
 
+  @Test func searchDoesNotGrantIndexWriteAccess() {
+    let invocation = SandboxProfile.invocation(
+      homePath: "/Users/me", scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    #expect(!invocation.defines.contains { $0.0.contains("SEARCH_INDEX") })
+    #expect(!invocation.profile.contains("SEARCH_INDEX"))
+    #expect(!readOnlyProfile().contains("SEARCH_INDEX"))
+  }
+
   // MARK: - SQLite sidecars
 
   @Test func allowsDBPlusWalShmJournalSidecars() {

@@ -605,11 +605,14 @@ final class WikiDaemon: @unchecked Sendable {
             return chatHosts.removeValue(forKey: wikiID)
         }
         await chatHost?.shutdown()
-        queue.sync {
+        let searchRuntime: DaemonSearchRuntime? = queue.sync { () -> DaemonSearchRuntime? in
+            preparationEpochs[wikiID, default: 0] &+= 1
             preparedServices.removeValue(forKey: wikiID)
             openStores.removeValue(forKey: wikiID)
             registry.remove(id: wikiID)
+            return searchRuntimes.removeValue(forKey: wikiID)
         }
+        await searchRuntime?.shutdown()
         await profileOwner?.removeWiki(wikiID)
         do {
             try deleteDatabaseArtifacts(wikiID: wikiID)
@@ -664,11 +667,46 @@ final class WikiDaemon: @unchecked Sendable {
             return chatHosts.removeValue(forKey: wikiID)
         }
         await chatHost?.shutdown()
-        // The daemon cache must release the services before its owning child profile
-        // shuts down. The epoch prevents an admitted prepare from publishing late.
-        queue.sync {
+        // Same atomic retirement as closeStore: the runtime stays in the map
+        // while it shuts down (fast `stopped` failures, never writer-lock
+        // contention), the pending construction slot stays reserved, and
+        // admission waits on the barrier. The child profile is released only
+        // after the retirement fully settles.
+        let retirement: Task<Void, Never> = queue.sync { () -> Task<Void, Never> in
             preparedServices.removeValue(forKey: wikiID)
             openStores.removeValue(forKey: wikiID)
+            let runtime = searchRuntimes[wikiID]
+            let pendingTask = searchRuntimeTasks[wikiID]
+            let priorRetirement = searchRetirements[wikiID]
+            let retirement = Task { [weak self] in
+                await priorRetirement?.value
+                if let pendingTask {
+                    do {
+                        _ = try await pendingTask.value
+                    } catch {
+                        // Fenced or genuinely failed construction — logged
+                        // upstream by the construction itself.
+                    }
+                }
+                await runtime?.shutdown()
+                guard let self else { return }
+                self.queue.sync {
+                    if let current = searchRuntimes[wikiID], current === runtime {
+                        searchRuntimes[wikiID] = nil
+                    }
+                    if searchRuntimeTasks[wikiID] == pendingTask {
+                        searchRuntimeTasks[wikiID] = nil
+                    }
+                }
+            }
+            searchRetirements[wikiID] = retirement
+            return retirement
+        }
+        await retirement.value
+        queue.sync {
+            if searchRetirements[wikiID] == retirement {
+                searchRetirements[wikiID] = nil
+            }
         }
         await profileOwner?.removeWiki(wikiID)
     }
@@ -716,6 +754,43 @@ final class WikiDaemon: @unchecked Sendable {
                 }
                 for chatHost in chatHosts {
                     await chatHost.shutdown()
+                }
+                let pendingSearchTasks = self.queue.sync { () -> [Task<DaemonSearchRuntime, Error>] in
+                    let tasks = Array(self.searchRuntimeTasks.values)
+                    self.searchRuntimeTasks.removeAll()
+                    return tasks
+                }
+                for task in pendingSearchTasks {
+                    // A construction finishing during shutdown is shut down
+                    // with everything else; a FAILED construction at shutdown
+                    // is expected (the daemon is going away) and only logged.
+                    do {
+                        let runtime = try await task.value
+                        await runtime.shutdown()
+                    } catch {
+                        DebugLog.store(
+                            "wikid: pending search construction abandoned at shutdown: \(error)")
+                    }
+                }
+                // Snapshot AFTER the constructions settled so one that landed
+                // during the drain cannot escape this pass.
+                let searchRuntimes = self.queue.sync { () -> [DaemonSearchRuntime] in
+                    let runtimes = Array(self.searchRuntimes.values)
+                    self.searchRuntimes.removeAll()
+                    return runtimes
+                }
+                for searchRuntime in searchRuntimes {
+                    await searchRuntime.shutdown()
+                }
+                // Settle any in-flight close/remove retirements so their
+                // writers are released before the process exits.
+                let searchRetirements = self.queue.sync { () -> [Task<Void, Never>] in
+                    let retirements = Array(self.searchRetirements.values)
+                    self.searchRetirements.removeAll()
+                    return retirements
+                }
+                for retirement in searchRetirements {
+                    await retirement.value
                 }
                 if let profileOwner = self.profileOwner {
                     await profileOwner.shutdown()
@@ -1007,18 +1082,66 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
-    func closeStore(wikiID: WikiID) {
-        queue.sync {
-            // Production profile-backed services remain prepared for the child
-            // profile lifetime. Compatibility stores are explicitly released.
-            #if canImport(WikiFSEngine)
+    func closeStore(wikiID: WikiID) async {
+        #if canImport(WikiFSEngine)
+        // The search runtime is derived state (recreated from the store on
+        // the next query), so a client session close releases it even while
+        // production profile-backed services stay prepared.
+        //
+        // The retirement is registered ATOMICALLY with the fence: the runtime
+        // STAYS in the map while it shuts down (in-flight queries fail
+        // `stopped` fast instead of contending on the writer lock), the
+        // pending construction slot stays reserved until its candidate is
+        // released, and admission during the close awaits the barrier instead
+        // of seeing a half-torn-down state and starting a competing writer.
+        let retirement: Task<Void, Never> = queue.sync { () -> Task<Void, Never> in
+            // Fence any in-flight construction: its install check sees the
+            // bumped epoch and rejects (shutting its candidate down).
+            preparationEpochs[wikiID, default: 0] &+= 1
             if preparedServices[wikiID] == nil {
                 openStores.removeValue(forKey: wikiID)
             }
-            #else
-            openStores.removeValue(forKey: wikiID)
-            #endif
+            let runtime = searchRuntimes[wikiID]
+            let pendingTask = searchRuntimeTasks[wikiID]
+            let priorRetirement = searchRetirements[wikiID]
+            let retirement = Task { [weak self] in
+                await priorRetirement?.value
+                if let pendingTask {
+                    do {
+                        _ = try await pendingTask.value
+                    } catch {
+                        // Fenced rejection — the expected post-close outcome.
+                    }
+                }
+                await runtime?.shutdown()
+                guard let self else { return }
+                // Identity-conditional release: a reopen that raced this
+                // retirement may already hold newer state we must not drop.
+                self.queue.sync {
+                    if let current = searchRuntimes[wikiID], current === runtime {
+                        searchRuntimes[wikiID] = nil
+                    }
+                    if searchRuntimeTasks[wikiID] == pendingTask {
+                        searchRuntimeTasks[wikiID] = nil
+                    }
+                }
+            }
+            searchRetirements[wikiID] = retirement
+            return retirement
         }
+        await retirement.value
+        // The retirement's own barrier entry vacates after it settles (a
+        // newer retirement, if any, is left in place).
+        queue.sync {
+            if searchRetirements[wikiID] == retirement {
+                searchRetirements[wikiID] = nil
+            }
+        }
+        #else
+        queue.sync {
+            openStores.removeValue(forKey: wikiID)
+        }
+        #endif
     }
 
     /// Resolve a store only after its wiki services have been prepared.
@@ -1141,6 +1264,12 @@ final class WikiDaemon: @unchecked Sendable {
             guard fileManager.fileExists(atPath: path) else { continue }
             try fileManager.removeItem(atPath: path)
         }
+        // The derived Tantivy index directory is intentionally NOT removed
+        // here: a pending construction candidate may hold the index writer
+        // (it is fenced, not awaited, in the gate-free eviction path), and
+        // deleting files under a live writer recreates the destructive race
+        // this daemon avoids everywhere else. Retention is safe — the
+        // directory is keyed to a ULID that is never reused.
     }
 
     private func databaseURL(forWikiID id: WikiID) -> URL {
@@ -1195,6 +1324,261 @@ final class WikiDaemon: @unchecked Sendable {
         openStores[wikiID] = store
         return store
     }
+
+    // MARK: - Search (daemon-owned per-wiki search runtime)
+
+    #if canImport(WikiFSEngine)
+    /// One search runtime per wiki. Each runtime is the SOLE writer of its
+    /// wiki's Tantivy index directory; released on close/delete/shutdown.
+    private var searchRuntimes: [WikiID: DaemonSearchRuntime] = [:]
+    /// Singleflight construction. The construction task acquires the Tantivy
+    /// index writer, so it MUST be cached here before any await — concurrent
+    /// cold callers share one candidate instead of racing two writer
+    /// acquisitions (which would fail with the index directory lock busy).
+    private var searchRuntimeTasks: [WikiID: Task<DaemonSearchRuntime, Error>] = [:]
+    /// Per-wiki retirement barrier: a close/remove in flight. Admission
+    /// awaits it and re-resolves afterwards, so a reopened wiki never races
+    /// the retiring runtime's writer — one owner across close/reopen.
+    private var searchRetirements: [WikiID: Task<Void, Never>] = [:]
+
+    /// Resolve (or build) the per-wiki search runtime. Cold requests dedup
+    /// on the cached construction task; every concurrent caller receives the
+    /// same runtime.
+    func ensureSearchRuntime(wikiID: WikiID) async throws -> DaemonSearchRuntime {
+        // Registry coherence BEFORE the cached-runtime return: a wiki deleted
+        // on disk must not keep serving search from its cached runtime.
+        try await reconcileForOperation(wikiID)
+        // ONE admission block resolves everything: a construction that
+        // completes (and vacates the task slot) between two separate checks
+        // must surface as the installed runtime, never as a second candidate
+        // — two candidates would contend on the index directory lock.
+        enum Resolution {
+            case runtime(DaemonSearchRuntime)
+            case task(Task<DaemonSearchRuntime, Error>)
+            case retiring(Task<Void, Never>)
+        }
+        func admit() -> Resolution {
+            queue.sync { () -> Resolution in
+                if let retiring = searchRetirements[wikiID] { return .retiring(retiring) }
+                if let existing = searchRuntimes[wikiID] { return .runtime(existing) }
+                if let cached = searchRuntimeTasks[wikiID] { return .task(cached) }
+                // The admission epoch is read inside the block, BEFORE the
+                // task can await anything, so an eviction/close that lands
+                // during construction fences the install.
+                let admissionEpoch = preparationEpochs[wikiID, default: 0]
+                let operation = Task<DaemonSearchRuntime, Error> { [weak self] in
+                    guard let self else { throw DaemonStoreResolutionError.unavailable(wikiID) }
+                    return try await self.constructAndInstallSearchRuntime(
+                        wikiID: wikiID,
+                        admissionEpoch: admissionEpoch)
+                }
+                searchRuntimeTasks[wikiID] = operation
+                return .task(operation)
+            }
+        }
+        // One bounded retry: a fenced failure (close/evict won the race) is
+        // resolved by re-admitting after the fence — the retirement barrier
+        // guarantees the previous writer is gone before the fresh
+        // construction starts. A second consecutive failure is genuine and
+        // surfaces to the caller.
+        for attempt in 0..<2 {
+            switch admit() {
+            case .runtime(let runtime):
+                return runtime
+            case .retiring(let retirement):
+                await retirement.value
+            case .task(let operation):
+                do {
+                    let runtime = try await operation.value
+                    // The finished task vacates the singleflight slot; the
+                    // identity comparison never removes a newer slot.
+                    clearSearchRuntimeTask(wikiID: wikiID, operation: operation)
+                    return runtime
+                } catch {
+                    clearSearchRuntimeTask(wikiID: wikiID, operation: operation)
+                    guard attempt == 0, error is DaemonStoreResolutionError else {
+                        throw error
+                    }
+                    // Fenced by a concurrent close/evict — re-admit fresh.
+                }
+            }
+        }
+        throw DaemonStoreResolutionError.unavailable(wikiID)
+    }
+
+    private func clearSearchRuntimeTask(wikiID: WikiID, operation: Task<DaemonSearchRuntime, Error>) {
+        queue.sync {
+            if searchRuntimeTasks[wikiID] == operation {
+                searchRuntimeTasks[wikiID] = nil
+            }
+        }
+    }
+
+    private func constructAndInstallSearchRuntime(
+        wikiID: WikiID,
+        admissionEpoch: UInt64
+    ) async throws -> DaemonSearchRuntime {
+        // Acquires the index directory writer — exactly once per wiki, via
+        // the singleflight slot above.
+        let candidate = try await makeSearchRuntime(wikiID: wikiID)
+        enum InstallOutcome {
+            case installed
+            case duplicate(DaemonSearchRuntime)
+            case rejected
+        }
+        let outcome: InstallOutcome = queue.sync {
+            if let winner = searchRuntimes[wikiID] { return .duplicate(winner) }
+            guard preparationEpochs[wikiID, default: 0] == admissionEpoch else { return .rejected }
+            switch reconcileRegistry(wikiID) {
+            case .deleted, .missing:
+                return .rejected
+            case .present, .adopted, .unreadable:
+                break
+            }
+            searchRuntimes[wikiID] = candidate
+            return .installed
+        }
+        switch outcome {
+        case .installed:
+            return candidate
+        case .duplicate(let winner):
+            // The loser's writer is released immediately; the winner serves.
+            await candidate.shutdown()
+            return winner
+        case .rejected:
+            await candidate.shutdown()
+            throw DaemonStoreResolutionError.unavailable(wikiID)
+        }
+    }
+
+    private func makeSearchRuntime(wikiID: WikiID) async throws -> DaemonSearchRuntime {
+        if profileOwner != nil {
+            // Production: identity + content source come from the prepared
+            // profile's search factory; the closures read the admitted store.
+            let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
+            let store = try resolvePreparedStore(wikiID: wikiID)
+            return try DaemonSearchRuntime(
+                wikiID: wikiID,
+                indexDirectory: services.searchFactory.identity.indexDirectory,
+                contentSource: services.searchFactory.contentSource,
+                tokenReader: Self.storeTokenReader(store),
+                baselineReader: Self.storeBaselineReader(store),
+                baselineWriter: Self.storeBaselineWriter(store))
+        }
+        // Compatibility fixture path (tests, `testFixtureMakeStore`): the
+        // injected store plays every role the profile would.
+        let store = try resolvePreparedStore(wikiID: wikiID)
+        return try DaemonSearchRuntime(
+            wikiID: wikiID,
+            indexDirectory: SearchRuntimeIdentity(
+                wikiID: wikiID,
+                containerDirectory: containerDirectory).indexDirectory,
+            contentSource: StoreBackedTantivyContentSource(store: store),
+            tokenReader: Self.storeTokenReader(store),
+            baselineReader: Self.storeBaselineReader(store),
+            baselineWriter: Self.storeBaselineWriter(store))
+    }
+
+    /// Change-token reader over the admitted store. The store is
+    /// method-atomic (`@unchecked Sendable`); the strong capture is bounded
+    /// by the runtime's own lifetime — every release path drops both.
+    private static func storeTokenReader(
+        _ store: GRDBWikiStore
+    ) -> @Sendable () async throws -> String {
+        { [store] in
+            try store.changeToken().rawString
+        }
+    }
+
+    /// Baseline persistence in `wiki_metadata` — the NO-EMIT seam: writes
+    /// there emit no bus event and the table is outside the change token's
+    /// folds, so persisting the baseline never perturbs the token itself.
+    private static func storeBaselineReader(
+        _ store: GRDBWikiStore
+    ) -> @Sendable () async throws -> String? {
+        { [store] in
+            try store.getMetadata(DaemonSearchRuntime.baselineMetadataKey)
+        }
+    }
+
+    private static func storeBaselineWriter(
+        _ store: GRDBWikiStore
+    ) -> @Sendable (String) async throws -> Void {
+        { [store] value in
+            try store.setMetadata(DaemonSearchRuntime.baselineMetadataKey, value: value)
+        }
+    }
+
+    /// The unified search/autocomplete RPC handler. Decodes the versioned
+    /// request, resolves the per-wiki runtime, and ALWAYS answers with a
+    /// JSON `SearchRPCReply` (failures carry its `error`).
+    func searchData(request data: Data) async -> Data {
+        let request: SearchRPCRequest
+        do {
+            request = try SearchRPCWire.decode(data)
+        } catch let error as SearchRPCError {
+            return encodeSearchReply(.failure(error.code, error.message))
+        } catch {
+            return encodeSearchReply(.failure(.invalidRequest, String(describing: error)))
+        }
+        let wikiID = WikiID(rawValue: request.wikiID)
+        do {
+            let runtime = try await ensureSearchRuntime(wikiID: wikiID)
+            let hits: [SearchRPCHit]
+            switch request.operation {
+            case .search(let query, let rawKinds, let limit):
+                let kinds = try DaemonSearchWireMapping.kinds(rawKinds)
+                let results = try await runtime.search(
+                    query: query,
+                    kinds: kinds,
+                    limit: max(0, limit))
+                hits = DaemonSearchWireMapping.hits(results)
+            case .autocomplete(let partial, let rawKinds, let rawDistance, let limit):
+                let kinds = try DaemonSearchWireMapping.kinds(rawKinds)
+                let results = try await runtime.autocomplete(
+                    partial: partial,
+                    kinds: kinds,
+                    distance: UInt8(clamping: rawDistance),
+                    limit: max(0, limit))
+                hits = DaemonSearchWireMapping.hits(results)
+            }
+            return encodeSearchReply(.success(hits))
+        } catch let error as DaemonSearchRequestError {
+            return encodeSearchReply(.failure(.invalidRequest, error.debugDescription))
+        } catch {
+            DebugLog.store("wikid: search failed for wiki \(request.wikiID): \(error)")
+            return encodeSearchReply(
+                .failure(Self.searchErrorCode(for: error), String(describing: error)))
+        }
+    }
+
+    private static func searchErrorCode(for error: Error) -> SearchRPCErrorCode {
+        if error is DaemonSearchLifecycleError { return .unavailable }
+        switch error {
+        case DaemonStoreResolutionError.notPrepared,
+             DaemonStoreResolutionError.unavailable,
+             DaemonStoreResolutionError.registryUnreadable:
+            return .unavailable
+        default:
+            return .operationFailed
+        }
+    }
+
+    private func encodeSearchReply(_ reply: SearchRPCReply) -> Data {
+        do {
+            return try SearchRPCWire.encode(reply)
+        } catch {
+            DebugLog.store("wikid: search reply encoding failed: \(error)")
+            return Data()
+        }
+    }
+
+    /// Test/diagnostic seam: the live per-wiki runtime, if any. Lets tests
+    /// assert single-owner behavior through object identity.
+    func activeSearchRuntimeForTesting(wikiID: WikiID) -> DaemonSearchRuntime? {
+        queue.sync { searchRuntimes[wikiID] }
+    }
+    #endif
 
     // MARK: - Event sink management (Phase 0)
 

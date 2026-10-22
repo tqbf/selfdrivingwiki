@@ -422,9 +422,9 @@ public enum SandboxProfile {
         )
         // NOTE: these are profile parameters, NOT child env vars. `-D WIKI_DB=<path>`
         // is consumed by `(param "WIKI_DB")`; it does not touch the `WIKI_DB=<ulid>`
-        // env var the agent/wikictl use. `PDF2MD_SCRIPT` is appended ONLY when a path
-        // was supplied, so the default-nil invocation stays byte-identical to the
-        // pre-denial build (call sites and argv-index tests unaffected).
+        // env var the agent/wikictl use. Search runs through the daemon, so the
+        // child needs no index write permission. `PDF2MD_SCRIPT` is appended only
+        // when the caller supplies a path.
         var defines: [(String, String)] = [
             ("HOME", resolvedHome),
             ("SCRATCH_DIR", resolvedScratch),

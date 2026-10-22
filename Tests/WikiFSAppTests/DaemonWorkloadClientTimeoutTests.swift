@@ -93,6 +93,7 @@ struct DaemonWorkloadClientTimeoutTests {
         // The remaining contract methods are outside the fault-injection
         // surface; answering with empty data yields a catchable decode error.
 
+        func search(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
         func listWikis(reply: @escaping (Data) -> Void) { reply(Data()) }
         func createWiki(name: String, reply: @escaping (Data?) -> Void) { reply(nil) }
         func deleteWiki(id: String, reply: @escaping (Bool) -> Void) { reply(false) }
