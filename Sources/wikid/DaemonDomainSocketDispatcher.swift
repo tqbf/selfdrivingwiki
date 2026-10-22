@@ -25,8 +25,9 @@ import WikiFSCore
 ///   Routing reuses `WikiDaemonExporter`'s queue handlers verbatim (the same
 ///   code the app's XPC surface serves), so the queue error taxonomy and
 ///   engine-less stubs stay identical on both transports.
-/// - `wiki`   — registry + lifecycle (Phase 2); served there, rejected with a
-///   typed error until then.
+/// - `wiki`   — registry + lifecycle: `listWikis`, `createWiki`, `deleteWiki`,
+///   `renameWiki`, `resolveWiki`, each routing to the daemon's existing
+///   registry methods (Phase 2). Delete inherits the daemon's full eviction.
 //
 // Sendable invariant: both stored fields are immutable after init and the
 // dispatcher holds no mutable state of its own; `WikiDaemon` and
@@ -210,9 +211,93 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
     // MARK: - wiki (Phase 2)
 
     private func wikiReply(for request: DaemonDomainRequest) async throws -> Data {
-        throw DaemonDomainError(
-            code: .unavailable,
-            message: "the wiki registry family is not served by this daemon build")
+        // Each verb routes to the daemon's EXISTING registry methods — the
+        // same code the app's XPC surface serves. Reads adopt the on-disk
+        // registry (the app is the primary writer); delete inherits the
+        // daemon's full eviction (search runtime shutdown, child profile
+        // removal, registry row, database artifacts), closing the CLI's
+        // degraded-delete race. Descriptor payloads are the daemon's own
+        // JSON bytes.
+        let payload: Data?
+        switch request.operation {
+        case DaemonDomainOperation.Wiki.listWikis:
+            payload = daemon.listWikis()
+        case DaemonDomainOperation.Wiki.resolveWiki:
+            let selector = try wikiPayload(DaemonWikiResolveRequest.self, request)
+            guard let descriptorData = daemon.resolveWiki(selector: selector.selector) else {
+                throw DaemonDomainError(
+                    code: .notFound,
+                    message: "no wiki matching \(selector.selector)")
+            }
+            payload = descriptorData
+        case DaemonDomainOperation.Wiki.createWiki:
+            let create = try wikiPayload(DaemonWikiCreateRequest.self, request)
+            guard let descriptorData = await daemon.createWikiOverSocket(name: create.name) else {
+                throw DaemonDomainError(
+                    code: .operationFailed,
+                    message: "wiki creation failed on the daemon")
+            }
+            payload = descriptorData
+        case DaemonDomainOperation.Wiki.deleteWiki:
+            let delete = try wikiPayload(DaemonWikiDeleteRequest.self, request)
+            // Resolve FIRST so an unknown id is a typed notFound (the CLI's
+            // byte-stable "no wiki matching <id>" failure) instead of a
+            // generic delete failure.
+            guard daemon.resolveWiki(selector: delete.id) != nil else {
+                throw DaemonDomainError(
+                    code: .notFound,
+                    message: "no wiki matching \(delete.id)")
+            }
+            guard await daemon.deleteWikiOverSocket(id: WikiID(rawValue: delete.id)) else {
+                throw DaemonDomainError(
+                    code: .operationFailed,
+                    message: "wiki delete failed on the daemon")
+            }
+            payload = nil
+        case DaemonDomainOperation.Wiki.renameWiki:
+            let rename = try wikiPayload(DaemonWikiRenameRequest.self, request)
+            // Same resolve-first notFound contract as delete.
+            guard daemon.resolveWiki(selector: rename.id) != nil else {
+                throw DaemonDomainError(
+                    code: .notFound,
+                    message: "no wiki matching \(rename.id)")
+            }
+            guard daemon.renameWiki(id: WikiID(rawValue: rename.id), name: rename.name) else {
+                throw DaemonDomainError(
+                    code: .operationFailed,
+                    message: "wiki rename failed on the daemon (empty name, deleted wiki, or unreadable registry)")
+            }
+            payload = nil
+        default:
+            throw DaemonDomainError(
+                code: .invalidRequest,
+                message: "unknown wiki operation: \(request.operation)")
+        }
+        return Self.encodedReply(.success(
+            requestID: request.requestID,
+            family: .wiki,
+            operation: request.operation,
+            payload: payload))
+    }
+
+    /// Decodes a wiki-family request payload; a missing or malformed one is a
+    /// typed `invalidRequest`.
+    private func wikiPayload<Payload: Decodable>(
+        _ type: Payload.Type,
+        _ request: DaemonDomainRequest
+    ) throws -> Payload {
+        guard let data = request.payload else {
+            throw DaemonDomainError(
+                code: .invalidRequest,
+                message: "\(request.operation) carries no payload")
+        }
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            throw DaemonDomainError(
+                code: .invalidRequest,
+                message: "\(request.operation) payload could not be decoded")
+        }
     }
 
     // MARK: - Shared reply encoding

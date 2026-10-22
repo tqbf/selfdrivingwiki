@@ -121,18 +121,15 @@ public struct WikiCtlRunner {
 
     private let resolveContainer: () throws -> WikiResolver
     private let storeProfile: CLIStoreProfile
-    private let bootstrap: StoreBootstrap
     private let execute: CommandExecutor
 
     public init(
         resolveContainer: @escaping () throws -> WikiResolver = WikiResolver.appGroupContainer,
         storeProfile: CLIStoreProfile = CLIStoreProfile(),
-        bootstrap: StoreBootstrap = StoreBootstrap(),
         execute: @escaping CommandExecutor
     ) {
         self.resolveContainer = resolveContainer
         self.storeProfile = storeProfile
-        self.bootstrap = bootstrap
         self.execute = execute
     }
 
@@ -219,20 +216,11 @@ public struct WikiCtlRunner {
         return Output(stdout: Data(text.utf8))
     }
 
-    public func runWikiCreate(name: String) throws -> Output {
-        let resolver = try resolveContainer()
-        let container = resolver.containerDirectory
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayName = trimmed.isEmpty ? "Untitled Wiki" : trimmed
-        var descriptor = WikiDescriptor.make(displayName: displayName)
-        descriptor.homePageID = try bootstrap.createAndSeed(
-            databaseURL: resolver.databaseURL(for: descriptor)).homePageID
-
-        var registry = WikiRegistry.load(from: container)
-        registry.add(descriptor)
-        try registry.save(to: container)
-        return Output(stdout: Data("\(descriptor.id)\t\(descriptor.displayName)\n".utf8))
-    }
+    // `runWikiCreate` was removed in Phase 2 of plans/cli-domain-commands.md:
+    // wiki creation runs on the daemon (its creation coordinator bootstraps,
+    // seeds, and registers the wiki) through `DaemonWikiRegistryClient`. The
+    // CLI's direct `StoreBootstrap.createAndSeed` + `wikis.json` write path is
+    // gone — the daemon is the single writer of wiki lifecycle state.
 }
 
 /// Bridges the wikictl CLI's three search commands (`page search`,

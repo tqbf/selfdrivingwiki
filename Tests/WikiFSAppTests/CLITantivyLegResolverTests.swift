@@ -522,25 +522,11 @@ struct CLITantivyLegResolverTests {
         }
     }
 
-    @Test func wikiCreateSeedsDatabaseThroughBootstrapBoundary() throws {
-        let (container, fm) = try makeTempContainer()
-        defer { removeTempContainer(container, fileManager: fm) }
-        let runner = WikiCtlRunner(
-            resolveContainer: { WikiResolver(containerDirectory: container) }
-        ) { _, _, _, _ in
-            Issue.record("wiki create must not run an ordinary command")
-            return SourceCommand.Result(payload: .text(""), didCommit: false)
-        }
-
-        let output = try runner.runWikiCreate(name: "Runner Wiki")
-        let descriptor = try #require(WikiRegistry.load(from: container).wikis.first)
-        let store = try GRDBWikiStore(databaseURL: container.appendingPathComponent(descriptor.dbFileName))
-        let pages = try store.listPages(sortBy: .newestFirst)
-
-        #expect(String(decoding: output.stdout, as: UTF8.self) == "\(descriptor.id)\tRunner Wiki\n")
-        #expect(descriptor.homePageID == pages.first?.id)
-        #expect(pages.map(\.title) == ["Home"])
-    }
+    // `wikiCreateSeedsDatabaseThroughBootstrapBoundary` was removed with the
+    // CLI's direct create path (Phase 2 of plans/cli-domain-commands.md). Its
+    // coverage moved to `DaemonWikiSocketTests`: creation runs on the daemon's
+    // creation coordinator over the socket (Home page seeded, registry
+    // persisted, full eviction on delete).
 
     @Test func dumpConfigOutputMatchesCommandFormatting() throws {
         let (container, fm) = try makeTempContainer()

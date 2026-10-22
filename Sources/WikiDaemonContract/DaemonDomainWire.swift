@@ -289,5 +289,61 @@ public enum DaemonDomainOperation {
         public static let resumeQueue = "resumeQueue"
         public static let haltQueue = "haltQueue"
     }
+
+    public enum Wiki {
+        public static let listWikis = "listWikis"
+        public static let createWiki = "createWiki"
+        public static let deleteWiki = "deleteWiki"
+        public static let renameWiki = "renameWiki"
+        public static let resolveWiki = "resolveWiki"
+    }
+}
+
+// MARK: - wiki family payloads (Phase 2 of plans/cli-domain-commands.md)
+//
+// The wiki family routes the daemon's existing registry methods over the
+// socket. Descriptor payloads are the daemon's own JSON `[WikiDescriptor]` /
+// `WikiDescriptor` bytes (the same values the XPC methods carry), so the CLI
+// decodes them with the shared `WikiDescriptor` type in WikiFSCore.
+
+/// `createWiki` request payload. The daemon trims and defaults an empty name
+/// to "Untitled Wiki" (the behavior the CLI's direct create path used to
+/// implement).
+public struct DaemonWikiCreateRequest: Codable, Equatable, Sendable {
+    public let name: String
+
+    public init(name: String) {
+        self.name = name
+    }
+}
+
+/// `deleteWiki` request payload. The id is the wiki's raw ULID string.
+public struct DaemonWikiDeleteRequest: Codable, Equatable, Sendable {
+    public let id: String
+
+    public init(id: String) {
+        self.id = id
+    }
+}
+
+/// `renameWiki` request payload.
+public struct DaemonWikiRenameRequest: Codable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
+/// `resolveWiki` request payload. The selector is a ULID id or a display
+/// name (ULID tried first, mirroring `WikiResolver`).
+public struct DaemonWikiResolveRequest: Codable, Equatable, Sendable {
+    public let selector: String
+
+    public init(selector: String) {
+        self.selector = selector
+    }
 }
 #endif

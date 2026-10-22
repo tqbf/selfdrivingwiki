@@ -1,5 +1,6 @@
 import Foundation
 import WikiCtlCore
+import WikiDaemonContract
 import WikiFSCore
 #if canImport(WikiFSEngine)
 import WikiFSEngine
@@ -534,7 +535,22 @@ private func runTranscribeCommand(
                 "transcribe on-device: pass --wiki <id> before the subcommand (the wiki that owns the source)")
         }
         let resolver = try WikiResolver.appGroupContainer()
-        let target = try resolver.resolve(selection: .registry(wikiSelector))
+        // Phase 2 of plans/cli-domain-commands.md: --wiki resolution goes
+        // through the daemon's registry over the socket (resolveWiki), so the
+        // selector resolves against the live registry and fails fast with the
+        // not-running error when the app is closed. There is no local
+        // fallback.
+        let target: ResolvedWikiTarget
+        do {
+            let descriptor = try await makeRegistryClient().resolveWiki(selector: wikiSelector)
+            target = ResolvedWikiTarget(
+                databaseURL: resolver.databaseURL(for: descriptor),
+                wikiID: descriptor.id,
+                containerDirectory: resolver.containerDirectory)
+        } catch let error as DaemonDomainError where error.code == .notFound {
+            throw TranscribeCommand.Failure(
+                "no wiki matching \(wikiSelector.debugDescription) in the registry")
+        }
 
         // Pre-flight the source against the owning wiki: the queue path
         // would fail anyway, but the typed message reads better here and
@@ -835,26 +851,25 @@ private func write(_ output: WikiCtlRunner.Output) {
     }
 }
 
-// MARK: - wiki subcommands (direct registry access)
+// MARK: - wiki subcommands (daemon registry over the socket)
 //
-// These operate directly on `wikis.json` + the per-wiki `<ulid>.sqlite` in the
-// App Group container — NOT via the daemon. The wikid daemon is now a bundled,
-// app-bound XPC service (Contents/XPCServices/wikid.xpc): it is only reachable
-// from within the host app's process, never from this standalone CLI. See
-// plans/xpc-service-migration.md. The logic mirrors `WikiDaemon.createWiki` /
-// `deleteWiki` / `renameWiki` verbatim, minus the daemon-only store caching +
-// event-bus wiring.
+// Phase 2 of plans/cli-domain-commands.md: every wiki verb routes through the
+// daemon's registry over its local socket (`DaemonWikiRegistryClient`) — the
+// daemon is the single pathway to `wikis.json` and the per-wiki databases.
+// `wiki list` / `wiki rename` reads adopt the app's on-disk registry, so
+// app-side creates and renames are visible immediately; `wiki create` runs
+// the daemon's creation coordinator (bootstrap + seed + child profile);
+// `wiki delete` inherits the daemon's FULL eviction (search runtime shutdown,
+// child profile removal, registry row, database artifacts), which closes the
+// CLI's old degraded-delete race (a delete that never cleaned the search
+// index or raced a live daemon's caches).
 //
-// Registry-level changes (a new/deleted/renamed wiki) become visible to a
-// running app on the next committing write, not only on its next launch: the
-// app's `WikiChangeBridge` re-reads `wikis.json` on every wiki-change wake
-// (`WikiRegistryClient.reloadFromDisk()`), and this CLI posts that wake after a
-// committing write via `DarwinNotifier.postChange()`. A registry change that is
-// followed by no write is still only picked up at launch, and the wake is
-// wiki-agnostic, so the app cannot tell which wiki changed — it refreshes every
-// wiki the registry lists. The daemon's prior behavior was to post no registry
-// notification at all, which is fine for the CLI's scripting/headless role (the
-// app creates wikis via its own client, not via wikictl).
+// App closed ⇒ socket unlinked ⇒ every wiki command fails fast with "the
+// wikid daemon is not running — launch the app" (exit 1). No local fallback.
+//
+// Registry changes become visible to a running app through the same mechanism
+// as before: the app's `WikiChangeBridge` re-reads `wikis.json` on every
+// wiki-change wake, and the daemon now owns the write.
 
 func runDumpConfig(overlay: String?) -> Int32 {
     do {
@@ -866,14 +881,20 @@ func runDumpConfig(overlay: String?) -> Int32 {
     }
 }
 
+/// The container-scoped registry client for the wiki subcommands.
+private func makeRegistryClient() throws -> DaemonWikiRegistryClient {
+    try DaemonWikiRegistryClient(
+        containerDirectory: try DatabaseLocation.appGroupContainerDirectory())
+}
+
 func runWikiList() async -> Int32 {
     do {
-        let resolver = try WikiResolver.appGroupContainer()
-        let registry = WikiRegistry.load(from: resolver.containerDirectory)
-        for wiki in registry.wikis {
+        let client = try makeRegistryClient()
+        let wikis = try await client.listWikis()
+        for wiki in wikis {
             print("\(wiki.id)\t\(wiki.displayName)")
         }
-        if registry.wikis.isEmpty {
+        if wikis.isEmpty {
             // #1230 (axi.md principle 5): zero wikis is an answer, not a
             // silence. The stderr notice says so; stdout stays empty; exit
             // stays 0.
@@ -881,69 +902,48 @@ func runWikiList() async -> Int32 {
         }
         return 0
     } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
         return 1
     }
 }
 
 func runWikiCreate(name: String) async -> Int32 {
     do {
-        write(try makeRunner().runWikiCreate(name: name))
+        let client = try makeRegistryClient()
+        let descriptor = try await client.createWiki(name: name)
+        print("\(descriptor.id)\t\(descriptor.displayName)")
         return 0
     } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
         return 1
     }
 }
 
 func runWikiDelete(id: String) async -> Int32 {
     do {
-        let wikiID = WikiID(rawValue: id)
-        let resolver = try WikiResolver.appGroupContainer()
-        let container = resolver.containerDirectory
-        var registry = WikiRegistry.load(from: container)
-        guard let descriptor = registry.descriptor(id: wikiID) else {
-            FileHandle.standardError.write(Data("wikictl: no wiki matching \(id)\n".utf8))
-            return 1
-        }
-
-        // Remove from the registry first, then drop the DB files (main + WAL
-        // sidecars). Mirrors WikiDaemon.deleteWiki.
-        registry.remove(id: wikiID)
-        try registry.save(to: container)
-
-        let dbURL = resolver.databaseURL(for: descriptor)
-        let fm = FileManager.default
-        for suffix in ["", "-wal", "-shm"] {
-            DebugLog.trying("remove database suffix \(suffix)") { try fm.removeItem(atPath: dbURL.path + suffix) }
-        }
+        let client = try makeRegistryClient()
+        // An unknown id throws the daemon's typed notFound ("no wiki matching
+        // <id>") — the same failure text the direct-registry path printed.
+        try await client.deleteWiki(id: WikiID(rawValue: id))
         return 0
     } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
         return 1
     }
 }
 
 func runWikiRename(id: String, name: String) async -> Int32 {
     do {
-        let resolver = try WikiResolver.appGroupContainer()
-        let container = resolver.containerDirectory
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             FileHandle.standardError.write(Data("wikictl: wiki rename requires a non-empty name\n".utf8))
             return 1
         }
-        let wikiID = WikiID(rawValue: id)
-        var registry = WikiRegistry.load(from: container)
-        guard registry.descriptor(id: wikiID) != nil else {
-            FileHandle.standardError.write(Data("wikictl: no wiki matching \(id)\n".utf8))
-            return 1
-        }
-        registry.rename(id: wikiID, to: trimmed)
-        try registry.save(to: container)
+        let client = try makeRegistryClient()
+        try await client.renameWiki(id: WikiID(rawValue: id), name: trimmed)
         return 0
     } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
         return 1
     }
 }

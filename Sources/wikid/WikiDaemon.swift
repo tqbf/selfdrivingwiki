@@ -1069,6 +1069,41 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
+    // MARK: Registry over the CLI socket (Phase 2 of plans/cli-domain-commands.md)
+
+    /// `createWiki` for the socket dispatcher: the production coordinator
+    /// path when a profile owner exists (full bootstrap + child profile),
+    /// the synchronous fixture seam otherwise (tests and Linux). Mirrors the
+    /// `openStore` split. `nil` = creation failed; the dispatcher turns that
+    /// into a typed `operationFailed`.
+    #if canImport(WikiFSEngine)
+    func createWikiOverSocket(name: String) async -> Data? {
+        if profileOwner != nil {
+            return await createWiki(name: name)
+        }
+        return testFixtureCreateWiki(name: name)
+    }
+
+    /// `deleteWiki` for the socket dispatcher: the production path (await
+    /// creation settlement, full eviction — search runtime shutdown, child
+    /// profile removal, registry row, database artifacts) when a profile
+    /// owner exists, the fixture seam otherwise.
+    func deleteWikiOverSocket(id wikiID: WikiID) async -> Bool {
+        if profileOwner != nil {
+            return await deleteWiki(id: wikiID)
+        }
+        return testFixtureDeleteWiki(id: wikiID)
+    }
+    #else
+    func createWikiOverSocket(name: String) -> Data? {
+        testFixtureCreateWiki(name: name)
+    }
+
+    func deleteWikiOverSocket(id wikiID: WikiID) -> Bool {
+        testFixtureDeleteWiki(id: wikiID)
+    }
+    #endif
+
     // MARK: - Store lifecycle
 
     func openStore(wikiID: WikiID) async -> Bool {

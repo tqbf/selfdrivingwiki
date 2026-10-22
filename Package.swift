@@ -464,7 +464,14 @@ let package = Package(
         // `wikictl file` family rather than the File Provider mount.
         .executableTarget(
             name: "wikictl",
-            dependencies: ["WikiFSCore", "WikiCtlCore"],
+            dependencies: [
+                "WikiFSCore",
+                "WikiCtlCore",
+                // Phase 2 of plans/cli-domain-commands.md: the CLI speaks the
+                // daemon's versioned domain envelope directly (DaemonDomainError
+                // codes drive the wiki/transcribe failure mapping).
+                "WikiDaemonContract",
+            ],
             path: "Sources/wikictl",
             swiftSettings: strictSwiftSettings
         ),
