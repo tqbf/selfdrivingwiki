@@ -371,37 +371,19 @@ public final class AgentLauncher {
         await UserEnvironmentPath.userPATH()
     }
 
-    /// The EXPLICIT wiki database this launcher's runs read and write, when a
-    /// run targets a database outside the standard App Group container layout.
-    /// nil (every production launch today) keeps the default: the container
-    /// layout `<container>/<wikiID>.sqlite`.
-    ///
-    /// The live semantic evaluation harness sets this to a disposable fixture
-    /// database under project `tmp/` (see
-    /// `plans/wiki-strategy-evaluation-harness.md`). EVERY place the launcher
-    /// derives a wiki database URL from a wiki id MUST go through
-    /// ``wikiDatabaseURL(for:container:)`` — run contexts (trusted prompts +
-    /// child env), the seatbelt write fence, and in-plan title validation —
-    /// so all of them target the same database.
-    ///
-    /// Safety: an explicit value must point OUTSIDE the App Group container
-    /// (mirroring `WikiResolver`'s boundary guard); the eval harness
-    /// constructs it under a disposable `tmp/` directory by construction.
-    @ObservationIgnored public var wikiDatabaseOverride: URL?
-
-    /// The single wiki-database derivation for this launcher: the explicit
-    /// override when set, else the container layout
-    /// `<containerDirectory>/<wikiID>.sqlite` (mirrors
-    /// `WikiResolver.databaseURL(for:)`). MainActor like every caller (run
-    /// context, seatbelt fence, in-plan title validation).
+    /// The single wiki-database derivation for this launcher: the container
+    /// layout `<containerDirectory>/<wikiID>.sqlite` (mirrors the registry).
+    /// MainActor like every caller (run context, seatbelt fence, in-plan title
+    /// validation). There is no override: since the fixture-binary split
+    /// (plans/cli-domain-commands.md §"The fixture binary") every run targets
+    /// a real registered wiki and every agent command resolves through the
+    /// daemon; disposable fixture databases live only in the build-only
+    /// `wikictl-fixture` binary.
     public func wikiDatabaseURL(
         for wikiID: WikiID,
         container containerDirectory: URL
     ) -> URL {
-        if let wikiDatabaseOverride {
-            return wikiDatabaseOverride
-        }
-        return containerDirectory
+        containerDirectory
             .appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
     }
 
@@ -431,8 +413,7 @@ public final class AgentLauncher {
             userPATH: userPath,
             resolvedLoginShellPATH: resolvedLoginShellPATH,
             stateFilePath: operation?.stateFilePath,
-            stagedSourcePaths: operation?.stagedSourcePaths ?? [],
-            databasePath: wikiDatabaseOverride)
+            stagedSourcePaths: operation?.stagedSourcePaths ?? [])
         context.createTempDirectories()
         return context
     }
@@ -4977,18 +4958,14 @@ public final class AgentLauncher {
         let homePath = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 
         // The active wiki's SQLite DB path — the launcher's single derivation
-        // (`wikiDatabaseURL`): the explicit override when set (isolated
-        // fixture database), else `<container>/<ulid>.sqlite`.
-        // Symlink resolution is performed inside `SandboxProfile.invocation` (the
-        // tested core layer) so the canonical path reaches the seatbelt profile.
+        // (`wikiDatabaseURL`): `<container>/<ulid>.sqlite`. Symlink resolution
+        // is performed inside `SandboxProfile.invocation` (the tested core
+        // layer) so the canonical path reaches the seatbelt profile.
         let dbPath = wikiDatabaseURL(for: wikiID, container: dir).path
-        // The central queue database is a container artifact; an isolated
-        // fixture run has no queue store, so its fence targets the (absent,
-        // harmless) sibling file next to the fixture database.
-        let queueDBPath = wikiDatabaseOverride.map {
-            $0.deletingLastPathComponent()
-                .appendingPathComponent("queue.sqlite", isDirectory: false).path
-        } ?? dir.appendingPathComponent("queue.sqlite", isDirectory: false).path
+        // The central queue database is a container artifact; the fence
+        // targets its path beside the wiki database so agent writes stay
+        // confined to the wiki surface.
+        let queueDBPath = dir.appendingPathComponent("queue.sqlite", isDirectory: false).path
 
         // Fail-open if any required path is empty/relative (misconfiguration).
         guard !scratch.path.isEmpty, scratch.path.hasPrefix("/"),

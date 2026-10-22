@@ -22,38 +22,8 @@ import Testing
 /// leg); backend failures throw.
 @Suite(.serialized, .timeLimit(.minutes(3)))
 struct CLITantivyLegResolverTests {
-    enum ExpectedCommandFailure: Error {
-        case expected
-    }
-
     enum ExpectedBackendFailure: Error {
         case expected
-    }
-
-    enum ExpectedCleanupFailure: Error {
-        case expected
-    }
-
-    actor CLIProfileRecorder {
-        private var resolvedStoreID: ObjectIdentifier?
-        private var operationStoreID: ObjectIdentifier?
-        private var disposalCount = 0
-
-        func recordResolved(store: GRDBWikiStore) {
-            resolvedStoreID = ObjectIdentifier(store)
-        }
-
-        func recordOperation(store: GRDBWikiStore) {
-            operationStoreID = ObjectIdentifier(store)
-        }
-
-        func recordDisposal() {
-            disposalCount += 1
-        }
-
-        func snapshot() -> (resolvedStoreID: ObjectIdentifier?, operationStoreID: ObjectIdentifier?, disposalCount: Int) {
-            (resolvedStoreID, operationStoreID, disposalCount)
-        }
     }
 
     actor SearchRequestRecorder {
@@ -395,123 +365,6 @@ struct CLITantivyLegResolverTests {
         #expect(invocations == 1)
     }
 
-    // MARK: - CLI store profile and bootstrap
-
-    @Test(arguments: [false, true])
-    func cliStoreProfileUsesResolvedStoreAndDisposes(commandFails: Bool) async throws {
-        let (container, fm) = try makeTempContainer()
-        defer { removeTempContainer(container, fileManager: fm) }
-        let wikiID = WikiID(rawValue: "01TESTCLI01")
-        let recorder = CLIProfileRecorder()
-        let observerID = PluginID("test.cli-store-observer")
-        let observer = PluginDefinition(
-            id: observerID,
-            dependencies: [ServiceDependency(StoreServiceKeys.store)]) {
-            try ComponentDefinition(
-                label: observerID.rawValue,
-                dependencies: [ServiceDependency(StoreServiceKeys.store)]) { activation in
-                let service = try await activation.require(StoreServiceKeys.store)
-                guard let store = service as? GRDBWikiStore else {
-                    throw CLIStoreProfileError.incompatibleStore
-                }
-                await recorder.recordResolved(store: store)
-                _ = try await activation.effect { _ in
-                    await recorder.recordDisposal()
-                }
-            }
-        }
-        let profile = CLIStoreProfile { request in
-            var entries = try ProductionProfiles.cli(
-                databaseURL: request.databaseURL,
-                wikiID: request.wikiID,
-                homeDirectory: request.containerDirectory)
-            entries.append(Entry(id: EntryID("store-observer"), plugin: observerID))
-            let definitions = CLIPluginCatalog.definitions() + [observer]
-            return try await CordisBoot.boot(.init(
-                catalog: try PluginCatalog(definitions),
-                layers: [PatchFile(entries: entries)]))
-        }
-        // Phase 5: a registry-selected command rides the daemon. This store
-        // profile test drives the sanctioned LOCAL leg instead — an explicit
-        // `--database-path` fixture — which is the path whose in-process
-        // profile boot it verifies.
-        let runner = WikiCtlRunner(
-            resolveContainer: { WikiResolver(containerDirectory: container) },
-            storeProfile: profile
-        ) { _, store, _, _ in
-            await recorder.recordOperation(store: store)
-            if commandFails {
-                throw ExpectedCommandFailure.expected
-            }
-            return SourceCommand.Result(payload: .text("runner-output"), didCommit: false)
-        }
-
-        do {
-            let output = try await runner.runOrdinary(
-                command: .page(.list(json: false)),
-                wikiSelector: "",
-                databasePath: container.appendingPathComponent("\(wikiID.rawValue).sqlite").path,
-                environment: [:])
-            #expect(commandFails == false)
-            #expect(String(decoding: output.stdout, as: UTF8.self) == "runner-output\n")
-        } catch is ExpectedCommandFailure {
-            #expect(commandFails)
-        }
-
-        let snapshot = await recorder.snapshot()
-        #expect(snapshot.resolvedStoreID == snapshot.operationStoreID)
-        #expect(snapshot.disposalCount == 1)
-    }
-
-    @Test func cliStoreProfilePreservesOperationAndCleanupFailures() async throws {
-        let (container, fm) = try makeTempContainer()
-        defer { removeTempContainer(container, fileManager: fm) }
-        let wikiID = WikiID(rawValue: "01TESTCLI02")
-
-        let cleanupID = PluginID("test.cli-cleanup-failure")
-        let cleanupDefinition = PluginDefinition(id: cleanupID) {
-            try ComponentDefinition(label: cleanupID.rawValue) { activation in
-                _ = try await activation.effect { _ in
-                    throw ExpectedCleanupFailure.expected
-                }
-            }
-        }
-        let profile = CLIStoreProfile { request in
-            var entries = try ProductionProfiles.cli(
-                databaseURL: request.databaseURL,
-                wikiID: request.wikiID,
-                homeDirectory: request.containerDirectory)
-            entries.append(Entry(id: EntryID("cleanup-failure"), plugin: cleanupID))
-            return try await CordisBoot.boot(.init(
-                catalog: try PluginCatalog(CLIPluginCatalog.definitions() + [cleanupDefinition]),
-                layers: [PatchFile(entries: entries)]))
-        }
-        let runner = WikiCtlRunner(
-            resolveContainer: { WikiResolver(containerDirectory: container) },
-            storeProfile: profile
-        ) { _, _, _, _ in
-            throw ExpectedCommandFailure.expected
-        }
-
-        do {
-            _ = try await runner.runOrdinary(
-                command: .page(.list(json: false)),
-                wikiSelector: "",
-                databasePath: container.appendingPathComponent("\(wikiID.rawValue).sqlite").path,
-                environment: [:])
-            Issue.record("expected combined operation and cleanup failure")
-        } catch CLIStoreProfileError.operationAndCleanup(let operation, let cleanup) {
-            #expect(operation is ExpectedCommandFailure)
-            guard case .cleanup(let aggregate) = cleanup as? CordisError else {
-                Issue.record("expected Cordis cleanup error, got \(cleanup)")
-                return
-            }
-            #expect(aggregate.failures.count == 1)
-            #expect(aggregate.failures.first?.error.message == "expected")
-        } catch {
-            Issue.record("unexpected error: \(error)")
-        }
-    }
 
     // `wikiCreateSeedsDatabaseThroughBootstrapBoundary` was removed with the
     // CLI's direct create path (Phase 2 of plans/cli-domain-commands.md). Its
@@ -523,11 +376,7 @@ struct CLITantivyLegResolverTests {
         let (container, fm) = try makeTempContainer()
         defer { removeTempContainer(container, fileManager: fm) }
         let runner = WikiCtlRunner(
-            resolveContainer: { WikiResolver(containerDirectory: container) }
-        ) { _, _, _, _ in
-            Issue.record("dump config must not run an ordinary command")
-            return SourceCommand.Result(payload: .text(""), didCommit: false)
-        }
+            resolveContainer: { WikiResolver(containerDirectory: container) })
 
         let direct = try DumpConfigCommand.run(homeDirectory: container, overlay: nil)
         let output = try runner.runDumpConfig(overlay: nil)

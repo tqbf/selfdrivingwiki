@@ -40,13 +40,12 @@ public struct DaemonCommandCall: Sendable {
 }
 
 /// Command → daemon-call mapping for the migrated commands — Phase 3 reads AND
-/// Phase 4 writes. `nil` means "no daemon route": since Phase 5 of
-/// plans/cli-domain-commands.md a registry-selected command without a route
-/// FAILS in `WikiCtlRunner.runOrdinary` (no local fallback) — only an explicit
-/// `--database-path` fixture run takes the in-process path, and the commands
-/// that return nil here (`wiki` verbs, queue/transcribe/job, `extractor
-/// list`, help/version/dump-config) are all dispatched before `runOrdinary`
-/// in wikictl's `run()`.
+/// Phase 4 writes. `nil` means "no daemon route": every `wikictl` command
+/// without a route FAILS in `WikiCtlRunner.runOrdinary` (no local fallback;
+/// the in-process path lives only in the build-only `wikictl-fixture`
+/// binary), and the commands that return nil here (`wiki` verbs,
+/// queue/transcribe/job, `extractor list`, help/version/dump-config) are all
+/// dispatched before `runOrdinary` in wikictl's `run()`.
 public enum DaemonCommandRoute {
 
     public static func call(for command: ArgumentParser.Command) -> DaemonCommandCall? {

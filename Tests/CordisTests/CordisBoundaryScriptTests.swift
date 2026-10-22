@@ -120,6 +120,18 @@ struct CordisBoundaryScriptTests {
         ProtectedConstruction(
             path: "Sources/wikictl/WikiCtlRunner.swift",
             source: "let registry = WikiRegistry.load(from: directory)"),
+        // The fixture-binary split removed the ExtractorFixtureLeg allowlist:
+        // the fixture leg's old file back inside Sources/wikictl must FAIL —
+        // the negative proof that no carve-out survives in the CLI targets.
+        ProtectedConstruction(
+            path: "Sources/wikictl/ExtractorFixtureLeg.swift",
+            source: "let queueStore = try QueueStore(databaseURL: url)"),
+        // GRDBWikiStore( is now unconditionally rejected in the CLI targets
+        // too (the daemon and the wikictl-fixture store profile own store
+        // construction).
+        ProtectedConstruction(
+            path: "Sources/WikiCtlCore/DumpConfigCommand.swift",
+            source: "let store = GRDBWikiStore("),
     ])
     func migratedProductionPathsRemainProtected(fixture: ProtectedConstruction) async throws {
         let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
@@ -153,12 +165,12 @@ struct CordisBoundaryScriptTests {
         ProtectedConstruction(
             path: "Sources/WikiFSEngine/ProfileWikiSession.swift",
             source: "let makeStore: () -> Void"),
-        // The sanctioned Phase 5 fixture carve-out: the explicit
-        // --database-path harness leg keeps its local queue write, and the
-        // rule allowlists EXACTLY this file in the CLI targets.
+        // The fixture binary's named backend boundary (the makeStore rule's
+        // allowlist covers it; its direct queue write is exempt because the
+        // scoped CLI rules below do not scan the fixture target).
         ProtectedConstruction(
-            path: "Sources/wikictl/ExtractorFixtureLeg.swift",
-            source: "let queueStore = try QueueStore(databaseURL: url)"),
+            path: "Sources/wikictl-fixture/FixtureStoreProfile.swift",
+            source: "let makeStore: () -> Void"),
     ])
     func documentedAllowlistedPathIsAcceptedInFixtureMode(
         fixture: ProtectedConstruction
@@ -166,6 +178,44 @@ struct CordisBoundaryScriptTests {
         let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
         defer { subprocessGate.release() }
         let result = try await runSyntheticBoundaryCheck(fixture)
+        #expect(result.status == 0, "Boundary check failed: \(result.standardError)")
+    }
+
+    /// The fixture-binary split's exemption: the build-only
+    /// `wikictl-fixture` target keeps its direct QueueStore write (the moved
+    /// ExtractorFixtureLeg), and the scoped CLI rules do NOT scan it — the
+    /// check stays green while the fixture leg lives in its own target beside
+    /// an (empty) wikictl scope.
+    @Test("the fixture target is outside the CLI scopes")
+    func fixtureTargetIsOutsideCLIScopes() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
+        let root = repositoryRoot()
+        let fixtureRoot = root.appendingPathComponent(
+            "tmp/cordis-fixture-exempt-\(UUID().uuidString)",
+            isDirectory: true)
+        // The wikictl scope must EXIST (so the scoped rules actually run and
+        // find nothing) while the violation sits in the fixture target only.
+        let files: [(String, String)] = [
+            ("Sources/wikictl/main.swift", "// wikictl has no local store pathway\n"),
+            (
+                "Sources/wikictl-fixture/ExtractorFixtureLeg.swift",
+                "let queueStore = try QueueStore(databaseURL: url)\n"
+            ),
+        ]
+        for (path, source) in files {
+            let file = fixtureRoot.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try source.write(to: file, atomically: false, encoding: .utf8)
+        }
+        defer {
+            do { try FileManager.default.removeItem(at: fixtureRoot) }
+            catch { Issue.record("Could not remove fixture-exempt root: \(error)") }
+        }
+
+        let result = try await runBoundaryCheck(arguments: [], sourceRoot: fixtureRoot)
         #expect(result.status == 0, "Boundary check failed: \(result.standardError)")
     }
 

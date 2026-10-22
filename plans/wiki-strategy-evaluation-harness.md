@@ -10,22 +10,28 @@ established. It is plan Phase 5.3-5.5 of `plans/wiki-strategies-and-cumulative-i
 
 A live run uses the operator's real configured provider, the real
 `AgentLauncher` ingest path, and real `wikictl` writes by the real agent. It
-never touches the operator's wiki data.
+runs only against REAL throwaway wikis the daemon creates and fully evicts —
+it never touches the operator's own wiki data.
 
 ## Isolation
 
-- Every wiki the harness creates is a disposable SQLite database under the
-  output directory (default `tmp/wiki-strategy-eval/<timestamp>/`).
-- The harness refuses an output directory under `~/Library/Group Containers`.
-- The agent writes through a new typed selector: `wikictl --database-path
-  <file>` (or `WIKI_DB_PATH`). It is mutually exclusive with `--wiki` /
-  `WIKI_DB`, and `wikictl` refuses a path inside the real App Group
-  container. `--wiki` remains the only route to a live wiki.
-- `AgentLauncher.wikiDatabaseOverride` routes every launcher-side database
-  derivation (trusted prompts, child environment, seatbelt write fence) to the
-  same file. Any new derivation must call
-  `AgentLauncher.wikiDatabaseURL(for:container:)`, including the cumulative
-  plan-validation title resolver.
+- Every leg creates its wiki THROUGH THE DAEMON (`DaemonWikiRegistryClient.
+  createWiki` over the local socket — bootstrap + seed + registry row) and
+  DELETES it afterwards (full daemon eviction). The app must be running; the
+  harness fails with a typed `daemonUnavailable` stop rather than falling
+  back to a local pathway. Since the fixture-binary split of
+  `plans/cli-domain-commands.md` (§"The fixture binary"), no local wiki
+  creation exists.
+- The harness's measurement boot opens the daemon-created database
+  in-process (a second WAL-mode writer, the same posture as any daemon
+  command) for loop-trace hooks and observation reads.
+- Report/artifact output stays under the output directory (default
+  `tmp/wiki-strategy-eval/<timestamp>/`); the harness refuses an output
+  directory under `~/Library/Group Containers`.
+- The agent writes through the normal `--wiki <id>` selector, resolved
+  daemon-side. `--database-path`/`WIKI_DB_PATH` no longer exist on `wikictl`
+  (they live only in the build-only `wikictl-fixture` binary), so prompts can
+  render only `--wiki`.
 - Provider configuration is read read-only from the operator's App Group
   container, with provider discovery disabled. Credentials stay in the
   Keychain and are read at spawn time by the production credential stores.

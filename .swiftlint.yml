@@ -125,7 +125,7 @@ custom_rules:
     # Per-rule `excluded` is a REGEX on the file path, not a glob. Real CLI
     # stdout is the documented exception in AGENTS.md, so the executable targets
     # whose whole job is printing are exempt.
-    excluded: ".*/(wikictl|versiongen|keychaingen|FuzzHarness|podcast-token-helper)/.*"
+    excluded: ".*/(wikictl|wikictl-fixture|versiongen|keychaingen|FuzzHarness|podcast-token-helper)/.*"
     message: >-
       `print` goes nowhere when the app is launched by launchd, XPC or the File
       Provider — the diagnostic is simply lost. Route it through the appropriate

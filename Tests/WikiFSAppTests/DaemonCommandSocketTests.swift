@@ -515,18 +515,13 @@ struct DaemonCommandSocketTests {
 
         let runner = WikiCtlRunner(
             resolveContainer: { WikiResolver(containerDirectory: container) },
-            daemonCommandRouter: DaemonCommandRouter(),
-            execute: { _, _, _, _ in
-                Issue.record("routed search must not open the in-process store")
-                return SourceCommand.Result(payload: .text(""), didCommit: false)
-            })
+            daemonCommandRouter: DaemonCommandRouter())
         let invocation = try ArgumentParser.parse(
             ["--wiki", fixture.displayName, "page", "search", "--query", "Ironworkers"],
             env: { _ in nil })
         let output = try await runner.runOrdinary(
             command: invocation.command,
             wikiSelector: invocation.wikiSelector,
-            databasePath: invocation.databasePath,
             environment: [:])
         #expect(String(decoding: output.stdout, as: UTF8.self).contains("Ironworkers Hall"))
         #expect(output.changedWikiID == nil)
@@ -617,18 +612,13 @@ struct DaemonCommandSocketTests {
 
         let runner = WikiCtlRunner(
             resolveContainer: { WikiResolver(containerDirectory: container) },
-            daemonCommandRouter: DaemonCommandRouter(),
-            execute: { _, _, _, _ in
-                Issue.record("migrated read must not open the in-process store")
-                return SourceCommand.Result(payload: .text(""), didCommit: false)
-            })
+            daemonCommandRouter: DaemonCommandRouter())
         let invocation = try ArgumentParser.parse(
             ["--wiki", fixture.displayName, "page", "list"],
             env: { _ in nil })
         let output = try await runner.runOrdinary(
             command: invocation.command,
             wikiSelector: invocation.wikiSelector,
-            databasePath: invocation.databasePath,
             environment: [:])
         #expect(String(decoding: output.stdout, as: UTF8.self).contains("Routed Page"))
         #expect(output.changedWikiID == nil)
@@ -645,11 +635,7 @@ struct DaemonCommandSocketTests {
 
         let runner = WikiCtlRunner(
             resolveContainer: { WikiResolver(containerDirectory: container) },
-            daemonCommandRouter: DaemonCommandRouter(),
-            execute: { _, _, _, _ in
-                Issue.record("migrated write must not open the in-process store")
-                return SourceCommand.Result(payload: .text(""), didCommit: false)
-            })
+            daemonCommandRouter: DaemonCommandRouter())
         let bodyFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("dcm-body-\(UUID().uuidString.prefix(8)).md")
         try Data("routed body".utf8).write(to: bodyFile)
@@ -660,7 +646,6 @@ struct DaemonCommandSocketTests {
         let output = try await runner.runOrdinary(
             command: invocation.command,
             wikiSelector: invocation.wikiSelector,
-            databasePath: invocation.databasePath,
             environment: [:])
         #expect(output.changedWikiID == fixture.id)
         let titles = try await seedValue(daemon, wikiID: fixture.id) { store in
@@ -669,20 +654,16 @@ struct DaemonCommandSocketTests {
         #expect(titles.contains("Routed Write"))
     }
 
-    /// Phase 5: a registry-selected command with NO daemon route FAILS the
-    /// runner instead of booting the in-process store — the local store path
-    /// exists only for explicit `--database-path` fixture runs. `.wikiList`
-    /// never reaches `runOrdinary` in wikictl's `run()` (it dispatches before),
-    /// so reaching it here is exactly the wiring bug the guard exists for.
+    /// Phase 5: a command with NO daemon route FAILS the runner — there is no
+    /// local fallback (the in-process store path lives only in the build-only
+    /// `wikictl-fixture` binary). `.wikiList` never reaches `runOrdinary` in
+    /// wikictl's `run()` (it dispatches before), so reaching it here is
+    /// exactly the wiring bug the guard exists for.
     @Test func registrySelectionWithoutDaemonRouteFailsInsteadOfBootingStore() async throws {
         let container = makeContainer()
         let runner = WikiCtlRunner(
             resolveContainer: { WikiResolver(containerDirectory: container) },
-            daemonCommandRouter: DaemonCommandRouter(),
-            execute: { _, _, _, _ in
-                Issue.record("a registry-selected command must not open the in-process store")
-                return SourceCommand.Result(payload: .text(""), didCommit: false)
-            })
+            daemonCommandRouter: DaemonCommandRouter())
         do {
             _ = try await runner.runOrdinary(
                 command: .wikiList,

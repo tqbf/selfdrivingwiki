@@ -48,10 +48,11 @@ reject_matches "Cordis service key contains an application or context type" \
 # SessionManager and ProfileWikiSession retain explicit test-fixture factories.
 # SessionsPlugin provisions the session-owned model factory.
 # StorePlugin resolves the named StoreBackend factory during activation.
-# CLITantivyLegResolver owns its optional legacy lexical fallback seam.
+# The wikictl-fixture store profile is the fixture binary's named backend
+# boundary (its entire job is booting one explicit fixture database).
 reject_matches "makeStore remains outside a named bootstrap, backend, fallback, or test boundary" \
   '(^|[^[:alnum:]_])makeStore([^[:alnum:]_]|$)' \
-  Sources/WikiCtlCore/CLITantivyLegResolver.swift \
+  Sources/wikictl-fixture/FixtureStoreProfile.swift \
   Sources/WikiFSCore/Core/WikiRegistryClient.swift \
   Sources/WikiFSCore/Store/StoreBackend.swift \
   Sources/WikiFSEngine/ProfileWikiSession.swift \
@@ -62,7 +63,7 @@ reject_matches "public production facade exposes BootedProfile or CordisContext"
   'public[[:space:]]+(let|var|typealias|func|init)[^\n]*(BootedProfile|CordisContext)' \
   Sources/Cordis/CordisContext.swift \
   Sources/CordisLoader/EntryTree.swift \
-  Sources/WikiCtlCore/CLITantivyLegResolver.swift \
+  Sources/wikictl-fixture/FixtureStoreProfile.swift \
   Sources/WikiFSEngine/ProductionPluginCatalogs.swift \
   Sources/WikiFSEngine/SearchRuntimeCompositionFactory.swift \
   Sources/WikiFSEngine/SearchRuntimeFactory.swift || failed=1
@@ -150,22 +151,29 @@ reject_matches_in() {
   return 0
 }
 
-# Phase 5 of plans/cli-domain-commands.md — one pathway: the CLI targets
-# (wikictl + WikiCtlCore) reach wiki data ONLY through the daemon over the
-# domain envelope. The queue store is opened by wikid and the app's queue
-# engine; the registry is loaded by wikid, the app shell, and WikiRegistryClient
-# (the pre-profile bootstrap boundary). The single sanctioned exception is the
-# --database-path fixture leg, which stays local by design:
-# Sources/wikictl/ExtractorFixtureLeg.swift stages extraction items for the
-# isolated harness without a running app, and WikiCtlCore's headless store
-# profile boot (CordisBoot) serves only explicit --database-path runs.
+# The fixture-binary split of plans/cli-domain-commands.md (§"The fixture
+# binary") — one pathway, enforced: the CLI targets (wikictl + WikiCtlCore)
+# reach wiki data ONLY through the daemon over the domain envelope. The queue
+# store is opened by wikid and the app's queue engine; the registry is loaded
+# by wikid, the app shell, and WikiRegistryClient (the pre-profile bootstrap
+# boundary). Disposable --database-path fixture runs use the SEPARATE
+# build-only `wikictl-fixture` executable target (Sources/wikictl-fixture),
+# which — like the test targets — is outside these CLI scopes: its local store
+# boot and its direct QueueStore write are its entire reason to exist, and the
+# rules below fail if any of that machinery regresses into WikiCtlCore or
+# wikictl.
 reject_matches_in \
-  "QueueStore is constructed in a CLI target (registry-selected runs ride the daemon; the --database-path fixture leg excepted)" \
+  "QueueStore is constructed in a CLI target (registry-selected runs ride the daemon; fixture runs use the wikictl-fixture binary)" \
   "WikiCtlCore" '(^|[^[:alnum:]_])QueueStore\(' || failed=1
 reject_matches_in \
-  "QueueStore is constructed in a CLI target (registry-selected runs ride the daemon; the --database-path fixture leg excepted)" \
-  "wikictl" '(^|[^[:alnum:]_])QueueStore\(' \
-  Sources/wikictl/ExtractorFixtureLeg.swift || failed=1
+  "QueueStore is constructed in a CLI target (registry-selected runs ride the daemon; fixture runs use the wikictl-fixture binary)" \
+  "wikictl" '(^|[^[:alnum:]_])QueueStore\(' || failed=1
+reject_matches_in \
+  "GRDBWikiStore is constructed in a CLI target (the daemon and the wikictl-fixture store profile own store construction)" \
+  "WikiCtlCore" '(^|[^[:alnum:]_])GRDBWikiStore\(' || failed=1
+reject_matches_in \
+  "GRDBWikiStore is constructed in a CLI target (the daemon and the wikictl-fixture store profile own store construction)" \
+  "wikictl" '(^|[^[:alnum:]_])GRDBWikiStore\(' || failed=1
 reject_matches_in \
   "WikiRegistry is loaded in a CLI target (--wiki resolves through the daemon's resolveWiki over the socket)" \
   "WikiCtlCore" '(^|[^[:alnum:]_])WikiRegistry\.load\(' || failed=1

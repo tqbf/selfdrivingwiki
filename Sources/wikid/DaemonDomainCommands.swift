@@ -717,8 +717,8 @@ final class DaemonDomainCommands: @unchecked Sendable {
     /// the DURABLE ENQUEUE through the daemon's queue engine — the exact
     /// closure the `enqueueItem` operation's handler runs. The CLI never opens
     /// `queue.sqlite`; with the app closed these commands fail fast at
-    /// connect (accepted posture for Phase 4; the CLI's old direct-write path
-    /// survives only for `--database-path` fixtures until Phase 5 strips it).
+    /// connect (the CLI's old direct-write path is gone — fixture runs use
+    /// the build-only `wikictl-fixture` binary).
     private func extractorOutcome(_ request: DaemonDomainRequest) async throws -> DaemonCommandOutcome {
         #if canImport(WikiFSEngine)
         let wikiIDRaw = try wikiIDFromPayload(request)

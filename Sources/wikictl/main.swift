@@ -6,15 +6,18 @@ import WikiFSCore
 import WikiFSEngine
 #endif
 
-/// `wikictl` — the agent's write path into a wiki (`plans/llm-wiki.md` Phase A).
+/// `wikictl` — the agent's scriptable path into a wiki.
 ///
-/// Reads happen via the read-only File Provider mount; WRITES go through this CLI
-/// straight to the wiki's `<ulid>.sqlite` in the App Group container. It opens the
-/// DB READ-WRITE via the literal App Group path the un-sandboxed app uses (WAL +
-/// `busy_timeout=5000` make a second writer process safe), runs one `page`
-/// command, prints its output to stdout, and — after any committing call — posts
-/// a per-wiki Darwin notification so the app refreshes. It NEVER signals the File
-/// Provider itself (single-owner invariant) and NEVER writes the mount.
+/// Since the fixture-binary split (plans/cli-domain-commands.md §"The fixture
+/// binary") this binary has NO local database pathway: every command resolves
+/// its `--wiki` selector through the wikid daemon's registry over the socket
+/// and executes daemon-side against the daemon's prepared store (the daemon
+/// runs the identical command layer, so stdout bytes are unchanged), then —
+/// after any committing call — posts a per-wiki Darwin notification so the app
+/// refreshes. Disposable fixture databases are the separate build-only
+/// `wikictl-fixture` binary's contract; `--database-path`/`WIKI_DB_PATH` are
+/// rejected here as usage errors. Raw source reads go through the `wikictl
+/// file` family rather than the File Provider mount.
 ///
 /// Exit codes: 0 success, 2 usage error, 1 runtime error, 3 CAS conflict.
 func run() async -> Int32 {
@@ -181,7 +184,6 @@ func run() async -> Int32 {
         let output = try await makeRunner().runOrdinary(
             command: invocation.command,
             wikiSelector: invocation.wikiSelector,
-            databasePath: invocation.databasePath,
             environment: ProcessInfo.processInfo.environment)
         write(output)
         return 0
@@ -279,131 +281,6 @@ func run() async -> Int32 {
     }
 }
 
-/// Execute a parsed `Command`, dispatching to `PageCommand` (the `page …`
-/// family), `LogIndexCommand` (the Phase-B `log append` / `index set`), or
-/// `SourceCommand` (the `source …` family for raw source reads). The deferred
-/// body read (`-` = stdin, else a file path) happens inside the action's `run`
-/// via `resolveBodySource` — the only I/O the parser left for execution time.
-///
-/// `wikiID` routes the three search cases to the daemon's index via
-/// `CLITantivyLegResolver` so they can resolve a Tantivy BM25 leg before
-/// invoking the kind-specific `*Command.run(..., bm25Leg:)` (#637).
-/// Non-search cases ignore it. `containerDirectory` feeds the fence validator
-/// and the extractor commands.
-func execute(
-    _ command: ArgumentParser.Command,
-    in store: GRDBWikiStore,
-    wikiID: WikiID,
-    containerDirectory: URL
-) async throws -> SourceCommand.Result {
-    switch command {
-    case .page(let action):
-        let leg = try await cliPageLegIfSearch(
-            action,
-            wikiID: wikiID,
-            store: store)
-        // The package-driven fence validator resolves from the machine
-        // renderer package store. An unresolvable layout skips validation
-        // (nil semantics) rather than failing the command.
-        let fenceValidator = DebugLog.trying("resolve fence validation service", operation: {
-            try FenceSyntaxValidationService(
-                layout: RendererPackageStoreLayout(appGroupContainerRoot: containerDirectory))
-        })
-        let r = try PageCommand.run(action, in: store, validator: fenceValidator, bm25Leg: leg)
-        return SourceCommand.Result(
-            payload: .text(r.output),
-            didCommit: r.didCommit,
-            stderrOutput: r.stderrOutput
-        )
-    case .logAppend(let kind, let title, let note, let source, let author):
-        // The author arrived resolved (flag > env) via `applyEnv` in
-        // `WikiCtlRunner.runOrdinary`. Parse it through the typed `PageAuthor`
-        // seam HERE — the single boundary between parse-land strings and
-        // command-land types — so the #1367 stamp gate in `LogIndexCommand`
-        // never string-matches the author.
-        let r = try LogIndexCommand.run(
-            .logAppend(kind: kind, title: title, note: note, source: source,
-                       author: PageAuthor(rawValue: author)),
-            in: store)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .indexSet(let bodyFile, let workspace):
-        let body = try readBodyFile(from: bodyFile)
-        let r = try LogIndexCommand.run(.indexSet(body: body, workspace: workspace), in: store)
-        return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .transcribe:
-        // Unreachable: main.swift handles the transcribe family against the
-        // live daemon before any wiki store is opened.
-        throw ArgumentParser.Failure.usage("transcribe requires no wiki store context")
-    case .source(let action):
-        if case .addURL(let rawInput, let allowDuplicateURL) = action {
-            return try await SourceCommand.runAddURL(
-                rawInput, allowDuplicateURL: allowDuplicateURL,
-                in: store, fetcher: URLSessionFetcher())
-        }
-        if case .refresh(let selector) = action {
-            return try await SourceCommand.runRefresh(
-                selector,
-                in: store,
-                fetcher: URLSessionFetcher())
-        }
-        return try SourceCommand.run(
-            action, in: store,
-            cwd: FileManager.default.currentDirectoryPath,
-            bm25Leg: try await cliSourceLegIfSearch(
-                action,
-                wikiID: wikiID,
-                store: store))
-    case .admin(let action):
-        return try AdminCommand.run(action, in: store)
-    case .extractor(.sync(let packageName, let force)):
-        return try await runExtractorSync(
-            packageName: packageName, force: force, in: store,
-            wikiID: wikiID, containerDirectory: containerDirectory)
-    case .extractor(.fetch(let packageName, let itemKey, let force)):
-        return try await runExtractorFetch(
-            packageName: packageName, itemKey: itemKey, force: force, in: store,
-            wikiID: wikiID, containerDirectory: containerDirectory)
-    case .extractor(.list):
-        // Handled before wiki resolution in `run()` — unreachable here.
-        return SourceCommand.Result(payload: .text(""), didCommit: false)
-    case .job:
-        // Handled before the writable ordinary-command runner.
-        return SourceCommand.Result(payload: .text(""), didCommit: false)
-    case .queue:
-        // Handled before the writable ordinary-command runner.
-        return SourceCommand.Result(payload: .text(""), didCommit: false)
-    case .chat(let action):
-        return try await runChatCommand(
-            action,
-            in: store,
-            wikiID: wikiID)
-    case .bookmark(let action):
-        let r = try BookmarkCommand.run(action, in: store)
-        return SourceCommand.Result(
-            payload: .text(r.output), didCommit: r.didCommit,
-            stderrOutput: r.stderrOutput)
-    case .workspace(let action):
-        let r = try WorkspaceCommand.run(action, in: store)
-        return SourceCommand.Result(
-            payload: .text(r.output), didCommit: r.didCommit,
-            stderrOutput: r.stderrOutput)
-    case .strategy(let action):
-        let r = try StrategyCommand.run(action, in: store)
-        return SourceCommand.Result(
-            payload: .text(r.output),
-            didCommit: r.didCommit,
-            stderrOutput: r.stderrOutput)
-    case .help, .version, .dumpConfig:
-        // Handled before wiki resolution in `run()` — unreachable here.
-        return SourceCommand.Result(payload: .text(""), didCommit: false)
-    case .wikiList, .wikiCreate, .wikiDelete, .wikiRename:
-        // Handled before wiki resolution in `run()` — unreachable here.
-        return SourceCommand.Result(payload: .text(""), didCommit: false)
-    case .daemonChatNew, .daemonChatSend, .daemonChatStop:
-        // Phase C: handled before wiki resolution in `run()` — unreachable here.
-        return SourceCommand.Result(payload: .text(""), didCommit: false)
-    }
-}
 
 /// `wikictl queue status|pause|resume|halt` — runs against the live daemon
 /// over its local socket (`DaemonWorkloadClient`'s socket backend, Phase 1 of
@@ -627,73 +504,8 @@ private func runTranscribeCommand(
 }
 
 
-/// #637: split-out dispatch for the `wikictl chat …` subcommands. Resolves
-/// a Tantivy BM25 leg for `.search` before invoking `ChatCommand.run(...,
-/// bm25Leg:)`. Mirrors the `page search` / `source search` paths in
-/// `execute(...)` — kept as a helper so that function's switch stays compact.
-private func runChatCommand(
-    _ action: ChatCommand.Action,
-    in store: GRDBWikiStore,
-    wikiID: WikiID
-) async throws -> SourceCommand.Result {
-    let leg: [ChatSummary]?
-    if case .search(let query, let limit) = action {
-        leg = try await CLITantivyLegResolver.resolveChatLeg(
-            wikiID: wikiID, store: store, query: query, limit: limit)
-    } else {
-        leg = nil
-    }
-    let r = try ChatCommand.run(action, in: store, bm25Leg: leg)
-    return SourceCommand.Result(
-        payload: .text(r.output), didCommit: r.didCommit,
-        stderrOutput: r.stderrOutput)
-}
-
-/// #637: inspect a `SourceCommand.Action` and, when it's `.search`, resolve a
-/// Tantivy BM25 leg to thread into `SourceCommand.run(..., bm25Leg:)`. Returns
-/// `nil` for every other action (the param is unused by them). Kept as a
-/// helper so the switch in `execute(...)` reads cleanly.
-private func cliSourceLegIfSearch(
-    _ action: SourceCommand.Action,
-    wikiID: WikiID,
-    store: GRDBWikiStore
-) async throws -> [SourceSummary]? {
-    guard case .search(let query, let limit) = action else { return nil }
-    return try await CLITantivyLegResolver.resolveSourceLeg(
-        wikiID: wikiID, store: store, query: query, limit: limit)
-}
-
-/// #637: inspect a `PageCommand.Action` and, when it's `.search`, resolve a
-/// Tantivy BM25 leg to thread into `PageCommand.run(..., bm25Leg:)`. Returns
-/// `nil` for every other action. Mirrors `cliSourceLegIfSearch` so the
-/// `page search` / `source search` paths share the same resolve step.
-private func cliPageLegIfSearch(
-    _ action: PageCommand.Action,
-    wikiID: WikiID,
-    store: GRDBWikiStore
-) async throws -> [WikiPageSummary]? {
-    guard case .search(let query, let limit) = action else { return nil }
-    return try await CLITantivyLegResolver.resolvePageLeg(
-        wikiID: wikiID, store: store, query: query, limit: limit)
-}
-
-/// Read an upsert body: `-` reads stdin to EOF; anything else is a file path.
-/// Now a thin shim to `readBodyFile` in WikiCtlCore so the body-read contract
-/// lives next to `BodySource`/`resolveBodySource`. Kept as a `wikictl`-local
-/// helper so existing callers in this file (e.g. `LogIndexCommand` indexSet)
-/// read cleanly.
-func readBody(from source: String) throws -> String {
-    try readBodyFile(from: source)
-}
-
 private func makeRunner() -> WikiCtlRunner {
-    WikiCtlRunner { command, store, wikiID, containerDirectory in
-        try await execute(
-            command,
-            in: store,
-            wikiID: wikiID,
-            containerDirectory: containerDirectory)
-    }
+    WikiCtlRunner()
 }
 
 private func write(_ output: WikiCtlRunner.Output) {

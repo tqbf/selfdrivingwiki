@@ -242,7 +242,7 @@ struct WikiCtlCommandTests {
     @Test func parsesSearchWithCustomLimit() throws {
         let invocation = try ArgumentParser.parse(
             ["page", "search", "--query", "ai", "--limit", "5"],
-            env: { _ in "W" })
+            env: { $0 == "WIKI_DB" ? "W" : nil })
         #expect(invocation.command == .page(.search(query: "ai", limit: 5)))
     }
 

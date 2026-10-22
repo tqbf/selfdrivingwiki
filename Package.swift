@@ -475,6 +475,49 @@ let package = Package(
             path: "Sources/wikictl",
             swiftSettings: strictSwiftSettings
         ),
+        // wikictl-fixture — the BUILD-ONLY companion CLI for disposable fixture
+        // databases. It owns everything the shipping wikictl must never have:
+        // the `--database-path`/`WIKI_DB_PATH` explicit-database selection
+        // parsing, the in-process CLIStoreProfile boot (CordisBoot over an
+        // explicit database), the local command execution over that store, and
+        // the fixture extractor sync/fetch leg (direct QueueStore write).
+        // Commands reuse WikiCtlCore's command layer — no semantics duplicated.
+        // NEVER bundled into the app (build.sh stages wikictl into
+        // Contents/Helpers; this target is not staged anywhere) and never a
+        // production pathway: it is a developer/CI tool for isolated fixture
+        // runs. See plans/cli-domain-commands.md §"The fixture binary".
+        .executableTarget(
+            name: "wikictl-fixture",
+            dependencies: [
+                "WikiFSCore",
+                "WikiCtlCore",
+                // CLIStoreProfile's production boot runs CordisBoot over the
+                // engine's ProductionProfiles.cli layer. macOS-only like the
+                // other workload surfaces; the target keeps a Linux stub.
+                .target(name: "WikiFSEngine",
+                        condition: .when(platforms: [.macOS])),
+            ],
+            path: "Sources/wikictl-fixture",
+            swiftSettings: strictSwiftSettings
+        ),
+        // In-process tests for the fixture target's own surface (explicit
+        // selection validation, the fixture store profile boot). The shipping
+        // wikictl's rejection of the fixture flag is covered in WikiFSTests.
+        .testTarget(
+            name: "WikiCtlFixtureTests",
+            dependencies: [
+                "wikictl-fixture",
+                "WikiCtlCore",
+                "WikiFSCore",
+                "Cordis",
+                "CordisLoader",
+                .target(name: "WikiFSEngine",
+                        condition: .when(platforms: [.macOS])),
+                "WikiFSTestSupport",
+            ],
+            path: "Tests/WikiCtlFixtureTests",
+            swiftSettings: strictSwiftSettings
+        ),
         // The live semantic evaluation harness (plan Phase 5.3-5.5, AC.7):
         // scenario fixtures, the deterministic structural evaluator, the
         // budgeted live runner over the real launcher/provider seams, and the
@@ -488,6 +531,12 @@ let package = Package(
             dependencies: [
                 "WikiFSCore",
                 .target(name: "WikiFSEngine",
+                        condition: .when(platforms: [.macOS])),
+                // The live harness creates/deletes its throwaway wikis through
+                // the daemon's registry over the local socket
+                // (DaemonWikiRegistryClient) — the fixture-binary split's
+                // one-pathway posture. macOS-only like the daemon surface.
+                .target(name: "WikiCtlCore",
                         condition: .when(platforms: [.macOS])),
             ],
             path: "Sources/WikiStrategyEval",

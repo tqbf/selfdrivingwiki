@@ -20,14 +20,11 @@ import WikiFSCore
 ///
 /// `--wiki` may be omitted when the `WIKI_DB` env var supplies the selector.
 ///
-/// An EXPLICIT database file may replace the registry selector:
-/// `wikictl --database-path /abs/<ulid>.sqlite page list`. The flag and the
-/// `WIKI_DB_PATH` env var are mutually exclusive with `--wiki`/`WIKI_DB`
-/// (mixed forms are a usage error), the path must be an absolute `.sqlite`
-/// file outside the App Group container, and the two raw strings are typed
-/// into a `WikiSelection` at the runner boundary — never inside the parser.
-/// This form exists for disposable fixture databases (the live semantic
-/// evaluation harness); ordinary invocations are unchanged.
+/// An EXPLICIT database selector (`--database-path`/`WIKI_DB_PATH`) is NOT
+/// part of this grammar. Since the fixture-binary split (plans/cli-domain-
+/// commands.md §"The fixture binary") the shipping `wikictl` has NO local
+/// database pathway: both spellings are rejected with a usage error that names
+/// the build-only `wikictl-fixture` binary, which owns the fixture surface.
 public enum ArgumentParser {
 
     /// A fully-parsed invocation: which wiki, what to do, and — for `page add`
@@ -36,15 +33,10 @@ public enum ArgumentParser {
     /// reads it.
     public struct Invocation: Equatable {
         public var wikiSelector: String
-        /// Raw `--database-path`/`WIKI_DB_PATH` value, empty when the ordinary
-        /// `--wiki` selector form was used. Exactly one of `wikiSelector` /
-        /// `databasePath` is non-empty once parsing succeeds.
-        public var databasePath: String
         public var command: Command
 
-        public init(wikiSelector: String, databasePath: String = "", command: Command) {
+        public init(wikiSelector: String, command: Command) {
             self.wikiSelector = wikiSelector
-            self.databasePath = databasePath
             self.command = command
         }
     }
@@ -180,11 +172,23 @@ public enum ArgumentParser {
             }
         }
 
-        // A leading `--wiki <id>`/`--wiki=<id>`, `--database-path <file>`/
-        // `--database-path=<file>`, or their `WIKI_DB`/`WIKI_DB_PATH` env
-        // fallbacks. The parser records the raw winning form(s); typed
-        // conversion and mutual-exclusion checks live in
-        // `WikiResolver.selection(wikiSelector:databasePath:)`.
+        // A leading `--wiki <id>`/`--wiki=<id>` or its `WIKI_DB` env fallback.
+        // The explicit-database selector (`--database-path`/`WIKI_DB_PATH`)
+        // was REMOVED from wikictl with the fixture-binary split: the raw
+        // strings are rejected below, never silently treated as an unknown
+        // command. The selector string is typed at the runner boundary by the
+        // daemon router (resolveWiki over the socket) — never inside the
+        // parser.
+        if args.first == "--database-path" || args.first?.hasPrefix("--database-path=") == true {
+            throw Failure.usage(
+                "--database-path was removed from wikictl — disposable fixture databases "
+                    + "are the build-only `wikictl-fixture` binary; pass --wiki <id> to select a live wiki")
+        }
+        if let envValue = env("WIKI_DB_PATH"), !envValue.isEmpty {
+            throw Failure.usage(
+                "WIKI_DB_PATH was removed from wikictl — disposable fixture databases "
+                    + "are the build-only `wikictl-fixture` binary; pass --wiki <id> (or set WIKI_DB) to select a live wiki")
+        }
         var wikiSelector: String?
         if args.first == "--wiki" {
             guard args.count >= 2 else { throw Failure.usage("--wiki requires a value") }
@@ -198,31 +202,28 @@ public enum ArgumentParser {
         } else if let envValue = env("WIKI_DB"), !envValue.isEmpty {
             wikiSelector = envValue
         }
-        var databasePath: String?
-        if args.first == "--database-path" {
-            guard args.count >= 2 else { throw Failure.usage("--database-path requires a value") }
-            databasePath = args[1]
-            args.removeFirst(2)
-        } else if let first = args.first, first.hasPrefix("--database-path=") {
-            let value = String(first.dropFirst("--database-path=".count))
-            guard !value.isEmpty else { throw Failure.usage("--database-path requires a value") }
-            databasePath = value
-            args.removeFirst()
-        } else if databasePath == nil, let envValue = env("WIKI_DB_PATH"), !envValue.isEmpty {
-            // Env fallback only when no --database-path FLAG was given. Both
-            // env vars set, or flag+env mixing, reaches the typed conflict
-            // check in `WikiResolver.selection` — never a silent winner.
-            databasePath = envValue
-        }
         let selectedWikiSelector = wikiSelector ?? ""
-        let selectedDatabasePath = databasePath ?? ""
-        guard !selectedWikiSelector.isEmpty || !selectedDatabasePath.isEmpty else {
+        guard !selectedWikiSelector.isEmpty else {
             throw Failure.usage(
-                "no wiki selected — pass --wiki <id> (or --wiki=<id>), --database-path <file>, or set WIKI_DB/WIKI_DB_PATH")
+                "no wiki selected — pass --wiki <id> (or --wiki=<id>), or set WIKI_DB")
         }
 
+        return Invocation(
+            wikiSelector: selectedWikiSelector,
+            command: try parseCommand(args))
+    }
+
+    /// Parse ONLY the command portion (family + subcommand + options) — no
+    /// leading wiki selector. Shared by `wikictl`'s ``parse`` and the
+    /// build-only `wikictl-fixture` binary, which owns its own
+    /// `--database-path` selector parsing ahead of this call. One command
+    /// grammar, two binaries — no duplication.
+    public static func parseCommand(_ args: [String]) throws -> Command {
+        guard let first = args.first else {
+            throw Failure.usage("no command given")
+        }
         let command: Command
-        switch args.first {
+        switch first {
         case "page":
             command = try parsePageCommand(Array(args.dropFirst()))
         case "log":
@@ -252,10 +253,7 @@ public enum ArgumentParser {
         default:
             throw Failure.usage("unknown command \((args.first ?? "").debugDescription)")
         }
-        return Invocation(
-            wikiSelector: selectedWikiSelector,
-            databasePath: selectedDatabasePath,
-            command: command)
+        return command
     }
 
     private static func parsePageCommand(_ args: [String]) throws -> Command {
