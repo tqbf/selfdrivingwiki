@@ -532,6 +532,12 @@ let package = Package(
                 "WikiFSCore",
                 .target(name: "WikiFSEngine",
                         condition: .when(platforms: [.macOS])),
+                // The live harness creates/deletes its throwaway wikis through
+                // the daemon's registry over the local socket
+                // (DaemonWikiRegistryClient) — the fixture-binary split's
+                // one-pathway posture. macOS-only like the daemon surface.
+                .target(name: "WikiCtlCore",
+                        condition: .when(platforms: [.macOS])),
             ],
             path: "Sources/WikiStrategyEval",
             swiftSettings: strictSwiftSettings

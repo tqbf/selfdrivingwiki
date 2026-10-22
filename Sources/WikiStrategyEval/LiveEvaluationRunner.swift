@@ -3,6 +3,7 @@ import WikiFSCore
 import WikiFSTypes
 
 #if canImport(WikiFSEngine) && os(macOS)
+import WikiCtlCore
 import WikiFSEngine
 
 /// Why a live evaluation could not run or must stop.
@@ -18,6 +19,11 @@ public enum LiveEvaluationError: Error, Equatable, Sendable {
     case outputDirectoryNotIsolated(String)
     /// The launcher run itself failed (preflight error, bad exit).
     case ingestionRunFailed(String)
+    /// The daemon (the app) is unreachable, so no throwaway wiki can be
+    /// created or evicted. Since the fixture-binary split the harness runs
+    /// only against REAL daemon-created wikis — a missing daemon is a stop,
+    /// never a local fallback.
+    case daemonUnavailable(String)
 
     public var localizedDescription: String {
         switch self {
@@ -29,6 +35,8 @@ public enum LiveEvaluationError: Error, Equatable, Sendable {
             "output directory must live outside ~/Library/Group Containers: \(detail)"
         case .ingestionRunFailed(let detail):
             "ingestion run failed: \(detail)"
+        case .daemonUnavailable(let detail):
+            "wikid daemon unavailable: \(detail)"
         }
     }
 }
@@ -73,18 +81,24 @@ public struct LiveEvaluationConfiguration: Sendable {
 /// `AgentLauncher` multi-phase ingest path — launched with the REAL
 /// agent-loop service (`AgentLoopPlugin` activation over StorePlugin →
 /// SessionsPlugin → ChatsPersistencePlugin, booted per leg against the leg's
-/// disposable database through the engine's approved
-/// `AgentLoopRuntimeFactory` composition), so every agent turn traverses the
-/// production loop
+/// database through the engine's approved `AgentLoopRuntimeFactory`
+/// composition), so every agent turn traverses the production loop
 /// (turn-started → pre-step waterfall → request waterfall → backend stream →
 /// step-completed → turn-completed) exactly as the daemon profile runs it —
 /// REAL ingestion of source A then source B through the production staging
-/// seam, and page writes performed by the real agent through `wikictl` —
-/// targeted at a DISPOSABLE fixture database under the output directory via
-/// the launcher's explicit-database override and `wikictl --database-path`.
-/// Nothing in the operator's App Group container is written: no registry row,
-/// no group-container directory, no provider-config change, and quota state
-/// is redirected to a fixture file.
+/// seam, and page writes performed by the real agent through `wikictl`.
+///
+/// Wikis are REAL throwaway wikis (the fixture-binary split of
+/// plans/cli-domain-commands.md, §"The fixture binary"): each leg CREATES its
+/// wiki through the daemon's registry over the local socket (`createWiki` —
+/// bootstrap + seed + registry row), the agent's commands resolve through the
+/// normal `--wiki <id>` selector daemon-side, and the wiki is DELETED
+/// afterwards (full daemon eviction). The harness's own measurement boot
+/// opens the daemon-created database in-process for trace hooks — a second
+/// WAL-mode writer, the same posture as any daemon command — and no
+/// `--database-path`/`WIKI_DB_PATH` selector is ever rendered: those spellings
+/// live only in the build-only `wikictl-fixture` binary. Quota state is
+/// redirected to a fixture file under the output directory.
 ///
 /// Complete run evidence is retained per leg and per batch: each batch's
 /// state markdown (the prompt context rendered before its run), each agent
@@ -374,10 +388,13 @@ public struct LiveEvaluationHarness: Sendable {
         var debugFolderURL: URL?
     }
 
-    /// One leg: fresh wiki, save the strategy through the REAL store seam,
-    /// boot the production agent-loop composition against the leg's disposable
-    /// database, import each batch through REAL ingestion (every agent turn
-    /// traversing the real loop), observe after each batch.
+    /// One leg: a REAL throwaway wiki created through the daemon (its
+    /// creation coordinator bootstraps, seeds, and registers it), the strategy
+    /// saved through the REAL store seam, the production agent-loop
+    /// composition booted against the daemon-created database, each batch
+    /// imported through REAL ingestion (every agent turn traversing the real
+    /// loop), observations captured — and the wiki DELETED afterwards (full
+    /// daemon eviction), on the success path AND the failure path.
     private func runOneLeg(
         label: String,
         scenarioDirectory: URL,
@@ -393,18 +410,86 @@ public struct LiveEvaluationHarness: Sendable {
             throw LiveEvaluationError.fixtureInvalid(["leg \(label) has no batches"])
         }
 
-        // Fresh disposable wiki: <scenarioDirectory>/<label>/<ulid>.sqlite.
-        let legDirectory = scenarioDirectory.appendingPathComponent(label, isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: legDirectory, withIntermediateDirectories: true)
-        let descriptor = WikiDescriptor.make(displayName: "eval-\(label)")
-        let databaseURL = legDirectory
+        // Create the throwaway wiki through the daemon's registry over its
+        // local socket. The daemon is the single writer of wiki lifecycle
+        // state — the harness never touches `wikis.json` and never
+        // manufactures a database itself. The app must be running.
+        let containerDirectory: URL
+        do {
+            containerDirectory = try DatabaseLocation.appGroupContainerDirectory()
+        } catch {
+            throw LiveEvaluationError.daemonUnavailable(
+                "the App Group container is not resolvable: \(error.localizedDescription)")
+        }
+        let registryClient: DaemonWikiRegistryClient
+        do {
+            registryClient = try DaemonWikiRegistryClient(containerDirectory: containerDirectory)
+        } catch {
+            throw LiveEvaluationError.daemonUnavailable(
+                "no daemon socket in the App Group container (launch the app first): "
+                    + "\(error.localizedDescription)")
+        }
+        // Unique display name: the registry is name-keyed and a crashed
+        // earlier run may have left its wiki behind.
+        let descriptor: WikiDescriptor
+        do {
+            descriptor = try await registryClient.createWiki(
+                name: "eval-\(label)-\(UUID().uuidString.prefix(8))")
+        } catch {
+            throw LiveEvaluationError.daemonUnavailable(
+                "could not create the throwaway wiki through the daemon (launch the app first): "
+                    + "\(error.localizedDescription)")
+        }
+        // The daemon created and seeded `<ulid>.sqlite` in the container. The
+        // harness's MEASUREMENT boot opens that same database in-process — a
+        // second WAL-mode writer, the same posture as any daemon command —
+        // purely for the loop-trace hooks and observation reads. The AGENT's
+        // own commands resolve through `--wiki` daemon-side; no
+        // `--database-path` selector exists in this process.
+        let databaseURL = containerDirectory
             .appendingPathComponent("\(descriptor.id.rawValue).sqlite", isDirectory: false)
-        _ = try StoreBootstrap().createAndSeed(databaseURL: databaseURL)
 
+        do {
+            let outcome = try await runOneLegBody(
+                label: label,
+                strategy: strategy,
+                batches: batches,
+                services: services,
+                tracker: tracker,
+                budgetGate: budgetGate,
+                evidenceLedger: evidenceLedger,
+                agentBox: agentBox,
+                descriptor: descriptor,
+                databaseURL: databaseURL)
+            // Full daemon eviction AFTER the measurement boot has shut down
+            // (the body guarantees that) — the registry row, child profile,
+            // search runtime, and database artifacts all go.
+            await Self.evictThrowawayWiki(registryClient, id: descriptor.id, after: "leg \(label) completed")
+            return outcome
+        } catch {
+            await Self.evictThrowawayWiki(registryClient, id: descriptor.id, after: "leg \(label) failed")
+            throw error
+        }
+    }
+
+    /// The leg body: measurement boot, strategy save, batch ingestion,
+    /// observation. Guarantees the agent-loop composition shuts down before
+    /// returning or throwing, so the daemon eviction never races open handles.
+    private func runOneLegBody(
+        label: String,
+        strategy: EvaluationStrategyFixture,
+        batches: [[EvaluationSourceFixture]],
+        services: any AgentProviderServices,
+        tracker: UsageBudgetTracker,
+        budgetGate: LiveUsageBudgetGate,
+        evidenceLedger: ScenarioEvidenceLedger,
+        agentBox: CurrentAgentBox,
+        descriptor: WikiDescriptor,
+        databaseURL: URL
+    ) async throws -> LegOutcome {
         // Production agent-loop runtime: the engine's approved composition
         // boots the same plugin stack the daemon profile boots (StorePlugin
-        // on this leg's disposable database → SessionsPlugin →
+        // on the daemon-created database → SessionsPlugin →
         // ChatsPersistencePlugin → AgentLoopPlugin), plus this harness's
         // observation-only trace callbacks. The launcher factory below hands
         // out the REAL `AgentLoopPlugin` service, not a stand-in — pre-step
@@ -585,14 +670,15 @@ public struct LiveEvaluationHarness: Sendable {
                 sourceID: summary.id))
         }
 
-        // Launcher with the explicit-database override + disposable quota
-        // state. Constructed through the booted runtime's factory and
-        // configured on the main actor like every production call site.
+        // Launcher with the disposable quota state. Constructed through the
+        // booted runtime's factory and configured on the main actor like
+        // every production call site. NO wikiDatabaseOverride exists anymore:
+        // the run targets a real registered wiki, and the agent's commands
+        // resolve through `--wiki` via the daemon.
         let quotaStateURL = configuration.outputDirectory
             .appendingPathComponent("quota-state.json", isDirectory: false)
         let launcher = await MainActor.run { () -> AgentLauncher in
             let launcher = launcherFactory(providerServices: services)
-            launcher.wikiDatabaseOverride = databaseURL
             launcher.makeQuotaFallbackCoordinator = {
                 QuotaFallbackCoordinator(quotaStateURL: quotaStateURL)
             }
@@ -663,6 +749,25 @@ public struct LiveEvaluationHarness: Sendable {
         return IngestArtifacts(usage: usage, log: results.4, debug: results.5, stateMarkdown: stateMarkdown, startedAt: startedAt, finishedAt: Date())
     }
 
+    // MARK: - Throwaway wiki lifecycle
+
+    /// Full daemon eviction of a throwaway wiki — best-effort, logged, never
+    /// thrown: a failed eviction must not lose the leg's already-captured
+    /// results, but a left-behind wiki IS a registry row the operator should
+    /// see in `wikictl wiki list`.
+    private static func evictThrowawayWiki(
+        _ client: DaemonWikiRegistryClient,
+        id: WikiID,
+        after reason: String
+    ) async {
+        do {
+            try await client.deleteWiki(id: id)
+        } catch {
+            DebugLog.agent(
+                "eval harness: throwaway wiki delete (\(reason)) failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - State markdown (mirrors the daemon provider's snapshot)
 
     static func renderStateMarkdown(from store: any WikiStore) throws -> String {
@@ -724,7 +829,7 @@ public struct LiveEvaluationHarness: Sendable {
         var lines = [
             "# Live semantic evaluation — summary",
             "",
-            "- Run kind: live (real provider, real launcher, disposable fixture databases)",
+            "- Run kind: live (real provider, real launcher, real daemon-created throwaway wikis)",
             "- Structural checks are heuristics over known fixture phrases; the per-scenario report's human rubric is the authoritative semantic review.",
             "",
             "| Scenario | Structural | Strategy delivered | Error |",
