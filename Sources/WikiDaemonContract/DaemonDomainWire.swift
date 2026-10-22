@@ -32,7 +32,40 @@ import Foundation
 
 public enum DaemonDomainVersion {
     /// The envelope version this daemon serves and this client speaks.
-    public static let current: UInt16 = 1
+    /// Version 2 adds the OPTIONAL encoded authorization object
+    /// (``DaemonDomainAuthorization``); the v1 shape is otherwise unchanged,
+    /// so v1 bytes decode as v2-minus-authorization.
+    public static let current: UInt16 = 2
+    /// The oldest envelope version the ORDINARY listener still serves during
+    /// the compatibility window (plans/agent-sandbox-scoping.md §9): a v1 CLI
+    /// keeps working against the ordinary socket unchanged. SCOPED listeners
+    /// never serve it — a v1 data operation there is a typed
+    /// `unsupportedVersion` (an old client must not silently ride an
+    /// unscoped envelope past the authorization gate).
+    public static let compatibilityMinimum: UInt16 = 1
+
+    /// The versions the ORDINARY listener serves: the compatibility window's
+    /// minimum through the current version.
+    public static var ordinaryServed: ClosedRange<UInt16> {
+        compatibilityMinimum...current
+    }
+}
+
+/// The v2 envelope's OPTIONAL encoded authorization object (plans/
+/// agent-sandbox-scoping.md §6). It carries the run capability as the
+/// printable secret string; the daemon digests it and authorizes against the
+/// run registry — the printable secret is never stored, logged, or echoed in
+/// a reply. Ordinary trusted CLI requests keep it ABSENT: on the ordinary
+/// listener, absence is the documented same-user trust posture. On a SCOPED
+/// listener, absence is never interpreted as unrestricted access — it is a
+/// typed `authorizationRequired`.
+public struct DaemonDomainAuthorization: Codable, Equatable, Sendable {
+    /// The run capability, printable form (base64 of the 256 random bits).
+    public let capability: String
+
+    public init(capability: String) {
+        self.capability = capability
+    }
 }
 
 /// The command family inside one domain envelope. Adding a case is the
@@ -81,19 +114,25 @@ public struct DaemonDomainRequest: Codable, Equatable, Sendable {
     public let operation: String
     /// Family-specific JSON payload; `nil` where the operation carries none.
     public let payload: Data?
+    /// v2 only: the run capability (absent on ordinary trusted requests and
+    /// on every v1 envelope — the decoder treats a missing field as nil, so
+    /// v1 bytes decode unchanged).
+    public let authorization: DaemonDomainAuthorization?
 
     public init(
         version: UInt16 = DaemonDomainVersion.current,
         requestID: String,
         family: DaemonDomainFamily,
         operation: String,
-        payload: Data? = nil
+        payload: Data? = nil,
+        authorization: DaemonDomainAuthorization? = nil
     ) {
         self.version = version
         self.requestID = requestID
         self.family = family
         self.operation = operation
         self.payload = payload
+        self.authorization = authorization
     }
 }
 
@@ -168,6 +207,28 @@ public enum DaemonDomainErrorCode: String, Codable, Sendable {
     case unavailable
     /// The operation ran and failed; the daemon-side cause is in `message`.
     case operationFailed
+
+    // Scoped-run authorization errors (plans/agent-sandbox-scoping.md §6).
+    // Every one of these is a DOMAIN REPLY inside this envelope — never a
+    // transport failure — and the CLI maps them to exit 1 with a stable error
+    // code in diagnostics (CAS keeps exit 3). Denial messages are generic:
+    // they never name another wiki or reveal whether one exists, and replies
+    // never echo credentials.
+    /// A scoped request arrived with no authorization object. Absence is
+    /// never unrestricted access on a scoped listener.
+    case authorizationRequired
+    /// The presented capability is malformed, or digests to no registered
+    /// run (includes capabilities whose run this daemon never registered —
+    /// the reply is identical either way, so nothing about run existence
+    /// leaks).
+    case authorizationInvalid
+    /// The capability matched a registered run whose lease is over: past its
+    /// owner-renewed expiry, or revoked.
+    case authorizationExpired
+    /// The request was authorized but targets something outside the run's
+    /// registered scope or operation policy: another wiki, a global
+    /// registry/queue surface, or a denied operation.
+    case scopeDenied
 
     // Phase 4 typed CAS codes (plans/cli-domain-commands.md §"CAS and exit
     // codes"). Each carries a ``DaemonConflictDetail`` on the error so the CLI
@@ -301,16 +362,41 @@ public enum DaemonDomainWire {
 }
 
 extension DaemonDomainRequest {
-    /// The pre-dispatch version gate. Only the exact current version is
-    /// served; anything else is a typed `unsupportedVersion` the client can
-    /// turn into "requires app ≥ build N" guidance.
+    /// The ORDINARY listener's pre-dispatch version gate: the compatibility
+    /// window (v1) through the current version (v2). Anything else is a typed
+    /// `unsupportedVersion` the client can turn into "requires app ≥ build N"
+    /// guidance. SCOPED listeners use ``requireScopedCurrentVersion()``
+    /// instead — the compatibility window must not carry unscoped envelopes
+    /// past an authorization gate.
     public func requireCurrentVersion() throws {
-        guard version == DaemonDomainVersion.current else {
-            throw DaemonDomainError(
-                code: .unsupportedVersion,
-                message: "daemon serves domain protocol \(DaemonDomainVersion.current), "
-                    + "request carried \(version)")
+        guard DaemonDomainVersion.ordinaryServed.contains(version) else {
+            throw Self.unsupportedVersionError(
+                served: DaemonDomainVersion.ordinaryServed, carried: version)
         }
+    }
+
+    /// The SCOPED listener's version gate: only the current version (v2) is
+    /// served. A v1 data operation on a scoped listener is a typed
+    /// `unsupportedVersion` — a v1 envelope cannot carry the authorization
+    /// object, so serving it would bypass scoping entirely.
+    public func requireScopedCurrentVersion() throws {
+        guard version == DaemonDomainVersion.current else {
+            throw Self.unsupportedVersionError(
+                served: DaemonDomainVersion.current...DaemonDomainVersion.current,
+                carried: version)
+        }
+    }
+
+    private static func unsupportedVersionError(
+        served: ClosedRange<UInt16>, carried: UInt16
+    ) -> DaemonDomainError {
+        let servedText = served.lowerBound == served.upperBound
+            ? "\(served.lowerBound)"
+            : "\(served.lowerBound)–\(served.upperBound)"
+        return DaemonDomainError(
+            code: .unsupportedVersion,
+            message: "daemon serves domain protocol \(servedText), "
+                + "request carried \(carried)")
     }
 }
 
@@ -342,6 +428,19 @@ public struct DaemonHelloPayload: Codable, Equatable, Sendable {
         self.families = families
         self.appVersion = appVersion
         self.buildVersion = buildVersion
+    }
+
+    /// The uncredentialed `hello` answer on a SCOPED listener (plans/
+    /// agent-sandbox-scoping.md §9): the required protocol version ONLY —
+    /// no served families, no build identity, no wiki data. A client holding
+    /// no capability learns how to speak, and nothing else.
+    public static func versionOnly(protocolVersion: UInt16) -> Self {
+        Self(
+            version: Self.currentVersion,
+            protocolVersion: protocolVersion,
+            families: [],
+            appVersion: nil,
+            buildVersion: nil)
     }
 }
 

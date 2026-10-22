@@ -1281,6 +1281,21 @@ final class WikiDaemon: @unchecked Sendable {
         return (state: item.state.rawValue, error: item.error)
     }
 
+    /// The queue item's OWNING wiki, or nil when no row matches — the
+    /// authorization lookup for item-only scoped queue requests (plans/
+    /// agent-sandbox-scoping.md §6: knowledge of an item id is not access;
+    /// the owning wiki resolves BEFORE authorization). The queue store opens
+    /// HERE, read-only beside the engine's writer — the same WAL pattern
+    /// `queueItemState` uses — so the lookup is one short read.
+    func queueItemOwningWiki(itemID: QueueItemID) async throws -> WikiID? {
+        guard FileManager.default.fileExists(atPath: queueDatabaseURL.path) else {
+            return nil
+        }
+        let queueStore = try QueueStore(readOnlyDatabaseURL: queueDatabaseURL)
+        defer { queueStore.close() }
+        return try queueStore.getItem(itemID)?.wikiID
+    }
+
     private func preparedStoreIfAvailable(wikiID: WikiID) -> GRDBWikiStore? {
         do {
             return try resolvePreparedStore(wikiID: wikiID)

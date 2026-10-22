@@ -76,17 +76,25 @@ public struct DaemonDomainSocketClient: Sendable {
     }
 
     /// One envelope round trip. Throws `DaemonDomainError` for daemon
-    /// rejections and `SearchSocketError` for transport faults.
+    /// rejections and `SearchSocketError` for transport faults. `version` and
+    /// `authorization` default to the uncredentialed current-version request
+    /// every ordinary CLI command sends; the scoped-run client (plans/
+    /// agent-sandbox-scoping.md) overrides both — v2 only, with the run
+    /// capability carried in the envelope's authorization object.
     public func send(
         family: DaemonDomainFamily,
         operation: String,
-        payload: Data? = nil
+        payload: Data? = nil,
+        version: UInt16 = DaemonDomainVersion.current,
+        authorization: DaemonDomainAuthorization? = nil
     ) async throws -> DaemonDomainReply {
         let request = DaemonDomainRequest(
+            version: version,
             requestID: UUID().uuidString,
             family: family,
             operation: operation,
-            payload: payload)
+            payload: payload,
+            authorization: authorization)
         let replyBytes = try await DaemonSocketRoundTrip.perform(
             socketPath: socketPath,
             requestBytes: try DaemonDomainWire.encode(request),
