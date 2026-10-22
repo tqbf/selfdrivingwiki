@@ -386,6 +386,10 @@ public enum DaemonDomainOperation {
         /// call, the standard per-call deadlines), never a hours-long open
         /// socket (`plans/cli-domain-commands.md` Phase 5).
         public static let queueItemState = "queueItemState"
+        /// Phase 5: the transcribe enqueue preflight — is this source a
+        /// YouTube video in the given wiki? The check reads the daemon's
+        /// prepared store so the CLI never opens the wiki database itself.
+        public static let transcribePreflight = "transcribePreflight"
     }
 
     public enum Wiki {

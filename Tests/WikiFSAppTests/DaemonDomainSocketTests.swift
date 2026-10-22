@@ -311,6 +311,68 @@ struct DaemonDomainSocketTests {
         }
     }
 
+    // MARK: transcribePreflight (speech enqueue preflight, Phase 5)
+
+    /// The preflight behind `wikictl transcribe on-device`: the YouTube-scope
+    /// check reads the daemon's prepared store, so the CLI never opens the
+    /// wiki database. Pins the true leg (YouTube-provenance source), the false
+    /// legs (present non-YouTube source, unknown source), and the unknown-wiki
+    /// typed notFound — the exact answer shape the CLI's typed failure keys on.
+    @Test func transcribePreflightYouTubeScopeOverRealSocket() async throws {
+        let container = makeContainer()
+        let (server, daemon) = try startDaemonSocket(container: container)
+        defer { server.stop() }
+        let registry = try DaemonWikiRegistryClient(containerDirectory: container, timeout: 10)
+        let fixture = try await registry.createWiki(name: "Preflight Fixture Wiki")
+
+        // One YouTube-provenance source (the in-scope shape) and one plain
+        // source, seeded through the daemon's own admission seam.
+        let youtubeSourceID: SourceID = try await {
+            let store = try await daemon.domainCommandStore(wikiID: fixture.id)
+            let summary = try store.addSource(
+                filename: "youtube-dQw4w9WgXcQ.mp4",
+                data: Data("video".utf8),
+                detectionHints: ContentTypeDetectionHints(filenameExtension: "mp4"),
+                ingestMetadata: nil,
+                provenance: SourceProvenance(
+                    agentName: SourceProvider.youtube.rawValue,
+                    activityKind: "import",
+                    externalIdentity: "dQw4w9WgXcQ"),
+                role: .media,
+                originalPath: nil,
+                activityID: nil,
+                resolvedDisplayName: nil)
+            return summary.id
+        }()
+        let plainSourceID: SourceID = try await {
+            let store = try await daemon.domainCommandStore(wikiID: fixture.id)
+            return try store.addSource(filename: "notes.md", data: Data("text".utf8)).id
+        }()
+
+        let workload = try DaemonWorkloadClient(
+            socketContainerDirectory: container, timeout: 10)
+        let youtube = try await workload.transcribePreflight(
+            wikiID: fixture.id, sourceID: youtubeSourceID)
+        #expect(youtube == true)
+        let plain = try await workload.transcribePreflight(
+            wikiID: fixture.id, sourceID: plainSourceID)
+        #expect(plain == false)
+        let unknown = try await workload.transcribePreflight(
+            wikiID: fixture.id,
+            sourceID: SourceID(rawValue: "02AAAAAAAAAAAAAAAAAAAAAAAA"))
+        #expect(unknown == false)
+
+        do {
+            _ = try await workload.transcribePreflight(
+                wikiID: WikiID(rawValue: "01AAAAAAAAAAAAAAAAAAAAAAAA"),
+                sourceID: youtubeSourceID)
+            Issue.record("expected notFound for an unknown wiki")
+        } catch let error as DaemonDomainError {
+            #expect(error.code == .notFound)
+            #expect(error.message.contains("no wiki matching") == true)
+        }
+    }
+
     // MARK: Absent daemon
 
     @Test func absentDaemonSurfacesExplicitNotRunningError() async throws {

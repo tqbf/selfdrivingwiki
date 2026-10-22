@@ -388,6 +388,34 @@ public struct DaemonQueueItemStateReply: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - queue family: transcribePreflight (speech enqueue preflight, Phase 5)
+
+/// The transcribe enqueue preflight: the CLI asks BEFORE enqueueing whether
+/// `sourceID` is a YouTube video in `wikiID` (the explicit on-device speech
+/// scope), so a wrong-source mistake fails before anything is enqueued. The
+/// check reads the daemon's prepared store — the same acceptance rule
+/// `GRDBWikiStore.youtubeSpeechPreflight` served CLI-side until Phase 5.
+public struct DaemonTranscribePreflightRequest: Codable, Equatable, Sendable {
+    public let wikiID: String
+    public let sourceID: String
+
+    public init(wikiID: String, sourceID: String) {
+        self.wikiID = wikiID
+        self.sourceID = sourceID
+    }
+}
+
+/// Reply payload: `inScope` is false BOTH for a missing source and for a
+/// present non-YouTube source — the CLI renders one typed failure for both,
+/// exactly as the direct read did. An unknown WIKI is a typed `notFound`.
+public struct DaemonTranscribePreflightReply: Codable, Equatable, Sendable {
+    public let inScope: Bool
+
+    public init(inScope: Bool) {
+        self.inScope = inScope
+    }
+}
+
 // MARK: - Phase 4 write payloads (plans/cli-domain-commands.md)
 //
 // Same principle as the Phase 3 payloads: the daemon EXECUTES the CLI's

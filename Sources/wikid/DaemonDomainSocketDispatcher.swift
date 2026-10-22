@@ -202,6 +202,10 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             // Phase 5: the one-item state snapshot the transcribe completion
             // wait polls — one short read per round trip.
             replyData = try await commands.queueItemStateReply(for: request)
+        case DaemonDomainOperation.Queue.transcribePreflight:
+            // Phase 5: the speech enqueue preflight — the YouTube-scope check
+            // through the daemon's prepared store.
+            replyData = try await commands.transcribePreflightReply(for: request)
         default:
             throw DaemonDomainError(
                 code: .invalidRequest,

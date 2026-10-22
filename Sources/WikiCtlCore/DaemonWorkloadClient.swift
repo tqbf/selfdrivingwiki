@@ -522,6 +522,36 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         return (state: reply.state, error: reply.error)
     }
 
+    /// The transcribe enqueue preflight (Phase 5): is this source a YouTube
+    /// video in the given wiki? The check reads the wiki store DAEMON-side
+    /// through its prepared services — the CLI never opens the database, and
+    /// a wrong-source mistake fails before anything is enqueued. Socket
+    /// backend only; the app drives its own speech flows in-process.
+    public func transcribePreflight(
+        wikiID: WikiID,
+        sourceID: SourceID
+    ) async throws -> Bool {
+        guard case .socket(let client) = backend else {
+            throw DaemonXPCError.failure(
+                "transcribePreflight requires the CLI socket backend (the app reads its own store)")
+        }
+        let data = try await withTimeout {
+            try await self.queueSocketData(
+                client,
+                operation: DaemonDomainOperation.Queue.transcribePreflight,
+                payload: try JSONEncoder().encode(DaemonTranscribePreflightRequest(
+                    wikiID: wikiID.rawValue,
+                    sourceID: sourceID.rawValue)))
+        }
+        let reply: DaemonTranscribePreflightReply
+        do {
+            reply = try JSONDecoder().decode(DaemonTranscribePreflightReply.self, from: data)
+        } catch {
+            throw DaemonXPCError.unexpectedReply
+        }
+        return reply.inScope
+    }
+
     /// Load persisted typed transcript items for a queue item.
     public func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] {
         try await withTimeout {

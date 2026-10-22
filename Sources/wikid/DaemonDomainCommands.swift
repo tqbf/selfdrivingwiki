@@ -820,6 +820,27 @@ final class DaemonDomainCommands: @unchecked Sendable {
         return try JSONEncoder().encode(reply)
     }
 
+    // MARK: - queue family: transcribePreflight (speech enqueue preflight)
+
+    func transcribePreflightReply(for request: DaemonDomainRequest) async throws -> Data {
+        let payload = try decode(DaemonTranscribePreflightRequest.self, request)
+        let wikiID = try resolveWikiID(payload.wikiID)
+        let store = try await daemon.domainCommandStore(wikiID: wikiID)
+        // The same acceptance rule `GRDBWikiStore.youtubeSpeechPreflight` read
+        // CLI-side until Phase 5: the source must exist and its origin agent
+        // must be YouTube (the explicit on-device speech scope). A missing
+        // source answers inScope=false — the CLI renders one typed failure for
+        // missing and non-YouTube alike — never an error.
+        let sourceID = SourceID(rawValue: payload.sourceID)
+        let summaries = try store.listSources()
+        var inScope = false
+        if summaries.contains(where: { $0.id == sourceID }) {
+            let origin = try store.sourceOrigin(sourceID: sourceID)
+            inScope = origin?.provider == SourceProvider.youtube
+        }
+        return try JSONEncoder().encode(DaemonTranscribePreflightReply(inScope: inScope))
+    }
+
     // MARK: - Shared helpers
 
     /// The package-driven fence validator, resolved from the daemon's
