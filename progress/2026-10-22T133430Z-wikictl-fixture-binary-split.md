@@ -73,3 +73,22 @@ note and the plan section.
 - `scripts/check-cordis-boundaries` green with the tightened rules; the
   negative proof (a reintroduced `QueueStore(` in
   `Sources/wikictl/ExtractorFixtureLeg.swift`) fails the check by test.
+- Full gates after the rebase onto `main` (#1463 squash): `make build` green,
+  `make test` green (full suite), `WIKIFS_APP_TESTS=1 swift test` green (full
+  app tier), boundary check green.
+- Live check (app installed via `make install`, relaunched, left RUNNING):
+  - `wikictl --help` — zero occurrences of `database-path`.
+  - `wikictl --database-path /tmp/x.sqlite page list` — exit 2, usage error
+    naming the `wikictl-fixture` binary.
+  - Disposable eval-style daemon run: `wiki create --name eval-livecheck-…`
+    → exit 0 (seeded Home page); `--wiki <id> page list` → exit 0;
+    `--wiki <id> page add` → exit 0 (daemon-side write); `wiki delete --id`
+    → exit 0; post-delete `--wiki <id> page list` → exit 1 typed `no wiki
+    matching` (full eviction confirmed).
+  - `wikictl-fixture --help` documents the selector; a real fixture run
+    (`--database-path tmp/fixture-live-check.sqlite page list` / `page add` /
+    `page list`) works end-to-end; the `WIKI_DB_PATH` env form works; `--wiki`
+    is refused.
+  - The installed app's `Contents/Helpers` contains `wikictl` but NOT
+    `wikictl-fixture` (build-only confirmed); build.sh never references the
+    fixture target.
