@@ -1,5 +1,24 @@
 # Agent seatbelt sandbox (write whitelist)
 
+**Status note (2026-10-22, Phase 4 of
+[`plans/agent-sandbox-scoping.md`](agent-sandbox-scoping.md)):** the
+managed-run model in that plan now SUPERSEDES this document's file-fence
+sections as the enforcement story for wiki data. The seatbelt write
+allowlist described below still applies to every LLM child — scratch,
+runtime state, and provider config homes only — but the wiki-database
+allowances this document once described are GONE: no product profile
+allows a child to open a wiki database, the central queue database, or
+the wiki registry, and every wiki mutation travels through the daemon —
+for managed (daemon-hosted) runs through a run-lifetime endpoint with a
+per-run capability, envelope v2, and an explicit read/edit/acquire
+operation policy; for ordinary standalone CLI use through the documented
+same-user-trusted ordinary socket. What REMAINS from this document: the
+write-allowlist profile shape, the scratch/temp relocation, the Claude
+runtime allowances and execution-vector denies, the pdf2md deny, the
+strict summarizer tier, and the fail-closed front-end gate. The direct
+database fence sections below are HISTORICAL — kept for the design
+record, not the current behavior.
+
 **Status:** Implemented on `main` and APPLIED to every LLM-driven child
 process (issues #1251 and #1276). Confines each spawned agent process's
 filesystem **writes** to a strict allowlist via the macOS seatbelt

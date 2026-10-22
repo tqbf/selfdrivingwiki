@@ -1,7 +1,7 @@
 # Agent sandbox invocation scoping
 
 Status: approved (operator decisions recorded 2026-10-22 — see §13).
-Implementation: Phases 0–2 implemented on `feature/agent-sandbox-scoping` (PR #1470) — Phase 0 at `da3b8b74`, Phase 1 at `2ece6a4b`, Phase 2 per §11 below (endpoint gate PROVEN live). Scoped production launches remain DISABLED; managed-run wiring and credential delivery are Phase 3. Deviations recorded in §11 under each phase.
+Implementation: Phases 0–4 IMPLEMENTED on `feature/agent-sandbox-scoping` (PR #1470) — Phase 0 at `da3b8b74`, Phase 1 at `2ece6a4b`, Phase 2 per §11 (endpoint gate PROVEN live), Phases 3–4 per §11 below (managed-run registration, credential delivery, the flipped enforcement matrix, and the grant removal). Deviations recorded in §11 under each phase.
 Author: OpenAI-family (codex/gpt-6.1-sol), reviewing GLM-family migration work.
 Baseline: `ab44c06d`, branch `feature/wikictl-fixture-target`. Recheck line numbers after the stacked branches land.
 Decision record: all five §13 decisions approved as recommended on 2026-10-22. Implementation queues behind the fixture-binary split; rollout per §11 (Phase 0 lands with the stack, Phases 1–4 as their own stacked change).
@@ -393,17 +393,23 @@ Deviations from the letter of the plan (all conservative):
 
 ### Phase 3: managed-run integration
 
-Wire registration before spawn and revocation through all teardown paths. Add credential propagation to supported adapters.
+Status: IMPLEMENTED (`14438adb` registration seam, `cd002b76` CLI half, `2b111de4` enforcement matrix, `2c9f4d77` grant removal).
 
-Enable the new profile and daemon scope together. Never enable token-only managed runs against the unrestricted listener.
+Registration before spawn and revocation through all teardown paths: the daemon boot creates ONE run registry shared by the ordinary dispatcher and the trusted registration broker, and installs the broker-backed `DaemonScopedRunLeaseManager` on `WikiDaemon`; every launcher the daemon hosts — the ingestion queue resolver and the chat host's pair plus its replacement launchers — carries it. Before a managed child spawns, the launcher issues the lease (mint → register → bind → activate) for the run's one wiki with the §6 initial policy (`wikiRead`/`wikiEdit`/`wikiAcquire`); a registration or profile-construction failure fails the launch with a typed error, never an unscoped fallback. Credential delivery (§7): the endpoint path + printable capability travel through the DEDICATED child environment keys `WIKI_DAEMON_RUN_ENDPOINT` / `WIKI_DAEMON_RUN_CAPABILITY`, which ride `AgentRunContext`'s protected overwrite set (provider hints cannot forge, replace, or drop them) and never reach prompts, diagnostics, transcripts, or argv. The bundled CLI resolves the pair at execution time (`DaemonScopedRunEnvironment`): both keys → every domain family rides the run endpoint with envelope-v2 authorization (command routing, registry, workload, job, and the search envelope — no legacy frame bypass); neither → the ordinary path unchanged; exactly one → a typed error before any request, no fallback. Revocation is wired through EVERY teardown path — `finish()` (success, error, cancellation via `stopAgent`, process death), both spawn-failure catches that bypass `finish()`, a reset-hygiene sweep, the daemon-shutdown revoke-all — plus owner-side renewal at half-life so the bounded lease cannot expire under a live session. Adapter propagation is pinned for five spawn shapes (claude/codex/gemini/npx/bun) through the pure `resolveSpawnConfig` + protected-merge seam; an adapter that strips its own children's environment is outside the process boundary by construction and fails typed at the CLI.
 
-Complete the live process matrix. Remove the obsolete database and queue grants only after successful daemon operations pass.
+The scoped profile and the daemon scope went live TOGETHER (`2c9f4d77`): with the enforcement matrix green, the production unscoped profile dropped its `WIKI_DB`/`QUEUE_DB` allowances entirely (rules, sidecars, parameters, launcher arguments) — after that commit NO product profile allows a child to open a wiki database, the central queue database, or the registry, and the §10 matrix rows for direct-database denial apply to every launch shape.
+
+Deviations from the letter of the plan (all conservative):
+
+- ONE lease per managed SESSION, not per provider process: provider fallback inherits the run's lease (`withScratch` preserves the credentials) and revocation happens at run teardown. Per-provider replacement leases are deferred; the run-scoped bound + teardown revocation covers the failed-provider exposure.
+- The §5 "fallback providers receive replacement leases" cadence and §5's per-CLI-call parallel-executor leases collapse into the session lease above; parallel executors are separate runs and get separate leases.
+- App-hosted launches (the local fallback when the daemon is not serving) stay UNSCOPED — the Phase 2 §5 audit found the XPC channel unauthenticated, so registration remains an in-process daemon API; the app fallback keeps the documented same-user risk (§13.1).
+- The enforcement matrix's live rows run in `AgentSandboxProcessTests` (real `sandbox-exec` + real CLI + real broker endpoints): the flipped `scopedRunBlocksCrossWikiMutationWithValidCapability` (successful scoped A read FIRST, then the B attempt through the same live endpoint, typed denial, unchanged B history, false-evidence controls), assigned-wiki CAS edit + foreign-read denial, missing/malformed/half-delivered credentials, the no-credentials kernel denial with a host-write probe, export/global-queue/registry/job denials through the real CLI, and two concurrent runs without crossover. Wire-level rows (expired/revoked on an accepted connection, cross-run capability, v1-on-scoped, custom frames, queue-item ownership) live in `DaemonScopedSocketTests`; endpoint-lifetime rows in `DaemonRunEndpointTests`; kernel-denial rows in `ScopedSandboxGateTests`; §12's matrix is complete across those suites.
+- The `ExtractorSyncChatFenceTests` file was retired with its premise: its scenario (a queue-DB grant fixes the sync enqueue) no longer exists — the sync is daemon-routed, and its coverage lives in the scoped policy contract tests, the live matrix, and the scoped-enqueue endpoint test.
 
 ### Phase 4: documentation and release checks
 
-Update `plans/sandbox-agent.md`, `plans/cli-domain-commands.md`, and the `PLAN.md` index. Add a conforming progress entry.
-
-Explain the regression, restored guarantees, unsandboxed limit, adapter credential contract, and scoped-export restriction.
+Status: IMPLEMENTED (`2b111de4`–final docs commit). `plans/sandbox-agent.md` notes the supersession (the file-fence sections are historical; the scoped-run model is authoritative), `plans/cli-domain-commands.md` cross-references the credential keys and the scoped exit behavior, the `PLAN.md` index row covers the plan, and a conforming progress note records both phases. The regression (daemon-side execution without run scope), the restored guarantees, the unsandboxed limit, the adapter credential contract, and the scoped-export restriction are documented in the plan (§2–§8, §13.3) and the progress note.
 
 ### Stacked branch order
 

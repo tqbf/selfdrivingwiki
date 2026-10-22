@@ -516,3 +516,24 @@ connection) is ever held open for the job's duration.
   socket ENOENT/EACCES. Error text must not imply "no wiki exists".
 - **App-closed becomes a hard failure for every command.** Deliberate posture
   change per operator direction; make the error name the cause.
+
+## Scoped managed runs (cross-reference)
+
+Phase 3 of [`plans/agent-sandbox-scoping.md`](agent-sandbox-scoping.md)
+extends this document's transport with run-scoped credentials. A managed
+(daemon-hosted) run's child receives `WIKI_DAEMON_RUN_ENDPOINT` and
+`WIKI_DAEMON_RUN_CAPABILITY` through its environment — never as command
+line arguments. The bundled `wikictl` resolves the pair at execution time
+(`DaemonScopedRunEnvironment`): both keys set → every domain family
+(command routing, registry, workload, job, and the search envelope) rides
+the run endpoint with envelope v2 authorization; neither key set → the
+ordinary socket behavior this document describes is unchanged; exactly
+one key set → a typed refusal before any request (a half-delivered
+credential must never select the unrestricted listener). Inside a scoped
+run, the operation policy denies registry mutation, global queue
+controls, admin maintenance, and `source export`; authorization denials
+travel as typed domain replies (`scopeDenied`,
+`authorizationRequired`/`Invalid`/`Expired`) with one fixed generic
+message, and the CLI exits 1 with that message — CAS exit 3 is
+preserved. This document's "app closed ⇒ socket unlinked ⇒ fail fast"
+posture is unchanged for ordinary use.
