@@ -431,14 +431,10 @@ struct CLITantivyLegResolverTests {
                 catalog: try PluginCatalog(definitions),
                 layers: [PatchFile(entries: entries)]))
         }
-        let descriptor = WikiDescriptor(
-            id: wikiID,
-            displayName: "CLI Test",
-            createdAt: Date(timeIntervalSince1970: 0),
-            lastUsedAt: Date(timeIntervalSince1970: 0))
-        var registry = WikiRegistry()
-        registry.add(descriptor)
-        try registry.save(to: container)
+        // Phase 5: a registry-selected command rides the daemon. This store
+        // profile test drives the sanctioned LOCAL leg instead — an explicit
+        // `--database-path` fixture — which is the path whose in-process
+        // profile boot it verifies.
         let runner = WikiCtlRunner(
             resolveContainer: { WikiResolver(containerDirectory: container) },
             storeProfile: profile
@@ -453,7 +449,8 @@ struct CLITantivyLegResolverTests {
         do {
             let output = try await runner.runOrdinary(
                 command: .page(.list(json: false)),
-                wikiSelector: wikiID.rawValue,
+                wikiSelector: "",
+                databasePath: container.appendingPathComponent("\(wikiID.rawValue).sqlite").path,
                 environment: [:])
             #expect(commandFails == false)
             #expect(String(decoding: output.stdout, as: UTF8.self) == "runner-output\n")
@@ -470,13 +467,6 @@ struct CLITantivyLegResolverTests {
         let (container, fm) = try makeTempContainer()
         defer { removeTempContainer(container, fileManager: fm) }
         let wikiID = WikiID(rawValue: "01TESTCLI02")
-        var registry = WikiRegistry()
-        registry.add(WikiDescriptor(
-            id: wikiID,
-            displayName: "CLI Failure Test",
-            createdAt: Date(timeIntervalSince1970: 0),
-            lastUsedAt: Date(timeIntervalSince1970: 0)))
-        try registry.save(to: container)
 
         let cleanupID = PluginID("test.cli-cleanup-failure")
         let cleanupDefinition = PluginDefinition(id: cleanupID) {
@@ -506,7 +496,8 @@ struct CLITantivyLegResolverTests {
         do {
             _ = try await runner.runOrdinary(
                 command: .page(.list(json: false)),
-                wikiSelector: wikiID.rawValue,
+                wikiSelector: "",
+                databasePath: container.appendingPathComponent("\(wikiID.rawValue).sqlite").path,
                 environment: [:])
             Issue.record("expected combined operation and cleanup failure")
         } catch CLIStoreProfileError.operationAndCleanup(let operation, let cleanup) {

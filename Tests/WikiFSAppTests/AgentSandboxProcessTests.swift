@@ -5,6 +5,7 @@ import WikiFSCore
 import WikiFSEngine
 import WikiFSSearch
 @testable import WikiFSEngine
+@testable import wikid
 
 /// Live macOS Seatbelt suite (`plans/sandbox-agent.md` §live-sandbox): runs the
 /// REAL `/usr/bin/sandbox-exec` profile against scratch/temp/heredoc/runtime
@@ -87,7 +88,31 @@ struct AgentSandboxProcessTests {
             headA = try #require(try storeA.processedMarkdownHead(sourceID: sourceA.id))
         }
 
+        private var fixtureDaemon: WikiDaemon?
+        private var daemonServer: DaemonSearchSocketServer?
+
+        /// Hosts the fixture daemon's domain dispatcher over the fixture
+        /// container's socket. Registry-selected `wikictl` children ride the
+        /// daemon since Phase 5, so any test that spawns a `--wiki` child
+        /// needs this live for the child to reach its fixture wiki.
+        func startDaemon() throws {
+            guard daemonServer == nil else { return }
+            let daemon = WikiDaemon(containerDirectory: container)
+            let dispatcher = DaemonDomainSocketDispatcher(daemon: daemon)
+            let server = try DaemonSearchSocketServer(containerDirectory: container) { request in
+                await dispatcher.handle(request)
+            }
+            try server.start()
+            fixtureDaemon = daemon
+            daemonServer = server
+        }
+
         func cleanup() {
+            // Stop the daemon (unlinking its socket) before the container
+            // directory goes away.
+            daemonServer?.stop()
+            daemonServer = nil
+            fixtureDaemon = nil
             // The fixture container lives under the real Group Containers —
             // remove it explicitly; everything else is under the temp root.
             try? FileManager.default.removeItem(at: container)
@@ -521,6 +546,9 @@ struct AgentSandboxProcessTests {
     @Test func absoluteWikictlInvocationWorksWithoutAgentEnvironment() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
+        // The `--wiki` child rides the daemon (Phase 5): host the fixture
+        // daemon so the rewrite lands through it.
+        try fixture.startDaemon()
         let wikictl = try wikictlPath()
 
         // The scratch-style body file the agent's script would produce.

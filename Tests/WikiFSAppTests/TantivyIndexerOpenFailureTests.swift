@@ -27,11 +27,16 @@ struct TantivyIndexerOpenFailureTests {
     @Test func indexCanBeReopenedAfterContendedOpenFails() async throws {
         let indexDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("tantivy-open-failure-\(UUID().uuidString)", isDirectory: true)
+        // Best-effort cleanup: the reopened writer below may still hold file
+        // handles when this runs, and macOS then refuses the directory
+        // removal (EPERM). The system temp cleaner owns the leftover; the
+        // test's assertions never depend on the removal.
         defer {
             do {
                 try FileManager.default.removeItem(at: indexDirectory)
             } catch {
-                Issue.record("Failed to remove temporary Tantivy index: \(error)")
+                DebugLog.store(
+                    "leftover Tantivy test index at \(indexDirectory.path): \(error)")
             }
         }
 
@@ -41,16 +46,20 @@ struct TantivyIndexerOpenFailureTests {
             contentSource: contentSource
         )
 
-        let reopenedIndexer = try TantivyIndexer(
-            indexDirectory: indexDirectory,
-            contentSource: contentSource
-        )
-        let results = try await reopenedIndexer.search(
-            query: "persistent",
-            kind: .page,
-            limit: 10
-        )
-        #expect(results.contains { $0.title == "Persistent Search Entry" })
+        // Inner scope: release the reopened writer BEFORE the deferred
+        // cleanup runs, so the directory is normally removable.
+        do {
+            let reopenedIndexer = try TantivyIndexer(
+                indexDirectory: indexDirectory,
+                contentSource: contentSource
+            )
+            let results = try await reopenedIndexer.search(
+                query: "persistent",
+                kind: .page,
+                limit: 10
+            )
+            #expect(results.contains { $0.title == "Persistent Search Entry" })
+        }
     }
 
     private func createIndexAndFailContendedOpen(
