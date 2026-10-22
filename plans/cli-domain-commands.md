@@ -114,6 +114,15 @@ Reply: `{"version": 1, "requestID": "<echo>", "family": "<family>",
     history via `QueueStore.loadItems(wikiID:)`, not the bounded snapshot
     window) plus the wiki leg: every source id among the selected items that
     has a processed-markdown HEAD. This is what `wikictl job list/get` runs on.
+    `queue` / `queueItemState` (Phase 5) → payload
+    `DaemonQueueItemStateRequest {itemID}`; reply payload
+    `DaemonQueueItemStateReply {state, error?}` — the one-item lifecycle
+    snapshot (raw `QueueItemState` string + recorded failure text) the
+    transcribe completion wait polls. `queue` / `transcribePreflight`
+    (Phase 5) → payload `DaemonTranscribePreflightRequest {wikiID, sourceID}`;
+    reply payload `DaemonTranscribePreflightReply {inScope}` — the
+    YouTube-scope check behind the transcribe enqueue, read through the
+    daemon's prepared store.
   - `wiki` / `listWikis|createWiki|deleteWiki|renameWiki|resolveWiki` →
     payloads `DaemonWikiCreateRequest {name}`, `DaemonWikiDeleteRequest {id}`,
     `DaemonWikiRenameRequest {id, name}`, `DaemonWikiResolveRequest
@@ -238,6 +247,62 @@ Reply: `{"version": 1, "requestID": "<echo>", "family": "<family>",
   encoder): covers every new family. `page get` on a >~4 MiB page still fails
   typed `operationFailed` naming the cap.
 
+## Deviations from the plan (Phase 5)
+
+- **The transcribe wait polls a SHORT state snapshot, not a long-lived
+  daemon wait.** The plan said "transcribe waits via a daemon poll
+  endpoint"; landed as `queue` / `queueItemState` — a one-item state
+  snapshot (raw `QueueItemState` string + recorded failure text) the CLI
+  loops on with a sleep BETWEEN calls, bounded by the caller's 165-minute
+  speech-wait policy (and Ctrl-C). No single socket connection outlives one
+  round trip, the standard 30 s per-call deadline bounds each poll, and the
+  XPC `waitForCompletion` continuation surface stays app-only (the socket
+  backend throws a typed failure for it). An unknown item is a typed
+  `notFound` — the durable terminal history is never deleted, so a missing
+  row mid-wait is a genuine anomaly the CLI surfaces instead of polling
+  forever. A failed snapshot with no recorded text now terminates the wait
+  as "failed" (the direct store read would have polled to the ceiling).
+- **The enqueue preflight rides the daemon too.** Phase 5's charter was the
+  completion wait, but the preflight
+  (`GRDBWikiStore.youtubeSpeechPreflight` on the resolved database URL) was
+  the transcribe family's last direct wiki-DB read — so the queue family
+  gained `transcribePreflight` (the same YouTube-scope rule, evaluated
+  through the daemon's `domainCommandStore`). `inScope=false` covers a
+  missing source and a present non-YouTube source alike (the CLI renders one
+  typed failure for both, exactly as the direct read did); an unknown wiki
+  is typed `notFound`. A wrong-source mistake still fails BEFORE anything is
+  enqueued, and the transcribe family now opens NO database in the CLI
+  process.
+- **The ordinary runner has no local fallback — at all.** `runOrdinary`'s
+  registry branch REQUIRES a `DaemonCommandRoute` mapping; a
+  registry-selected command without one fails with "no daemon route … no
+  local fallback" instead of booting the store profile. Every command that
+  could reach that guard (`wiki` verbs, queue/transcribe/job, `extractor
+  list`, help/version/dump-config) dispatches before `runOrdinary` in
+  `run()`, so the guard fires only on a wiring bug. The store executor
+  exists for explicit `--database-path` fixture runs alone.
+- **`WikiResolver` serves fixtures only.** `descriptor(forSelector:)` (the
+  `WikiRegistry.load` read), `databaseURL(for:)`, and `resolve(selection:)`'s
+  registry case are GONE — `--wiki` resolution happens through the daemon's
+  `resolveWiki` over the socket. A registry selection handed to the resolver
+  fails loudly instead of loading a local `wikis.json`.
+- **The extractor fixture leg moved into its own file.** `runExtractorSync`/
+  `runExtractorFetch` (the Phase 4 leftover direct queue write) left
+  main.swift for `Sources/wikictl/ExtractorFixtureLeg.swift` and run ONLY
+  inside explicit `--database-path` fixture runs; the boundary rule's
+  allowlist is exactly that file. Behavior inside the fixture leg is
+  unchanged (including its durable write to the live queue database — the
+  harness stages items for the app/daemon to drain on next launch).
+- **Sanctioned local surfaces after Phase 5** (the complete list):
+  `--database-path` fixtures (the in-process `CLIStoreProfile` boot +
+  `ExtractorFixtureLeg.swift`), `extractor list` (machine catalog, no
+  database), `--dump-config`, `version`. Everything else in the CLI targets
+  rides the daemon, and `QueueStore(`/`WikiRegistry.load(` in
+  `WikiCtlCore`/`wikictl` are boundary-rejected (`GRDBWikiStore(` already
+  was, pre-branch). The violation proof: reintroducing both constructs in
+  the real tree made `scripts/check-cordis-boundaries` exit 1 naming exactly
+  those files; removing the probes restored green.
+
 ## Deviations from the plan (Phase 3)
 
 - **The daemon EXECUTES the CLI's command layer.** Instead of one handler per
@@ -298,18 +363,18 @@ byte-stable stdout formats are scripting contracts; preserve both.
 1. **Transport generalization + queue verbs** — introduce the domain envelope,
    re-target `DaemonWorkloadClient` onto the socket. Fixes the pre-existing
    lookup3 defect. No new domain handlers; lowest risk first.
-   ✅ **Implemented** (commit `2d809bbe`). See §"The landed envelope (v1)"
+   ✅ **Implemented** (commit `dbb80bf1`). See §"The landed envelope (v1)"
    below for the exact wire shape Phases 3–4 build on.
 2. **Registry + lifecycle** — `wiki list/rename/create/delete` through the
    daemon. Delete inherits full eviction (search runtime, database artifacts),
    closing the CLI's degraded-delete race. Drop the CLI's direct create path.
-   ✅ **Implemented** (commit `c123797d`); `wiki resolve` has no CLI verb —
+   ✅ **Implemented** (commit `f5e45a2c`); `wiki resolve` has no CLI verb —
    the daemon's `resolveWiki` is served over the envelope and backs
    `transcribe --wiki` resolution (see §Deviations).
 3. **Read-only domain endpoint** — page/source/chat/bookmark/workspace reads,
    info/okf-inspect, `job list/get` (new queue read endpoint). Server executes
    through the daemon's prepared services.
-   ✅ **Implemented** (commits `0bf3478e`, `15b67245`): the five command
+   ✅ **Implemented** (commits `75d86fd6`, `403478d1`): the five command
    families + server-side search resolution + `queueWikiItems` behind
    `job list/get`, all store-free on the CLI side. See §"Deviations from the
    plan (Phase 3)" — notably the daemon EXECUTES the CLI's command layer and
@@ -336,6 +401,19 @@ byte-stable stdout formats are scripting contracts; preserve both.
    from `WikiCtlCore`/`wikictl`; extend the boundary script to reject
    `QueueStore(`/`WikiRegistry.load(` in those targets so "one pathway" stays
    true.
+   ✅ **Implemented** (commits `f46b609f`, `23d92155`, `a2e62aea`,
+   `17cb52af`, `24b7e7db`, `9ee9cc48`): the transcribe `--wait` loop polls
+   the queue family's `queueItemState` snapshots (one short round trip per
+   poll — no hours-long socket) and the enqueue preflight moved behind the
+   `transcribePreflight` operation, so the transcribe family opens NO
+   database in the CLI process. `WikiCtlRunner.runOrdinary` routes EVERY
+   registry-selected command through the daemon (an unmapped one fails —
+   no local fallback), `WikiResolver` lost its registry leg, and the
+   extractor sync/fetch direct queue write survives only in
+   `Sources/wikictl/ExtractorFixtureLeg.swift` (the sanctioned
+   `--database-path` fixture carve-out). The boundary script rejects
+   `QueueStore(` and `WikiRegistry.load(` in both CLI targets. See
+   §"Deviations from the plan (Phase 5)".
 6. **Optional follow-on (separate plan)** — app-side convergence: retire the
    local `QueueEngine` fallback, consider unifying the app onto the socket,
    sole-writer evolution.
@@ -352,8 +430,10 @@ payload can exceed it.
 Phase 4 landed the per-endpoint budget: `DaemonDomainBudgets` gives the admin
 family and workspace merge/reap a 600 s server handler budget (660 s client
 deadline); everything else keeps the socket's 60 s/30 s posture. The budget
-sufficed — no async-job pattern was needed. `transcribe`'s wait already uses
-its own durable poll and is untouched.
+sufficed — no async-job pattern was needed. Phase 5 moved the transcribe wait
+onto the socket the same way: it polls the queue family's `queueItemState`
+snapshots with a sleep between calls, so no handler (and no socket
+connection) is ever held open for the job's duration.
 
 ## Test strategy
 
