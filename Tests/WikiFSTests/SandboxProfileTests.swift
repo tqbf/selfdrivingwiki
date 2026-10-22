@@ -550,4 +550,162 @@ struct SandboxProfileTests {
     #expect(!strict.profile.contains("(deny process-exec* (literal \"/usr/bin/uv\"))"))
     #expect(!strict.profile.contains("(deny process-exec* (literal \"/usr/bin/bun\"))"))
   }
+
+  // MARK: - Scoped-run profile (plans/agent-sandbox-scoping.md §8)
+
+  static let container = "/Users/me/Library/Group Containers/group.x"
+  static let daemonEndpoint = container + "/wikid-search.sock"
+  static let runsDirectory = container + "/r"
+  static let runEndpoint = runsDirectory + "/0a1b2c3d4e5f.sock"
+
+  private func scopedProfile(
+    runEndpoint: String = SandboxProfileTests.runEndpoint
+  ) throws -> String {
+    try SandboxProfile.generateScopedRun(
+      scratchDir: Self.scratchDir,
+      appGroupContainerPath: Self.container,
+      daemonEndpointPath: Self.daemonEndpoint,
+      runsDirectoryPath: Self.runsDirectory,
+      runEndpointPath: runEndpoint)
+  }
+
+  private func scopedInvocation(
+    runEndpoint: String = SandboxProfileTests.runEndpoint
+  ) throws -> SandboxProfile.SandboxInvocation {
+    try SandboxProfile.scopedRunInvocation(
+      homePath: "/Users/me",
+      scratchDir: Self.scratchDir,
+      appGroupContainerPath: Self.container,
+      daemonEndpointPath: Self.daemonEndpoint,
+      runsDirectoryPath: Self.runsDirectory,
+      runEndpointPath: runEndpoint)
+  }
+
+  /// The endpoint gate: ordinary + every-run denies, then the ONE assigned
+  /// allow — order is load-bearing (the seatbelt is last-match-wins, so the
+  /// assigned allow MUST follow both denies).
+  @Test func scopedRunDeniesEndpointsThenAllowsTheAssignedOne() throws {
+    let p = try scopedProfile()
+    let denyOrdinary = "(deny network-outbound (literal (param \"DAEMON_ENDPOINT\")))"
+    let denyRuns = "(deny network-outbound (subpath (param \"RUNS_DIR\")))"
+    let allowAssigned = "(allow network-outbound (literal (param \"RUN_ENDPOINT\")))"
+    #expect(p.contains(denyOrdinary))
+    #expect(p.contains(denyRuns))
+    #expect(p.contains(allowAssigned))
+    let lines = p.split(separator: "\n").map(String.init)
+    let denyOrdinaryIndex = try #require(lines.firstIndex(of: denyOrdinary))
+    let denyRunsIndex = try #require(lines.firstIndex(of: denyRuns))
+    let allowIndex = try #require(lines.firstIndex(of: allowAssigned))
+    #expect(denyOrdinaryIndex < allowIndex)
+    #expect(denyRunsIndex < allowIndex)
+    #expect(allowIndex == lines.count - 1,
+            "the assigned-endpoint allow is the LAST rule of the base profile")
+  }
+
+  /// §8: no `WIKI_DB`/`QUEUE_DB` write allowances, sidecars, or parameters —
+  /// production edit permission lives in the daemon operation policy.
+  @Test func scopedRunHasNoWikiOrQueueDBAllowances() throws {
+    let p = try scopedProfile()
+    #expect(!p.contains("WIKI_DB"))
+    #expect(!p.contains("QUEUE_DB"))
+  }
+
+  /// The terminal data denies: the whole App Group subtree is read- AND
+  /// write-denied, and the denies come AFTER every allowance (they are the
+  /// last matching rules for what they name).
+  @Test func scopedRunContainerDeniesAreTerminal() throws {
+    let p = try scopedProfile()
+    let denyRead = "(deny file-read* (subpath (param \"APP_GROUP_DIR\")))"
+    let denyWrite = "(deny file-write* (subpath (param \"APP_GROUP_DIR\")))"
+    #expect(p.contains(denyRead))
+    #expect(p.contains(denyWrite))
+    let lines = p.split(separator: "\n").map(String.init)
+    let denyReadIndex = try #require(lines.firstIndex(of: denyRead))
+    let scratchAllowIndex = try #require(
+      lines.firstIndex(of: "(allow file-write* (subpath (param \"SCRATCH_DIR\")))"))
+    let claudeAllowIndex = try #require(
+      lines.firstIndex(where: { $0.contains("(param \"HOME\") \"/.claude\"") }))
+    #expect(scratchAllowIndex < denyReadIndex)
+    #expect(claudeAllowIndex < denyReadIndex)
+    // Every APP_GROUP_DIR file rule is a deny (nothing later re-opens it in
+    // the base; provider layering is HOME-relative — asserted below).
+    for line in lines where line.contains("APP_GROUP_DIR") {
+      #expect(line.contains("(deny file-"),
+              "every APP_GROUP_DIR file rule must be a deny, got: \(line)")
+    }
+  }
+
+  /// Runtime allowances survive verbatim: scratch, Claude runtime state, the
+  /// temp base, the shell device allowances, the execution-vector denies.
+  @Test func scopedRunKeepsRuntimeAllowancesAndClaudeDenies() throws {
+    let p = try scopedProfile()
+    #expect(p.contains("(allow file-write* (subpath (param \"SCRATCH_DIR\")))"))
+    #expect(p.contains("(allow file-write* (subpath (param \"CLAUDE_TMP\")))"))
+    #expect(p.contains("(allow file-write-data (literal \"/dev/null\"))"))
+    #expect(p.contains("(deny file-write* (subpath (string-append (param \"HOME\") \"/.claude/hooks\")))"))
+  }
+
+  /// The scoped defines carry every path the profile references.
+  @Test func scopedRunInvocationCarriesScopedDefines() throws {
+    let inv = try scopedInvocation()
+    let defines = Dictionary(uniqueKeysWithValues: inv.defines.map { ($0.0, $0.1) })
+    #expect(defines["APP_GROUP_DIR"] == Self.container)
+    #expect(defines["DAEMON_ENDPOINT"] == Self.daemonEndpoint)
+    #expect(defines["RUNS_DIR"] == Self.runsDirectory)
+    #expect(defines["RUN_ENDPOINT"] == Self.runEndpoint)
+    #expect(defines["SCRATCH_DIR"] == Self.scratchDir)
+  }
+
+  /// #1468, profile side: a run endpoint that cannot fit `sockaddr_un`
+  /// throws the operator-actionable error instead of building silently.
+  @Test func scopedRunRejectsOverlongRunEndpointPath() {
+    let overlong = Self.runsDirectory + "/" + String(repeating: "a", count: 120) + ".sock"
+    #expect(overlong.utf8.count > SandboxProfile.maxSocketPathBytes)
+    #expect(throws: SandboxProfile.ProfileError.runEndpointPathTooLong(
+      limit: SandboxProfile.maxSocketPathBytes, actual: overlong.utf8.count)) {
+      try scopedProfile(runEndpoint: overlong)
+    }
+  }
+
+  /// The strict scoped variant keeps the pivot/W^X trailer LAST — after the
+  /// base whose final rule is the assigned-endpoint allow — and the trailer
+  /// carries no file or network rules that could shadow the terminal denies.
+  @Test func strictScopedRunKeepsTrailerLastWithoutShadowingEndpointRules() throws {
+    let base = try scopedInvocation()
+    let strict = try SandboxProfile.strictScopedRunInvocation(
+      homePath: "/Users/me",
+      scratchDir: Self.scratchDir,
+      appGroupContainerPath: Self.container,
+      daemonEndpointPath: Self.daemonEndpoint,
+      runsDirectoryPath: Self.runsDirectory,
+      runEndpointPath: Self.runEndpoint)
+    #expect(strict.baseProfile == base.profile)
+    #expect(!strict.trailer.isEmpty)
+    #expect(strict.baseProfile.hasSuffix(
+      "(allow network-outbound (literal (param \"RUN_ENDPOINT\")))\n"))
+    // Every trailer rule is a DENY — the trailer can only narrow further
+    // (HOME-subtree exec/credential reads), never re-open the terminal
+    // scoped denies or the assigned-endpoint allow.
+    for rule in strict.trailer {
+      #expect(rule.hasPrefix("(deny "),
+              "the strict trailer must stay deny-only so it cannot shadow the scoped terminal rules: \(rule)")
+    }
+    #expect(strict.profile.hasSuffix(strict.trailer.last! + "\n"))
+  }
+
+  /// Provider layering (`addingHomeSubpaths`) appends write allows AFTER the
+  /// terminal section — they are HOME-relative and can never re-open the
+  /// container denies.
+  @Test func scopedRunContainerDeniesSurviveProviderLayering() throws {
+    let base = try scopedInvocation()
+    let layered = SandboxProfile.invocation(
+      base, addingHomeSubpaths: [".codex", ".gemini"])
+    #expect(layered.profile.contains(
+      "(allow file-write* (subpath (string-append (param \"HOME\") \"/.codex\")))"))
+    let lines = layered.profile.split(separator: "\n").map(String.init)
+    for line in lines where line.contains("APP_GROUP_DIR") {
+      #expect(line.contains("(deny file-"),
+              "layering must not re-open the container, got: \(line)")
+    }
+  }
 }
