@@ -536,7 +536,7 @@ struct AgentSandboxProcessTests {
         #expect(String(decoding: out, as: UTF8.self) == "SCRATCH INPUT\n")
     }
 
-    // MARK: - AC.5: absolute wiki-tool invocation + cross-wiki denial
+    // MARK: - AC.5: absolute wiki-tool invocation + the cross-wiki boundary
 
     /// The absolute `wikictl --wiki <id>` invocation performs a CAS
     /// processed-markdown rewrite from a scratch file with WIKI_DB, WIKICTL,
@@ -593,12 +593,30 @@ struct AgentSandboxProcessTests {
         #expect(readBack.outputText == "# cleaned by scratch script\n")
     }
 
-    /// Targeting wiki B under wiki A's production sandbox must be prevented
-    /// by Seatbelt: B's DB is not in the allowlist, so the mutation is denied
-    /// and B's data is unchanged.
-    @Test func productionSandboxPreventsCrossWikiMutation() async throws {
+    /// THE MIGRATION REGRESSION, RECORDED (plans/agent-sandbox-scoping.md
+    /// Phase 0; issue #1464). Since #1463 every `wikictl` domain command
+    /// executes DAEMON-side, and the daemon socket checks the peer's user id —
+    /// not the run's assigned wiki. So a child confined to wiki A's write
+    /// fence that targets wiki B reaches the same-user daemon over its socket
+    /// and the CROSS-WIKI WRITE SUCCEEDS: the daemon has no run scope to deny
+    /// it with. Seatbelt fences the child's own file writes, but the mutation
+    /// no longer happens inside the child.
+    ///
+    /// This test deliberately asserts that true (wrong) behavior. Its
+    /// predecessor passed for the wrong reason: it never started a daemon, so
+    /// the child's command died on a dead socket and the transport failure
+    /// masqueraded as a policy denial. Starting the fixture daemon removes the
+    /// ambiguity — the write below genuinely lands in wiki B — and the suite
+    /// stays honest about the missing-authorization boundary instead of
+    /// faking a denial. The daemon-side authorization core lands in
+    /// agent-sandbox-scoping Phases 1–3; when scoped enforcement ships, this
+    /// assertion flips to a typed `scopeDenied` and an unchanged wiki B.
+    @Test func crossWikiMutationReachesDaemonWithoutAuthorization() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
+        // The daemon MUST be live: the success below is only evidence of the
+        // missing boundary if the child's command genuinely reached it.
+        try fixture.startDaemon()
         let wikictl = try wikictlPath()
 
         // Seed wiki B with its own chain (a second wiki's independent data).
@@ -621,13 +639,18 @@ struct AgentSandboxProcessTests {
                 "--expect-head", headBBefore.id.rawValue,
             ])
 
-        // Seatbelt (or SQLite's EPERM surface of it) denies the write.
-        #expect(result.status != 0,
-                "the cross-wiki write must be denied under wiki A's sandbox")
+        // The regression: nothing denies the write. The wiki-A-sandboxed
+        // child's request executes wiki B's CAS rewrite in full.
+        #expect(result.status == 0,
+                "the cross-wiki edit must reach the daemon and succeed while run scoping is unimplemented (stderr: \(result.errorText))")
         let headBAfter = try #require(try fixture.storeB.processedMarkdownHead(sourceID: sourceB.id))
-        #expect(headBAfter.id == headBBefore.id, "wiki B's head must be unchanged")
+        #expect(headBAfter.id != headBBefore.id, "the cross-wiki write appended a new wiki B head")
+        #expect(headBAfter.content == "# cross-wiki attack\n")
         let historyB = try fixture.storeB.processedMarkdownHistory(sourceID: sourceB.id)
-        #expect(historyB.count == 1, "no version may be appended to wiki B")
+        #expect(historyB.count == 2, "exactly one version was appended to wiki B")
+        // The scoped-command contract itself is intact: raw bytes untouched.
+        let rawB = try fixture.storeB.sourceContent(id: sourceB.id)
+        #expect(String(decoding: rawB, as: UTF8.self) == "B RAW")
     }
 
     // MARK: - AC.7 (issue #1276): the extraction-shaped fence, live
