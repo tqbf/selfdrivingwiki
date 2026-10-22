@@ -121,15 +121,18 @@ public struct WikiCtlRunner {
 
     private let resolveContainer: () throws -> WikiResolver
     private let storeProfile: CLIStoreProfile
+    private let daemonCommandRouter: DaemonCommandRouter
     private let execute: CommandExecutor
 
     public init(
         resolveContainer: @escaping () throws -> WikiResolver = WikiResolver.appGroupContainer,
         storeProfile: CLIStoreProfile = CLIStoreProfile(),
+        daemonCommandRouter: DaemonCommandRouter = DaemonCommandRouter(),
         execute: @escaping CommandExecutor
     ) {
         self.resolveContainer = resolveContainer
         self.storeProfile = storeProfile
+        self.daemonCommandRouter = daemonCommandRouter
         self.execute = execute
     }
 
@@ -148,6 +151,23 @@ public struct WikiCtlRunner {
         let selection = try WikiResolver.selection(
             wikiSelector: wikiSelector.isEmpty ? nil : wikiSelector,
             databasePath: databasePath.isEmpty ? nil : databasePath)
+        // Phase 3 of plans/cli-domain-commands.md: MIGRATED read-only commands
+        // execute on the daemon over the domain envelope and never open the
+        // wiki database here. Anything not migrated (Phase 4 writes, the
+        // search commands until their server-side resolution lands) and every
+        // explicit `--database-path` fixture run keeps the in-process path
+        // below.
+        if case .registry(let selector) = selection,
+           let call = DaemonCommandRoute.call(for: resolvedCommand) {
+            let routed = try await daemonCommandRouter.run(
+                call,
+                selector: selector,
+                containerDirectory: resolver.containerDirectory)
+            return Self.output(
+                for: routed.result,
+                command: resolvedCommand,
+                changedWikiID: routed.result.didCommit ? routed.wikiID : nil)
+        }
         let target = try resolver.resolve(selection: selection)
         let result = try await storeProfile.withStore(request: CLIStoreProfile.Request(
             databaseURL: target.databaseURL,

@@ -1191,6 +1191,57 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
+    /// The wiki store for one Phase 3 domain-command execution
+    /// (plans/cli-domain-commands.md). Production admits the wiki's prepared
+    /// services — the same profile boot every other per-wiki operation goes
+    /// through (`prepareAndResolveWikiServices`); the fixture path (tests,
+    /// `testFixtureMakeStore`) admits the injected store. This is the ONLY
+    /// store source for the command families: no direct SQLite opens.
+    func domainCommandStore(wikiID: WikiID) async throws -> WikiStore {
+        #if canImport(WikiFSEngine)
+        if profileOwner != nil {
+            let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
+            return services.store
+        }
+        #endif
+        try prepareInjectedStore(wikiID: wikiID)
+        return try resolvePreparedStore(wikiID: wikiID)
+    }
+
+    /// The durable per-wiki queue read behind `wikictl job list/get` (Phase 3
+    /// of plans/cli-domain-commands.md). `queueSnapshot` is a bounded
+    /// active+recent window for UI bootstrap; job inspection needs the FULL
+    /// terminal history, which is what `QueueStore.loadItems(wikiID:)` reads.
+    /// The queue store opens READ-ONLY beside the engine's writer connection —
+    /// the same WAL pattern the transcribe completion poll uses — and a
+    /// missing queue database is an empty list, never a file creation. The
+    /// wiki leg (a source counts as extraction-completed when a processed-
+    /// markdown HEAD exists) reads through ``domainCommandStore(wikiID:)``.
+    func queueWikiItems(
+        wikiID: WikiID,
+        itemID: QueueItemID?
+    ) async throws -> (items: [QueueItem], completedSourceIDs: Set<SourceID>) {
+        let allItems: [QueueItem]
+        if FileManager.default.fileExists(atPath: queueDatabaseURL.path) {
+            let queueStore = try QueueStore(readOnlyDatabaseURL: queueDatabaseURL)
+            defer { queueStore.close() }
+            allItems = try queueStore.loadItems(wikiID: wikiID)
+        } else {
+            allItems = []
+        }
+        let selected = itemID.map { id in allItems.filter { $0.id == id } } ?? allItems
+        var completedSourceIDs = Set<SourceID>()
+        if !selected.isEmpty {
+            let store = try await domainCommandStore(wikiID: wikiID)
+            for sourceID in Set(selected.flatMap(\.payload.sourceIDs)) {
+                if try store.processedMarkdownHead(sourceID: sourceID) != nil {
+                    completedSourceIDs.insert(sourceID)
+                }
+            }
+        }
+        return (selected, completedSourceIDs)
+    }
+
     private func preparedStoreIfAvailable(wikiID: WikiID) -> GRDBWikiStore? {
         do {
             return try resolvePreparedStore(wikiID: wikiID)

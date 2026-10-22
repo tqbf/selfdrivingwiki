@@ -45,6 +45,16 @@ public enum DaemonDomainFamily: String, Codable, Sendable, CaseIterable {
     case queue
     /// Wiki registry + lifecycle (Phase 2 of plans/cli-domain-commands.md).
     case wiki
+    /// Read-only page commands executed daemon-side (Phase 3).
+    case page
+    /// Read-only source commands executed daemon-side (Phase 3).
+    case source
+    /// Read-only chat commands executed daemon-side (Phase 3).
+    case chat
+    /// Read-only bookmark commands executed daemon-side (Phase 3).
+    case bookmark
+    /// Read-only workspace commands executed daemon-side (Phase 3).
+    case workspace
 }
 
 public struct DaemonDomainRequest: Codable, Equatable, Sendable {
@@ -288,6 +298,9 @@ public enum DaemonDomainOperation {
         public static let pauseQueue = "pauseQueue"
         public static let resumeQueue = "resumeQueue"
         public static let haltQueue = "haltQueue"
+        /// Phase 3: the durable per-wiki item read `wikictl job list/get` is
+        /// built on (full terminal history, not the bounded snapshot window).
+        public static let queueWikiItems = "queueWikiItems"
     }
 
     public enum Wiki {
@@ -296,6 +309,45 @@ public enum DaemonDomainOperation {
         public static let deleteWiki = "deleteWiki"
         public static let renameWiki = "renameWiki"
         public static let resolveWiki = "resolveWiki"
+    }
+
+    // Phase 3 command families — the daemon EXECUTES the CLI's command layer
+    // against its prepared services and replies with a uniform
+    // `DaemonCommandOutcome` (stdout text or bytes + stderr + didCommit), so
+    // byte-stable stdout is produced by the same code that produced it
+    // in-process.
+
+    public enum Page {
+        public static let list = "list"
+        public static let get = "get"
+        public static let history = "history"
+        public static let info = "info"
+        public static let okfInspect = "okfInspect"
+        public static let okfStatus = "okfStatus"
+        public static let okfFreshness = "okfFreshness"
+        public static let okfVerify = "okfVerify"
+    }
+
+    public enum Source {
+        public static let list = "list"
+        public static let cat = "cat"
+        public static let export = "export"
+        public static let info = "info"
+    }
+
+    public enum Chat {
+        public static let list = "list"
+        public static let get = "get"
+        public static let search = "search"
+    }
+
+    public enum Bookmark {
+        public static let list = "list"
+    }
+
+    public enum Workspace {
+        public static let status = "status"
+        public static let conflicts = "conflicts"
     }
 }
 

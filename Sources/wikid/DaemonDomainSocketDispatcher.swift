@@ -41,10 +41,14 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
     /// `Data`-reply wrapper over `WikiDaemon` — no listener, no sink — so a
     /// second instance here shares nothing mutable with the app's exporter.
     private let exporter: WikiDaemonExporter
+    /// The Phase 3 command-family executor: runs the CLI's read-only command
+    /// layer against the daemon's prepared services (plans/cli-domain-commands.md).
+    private let commands: DaemonDomainCommands
 
     init(daemon: WikiDaemon) {
         self.daemon = daemon
         self.exporter = WikiDaemonExporter(daemon: daemon)
+        self.commands = DaemonDomainCommands(daemon: daemon)
     }
 
     /// The socket server's `Data -> Data` handler. Never throws: every path
@@ -73,6 +77,10 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                 return try await queueReply(for: request)
             case .wiki:
                 return try await wikiReply(for: request)
+            case .page, .source, .chat, .bookmark, .workspace:
+                // Phase 3 command families: the daemon executes the CLI's
+                // read-only command layer against its prepared services.
+                return try await commands.reply(for: request)
             }
         } catch let error as DaemonDomainError {
             return Self.encodedReply(.failure(
@@ -184,6 +192,10 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                     self.exporter.haltQueue(queue: queue, reply: reply)
                 }
             }
+        case DaemonDomainOperation.Queue.queueWikiItems:
+            // Phase 3: the durable per-wiki read behind `wikictl job list/get`
+            // — full terminal history + the extraction-completed wiki leg.
+            replyData = try await commands.queueWikiItemsReply(for: request)
         default:
             throw DaemonDomainError(
                 code: .invalidRequest,
@@ -304,10 +316,27 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
 
     /// Encode-or-empty: a `DaemonDomainReply` of these value payloads cannot
     /// fail to encode; if it ever did, an empty body is the honest "no reply"
-    /// and the client surfaces it as a malformed reply.
+    /// and the client surfaces it as a malformed reply. An encoded reply that
+    /// would exceed the socket's 4 MiB frame cap is replaced by a TYPED
+    /// `operationFailed` failure envelope instead — never a truncation and
+    /// never a client-side transport fault (the client refuses oversized
+    /// announced lengths before buffering).
     private static func encodedReply(_ reply: DaemonDomainReply) -> Data {
         do {
-            return try DaemonDomainWire.encode(reply)
+            let encoded = try DaemonDomainWire.encode(reply)
+            if encoded.count > Int(SearchSocketWire.maxFrameSize) {
+                return try DaemonDomainWire.encode(.failure(
+                    requestID: reply.requestID,
+                    family: reply.family,
+                    operation: reply.operation,
+                    DaemonDomainError(
+                        code: .operationFailed,
+                        message: "reply payload (\(encoded.count) bytes) exceeds the socket "
+                            + "frame cap (\(SearchSocketWire.maxFrameSize) bytes) — use a "
+                            + "narrower read (for example `source export --out <file>`); "
+                            + "nothing was truncated")))
+            }
+            return encoded
         } catch {
             DebugLog.store("wikid: domain reply encoding failed: \(error)")
             return Data()

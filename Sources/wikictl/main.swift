@@ -105,12 +105,24 @@ func run() async -> Int32 {
         return await runDaemonChatStop(wikiSelector: invocation.wikiSelector, chatID: chatID)
     }
 
-    // Job inspection is read-only end to end. It bypasses WikiCtlRunner's
-    // writable wiki-store profile and opens both SQLite files without
-    // migrations or checkpoints.
+    // Job inspection is read-only end to end. Phase 3 of
+    // plans/cli-domain-commands.md: it reads the daemon's durable per-wiki
+    // queue read over the socket (`queueWikiItems`) — the queue database and
+    // the wiki store are opened by the daemon, not here.
     if case .job(let action) = invocation.command {
         do {
-            print(try await runJobCommand(action, wikiSelector: invocation.wikiSelector))
+            let router = DaemonCommandRouter()
+            let (output, emptyList) = try await router.runJob(
+                action,
+                selector: invocation.wikiSelector,
+                containerDirectory: try DatabaseLocation.appGroupContainerDirectory())
+            print(output)
+            if emptyList {
+                // #1230 (axi.md principle 5): zero jobs is an answer, not a
+                // silence (stdout keeps its exact bytes — the TSV header, or
+                // `[]` for --json). The stderr notice says so; exit stays 0.
+                FileHandle.standardError.write(Data(ZeroResults.note("job list").utf8))
+            }
             return 0
         } catch {
             FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
@@ -694,81 +706,6 @@ private func runTranscribeCommand(
     #endif
 }
 
-
-/// Read durable job state without creating, migrating, or checkpointing either
-/// database. A missing queue database is an empty list, not an invitation to
-/// create the file.
-private func runJobCommand(
-    _ action: JobCommand.Action,
-    wikiSelector: String
-) async throws -> String {
-    let resolver = try WikiResolver.appGroupContainer()
-    guard let descriptor = resolver.descriptor(forSelector: wikiSelector) else {
-        throw PageCommand.Failure.message(
-            "no wiki matching \(wikiSelector.debugDescription) in the registry")
-    }
-
-    let queueURL = try DatabaseLocation.queueDatabaseURL()
-    let items: [QueueItem]
-    if FileManager.default.fileExists(atPath: queueURL.path) {
-        let queueStore = try QueueStore(readOnlyDatabaseURL: queueURL)
-        defer { queueStore.close() }
-        items = try queueStore.loadItems(wikiID: descriptor.id)
-    } else {
-        items = []
-    }
-
-    let selectedItems: [QueueItem]
-    let json: Bool
-    switch action {
-    case .list(let wantsJSON):
-        selectedItems = items
-        json = wantsJSON
-    case .get(let id, let wantsJSON):
-        guard let item = items.first(where: { $0.id == id }) else {
-            throw JobCommand.Failure.notFound(id)
-        }
-        selectedItems = [item]
-        json = wantsJSON
-    }
-
-    // The wiki leg goes through WikiReadService — the sanctioned read-only
-    // projection seam (the boundary script rejects bare GRDBWikiStore
-    // construction in this target). Existence of any processed markdown is
-    // what "extraction completed" means here: a byteless placeholder source
-    // has none.
-    let wikiReadService = WikiReadService(
-        databaseURL: resolver.databaseURL(for: descriptor))
-    let sourceIDs = Set(selectedItems.flatMap(\.payload.sourceIDs))
-    var completedSourceIDs = Set<SourceID>()
-    for sourceID in sourceIDs {
-        let head = try await wikiReadService.asyncRead { access in
-            try access.processedMarkdownHead(sourceID: sourceID)
-        }
-        if head != nil {
-            completedSourceIDs.insert(sourceID)
-        }
-    }
-    await wikiReadService.shutdown()
-
-    let output: String
-    switch action {
-    case .list:
-        output = try JobCommand.renderList(
-            items: selectedItems, completedSourceIDs: completedSourceIDs, json: json)
-        if selectedItems.isEmpty {
-            // #1230 (axi.md principle 5): zero jobs is an answer, not a
-            // silence (today's stdout is just the TSV header, or `[]` for
-            // --json — both stay byte-identical). The stderr notice says so;
-            // exit stays 0.
-            FileHandle.standardError.write(Data(ZeroResults.note("job list").utf8))
-        }
-    case .get:
-        output = try JobCommand.renderGet(
-            item: selectedItems[0], completedSourceIDs: completedSourceIDs, json: json)
-    }
-    return output
-}
 
 /// #637: split-out dispatch for the `wikictl chat …` subcommands. Resolves
 /// a Tantivy BM25 leg for `.search` before invoking `ChatCommand.run(...,
