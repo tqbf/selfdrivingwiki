@@ -61,6 +61,85 @@ is the in-process profile boot; the daemon serves the same profile layer via
 `prepareAndResolveWikiServices`, which is what "same domain layer as the app"
 means concretely.
 
+## The landed envelope (v1) — what Phases 3–4 build on
+
+Implemented in `Sources/WikiDaemonContract/DaemonDomainWire.swift`; dispatched
+by `Sources/wikid/DaemonDomainSocketDispatcher.swift` (the daemon boot's
+socket handler); spoken by `Sources/WikiCtlCore/DaemonDomainSocketClient.swift`
+(+ `DaemonWikiRegistryClient`, `DaemonWorkloadClient`'s socket backend). The
+byte-level transport (`SearchSocketWire` framing, socket file
+`wikid-search.sock`, flock guard, same-user gate, deadlines) is unchanged;
+only the payload changed.
+
+Request: `{"version": 1, "requestID": "<uuid>", "family": "<family>",
+"operation": "<verb>", "payload": <family JSON or null>}`
+
+Reply: `{"version": 1, "requestID": "<echo>", "family": "<family>",
+"operation": "<echo>", "payload": <family JSON or null>, "error": null |
+{"code": "<code>", "message": "<text>"}}`
+
+- `DaemonDomainVersion.current == 1`. The daemon checks `version` BEFORE
+  dispatch; any mismatch is a typed `unsupportedVersion` reply. A reply that
+  is not a domain envelope at all (an old daemon) decodes as
+  `unsupportedVersion` on the client with "quit and relaunch (or reinstall)
+  the app" guidance.
+- Families today: `hello`, `search`, `queue`, `wiki`. Phase 3+ adds more
+  family cases (page/source/chat/bookmark/workspace/strategy/log/admin); an
+  unknown family string or unknown operation decodes to a typed
+  `invalidRequest` reply — never a transport fault.
+- Error codes: `invalidRequest`, `unsupportedVersion`, `notFound`,
+  `unavailable`, `operationFailed`. Phase 4's CAS codes (`casConflict`,
+  `createOnly`, `expectedTargetMissing`, `strategyRevision`) extend this enum.
+- Family payloads ride unchanged inside `payload`:
+  - `hello` / `capabilities` → reply payload is `DaemonHelloPayload`
+    `{version, protocolVersion, families: [sorted strings], appVersion,
+    buildVersion}`.
+  - `search` / `search` → payload is the unchanged `SearchRPCRequest` JSON;
+    reply payload the unchanged `SearchRPCReply` JSON.
+  - `queue` / `queueSnapshot|enqueueItem|pauseQueue|resumeQueue|haltQueue` →
+    payload is the unchanged `QueueRPCEnvelope<P>` JSON pair (lane controls
+    carry a `DaemonQueueControlRequest {queue}`); the queue error taxonomy
+    survives the socket intact.
+  - `wiki` / `listWikis|createWiki|deleteWiki|renameWiki|resolveWiki` →
+    payloads `DaemonWikiCreateRequest {name}`, `DaemonWikiDeleteRequest {id}`,
+    `DaemonWikiRenameRequest {id, name}`, `DaemonWikiResolveRequest
+    {selector}`; descriptor replies are the daemon's own `[WikiDescriptor]` /
+    `WikiDescriptor` JSON bytes. Unknown ids resolve to typed `notFound`
+    with the message `no wiki matching <selector>`.
+- Operation strings live in `DaemonDomainOperation` (Hello/Search/Queue/Wiki
+  namespaces) shared by both sides.
+
+## Deviations from the plan (Phases 1–2)
+
+- **`wiki resolve`** is not a CLI verb (it never was). The daemon's
+  `resolveWiki` is served over the envelope, and `transcribe --wiki`
+  resolution uses it. Ordinary command `--wiki` resolution stays a local
+  registry read until Phase 5 strips registry construction from
+  `WikiCtlCore` — routing it now would force every read-only command to
+  require the daemon ahead of its phase.
+- **The queue family requires `--wiki` at parse time** (pre-existing parser
+  contract, unchanged here): the live-check invocation is
+  `wikictl --wiki <id> queue status`.
+- **Search wrapping is transport-level**: `DaemonSearchClient` and its
+  transport seam are untouched; the envelope wraps/unwraps inside
+  `DaemonSearchSocketClient`. Search keep-working is proven by the
+  pre-existing socket suite plus a live `page search` round trip.
+- **`DaemonWorkloadClient`'s socket backend implements the five CLI queue
+  verbs** (snapshot, enqueue, pause, resume, halt). Its other methods throw a
+  typed failure on that backend — the event sink and chat surfaces are XPC
+  reverse-channel world and stay app-only.
+- **`WikiDaemon.createWikiOverSocket/deleteWikiOverSocket`** route to the
+  production creation coordinator when a profile owner exists and to the
+  synchronous fixture seam otherwise (mirrors the `openStore` split) so
+  in-process tests exercise the same dispatcher.
+- **Fixture handlers in `DaemonSearchSocketTests` are wrapped in an envelope
+  adapter** mirroring the daemon's search-family routing, so transport
+  coverage is preserved verbatim while the wire changed shape.
+- **The CLI consults `hello` via typed error guidance** rather than a
+  proactive handshake per command: a version-mismatch surfaces as
+  `unsupportedVersion` with relaunch guidance; `hello`/`capabilities` is
+  served and tested for clients that want to negotiate explicitly.
+
 ## CAS and exit codes
 
 CAS crosses the wire as typed error codes, not strings: `casConflict`
@@ -71,13 +150,18 @@ byte-stable stdout formats are scripting contracts; preserve both.
 ## Phases
 
 0. **Land `bugfix/concurrent-cli-search`** — the search socket, safe index
-   opens, and the fail-fast error contract.
+   opens, and the fail-fast error contract. ✅ **Implemented.**
 1. **Transport generalization + queue verbs** — introduce the domain envelope,
    re-target `DaemonWorkloadClient` onto the socket. Fixes the pre-existing
    lookup3 defect. No new domain handlers; lowest risk first.
+   ✅ **Implemented** (commit `2d809bbe`). See §"The landed envelope (v1)"
+   below for the exact wire shape Phases 3–4 build on.
 2. **Registry + lifecycle** — `wiki list/rename/create/delete` through the
    daemon. Delete inherits full eviction (search runtime, database artifacts),
    closing the CLI's degraded-delete race. Drop the CLI's direct create path.
+   ✅ **Implemented** (commit `c123797d`); `wiki resolve` has no CLI verb —
+   the daemon's `resolveWiki` is served over the envelope and backs
+   `transcribe --wiki` resolution (see §Deviations).
 3. **Read-only domain endpoint** — page/source/chat/bookmark/workspace reads,
    info/okf-inspect, `job list/get` (new queue read endpoint). Server executes
    through the daemon's prepared services.
