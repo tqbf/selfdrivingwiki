@@ -691,12 +691,13 @@ public struct DaemonCommandRouter: Sendable {
             //
             // §7: the shared scoped-run factory resolves the credential
             // environment — both keys → the run endpoint + v2 authorization,
-            // both absent → the ordinary socket (container resolved inside
-            // the factory), exactly one → typed failure. A scoped child's
-            // container is kernel-denied, so the container is never touched
-            // on the scoped branch.
+            // both absent → the ordinary socket via the CALLER's container
+            // (the injected resolver's — tests rely on it), exactly one →
+            // typed failure. A scoped child's container is kernel-denied, so
+            // runOrdinary passes nil there and the factory never resolves.
             let scopedSocket = try DaemonScopedRunEnvironment.domainSocketClient(
                 environment: ProcessInfo.processInfo.environment,
+                containerDirectory: containerDirectory,
                 timeout: call.timeout)
             let registry = DaemonWikiRegistryClient(socket: scopedSocket)
             let descriptor = try await registry.resolveWiki(selector: selector)

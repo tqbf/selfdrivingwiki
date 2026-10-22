@@ -3,8 +3,10 @@ import Testing
 @testable import WikiFSCore
 
 /// Tests for the pure seatbelt profile generator — the exact `(version 1)` /
-/// `(allow default)` / `(deny file-write*)` skeleton, the SCRATCH_DIR subpath allow,
-/// and the four WIKI_DB literal allows (base + wal/shm/journal). Pure; no shell, no IO.
+/// `(allow default)` / `(deny file-write*)` skeleton and the SCRATCH_DIR
+/// subpath allow. Pure; no shell, no IO. Phase 3 of
+/// plans/agent-sandbox-scoping.md (§8): the profiles carry NO database
+/// grants — those tests now pin the grants' ABSENCE.
 struct SandboxProfileTests {
 
   static let scratchDir = "/Users/me/Library/Caches/Self Driving Wiki-agent/UUID"
@@ -13,8 +15,7 @@ struct SandboxProfileTests {
 
   private func profile() -> String {
     SandboxProfile.generate(
-      scratchDir: Self.scratchDir,
-      wikiDBPath: Self.wikiDB)
+      scratchDir: Self.scratchDir)
   }
 
   // MARK: - Skeleton
@@ -27,57 +28,36 @@ struct SandboxProfileTests {
     #expect(lines[2] == "(deny file-write*)")
   }
 
-  @Test func deniesAllWritesThenReallowsScratchAndDB() {
+  @Test func deniesAllWritesThenReallowsScratchOnly() {
     let p = profile()
     #expect(p.contains("(deny file-write*)"))
     #expect(p.contains("(allow file-write* (subpath (param \"SCRATCH_DIR\")))"))
-    #expect(p.contains("(allow file-write* (literal (param \"WIKI_DB\")))"))
   }
 
   @Test func searchDoesNotGrantIndexWriteAccess() {
     let invocation = SandboxProfile.invocation(
-      homePath: "/Users/me", scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+      homePath: "/Users/me", scratchDir: Self.scratchDir)
     #expect(!invocation.defines.contains { $0.0.contains("SEARCH_INDEX") })
     #expect(!invocation.profile.contains("SEARCH_INDEX"))
     #expect(!readOnlyProfile().contains("SEARCH_INDEX"))
   }
 
-  // MARK: - SQLite sidecars
+  // MARK: - No database grants (Phase 3, plans/agent-sandbox-scoping.md §8)
 
-  @Test func allowsDBPlusWalShmJournalSidecars() {
+  @Test func noDatabaseGrantsRemainAnywhere() {
     let p = profile()
-    #expect(p.contains("(allow file-write* (literal (string-append (param \"WIKI_DB\") \"-wal\")))"))
-    #expect(p.contains("(allow file-write* (literal (string-append (param \"WIKI_DB\") \"-shm\")))"))
-    #expect(p.contains("(allow file-write* (literal (string-append (param \"WIKI_DB\") \"-journal\")))"))
+    #expect(p.contains("WIKI_DB") == false, "the wiki DB grant is gone")
+    #expect(p.contains("QUEUE_DB") == false, "the queue DB grant is gone")
+    let invocation = SandboxProfile.invocation(
+      homePath: "/Users/me", scratchDir: Self.scratchDir)
+    #expect(invocation.defines.contains { $0.0 == "WIKI_DB" } == false)
+    #expect(invocation.defines.contains { $0.0 == "QUEUE_DB" } == false)
+    #expect(invocation.profile.contains("WIKI_DB") == false)
+    #expect(invocation.profile.contains("QUEUE_DB") == false)
   }
 
   @Test func sidecarSuffixesAreExactlyWalShmJournal() {
     #expect(SandboxProfile.sqliteSidecarSuffixes == ["-wal", "-shm", "-journal"])
-  }
-
-  @Test func queueDatabaseAllowanceIsExplicitAndIncludesSQLiteSidecars() {
-    let invocation = SandboxProfile.invocation(
-      homePath: "/Users/me",
-      scratchDir: Self.scratchDir,
-      wikiDBPath: Self.wikiDB,
-      queueDBPath: Self.queueDB)
-
-    #expect(invocation.defines.contains { $0.0 == "QUEUE_DB" && $0.1 == Self.queueDB })
-    #expect(invocation.profile.contains("(allow file-write* (literal (param \"QUEUE_DB\")))"))
-    for suffix in SandboxProfile.sqliteSidecarSuffixes {
-      #expect(invocation.profile.contains(
-        "(allow file-write* (literal (string-append (param \"QUEUE_DB\") \"\(suffix)\")))"))
-    }
-  }
-
-  @Test func queueDatabaseAllowanceIsAbsentUnlessRequested() {
-    let invocation = SandboxProfile.invocation(
-      homePath: "/Users/me",
-      scratchDir: Self.scratchDir,
-      wikiDBPath: Self.wikiDB)
-
-    #expect(invocation.defines.contains { $0.0 == "QUEUE_DB" } == false)
-    #expect(invocation.profile.contains("QUEUE_DB") == false)
   }
 
   // MARK: - Claude config writes (generate)
@@ -165,24 +145,21 @@ struct SandboxProfileTests {
 
   // MARK: - SandboxInvocation (Equatable + defines)
 
-  @Test func invocationCarriesHomeScratchAndWikiDBDefines() {
+  @Test func invocationCarriesHomeScratchAndClaudeTempDefines() {
     let inv = SandboxProfile.invocation(
       homePath: "/Users/me",
       scratchDir: Self.scratchDir,
-      wikiDBPath: Self.wikiDB,
       claudeTempBase: "/private/tmp/claude-999")
-    #expect(inv.defines.count == 4)
+    #expect(inv.defines.count == 3)
     // Order matters for the argv emit.
     #expect(inv.defines[0].0 == "HOME")
     #expect(inv.defines[0].1 == "/Users/me")
     #expect(inv.defines[1].0 == "SCRATCH_DIR")
     #expect(inv.defines[1].1 == Self.scratchDir)
-    #expect(inv.defines[2].0 == "WIKI_DB")
-    #expect(inv.defines[2].1 == Self.wikiDB)
     // CLAUDE_TMP canonicalizes via realpath; the non-existent probe path falls back to
     // the input (same behaviour the other defines rely on for non-existent paths).
-    #expect(inv.defines[3].0 == "CLAUDE_TMP")
-    #expect(inv.defines[3].1 == "/private/tmp/claude-999")
+    #expect(inv.defines[2].0 == "CLAUDE_TMP")
+    #expect(inv.defines[2].1 == "/private/tmp/claude-999")
     #expect(inv.profile == profile())
   }
 
@@ -205,11 +182,11 @@ struct SandboxProfileTests {
 
   @Test func invocationEquatableComparesProfileAndDefines() {
     let a = SandboxProfile.invocation(
-      homePath: "/h", scratchDir: "/s", wikiDBPath: "/d")
+      homePath: "/h", scratchDir: "/s")
     let b = SandboxProfile.invocation(
-      homePath: "/h", scratchDir: "/s", wikiDBPath: "/d")
+      homePath: "/h", scratchDir: "/s")
     let c = SandboxProfile.invocation(
-      homePath: "/h2", scratchDir: "/s", wikiDBPath: "/d")
+      homePath: "/h2", scratchDir: "/s")
     #expect(a == b)
     #expect(a != c)
   }
@@ -228,8 +205,7 @@ struct SandboxProfileTests {
 
     let inv = SandboxProfile.invocation(
       homePath: "/Users/me",
-      scratchDir: symlinkScratch,
-      wikiDBPath: "/Users/me/db.sqlite")
+      scratchDir: symlinkScratch)
 
     let resolved = try #require(inv.defines.first { $0.0 == "SCRATCH_DIR" }?.1)
     #expect(resolved.hasPrefix("/private/tmp/"))
@@ -247,7 +223,7 @@ struct SandboxProfileTests {
   @Test func bothProfilesDenyExecAndReadOfResolvedPdf2md() {
     let script = "/Applications/Self Driving Wiki.app/Contents/Helpers/pdf2md"
     let rw = SandboxProfile.generate(
-      scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB, pdf2mdScriptPath: script)
+      scratchDir: Self.scratchDir, pdf2mdScriptPath: script)
     let ro = SandboxProfile.generateReadOnly(
       scratchDir: Self.scratchDir, pdf2mdScriptPath: script)
     for p in [rw, ro] {
@@ -263,7 +239,7 @@ struct SandboxProfileTests {
   @Test func pdf2mdDenyUsesLiteralNotSubpath() {
     let script = "/Applications/Self Driving Wiki.app/Contents/Helpers/pdf2md"
     let p = SandboxProfile.generate(
-      scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB, pdf2mdScriptPath: script)
+      scratchDir: Self.scratchDir, pdf2mdScriptPath: script)
     #expect(!p.contains("(deny process-exec* (subpath"))
     #expect(!p.contains("(deny file-read* (subpath"))
     // No directory-shaped param either — the collocation trap would name a dir.
@@ -275,7 +251,7 @@ struct SandboxProfileTests {
   /// to the pre-denial build, so call sites and argv-index tests that don't care about
   /// pdf2md are unaffected (the load-bearing non-breaking guard).
   @Test func defaultNilEmitsNoPdf2mdDeny() {
-    let gen = SandboxProfile.generate(scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    let gen = SandboxProfile.generate(scratchDir: Self.scratchDir)
     let ro = SandboxProfile.generateReadOnly(scratchDir: Self.scratchDir)
     for p in [gen, ro] {
       #expect(!p.contains("PDF2MD_SCRIPT"))
@@ -284,7 +260,7 @@ struct SandboxProfileTests {
 
   @Test func emptyPdf2mdPathEmitsNoDeny() {
     let p = SandboxProfile.generate(
-      scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB, pdf2mdScriptPath: "")
+      scratchDir: Self.scratchDir, pdf2mdScriptPath: "")
     #expect(!p.contains("PDF2MD_SCRIPT"))
   }
 
@@ -292,13 +268,12 @@ struct SandboxProfileTests {
     let inv = SandboxProfile.invocation(
       homePath: "/Users/me",
       scratchDir: Self.scratchDir,
-      wikiDBPath: Self.wikiDB,
       claudeTempBase: "/private/tmp/claude-999",
       pdf2mdScriptPath: "/Users/me/app/Contents/Helpers/pdf2md")
-    #expect(inv.defines.count == 5)
+    #expect(inv.defines.count == 4)
     // Order matters for the argv emit — PDF2MD_SCRIPT is appended last.
-    #expect(inv.defines[4].0 == "PDF2MD_SCRIPT")
-    #expect(inv.defines[4].1 == "/Users/me/app/Contents/Helpers/pdf2md")
+    #expect(inv.defines[3].0 == "PDF2MD_SCRIPT")
+    #expect(inv.defines[3].1 == "/Users/me/app/Contents/Helpers/pdf2md")
     // The define alone is useless without the deny rules in the profile text.
     #expect(inv.profile.contains("(deny process-exec* (literal (param \"PDF2MD_SCRIPT\")))"))
     #expect(inv.profile.contains("(deny file-read* (literal (param \"PDF2MD_SCRIPT\")))"))
@@ -330,7 +305,6 @@ struct SandboxProfileTests {
     let inv = SandboxProfile.invocation(
       homePath: "/Users/me",
       scratchDir: "/Users/me/scratch",
-      wikiDBPath: "/Users/me/db.sqlite",
       pdf2mdScriptPath: symlinkScript)
 
     let resolved = try #require(inv.defines.first { $0.0 == "PDF2MD_SCRIPT" }?.1)
@@ -344,7 +318,7 @@ struct SandboxProfileTests {
   /// subtree is broadly allowed — a compromised agent can't plant hooks/commands/agents/
   /// skills/plugins or swap credentials/settings/CLAUDE.md for a future unsandboxed session.
   @Test func bothProfilesDenyClaudeHomeExecutionAndCredentialPaths() {
-    let rw = SandboxProfile.generate(scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    let rw = SandboxProfile.generate(scratchDir: Self.scratchDir)
     let ro = SandboxProfile.generateReadOnly(scratchDir: Self.scratchDir)
     for p in [rw, ro] {
       // Subtree denies (execution vectors).
@@ -362,7 +336,7 @@ struct SandboxProfileTests {
   /// projects/ and other benign runtime writes still need it); only the dangerous
   /// subpaths are carved out. Narrowing the ALLOW itself would break the transcript.
   @Test func bothProfilesStillBroadlyAllowClaudeHomeSubtree() {
-    let rw = SandboxProfile.generate(scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    let rw = SandboxProfile.generate(scratchDir: Self.scratchDir)
     let ro = SandboxProfile.generateReadOnly(scratchDir: Self.scratchDir)
     for p in [rw, ro] {
       #expect(p.contains("(allow file-write* (subpath (string-append (param \"HOME\") \"/.claude\")))"))
@@ -375,7 +349,7 @@ struct SandboxProfileTests {
   /// Swapping them would either over-deny (a literal on a dir misses new files) or
   /// under-deny (a subpath on a file is equivalent but inconsistent).
   @Test func claudeHomeDenyUsesSubpathForDirsLiteralForFiles() {
-    let p = SandboxProfile.generate(scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+    let p = SandboxProfile.generate(scratchDir: Self.scratchDir)
     // settings.json is a FILE → literal, not subpath.
     #expect(p.contains("(deny file-write* (literal (string-append (param \"HOME\") \"/.claude/settings.json\")))"))
     #expect(!p.contains("(deny file-write* (subpath (string-append (param \"HOME\") \"/.claude/settings.json\")))"))
@@ -391,7 +365,7 @@ struct SandboxProfileTests {
   /// byte-identical profile.
   @Test func addingHomeSubpathsEmptyIsIdentity() {
     let base = SandboxProfile.invocation(
-      homePath: "/Users/me", scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+      homePath: "/Users/me", scratchDir: Self.scratchDir)
     let same = SandboxProfile.invocation(base, addingHomeSubpaths: [])
     #expect(same == base)
   }
@@ -400,7 +374,7 @@ struct SandboxProfileTests {
   /// existing HOME define; defines are unchanged (HOME is already present).
   @Test func addingHomeSubpathsAppendsAllowRulesWithoutNewDefines() throws {
     let base = SandboxProfile.invocation(
-      homePath: "/Users/me", scratchDir: Self.scratchDir, wikiDBPath: Self.wikiDB)
+      homePath: "/Users/me", scratchDir: Self.scratchDir)
     let widened = SandboxProfile.invocation(base, addingHomeSubpaths: [".codex"])
     #expect(widened.profile.contains(
       "(allow file-write* (subpath (string-append (param \"HOME\") \"/.codex\")))"))

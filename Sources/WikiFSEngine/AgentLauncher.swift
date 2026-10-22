@@ -388,22 +388,6 @@ public final class AgentLauncher {
         await UserEnvironmentPath.userPATH()
     }
 
-    /// The single wiki-database derivation for this launcher: the container
-    /// layout `<containerDirectory>/<wikiID>.sqlite` (mirrors the registry).
-    /// MainActor like every caller (run context, seatbelt fence, in-plan title
-    /// validation). There is no override: since the fixture-binary split
-    /// (plans/cli-domain-commands.md §"The fixture binary") every run targets
-    /// a real registered wiki and every agent command resolves through the
-    /// daemon; disposable fixture databases live only in the build-only
-    /// `wikictl-fixture` binary.
-    public func wikiDatabaseURL(
-        for wikiID: WikiID,
-        container containerDirectory: URL
-    ) -> URL {
-        containerDirectory
-            .appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
-    }
-
     // MARK: - Scoped daemon runs (plans/agent-sandbox-scoping.md §5/§7)
 
     /// Issue the managed run's scoped lease when a trusted manager is
@@ -1626,7 +1610,7 @@ public final class AgentLauncher {
 
         // Resolved fresh at spawn time so Settings changes apply without a
         // restart.
-        let dir = containerDirectory ?? DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() }) ?? FileManager.default.temporaryDirectory
+        _ = containerDirectory ?? DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() }) ?? FileManager.default.temporaryDirectory
 
         // #607: per-operation permission policy. The kind is known from the
         // `request` parameter (the staged `WikiOperation` isn't built yet, but
@@ -1783,7 +1767,7 @@ public final class AgentLauncher {
         let sandbox: SandboxProfile.SandboxInvocation?
         do {
             sandbox = try resolveSandboxInvocation(
-                wikiID: wikiID, scratch: scratch, dir: dir,
+                scratch: scratch,
                 pdf2mdScriptPath: pdf2mdScriptPath,
                 scopedRunLease: scopedRunLease)
         } catch {
@@ -3766,9 +3750,6 @@ public final class AgentLauncher {
         // the user message the model already seeded at chat creation.
         self.firstMessagePrePersisted = firstMessagePrePersisted
 
-        // Resolved fresh at spawn time.
-        let dir = containerDirectory ?? DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() }) ?? FileManager.default.temporaryDirectory
-
         // Chat uses the bypass permission policy. The ACP agent spawn is
         // threaded into providerHints below. #606: chat is interactive, so no
         // auto-reject budget —
@@ -3931,7 +3912,7 @@ public final class AgentLauncher {
         let sandbox: SandboxProfile.SandboxInvocation?
         do {
             sandbox = try resolveSandboxInvocation(
-                wikiID: wikiID, scratch: scratch, dir: dir,
+                scratch: scratch,
                 pdf2mdScriptPath: pdf2mdScriptPath,
                 scopedRunLease: scopedRunLease)
         } catch {
@@ -5104,9 +5085,7 @@ public final class AgentLauncher {
     /// write-capable. The former read-only Ask sandbox is retained in-tree but
     /// unwired.)
     private func resolveSandboxInvocation(
-        wikiID: WikiID,
         scratch: URL,
-        dir: URL,
         pdf2mdScriptPath: String?,
         scopedRunLease: AgentScopedRunLease?
     ) throws -> SandboxProfile.SandboxInvocation? {
@@ -5136,33 +5115,26 @@ public final class AgentLauncher {
             return invocation
         }
 
-        // The active wiki's SQLite DB path — the launcher's single derivation
-        // (`wikiDatabaseURL`): `<container>/<ulid>.sqlite`. Symlink resolution
-        // is performed inside `SandboxProfile.invocation` (the tested core
-        // layer) so the canonical path reaches the seatbelt profile.
-        let dbPath = wikiDatabaseURL(for: wikiID, container: dir).path
-        // The central queue database is a container artifact; the fence
-        // targets its path beside the wiki database so agent writes stay
-        // confined to the wiki surface.
-        let queueDBPath = dir.appendingPathComponent("queue.sqlite", isDirectory: false).path
+        // Phase 3 (plans/agent-sandbox-scoping.md §8): the unscoped profile
+        // no longer carries database grants — production edit permission
+        // lives in the daemon's scoped-run operation policy, and every child
+        // (scoped or not) is kernel-denied the database files. Wiki writes
+        // ride the bundled CLI through the daemon.
 
         // Fail-open if any required path is empty/relative (misconfiguration).
-        guard !scratch.path.isEmpty, scratch.path.hasPrefix("/"),
-              !dbPath.isEmpty, dbPath.hasPrefix("/") else {
-            DebugLog.agent("sandbox: could not resolve scratch/db path — running UNSANDBOXED")
+        guard !scratch.path.isEmpty, scratch.path.hasPrefix("/") else {
+            DebugLog.agent("sandbox: could not resolve scratch path — running UNSANDBOXED")
             return nil
         }
 
         let invocation = SandboxProfile.invocation(
             homePath: homePath,
             scratchDir: scratch.path,
-            wikiDBPath: dbPath,
-            queueDBPath: queueDBPath,
             pdf2mdScriptPath: pdf2mdScriptPath
         )
         let pdf2mdNote = pdf2mdScriptPath.map { " + denying pdf2md @ \($0)" } ?? ""
         DebugLog.agent(
-            "sandbox: confining Ingest/Edit agent writes to scratch + \(dbPath) + \(queueDBPath)\(pdf2mdNote)")
+            "sandbox: confining Ingest/Edit agent writes to scratch + runtime state (no database grants)\(pdf2mdNote)")
         return invocation
     }
 

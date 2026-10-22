@@ -166,15 +166,15 @@ struct AgentSandboxProcessTests {
             try? FileManager.default.removeItem(at: root)
         }
 
-        /// The production-shaped write-fence invocation for wiki A: writes
-        /// allowed ONLY under scratch (+ the wiki-A DB, temp home's .claude,
-        /// the Claude temp base, and device aliases). Wiki B is OUTSIDE.
+        /// The production-shaped write-fence invocation for wiki A. Phase 3
+        /// (plans/agent-sandbox-scoping.md §8): NO database grants anywhere —
+        /// writes are allowed ONLY under scratch (+ the temp home's .claude,
+        /// the Claude temp base, and device aliases). Wiki B is OUTSIDE, and
+        /// so is every database.
         func sandboxInvocationForWikiA() throws -> SandboxProfile.SandboxInvocation {
             SandboxProfile.invocation(
                 homePath: home.path,
-                scratchDir: scratch.path,
-                wikiDBPath: container.appendingPathComponent(wikiA.dbFileName, isDirectory: false).path,
-                queueDBPath: queueDatabase.path)
+                scratchDir: scratch.path)
         }
 
         /// The SCOPED-RUN invocation (plans/agent-sandbox-scoping.md §8):

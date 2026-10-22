@@ -353,8 +353,7 @@ import ACPModel
     @Test func sandboxedSpawnPlanPassesPATHThroughUnchanged() {
         let invocation = SandboxProfile.invocation(
             homePath: "/Users/me",
-            scratchDir: "/tmp/scratch",
-            wikiDBPath: "/db/wiki.sqlite")
+            scratchDir: "/tmp/scratch",)
         let injectedPATH = "/users/me/.local/bin:/opt/homebrew/bin:/usr/bin:/bin"
         let plan = ACPBackend.sandboxedSpawnPlan(
             invocation: invocation,
@@ -574,8 +573,7 @@ import ACPModel
 
         let invocation = SandboxProfile.invocation(
             homePath: "/Users/me",
-            scratchDir: "/tmp/scratch",
-            wikiDBPath: "/db/wiki.sqlite")
+            scratchDir: "/tmp/scratch",)
         let confined = BackendProfile(providerHints: [:], sandbox: invocation)
         #expect(confined.sandbox == invocation)
     }
@@ -601,8 +599,7 @@ import ACPModel
             isReadOnly: true,
             sandbox: SandboxProfile.invocation(
                 homePath: "/Users/me",
-                scratchDir: "/private/tmp/scratch",
-                wikiDBPath: "/db/wiki.sqlite"))
+                scratchDir: "/private/tmp/scratch",))
         let violation = ACPBackend.launchPolicyViolation(profile: sandboxed, sandboxUsable: false)
         guard case .sandboxUnavailable? = violation else {
             Issue.record("a requested sandbox with an unusable front-end must fail closed with .sandboxUnavailable, got \(String(describing: violation))")
@@ -674,8 +671,7 @@ import ACPModel
     @Test func sandboxedSpawnPlanWrapsArgvRelocatesTmpdirAndLayersProviderHome() {
         let invocation = SandboxProfile.invocation(
             homePath: "/Users/me",
-            scratchDir: "/tmp/scratch",
-            wikiDBPath: "/db/wiki.sqlite")
+            scratchDir: "/tmp/scratch",)
         let plan = ACPBackend.sandboxedSpawnPlan(
             invocation: invocation,
             executablePath: "/usr/local/bin/codex",
@@ -710,8 +706,7 @@ import ACPModel
     @Test func sandboxedSpawnPlanAddsNothingForPlainClaudeBinary() {
         let invocation = SandboxProfile.invocation(
             homePath: "/Users/me",
-            scratchDir: "/tmp/scratch",
-            wikiDBPath: "/db/wiki.sqlite")
+            scratchDir: "/tmp/scratch",)
         let plan = ACPBackend.sandboxedSpawnPlan(
             invocation: invocation,
             executablePath: "/usr/local/bin/claude",
@@ -972,8 +967,7 @@ import ACPModel
     @Test func sandboxedSpawnPlanForCanonicalizedBunXLayersBunCache() throws {
         let invocation = SandboxProfile.invocation(
             homePath: "/Users/me",
-            scratchDir: "/tmp/scratch",
-            wikiDBPath: "/db/wiki.sqlite")
+            scratchDir: "/tmp/scratch",)
         let canonical = try #require(ACPBackend.canonicalizedSpawn(
             ACPBackend.AgentSpawnConfig(
                 executablePath: "/Users/me/.local/bin/npx",
@@ -1052,8 +1046,7 @@ import ACPModel
     @Test func effectiveBunRunnerUsesOwnedExecutionTemp() {
         let invocation = SandboxProfile.invocation(
             homePath: "/Users/me",
-            scratchDir: "/tmp/scratch",
-            wikiDBPath: "/db/wiki.sqlite")
+            scratchDir: "/tmp/scratch",)
         let leaseURL = URL(fileURLWithPath: "/Users/me/.bun/wikifs-tmp/DEADBEEF")
         let scratch = URL(fileURLWithPath: "/tmp/scratch")
 
@@ -1106,8 +1099,7 @@ import ACPModel
     @Test func nonSummarizerLaunchesKeepScratchTempPolicy() {
         let invocation = SandboxProfile.invocation(
             homePath: "/Users/me",
-            scratchDir: "/tmp/scratch",
-            wikiDBPath: "/db/wiki.sqlite")
+            scratchDir: "/tmp/scratch",)
         let scratch = URL(fileURLWithPath: "/tmp/scratch")
         let cases: [(executable: String, arguments: [String])] = [
             ("/usr/local/bin/claude", []),
@@ -1134,8 +1126,7 @@ import ACPModel
     @Test func sandboxedSpawnPlanOverwritesUntrustedTempHint() {
         let invocation = SandboxProfile.invocation(
             homePath: "/Users/me",
-            scratchDir: "/tmp/scratch",
-            wikiDBPath: "/db/wiki.sqlite")
+            scratchDir: "/tmp/scratch",)
         let scratch = URL(fileURLWithPath: "/tmp/scratch")
         let leaseURL = URL(fileURLWithPath: "/Users/me/.bun/wikifs-tmp/CAFEBABE")
         let hostile = ["TMPDIR": "/attacker/controlled", "TMPPREFIX": "/attacker/prefix"]
@@ -1164,8 +1155,7 @@ import ACPModel
     @Test func providerHomePolicyForUVIsBounded() {
         let invocation = SandboxProfile.invocation(
             homePath: "/Users/me",
-            scratchDir: "/tmp/scratch",
-            wikiDBPath: "/db/wiki.sqlite")
+            scratchDir: "/tmp/scratch",)
         let plan = ACPBackend.sandboxedSpawnPlan(
             invocation: invocation,
             executablePath: "/Users/me/.local/bin/uvx",

@@ -111,23 +111,21 @@ public enum SandboxProfile {
 
     /// Generate the seatbelt profile text. Pure `String → String` — no shell, no IO.
     ///
+    /// Phase 3 of plans/agent-sandbox-scoping.md (§8): the obsolete
+    /// `WIKI_DB`/`QUEUE_DB` write allowances are GONE — production edit
+    /// permission moved into the daemon's scoped-run operation policy, and
+    /// every child (scoped or not) is kernel-denied the databases. Wiki
+    /// writes ride the bundled CLI through the daemon, never a direct file.
+    ///
     /// - Parameters:
     ///   - scratchDir: the per-run scratch directory absolute path (the writable cwd).
-    ///   - wikiDBPath: the active wiki's `<ulid>.sqlite` absolute file path.
-    ///   - queueDBPath: when non-nil, the central `queue.sqlite` absolute path —
-    ///     emits `QUEUE_DB` literal write allows (base + the SQLite sidecar
-    ///     suffixes) so a sandboxed agent can persist extraction jobs (issue
-    ///     #1314). Nil (default) emits nothing — the write fence is unchanged.
     ///   - pdf2mdScriptPath: when non-nil, the resolved absolute path to the bundled
     ///     `pdf2md` PEP 723 script. Emits `process-exec*` + `file-read*` denies (by
     ///     `literal` on the script file) so a sandboxed agent can't run it or feed it
     ///     to `uv --script`. See `pdf2mdDenyRules()` for why this is `literal`, not
-    ///     `subpath`. Nil (default) emits nothing — byte-identical to the pre-denial
-    ///     profile, so call sites that don't care are unaffected.
+    ///     `subpath`. Nil (default) emits nothing — the write fence is unchanged.
     public static func generate(
         scratchDir: String,
-        wikiDBPath: String,
-        queueDBPath: String? = nil,
         pdf2mdScriptPath: String? = nil
     ) -> String {
         var lines: [String] = [
@@ -148,26 +146,10 @@ public enum SandboxProfile {
             // mkdir's this dir before running any command, so without this allow rule the
             // sandboxed agent's shell dies with EPERM on the first invocation.
             "(allow file-write* (subpath (param \"CLAUDE_TMP\")))",
-            // The active wiki DB and its SQLite sidecars are exact files.
-            "(allow file-write* (literal (param \"WIKI_DB\")))",
         ]
-        if queueDBPath != nil {
-            // Acquisition sync writes its durable job to the central queue DB.
-            lines.append("(allow file-write* (literal (param \"QUEUE_DB\")))")
-        }
         // Layer the ~/.claude execution-vector / credential denies over the subtree allow.
         lines.append(contentsOf: claudeHomeDenyRules())
         lines.append(contentsOf: agentRuntimeWriteRules())
-        for suffix in sqliteSidecarSuffixes {
-            lines.append(
-                "(allow file-write* (literal (string-append (param \"WIKI_DB\") \"\(suffix)\")))"
-            )
-            if queueDBPath != nil {
-                lines.append(
-                    "(allow file-write* (literal (string-append (param \"QUEUE_DB\") \"\(suffix)\")))"
-                )
-            }
-        }
         // The deny rules reference only the `PDF2MD_SCRIPT` param NAME; the resolved
         // value flows in via `-D` at sandbox-exec time. Guard just to avoid emitting
         // rules with nothing to deny (and to keep the default-nil profile identical to
@@ -589,8 +571,6 @@ public enum SandboxProfile {
     public static func invocation(
         homePath: String,
         scratchDir: String,
-        wikiDBPath: String,
-        queueDBPath: String? = nil,
         claudeTempBase: String = defaultClaudeTempBase(),
         pdf2mdScriptPath: String? = nil
     ) -> SandboxInvocation {
@@ -603,8 +583,6 @@ public enum SandboxProfile {
         // paths fall back to the input (realpath returns nil for non-existent paths).
         let resolvedHome = realPath(homePath)
         let resolvedScratch = realPath(scratchDir)
-        let resolvedDB = realPath(wikiDBPath)
-        let resolvedQueueDB = queueDBPath.map(realPath)
         let resolvedClaudeTemp = realPath(claudeTempBase)
         // The script file exists when the launcher hands it to us (it probed
         // `isExecutableFile`), so `realpath` fully resolves it — important because
@@ -614,24 +592,16 @@ public enum SandboxProfile {
         let resolvedPdf2md = pdf2mdScriptPath.map { realPath($0) }
         let profile = generate(
             scratchDir: resolvedScratch,
-            wikiDBPath: resolvedDB,
-            queueDBPath: resolvedQueueDB,
             pdf2mdScriptPath: resolvedPdf2md
         )
-        // NOTE: these are profile parameters, NOT child env vars. `-D WIKI_DB=<path>`
-        // is consumed by `(param "WIKI_DB")`; it does not touch the `WIKI_DB=<ulid>`
-        // env var the agent/wikictl use. Search runs through the daemon, so the
-        // child needs no index write permission. `PDF2MD_SCRIPT` is appended only
-        // when the caller supplies a path.
+        // NOTE: these are profile parameters, NOT child env vars. Search runs
+        // through the daemon, so the child needs no index write permission.
+        // `PDF2MD_SCRIPT` is appended only when the caller supplies a path.
         var defines: [(String, String)] = [
             ("HOME", resolvedHome),
             ("SCRATCH_DIR", resolvedScratch),
-            ("WIKI_DB", resolvedDB),
             ("CLAUDE_TMP", resolvedClaudeTemp),
         ]
-        if let resolvedQueueDB {
-            defines.append(("QUEUE_DB", resolvedQueueDB))
-        }
         if let resolvedPdf2md, !resolvedPdf2md.isEmpty {
             defines.append(("PDF2MD_SCRIPT", resolvedPdf2md))
         }
