@@ -27,6 +27,20 @@ extension WikiDaemon {
             testFixtureMakeStore: { try GRDBWikiStore(databaseURL: $0) })
     }
 
+    /// Fixture daemon with an injected extractor catalog (Phase 4): the
+    /// `extractor sync/fetch` handler reads THIS catalog instead of the
+    /// daemon's durable machine catalog, so a socket round trip can drive a
+    /// real sync→enqueue without an installed package.
+    convenience init(
+        containerDirectory: URL,
+        testExtractorCatalog: any ExtractorPackageCatalogReading
+    ) {
+        self.init(
+            containerDirectory: containerDirectory,
+            testFixtureMakeStore: { try GRDBWikiStore(databaseURL: $0) },
+            testExtractorCatalog: testExtractorCatalog)
+    }
+
     static func profileBackedForTesting(
         containerDirectory: URL,
         registryPersistence: DaemonRegistryPersistence = DaemonRegistryPersistence()

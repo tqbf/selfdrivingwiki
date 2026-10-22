@@ -633,43 +633,39 @@ struct DaemonCommandSocketTests {
         #expect(output.changedWikiID == nil)
     }
 
-    /// An unmigrated action (a Phase 4 write) keeps the in-process path —
-    /// the store executor runs against the local database.
-    @Test func runnerKeepsUnmigratedWriteOnInProcessPath() async throws {
+    /// A Phase 4 WRITE now routes over the daemon like every other command —
+    /// the in-process store executor is never reached for a registry-selected
+    /// write. The in-process path survives only for `--database-path` fixture
+    /// runs (covered by the dedicated fixture suites, not here).
+    @Test func runnerRoutesWritesThroughDaemonWithoutOpeningStore() async throws {
         let container = makeContainer()
-        let (server, fixture, _) = try await makeSeededWiki(container: container)
+        let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
+
         let runner = WikiCtlRunner(
             resolveContainer: { WikiResolver(containerDirectory: container) },
             daemonCommandRouter: DaemonCommandRouter(),
-            execute: { command, store, _, _ in
-                guard case .page(.add(_, let title, let bodySource, _, _, _, _, _)) = command else {
-                    Issue.record("expected the page add action")
-                    return SourceCommand.Result(payload: .text(""), didCommit: false)
-                }
-                let body: String
-                switch bodySource {
-                case .inline(let text): body = text
-                case .file(let path): body = try String(contentsOfFile: path, encoding: .utf8)
-                }
-                let page = try store.createPage(title: title, body: body)
-                return SourceCommand.Result(
-                    payload: .text(page.id.rawValue), didCommit: true)
+            execute: { _, _, _, _ in
+                Issue.record("migrated write must not open the in-process store")
+                return SourceCommand.Result(payload: .text(""), didCommit: false)
             })
         let bodyFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("dcm-body-\(UUID().uuidString.prefix(8)).md")
-        try Data("local body".utf8).write(to: bodyFile)
+        try Data("routed body".utf8).write(to: bodyFile)
         let invocation = try ArgumentParser.parse(
             ["--wiki", fixture.displayName, "page", "add",
-             "--title", "Local Write", "--body-file", bodyFile.path],
+             "--title", "Routed Write", "--body-file", bodyFile.path],
             env: { _ in nil })
         let output = try await runner.runOrdinary(
             command: invocation.command,
             wikiSelector: invocation.wikiSelector,
             databasePath: invocation.databasePath,
             environment: [:])
-        #expect(String(decoding: output.stdout, as: UTF8.self).isEmpty == false)
         #expect(output.changedWikiID == fixture.id)
+        let titles = try await seedValue(daemon, wikiID: fixture.id) { store in
+            try store.listPages(sortBy: .lastUpdated).map(\.title)
+        }
+        #expect(titles.contains("Routed Write"))
     }
 
     // MARK: - Absent daemon
