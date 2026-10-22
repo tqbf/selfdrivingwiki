@@ -64,14 +64,11 @@ public struct ResolvedWikiTarget: Equatable, Sendable {
     }
 }
 
-/// Resolves the `--wiki <id>` / `--wiki=<id>` / `WIKI_DB` selector to a concrete wiki's
-/// `<ulid>.sqlite` path, through the SAME registry the app uses
-/// (`plans/llm-wiki.md` — "Takes `--wiki <id>` … resolved through the same
-/// registry the app uses").
-///
-/// Accepts either the wiki's ULID directly, or — for convenience — a display
-/// name, which it resolves to the id via the registry. The ULID is tried first
-/// so an exactly-matching id is never shadowed by a same-named wiki.
+/// Resolves a `--database-path` selection (a disposable fixture database) to
+/// its concrete target. Registry selections (`--wiki <id>`) do NOT resolve
+/// here anymore: Phase 5 of `plans/cli-domain-commands.md` routes them through
+/// the daemon's registry over the socket (`resolveWiki`), so the CLI never
+/// loads `wikis.json` itself and there is no local fallback.
 public struct WikiResolver {
     public let containerDirectory: URL
 
@@ -84,21 +81,6 @@ public struct WikiResolver {
     /// so `wikictl` opens the exact same files without an entitlement.
     public static func appGroupContainer() throws -> WikiResolver {
         WikiResolver(containerDirectory: try DatabaseLocation.appGroupContainerDirectory())
-    }
-
-    /// Resolve a `--wiki` selector to its descriptor. Returns nil if no wiki in
-    /// the registry matches the selector by id or by display name.
-    public func descriptor(forSelector selector: String) -> WikiDescriptor? {
-        let registry = WikiRegistry.load(from: containerDirectory)
-        if let byID = registry.descriptor(id: WikiID(rawValue: selector)) {
-            return byID
-        }
-        return registry.wikis.first { $0.displayName == selector }
-    }
-
-    /// The on-disk `<ulid>.sqlite` URL for a resolved descriptor.
-    public func databaseURL(for descriptor: WikiDescriptor) -> URL {
-        containerDirectory.appendingPathComponent(descriptor.dbFileName, isDirectory: false)
     }
 
     // MARK: - Typed selection (explicit database support)
@@ -174,31 +156,24 @@ public struct WikiResolver {
         return .explicitDatabase(url)
     }
 
-    /// Resolve a typed selection to its target. The registry form performs the
-    /// ordinary registry lookup (read-only, unchanged). The explicit form
-    /// bypasses the registry entirely: the database is the named file, the
-    /// wiki id is the file's stem, and the container directory is the file's
-    /// parent — so every sidecar the CLI profile roots at a "container"
-    /// (search index, scratch state) stays beside the disposable database and
-    /// nothing in the real App Group container is read or written.
+    /// Resolve a typed selection to its target. Only the EXPLICIT database
+    /// form resolves here — the fixture leg's local store path. The registry
+    /// form resolves through the daemon's registry over the socket (Phase 5
+    /// of `plans/cli-domain-commands.md`, in `DaemonCommandRouter`): the CLI
+    /// never loads `wikis.json`, so a registry selection handed to this
+    /// resolver is a wiring bug and fails loudly instead of silently opening
+    /// a local registry.
     public func resolve(selection: WikiDatabaseSelection) throws -> ResolvedWikiTarget {
-        switch selection {
-        case .registry(let selector):
-            guard let descriptor = descriptor(forSelector: selector) else {
-                throw PageCommand.Failure.message(
-                    "no wiki matching \(selector.debugDescription) in the registry")
-            }
-            return ResolvedWikiTarget(
-                databaseURL: databaseURL(for: descriptor),
-                wikiID: descriptor.id,
-                containerDirectory: containerDirectory)
-        case .explicitDatabase(let url):
-            let canonical = url.standardizedFileURL.resolvingSymlinksInPath()
-            let stem = canonical.deletingPathExtension().lastPathComponent
-            return ResolvedWikiTarget(
-                databaseURL: canonical,
-                wikiID: WikiID(rawValue: stem),
-                containerDirectory: canonical.deletingLastPathComponent())
+        guard case .explicitDatabase(let url) = selection else {
+            throw PageCommand.Failure.message(
+                "registry selection (--wiki) resolves through the wikid daemon — "
+                    + "pass --wiki with the app running")
         }
+        let canonical = url.standardizedFileURL.resolvingSymlinksInPath()
+        let stem = canonical.deletingPathExtension().lastPathComponent
+        return ResolvedWikiTarget(
+            databaseURL: canonical,
+            wikiID: WikiID(rawValue: stem),
+            containerDirectory: canonical.deletingLastPathComponent())
     }
 }

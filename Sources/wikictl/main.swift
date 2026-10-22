@@ -1,5 +1,6 @@
 import Foundation
 import WikiCtlCore
+import WikiDaemonContract
 import WikiFSCore
 #if canImport(WikiFSEngine)
 import WikiFSEngine
@@ -104,12 +105,24 @@ func run() async -> Int32 {
         return await runDaemonChatStop(wikiSelector: invocation.wikiSelector, chatID: chatID)
     }
 
-    // Job inspection is read-only end to end. It bypasses WikiCtlRunner's
-    // writable wiki-store profile and opens both SQLite files without
-    // migrations or checkpoints.
+    // Job inspection is read-only end to end. Phase 3 of
+    // plans/cli-domain-commands.md: it reads the daemon's durable per-wiki
+    // queue read over the socket (`queueWikiItems`) — the queue database and
+    // the wiki store are opened by the daemon, not here.
     if case .job(let action) = invocation.command {
         do {
-            print(try await runJobCommand(action, wikiSelector: invocation.wikiSelector))
+            let router = DaemonCommandRouter()
+            let (output, emptyList) = try await router.runJob(
+                action,
+                selector: invocation.wikiSelector,
+                containerDirectory: try DatabaseLocation.appGroupContainerDirectory())
+            print(output)
+            if emptyList {
+                // #1230 (axi.md principle 5): zero jobs is an answer, not a
+                // silence (stdout keeps its exact bytes — the TSV header, or
+                // `[]` for --json). The stderr notice says so; exit stays 0.
+                FileHandle.standardError.write(Data(ZeroResults.note("job list").utf8))
+            }
             return 0
         } catch {
             FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
@@ -117,8 +130,11 @@ func run() async -> Int32 {
         }
     }
 
-    // The queue family runs against the LIVE daemon over the workload XPC
-    // surface — no writable wiki-store profile involved.
+    // The queue family runs against the LIVE daemon over its local socket —
+    // the versioned domain envelope transport (Phase 1 of
+    // plans/cli-domain-commands.md). The app-only XPC surface is unreachable
+    // from a standalone binary. App closed ⇒ socket unlinked ⇒ this fails
+    // fast with the explicit not-running error; there is no local fallback.
     if case .queue(let action) = invocation.command {
         do {
             print(try await runQueueCommand(action))
@@ -130,9 +146,9 @@ func run() async -> Int32 {
     }
 
     // The transcribe family enqueues on-device speech jobs through the same
-    // live daemon surface; waiting jobs block on the daemon's completion
-    // wait. No writable wiki-store profile is opened unless a source
-    // existence check needs one.
+    // live daemon surface; waiting jobs poll the daemon's queue item-state
+    // snapshots (Phase 5 of plans/cli-domain-commands.md). No wiki-store
+    // profile and no queue database is ever opened in this process.
     if case .transcribe(let action) = invocation.command {
         do {
             print(try await runTranscribeCommand(action, wikiSelector: invocation.wikiSelector))
@@ -389,93 +405,15 @@ func execute(
     }
 }
 
-/// `wikictl extractor sync <package>` dispatch: enqueue-only queue wiring.
-/// The closure writes the durable `.extraction` item through
-/// `QueueStore.enqueue` — the same immediate durable store write
-/// `QueueEngine.enqueue` performs — WITHOUT constructing a `QueueEngine`
-/// (that needs a worker factory whose provider implementations live in
-/// targets `WikiCtlCore` cannot link) and WITHOUT waiting for completion
-/// (waiters are per-engine in-memory; a daemon-side completion could never
-/// resume a CLI waiter — it would hang). The app or the wikid daemon
-/// rehydrates and drains the persisted items on its next dispatch scan /
-/// launch.
-private func runExtractorSync(
-    packageName: String,
-    force: Bool,
-    in store: GRDBWikiStore,
-    wikiID: WikiID,
-    containerDirectory: URL
-) async throws -> SourceCommand.Result {
-    let queueStore = try QueueStore(
-        databaseURL: try DatabaseLocation.queueDatabaseURL())
-    defer { queueStore.close() }
-    // Discovery = durable machine catalog ∪ this process's reviewed overlay.
-    // The reviewed root is wherever an `ExtractorPackages/` tree is staged
-    // beside this binary (the build layout); when that does not resolve
-    // (an app-bundled helper), the durable catalog the app published at
-    // launch still carries the record.
-    let reviewedRoot = ExtractorSyncCommand.reviewedPackageRoot()
-    let catalog = try ExtractorSyncCommand.productionCatalogReader(
-        containerDirectory: containerDirectory,
-        reviewedPackageRoot: reviewedRoot)
-    let output = try await ExtractorSyncCommand.run(
-        packageName: packageName,
-        force: force,
-        in: store,
-        containerDirectory: containerDirectory,
-        catalog: catalog,
-        enqueueJob: { sourceID in
-            try queueStore.enqueue(QueueItemRequest(
-                queue: .extraction,
-                wikiID: wikiID,
-                payload: QueueItemPayload(sourceIDs: [sourceID]))).id
-        })
-    return SourceCommand.Result(payload: .text(output), didCommit: true)
-}
-
-/// `wikictl extractor fetch <package> --item <key>` dispatch: the same
-/// enqueue-only wiring as `runExtractorSync` — durable queue write, no
-/// `QueueEngine`, no waiting (the daemon-side drain owns completion).
-private func runExtractorFetch(
-    packageName: String,
-    itemKey: String,
-    force: Bool,
-    in store: GRDBWikiStore,
-    wikiID: WikiID,
-    containerDirectory: URL
-) async throws -> SourceCommand.Result {
-    let queueStore = try QueueStore(
-        databaseURL: try DatabaseLocation.queueDatabaseURL())
-    defer { queueStore.close() }
-    let reviewedRoot = ExtractorSyncCommand.reviewedPackageRoot()
-    let catalog = try ExtractorSyncCommand.productionCatalogReader(
-        containerDirectory: containerDirectory,
-        reviewedPackageRoot: reviewedRoot)
-    let output = try await ExtractorFetchCommand.run(
-        packageName: packageName,
-        itemKey: itemKey,
-        force: force,
-        in: store,
-        containerDirectory: containerDirectory,
-        catalog: catalog,
-        enqueueJob: { sourceID in
-            try queueStore.enqueue(QueueItemRequest(
-                queue: .extraction,
-                wikiID: wikiID,
-                payload: QueueItemPayload(sourceIDs: [sourceID]))).id
-        })
-    return SourceCommand.Result(payload: .text(output), didCommit: true)
-}
-
-/// Read durable job state without creating, migrating, or checkpointing either
 /// `wikictl queue status|pause|resume|halt` — runs against the live daemon
-/// over the workload XPC surface. `status` renders per-lane truth from the
+/// over its local socket (`DaemonWorkloadClient`'s socket backend, Phase 1 of
+/// plans/cli-domain-commands.md). `status` renders per-lane truth from the
 /// daemon's queue snapshot; the lane controls are pass-through verbs whose
 /// effect is durable in the daemon's queue store.
 private func runQueueCommand(_ action: QueueCommand.Action) async throws -> String {
     #if os(macOS)
-    let connection = try WikiDaemonConnection.connect()
-    let client = try DaemonWorkloadClient(connection: connection)
+    let client = try DaemonWorkloadClient(
+        socketContainerDirectory: try DatabaseLocation.appGroupContainerDirectory())
     switch action {
     case .status(let json):
         let snapshot = try await client.queueSnapshot()
@@ -507,18 +445,18 @@ private func runQueueCommand(_ action: QueueCommand.Action) async throws -> Stri
 }
 
 private struct QueueCommandUnsupportedError: LocalizedError {
-    var errorDescription: String? { "wikictl queue requires macOS (the wikid daemon XPC surface)" }
+    var errorDescription: String? { "wikictl queue requires macOS (the wikid daemon socket surface)" }
 }
 
 /// Enqueue the EXPLICIT on-device speech job for one source through the live
 /// daemon workload surface, mirroring the app's provenance-chip menu action:
 /// same payload intent, same speech arm, same typed failures (YouTube
-/// sources only; no caption fallback). `--wiki` resolves the owning wiki
-/// through the ordinary registry; the source must exist there and be a
-/// YouTube source — a wrong-source mistake fails BEFORE anything is
-/// enqueued. With the default `--wait`, the command blocks on the daemon's
-/// completion wait and prints the typed outcome (success, or the queue
-/// item's redacted error).
+/// sources only; no caption fallback). `--wiki` resolves the owning wiki and
+/// the source is preflighted BOTH over the daemon's socket (Phase 5 of
+/// plans/cli-domain-commands.md) — a wrong-source mistake fails BEFORE
+/// anything is enqueued, and this process opens no database. With the default
+/// `--wait`, the command polls the daemon's queue item-state snapshots and
+/// prints the typed outcome (success, or the queue item's redacted error).
 private func runTranscribeCommand(
     _ action: TranscribeCommand.Action,
     wikiSelector: String
@@ -530,16 +468,29 @@ private func runTranscribeCommand(
             throw TranscribeCommand.Failure(
                 "transcribe on-device: pass --wiki <id> before the subcommand (the wiki that owns the source)")
         }
-        let resolver = try WikiResolver.appGroupContainer()
-        let target = try resolver.resolve(selection: .registry(wikiSelector))
-
-        // Pre-flight the source against the owning wiki: the queue path
-        // would fail anyway, but the typed message reads better here and
-        // nothing is enqueued for a mistake.
-        let sourceID = SourceID(rawValue: source)
+        // Phases 2 and 5 of plans/cli-domain-commands.md: --wiki resolution
+        // AND the source preflight ride the daemon over the socket —
+        // resolveWiki for the owning wiki, transcribePreflight for the
+        // YouTube-scope check (the daemon reads its own prepared store; this
+        // process opens nothing). Both fail fast with the not-running error
+        // when the app is closed. There is no local fallback.
+        let container = try DatabaseLocation.appGroupContainerDirectory()
+        let descriptor: WikiDescriptor
         do {
-            let inScope = try GRDBWikiStore.youtubeSpeechPreflight(
-                readOnlyURL: target.databaseURL, sourceID: sourceID)
+            descriptor = try await makeRegistryClient().resolveWiki(selector: wikiSelector)
+        } catch let error as DaemonDomainError where error.code == .notFound {
+            throw TranscribeCommand.Failure(
+                "no wiki matching \(wikiSelector.debugDescription) in the registry")
+        }
+
+        // Pre-flight the source against the owning wiki, DAEMON-side: the
+        // queue path would fail anyway, but the typed message reads better
+        // here and nothing is enqueued for a mistake.
+        let sourceID = SourceID(rawValue: source)
+        let client = try DaemonWorkloadClient(socketContainerDirectory: container)
+        do {
+            let inScope = try await client.transcribePreflight(
+                wikiID: descriptor.id, sourceID: sourceID)
             guard inScope else {
                 throw TranscribeCommand.Failure(
                     "source \(source) is not a YouTube video in wiki \(wikiSelector) — on-device speech supports YouTube videos only")
@@ -547,14 +498,12 @@ private func runTranscribeCommand(
         } catch let error as TranscribeCommand.Failure {
             throw error
         } catch {
-            // A read failure of the owning wiki is surfaced, not swallowed:
-            // the agent should see WHY the source could not be verified.
+            // A failed preflight read is surfaced, not swallowed: the agent
+            // should see WHY the source could not be verified.
             throw TranscribeCommand.Failure(
                 "could not verify source \(source) in wiki \(wikiSelector): \(error.localizedDescription)")
         }
 
-        let connection = try WikiDaemonConnection.connect()
-        let client = try DaemonWorkloadClient(connection: connection)
         // The enqueue write is durable in the daemon's queue store even if
         // its reply is slow (the handler runs the dispatch scan inline). A
         // CLI cannot leak a parked continuation — it would never exit — so
@@ -562,7 +511,7 @@ private func runTranscribeCommand(
         // exits with a clear note if the reply misses it.
         let request = QueueItemRequest(
             queue: .extraction,
-            wikiID: target.wikiID,
+            wikiID: descriptor.id,
             payload: QueueItemPayload(
                 sourceIDs: [sourceID],
                 transcriptionIntent: .onDeviceSpeech))
@@ -625,30 +574,32 @@ private func runTranscribeCommand(
 
         guard wait else { return "" }
 
-        // Poll the DURABLE queue store rather than the daemon's completion
-        // wait: the workload XPC client bounds every call at 30 s, and a
-        // speech job legitimately runs minutes. A deduplicated enqueue
-        // returns an already-terminal item, so the poll reads the store the
-        // engine writes (the same truth `wikictl job get` renders); the
-        // loop is bounded by the speech wait policy (2 h 45 m).
+        // Phase 5 of plans/cli-domain-commands.md: poll the daemon's
+        // `queueItemState` operation — one SHORT item-state snapshot per round
+        // trip, sleeping BETWEEN calls — instead of holding this process's own
+        // read-only queue-store connection open for the job's duration. Every
+        // round trip is bounded by the workload client's per-call deadline;
+        // the 165-minute ceiling is the speech wait policy (and the caller's
+        // Ctrl-C), never a socket lifetime. There is no local fallback: a
+        // daemon failure mid-wait (the app quit, the socket went away)
+        // surfaces as this command's error, and an unknown item (the durable
+        // terminal history is never deleted) fails instead of polling forever.
         let started = Date()
         let waitLimit = started.addingTimeInterval(
             165 * 60)
         var finalState: String?
         var finalError: String?
-        let queueStore = try QueueStore(readOnlyDatabaseURL: DatabaseLocation.queueDatabaseURL())
-        defer { queueStore.close() }
         while Date() < waitLimit {
             try Task.checkCancellation()
-            if let item = try queueStore.getItem(itemID) {
-                switch item.state {
-                case .completed: finalState = "completed"
-                case .failed: finalError = item.error
-                case .cancelled: finalError = "cancelled"
-                default: break
-                }
-                if finalState != nil || finalError != nil { break }
+            let snapshot = try await client.queueItemState(of: itemID)
+            switch snapshot.state {
+            case QueueItemState.completed.rawValue: finalState = "completed"
+            case QueueItemState.failed.rawValue:
+                finalError = snapshot.error ?? "failed"
+            case QueueItemState.cancelled.rawValue: finalError = "cancelled"
+            default: break
             }
+            if finalState != nil || finalError != nil { break }
             try await Task.sleep(for: .seconds(5))
         }
         let elapsed = Int(Date().timeIntervalSince(started))
@@ -671,85 +622,10 @@ private func runTranscribeCommand(
     }
     #else
     throw TranscribeCommand.Failure(
-        "wikictl transcribe requires macOS (the wikid daemon XPC surface)")
+        "wikictl transcribe requires macOS (the wikid daemon socket surface)")
     #endif
 }
 
-
-/// Read durable job state without creating, migrating, or checkpointing either
-/// database. A missing queue database is an empty list, not an invitation to
-/// create the file.
-private func runJobCommand(
-    _ action: JobCommand.Action,
-    wikiSelector: String
-) async throws -> String {
-    let resolver = try WikiResolver.appGroupContainer()
-    guard let descriptor = resolver.descriptor(forSelector: wikiSelector) else {
-        throw PageCommand.Failure.message(
-            "no wiki matching \(wikiSelector.debugDescription) in the registry")
-    }
-
-    let queueURL = try DatabaseLocation.queueDatabaseURL()
-    let items: [QueueItem]
-    if FileManager.default.fileExists(atPath: queueURL.path) {
-        let queueStore = try QueueStore(readOnlyDatabaseURL: queueURL)
-        defer { queueStore.close() }
-        items = try queueStore.loadItems(wikiID: descriptor.id)
-    } else {
-        items = []
-    }
-
-    let selectedItems: [QueueItem]
-    let json: Bool
-    switch action {
-    case .list(let wantsJSON):
-        selectedItems = items
-        json = wantsJSON
-    case .get(let id, let wantsJSON):
-        guard let item = items.first(where: { $0.id == id }) else {
-            throw JobCommand.Failure.notFound(id)
-        }
-        selectedItems = [item]
-        json = wantsJSON
-    }
-
-    // The wiki leg goes through WikiReadService — the sanctioned read-only
-    // projection seam (the boundary script rejects bare GRDBWikiStore
-    // construction in this target). Existence of any processed markdown is
-    // what "extraction completed" means here: a byteless placeholder source
-    // has none.
-    let wikiReadService = WikiReadService(
-        databaseURL: resolver.databaseURL(for: descriptor))
-    let sourceIDs = Set(selectedItems.flatMap(\.payload.sourceIDs))
-    var completedSourceIDs = Set<SourceID>()
-    for sourceID in sourceIDs {
-        let head = try await wikiReadService.asyncRead { access in
-            try access.processedMarkdownHead(sourceID: sourceID)
-        }
-        if head != nil {
-            completedSourceIDs.insert(sourceID)
-        }
-    }
-    await wikiReadService.shutdown()
-
-    let output: String
-    switch action {
-    case .list:
-        output = try JobCommand.renderList(
-            items: selectedItems, completedSourceIDs: completedSourceIDs, json: json)
-        if selectedItems.isEmpty {
-            // #1230 (axi.md principle 5): zero jobs is an answer, not a
-            // silence (today's stdout is just the TSV header, or `[]` for
-            // --json — both stay byte-identical). The stderr notice says so;
-            // exit stays 0.
-            FileHandle.standardError.write(Data(ZeroResults.note("job list").utf8))
-        }
-    case .get:
-        output = try JobCommand.renderGet(
-            item: selectedItems[0], completedSourceIDs: completedSourceIDs, json: json)
-    }
-    return output
-}
 
 /// #637: split-out dispatch for the `wikictl chat …` subcommands. Resolves
 /// a Tantivy BM25 leg for `.search` before invoking `ChatCommand.run(...,
@@ -832,26 +708,25 @@ private func write(_ output: WikiCtlRunner.Output) {
     }
 }
 
-// MARK: - wiki subcommands (direct registry access)
+// MARK: - wiki subcommands (daemon registry over the socket)
 //
-// These operate directly on `wikis.json` + the per-wiki `<ulid>.sqlite` in the
-// App Group container — NOT via the daemon. The wikid daemon is now a bundled,
-// app-bound XPC service (Contents/XPCServices/wikid.xpc): it is only reachable
-// from within the host app's process, never from this standalone CLI. See
-// plans/xpc-service-migration.md. The logic mirrors `WikiDaemon.createWiki` /
-// `deleteWiki` / `renameWiki` verbatim, minus the daemon-only store caching +
-// event-bus wiring.
+// Phase 2 of plans/cli-domain-commands.md: every wiki verb routes through the
+// daemon's registry over its local socket (`DaemonWikiRegistryClient`) — the
+// daemon is the single pathway to `wikis.json` and the per-wiki databases.
+// `wiki list` / `wiki rename` reads adopt the app's on-disk registry, so
+// app-side creates and renames are visible immediately; `wiki create` runs
+// the daemon's creation coordinator (bootstrap + seed + child profile);
+// `wiki delete` inherits the daemon's FULL eviction (search runtime shutdown,
+// child profile removal, registry row, database artifacts), which closes the
+// CLI's old degraded-delete race (a delete that never cleaned the search
+// index or raced a live daemon's caches).
 //
-// Registry-level changes (a new/deleted/renamed wiki) become visible to a
-// running app on the next committing write, not only on its next launch: the
-// app's `WikiChangeBridge` re-reads `wikis.json` on every wiki-change wake
-// (`WikiRegistryClient.reloadFromDisk()`), and this CLI posts that wake after a
-// committing write via `DarwinNotifier.postChange()`. A registry change that is
-// followed by no write is still only picked up at launch, and the wake is
-// wiki-agnostic, so the app cannot tell which wiki changed — it refreshes every
-// wiki the registry lists. The daemon's prior behavior was to post no registry
-// notification at all, which is fine for the CLI's scripting/headless role (the
-// app creates wikis via its own client, not via wikictl).
+// App closed ⇒ socket unlinked ⇒ every wiki command fails fast with "the
+// wikid daemon is not running — launch the app" (exit 1). No local fallback.
+//
+// Registry changes become visible to a running app through the same mechanism
+// as before: the app's `WikiChangeBridge` re-reads `wikis.json` on every
+// wiki-change wake, and the daemon now owns the write.
 
 func runDumpConfig(overlay: String?) -> Int32 {
     do {
@@ -863,14 +738,22 @@ func runDumpConfig(overlay: String?) -> Int32 {
     }
 }
 
+/// The container-scoped registry client for the wiki subcommands.
+private func makeRegistryClient() throws -> DaemonWikiRegistryClient {
+    try DaemonWikiRegistryClient(
+        containerDirectory: try DatabaseLocation.appGroupContainerDirectory())
+}
+
 func runWikiList() async -> Int32 {
     do {
-        let resolver = try WikiResolver.appGroupContainer()
-        let registry = WikiRegistry.load(from: resolver.containerDirectory)
-        for wiki in registry.wikis {
-            print("\(wiki.id)\t\(wiki.displayName)")
+        let client = try makeRegistryClient()
+        let wikis = try await client.listWikis()
+        for wiki in wikis {
+            // `.rawValue` — the TSV scripting contract carries the raw ULID,
+            // not the type's Debug rendering.
+            print("\(wiki.id.rawValue)\t\(wiki.displayName)")
         }
-        if registry.wikis.isEmpty {
+        if wikis.isEmpty {
             // #1230 (axi.md principle 5): zero wikis is an answer, not a
             // silence. The stderr notice says so; stdout stays empty; exit
             // stays 0.
@@ -878,69 +761,50 @@ func runWikiList() async -> Int32 {
         }
         return 0
     } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
         return 1
     }
 }
 
 func runWikiCreate(name: String) async -> Int32 {
     do {
-        write(try makeRunner().runWikiCreate(name: name))
+        let client = try makeRegistryClient()
+        let descriptor = try await client.createWiki(name: name)
+        // `.rawValue` — the TSV scripting contract carries the raw ULID,
+        // not the type's Debug rendering.
+        print("\(descriptor.id.rawValue)\t\(descriptor.displayName)")
         return 0
     } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
         return 1
     }
 }
 
 func runWikiDelete(id: String) async -> Int32 {
     do {
-        let wikiID = WikiID(rawValue: id)
-        let resolver = try WikiResolver.appGroupContainer()
-        let container = resolver.containerDirectory
-        var registry = WikiRegistry.load(from: container)
-        guard let descriptor = registry.descriptor(id: wikiID) else {
-            FileHandle.standardError.write(Data("wikictl: no wiki matching \(id)\n".utf8))
-            return 1
-        }
-
-        // Remove from the registry first, then drop the DB files (main + WAL
-        // sidecars). Mirrors WikiDaemon.deleteWiki.
-        registry.remove(id: wikiID)
-        try registry.save(to: container)
-
-        let dbURL = resolver.databaseURL(for: descriptor)
-        let fm = FileManager.default
-        for suffix in ["", "-wal", "-shm"] {
-            DebugLog.trying("remove database suffix \(suffix)") { try fm.removeItem(atPath: dbURL.path + suffix) }
-        }
+        let client = try makeRegistryClient()
+        // An unknown id throws the daemon's typed notFound ("no wiki matching
+        // <id>") — the same failure text the direct-registry path printed.
+        try await client.deleteWiki(id: WikiID(rawValue: id))
         return 0
     } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
         return 1
     }
 }
 
 func runWikiRename(id: String, name: String) async -> Int32 {
     do {
-        let resolver = try WikiResolver.appGroupContainer()
-        let container = resolver.containerDirectory
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             FileHandle.standardError.write(Data("wikictl: wiki rename requires a non-empty name\n".utf8))
             return 1
         }
-        let wikiID = WikiID(rawValue: id)
-        var registry = WikiRegistry.load(from: container)
-        guard registry.descriptor(id: wikiID) != nil else {
-            FileHandle.standardError.write(Data("wikictl: no wiki matching \(id)\n".utf8))
-            return 1
-        }
-        registry.rename(id: wikiID, to: trimmed)
-        try registry.save(to: container)
+        let client = try makeRegistryClient()
+        try await client.renameWiki(id: WikiID(rawValue: id), name: trimmed)
         return 0
     } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
         return 1
     }
 }

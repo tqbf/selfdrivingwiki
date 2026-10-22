@@ -114,6 +114,65 @@ reject_matches "AgentLauncher is constructed outside a plugin/factory or launche
   Sources/WikiFSEngine/AgentLauncher.swift \
   Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
 
+# Scope-limited variant of reject_matches: the pattern is grepped under
+# "$source_root/<scope>" only. A missing scope directory (synthetic fixture
+# roots in the boundary tests) is not an error — it simply has no matches, and
+# the fixture layout (<root>/Sources/<scope>) falls back to the nested path so
+# synthetic fixtures resolve exactly like the real tree.
+reject_matches_in() {
+  local label="$1"
+  local scope="$2"
+  local pattern="$3"
+  shift 3
+  local scope_dir="$source_root/$scope"
+  [[ -d "$scope_dir" ]] || scope_dir="$source_root/Sources/$scope"
+  local matches
+  matches="$({ grep -RIlE --include='*.swift' "$pattern" "$scope_dir" 2>/dev/null || true; } | while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    local relative_path="${path#"$source_root/"}"
+    local policy_path="$relative_path"
+    if [[ -n "$policy_prefix" ]]; then
+      policy_path="$policy_prefix/$relative_path"
+    fi
+    local allowed=0
+    for prefix in "$@"; do
+      [[ "$policy_path" == "$prefix" ]] && allowed=1 && break
+    done
+    if [[ $allowed -eq 0 ]]; then
+      printf '%s\n' "$policy_path"
+    fi
+  done | LC_ALL=C sort)"
+  if [[ -n "$matches" ]]; then
+    echo "Cordis boundary violation: $label:" >&2
+    printf '%s\n' "$matches" >&2
+    return 1
+  fi
+  return 0
+}
+
+# Phase 5 of plans/cli-domain-commands.md — one pathway: the CLI targets
+# (wikictl + WikiCtlCore) reach wiki data ONLY through the daemon over the
+# domain envelope. The queue store is opened by wikid and the app's queue
+# engine; the registry is loaded by wikid, the app shell, and WikiRegistryClient
+# (the pre-profile bootstrap boundary). The single sanctioned exception is the
+# --database-path fixture leg, which stays local by design:
+# Sources/wikictl/ExtractorFixtureLeg.swift stages extraction items for the
+# isolated harness without a running app, and WikiCtlCore's headless store
+# profile boot (CordisBoot) serves only explicit --database-path runs.
+reject_matches_in \
+  "QueueStore is constructed in a CLI target (registry-selected runs ride the daemon; the --database-path fixture leg excepted)" \
+  "WikiCtlCore" '(^|[^[:alnum:]_])QueueStore\(' || failed=1
+reject_matches_in \
+  "QueueStore is constructed in a CLI target (registry-selected runs ride the daemon; the --database-path fixture leg excepted)" \
+  "wikictl" '(^|[^[:alnum:]_])QueueStore\(' \
+  Sources/wikictl/ExtractorFixtureLeg.swift || failed=1
+reject_matches_in \
+  "WikiRegistry is loaded in a CLI target (--wiki resolves through the daemon's resolveWiki over the socket)" \
+  "WikiCtlCore" '(^|[^[:alnum:]_])WikiRegistry\.load\(' || failed=1
+reject_matches_in \
+  "WikiRegistry is loaded in a CLI target (--wiki resolves through the daemon's resolveWiki over the socket)" \
+  "wikictl" '(^|[^[:alnum:]_])WikiRegistry\.load\(' || failed=1
+
 process_catalog="$source_root/WikiFSEngine/ProductionPluginCatalogs.swift"
 if [[ -f "$process_catalog" ]]; then
   required_process_markers=(

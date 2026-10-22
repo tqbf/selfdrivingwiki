@@ -121,18 +121,18 @@ public struct WikiCtlRunner {
 
     private let resolveContainer: () throws -> WikiResolver
     private let storeProfile: CLIStoreProfile
-    private let bootstrap: StoreBootstrap
+    private let daemonCommandRouter: DaemonCommandRouter
     private let execute: CommandExecutor
 
     public init(
         resolveContainer: @escaping () throws -> WikiResolver = WikiResolver.appGroupContainer,
         storeProfile: CLIStoreProfile = CLIStoreProfile(),
-        bootstrap: StoreBootstrap = StoreBootstrap(),
+        daemonCommandRouter: DaemonCommandRouter = DaemonCommandRouter(),
         execute: @escaping CommandExecutor
     ) {
         self.resolveContainer = resolveContainer
         self.storeProfile = storeProfile
-        self.bootstrap = bootstrap
+        self.daemonCommandRouter = daemonCommandRouter
         self.execute = execute
     }
 
@@ -151,23 +151,55 @@ public struct WikiCtlRunner {
         let selection = try WikiResolver.selection(
             wikiSelector: wikiSelector.isEmpty ? nil : wikiSelector,
             databasePath: databasePath.isEmpty ? nil : databasePath)
-        let target = try resolver.resolve(selection: selection)
-        let result = try await storeProfile.withStore(request: CLIStoreProfile.Request(
-            databaseURL: target.databaseURL,
-            wikiID: target.wikiID,
-            containerDirectory: target.containerDirectory
-        )) { store in
-            try await execute(
-                resolvedCommand,
-                store,
-                target.wikiID,
-                target.containerDirectory)
-        }
+        switch selection {
+        case .registry(let selector):
+            // Phase 5 of plans/cli-domain-commands.md: EVERY registry-selected
+            // command rides the daemon — the daemon resolves the selector
+            // against its live registry and executes the command layer against
+            // its prepared store. The in-process store boot below exists ONLY
+            // for explicit `--database-path` fixture runs. A registry-selected
+            // command with no daemon route is a wikictl wiring bug (every
+            // `--wiki` command is dispatched to the daemon); it fails loudly
+            // instead of silently opening a local store.
+            guard let call = DaemonCommandRoute.call(for: resolvedCommand) else {
+                throw PageCommand.Failure.message(
+                    "no daemon route for this wikictl command — every --wiki command "
+                        + "must ride the daemon, and there is no local fallback; "
+                        + "this is a wikictl wiring bug")
+            }
+            let routed = try await daemonCommandRouter.run(
+                call,
+                selector: selector,
+                containerDirectory: resolver.containerDirectory)
+            return Self.output(
+                for: routed.result,
+                command: resolvedCommand,
+                changedWikiID: routed.result.didCommit ? routed.wikiID : nil)
+        case .explicitDatabase:
+            // The sanctioned LOCAL path: an explicit `--database-path` fixture
+            // run targets a disposable database outside the App Group container
+            // by design, so the CLI boots its own headless store profile for it.
+            // Nothing here may touch the live container (enforced by the
+            // selection validation above and the boundary script's fixture
+            // carve-out).
+            let target = try resolver.resolve(selection: selection)
+            let result = try await storeProfile.withStore(request: CLIStoreProfile.Request(
+                databaseURL: target.databaseURL,
+                wikiID: target.wikiID,
+                containerDirectory: target.containerDirectory
+            )) { store in
+                try await execute(
+                    resolvedCommand,
+                    store,
+                    target.wikiID,
+                    target.containerDirectory)
+            }
 
-        return Self.output(
-            for: result,
-            command: resolvedCommand,
-            changedWikiID: result.didCommit ? target.wikiID : nil)
+            return Self.output(
+                for: result,
+                command: resolvedCommand,
+                changedWikiID: result.didCommit ? target.wikiID : nil)
+        }
     }
 
     static func output(
@@ -219,20 +251,11 @@ public struct WikiCtlRunner {
         return Output(stdout: Data(text.utf8))
     }
 
-    public func runWikiCreate(name: String) throws -> Output {
-        let resolver = try resolveContainer()
-        let container = resolver.containerDirectory
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayName = trimmed.isEmpty ? "Untitled Wiki" : trimmed
-        var descriptor = WikiDescriptor.make(displayName: displayName)
-        descriptor.homePageID = try bootstrap.createAndSeed(
-            databaseURL: resolver.databaseURL(for: descriptor)).homePageID
-
-        var registry = WikiRegistry.load(from: container)
-        registry.add(descriptor)
-        try registry.save(to: container)
-        return Output(stdout: Data("\(descriptor.id)\t\(descriptor.displayName)\n".utf8))
-    }
+    // `runWikiCreate` was removed in Phase 2 of plans/cli-domain-commands.md:
+    // wiki creation runs on the daemon (its creation coordinator bootstraps,
+    // seeds, and registers the wiki) through `DaemonWikiRegistryClient`. The
+    // CLI's direct `StoreBootstrap.createAndSeed` + `wikis.json` write path is
+    // gone — the daemon is the single writer of wiki lifecycle state.
 }
 
 /// Bridges the wikictl CLI's three search commands (`page search`,

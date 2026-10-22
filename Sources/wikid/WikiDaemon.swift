@@ -81,9 +81,18 @@ final class WikiDaemon: @unchecked Sendable {
 
     // MARK: - Dependencies
 
-    private let containerDirectory: URL
+    /// Internal (not private): the Phase 4 extractor family resolves its
+    /// package catalog against the daemon's own container — the same directory
+    /// every other daemon-side operation reads.
+    let containerDirectory: URL
     private let registryPersistence: DaemonRegistryPersistence?
     private let testFixtureMakeStore: ((URL) throws -> WikiStore)?
+    /// Test seam for the Phase 4 extractor family: the package catalog the
+    /// `extractor sync/fetch` handler reads. Production resolves the daemon's
+    /// durable machine catalog (+ its reviewed overlay); a fixture daemon
+    /// injects a catalog double so a socket round trip can drive a REAL
+    /// sync→enqueue without an installed package. Nil = production.
+    let testExtractorCatalog: (any ExtractorPackageCatalogReading)?
     private let daemonChatDiagnostics = DaemonChatDiagnostics()
     #if canImport(WikiFSEngine)
     /// Production owns provider, extraction, and per-wiki store lifetimes here.
@@ -285,11 +294,13 @@ final class WikiDaemon: @unchecked Sendable {
     init(
         containerDirectory: URL,
         testFixtureMakeStore: @escaping (URL) throws -> WikiStore,
-        extractionAssembly: ExtractionCompositionOwner.AssemblyFactory? = nil
+        extractionAssembly: ExtractionCompositionOwner.AssemblyFactory? = nil,
+        testExtractorCatalog: (any ExtractorPackageCatalogReading)? = nil
     ) {
         self.containerDirectory = containerDirectory
         self.registryPersistence = nil
         self.testFixtureMakeStore = testFixtureMakeStore
+        self.testExtractorCatalog = testExtractorCatalog
         self.registry = WikiRegistry.load(from: containerDirectory)
         #if canImport(WikiFSEngine)
         self.profileOwner = nil
@@ -345,6 +356,7 @@ final class WikiDaemon: @unchecked Sendable {
         self.containerDirectory = containerDirectory
         self.registryPersistence = registryPersistence
         self.testFixtureMakeStore = nil
+        self.testExtractorCatalog = nil
         self.registry = WikiRegistry.load(from: containerDirectory)
         self.profileOwner = profileOwner
         self.legacyAgentProviderServices = nil
@@ -1069,6 +1081,41 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
+    // MARK: Registry over the CLI socket (Phase 2 of plans/cli-domain-commands.md)
+
+    /// `createWiki` for the socket dispatcher: the production coordinator
+    /// path when a profile owner exists (full bootstrap + child profile),
+    /// the synchronous fixture seam otherwise (tests and Linux). Mirrors the
+    /// `openStore` split. `nil` = creation failed; the dispatcher turns that
+    /// into a typed `operationFailed`.
+    #if canImport(WikiFSEngine)
+    func createWikiOverSocket(name: String) async -> Data? {
+        if profileOwner != nil {
+            return await createWiki(name: name)
+        }
+        return testFixtureCreateWiki(name: name)
+    }
+
+    /// `deleteWiki` for the socket dispatcher: the production path (await
+    /// creation settlement, full eviction — search runtime shutdown, child
+    /// profile removal, registry row, database artifacts) when a profile
+    /// owner exists, the fixture seam otherwise.
+    func deleteWikiOverSocket(id wikiID: WikiID) async -> Bool {
+        if profileOwner != nil {
+            return await deleteWiki(id: wikiID)
+        }
+        return testFixtureDeleteWiki(id: wikiID)
+    }
+    #else
+    func createWikiOverSocket(name: String) -> Data? {
+        testFixtureCreateWiki(name: name)
+    }
+
+    func deleteWikiOverSocket(id wikiID: WikiID) -> Bool {
+        testFixtureDeleteWiki(id: wikiID)
+    }
+    #endif
+
     // MARK: - Store lifecycle
 
     func openStore(wikiID: WikiID) async -> Bool {
@@ -1154,6 +1201,84 @@ final class WikiDaemon: @unchecked Sendable {
             }
             return store
         }
+    }
+
+    /// The wiki store for one Phase 3 domain-command execution
+    /// (plans/cli-domain-commands.md). Production admits the wiki's prepared
+    /// services — the same profile boot every other per-wiki operation goes
+    /// through (`prepareAndResolveWikiServices`); the fixture path (tests,
+    /// `testFixtureMakeStore`) admits the injected store. This is the ONLY
+    /// store source for the command families: no direct SQLite opens.
+    func domainCommandStore(wikiID: WikiID) async throws -> WikiStore {
+        #if canImport(WikiFSEngine)
+        if profileOwner != nil {
+            let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
+            return services.store
+        }
+        #endif
+        try prepareInjectedStore(wikiID: wikiID)
+        return try resolvePreparedStore(wikiID: wikiID)
+    }
+
+    /// The durable per-wiki queue read behind `wikictl job list/get` (Phase 3
+    /// of plans/cli-domain-commands.md). `queueSnapshot` is a bounded
+    /// active+recent window for UI bootstrap; job inspection needs the FULL
+    /// terminal history, which is what `QueueStore.loadItems(wikiID:)` reads.
+    /// The queue store opens READ-ONLY beside the engine's writer connection —
+    /// the same WAL pattern the transcribe completion poll uses — and a
+    /// missing queue database is an empty list, never a file creation. The
+    /// wiki leg (a source counts as extraction-completed when a processed-
+    /// markdown HEAD exists) reads through ``domainCommandStore(wikiID:)``.
+    func queueWikiItems(
+        wikiID: WikiID,
+        itemID: QueueItemID?
+    ) async throws -> (items: [QueueItem], completedSourceIDs: Set<SourceID>) {
+        let allItems: [QueueItem]
+        if FileManager.default.fileExists(atPath: queueDatabaseURL.path) {
+            let queueStore = try QueueStore(readOnlyDatabaseURL: queueDatabaseURL)
+            defer { queueStore.close() }
+            allItems = try queueStore.loadItems(wikiID: wikiID)
+        } else {
+            allItems = []
+        }
+        let selected = itemID.map { id in allItems.filter { $0.id == id } } ?? allItems
+        var completedSourceIDs = Set<SourceID>()
+        if !selected.isEmpty {
+            let store = try await domainCommandStore(wikiID: wikiID)
+            for sourceID in Set(selected.flatMap(\.payload.sourceIDs)) {
+                if try store.processedMarkdownHead(sourceID: sourceID) != nil {
+                    completedSourceIDs.insert(sourceID)
+                }
+            }
+        }
+        return (selected, completedSourceIDs)
+    }
+
+    /// The one-item queue state snapshot behind the transcribe completion wait
+    /// (Phase 5 of plans/cli-domain-commands.md). The CLI polls this over the
+    /// socket with a sleep between calls instead of holding its own read-only
+    /// queue connection open for the job's duration — the queue store opens
+    /// HERE, read-only beside the engine's writer (the same WAL pattern
+    /// `queueWikiItems` uses), and each answer is a complete snapshot, so a
+    /// poll round trip is as short as any other queue read. An unknown item is
+    /// a typed `notFound`: the durable terminal history is never deleted, so a
+    /// missing row mid-wait is a genuine anomaly, not a "still running".
+    func queueItemState(
+        itemID: QueueItemID
+    ) async throws -> (state: String, error: String?) {
+        guard FileManager.default.fileExists(atPath: queueDatabaseURL.path) else {
+            throw DaemonDomainError(
+                code: .notFound,
+                message: "no queue item matching \(itemID.rawValue)")
+        }
+        let queueStore = try QueueStore(readOnlyDatabaseURL: queueDatabaseURL)
+        defer { queueStore.close() }
+        guard let item = try queueStore.getItem(itemID) else {
+            throw DaemonDomainError(
+                code: .notFound,
+                message: "no queue item matching \(itemID.rawValue)")
+        }
+        return (state: item.state.rawValue, error: item.error)
     }
 
     private func preparedStoreIfAvailable(wikiID: WikiID) -> GRDBWikiStore? {

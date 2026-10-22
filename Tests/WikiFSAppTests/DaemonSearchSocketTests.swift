@@ -72,9 +72,61 @@ struct DaemonSearchSocketTests {
         }
     }
 
+    /// The daemon-side envelope routing the search family rides on (Phase 1
+    /// of plans/cli-domain-commands.md). The production handler is the full
+    /// `DaemonDomainSocketDispatcher`; this adapter applies the SAME search
+    /// family shape — decode `DaemonDomainRequest`, forward the payload to
+    /// the search-shaped handler, wrap the reply bytes back into
+    /// `DaemonDomainReply.success` — so these transport tests keep their
+    /// controlled handler while speaking the real wire. Envelope dispatch
+    /// behavior (version gate, unknown family/operation, queue verbs) is
+    /// covered by `DaemonDomainSocketTests` against the real dispatcher.
+    private static func envelopeSearchAdapter(
+        _ searchHandler: @escaping @Sendable (Data) async -> Data
+    ) -> @Sendable (Data) async -> Data {
+        // DaemonDomainReply of these value payloads cannot fail to encode; if
+        // it ever did, an empty body is the honest "no reply" and the client
+        // surfaces it as malformed (same convention as `rpcHandler` above).
+        @Sendable func encodeOrEmpty(_ reply: DaemonDomainReply) -> Data {
+            do {
+                return try DaemonDomainWire.encode(reply)
+            } catch {
+                return Data()
+            }
+        }
+        return { request in
+            let requestEnvelope: DaemonDomainRequest
+            do {
+                requestEnvelope = try DaemonDomainWire.decodeRequest(request)
+            } catch let error as DaemonDomainError {
+                return encodeOrEmpty(DaemonDomainReply.failure(
+                    requestID: "", family: nil, operation: "", error))
+            } catch {
+                return Data()
+            }
+            guard requestEnvelope.family == .search,
+                  let payload = requestEnvelope.payload else {
+                return encodeOrEmpty(DaemonDomainReply.failure(
+                    requestID: requestEnvelope.requestID,
+                    family: requestEnvelope.family,
+                    operation: requestEnvelope.operation,
+                    DaemonDomainError(code: .invalidRequest, message: "not a search request")))
+            }
+            let replyData = await searchHandler(payload)
+            return encodeOrEmpty(DaemonDomainReply.success(
+                requestID: requestEnvelope.requestID,
+                family: .search,
+                operation: requestEnvelope.operation,
+                payload: replyData))
+        }
+    }
+
     private static func sleepHandler() -> @Sendable (Data) async -> Data {
         { _ in
-            // Deliberately outlives every timeout in this suite.
+            // Deliberately outlives every timeout in this suite. A cancelled
+            // sleep is exactly the expiry trigger, so the swallowed error is
+            // meaningless here.
+            // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(for: .seconds(10))
             return Data()
         }
@@ -84,7 +136,9 @@ struct DaemonSearchSocketTests {
         container: URL,
         handler: @escaping @Sendable (Data) async -> Data
     ) throws -> DaemonSearchSocketServer {
-        let server = try DaemonSearchSocketServer(containerDirectory: container, handler: handler)
+        let server = try DaemonSearchSocketServer(
+            containerDirectory: container,
+            handler: Self.envelopeSearchAdapter(handler))
         try server.start()
         return server
     }

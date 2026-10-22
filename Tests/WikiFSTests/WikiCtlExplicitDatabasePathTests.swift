@@ -4,8 +4,9 @@ import WikiFSCore
 @testable import WikiCtlCore
 
 /// The typed explicit-database selector seam (`--database-path` /
-/// `WIKI_DB_PATH`): invalid combinations are rejected, ordinary `--wiki`
-/// registry resolution is unchanged, and explicit resolution touches neither
+/// `WIKI_DB_PATH`): invalid combinations are rejected, registry selections
+/// have NO local leg (they resolve through the daemon since Phase 5 of
+/// plans/cli-domain-commands.md), and explicit resolution touches neither
 /// the registry nor the App Group container.
 @Suite("WikiCtl explicit database path")
 struct WikiCtlExplicitDatabasePathTests {
@@ -70,7 +71,7 @@ struct WikiCtlExplicitDatabasePathTests {
         #expect(plain == .registry("01WIKI"))
     }
 
-    // MARK: - Resolution: explicit bypasses the registry; ordinary unchanged
+    // MARK: - Resolution: explicit bypasses the registry; registry rides the daemon
 
     @Test("explicit resolution bypasses the registry and creates nothing",
           arguments: ["/tmp", "/private/tmp"])
@@ -99,8 +100,13 @@ struct WikiCtlExplicitDatabasePathTests {
         #expect(contents.isEmpty)
     }
 
-    @Test("ordinary registry resolution is unchanged")
-    func ordinaryResolutionUnchanged() throws {
+    @Test("registry selection has no local leg — it resolves through the daemon")
+    func registrySelectionHasNoLocalLeg() throws {
+        // Phase 5 of plans/cli-domain-commands.md: `--wiki` selections resolve
+        // through the daemon's registry over the socket (resolveWiki). The
+        // CLI-side resolver has no registry leg anymore — a registry selection
+        // handed to it is a wiring bug and fails loudly instead of loading a
+        // local wikis.json.
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("wiki-registry-path-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -109,22 +115,15 @@ struct WikiCtlExplicitDatabasePathTests {
             catch { Issue.record("fixture cleanup failed: \(error)") }
         }
 
-        let descriptor = WikiDescriptor.make(displayName: "Fixture Wiki", now: Date())
-        var registry = WikiRegistry()
-        registry.add(descriptor)
-        try registry.save(to: directory)
-
         let resolver = WikiResolver(containerDirectory: directory)
-        let selection = try WikiResolver.selection(wikiSelector: descriptor.id.rawValue, databasePath: "")
-        let target = try resolver.resolve(selection: selection)
-        #expect(target.databaseURL.path == directory.appendingPathComponent("\(descriptor.id.rawValue).sqlite").path)
-        #expect(target.wikiID == descriptor.id)
-        #expect(target.containerDirectory.path == directory.path)
-
-        // Unknown selector still fails like before.
         #expect(throws: PageCommand.Failure.self) {
             _ = try resolver.resolve(selection: .registry("no-such-wiki"))
         }
+
+        // Nothing was read or written: the directory still holds no
+        // wikis.json and no database.
+        let contents = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        #expect(contents.isEmpty)
     }
 
     // MARK: - Argument parsing

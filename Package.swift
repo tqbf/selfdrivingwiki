@@ -464,7 +464,14 @@ let package = Package(
         // `wikictl file` family rather than the File Provider mount.
         .executableTarget(
             name: "wikictl",
-            dependencies: ["WikiFSCore", "WikiCtlCore"],
+            dependencies: [
+                "WikiFSCore",
+                "WikiCtlCore",
+                // Phase 2 of plans/cli-domain-commands.md: the CLI speaks the
+                // daemon's versioned domain envelope directly (DaemonDomainError
+                // codes drive the wiki/transcribe failure mapping).
+                "WikiDaemonContract",
+            ],
             path: "Sources/wikictl",
             swiftSettings: strictSwiftSettings
         ),
@@ -525,6 +532,24 @@ let package = Package(
                 // on Linux (the daemon uses the stdio transport there).
                 "WikiDaemonContract",
                 .target(name: "WikiFSEngine",
+                        condition: .when(platforms: [.macOS])),
+                // Phase 3 of plans/cli-domain-commands.md: the daemon EXECUTES
+                // the CLI's read-only command layer (PageCommand/SourceCommand/
+                // ChatCommand/…) against its prepared services, so a migrated
+                // wikictl command never opens the wiki database. The command
+                // semantics stay in one module — the CLI sends the parsed
+                // action over the domain envelope and the daemon runs the same
+                // code, keeping stdout byte-stable. macOS-only like the other
+                // workload surfaces.
+                .target(name: "WikiCtlCore",
+                        condition: .when(platforms: [.macOS])),
+                // Phase 4: the log family types the author through PageAuthor
+                // (WikiFSTypes), and the page-add write auto-fixes markdown
+                // through the same linter the in-process CLI path loads — nil
+                // here would silently change what gets stored.
+                .target(name: "WikiFSTypes",
+                        condition: .when(platforms: [.macOS])),
+                .target(name: "WikiFSMarkdown",
                         condition: .when(platforms: [.macOS])),
             ],
             path: "Sources/wikid",

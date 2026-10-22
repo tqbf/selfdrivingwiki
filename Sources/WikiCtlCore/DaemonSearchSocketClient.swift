@@ -5,7 +5,10 @@ import WikiFSCore
 
 /// CLI-side transport factory: a `DaemonSearchTransport` that carries one
 /// request/reply round trip over a bounded local AF_UNIX socket to the
-/// daemon's search endpoint (`WikiDaemon.searchData(request:)`).
+/// daemon's search endpoint (`WikiDaemon.searchData(request:)`). The search
+/// payload rides inside the versioned domain envelope (`DaemonDomainWire`,
+/// Phase 1 of plans/cli-domain-commands.md) on the same socket file every
+/// CLI⇄daemon family shares.
 ///
 /// Why a socket: `NSXPCConnection(serviceName:)` is app-only (provably
 /// lookup3 outside a host app), so the standalone `wikictl` binary cannot
@@ -55,49 +58,35 @@ public enum DaemonSearchSocketClient {
             Task.detached(priority: .userInitiated) {
                 let result: Result<Data, Error>
                 do {
-                    result = .success(
-                        try await roundTrip(socketPath: socketPath, request: request, timeout: timeout))
+                    // The raw-size check happens on the UNWRAPPED search
+                    // request so an oversized search still reports its own
+                    // exact byte count (the wire contract the CLI tests pin)
+                    // before the envelope's slightly larger frame is checked.
+                    guard request.count <= Int(SearchSocketWire.maxFrameSize) else {
+                        throw SearchSocketError.frameTooLarge(UInt32(request.count))
+                    }
+                    // Phase 1 of plans/cli-domain-commands.md: the search
+                    // payload rides inside the versioned domain envelope; the
+                    // SearchRPCRequest/SearchRPCReply bytes are unchanged.
+                    let envelope = DaemonDomainRequest(
+                        requestID: UUID().uuidString,
+                        family: .search,
+                        operation: DaemonDomainOperation.Search.search,
+                        payload: request)
+                    let replyBytes = try await DaemonSocketRoundTrip.perform(
+                        socketPath: socketPath,
+                        requestBytes: try DaemonDomainWire.encode(envelope),
+                        timeout: timeout)
+                    let envelopeReply = try DaemonDomainWire.decodeReply(replyBytes)
+                    if let error = envelopeReply.error {
+                        throw error
+                    }
+                    result = .success(envelopeReply.payload ?? Data())
                 } catch {
                     DebugLog.store("wikictl: search socket transport failed: \(error)")
                     result = .failure(error)
                 }
                 reply(result)
-            }
-        }
-    }
-
-    /// One connection: connect → write one framed request → read one framed
-    /// reply → close.
-    private static func roundTrip(
-        socketPath: String,
-        request: Data,
-        timeout: TimeInterval
-    ) async throws -> Data {
-        let deadline = Date().addingTimeInterval(timeout)
-        // Client-side bound, checked before any socket is opened.
-        guard request.count <= Int(SearchSocketWire.maxFrameSize) else {
-            throw SearchSocketError.frameTooLarge(UInt32(request.count))
-        }
-        let fd = try await SearchSocketIO.connectSocket(path: socketPath, deadline: deadline)
-        defer { close(fd) }
-        try await SearchSocketIO.sendAll(fd: fd, bytes: SearchSocketWire.framed(request), deadline: deadline)
-        var parser = SearchSocketWire.FrameParser()
-        while true {
-            if let payload = try parser.nextPayload() {
-                return payload
-            }
-            try SearchSocketIO.checkDeadline(deadline, operation: "recv")
-            switch SearchSocketIO.recvOnce(fd: fd) {
-            case .data(let chunk):
-                parser.append(chunk)
-            case .eof:
-                // The daemon closed before a complete reply: transport failure.
-                throw SearchSocketError.incompleteFrame
-            case .again:
-                try await SearchSocketIO.awaitReady(
-                    fd: fd, writable: false, deadline: deadline, operation: "recv")
-            case .failed(let error):
-                throw error
             }
         }
     }

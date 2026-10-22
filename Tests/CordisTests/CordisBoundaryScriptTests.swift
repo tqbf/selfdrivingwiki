@@ -105,6 +105,21 @@ struct CordisBoundaryScriptTests {
         ProtectedConstruction(
             path: "Sources/wikid/DaemonQueueIngestionProvider.swift",
             source: "let launcher = AgentLauncher("),
+        // Phase 5 of plans/cli-domain-commands.md: the CLI targets must not
+        // regain direct queue or registry access — one pathway, through the
+        // daemon over the domain envelope.
+        ProtectedConstruction(
+            path: "Sources/wikictl/main.swift",
+            source: "let store = QueueStore(databaseURL: url)"),
+        ProtectedConstruction(
+            path: "Sources/WikiCtlCore/DaemonWorkloadClient.swift",
+            source: "let store = QueueStore(readOnlyDatabaseURL: url)"),
+        ProtectedConstruction(
+            path: "Sources/WikiCtlCore/WikiResolver.swift",
+            source: "let registry = WikiRegistry.load(from: directory)"),
+        ProtectedConstruction(
+            path: "Sources/wikictl/WikiCtlRunner.swift",
+            source: "let registry = WikiRegistry.load(from: directory)"),
     ])
     func migratedProductionPathsRemainProtected(fixture: ProtectedConstruction) async throws {
         let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
@@ -138,6 +153,12 @@ struct CordisBoundaryScriptTests {
         ProtectedConstruction(
             path: "Sources/WikiFSEngine/ProfileWikiSession.swift",
             source: "let makeStore: () -> Void"),
+        // The sanctioned Phase 5 fixture carve-out: the explicit
+        // --database-path harness leg keeps its local queue write, and the
+        // rule allowlists EXACTLY this file in the CLI targets.
+        ProtectedConstruction(
+            path: "Sources/wikictl/ExtractorFixtureLeg.swift",
+            source: "let queueStore = try QueueStore(databaseURL: url)"),
     ])
     func documentedAllowlistedPathIsAcceptedInFixtureMode(
         fixture: ProtectedConstruction
