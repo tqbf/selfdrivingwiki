@@ -471,6 +471,23 @@ private final class Connection: @unchecked Sendable {
 
     // MARK: Handler + reply
 
+    /// The handler budget for THIS request: decode the domain envelope's
+    /// family/operation (a decode failure keeps `fallback` — the standard
+    /// bound) and look up the per-endpoint table in the shared contract
+    /// (`DaemonDomainBudgets`).
+    private static func perEndpointBudget(
+        for request: Data, fallback: TimeInterval
+    ) -> TimeInterval {
+        let envelope: DaemonDomainRequest
+        do {
+            envelope = try JSONDecoder().decode(DaemonDomainRequest.self, from: request)
+        } catch {
+            return fallback
+        }
+        return DaemonDomainBudgets.handlerTimeout(
+            family: envelope.family, operation: envelope.operation)
+    }
+
     /// The frame is complete: race the handler against its deadline so a
     /// never-replying handler cannot pin the fd past one bound.
     private func startProcessing(_ request: Data) {
@@ -490,7 +507,15 @@ private final class Connection: @unchecked Sendable {
 
         let box = ReplyRaceBox()
         let handler = handler
-        let handlerTimeout = handlerTimeout
+        // Per-endpoint handler budget (Phase 4, plans/cli-domain-commands.md
+        // §"Long-running operations"): the envelope's family/operation names
+        // the budget — long-running operations (admin sweeps, workspace
+        // merge/reap) get the elevated ceiling; everything else keeps the
+        // socket's standard bound. An undecodable frame keeps the standard
+        // bound too (the dispatcher will reject it as invalidRequest long
+        // before any budget matters).
+        let handlerTimeout = Self.perEndpointBudget(
+            for: request, fallback: handlerTimeout)
         let producer = Task.detached(priority: .userInitiated) {
             box.fulfill(await handler(request))
         }

@@ -543,6 +543,14 @@ let package = Package(
                 // workload surfaces.
                 .target(name: "WikiCtlCore",
                         condition: .when(platforms: [.macOS])),
+                // Phase 4: the log family types the author through PageAuthor
+                // (WikiFSTypes), and the page-add write auto-fixes markdown
+                // through the same linter the in-process CLI path loads — nil
+                // here would silently change what gets stored.
+                .target(name: "WikiFSTypes",
+                        condition: .when(platforms: [.macOS])),
+                .target(name: "WikiFSMarkdown",
+                        condition: .when(platforms: [.macOS])),
             ],
             path: "Sources/wikid",
             swiftSettings: strictSwiftSettings

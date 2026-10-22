@@ -81,9 +81,18 @@ final class WikiDaemon: @unchecked Sendable {
 
     // MARK: - Dependencies
 
-    private let containerDirectory: URL
+    /// Internal (not private): the Phase 4 extractor family resolves its
+    /// package catalog against the daemon's own container — the same directory
+    /// every other daemon-side operation reads.
+    let containerDirectory: URL
     private let registryPersistence: DaemonRegistryPersistence?
     private let testFixtureMakeStore: ((URL) throws -> WikiStore)?
+    /// Test seam for the Phase 4 extractor family: the package catalog the
+    /// `extractor sync/fetch` handler reads. Production resolves the daemon's
+    /// durable machine catalog (+ its reviewed overlay); a fixture daemon
+    /// injects a catalog double so a socket round trip can drive a REAL
+    /// sync→enqueue without an installed package. Nil = production.
+    let testExtractorCatalog: (any ExtractorPackageCatalogReading)?
     private let daemonChatDiagnostics = DaemonChatDiagnostics()
     #if canImport(WikiFSEngine)
     /// Production owns provider, extraction, and per-wiki store lifetimes here.
@@ -285,11 +294,13 @@ final class WikiDaemon: @unchecked Sendable {
     init(
         containerDirectory: URL,
         testFixtureMakeStore: @escaping (URL) throws -> WikiStore,
-        extractionAssembly: ExtractionCompositionOwner.AssemblyFactory? = nil
+        extractionAssembly: ExtractionCompositionOwner.AssemblyFactory? = nil,
+        testExtractorCatalog: (any ExtractorPackageCatalogReading)? = nil
     ) {
         self.containerDirectory = containerDirectory
         self.registryPersistence = nil
         self.testFixtureMakeStore = testFixtureMakeStore
+        self.testExtractorCatalog = testExtractorCatalog
         self.registry = WikiRegistry.load(from: containerDirectory)
         #if canImport(WikiFSEngine)
         self.profileOwner = nil
@@ -345,6 +356,7 @@ final class WikiDaemon: @unchecked Sendable {
         self.containerDirectory = containerDirectory
         self.registryPersistence = registryPersistence
         self.testFixtureMakeStore = nil
+        self.testExtractorCatalog = nil
         self.registry = WikiRegistry.load(from: containerDirectory)
         self.profileOwner = profileOwner
         self.legacyAgentProviderServices = nil

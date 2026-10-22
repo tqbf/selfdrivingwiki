@@ -77,9 +77,11 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                 return try await queueReply(for: request)
             case .wiki:
                 return try await wikiReply(for: request)
-            case .page, .source, .chat, .bookmark, .workspace:
-                // Phase 3 command families: the daemon executes the CLI's
-                // read-only command layer against its prepared services.
+            case .page, .source, .chat, .bookmark, .workspace,
+                 .strategy, .log, .admin, .extractor:
+                // Phase 3+4 command families: the daemon executes the CLI's
+                // command layer (reads and writes) against its prepared
+                // services; typed CAS codes ride back inside the envelope.
                 return try await commands.reply(for: request)
             }
         } catch let error as DaemonDomainError {
