@@ -72,7 +72,7 @@ public enum PageCommand {
         case okfCorrect(versionID: PageVersionID, input: OKFCorrectionInput)
     }
 
-    public enum Failure: Error, CustomStringConvertible {
+    public enum Failure: Error, CustomStringConvertible, LocalizedError {
         case message(String)
 
         public var description: String {
@@ -80,6 +80,12 @@ public enum PageCommand {
             case .message(let text): text
             }
         }
+
+        /// Bridge the message through LocalizedError so callers printing
+        /// `error.localizedDescription` (the job path in wikictl's run loop)
+        /// surface the daemon's typed message verbatim instead of the
+        /// NSError fallback text.
+        public var errorDescription: String? { description }
     }
 
     /// Run one action against `store`. Read actions never commit; `upsert` /

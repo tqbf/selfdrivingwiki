@@ -117,8 +117,7 @@ func run() async -> Int32 {
             let router = DaemonCommandRouter()
             let (output, emptyList) = try await router.runJob(
                 action,
-                selector: invocation.wikiSelector,
-                containerDirectory: try DatabaseLocation.appGroupContainerDirectory())
+                selector: invocation.wikiSelector)
             print(output)
             if emptyList {
                 // #1230 (axi.md principle 5): zero jobs is an answer, not a
@@ -276,7 +275,7 @@ func run() async -> Int32 {
         FileHandle.standardError.write(Data("wikictl: \(failure)\n".utf8))
         return 1
     } catch {
-        FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
+        FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
         return 1
     }
 }
@@ -291,8 +290,7 @@ private func runQueueCommand(_ action: QueueCommand.Action) async throws -> Stri
     #if os(macOS)
     let client = try DaemonWorkloadClient(
         socket: DaemonScopedRunEnvironment.domainSocketClient(
-            environment: ProcessInfo.processInfo.environment,
-            containerDirectory: try DatabaseLocation.appGroupContainerDirectory()))
+            environment: ProcessInfo.processInfo.environment))
     switch action {
     case .status(let json):
         let snapshot = try await client.queueSnapshot()
@@ -352,8 +350,9 @@ private func runTranscribeCommand(
         // resolveWiki for the owning wiki, transcribePreflight for the
         // YouTube-scope check (the daemon reads its own prepared store; this
         // process opens nothing). Both fail fast with the not-running error
-        // when the app is closed. There is no local fallback.
-        let container = try DatabaseLocation.appGroupContainerDirectory()
+        // when the app is closed. There is no local fallback. §7: the
+        // container resolves only on the ordinary branch (inside the
+        // factory) — a scoped child's container is kernel-denied.
         let descriptor: WikiDescriptor
         do {
             descriptor = try await makeRegistryClient().resolveWiki(selector: wikiSelector)
@@ -368,8 +367,7 @@ private func runTranscribeCommand(
         let sourceID = SourceID(rawValue: source)
         let client = try DaemonWorkloadClient(
             socket: DaemonScopedRunEnvironment.domainSocketClient(
-                environment: ProcessInfo.processInfo.environment,
-                containerDirectory: container))
+                environment: ProcessInfo.processInfo.environment))
         do {
             let inScope = try await client.transcribePreflight(
                 wikiID: descriptor.id, sourceID: sourceID)
@@ -557,11 +555,12 @@ func runDumpConfig(overlay: String?) -> Int32 {
 
 /// The container-scoped registry client for the wiki subcommands. §7: the
 /// shared scoped-run factory resolves the credential environment, so a
-/// managed child's wiki commands ride the run endpoint with v2 authorization.
+/// managed child's wiki commands ride the run endpoint with v2 authorization;
+/// the container resolves only on the ordinary branch (a scoped child's
+/// container is kernel-denied).
 private func makeRegistryClient() throws -> DaemonWikiRegistryClient {
     DaemonWikiRegistryClient(socket: try DaemonScopedRunEnvironment.domainSocketClient(
-        environment: ProcessInfo.processInfo.environment,
-        containerDirectory: try DatabaseLocation.appGroupContainerDirectory()))
+        environment: ProcessInfo.processInfo.environment))
 }
 
 func runWikiList() async -> Int32 {

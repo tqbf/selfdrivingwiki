@@ -36,6 +36,13 @@ public enum DaemonScopedRunEnvironment {
         /// Both keys present: every domain request rides the run endpoint
         /// with envelope-v2 authorization.
         case scoped(endpointPath: String, capability: String)
+
+        /// True for the scoped resolution — call sites use it to skip App
+        /// Group container work a scoped child cannot perform (§7).
+        public var isScoped: Bool {
+            if case .scoped = self { return true }
+            return false
+        }
     }
 
     /// Exactly one of the two credential keys is set. This is a delivery
@@ -45,7 +52,7 @@ public enum DaemonScopedRunEnvironment {
     public struct InconsistentCredentialsError: LocalizedError, Equatable {
         public init() {}
 
-        public var errorDescription: String {
+        public var errorDescription: String? {
             "\(endpointKey) and \(capabilityKey) must be set TOGETHER (managed "
                 + "daemon run) or both unset (ordinary use); exactly one is set. "
                 + "Refusing to fall back to the ordinary daemon endpoint."
@@ -85,15 +92,40 @@ public enum DaemonScopedRunEnvironment {
     /// container socket (unchanged behavior) or the run endpoint bound to
     /// the v2 authorization. One factory so every CLI family — command
     /// routing, registry, workload, job — resolves credentials the SAME way.
+    ///
+    /// This overload resolves the App Group container ONLY on the ordinary
+    /// branch (§7): a scoped child's container subtree is kernel-denied by
+    /// the §8 profile, so resolving it eagerly would fail the command before
+    /// any request — the endpoint path comes from the environment instead.
     public static func domainSocketClient(
         environment: [String: String],
-        containerDirectory: URL,
         timeout: TimeInterval = DaemonWorkloadClient.defaultTimeout
     ) throws -> DaemonDomainSocketClient {
         switch try resolve(from: environment) {
         case .ordinary:
             return try DaemonDomainSocketClient(
-                containerDirectory: containerDirectory,
+                containerDirectory: try DatabaseLocation.appGroupContainerDirectory(),
+                timeout: timeout)
+        case .scoped(let endpointPath, let capability):
+            return try DaemonDomainSocketClient(
+                socketPath: endpointPath,
+                authorization: DaemonDomainAuthorization(capability: capability),
+                timeout: timeout)
+        }
+    }
+
+    /// Explicit-container variant for tests and hosts that already resolved
+    /// the container. The scoped branch ignores `containerDirectory`.
+    public static func domainSocketClient(
+        environment: [String: String],
+        containerDirectory: URL?,
+        timeout: TimeInterval = DaemonWorkloadClient.defaultTimeout
+    ) throws -> DaemonDomainSocketClient {
+        switch try resolve(from: environment) {
+        case .ordinary:
+            return try DaemonDomainSocketClient(
+                containerDirectory: try containerDirectory
+                    ?? DatabaseLocation.appGroupContainerDirectory(),
                 timeout: timeout)
         case .scoped(let endpointPath, let capability):
             return try DaemonDomainSocketClient(

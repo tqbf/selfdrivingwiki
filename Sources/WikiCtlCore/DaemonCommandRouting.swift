@@ -674,7 +674,7 @@ public struct DaemonCommandRouter: Sendable {
     public typealias Executor = @Sendable (
         _ call: DaemonCommandCall,
         _ selector: String,
-        _ containerDirectory: URL
+        _ containerDirectory: URL?
     ) async throws -> RoutedOutput
 
     private let executor: Executor
@@ -691,11 +691,12 @@ public struct DaemonCommandRouter: Sendable {
             //
             // §7: the shared scoped-run factory resolves the credential
             // environment — both keys → the run endpoint + v2 authorization,
-            // both absent → the ordinary socket, exactly one → typed failure
-            // (never a silent fallback).
+            // both absent → the ordinary socket (container resolved inside
+            // the factory), exactly one → typed failure. A scoped child's
+            // container is kernel-denied, so the container is never touched
+            // on the scoped branch.
             let scopedSocket = try DaemonScopedRunEnvironment.domainSocketClient(
                 environment: ProcessInfo.processInfo.environment,
-                containerDirectory: containerDirectory,
                 timeout: call.timeout)
             let registry = DaemonWikiRegistryClient(socket: scopedSocket)
             let descriptor = try await registry.resolveWiki(selector: selector)
@@ -719,7 +720,7 @@ public struct DaemonCommandRouter: Sendable {
     public func run(
         _ call: DaemonCommandCall,
         selector: String,
-        containerDirectory: URL
+        containerDirectory: URL?
     ) async throws -> RoutedOutput {
         do {
             return try await executor(call, selector, containerDirectory)
@@ -823,7 +824,7 @@ public struct DaemonCommandRouter: Sendable {
     public func runJob(
         _ action: JobCommand.Action,
         selector: String,
-        containerDirectory: URL
+        containerDirectory: URL? = nil
     ) async throws -> (output: String, emptyList: Bool) {
         let itemID: String?
         let json: Bool
@@ -837,7 +838,9 @@ public struct DaemonCommandRouter: Sendable {
         }
         do {
             // §7: same credential resolution as every other family — scoped
-            // runs resolve the selector and read jobs through the run endpoint.
+            // runs resolve the selector and read jobs through the run endpoint;
+            // the container resolves only on the ordinary branch (nil passes
+            // through to the factory).
             let socket = try DaemonScopedRunEnvironment.domainSocketClient(
                 environment: ProcessInfo.processInfo.environment,
                 containerDirectory: containerDirectory)
