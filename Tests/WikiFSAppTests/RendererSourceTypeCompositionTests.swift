@@ -24,47 +24,10 @@ struct RendererSourceTypeCompositionTests {
         }
     }
 
-    @Test func cliRepairReceivesCatalog() async throws {
-        let container = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("source-type-cli-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: container) }
-
-        let wikiID = WikiID(rawValue: "01JCLIREPAIRWIKI000000000")
-        var registry = WikiRegistry()
-        registry.add(WikiDescriptor(
-            id: wikiID,
-            displayName: "CLI Repair Catalog",
-            createdAt: Date(timeIntervalSince1970: 0),
-            lastUsedAt: Date(timeIntervalSince1970: 0)))
-        try registry.save(to: container)
-
-        let fixture = MermaidCompositionFixtures.catalog
-        var profile = CLIStoreProfile { request in
-            try await CordisBoot.boot(.init(
-                catalog: try CLIPluginCatalog.build(),
-                layers: [PatchFile(entries: try ProductionProfiles.cli(
-                    databaseURL: request.databaseURL,
-                    wikiID: request.wikiID,
-                    homeDirectory: request.containerDirectory))]))
-        }
-        profile.resolveRendererCatalog = { fixture }
-
-        let runner = WikiCtlRunner(
-            resolveContainer: { WikiResolver(containerDirectory: container) },
-            storeProfile: profile
-        ) { _, store, _, _ in
-            #expect(store.registeredRendererSourceTypes == fixture)
-            let report = try store.repairMIME(dryRun: true)
-            #expect(report.applied == false)
-            return SourceCommand.Result(payload: .text("ok"), didCommit: false)
-        }
-
-        _ = try await runner.runOrdinary(
-            command: .page(.list(json: false)),
-            wikiSelector: wikiID.rawValue,
-            environment: [:])
-    }
+    // `cliRepairReceivesCatalog` moved to Tests/WikiCtlFixtureTests with the
+    // fixture-binary split: the CLI store profile it exercised now lives in
+    // the build-only `wikictl-fixture` target (the shipping wikictl boots no
+    // local store).
 
     @Test func unavailableRendererCatalogIsEmpty() async throws {
         // Without a host snapshot the factory inputs carry the empty catalog.

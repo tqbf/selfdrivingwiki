@@ -2,29 +2,30 @@ import Foundation
 import WikiCtlCore
 import WikiFSCore
 
-// The sanctioned LOCAL fixture leg for `wikictl extractor sync/fetch`
-// (Phase 5 of plans/cli-domain-commands.md). These two dispatchers run ONLY
-// inside an explicit `--database-path` fixture run — `WikiCtlRunner.runOrdinary`
-// reaches the in-process store executor for explicit databases alone, and the
-// boundary script's `QueueStore(` rule allowlists THIS file (and only this
-// file) in the CLI targets as the carve-out.
+// The LOCAL fixture leg for `wikictl-fixture extractor sync/fetch`. These two
+// dispatchers run ONLY inside an explicit `--database-path` fixture run of the
+// build-only fixture binary — the local executor in this target's main.swift
+// reaches them for the extractor sync/fetch actions alone. They moved here
+// from Sources/wikictl with the fixture-binary split (plans/cli-domain-
+// commands.md §"The fixture binary") so the shipping wikictl carries no
+// direct-queue pathway at all.
 //
 // For every registry-selected run (`--wiki`), the ENTIRE command executes
 // daemon-side (catalog + store + durable enqueue through the daemon's queue
 // engine) and this file is never touched. The daemon's queue engine owns the
 // durable enqueue; the direct `QueueStore` write below exists so the isolated
-// fixture harness can stage extraction items without a running app.
-//
-// `QueueStore(` here is the sanctioned exception — see
-// Tests/CordisTests/CordisBoundaryScriptTests.swift and
-// scripts/check-cordis-boundaries.
+// fixture harness can stage extraction items without a running app. The
+// `wikictl-fixture` TARGET is outside the CLI-target scope of
+// scripts/check-cordis-boundaries (exempt like the test targets); the
+// `QueueStore(` constructs here would fail the check if this file moved back
+// into Sources/wikictl or Sources/WikiCtlCore — that is the point.
 
-/// `wikictl extractor sync <package>` dispatch for fixture runs: enqueue-only
-/// queue wiring. The closure writes the durable `.extraction` item through
+/// `wikictl-fixture extractor sync <package>` dispatch: enqueue-only queue
+/// wiring. The closure writes the durable `.extraction` item through
 /// `QueueStore.enqueue` — the same immediate durable store write
 /// `QueueEngine.enqueue` performs — WITHOUT constructing a `QueueEngine`
 /// (that needs a worker factory whose provider implementations live in
-/// targets `WikiCtlCore` cannot link) and WITHOUT waiting for completion
+/// targets this binary does not link) and WITHOUT waiting for completion
 /// (waiters are per-engine in-memory; a daemon-side completion could never
 /// resume a CLI waiter — it would hang). The app or the wikid daemon
 /// rehydrates and drains the persisted items on its next dispatch scan /
@@ -63,7 +64,7 @@ func runExtractorSync(
     return SourceCommand.Result(payload: .text(output), didCommit: true)
 }
 
-/// `wikictl extractor fetch <package> --item <key>` dispatch for fixture runs:
+/// `wikictl-fixture extractor fetch <package> --item <key>` dispatch:
 /// the same enqueue-only wiring as `runExtractorSync` — durable queue write,
 /// no `QueueEngine`, no waiting (the daemon-side drain owns completion).
 func runExtractorFetch(

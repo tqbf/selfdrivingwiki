@@ -6,99 +6,6 @@ import Cordis
 import CordisLoader
 import WikiFSEngine
 
-public enum CLIStoreProfileError: Error {
-    case incompatibleStore
-    case operationAndCleanup(operation: any Error, cleanup: any Error)
-}
-
-public struct CLIStoreProfile: Sendable {
-    public struct Request: Sendable {
-        public let databaseURL: URL
-        public let wikiID: WikiID
-        public let containerDirectory: URL
-
-        public init(databaseURL: URL, wikiID: WikiID, containerDirectory: URL) {
-            self.databaseURL = databaseURL
-            self.wikiID = wikiID
-            self.containerDirectory = containerDirectory
-        }
-    }
-
-    public typealias Boot = @Sendable (Request) async throws -> BootedProfile
-
-    private let boot: Boot
-
-    public var resolveRendererCatalog: @Sendable () async -> RegisteredRendererSourceTypes =
-        { await RendererCatalogResolution.productionSourceTypes() }
-
-    public init() {
-        self.boot = CLIStoreProfile.productionBoot
-    }
-
-    public init(boot: @escaping Boot) {
-        self.boot = boot
-    }
-
-    public func withStore<Result>(
-        request: Request,
-        operation: (GRDBWikiStore) async throws -> Result
-    ) async throws -> Result {
-        let profile = try await boot(request)
-        let operationResult: Swift.Result<Result, any Error>
-        do {
-            let service = try await profile.context.require(StoreServiceKeys.store)
-            guard let store = service as? GRDBWikiStore else {
-                throw CLIStoreProfileError.incompatibleStore
-            }
-            // Headless CLI profile: project source-type claims from the
-            // authoritative machine index (WebKit-free, best-effort).
-            store.registeredRendererSourceTypes = await resolveRendererCatalog()
-            operationResult = .success(try await operation(store))
-        } catch {
-            operationResult = .failure(error)
-        }
-
-        do {
-            try await profile.shutdown()
-        } catch {
-            switch operationResult {
-            case .success:
-                throw error
-            case .failure(let operationError):
-                throw CLIStoreProfileError.operationAndCleanup(
-                    operation: operationError,
-                    cleanup: error)
-            }
-        }
-
-        return try operationResult.get()
-    }
-
-    public static func withStore<Result>(
-        databaseURL: URL,
-        wikiID: WikiID,
-        containerDirectory: URL,
-        operation: (GRDBWikiStore) async throws -> Result
-    ) async throws -> Result {
-        try await CLIStoreProfile().withStore(
-            request: Request(
-                databaseURL: databaseURL,
-                wikiID: wikiID,
-                containerDirectory: containerDirectory),
-            operation: operation)
-    }
-
-    private static func productionBoot(_ request: Request) async throws -> BootedProfile {
-        try await CordisBoot.boot(.init(
-            catalog: try CLIPluginCatalog.build(),
-            layers: [PatchFile(entries: try ProductionProfiles.cli(
-                databaseURL: request.databaseURL,
-                wikiID: request.wikiID,
-                homeDirectory: request.containerDirectory))]))
-    }
-
-}
-
 public struct WikiCtlRunner {
     public struct Output: Sendable, Equatable {
         public let stdout: Data
@@ -112,94 +19,46 @@ public struct WikiCtlRunner {
         }
     }
 
-    public typealias CommandExecutor = (
-        ArgumentParser.Command,
-        GRDBWikiStore,
-        WikiID,
-        URL
-    ) async throws -> SourceCommand.Result
-
     private let resolveContainer: () throws -> WikiResolver
-    private let storeProfile: CLIStoreProfile
     private let daemonCommandRouter: DaemonCommandRouter
-    private let execute: CommandExecutor
 
     public init(
         resolveContainer: @escaping () throws -> WikiResolver = WikiResolver.appGroupContainer,
-        storeProfile: CLIStoreProfile = CLIStoreProfile(),
-        daemonCommandRouter: DaemonCommandRouter = DaemonCommandRouter(),
-        execute: @escaping CommandExecutor
+        daemonCommandRouter: DaemonCommandRouter = DaemonCommandRouter()
     ) {
         self.resolveContainer = resolveContainer
-        self.storeProfile = storeProfile
         self.daemonCommandRouter = daemonCommandRouter
-        self.execute = execute
     }
 
+    /// Run one ordinary parsed command. EVERY command rides the daemon (Phase
+    /// 5 of plans/cli-domain-commands.md): the daemon resolves the `--wiki`
+    /// selector against its live registry and executes the command layer
+    /// against its prepared store. There is NO local store leg here — since
+    /// the fixture-binary split (§"The fixture binary") an in-process store
+    /// boot exists only in the separate build-only `wikictl-fixture` binary,
+    /// and a command with no daemon route is a wikictl wiring bug that fails
+    /// loudly instead of silently opening a local store.
     public func runOrdinary(
         command: ArgumentParser.Command,
         wikiSelector: String,
-        databasePath: String = "",
         environment: [String: String]
     ) async throws -> Output {
         let resolvedCommand = ArgumentParser.applyEnv(command, env: environment)
         let resolver = try resolveContainer()
-        // Raw selector strings become a typed WikiSelection HERE — the single
-        // boundary where an explicit database path is validated (absolute,
-        // .sqlite, outside the App Group container) and mixed selector forms
-        // are rejected.
-        let selection = try WikiResolver.selection(
-            wikiSelector: wikiSelector.isEmpty ? nil : wikiSelector,
-            databasePath: databasePath.isEmpty ? nil : databasePath)
-        switch selection {
-        case .registry(let selector):
-            // Phase 5 of plans/cli-domain-commands.md: EVERY registry-selected
-            // command rides the daemon — the daemon resolves the selector
-            // against its live registry and executes the command layer against
-            // its prepared store. The in-process store boot below exists ONLY
-            // for explicit `--database-path` fixture runs. A registry-selected
-            // command with no daemon route is a wikictl wiring bug (every
-            // `--wiki` command is dispatched to the daemon); it fails loudly
-            // instead of silently opening a local store.
-            guard let call = DaemonCommandRoute.call(for: resolvedCommand) else {
-                throw PageCommand.Failure.message(
-                    "no daemon route for this wikictl command — every --wiki command "
-                        + "must ride the daemon, and there is no local fallback; "
-                        + "this is a wikictl wiring bug")
-            }
-            let routed = try await daemonCommandRouter.run(
-                call,
-                selector: selector,
-                containerDirectory: resolver.containerDirectory)
-            return Self.output(
-                for: routed.result,
-                command: resolvedCommand,
-                changedWikiID: routed.result.didCommit ? routed.wikiID : nil)
-        case .explicitDatabase:
-            // The sanctioned LOCAL path: an explicit `--database-path` fixture
-            // run targets a disposable database outside the App Group container
-            // by design, so the CLI boots its own headless store profile for it.
-            // Nothing here may touch the live container (enforced by the
-            // selection validation above and the boundary script's fixture
-            // carve-out).
-            let target = try resolver.resolve(selection: selection)
-            let result = try await storeProfile.withStore(request: CLIStoreProfile.Request(
-                databaseURL: target.databaseURL,
-                wikiID: target.wikiID,
-                containerDirectory: target.containerDirectory
-            )) { store in
-                try await execute(
-                    resolvedCommand,
-                    store,
-                    target.wikiID,
-                    target.containerDirectory)
-            }
-
-            return Self.output(
-                for: result,
-                command: resolvedCommand,
-                changedWikiID: result.didCommit ? target.wikiID : nil)
+        guard let call = DaemonCommandRoute.call(for: resolvedCommand) else {
+            throw PageCommand.Failure.message(
+                "no daemon route for this wikictl command — every --wiki command "
+                    + "must ride the daemon, and there is no local fallback; "
+                    + "this is a wikictl wiring bug")
         }
+        let routed = try await daemonCommandRouter.run(
+            call,
+            selector: wikiSelector,
+            containerDirectory: resolver.containerDirectory)
+        return Self.output(
+            for: routed.result,
+            command: resolvedCommand,
+            changedWikiID: routed.result.didCommit ? routed.wikiID : nil)
     }
 
     static func output(
@@ -485,35 +344,6 @@ public enum CLITantivyLegResolver {
 }
 
 #else
-public enum CLIStoreProfileError: Error {
-    case incompatibleStore
-    case operationAndCleanup(operation: any Error, cleanup: any Error)
-}
-
-public enum CLIStoreProfile {
-    /// The catalog resolver for headless store opens. Injectable so tests can
-    /// prove the wiring without machine package state.
-    public static var resolveRendererCatalog: @Sendable () async -> RegisteredRendererSourceTypes =
-        { await RendererCatalogResolution.productionSourceTypes() }
-
-    public static func withStore<Result>(
-        databaseURL: URL,
-        wikiID: WikiID,
-        containerDirectory: URL,
-        operation: (GRDBWikiStore) async throws -> Result
-    ) async throws -> Result {
-        let service = try StoreBackend.current.makeStore(databaseURL: databaseURL)
-        guard let store = service as? GRDBWikiStore else {
-            throw CLIStoreProfileError.incompatibleStore
-        }
-        // Headless profiles project source-type claims straight from the
-        // authoritative machine index (WebKit-free). A failure keeps the
-        // empty catalog and never blocks the command.
-        store.registeredRendererSourceTypes = await resolveRendererCatalog()
-        return try await operation(store)
-    }
-}
-
 /// Linux stub: Tantivy is unavailable. All resolvers return nil (no BM25 leg).
 public enum CLITantivyLegResolver {
     public static func resolvePageLeg(

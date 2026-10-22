@@ -66,9 +66,9 @@ public enum DaemonDomainFamily: String, Codable, Sendable, CaseIterable {
     case admin
     /// `extractor sync/fetch` — the ENTIRE command runs daemon-side
     /// (catalog + store + durable enqueue through the daemon's queue engine),
-    /// so the CLI stops writing `queue.sqlite` directly (Phase 4; the CLI's
-    /// old direct-write path survives only for `--database-path` fixtures
-    /// until Phase 5 strips it).
+    /// so the CLI never writes `queue.sqlite` directly (Phase 4; the CLI's
+    /// old direct-write path is gone — fixture runs use the build-only
+    /// `wikictl-fixture` binary).
     case extractor
 }
 
