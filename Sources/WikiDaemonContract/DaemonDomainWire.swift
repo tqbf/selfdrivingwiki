@@ -51,10 +51,25 @@ public enum DaemonDomainFamily: String, Codable, Sendable, CaseIterable {
     case source
     /// Read-only chat commands executed daemon-side (Phase 3).
     case chat
-    /// Read-only bookmark commands executed daemon-side (Phase 3).
+    /// Read-only bookmark commands executed daemon-side (Phase 3); writes
+    /// joined in Phase 4.
     case bookmark
-    /// Read-only workspace commands executed daemon-side (Phase 3).
+    /// Read-only workspace commands executed daemon-side (Phase 3); writes
+    /// joined in Phase 4.
     case workspace
+    /// Strategy read + save/reset, executed daemon-side (Phase 4).
+    case strategy
+    /// `log append` / `index set`, executed daemon-side (Phase 4).
+    case log
+    /// Admin maintenance (vacuums, MIME repair), executed daemon-side
+    /// (Phase 4). Every operation runs under the long-running handler budget.
+    case admin
+    /// `extractor sync/fetch` — the ENTIRE command runs daemon-side
+    /// (catalog + store + durable enqueue through the daemon's queue engine),
+    /// so the CLI stops writing `queue.sqlite` directly (Phase 4; the CLI's
+    /// old direct-write path survives only for `--database-path` fixtures
+    /// until Phase 5 strips it).
+    case extractor
 }
 
 public struct DaemonDomainRequest: Codable, Equatable, Sendable {
@@ -153,15 +168,80 @@ public enum DaemonDomainErrorCode: String, Codable, Sendable {
     case unavailable
     /// The operation ran and failed; the daemon-side cause is in `message`.
     case operationFailed
+
+    // Phase 4 typed CAS codes (plans/cli-domain-commands.md §"CAS and exit
+    // codes"). Each carries a ``DaemonConflictDetail`` on the error so the CLI
+    // reconstructs the SAME typed store error the in-process path threw — the
+    // CLI's existing catch paths then print the byte-stable conflict text and
+    // exit 3. The server-side executor catches the typed store errors and
+    // produces these; it never stringifies a conflict into `operationFailed`.
+    /// A compare-and-swap head moved: `PageConflictError` (kind `page`) or
+    /// `SourceMarkdownConflictError` (kind `sourceMarkdown`). `expected` /
+    /// `actual` carry the head version ids.
+    case casConflict
+    /// A create-only page write found the title now occupied
+    /// (`PageCreateConflictError`); `actual` is the existing page's head.
+    case createOnlyConflict
+    /// An expected-head page write whose target no longer exists
+    /// (`PageExpectedTargetMissingError`); `actual` is nil — there is no head.
+    case expectedTargetMissing
+    /// The strategy singleton's revision moved (`WikiStrategyConflictError`);
+    /// `expected` / `actual` carry the revisions (nil = absent).
+    case strategyRevisionConflict
+}
+
+/// The structured payload behind the typed CAS error codes: everything the CLI
+/// needs to rebuild the typed store error (and therefore the byte-stable
+/// conflict text) without parsing `message`. Heads and revisions cross as raw
+/// strings; `nil` means absent (no head, no revision row).
+public struct DaemonConflictDetail: Codable, Equatable, Sendable {
+    /// Which store error the daemon caught: `page` (PageConflictError),
+    /// `sourceMarkdown` (SourceMarkdownConflictError), `strategy`
+    /// (WikiStrategyConflictError). The other codes imply their type.
+    public let kind: String
+    /// The page/source ULID the conflict names, when one exists.
+    public let targetID: String?
+    /// The page title, where the error carries one (create-only, target
+    /// missing).
+    public let title: String?
+    /// The expected head / revision raw value; nil = absent.
+    public let expected: String?
+    /// The actual head / revision raw value; nil = absent or none.
+    public let actual: String?
+
+    public init(
+        kind: String,
+        targetID: String? = nil,
+        title: String? = nil,
+        expected: String? = nil,
+        actual: String? = nil
+    ) {
+        self.kind = kind
+        self.targetID = targetID
+        self.title = title
+        self.expected = expected
+        self.actual = actual
+    }
 }
 
 public struct DaemonDomainError: Error, Codable, Equatable, Sendable, LocalizedError {
     public let code: DaemonDomainErrorCode
     public let message: String
+    /// Structured CAS payload; non-nil exactly for the four typed CAS codes.
+    public let conflict: DaemonConflictDetail?
 
     public init(code: DaemonDomainErrorCode, message: String) {
+        self.init(code: code, message: message, conflict: nil)
+    }
+
+    public init(
+        code: DaemonDomainErrorCode,
+        message: String,
+        conflict: DaemonConflictDetail?
+    ) {
         self.code = code
         self.message = message
+        self.conflict = conflict
     }
 
     public var errorDescription: String? { message }
@@ -326,11 +406,16 @@ public enum DaemonDomainOperation {
         public static let okfStatus = "okfStatus"
         public static let okfFreshness = "okfFreshness"
         public static let okfVerify = "okfVerify"
+        public static let okfCorrect = "okfCorrect"
         /// The FULL search command, server-side: the daemon resolves the BM25
         /// leg with its own per-wiki runtime, fuses with the semantic leg, and
         /// returns the byte-stable rendered output (Phase 3 search
         /// store-freedom).
         public static let search = "search"
+        // Phase 4 writes.
+        public static let add = "add"
+        public static let delete = "delete"
+        public static let revert = "revert"
     }
 
     public enum Source {
@@ -340,21 +425,147 @@ public enum DaemonDomainOperation {
         public static let info = "info"
         /// Server-side search — see `Page.search`.
         public static let search = "search"
+        // Phase 4 writes (addURL/refresh fetch the network server-side).
+        public static let addURL = "addURL"
+        public static let addFile = "addFile"
+        public static let editMarkdown = "editMarkdown"
+        public static let rename = "rename"
+        public static let setActive = "setActive"
+        public static let refresh = "refresh"
+        // Phase 4: the source okf family rides along (mirroring the page
+        // family's Phase 3 okf ops) so no mutating command stays local.
+        public static let okfInspect = "okfInspect"
+        public static let okfStatus = "okfStatus"
+        public static let okfFreshness = "okfFreshness"
+        public static let okfVerify = "okfVerify"
+        public static let okfCorrect = "okfCorrect"
     }
 
     public enum Chat {
         public static let list = "list"
         public static let get = "get"
         public static let search = "search"
+        // Phase 4 write.
+        public static let rename = "rename"
     }
 
     public enum Bookmark {
         public static let list = "list"
+        // Phase 4 writes.
+        public static let createFolder = "createFolder"
+        public static let addRef = "addRef"
+        public static let rename = "rename"
+        public static let delete = "delete"
+        public static let move = "move"
     }
 
     public enum Workspace {
         public static let status = "status"
         public static let conflicts = "conflicts"
+        // Phase 4 writes; `merge` and `reap` run under the long-running
+        // handler budget.
+        public static let create = "create"
+        public static let abandon = "abandon"
+        public static let merge = "merge"
+        public static let refresh = "refresh"
+        public static let resolve = "resolve"
+        public static let retry = "retry"
+        public static let reap = "reap"
+    }
+
+    // Phase 4 command families.
+
+    public enum Strategy {
+        public static let read = "read"
+        public static let save = "save"
+        public static let reset = "reset"
+    }
+
+    public enum Log {
+        public static let logAppend = "logAppend"
+        public static let indexSet = "indexSet"
+    }
+
+    public enum Admin {
+        public static let vacuumBlobs = "vacuumBlobs"
+        public static let vacuumActivities = "vacuumActivities"
+        public static let vacuumPageVersions = "vacuumPageVersions"
+        public static let vacuumAll = "vacuumAll"
+        public static let repairMIME = "repairMIME"
+    }
+
+    public enum Extractor {
+        public static let sync = "sync"
+        public static let fetch = "fetch"
+    }
+}
+
+/// Per-endpoint handler budgets for the CLI ⇄ daemon socket (Phase 4,
+/// plans/cli-domain-commands.md §"Long-running operations"). The socket's
+/// per-phase deadlines are configurable constants; this table is the
+/// per-endpoint override: the server races every handler against the budget
+/// its operation names (an oversized budget cannot pin an fd — the race still
+/// fires), and the CLI opens long-running calls with a client deadline ABOVE
+/// the server budget so the true outcome (committed or refused) rides back
+/// instead of the client giving up first.
+///
+/// The choice: standard command families keep the socket's standard posture
+/// (60 s server handler budget, 30 s client deadline). The operations that
+/// legitimately sweep whole stores or wait on merges — the admin family
+/// (`vacuum*`, `repairMIME`) and `workspace merge`/`reap` — get a 10-minute
+/// server budget with an 11-minute client deadline. No async-job pattern: a
+/// 10-minute ceiling comfortably covers a fixture-scale vacuum, and the frame
+/// cap and fd race still bound a stuck handler.
+public enum DaemonDomainBudgets {
+
+    /// The standard server-side handler budget — matches the socket server's
+    /// `Limits.handlerTimeout`.
+    public static let standardHandler: TimeInterval = 60
+
+    /// The elevated server-side handler budget for long-running operations.
+    public static let longRunningHandler: TimeInterval = 600
+
+    /// The standard CLI deadline (`DaemonWorkloadClient.defaultTimeout`).
+    public static let standardClient: TimeInterval = 30
+
+    /// The elevated CLI deadline: the long-running server budget plus one
+    /// minute, so the server's answer (or its typed budget expiry) wins the
+    /// race and the client reports the true outcome.
+    public static let longRunningClient: TimeInterval = 660
+
+    /// The server-side handler budget for one family/operation.
+    public static func handlerTimeout(
+        family: DaemonDomainFamily,
+        operation: String
+    ) -> TimeInterval {
+        isLongRunning(family: family, operation: operation)
+            ? longRunningHandler : standardHandler
+    }
+
+    /// The client-side deadline for one family/operation.
+    public static func clientTimeout(
+        family: DaemonDomainFamily,
+        operation: String
+    ) -> TimeInterval {
+        isLongRunning(family: family, operation: operation)
+            ? longRunningClient : standardClient
+    }
+
+    /// The long-running set: the whole admin family plus the workspace merge
+    /// and reaper sweeps. Everything else runs at the standard budget.
+    public static func isLongRunning(
+        family: DaemonDomainFamily,
+        operation: String
+    ) -> Bool {
+        switch family {
+        case .admin:
+            return true
+        case .workspace:
+            return operation == DaemonDomainOperation.Workspace.merge
+                || operation == DaemonDomainOperation.Workspace.reap
+        default:
+            return false
+        }
     }
 }
 
