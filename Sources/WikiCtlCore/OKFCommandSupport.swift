@@ -34,7 +34,9 @@ public struct OKFVerificationInput: Equatable, Sendable {
     }
 }
 
-public struct OKFCorrectionInput: Equatable, Sendable {
+/// Codable (Phase 4): the correction input crosses the CLI ⇄ daemon wire as
+/// embedded JSON, exactly like the verify payload.
+public struct OKFCorrectionInput: Equatable, Codable, Sendable {
     public let verificationID: OKFVerificationID
     public let verifier: OKFVerifierIdentity
     public let correctedAt: Date

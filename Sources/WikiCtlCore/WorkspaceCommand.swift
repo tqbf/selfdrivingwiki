@@ -27,7 +27,7 @@ public enum WorkspaceCommand {
         case merge(id: WorkspaceID)
         case refresh(id: WorkspaceID)
         case conflicts(id: WorkspaceID)
-        case resolve(id: WorkspaceID, pageID: PageID, bodyFile: String)
+        case resolve(id: WorkspaceID, pageID: PageID, body: BodySource)
         case retry(id: WorkspaceID)
         case reap(ttl: TimeInterval)
     }
@@ -56,8 +56,8 @@ public enum WorkspaceCommand {
             return try refresh(id: id, in: store)
         case .conflicts(let id):
             return try conflicts(id: id, in: store)
-        case .resolve(let id, let pageID, let bodyFile):
-            return try resolve(id: id, pageID: pageID, bodyFile: bodyFile, in: store)
+        case .resolve(let id, let pageID, let body):
+            return try resolve(id: id, pageID: pageID, body: body, in: store)
         case .retry(let id):
             return try retry(id: id, in: store)
         case .reap(let ttl):
@@ -143,15 +143,13 @@ public enum WorkspaceCommand {
     // MARK: - resolve
 
     private static func resolve(
-        id: WorkspaceID, pageID: PageID, bodyFile: String, in store: WikiStore
+        id: WorkspaceID, pageID: PageID, body: BodySource, in store: WikiStore
     ) throws -> Result {
-        let body: String
-        if bodyFile == "-" {
-            body = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
-        } else {
-            body = try String(contentsOfFile: bodyFile, encoding: .utf8)
-        }
-        try store.workspaceResolveConflict(workspaceID: id, pageID: pageID, body: body)
+        // The body source resolves HERE (file path or `-` = stdin), the same
+        // deferred read every other body-carrying action performs. The daemon
+        // execution path hands this an `.inline` body (resolved CLI-side).
+        let bodyText = try resolveBodySource(body)
+        try store.workspaceResolveConflict(workspaceID: id, pageID: pageID, body: bodyText)
         return Result(output: "resolved \(pageID.rawValue) in \(id.rawValue)", didCommit: true)
     }
 

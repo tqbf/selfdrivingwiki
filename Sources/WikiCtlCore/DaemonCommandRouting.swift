@@ -14,9 +14,15 @@ import WikiFSCore
 /// One routed daemon call: family + operation + a payload writer that embeds
 /// the resolved wiki id. The wiki id is unknown at mapping time (the selector
 /// resolves over the socket), so the payload closure receives it.
+///
+/// `timeout` is the CLIENT deadline for this call, resolved through
+/// ``DaemonDomainBudgets``: long-running operations (admin sweeps, workspace
+/// merge/reap) open with a deadline ABOVE the daemon's elevated handler budget
+/// so the true outcome rides back instead of the client giving up first.
 public struct DaemonCommandCall: Sendable {
     let family: DaemonDomainFamily
     let operation: String
+    let timeout: TimeInterval
     let payload: @Sendable (_ wikiID: String) throws -> Data
 
     init(
@@ -26,13 +32,16 @@ public struct DaemonCommandCall: Sendable {
     ) {
         self.family = family
         self.operation = operation
+        self.timeout = DaemonDomainBudgets.clientTimeout(
+            family: family, operation: operation)
         self.payload = payload
     }
 }
 
-/// Command → daemon-call mapping for the migrated reads. `nil` means "not
-/// migrated — run in-process" (writes stay local until Phase 4; the search
-/// commands route once their server-side resolution lands).
+/// Command → daemon-call mapping for the migrated commands — Phase 3 reads AND
+/// Phase 4 writes. `nil` means "not migrated — run in-process" (only
+/// `--database-path` fixture runs land there now; every registry-selected
+/// command rides the daemon).
 public enum DaemonCommandRoute {
 
     public static func call(for command: ArgumentParser.Command) -> DaemonCommandCall? {
@@ -43,23 +52,53 @@ public enum DaemonCommandRoute {
             return source(action)
         case .chat(let action):
             return chat(action)
-        case .bookmark(.list(let json)):
+        case .bookmark(let action):
+            return bookmark(action)
+        case .workspace(let action):
+            return workspace(action)
+        case .strategy(let action):
+            return strategy(action)
+        case .logAppend(let kind, let title, let note, let source, let author):
             return DaemonCommandCall(
-                family: .bookmark,
-                operation: DaemonDomainOperation.Bookmark.list) { wikiID in
-                try JSONEncoder().encode(DaemonBookmarkListRequest(wikiID: wikiID, json: json))
+                family: .log,
+                operation: DaemonDomainOperation.Log.logAppend) { wikiID in
+                try JSONEncoder().encode(DaemonLogAppendRequest(
+                    wikiID: wikiID,
+                    kind: kind.rawValue,
+                    title: title,
+                    note: note,
+                    source: source?.rawValue,
+                    author: author))
             }
-        case .workspace(.status(let id)):
+        case .indexSet(let bodyFile, let workspace):
             return DaemonCommandCall(
-                family: .workspace,
-                operation: DaemonDomainOperation.Workspace.status) { wikiID in
-                try JSONEncoder().encode(DaemonWorkspaceRequest(wikiID: wikiID, id: id.rawValue))
+                family: .log,
+                operation: DaemonDomainOperation.Log.indexSet) { wikiID in
+                // The index body crosses RESOLVED — `-` (stdin) reads HERE,
+                // in the caller's process; the daemon has no caller stdin.
+                let body = try readBodyFile(from: bodyFile)
+                return try JSONEncoder().encode(DaemonIndexSetRequest(
+                    wikiID: wikiID, body: body, workspace: workspace))
             }
-        case .workspace(.conflicts(let id)):
+        case .admin(let action):
+            return admin(action)
+        case .extractor(.sync(let packageName, let force)):
+            // The ENTIRE command runs daemon-side (catalog + store + durable
+            // enqueue through the daemon's queue engine) — the CLI stops
+            // writing queue.sqlite directly.
             return DaemonCommandCall(
-                family: .workspace,
-                operation: DaemonDomainOperation.Workspace.conflicts) { wikiID in
-                try JSONEncoder().encode(DaemonWorkspaceRequest(wikiID: wikiID, id: id.rawValue))
+                family: .extractor,
+                operation: DaemonDomainOperation.Extractor.sync) { wikiID in
+                try JSONEncoder().encode(DaemonExtractorSyncRequest(
+                    wikiID: wikiID, packageName: packageName, force: force))
+            }
+        case .extractor(.fetch(let packageName, let itemKey, let force)):
+            return DaemonCommandCall(
+                family: .extractor,
+                operation: DaemonDomainOperation.Extractor.fetch) { wikiID in
+                try JSONEncoder().encode(DaemonExtractorFetchRequest(
+                    wikiID: wikiID, packageName: packageName,
+                    itemKey: itemKey, force: force))
             }
         default:
             return nil
@@ -140,6 +179,53 @@ public enum DaemonCommandRoute {
                     basisJSON: try JSONEncoder().encode(input.basis),
                     ttlSeconds: ttlSeconds))
             }
+        case .add(let id, let title, let bodySource, let expectHead, let createOnly, let workspace, let author, let provenance):
+            // Phase 4 write. The body crosses RESOLVED (`-` = stdin reads
+            // HERE — the daemon has no caller stdin), and the CLI's
+            // environment is merged into provenance BEFORE the wire (the
+            // daemon's environment is not the caller's).
+            return DaemonCommandCall(
+                family: .page, operation: DaemonDomainOperation.Page.add) { wikiID in
+                let body = try resolveBodySource(bodySource)
+                let merged = PageCommand.mergedAgentIngestProvenance(provenance)
+                return try JSONEncoder().encode(DaemonPageAddRequest(
+                    wikiID: wikiID,
+                    id: id?.rawValue,
+                    title: title,
+                    body: body,
+                    expectHead: expectHead?.rawValue,
+                    createOnly: createOnly,
+                    workspace: workspace,
+                    author: author,
+                    provenance: merged.map { input in
+                        DaemonPageAddRequest.ProvenanceInput(
+                            sourceID: input.sourceID.rawValue,
+                            role: input.role.rawValue)
+                    }))
+            }
+        case .delete(let id, let unlinkIncoming):
+            return DaemonCommandCall(
+                family: .page, operation: DaemonDomainOperation.Page.delete) { wikiID in
+                try JSONEncoder().encode(DaemonPageDeleteRequest(
+                    wikiID: wikiID, id: id.rawValue, unlinkIncoming: unlinkIncoming))
+            }
+        case .revert(let selector, let versionID):
+            let wireSelector = DaemonCommandSelector(page: selector)
+            return DaemonCommandCall(
+                family: .page, operation: DaemonDomainOperation.Page.revert) { wikiID in
+                try JSONEncoder().encode(DaemonPageRevertRequest(
+                    wikiID: wikiID, selector: wireSelector,
+                    versionID: versionID.rawValue))
+            }
+        case .okfCorrect(let versionID, let input):
+            // Phase 4 completes the page writes; the correction input crosses
+            // as embedded JSON like the verify payload.
+            return DaemonCommandCall(
+                family: .page, operation: DaemonDomainOperation.Page.okfCorrect) { wikiID in
+                try JSONEncoder().encode(DaemonPageOKFCorrectRequest(
+                    wikiID: wikiID, versionID: versionID.rawValue,
+                    inputJSON: try JSONEncoder().encode(input)))
+            }
         case .search(let query, let limit):
             // Server-side search: the daemon resolves the BM25 leg, fuses,
             // maps, and renders — the CLI does no catalog work.
@@ -148,9 +234,6 @@ public enum DaemonCommandRoute {
                 try JSONEncoder().encode(DaemonSearchCommandRequest(
                     wikiID: wikiID, query: query, limit: limit))
             }
-        default:
-            // add/delete/revert/okfCorrect: not migrated here (Phase 4).
-            return nil
         }
     }
 
@@ -197,9 +280,112 @@ public enum DaemonCommandRoute {
                 try JSONEncoder().encode(DaemonSearchCommandRequest(
                     wikiID: wikiID, query: query, limit: limit))
             }
-        default:
-            // addURL/addFile/editMarkdown/rename/setActive/refresh/okf*: not migrated here (Phase 4).
-            return nil
+        case .addURL(let rawInput, let allowDuplicateURL):
+            // Phase 4 write. Parameters only — the duplicate check and the
+            // network materialization happen SERVER-side (the daemon owns the
+            // fetcher wiring).
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.addURL) { wikiID in
+                try JSONEncoder().encode(DaemonSourceAddURLRequest(
+                    wikiID: wikiID, url: rawInput,
+                    allowDuplicateURL: allowDuplicateURL))
+            }
+        case .addFile(let path, let name):
+            // Phase 4 write. The bytes cross RESOLVED (`-` = stdin reads HERE);
+            // `path` rides only for the command layer's default-filename
+            // behavior.
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.addFile) { wikiID in
+                let bytes = try SourceCommand.readSourceData(path)
+                return try JSONEncoder().encode(DaemonSourceAddFileRequest(
+                    wikiID: wikiID, path: path, name: name,
+                    contentBase64: bytes.base64EncodedString()))
+            }
+        case .editMarkdown(let selector, let contentSource, let expectedHead):
+            // Phase 4 CAS write. The content crosses RESOLVED and the
+            // expectation RIDES the request; the store evaluates it inside the
+            // write server-side and a stale head comes back as the typed
+            // `casConflict`.
+            let wireSelector = DaemonCommandSelector(source: selector)
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.editMarkdown) { wikiID in
+                let content = try resolveBodySource(contentSource)
+                return try JSONEncoder().encode(DaemonSourceEditMarkdownRequest(
+                    wikiID: wikiID, selector: wireSelector, content: content,
+                    expectedHead: expectedHead.rawValue))
+            }
+        case .rename(let selector, let to):
+            let wireSelector = DaemonCommandSelector(source: selector)
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.rename) { wikiID in
+                try JSONEncoder().encode(DaemonSourceRenameRequest(
+                    wikiID: wikiID, selector: wireSelector, to: to))
+            }
+        case .setActive(let selector, let versionID):
+            let wireSelector = DaemonCommandSelector(source: selector)
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.setActive) { wikiID in
+                try JSONEncoder().encode(DaemonSourceSetActiveRequest(
+                    wikiID: wikiID, selector: wireSelector,
+                    versionID: versionID.rawValue))
+            }
+        case .refresh(let selector):
+            // Phase 4 write. Parameters only — the origin re-fetch runs
+            // SERVER-side.
+            let wireSelector = DaemonCommandSelector(source: selector)
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.refresh) { wikiID in
+                try JSONEncoder().encode(DaemonSourceRefreshRequest(
+                    wikiID: wikiID, selector: wireSelector))
+            }
+        case .okfInspect(let versionID, let json):
+            // Phase 4: the source okf family rides along (mirrors the page
+            // family's Phase 3 okf ops).
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.okfInspect) { wikiID in
+                try JSONEncoder().encode(DaemonSourceOKFInspectRequest(
+                    wikiID: wikiID, versionID: versionID.rawValue, json: json))
+            }
+        case .okfStatus(let versionID, let status):
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.okfStatus) { wikiID in
+                try JSONEncoder().encode(DaemonSourceOKFStatusRequest(
+                    wikiID: wikiID, versionID: versionID.rawValue,
+                    status: status?.rawValue))
+            }
+        case .okfFreshness(let versionID, let input):
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.okfFreshness) { wikiID in
+                let policy = try input.policy
+                return try JSONEncoder().encode(DaemonSourceOKFFreshnessRequest(
+                    wikiID: wikiID,
+                    versionID: versionID.rawValue,
+                    policyJSON: policy.map { try JSONEncoder().encode($0) }))
+            }
+        case .okfVerify(let versionID, let input):
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.okfVerify) { wikiID in
+                let ttlSeconds: Int64?
+                if case .ttl(let duration, _) = input.freshness {
+                    ttlSeconds = duration.components.seconds
+                } else {
+                    ttlSeconds = nil
+                }
+                return try JSONEncoder().encode(DaemonSourceOKFVerifyRequest(
+                    wikiID: wikiID,
+                    versionID: versionID.rawValue,
+                    verifierJSON: try JSONEncoder().encode(input.verifier),
+                    verifiedAt: input.verifiedAt,
+                    basisJSON: try JSONEncoder().encode(input.basis),
+                    ttlSeconds: ttlSeconds))
+            }
+        case .okfCorrect(let versionID, let input):
+            return DaemonCommandCall(
+                family: .source, operation: DaemonDomainOperation.Source.okfCorrect) { wikiID in
+                try JSONEncoder().encode(DaemonSourceOKFCorrectRequest(
+                    wikiID: wikiID, versionID: versionID.rawValue,
+                    inputJSON: try JSONEncoder().encode(input)))
+            }
         }
     }
 
@@ -217,15 +403,228 @@ public enum DaemonCommandRoute {
                 try JSONEncoder().encode(DaemonChatGetRequest(
                     wikiID: wikiID, selector: wireSelector))
             }
+        case .rename(let selector, let to):
+            // Phase 4 write.
+            let wireSelector = DaemonCommandSelector(chat: selector)
+            return DaemonCommandCall(
+                family: .chat, operation: DaemonDomainOperation.Chat.rename) { wikiID in
+                try JSONEncoder().encode(DaemonChatRenameRequest(
+                    wikiID: wikiID, selector: wireSelector, to: to))
+            }
         case .search(let query, let limit):
             return DaemonCommandCall(
                 family: .chat, operation: DaemonDomainOperation.Chat.search) { wikiID in
                 try JSONEncoder().encode(DaemonSearchCommandRequest(
                     wikiID: wikiID, query: query, limit: limit))
             }
-        default:
-            // rename: not migrated here (Phase 4).
-            return nil
+        }
+    }
+
+    // MARK: - bookmark (Phase 3 read + Phase 4 writes)
+
+    private static func bookmark(_ action: BookmarkCommand.Action) -> DaemonCommandCall? {
+        switch action {
+        case .list(let json):
+            return DaemonCommandCall(
+                family: .bookmark,
+                operation: DaemonDomainOperation.Bookmark.list) { wikiID in
+                try JSONEncoder().encode(DaemonBookmarkListRequest(
+                    wikiID: wikiID, json: json))
+            }
+        case .createFolder(let parentID, let name):
+            return DaemonCommandCall(
+                family: .bookmark,
+                operation: DaemonDomainOperation.Bookmark.createFolder) { wikiID in
+                try JSONEncoder().encode(DaemonBookmarkCreateFolderRequest(
+                    wikiID: wikiID, parentID: parentID, name: name))
+            }
+        case .addRef(let parentID, let content):
+            let ref: DaemonBookmarkRef
+            switch content {
+            case .page(let id): ref = DaemonBookmarkRef(pageID: id.rawValue)
+            case .source(let id): ref = DaemonBookmarkRef(sourceID: id.rawValue)
+            case .chat(let id): ref = DaemonBookmarkRef(chatID: id.rawValue)
+            case .folder:
+                // The parser already rejects folder refs; keep the wire honest.
+                return nil
+            }
+            return DaemonCommandCall(
+                family: .bookmark,
+                operation: DaemonDomainOperation.Bookmark.addRef) { wikiID in
+                try JSONEncoder().encode(DaemonBookmarkAddRefRequest(
+                    wikiID: wikiID, parentID: parentID, ref: ref))
+            }
+        case .rename(let id, let to):
+            return DaemonCommandCall(
+                family: .bookmark,
+                operation: DaemonDomainOperation.Bookmark.rename) { wikiID in
+                try JSONEncoder().encode(DaemonBookmarkRenameRequest(
+                    wikiID: wikiID, id: id, to: to))
+            }
+        case .delete(let id):
+            return DaemonCommandCall(
+                family: .bookmark,
+                operation: DaemonDomainOperation.Bookmark.delete) { wikiID in
+                try JSONEncoder().encode(DaemonBookmarkDeleteRequest(
+                    wikiID: wikiID, id: id))
+            }
+        case .move(let id, let toParentID, let position):
+            return DaemonCommandCall(
+                family: .bookmark,
+                operation: DaemonDomainOperation.Bookmark.move) { wikiID in
+                try JSONEncoder().encode(DaemonBookmarkMoveRequest(
+                    wikiID: wikiID, id: id, toParentID: toParentID,
+                    position: position))
+            }
+        }
+    }
+
+    // MARK: - workspace (Phase 3 reads + Phase 4 writes)
+
+    private static func workspace(_ action: WorkspaceCommand.Action) -> DaemonCommandCall? {
+        switch action {
+        case .status(let id):
+            return DaemonCommandCall(
+                family: .workspace,
+                operation: DaemonDomainOperation.Workspace.status) { wikiID in
+                try JSONEncoder().encode(DaemonWorkspaceRequest(
+                    wikiID: wikiID, id: id.rawValue))
+            }
+        case .conflicts(let id):
+            return DaemonCommandCall(
+                family: .workspace,
+                operation: DaemonDomainOperation.Workspace.conflicts) { wikiID in
+                try JSONEncoder().encode(DaemonWorkspaceRequest(
+                    wikiID: wikiID, id: id.rawValue))
+            }
+        case .create(let name):
+            return DaemonCommandCall(
+                family: .workspace,
+                operation: DaemonDomainOperation.Workspace.create) { wikiID in
+                try JSONEncoder().encode(DaemonWorkspaceCreateRequest(
+                    wikiID: wikiID, name: name))
+            }
+        case .abandon(let id):
+            return DaemonCommandCall(
+                family: .workspace,
+                operation: DaemonDomainOperation.Workspace.abandon) { wikiID in
+                try JSONEncoder().encode(DaemonWorkspaceIDRequest(
+                    wikiID: wikiID, id: id.rawValue))
+            }
+        case .merge(let id):
+            // Long-running: the call opens with the elevated client deadline.
+            return DaemonCommandCall(
+                family: .workspace,
+                operation: DaemonDomainOperation.Workspace.merge) { wikiID in
+                try JSONEncoder().encode(DaemonWorkspaceIDRequest(
+                    wikiID: wikiID, id: id.rawValue))
+            }
+        case .refresh(let id):
+            return DaemonCommandCall(
+                family: .workspace,
+                operation: DaemonDomainOperation.Workspace.refresh) { wikiID in
+                try JSONEncoder().encode(DaemonWorkspaceIDRequest(
+                    wikiID: wikiID, id: id.rawValue))
+            }
+        case .resolve(let id, let pageID, let body):
+            let wireID = id.rawValue
+            let wirePageID = pageID.rawValue
+            return DaemonCommandCall(
+                family: .workspace,
+                operation: DaemonDomainOperation.Workspace.resolve) { wikiID in
+                    // The merge body crosses RESOLVED (`-` = stdin reads HERE).
+                    let content = try resolveBodySource(body)
+                    return try JSONEncoder().encode(DaemonWorkspaceResolveRequest(
+                        wikiID: wikiID, id: wireID, pageID: wirePageID,
+                        content: content))
+            }
+        case .retry(let id):
+            return DaemonCommandCall(
+                family: .workspace,
+                operation: DaemonDomainOperation.Workspace.retry) { wikiID in
+                try JSONEncoder().encode(DaemonWorkspaceIDRequest(
+                    wikiID: wikiID, id: id.rawValue))
+            }
+        case .reap(let ttl):
+            // Long-running: the call opens with the elevated client deadline.
+            return DaemonCommandCall(
+                family: .workspace,
+                operation: DaemonDomainOperation.Workspace.reap) { wikiID in
+                try JSONEncoder().encode(DaemonWorkspaceReapRequest(
+                    wikiID: wikiID, ttlSeconds: Int64(ttl)))
+            }
+        }
+    }
+
+    // MARK: - strategy (Phase 4)
+
+    private static func strategy(_ action: StrategyCommand.Action) -> DaemonCommandCall? {
+        switch action {
+        case .read(let json):
+            return DaemonCommandCall(
+                family: .strategy,
+                operation: DaemonDomainOperation.Strategy.read) { wikiID in
+                try JSONEncoder().encode(DaemonStrategyReadRequest(
+                    wikiID: wikiID, json: json))
+            }
+        case .save(let name, let content, let expect, let json):
+            // The instructions cross RESOLVED; the CAS expectation RIDES the
+            // request and is evaluated inside the store write server-side.
+            let wireExpect = DaemonCommandRoute.expectation(expect)
+            return DaemonCommandCall(
+                family: .strategy,
+                operation: DaemonDomainOperation.Strategy.save) { wikiID in
+                    let instructions = try resolveBodySource(content)
+                    return try JSONEncoder().encode(DaemonStrategySaveRequest(
+                        wikiID: wikiID, name: name, content: instructions,
+                        expect: wireExpect, json: json))
+            }
+        case .reset(let expect, let json):
+            return DaemonCommandCall(
+                family: .strategy,
+                operation: DaemonDomainOperation.Strategy.reset) { wikiID in
+                try JSONEncoder().encode(DaemonStrategyResetRequest(
+                    wikiID: wikiID,
+                    expect: DaemonCommandRoute.expectation(expect), json: json))
+            }
+        }
+    }
+
+    /// The wire form of the CLI's strategy CAS expectation.
+    private static func expectation(
+        _ expect: StrategyCommand.ExpectedRevision
+    ) -> DaemonStrategyExpectation {
+        switch expect {
+        case .absent: return .absent()
+        case .revision(let revision): return .revision(revision.rawValue)
+        }
+    }
+
+    // MARK: - admin (Phase 4)
+
+    private static func admin(_ action: AdminCommand.Action) -> DaemonCommandCall {
+        let dryRun: Bool
+        let json: Bool
+        switch action {
+        case .vacuumBlobs(let dry, let j), .vacuumActivities(let dry, let j),
+             .vacuumPageVersions(let dry, let j), .vacuumAll(let dry, let j),
+             .repairMIME(let dry, let j):
+            dryRun = dry
+            json = j
+        }
+        let operation: String
+        switch action {
+        case .vacuumBlobs: operation = DaemonDomainOperation.Admin.vacuumBlobs
+        case .vacuumActivities: operation = DaemonDomainOperation.Admin.vacuumActivities
+        case .vacuumPageVersions: operation = DaemonDomainOperation.Admin.vacuumPageVersions
+        case .vacuumAll: operation = DaemonDomainOperation.Admin.vacuumAll
+        case .repairMIME: operation = DaemonDomainOperation.Admin.repairMIME
+        }
+        // Long-running: every admin op opens with the elevated client deadline.
+        return DaemonCommandCall(
+            family: .admin, operation: operation) { wikiID in
+            try JSONEncoder().encode(DaemonAdminRequest(
+                wikiID: wikiID, dryRun: dryRun, json: json))
         }
     }
 }
@@ -290,7 +689,12 @@ public struct DaemonCommandRouter: Sendable {
             let descriptor = try await registry.resolveWiki(selector: selector)
             let payload = try call.payload(descriptor.id.rawValue)
             let socket = try DaemonDomainSocketClient(
-                containerDirectory: containerDirectory)
+                containerDirectory: containerDirectory,
+                // Per-endpoint client deadline (DaemonDomainBudgets): the
+                // long-running operations open with a deadline ABOVE the
+                // daemon's elevated handler budget so the true outcome rides
+                // back instead of the client giving up first.
+                timeout: call.timeout)
             let reply = try await socket.send(
                 family: call.family, operation: call.operation, payload: payload)
             let outcome = try DaemonCommandOutcome.decode(reply.payload)
@@ -302,7 +706,11 @@ public struct DaemonCommandRouter: Sendable {
 
     /// Run one routed call, mapping daemon/transport failures onto the CLI's
     /// failure types so the process layer's existing catch paths keep their
-    /// exit codes and byte-stable messages.
+    /// exit codes and byte-stable messages. The typed CAS codes
+    /// (`casConflict`, `createOnlyConflict`, `expectedTargetMissing`,
+    /// `strategyRevisionConflict`) reconstruct the SAME typed store errors the
+    /// in-process path threw, so main.swift's existing catch paths print the
+    /// byte-stable conflict text and exit 3.
     public func run(
         _ call: DaemonCommandCall,
         selector: String,
@@ -322,9 +730,63 @@ public struct DaemonCommandRouter: Sendable {
             // launch the app".
             throw PageCommand.Failure.message(error.localizedDescription)
         } catch let error as DaemonDomainError {
+            // Typed CAS codes rebuild the typed store error BEFORE the
+            // generic-message fallback: the process layer's conflict catch
+            // paths (exit 3) are keyed on these types.
+            if let conflict = Self.conflictError(from: error) {
+                throw conflict
+            }
             // Daemon rejections keep their message verbatim: notFound ("no
             // wiki matching …"), command failures, the frame-cap refusal.
             throw PageCommand.Failure.message(error.message)
+        }
+    }
+
+    /// Rebuild the typed store error from a typed CAS envelope error, so the
+    /// CLI's exit-3 catch paths fire exactly as they do in-process. Returns
+    /// nil for any error that is not a fully-populated CAS rejection (the
+    /// caller falls back to the message path).
+    static func conflictError(from error: DaemonDomainError) -> (any Error)? {
+        guard let detail = error.conflict else { return nil }
+        switch error.code {
+        case .casConflict:
+            switch detail.kind {
+            case "sourceMarkdown":
+                guard let targetID = detail.targetID,
+                      let expected = detail.expected else { return nil }
+                return SourceMarkdownConflictError(
+                    sourceID: SourceID(rawValue: targetID),
+                    expectedHead: SourceMarkdownVersionID(rawValue: expected),
+                    currentHead: detail.actual.map(SourceMarkdownVersionID.init(rawValue:)))
+            default:
+                guard let targetID = detail.targetID,
+                      let expected = detail.expected else { return nil }
+                return PageConflictError(
+                    pageID: PageID(rawValue: targetID),
+                    expectedVersionID: PageVersionID(rawValue: expected),
+                    actualVersionID: detail.actual.map(PageVersionID.init(rawValue:)))
+            }
+        case .createOnlyConflict:
+            guard let targetID = detail.targetID else { return nil }
+            return PageCreateConflictError(
+                pageID: PageID(rawValue: targetID),
+                title: detail.title ?? "",
+                actualVersionID: detail.actual.map(PageVersionID.init(rawValue:)))
+        case .expectedTargetMissing:
+            guard let expected = detail.expected else { return nil }
+            return PageExpectedTargetMissingError(
+                pageID: detail.targetID.map(PageID.init(rawValue:)),
+                expectedHead: PageVersionID(rawValue: expected),
+                title: detail.title ?? "")
+        case .strategyRevisionConflict:
+            return WikiStrategyConflictError(
+                expectedRevision: detail.expected.flatMap { Int64($0) }
+                    .map(WikiStrategyRevision.init),
+                currentRevision: detail.actual.flatMap { Int64($0) }
+                    .map(WikiStrategyRevision.init),
+                currentStrategy: nil)
+        default:
+            return nil
         }
     }
 

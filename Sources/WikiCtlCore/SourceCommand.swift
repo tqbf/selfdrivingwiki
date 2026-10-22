@@ -177,7 +177,11 @@ public enum SourceCommand {
             didCommit: true)
     }
 
-    private static func readSourceData(_ path: String) throws -> Data {
+    /// Reads the raw source bytes for `source add`: `-` reads stdin to EOF,
+    /// anything else is a file path. Internal (not private) so the Phase 4
+    /// daemon-routing seam can resolve the bytes CLI-side — the daemon has no
+    /// caller stdin.
+    static func readSourceData(_ path: String) throws -> Data {
         if path == "-" {
             return FileHandle.standardInput.readDataToEndOfFile()
         }
@@ -189,7 +193,10 @@ public enum SourceCommand {
         return try addFile(path: path, name: name, data: data, in: store)
     }
 
-    static func addFile(
+    /// Public (not internal) because the Phase 4 daemon path executes this
+    /// exact seam server-side: the CLI resolves the bytes (file/stdin) and
+    /// sends them; the daemon runs the same add against its store.
+    public static func addFile(
         path: String,
         name: String?,
         data: Data,

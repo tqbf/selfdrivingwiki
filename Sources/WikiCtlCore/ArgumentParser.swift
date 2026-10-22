@@ -1019,7 +1019,7 @@ public enum ArgumentParser {
                   let bodyFile = options.value("--body-file") else {
                 throw Failure.usage("workspace resolve: --id, --page, and --body-file are required")
             }
-            return .workspace(.resolve(id: id, pageID: pageID, bodyFile: bodyFile))
+            return .workspace(.resolve(id: id, pageID: pageID, body: .file(bodyFile)))
 
         case "retry":
             guard let id = options.value("--id").map({ WorkspaceID(rawValue: $0) }) else {
