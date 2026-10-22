@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Testing
+import WikiDaemonContract
 import WikiFSCore
 import WikiFSEngine
 import WikiFSSearch
@@ -29,6 +30,23 @@ struct AgentSandboxProcessTests {
     /// registered wikis (each seeded with a source + a processed-markdown
     /// chain), and a scratch workspace with the relocated temp roots.
     final class Fixture {
+
+        /// Where the fixture's App Group container lives. Both shapes are
+        /// reachable by same-user children; only the sibling shape is
+        /// resolvable by the production CLI's App Group id lookup, so tests
+        /// that spawn `wikictl` MUST use it — and suites that don't MUST
+        /// take the temp shape, so parallel suites never share (and collide
+        /// on) one container's daemon socket and wiki registry.
+        enum ContainerLocation {
+            /// The App Group SIBLING of the real container
+            /// (`group.test.selfdrivingwiki`) — `wikictl` resolves it via
+            /// `WIKI_APP_GROUP_ID`.
+            case groupContainerSibling
+            /// A short temp-root container — explicit-path probes only
+            /// (also keeps the run endpoint under `sockaddr_un`'s budget).
+            case tempRoot
+        }
+
         let root: URL
         let home: URL
         let container: URL
@@ -41,18 +59,33 @@ struct AgentSandboxProcessTests {
         let sourceA: SourceSummary
         let headA: SourceMarkdownVersion
 
-        init() throws {
-            root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("sandbox-suite-\(UUID().uuidString)", isDirectory: true)
+        init(containerLocation: ContainerLocation = .groupContainerSibling) throws {
+            switch containerLocation {
+            case .groupContainerSibling:
+                root = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(
+                        "sandbox-suite-\(UUID().uuidString)", isDirectory: true)
+                // wikictl resolves the container under the REAL account home
+                // (`homeDirectoryForCurrentUser` does not honor $HOME in the
+                // child), so the fixture container is a test-prefixed App Group
+                // SIBLING of the developer's real container — never the real one.
+                container = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library", isDirectory: true)
+                    .appendingPathComponent("Group Containers", isDirectory: true)
+                    .appendingPathComponent("group.test.selfdrivingwiki", isDirectory: true)
+            case .tempRoot:
+                // Short names: the CANONICAL temp root is ~58 bytes
+                // (/private/var/folders/...), so the fixture keeps every
+                // fixture path (including `r/<24hex>.sock`) inside
+                // `sockaddr_un`'s 103-byte budget — an 8-hex root leaf and
+                // a one-letter container leaf are the slack that
+                // guarantees it.
+                let name = String(UUID().uuidString.prefix(8))
+                root = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(name, isDirectory: true)
+                container = root.appendingPathComponent("c", isDirectory: true)
+            }
             home = root.appendingPathComponent("home", isDirectory: true)
-            // wikictl resolves the container under the REAL account home
-            // (`homeDirectoryForCurrentUser` does not honor $HOME in the
-            // child), so the fixture container is a test-prefixed App Group
-            // SIBLING of the developer's real container — never the real one.
-            container = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library", isDirectory: true)
-                .appendingPathComponent("Group Containers", isDirectory: true)
-                .appendingPathComponent("group.test.selfdrivingwiki", isDirectory: true)
             scratch = root.appendingPathComponent("scratch", isDirectory: true)
             queueDatabase = container.appendingPathComponent("queue.sqlite", isDirectory: false)
             for dir in [home, container, scratch] {
@@ -90,6 +123,11 @@ struct AgentSandboxProcessTests {
 
         private var fixtureDaemon: WikiDaemon?
         private var daemonServer: DaemonSearchSocketServer?
+        /// The trusted registration broker sharing the daemon's registry
+        /// (Phase 2): `startDaemon()` constructs it; scoped-run tests launch
+        /// runs through it and build their Seatbelt invocations around the
+        /// returned endpoints.
+        private(set) var runBroker: DaemonRunRegistrationBroker?
 
         /// Hosts the fixture daemon's domain dispatcher over the fixture
         /// container's socket. Registry-selected `wikictl` children ride the
@@ -98,13 +136,22 @@ struct AgentSandboxProcessTests {
         func startDaemon() throws {
             guard daemonServer == nil else { return }
             let daemon = WikiDaemon(containerDirectory: container)
-            let dispatcher = DaemonDomainSocketDispatcher(daemon: daemon)
+            // ONE registry shared by the dispatcher and the broker, so a
+            // scoped run registered by the broker authorizes on the same
+            // dispatcher the ordinary socket serves.
+            let runRegistry = DaemonRunRegistry()
+            let dispatcher = DaemonDomainSocketDispatcher(
+                daemon: daemon, runRegistry: runRegistry)
             let server = try DaemonSearchSocketServer(containerDirectory: container) { request in
                 await dispatcher.handle(request)
             }
             try server.start()
             fixtureDaemon = daemon
             daemonServer = server
+            runBroker = DaemonRunRegistrationBroker(
+                registry: runRegistry,
+                dispatcher: dispatcher,
+                containerDirectory: container)
         }
 
         func cleanup() {
@@ -128,6 +175,25 @@ struct AgentSandboxProcessTests {
                 scratchDir: scratch.path,
                 wikiDBPath: container.appendingPathComponent(wikiA.dbFileName, isDirectory: false).path,
                 queueDBPath: queueDatabase.path)
+        }
+
+        /// The SCOPED-RUN invocation (plans/agent-sandbox-scoping.md §8):
+        /// the App Group data subtree read+write denied, the ordinary daemon
+        /// endpoint and every run endpoint connect-denied EXCEPT the
+        /// assigned one, scratch/runtime allowances intact. The endpoint
+        /// paths come from the same layout the broker and the daemon use.
+        func scopedRunInvocationForWikiA(
+            runEndpointPath: String
+        ) throws -> SandboxProfile.SandboxInvocation {
+            try SandboxProfile.scopedRunInvocation(
+                homePath: home.path,
+                scratchDir: scratch.path,
+                appGroupContainerPath: container.path,
+                daemonEndpointPath: SearchSocketWire.socketPath(
+                    inContainerDirectory: container),
+                runsDirectoryPath: container.appendingPathComponent(
+                    DaemonRunRegistrationBroker.runsDirectoryName, isDirectory: true).path,
+                runEndpointPath: runEndpointPath)
         }
 
         /// The child environment an adapter would receive: scratch-relocated
@@ -305,81 +371,18 @@ struct AgentSandboxProcessTests {
                 "a denied write must not leave an artifact")
     }
 
-    /// Issue #1314: an agent-launched `wikictl extractor sync … --force`
-    /// reads the existing source from the active wiki, then persists its
-    /// extraction request in the sibling central queue database. Exercise the
-    /// same SQLite write under the real Seatbelt profile, entirely inside the
-    /// disposable test App Group container.
-    @Test func writeProfileAllowsCentralQueueSQLiteInsert() async throws {
-        let fixture = try Fixture()
-        defer { fixture.cleanup() }
-
-        let queue = try QueueStore(databaseURL: fixture.queueDatabase)
-        queue.close()
-
-        var environment = fixture.childEnvironment()
-        environment["QUEUE_DB"] = fixture.queueDatabase.path
-        let result = try await runSandboxed(
-            fixture,
-            executablePath: "/usr/bin/sqlite3",
-            arguments: [
-                fixture.queueDatabase.path,
-                "INSERT INTO queue_items "
-                    + "(id, queue, wiki_id, payload, state, ordering_key, attempt, created_at) "
-                    + "VALUES ('issue-1314', 'extraction', 'test-wiki', "
-                    + "'{\"sourceIDs\":[\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"]}', 'queued', 1000, 0, 0);",
-            ],
-            environment: environment)
-
-        #expect(result.status == 0, "queue INSERT failed: \(result.errorText)")
-        let reopened = try QueueStore(databaseURL: fixture.queueDatabase)
-        defer { reopened.close() }
-        #expect(try reopened.loadActive(for: .extraction).count == 1)
-    }
-
-    /// Issue #1314 root-cause control: the PRE-FIX write fence — the production
-    /// invocation WITHOUT the queue DB allowance — denies the same central-queue
-    /// INSERT, and SQLite surfaces the seatbelt denial as its classic
-    /// "attempt to write a readonly database" (SQLITE_READONLY, error 8): the
-    /// exact failure the issue reports for `extractor sync --force`. The denial
-    /// must also leave no durable row behind (the zero-byte, never-extracted
-    /// source the issue describes).
-    @Test func profileWithoutQueueAllowanceDeniesCentralQueueSQLiteInsert() async throws {
-        let fixture = try Fixture()
-        defer { fixture.cleanup() }
-
-        let queue = try QueueStore(databaseURL: fixture.queueDatabase)
-        queue.close()
-
-        let invocation = SandboxProfile.invocation(
-            homePath: fixture.home.path,
-            scratchDir: fixture.scratch.path,
-            wikiDBPath: fixture.container.appendingPathComponent(
-                fixture.wikiA.dbFileName, isDirectory: false).path)
-        let wrapped = SandboxProfile.wrappedArguments(
-            executablePath: "/usr/bin/sqlite3",
-            arguments: [
-                fixture.queueDatabase.path,
-                "INSERT INTO queue_items "
-                    + "(id, queue, wiki_id, payload, state, ordering_key, attempt, created_at) "
-                    + "VALUES ('issue-1314-denied', 'extraction', 'test-wiki', "
-                    + "'{\"sourceIDs\":[\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"]}', 'queued', 1000, 0, 0);",
-            ],
-            invocation: invocation)
-        let result = try await run(
-            executablePath: SandboxProfile.sandboxExecutablePath,
-            arguments: wrapped,
-            environment: fixture.childEnvironment())
-
-        #expect(result.status != 0,
-                "the queue INSERT must be denied under the pre-fix fence")
-        #expect(result.errorText.contains("attempt to write a readonly database"),
-                "the denial must surface as SQLITE_READONLY (error 8), got: \(result.errorText)")
-        let reopened = try QueueStore(databaseURL: fixture.queueDatabase)
-        defer { reopened.close() }
-        #expect(try reopened.loadActive(for: .extraction).isEmpty,
-                "a denied enqueue must not persist a durable row")
-    }
+    /// Issue #1314's direct central-queue write channel is CLOSED by the
+    /// scoped-run world (plans/agent-sandbox-scoping.md §8 + §10): the child
+    /// persists extraction jobs through a SCOPED daemon request instead, and
+    /// the terminal container denies make direct queue/wiki/registry access
+    /// a kernel denial. The replacement coverage lives in
+    /// `ScopedSandboxGateTests.directWikiQueueRegistryAccessIsKernelDeniedWhileScratchWritesWork`
+    /// (denial matrix, live sandbox-exec) and
+    /// `DaemonRunEndpointTests.scopedEnqueueThroughRunEndpointPersistsWikiJob`
+    /// (the successful scoped enqueue). The pre-scoping tests
+    /// (`writeProfileAllowsCentralQueueSQLiteInsert`,
+    /// `profileWithoutQueueAllowanceDeniesCentralQueueSQLiteInsert`) were
+    /// removed with their allowance.
 
     @Test func posixShellHeredocWorksInsideScratch() async throws {
         let fixture = try Fixture()
