@@ -47,10 +47,11 @@ deadlines) and `DaemonSearchSocketServer` are already proven on this branch.
 | `wiki list/rename/resolve` | direct `wikis.json` reads | daemon registry methods (exist) |
 | `wiki create/delete` | direct create+seed / degraded delete (no eviction, no search-index cleanup) | daemon `createWiki`/`deleteWiki` (full eviction) |
 | `queue status/pause/resume/halt`, `transcribe` enqueue | daemon XPC — broken from CLI (lookup3) | `DaemonWorkloadClient` re-targeted onto the socket |
-| `job list/get` | direct `queue.sqlite` reads | new queue read endpoint |
+| page/source/chat/bookmark/workspace — READS | CLI boots Cordis profile in-process, opens the store | ✅ daemon executes the same command layer over the envelope (Phase 3) |
+| page/source/chat search | daemon BM25 via socket; semantic leg, fusion, hit mapping still local | ✅ full command runs server-side; search commands are store-free (Phase 3) |
+| `job list/get` | direct `queue.sqlite` reads | ✅ daemon `queueWikiItems` (full history + extraction-completed leg) |
 | `extractor sync/fetch` | direct `queue.sqlite` writes | daemon `enqueueItem` |
-| page/source/chat/bookmark/workspace/strategy/log/admin | CLI boots Cordis profile in-process, opens the store | generic domain-command endpoint executed through the daemon's prepared services |
-| `page/source/chat search` | daemon BM25 via socket; semantic leg, fusion, hit mapping still local | move resolution server-side so search commands are store-free |
+| page/source/chat/bookmark/workspace/strategy/log/admin — WRITES | CLI boots Cordis profile in-process, opens the store | Phase 4: the same command-layer execution Phase 3 landed, extended to mutations with typed CAS codes |
 | `chat new/send/stop` | retired | may return over the existing daemon chat endpoints |
 | `extractor list`, `version`, `--dump-config` | container files / no DB | stay local |
 | `--database-path` fixtures | local by design (refuses container paths) | unchanged |
@@ -83,10 +84,10 @@ Reply: `{"version": 1, "requestID": "<echo>", "family": "<family>",
   is not a domain envelope at all (an old daemon) decodes as
   `unsupportedVersion` on the client with "quit and relaunch (or reinstall)
   the app" guidance.
-- Families today: `hello`, `search`, `queue`, `wiki`. Phase 3+ adds more
-  family cases (page/source/chat/bookmark/workspace/strategy/log/admin); an
-  unknown family string or unknown operation decodes to a typed
-  `invalidRequest` reply — never a transport fault.
+- Families today: `hello`, `search`, `queue`, `wiki`, plus Phase 3's
+  `page`, `source`, `chat`, `bookmark`, `workspace` (an unknown family string
+  or unknown operation still decodes to a typed `invalidRequest` reply —
+  never a transport fault).
 - Error codes: `invalidRequest`, `unsupportedVersion`, `notFound`,
   `unavailable`, `operationFailed`. Phase 4's CAS codes (`casConflict`,
   `createOnly`, `expectedTargetMissing`, `strategyRevision`) extend this enum.
@@ -99,15 +100,46 @@ Reply: `{"version": 1, "requestID": "<echo>", "family": "<family>",
   - `queue` / `queueSnapshot|enqueueItem|pauseQueue|resumeQueue|haltQueue` →
     payload is the unchanged `QueueRPCEnvelope<P>` JSON pair (lane controls
     carry a `DaemonQueueControlRequest {queue}`); the queue error taxonomy
-    survives the socket intact.
+    survives the socket intact. `queue` / `queueWikiItems` (Phase 3) →
+    payload `DaemonQueueWikiItemsRequest {wikiID, itemID?}`; reply payload
+    `DaemonQueueWikiItemsReply {itemsJSON: Data ([QueueItem] bytes),
+    completedSourceIDs: [String]}` — the durable per-wiki read (FULL terminal
+    history via `QueueStore.loadItems(wikiID:)`, not the bounded snapshot
+    window) plus the wiki leg: every source id among the selected items that
+    has a processed-markdown HEAD. This is what `wikictl job list/get` runs on.
   - `wiki` / `listWikis|createWiki|deleteWiki|renameWiki|resolveWiki` →
     payloads `DaemonWikiCreateRequest {name}`, `DaemonWikiDeleteRequest {id}`,
     `DaemonWikiRenameRequest {id, name}`, `DaemonWikiResolveRequest
     {selector}`; descriptor replies are the daemon's own `[WikiDescriptor]` /
     `WikiDescriptor` JSON bytes. Unknown ids resolve to typed `notFound`
     with the message `no wiki matching <selector>`.
-- Operation strings live in `DaemonDomainOperation` (Hello/Search/Queue/Wiki
-  namespaces) shared by both sides.
+  - `page|source|chat|bookmark|workspace` (Phase 3) → per-operation payload
+    structs in `Sources/WikiDaemonContract/DaemonCommandWire.swift`, each
+    carrying `wikiID` (resolved against the registry FIRST; unknown wiki is a
+    typed `notFound` with the `no wiki matching <id>` text). The reply
+    payload is ALWAYS the uniform `DaemonCommandOutcome
+    {text | bytesBase64, didCommit, stderr}`: the daemon EXECUTES the CLI's
+    own command layer (`PageCommand.run` and friends) against its prepared
+    store, so the byte-stable stdout formats are produced by the identical
+    code that produced them in-process and the CLI does no catalog work.
+    Operations: `page` list/get/history/info/search/okfInspect/okfStatus/
+    okfFreshness/okfVerify; `source` list/cat/export/info/search; `chat`
+    list/get/search; `bookmark` list; `workspace` status/conflicts.
+    `source export` carries the CLI's cwd (the default output path is built
+    and the file WRITTEN daemon-side, in the caller's directory). The okf
+    status/freshness/verify verbs are sanctioned Phase 3 scope — the daemon
+    executes their writes and `didCommit` drives the CLI's Darwin post.
+  - The search COMMANDS (Phase 3 store-freedom) are family-scoped operations
+    (`page`/`source`/`chat` × `search`, payload
+    `DaemonSearchCommandRequest {wikiID, query, limit}`), NOT a search-family
+    op: the daemon resolves the BM25 leg with its own per-wiki Tantivy
+    runtime, maps hits against the store catalog (absent ids dropped; an
+    all-empty resolution is NO leg, never an error), fuses with the semantic
+    cosine leg via the store's `searchSimilar`, and renders through the same
+    `*Command.run` code — so the zero-results stderr note and TSV bytes are
+    identical to the in-process path.
+- Operation strings live in `DaemonDomainOperation` (Hello/Search/Queue/Wiki/
+  Page/Source/Chat/Bookmark/Workspace namespaces) shared by both sides.
 
 ## Deviations from the plan (Phases 1–2)
 
@@ -140,6 +172,52 @@ Reply: `{"version": 1, "requestID": "<echo>", "family": "<family>",
   `unsupportedVersion` with relaunch guidance; `hello`/`capabilities` is
   served and tested for clients that want to negotiate explicitly.
 
+## Deviations from the plan (Phase 3)
+
+- **The daemon EXECUTES the CLI's command layer.** Instead of one handler per
+  operation re-encoding each read's output, `wikid` links `WikiCtlCore`
+  (macOS) and runs `PageCommand.run` / `SourceCommand.run` /
+  `ChatCommand.run` / `BookmarkCommand.run` / `WorkspaceCommand.run` against
+  its prepared store (`WikiDaemon.domainCommandStore` — the
+  `prepareAndResolveWikiServices` admission path; the fixture seam in
+  tests). Every family replies with the uniform `DaemonCommandOutcome`
+  `{text | bytesBase64, didCommit, stderr}`. Byte-stable stdout is therefore
+  guaranteed by construction — the same code renders the bytes in both
+  worlds — and future CLI verbs inherit the transport by mapping one
+  action. The command semantics stay in ONE module that both processes run.
+- **Unknown wiki text on migrated reads** is the daemon's byte-stable
+  `no wiki matching <selector>` — the local registry path's
+  `"… in the registry"` suffix is gone, matching the Phase 2 daemon text
+  (`wiki list`/`transcribe --wiki` already print it).
+- **The okf status/freshness/verify verbs are Phase 3 scope even though they
+  write** (per the Phase 3 charter's okf read-verb list): the daemon executes
+  their writes through the same store seam, `didCommit: true` rides the
+  outcome, and the CLI posts the Darwin notification exactly as the
+  in-process path did. `okfCorrect` and all other writes stay local until
+  Phase 4.
+- **Search store-freedom is family-scoped, not a search-family op.** The plan
+  sketched "a daemon-side search operation that returns RESOLVED, ranked
+  summaries"; landed instead as `page`/`source`/`chat` × `search` operations
+  that run the ENTIRE command server-side (BM25 leg via `ensureSearchRuntime`
+  → catalog mapping → `searchSimilar` fusion → the same `*Command.run`
+  rendering). Same store-freedom outcome, but the zero-results note and TSV
+  bytes come from the identical code, so nothing is re-encoded client-side.
+- **`job list/get` reads FULL terminal history, not the engine snapshot.**
+  `queueSnapshot` is a bounded active+recent window for UI bootstrap; the new
+  `queueWikiItems` queue-family operation reads `QueueStore.loadItems(wikiID:)`
+  through a read-only WAL connection beside the engine's writer (the same
+  pattern the transcribe completion poll uses) and resolves the
+  extraction-completed wiki leg through the prepared store. Rendering stays
+  CLI-side (`JobCommand.renderList/renderGet` — pure presentation).
+- **Frame-cap audit (4 MiB).** Worst cases: `source cat` (raw bytes ride
+  base64 — a source over ~3 MiB cannot fit) and `page get` (a page body over
+  ~4 MiB cannot fit). Both fail with a typed `operationFailed` naming the cap
+  and the narrower read to use instead — never a truncation. The guard is in
+  the dispatcher's shared reply encoder, so EVERY family is protected;
+  `source export` is immune (the daemon writes the file into the caller's cwd
+  — which rides the request — and replies with just the path). Chunked
+  replies remain out of scope: no real payload hit the cap.
+
 ## CAS and exit codes
 
 CAS crosses the wire as typed error codes, not strings: `casConflict`
@@ -165,6 +243,11 @@ byte-stable stdout formats are scripting contracts; preserve both.
 3. **Read-only domain endpoint** — page/source/chat/bookmark/workspace reads,
    info/okf-inspect, `job list/get` (new queue read endpoint). Server executes
    through the daemon's prepared services.
+   ✅ **Implemented** (commits `0bf3478e`, `15b67245`): the five command
+   families + server-side search resolution + `queueWikiItems` behind
+   `job list/get`, all store-free on the CLI side. See §"Deviations from the
+   plan (Phase 3)" — notably the daemon EXECUTES the CLI's command layer and
+   replies with a uniform outcome, which is how byte-stable stdout is kept.
 4. **Writes** — page/source/strategy/bookmark/workspace mutations, log/index,
    `extractor sync/fetch` via `enqueueItem` (move BEFORE stripping the CLI's
    direct queue write, or durable enqueue is lost when the app is closed),
