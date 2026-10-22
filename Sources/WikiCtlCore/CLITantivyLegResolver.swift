@@ -2,9 +2,9 @@ import Foundation
 import WikiFSCore
 
 #if os(macOS)
-import Cordis
-import CordisLoader
-import WikiFSEngine
+// No Cordis imports: since the fixture-binary split this module never boots a
+// Cordis profile (the store profile lives in the build-only wikictl-fixture
+// target) — WikiCtlRunner routes every command over the daemon socket.
 
 public struct WikiCtlRunner {
     public struct Output: Sendable, Equatable {

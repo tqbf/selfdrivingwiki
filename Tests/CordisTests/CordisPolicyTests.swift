@@ -146,7 +146,11 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/ExtractorPackagePluginDefinitionFactory.swift",
             "Sources/WikiFSEngine/ExtractorPackagePluginReconciler.swift",
             "Sources/WikiFSEngine/ProcessExtractionContext.swift",
-            "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
+            // The fixture-binary split moved the CLI's headless store profile
+            // into the build-only `wikictl-fixture` target: its store profile
+            // boots one explicit fixture database through CordisBoot and is
+            // the fixture binary's only Cordis-context assembly point.
+            "Sources/wikictl-fixture/FixtureStoreProfile.swift",
             "Sources/WikiCtlCore/CLIPluginCatalog.swift",
             // Phase 5a diagnostic composition boundary: resolves loader data
             // without exposing a Cordis context to command implementations.
