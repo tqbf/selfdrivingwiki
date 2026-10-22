@@ -656,30 +656,32 @@ private func runTranscribeCommand(
 
         guard wait else { return "" }
 
-        // Poll the DURABLE queue store rather than the daemon's completion
-        // wait: the workload XPC client bounds every call at 30 s, and a
-        // speech job legitimately runs minutes. A deduplicated enqueue
-        // returns an already-terminal item, so the poll reads the store the
-        // engine writes (the same truth `wikictl job get` renders); the
-        // loop is bounded by the speech wait policy (2 h 45 m).
+        // Phase 5 of plans/cli-domain-commands.md: poll the daemon's
+        // `queueItemState` operation — one SHORT item-state snapshot per round
+        // trip, sleeping BETWEEN calls — instead of holding this process's own
+        // read-only queue-store connection open for the job's duration. Every
+        // round trip is bounded by the workload client's per-call deadline;
+        // the 165-minute ceiling is the speech wait policy (and the caller's
+        // Ctrl-C), never a socket lifetime. There is no local fallback: a
+        // daemon failure mid-wait (the app quit, the socket went away)
+        // surfaces as this command's error, and an unknown item (the durable
+        // terminal history is never deleted) fails instead of polling forever.
         let started = Date()
         let waitLimit = started.addingTimeInterval(
             165 * 60)
         var finalState: String?
         var finalError: String?
-        let queueStore = try QueueStore(readOnlyDatabaseURL: DatabaseLocation.queueDatabaseURL())
-        defer { queueStore.close() }
         while Date() < waitLimit {
             try Task.checkCancellation()
-            if let item = try queueStore.getItem(itemID) {
-                switch item.state {
-                case .completed: finalState = "completed"
-                case .failed: finalError = item.error
-                case .cancelled: finalError = "cancelled"
-                default: break
-                }
-                if finalState != nil || finalError != nil { break }
+            let snapshot = try await client.queueItemState(of: itemID)
+            switch snapshot.state {
+            case QueueItemState.completed.rawValue: finalState = "completed"
+            case QueueItemState.failed.rawValue:
+                finalError = snapshot.error ?? "failed"
+            case QueueItemState.cancelled.rawValue: finalError = "cancelled"
+            default: break
             }
+            if finalState != nil || finalError != nil { break }
             try await Task.sleep(for: .seconds(5))
         }
         let elapsed = Int(Date().timeIntervalSince(started))
