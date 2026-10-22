@@ -749,7 +749,9 @@ func runWikiList() async -> Int32 {
         let client = try makeRegistryClient()
         let wikis = try await client.listWikis()
         for wiki in wikis {
-            print("\(wiki.id)\t\(wiki.displayName)")
+            // `.rawValue` — the TSV scripting contract carries the raw ULID,
+            // not the type's Debug rendering.
+            print("\(wiki.id.rawValue)\t\(wiki.displayName)")
         }
         if wikis.isEmpty {
             // #1230 (axi.md principle 5): zero wikis is an answer, not a
@@ -768,7 +770,9 @@ func runWikiCreate(name: String) async -> Int32 {
     do {
         let client = try makeRegistryClient()
         let descriptor = try await client.createWiki(name: name)
-        print("\(descriptor.id)\t\(descriptor.displayName)")
+        // `.rawValue` — the TSV scripting contract carries the raw ULID,
+        // not the type's Debug rendering.
+        print("\(descriptor.id.rawValue)\t\(descriptor.displayName)")
         return 0
     } catch {
         FileHandle.standardError.write(Data("wikictl: \(error.localizedDescription)\n".utf8))
