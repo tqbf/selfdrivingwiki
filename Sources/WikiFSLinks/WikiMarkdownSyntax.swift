@@ -105,9 +105,23 @@ public enum WikiMarkdownSyntaxNode: Hashable, Sendable {
 public extension WikiLinkParser {
     /// Parse every valid, non-code-protected wiki occurrence in source order.
     /// Unlike ``parse(_:)``, this render overlay never de-duplicates occurrences.
+    /// Code protection comes from the legacy heuristic protector
+    /// (`WikiLinkSpan.protectedCodeRanges`) — retained for existing callers;
+    /// new renderer/lint paths pass AST-derived protection explicitly via
+    /// ``syntaxNodes(in:protectedRanges:)`` instead of silently falling back
+    /// to this overload.
     static func syntaxNodes(in body: String) -> [WikiMarkdownSyntaxNode] {
+        syntaxNodes(in: body, protectedRanges: WikiLinkSpan.protectedCodeRanges(in: body))
+    }
+
+    /// Parse every valid wiki occurrence outside the SUPPLIED code-protected
+    /// ranges (UTF-16 offsets). AST-derived protection (`MarkdownCodeProtection`)
+    /// keeps this analysis in lockstep with the reader's parse.
+    static func syntaxNodes(
+        in body: String,
+        protectedRanges: [NSRange]
+    ) -> [WikiMarkdownSyntaxNode] {
         let ns = body as NSString
-        let protectedRanges = WikiLinkSpan.protectedCodeRanges(in: body)
         var nodes: [WikiMarkdownSyntaxNode] = []
 
         for match in WikiLinkSpan.matches(in: body) {

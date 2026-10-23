@@ -1,4 +1,5 @@
 import Foundation
+import Markdown
 
 /// Preview-only support for Markdown-style footnotes in wiki pages.
 ///
@@ -11,6 +12,11 @@ import Foundation
 ///
 /// The source remains unchanged in SQLite and on the mounted filesystem. This
 /// transform only prepares content for the in-app reader.
+///
+/// Extraction runs on the shared, occurrence-preserving footnote analysis
+/// (`MarkdownFootnoteAnalysis`) with AST-derived code protection, so the
+/// reader and lint pre-flight agree on what is a live footnote and what is
+/// literal code (REQ-46).
 public enum WikiFootnoteMarkdown {
 
     public struct Footnote: Equatable, Sendable {
@@ -36,19 +42,27 @@ public enum WikiFootnoteMarkdown {
 
     private static let referencePattern = #"\[\^([^\]\s]+)\]"#
     private static let referenceRegex = try! NSRegularExpression(pattern: referencePattern)
-    private static let definitionPattern = #"^\s{0,3}\[\^([^\]\s]+)\]:\s?(.*)$"#
-    private static let definitionRegex = try! NSRegularExpression(pattern: definitionPattern)
 
     public static func rendered(_ markdown: String) -> Rendered {
-        let extraction = extractDefinitions(from: markdown)
-        let numberedIDs = orderedReferencedIDs(in: extraction.bodyMarkdown, knownIDs: extraction.definitions.keys)
+        // AST-derived protection: parse the AUTHORED text with the reader's
+        // parser and protect what it reports as code (fences, indented blocks,
+        // inline spans). The footnote transform then rewrites only live notes.
+        let parsed = ParsedMarkdownDocument(parsing: markdown)
+        let analysis = MarkdownFootnoteAnalysis.analyze(
+            in: markdown,
+            protectedRanges: Self.utf16Ranges(of: parsed.codeProtection, in: markdown))
+
+        let bodyAfterDefinitions = removeDefinitions(from: markdown, definitions: analysis.definitions)
+        let numberedIDs = orderedReferencedIDs(in: analysis, definedIDs: Set(analysis.definitions.map(\.id)))
         let numbersByID = Dictionary(uniqueKeysWithValues: numberedIDs.enumerated().map { index, id in
             (id, index + 1)
         })
-        let body = rewriteReferences(in: extraction.bodyMarkdown, numbersByID: numbersByID)
+        let body = rewriteReferences(in: bodyAfterDefinitions, numbersByID: numbersByID)
         let footnotes = numberedIDs.compactMap { id -> Footnote? in
-            guard let markdown = extraction.definitions[id] else { return nil }
-            return Footnote(id: id, number: numbersByID[id] ?? 0, markdown: markdown)
+            guard let definitionMarkdown = analysis.definitions.first(where: { $0.id == id })?.markdown else {
+                return nil
+            }
+            return Footnote(id: id, number: numbersByID[id] ?? 0, markdown: definitionMarkdown)
         }
         return Rendered(bodyMarkdown: body, footnotes: footnotes)
     }
@@ -70,88 +84,53 @@ public enum WikiFootnoteMarkdown {
         return "wiki-fn-\(encoded)"
     }
 
-    // MARK: - Definitions
+    // MARK: - Definition removal (reader body preparation)
 
-    private struct Extraction {
-        var bodyMarkdown: String
-        var definitions: [String: String]
-    }
-
-    private struct Line {
-        var text: String
-        var isProtected: Bool
-    }
-
-    private static func extractDefinitions(from markdown: String) -> Extraction {
-        let lines = protectedLines(in: markdown)
-        var bodyLines: [String] = []
-        var definitions: [String: String] = [:]
-        var index = 0
-
-        while index < lines.count {
-            let line = lines[index]
-            guard !line.isProtected, let definition = parseDefinitionLine(line.text) else {
-                bodyLines.append(line.text)
-                index += 1
-                continue
+    /// Remove every definition occurrence's lines from the source, leaving
+    /// the body the reader renders. Line-join semantics match the
+    /// historical extractor byte-for-byte: split on `\n`, drop the lines a
+    /// definition span occupies, join the remainder.
+    private static func removeDefinitions(
+        from source: String,
+        definitions: [MarkdownFootnoteAnalysis.Definition]
+    ) -> String {
+        guard !definitions.isEmpty else { return source }
+        let lines = source.components(separatedBy: "\n")
+        // Walk line offsets; mark lines a definition span (UTF-16) covers.
+        var coveredLineIndices = Set<Int>()
+        var offset = 0
+        var sortedDefinitions = definitions.sorted { $0.utf16Range.location < $1.utf16Range.location }
+        for (index, line) in lines.enumerated() {
+            let lineLength = (line as NSString).length
+            let lineRange = NSRange(location: offset, length: lineLength)
+            while let first = sortedDefinitions.first,
+                  first.utf16Range.location + first.utf16Range.length <= offset {
+                sortedDefinitions.removeFirst()
             }
-
-            var definitionLines = [definition.markdown]
-            index += 1
-            while index < lines.count {
-                let next = lines[index]
-                if next.isProtected || !isContinuationLine(next.text) {
-                    break
-                }
-                definitionLines.append(trimContinuationPrefix(next.text))
-                index += 1
+            if let first = sortedDefinitions.first,
+               NSIntersectionRange(first.utf16Range, lineRange).length > 0 {
+                coveredLineIndices.insert(index)
             }
-
-            definitions[definition.id] = definitionLines
-                .joined(separator: "\n")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            offset += lineLength + 1
         }
-
-        return Extraction(bodyMarkdown: bodyLines.joined(separator: "\n"), definitions: definitions)
+        guard !coveredLineIndices.isEmpty else { return source }
+        return lines.enumerated()
+            .filter { !coveredLineIndices.contains($0.offset) }
+            .map(\.element)
+            .joined(separator: "\n")
     }
 
-    private static func parseDefinitionLine(_ line: String) -> (id: String, markdown: String)? {
-        let ns = line as NSString
-        let range = NSRange(location: 0, length: ns.length)
-        guard let match = definitionRegex.firstMatch(in: line, range: range) else { return nil }
-        let id = ns.substring(with: match.range(at: 1))
-        let markdown = ns.substring(with: match.range(at: 2))
-        return (id, markdown)
-    }
-
-    private static func isContinuationLine(_ line: String) -> Bool {
-        line.hasPrefix("    ") || line.hasPrefix("\t")
-    }
-
-    private static func trimContinuationPrefix(_ line: String) -> String {
-        if line.hasPrefix("    ") {
-            return String(line.dropFirst(4))
-        }
-        if line.hasPrefix("\t") {
-            return String(line.dropFirst())
-        }
-        return line
-    }
-
-    // MARK: - References
-
-    private static func orderedReferencedIDs(in markdown: String, knownIDs: Dictionary<String, String>.Keys) -> [String] {
-        let ns = markdown as NSString
-        let codeRanges = WikiLinkSpan.protectedCodeRanges(in: markdown)
-        let matches = referenceRegex.matches(in: markdown, range: NSRange(location: 0, length: ns.length))
+    /// Numbering order: referenced (and defined) IDs in first-reference order.
+    private static func orderedReferencedIDs(
+        in analysis: MarkdownFootnoteAnalysis,
+        definedIDs: Set<String>
+    ) -> [String] {
         var seen = Set<String>()
         var ids: [String] = []
-
-        for match in matches where !WikiLinkSpan.isProtected(match.range, by: codeRanges) {
-            let id = ns.substring(with: match.range(at: 1))
-            guard knownIDs.contains(id), !seen.contains(id) else { continue }
-            seen.insert(id)
-            ids.append(id)
+        for reference in analysis.references where definedIDs.contains(reference.id) {
+            if seen.insert(reference.id).inserted {
+                ids.append(reference.id)
+            }
         }
         return ids
     }
@@ -216,20 +195,21 @@ public enum WikiFootnoteMarkdown {
 
     // MARK: - Protected code ranges
 
-    private static func protectedLines(in body: String) -> [Line] {
-        let rawLines = body.components(separatedBy: "\n")
-        var lines: [Line] = []
-        var isInFence = false
-
-        for rawLine in rawLines {
-            let isFence = rawLine.trimmingCharacters(in: .whitespaces).hasPrefix("```")
-            let protected = isInFence || isFence
-            lines.append(Line(text: rawLine, isProtected: protected))
-            if isFence {
-                isInFence.toggle()
+    /// Convert AST-derived UTF-8 protection ranges into the UTF-16 offsets the
+    /// NSString-based rewrite helpers use. Public so lint pre-flight (and any
+    /// other WikiFSCore consumer) shares one conversion.
+    public static func utf16Ranges(of protection: MarkdownCodeProtection, in source: String) -> [NSRange] {
+        protection.ranges.compactMap { range in
+            guard let lower = source.utf8.index(source.utf8.startIndex, offsetBy: range.lowerBound, limitedBy: source.utf8.endIndex),
+                  let upper = source.utf8.index(source.utf8.startIndex, offsetBy: range.upperBound, limitedBy: source.utf8.endIndex),
+                  let lowerUTF16 = lower.samePosition(in: source.utf16),
+                  let upperUTF16 = upper.samePosition(in: source.utf16) else {
+                return nil
             }
+            let location = source.utf16.distance(from: source.utf16.startIndex, to: lowerUTF16)
+            let length = source.utf16.distance(from: lowerUTF16, to: upperUTF16)
+            return NSRange(location: location, length: length)
         }
-        return lines
     }
 
     // protectedCodeRanges, isInside, and backtick live in WikiLinkSpan (shared).

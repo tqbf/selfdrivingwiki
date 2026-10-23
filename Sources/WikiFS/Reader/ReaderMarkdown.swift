@@ -2,49 +2,6 @@ import Foundation
 import Markdown
 import WikiFSCore
 
-/// Canonical 1-based line to UTF-8 byte-offset conversion for Swift Markdown
-/// source locations.
-struct MarkdownSourceLineTable: Hashable, Sendable {
-    private let lineStarts: [Int]
-    let utf8Count: Int
-
-    init(source: String) {
-        let bytes = Array(source.utf8)
-        var starts = [0]
-        for index in bytes.indices where bytes[index] == 0x0A {
-            starts.append(index + 1)
-        }
-        lineStarts = starts
-        utf8Count = bytes.count
-    }
-
-    func offset(line: Int, utf8Column: Int) -> Int? {
-        guard line > 0, utf8Column > 0, line <= lineStarts.count else { return nil }
-        let value = lineStarts[line - 1] + utf8Column - 1
-        let lineEnd = line < lineStarts.count ? lineStarts[line] : utf8Count
-        guard value >= lineStarts[line - 1], value <= lineEnd else { return nil }
-        return value
-    }
-
-    func range(
-        startLine: Int,
-        startUTF8Column: Int,
-        endLine: Int,
-        endUTF8Column: Int
-    ) -> MarkdownSourceRange? {
-        guard let lowerBound = offset(line: startLine, utf8Column: startUTF8Column),
-              let upperBound = offset(line: endLine, utf8Column: endUTF8Column) else {
-            return nil
-        }
-        do {
-            return try MarkdownSourceRange(lowerBound: lowerBound, upperBound: upperBound)
-        } catch {
-            DebugLog.reader("Invalid Swift Markdown source range: \(error)")
-            return nil
-        }
-    }
-}
-
 /// Immutable reader-owned preparation result. Swift Markdown remains the only
 /// standard Markdown AST; wiki syntax is a source-ranged overlay on the same
 /// normalized source bytes.

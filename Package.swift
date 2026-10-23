@@ -302,9 +302,18 @@ let package = Package(
         // Sources/WikiFSCore/Markdown/.
         // JavaScriptCore: MarkdownLinter runs vendored markdownlint JS; fence
         // validation evaluates renderer-package assets (no Node at runtime).
+        // Markdown: the reader's own swift-markdown parser — the shared
+        // analysis entry point (AST, UTF-8 line mapping, AST-derived code
+        // protection) that lint pre-flight parses with, so detectors carry
+        // reader semantics (REQ-46). WikiFSCore depends on the same product,
+        // so detectors consume parser facts without a reverse dependency.
         .target(
             name: "WikiFSMarkdown",
-            dependencies: ["WikiFSTypes", "WikiFSLinks"],
+            dependencies: [
+                "WikiFSTypes",
+                "WikiFSLinks",
+                .product(name: "Markdown", package: "swift-markdown"),
+            ],
             path: "Sources/WikiFSMarkdown",
             swiftSettings: strictSwiftSettings
         ),
@@ -342,6 +351,10 @@ let package = Package(
                 "WikiFSMarkdown",
                 "WikiFSSearch",
                 "CRendererPackageMove",
+                // The reader's parser — lint detectors consume AST facts
+                // (tables, code blocks) directly, with no reverse dependency
+                // from WikiFSMarkdown into WikiFSCore (REQ-46 layering).
+                .product(name: "Markdown", package: "swift-markdown"),
                 .product(name: "GRDB", package: "GRDB.swift"),
                 // On Linux, `import SQLite3` needs this system module wrapper.
                 // On macOS, the SDK provides SQLite3 directly.

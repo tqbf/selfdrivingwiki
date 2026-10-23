@@ -477,6 +477,11 @@ struct IdentifierBoundaryTypecheckTests {
             root.appendingPathComponent(".build/checkouts/Yams/Sources/CYaml/include"),
             root.appendingPathComponent(".build/artifacts/tantivy.swift/TantivyRS/libtantivy-rs.xcframework/macos-arm64_x86_64/Headers"),
             root.appendingPathComponent(".build/artifacts/tantivy.swift/TantivyRS/libtantivy-rs.xcframework/linux-x86_64/Headers"),
+            // swift-markdown's C dependencies: WikiFSMarkdown (and WikiFSCore)
+            // import the Markdown product, whose swiftmodule pulls these in.
+            root.appendingPathComponent(".build/checkouts/swift-markdown/Sources/CAtomic/include"),
+            root.appendingPathComponent(".build/checkouts/swift-cmark/src/include"),
+            root.appendingPathComponent(".build/checkouts/swift-cmark/extensions/include"),
         ]
 
         for directory in candidateDirectories where fileManager.fileExists(atPath: directory.path) {
