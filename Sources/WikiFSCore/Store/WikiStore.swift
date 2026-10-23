@@ -363,6 +363,20 @@ public protocol WikiStore: AnyObject, Sendable {
         provenance: [PageVersionSourceInput]
     ) throws -> PageUpsert.Outcome
 
+    /// The exact patch write (REQ-52, plan Phase 3): apply `patch`'s hunks to
+    /// the page body in ONE transaction — CAS check against `patch.expectHead`,
+    /// exact-range validation, citation/provenance integrity checks, the
+    /// version write in EXACT-BODY MODE (no canonicalization, no cosmetic
+    /// fixing — untouched bytes stay byte-identical), and parsed-link
+    /// replacement from the committed bytes. A rejected, conflicted, or empty
+    /// patch writes nothing, creates no version, and emits no event.
+    ///
+    /// `GRDBWikiStore` implements this atomically; the protocol default below
+    /// is the documented NON-ATOMIC sequential fallback for test doubles
+    /// (never used in production).
+    @discardableResult
+    func patchPage(_ patch: PagePatch, author: String?) throws -> PagePatchOutcome
+
     /// Pages whose bodies link TO `pageID` via `[[wiki-link]]` — the incoming
     /// edge set (issue #219). Used to warn before deleting a page that other
     /// pages still reference, and to rewrite those links to plain text.

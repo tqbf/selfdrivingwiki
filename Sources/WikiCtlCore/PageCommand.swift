@@ -46,6 +46,12 @@ public enum PageCommand {
         /// link mutation. `createOnly` and `expectHead` are mutually
         /// exclusive; the parser rejects them together.
         case add(id: PageID?, title: String, body: BodySource, expectHead: PageVersionID? = nil, createOnly: Bool = false, workspace: String? = nil, author: String? = nil, provenance: [PageVersionSourceInput] = [])
+        /// `patch` — the exact ranged write (REQ-52): one hunk list applied
+        /// atomically in EXACT-BODY MODE against `expectHead` (CAS). Every
+        /// hunk carries its defect class; a rejected, conflicted, or empty
+        /// patch writes nothing and emits no event. This is the ONLY write
+        /// path lint runs get; full-body rewrites stay on `add`.
+        case patch(id: PageID, expectHead: PageVersionID, hunks: [PagePatchHunk], defectClasses: [LintDefectClass], author: String? = nil)
         /// Delete the page through the store's protected contract (issue #219
         /// hardening): bookmarks targeting the page are ALWAYS removed, and
         /// `unlinkIncoming` picks whether incoming `[[link]]` spans become
@@ -119,6 +125,25 @@ public enum PageCommand {
             let body = try resolveBodySource(bodySource)
             return try upsert(id: id, title: title, body: body, expectHead: expectHead, createOnly: createOnly, workspace: workspace, author: author,
                               provenance: mergedAgentIngestProvenance(provenance), in: store, validator: validator, linter: linter)
+        case .patch(let id, let expectHead, let hunks, let defectClasses, let author):
+            guard !hunks.isEmpty, hunks.count == defectClasses.count else {
+                throw PagePatchValidationError.emptyOrUnpaired(
+                    defectCount: defectClasses.count, hunkCount: hunks.count)
+            }
+            let outcome = try store.patchPage(
+                PagePatch(
+                    pageID: id, expectHead: expectHead,
+                    hunks: hunks, defectClasses: defectClasses),
+                author: author)
+            var lines = [
+                "patched\t\(outcome.pageID.rawValue)",
+                "old_head\t\(outcome.expectedHead.rawValue)",
+                "new_head\t\(outcome.writtenHead.rawValue)",
+                "classes\t\(outcome.appliedClasses.map(\.rawValue).joined(separator: ","))",
+                "fingerprint\t\(outcome.writtenFingerprint)",
+            ]
+            lines.append("revalidate\tre-run lint pre-flight on the written head before reporting success")
+            return Result(output: lines.joined(separator: "\n") + "\n", didCommit: true)
         case .delete(let id, let unlinkIncoming):
             return try delete(id: id, unlinkIncoming: unlinkIncoming, in: store)
         case .search(let query, let limit):

@@ -522,6 +522,10 @@ public enum DaemonDomainOperation {
         public static let search = "search"
         // Phase 4 writes.
         public static let add = "add"
+        /// The exact ranged write (REQ-52, plan Phase 3): one hunk list with
+        /// per-hunk defect classes, applied atomically in exact-body mode
+        /// under CAS. Lint runs' only mutation.
+        public static let patch = "patch"
         public static let delete = "delete"
         public static let revert = "revert"
     }

@@ -269,6 +269,28 @@ public enum CLIReference {
                         "wikictl page add --title Fresh --body-file - --create-only --author agent:executor",
                     ]),
                 CLILeaf(
+                    "patch",
+                    summary: "exact ranged write — apply hunk repairs with per-hunk defect classes under CAS (the lint write path; no full-body rewrite)",
+                    commandLine: "patch --id <page-id> --expect-head <ver> (--hunk <json> --defect <class>)… [--hunk-file <path>] [--author <who>]",
+                    options: [
+                        CLIOption("--id <page-id>", required: true, summary: "the page to patch (stable identity, never a title)"),
+                        CLIOption("--expect-head <ver>", required: true, summary: "CAS: the head_version_id the hunks were composed against"),
+                        CLIOption("--hunk <json>", repeated: true, summary: #"one hunk object: {"startByte":Int,"endByte":Int,"oldText":String,"newText":String,"reason":String} — bounds are authored UTF-8 bytes, half-open"#),
+                        CLIOption("--defect <class>", repeated: true, summary: "the hunk's defect class (D01–D28); must directly follow its --hunk"),
+                        CLIOption("--hunk-file <path>", summary: #"alternative to inline pairs: {"version":1,"hunks":[{"defect":"Dxx",…}]} — cannot combine with --hunk/--defect"#),
+                        CLIOption("--author <who>", summary: "stamp last_edited_by (lint repairs use agent:lint)"),
+                    ],
+                    details: [
+                        "Exact application: the stored bytes at each hunk's range must equal oldText exactly — no fuzzy matching, no partial commit.",
+                        "Untouched bytes stay byte-identical: no canonicalization, no cosmetic fixup, links re-parsed from the committed bytes.",
+                        "A rejected, conflicted (exit 3), or empty patch writes nothing and emits no page event. Report-only classes (D02/D04/D05/D14/D18/D28) cannot authorize hunks.",
+                        "On success the output names old_head, new_head, classes, and the written fingerprint — re-run lint pre-flight on the written head before reporting success.",
+                    ],
+                    examples: [
+                        #"wikictl page patch --id 01ABC --expect-head 01DEF --hunk '{"startByte":0,"endByte":14,"oldText":"```markdown\n","newText":"","reason":"unwrap whole-body fence"}' --defect D25"#,
+                        "wikictl page patch --id 01ABC --expect-head 01DEF --hunk-file ./hunks.json --author agent:lint",
+                    ]),
+                CLILeaf(
                     "delete", summary: "delete a page (removes bookmarks targeting it)",
                     commandLine: "delete --id Y [--unlink-incoming]",
                     options: [

@@ -247,6 +247,32 @@ final class DaemonDomainCommands: @unchecked Sendable {
                 workspace: payload.workspace,
                 author: payload.author,
                 provenance: provenance)
+        case DaemonDomainOperation.Page.patch:
+            // The exact ranged write (REQ-52). Hunk/class pairs decode at
+            // this boundary; the command layer re-validates and applies
+            // atomically in exact-body mode — no linter, no fence validator,
+            // no canonicalization on this path.
+            let payload = try decode(DaemonPagePatchRequest.self, request)
+            store = try await storeForWikiID(payload.wikiID)
+            let pairs = try payload.hunks.map { wire -> (PagePatchHunk, LintDefectClass) in
+                guard let defect = LintDefectClass(rawValue: wire.defect) else {
+                    throw DaemonDomainError(
+                        code: .invalidRequest,
+                        message: "page patch carries an unknown defect class: \(wire.defect)")
+                }
+                return (
+                    PagePatchHunk(
+                        startByte: wire.startByte, endByte: wire.endByte,
+                        oldText: wire.oldText, newText: wire.newText, reason: wire.reason),
+                    defect
+                )
+            }
+            action = .patch(
+                id: PageID(rawValue: payload.id),
+                expectHead: PageVersionID(rawValue: payload.expectHead),
+                hunks: pairs.map { $0.0 },
+                defectClasses: pairs.map { $0.1 },
+                author: payload.author)
         case DaemonDomainOperation.Page.delete:
             let payload = try decode(DaemonPageDeleteRequest.self, request)
             store = try await storeForWikiID(payload.wikiID)

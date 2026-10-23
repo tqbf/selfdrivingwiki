@@ -320,6 +320,80 @@ public enum ArgumentParser {
             let provenance = try decodePageVersionSources(options.values("--source"))
             return .page(.add(id: id, title: title, body: .file(bodyFile), expectHead: expectHead, createOnly: createOnly, workspace: workspace, author: author, provenance: provenance))
 
+        case "patch":
+            // The exact ranged write (REQ-52): `page patch --id <PageID>
+            // --expect-head <head> (--hunk <json> --defect <class>)…
+            // [--hunk-file <path>]`. Inline pairs and the file are mutually
+            // exclusive; inline pairs must strictly alternate.
+            guard let id = options.value("--id") else {
+                throw Failure.usage("page patch: --id is required (stable page identity)")
+            }
+            guard let expectHeadRaw = options.value("--expect-head"), let expectHead = PageVersionID(rawValue: expectHeadRaw) as PageVersionID? else {
+                throw Failure.usage("page patch: --expect-head is required — read the head with `page get --json` first (CAS)")
+            }
+            let inlineHunks = options.values("--hunk")
+            let inlineDefects = options.values("--defect")
+            let hunkFile = options.value("--hunk-file")
+            var pairs: [(hunk: PagePatchHunk, defect: LintDefectClass)]
+            if let hunkFile {
+                guard inlineHunks.isEmpty, inlineDefects.isEmpty else {
+                    throw Failure.usage(
+                        "page patch: --hunk-file cannot be combined with --hunk or --defect — pick one form")
+                }
+                pairs = try Self.decodeHunkFile(at: hunkFile)
+            } else {
+                // Strict alternation from the observed command-line order:
+                // hunk, defect, hunk, defect… Rejects reversed order,
+                // consecutive hunks, and unpaired classes positionally.
+                let order = options.optionOrder().filter { $0 == "--hunk" || $0 == "--defect" }
+                guard order.count == inlineHunks.count + inlineDefects.count, !order.isEmpty else {
+                    throw Failure.usage(
+                        "page patch: at least one --hunk <json> --defect <class> pair is required")
+                }
+                // Positional alternation first (each violation names itself),
+                // then the trailing-unpaired check.
+                for (index, key) in order.enumerated() {
+                    let expected = index % 2 == 0 ? "--hunk" : "--defect"
+                    guard key == expected else {
+                        if index == 0 {
+                            throw Failure.usage(
+                                "page patch: a --hunk must come before each --defect (reversed order)")
+                        }
+                        if index % 2 == 0 {
+                            // A complete pair already ended; this is an
+                            // extra class after it.
+                            throw Failure.usage(
+                                "page patch: unpaired --defect after position \(index) — every hunk takes exactly one defect class")
+                        }
+                        throw Failure.usage(
+                            "page patch: --defect must directly follow its --hunk (consecutive hunks at position \(index + 1))")
+                    }
+                }
+                guard order.count % 2 == 0 else {
+                    throw Failure.usage(
+                        "page patch: unpaired --hunk/--defect — every hunk needs exactly one defect class")
+                }
+                guard inlineHunks.count == inlineDefects.count else {
+                    throw Failure.usage(
+                        "page patch: \(inlineHunks.count) hunk(s) but \(inlineDefects.count) defect class(es)")
+                }
+                pairs = try zip(inlineHunks, inlineDefects).map { hunkJSON, defectRaw in
+                    let hunk = try Self.decodeHunkJSON(hunkJSON)
+                    guard let defect = LintDefectClass(rawValue: defectRaw) else {
+                        throw Failure.usage(
+                            "page patch: unknown defect class \(defectRaw.debugDescription) — expected D01–D28")
+                    }
+                    return (hunk, defect)
+                }
+            }
+            let author = options.value("--author")
+            return .page(.patch(
+                id: PageID(rawValue: id),
+                expectHead: expectHead,
+                hunks: pairs.map(\.hunk),
+                defectClasses: pairs.map(\.defect),
+                author: author))
+
         case "delete":
             guard let id = options.value("--id") else {
                 throw Failure.usage("page delete: --id is required")
@@ -1121,6 +1195,7 @@ public enum ArgumentParser {
     struct Options {
         private var valuesByKey: [String: [String]] = [:]
         private var flags: Set<String> = []
+        private var observedOptionOrder: [String] = []
 
         init(_ tokens: [String], options allowed: [CLIReference.CLIOption]) throws {
             let byName = Dictionary(allowed.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1134,6 +1209,7 @@ public enum ArgumentParser {
                     throw Failure.usage(
                         "unexpected option \(token.debugDescription) — run with --help for usage")
                 }
+                observedOptionOrder.append(token)
                 if spec.takesValue {
                     guard index + 1 < tokens.count else {
                         throw Failure.usage("\(token) requires a value")
@@ -1150,6 +1226,11 @@ public enum ArgumentParser {
         func value(_ key: String) -> String? { valuesByKey[key]?.last }
         func values(_ key: String) -> [String] { valuesByKey[key] ?? [] }
         func flag(_ key: String) -> Bool { flags.contains(key) }
+        /// The option keys in the order they appeared on the command line —
+        /// `page patch`'s `--hunk <json> --defect <class>` pairs are
+        /// POSITIONAL (one class per hunk, alternating), so their sequence
+        /// carries meaning the grouped maps lose.
+        func optionOrder() -> [String] { observedOptionOrder }
 
         /// A `--title X` or `--id Y` page selector (exactly one required).
         func requireSelector() throws -> PageCommand.Selector {
@@ -1282,6 +1363,55 @@ public enum ArgumentParser {
             return .logAppend(kind: kind, title: title, note: note, source: source, author: author)
         default:
             return command
+        }
+    }
+
+    /// Decode one inline `--hunk <json>` argument at the boundary: one JSON
+    /// object with the half-open byte bounds, exact expected text,
+    /// replacement, and validity reason.
+    private static func decodeHunkJSON(_ json: String) throws -> PagePatchHunk {
+        guard let data = json.data(using: .utf8) else {
+            throw Failure.usage("page patch: --hunk is not valid UTF-8")
+        }
+        do {
+            return try JSONDecoder().decode(PagePatchHunk.self, from: data)
+        } catch {
+            throw Failure.usage(
+                "page patch: --hunk must be one JSON object "
+                + #"{"startByte":Int,"endByte":Int,"oldText":String,"newText":String,"reason":String} — decode failed: \#(error.localizedDescription)"#)
+        }
+    }
+
+    /// Decode the `--hunk-file` document: `{"version":1,"hunks":[{"defect":
+    /// "Dxx","startByte":…,…}]}` — the same hunk fields with per-hunk classes.
+    private static func decodeHunkFile(at path: String) throws -> [(hunk: PagePatchHunk, defect: LintDefectClass)] {
+        guard let data = FileManager.default.contents(atPath: path),
+              !data.isEmpty else {
+            throw Failure.usage("page patch: --hunk-file is unreadable or empty: \(path)")
+        }
+        do {
+            let document = try JSONDecoder().decode(PagePatchHunkFile.self, from: data)
+            guard document.version == PagePatchHunkFile.version else {
+                throw Failure.usage(
+                    "page patch: --hunk-file version \(document.version) unsupported (expected \(PagePatchHunkFile.version))")
+            }
+            return try document.hunks.map { entry in
+                guard let defect = LintDefectClass(rawValue: entry.defect) else {
+                    throw Failure.usage(
+                        "page patch: unknown defect class \(entry.defect.debugDescription) in --hunk-file — expected D01–D28")
+                }
+                return (
+                    PagePatchHunk(
+                        startByte: entry.startByte, endByte: entry.endByte,
+                        oldText: entry.oldText, newText: entry.newText, reason: entry.reason),
+                    defect
+                )
+            }
+        } catch let failure as Failure {
+            throw failure
+        } catch {
+            throw Failure.usage(
+                "page patch: --hunk-file must be {\"version\":1,\"hunks\":[…]} — decode failed: \(error.localizedDescription)")
         }
     }
 

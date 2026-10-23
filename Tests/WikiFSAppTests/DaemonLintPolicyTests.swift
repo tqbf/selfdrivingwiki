@@ -149,6 +149,56 @@ struct DaemonLintPolicyTests {
         }
     }
 
+    /// The patch seam: the selected-page REPAIR policy may patch ONLY its
+    /// selected page (identity resolved daemon-side from the payload);
+    /// report-only policies never patch; whole-wiki runs never patch; a
+    /// patch with an unreadable or missing id denies.
+    @Test func patchRequiresSelectedPageIdentity() async throws {
+        let selected = PageID(rawValue: "01HZLINTPAGE00000000000000001")
+        let other = PageID(rawValue: "01HZLINTPAGE00000000000000002")
+
+        func patchPayload(pageID: PageID?) -> String {
+            let id = pageID?.rawValue ?? "01HZLINTPAGE00000000000000009"
+            return """
+            {"wikiID":"\(Fixture.wikiIDValue.rawValue)","id":"\(id)","expectHead":"01HZHEAD00000000000000000001","hunks":[{"defect":"D25","startByte":0,"endByte":3,"oldText":"```","newText":"","reason":"unwrap"}],"author":"agent:lint"}
+            """
+        }
+
+        // Repair policy: selected page passes; any other page denies.
+        let repair = try await Fixture(policy: .lintSelectedPageRepair(pageID: selected))
+        #expect(await repair.allowed(repair.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: selected))),
+            "the repair run may patch exactly its selected page")
+        #expect(await !repair.allowed(repair.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: other))),
+            "a patch against ANY other page must deny")
+        #expect(await !repair.allowed(repair.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: nil))),
+            "an unreadable patch payload must deny")
+
+        // Report-only policies: the same selected-page patch denies.
+        for policy in [
+            ManagedRunPolicy.lintSelectedPageReportOnly(pageID: selected),
+            .lintWholeWikiReportOnly,
+        ] {
+            let fixture = try await Fixture(policy: policy)
+            #expect(await !fixture.allowed(fixture.request(
+                family: .page, operation: DaemonDomainOperation.Page.patch,
+                payloadJSON: patchPayload(pageID: selected))),
+                "\(policy): report-only runs never patch")
+        }
+
+        // Ordinary managed runs may patch (it is a wikiEdit operation).
+        let ordinary = try await Fixture(policy: .ordinaryManaged)
+        #expect(await ordinary.allowed(ordinary.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: other))),
+            "ordinary managed runs keep the edit class for patches")
+    }
+
     // MARK: - Log append kind conditioning
 
     /// The log allowance is payload-conditioned for EVERY lint policy: kind

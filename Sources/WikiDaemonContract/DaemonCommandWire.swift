@@ -447,7 +447,6 @@ public struct DaemonPageAddRequest: Codable, Equatable, Sendable {
             self.role = role
         }
     }
-
     public let wikiID: String
     public let id: String?
     public let title: String
@@ -479,6 +478,48 @@ public struct DaemonPageAddRequest: Codable, Equatable, Sendable {
         self.author = author
         self.provenance = provenance
     }
+}
+
+/// `page patch` — the exact ranged write (REQ-52). Hunks cross in the
+/// file-entry shape (one defect class per hunk); the daemon decodes IDs,
+/// ranges, and classes at this boundary and runs the command layer.
+public struct DaemonPagePatchRequest: Codable, Equatable, Sendable {
+    public struct WireHunk: Codable, Equatable, Sendable {
+        public let defect: String
+        public let startByte: Int
+        public let endByte: Int
+        public let oldText: String
+        public let newText: String
+        public let reason: String
+
+        public init(defect: String, startByte: Int, endByte: Int, oldText: String, newText: String, reason: String) {
+            self.defect = defect
+            self.startByte = startByte
+            self.endByte = endByte
+            self.oldText = oldText
+            self.newText = newText
+            self.reason = reason
+        }
+    }
+
+    public let wikiID: String
+    public let id: String
+    public let expectHead: String
+    public let hunks: [WireHunk]
+    public let author: String?
+
+    public init(wikiID: String, id: String, expectHead: String, hunks: [WireHunk], author: String?) {
+        self.wikiID = wikiID
+        self.id = id
+        self.expectHead = expectHead
+        self.hunks = hunks
+        self.author = author
+    }
+
+    /// The payload's page identity as the raw string — the scope guard's
+    /// selected-page equality check reads exactly this field (the contract
+    /// module carries no domain types; PageID wraps it at the guard).
+    public var pageIDRawValue: String { id }
 }
 
 /// `page delete`.

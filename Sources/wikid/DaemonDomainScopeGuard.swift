@@ -127,6 +127,10 @@ enum DaemonScopedOperationPolicy {
             DaemonDomainOperation.Page.okfVerify: .allow(.wikiEdit),
             DaemonDomainOperation.Page.okfCorrect: .allow(.wikiEdit),
             DaemonDomainOperation.Page.add: .allow(.wikiEdit),
+            // The exact ranged write (REQ-52) — an edit class operation; the
+            // lint policy gate additionally pins it to the run's selected
+            // page by decoding the payload's id daemon-side.
+            DaemonDomainOperation.Page.patch: .allow(.wikiEdit),
             DaemonDomainOperation.Page.delete: .allow(.wikiEdit),
             DaemonDomainOperation.Page.revert: .allow(.wikiEdit),
         ],
@@ -354,11 +358,11 @@ struct DaemonScopedRequestGuard: Sendable {
                 }
             }
         case .lintSelectedPageRepair(let selectedPage):
-            try Self.evaluateLintAllowances(request, selectedPageID: selectedPage)
+            try Self.evaluateLintAllowances(request, selectedPageID: selectedPage, allowsPatch: true)
         case .lintSelectedPageReportOnly(let selectedPage):
-            try Self.evaluateLintAllowances(request, selectedPageID: selectedPage)
+            try Self.evaluateLintAllowances(request, selectedPageID: selectedPage, allowsPatch: false)
         case .lintWholeWikiReportOnly:
-            try Self.evaluateLintAllowances(request, selectedPageID: nil)
+            try Self.evaluateLintAllowances(request, selectedPageID: nil, allowsPatch: false)
         }
 
         // 4. TARGET SCOPE — the target must be the registered wiki; queue
@@ -402,18 +406,22 @@ struct DaemonScopedRequestGuard: Sendable {
     /// The operation the lint policy gate recognizes as a log append.
     static let lintLogAppendOperation = DaemonDomainOperation.Log.logAppend
 
-    /// Payload-conditioned lint allowances, evaluated AFTER the class gate:
-    /// a lint run's lease carries reads only, so every allowed-by-table wiki
-    /// read passes untouched and EVERYTHING else must be an explicit
+    /// Payload-conditioned lint allowances, evaluated INSTEAD of the class
+    /// gate: a lint run's lease carries reads only, so every allowed-by-table
+    /// wiki read passes untouched and EVERYTHING else must be an explicit
     /// allowance here or it denies generically.
     ///
     /// - `log append`: allowed only when the minimally-decoded payload names
-    ///   kind `lint` (the same minimal-decode posture as target extraction —
-    ///   the guard never decodes the full operation). Any other kind, or an
-    ///   unreadable payload, denies generically.
+    ///   kind `lint`. Any other kind, or an unreadable payload, denies
+    ///   generically.
+    /// - `page patch`: allowed ONLY for the selected-page REPAIR policy, and
+    ///   only when the payload's page id equals the lease's selected page
+    ///   (identity resolved daemon-side from the typed payload). Report-only
+    ///   policies and whole-wiki runs never patch.
     static func evaluateLintAllowances(
         _ request: DaemonDomainRequest,
-        selectedPageID: PageID?
+        selectedPageID: PageID?,
+        allowsPatch: Bool
     ) throws {
         let decision = DaemonScopedOperationPolicy.decision(
             family: request.family, operation: request.operation)
@@ -432,11 +440,34 @@ struct DaemonScopedRequestGuard: Sendable {
            Self.logAppendPayloadKind(request.payload) == "lint" {
             return
         }
-        // Everything else — page add/delete/revert, OKF writes, source
-        // writes, index set, strategy/bookmark/chat/workspace writes, queue
-        // controls, registry mutation — denies generically. The Phase 3
-        // `page patch` seam adds its selected-page identity check here.
+        // The patch seam: REPAIR-policy only, and only against the selected
+        // page's identity (resolved daemon-side from the typed payload).
+        if allowsPatch,
+           request.family == .page, request.operation == DaemonDomainOperation.Page.patch,
+           let selectedPageID,
+           let payload = request.payload,
+           let presented = Self.patchPayloadPageID(payload),
+           presented == selectedPageID.rawValue {
+            return
+        }
+        // Everything else — page add/delete/revert, patches against any
+        // other page, OKF writes, source writes, index set, strategy/
+        // bookmark/chat/workspace writes, queue controls, registry mutation
+        // — denies generically. No alternative write path exists.
         throw scopeDenied()
+    }
+
+    /// Minimally decode the patch payload's page id; nil when the payload is
+    /// absent or unreadable (which denies).
+    static func patchPayloadPageID(_ payload: Data) -> String? {
+        struct PatchID: Decodable { let id: String? }
+        do {
+            return try JSONDecoder().decode(PatchID.self, from: payload).id
+        } catch {
+            // An unreadable payload is a denial by design — the gate never
+            // authorizes what it cannot see.
+            return nil
+        }
     }
 
     /// Minimally decode the log-append payload's `kind` field; nil when the

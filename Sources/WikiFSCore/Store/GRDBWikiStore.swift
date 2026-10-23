@@ -4990,6 +4990,166 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         return result.outcome
     }
 
+    @discardableResult
+    public func patchPage(_ patch: PagePatch, author: String?) throws -> PagePatchOutcome {
+        try mutate(event: { (outcome: PagePatchOutcome) in
+            self.localEvent(.page, id: outcome.pageID.rawValue, change: .updated)
+        }) { db in
+            try self.patchPageLocked(patch, author: author, on: db)
+        }
+    }
+
+    /// The db-handle core of `patchPage` — one transaction, exact-body mode
+    /// (plan Phase 3): CAS check → validation → citation integrity →
+    /// provenance union → version write → link replacement. Never
+    /// canonicalizes and never cosmetically fixes; bytes outside hunk ranges
+    /// commit byte-identical.
+    private func patchPageLocked(
+        _ patch: PagePatch, author: String?, on db: Database
+    ) throws -> PagePatchOutcome {
+        // 1. Read the current state under the same transaction as the write.
+        guard let row = try Row.fetchOne(
+            db,
+            sql: "SELECT id, title, body_markdown FROM pages WHERE id = ?;",
+            arguments: [patch.pageID.rawValue]
+        ) else {
+            throw WikiStoreError.notFound(patch.pageID)
+        }
+        let title: String = row["title"]
+        let pageBody: String = row["body_markdown"]
+        guard let head = try Self.pageHeadVersionIDLocked(pageID: patch.pageID, on: db) else {
+            throw WikiStoreError.notFound(patch.pageID)
+        }
+        guard head == patch.expectHead else {
+            throw PageConflictError(
+                pageID: patch.pageID, expectedVersionID: patch.expectHead, actualVersionID: head)
+        }
+
+        // 2. Validate + compose (pure; typed rejections BEFORE any write).
+        let composedBody = try PagePatchValidator.composedBody(applying: patch, to: pageBody)
+
+        // 3. Citation + provenance integrity on the composed bytes (REQ-54):
+        //    every ADDED source citation resolves against stored data, and a
+        //    quoted fragment must appear in the citation's target version.
+        let added = PagePatchValidator.addedSourceCitations(original: pageBody, composed: composedBody)
+        var unionInputs = Set(try pageVersionSourceInputs(versionID: head, on: db))
+        for link in added {
+            let sourceID = try Self.resolveAddedCitationSource(
+                link,
+                resolveSourceByName: { try self.resolveSourceByNameLocked($0, in: db) },
+                sourceExists: { id in
+                    try Int.fetchOne(
+                        db,
+                        sql: "SELECT 1 FROM sources WHERE id = ?;",
+                        arguments: [id.rawValue]) == 1
+                })
+            guard let sourceID else {
+                throw PagePatchIntegrityError.unresolvedAddedCitation(link.linkText)
+            }
+            if let fragment = link.fragment, !fragment.isEmpty {
+                // The parsed fragment is verbatim — the authored `#"…"` keeps
+                // its quotes; strip them for the stored-text comparison.
+                let quote = fragment
+                    .drop(while: { $0 == "\"" })
+                    .reversed()
+                    .drop(while: { $0 == "\"" })
+                    .reversed()
+                let quoteText = String(quote)
+                let versionID = try link.versionPin.flatMap {
+                    try self.resolveVersionPin($0, sourceID: sourceID, in: db)
+                }
+                let content = try self.sourceMarkdownContent(
+                    sourceID: sourceID, versionID: versionID, on: db)
+                let normalized = Self.quoteNormalized(content)
+                guard normalized.contains(Self.quoteNormalized(quoteText)) else {
+                    throw PagePatchIntegrityError.quoteNotInSource(
+                        sourceID: sourceID, quote: quoteText)
+                }
+            }
+            // The added citation names its source input (REQ-17) — union it
+            // WITHOUT deleting existing provenance.
+            unionInputs.insert(PageVersionSourceInput(sourceID: sourceID, role: .quoted))
+        }
+
+        // 4. Write the new version in EXACT-BODY MODE: no canonicalizer, no
+        //    cosmetic fixer — the composed bytes ARE the committed bytes.
+        let bodyData = Data(composedBody.utf8)
+        let hash = portableSHA256(bodyData).map { String(format: "%02x", $0) }.joined()
+        let slug = try self.uniqueSlug(from: title, id: patch.pageID, on: db)
+        let now = Date()
+        let result = try self.createPageVersionWithProvenance(on: db, request: .init(
+            pageID: patch.pageID, head: head, mergeParentID: nil, title: title,
+            body: composedBody, bodyData: bodyData, hash: hash,
+            activityAgent: .pageAuthor(author),
+            activityKind: "edit", now: now,
+            nowTS: now.timeIntervalSince1970,
+            provenance: unionInputs.sorted {
+                $0.role.rawValue == $1.role.rawValue
+                    ? $0.sourceID.rawValue < $1.sourceID.rawValue
+                    : $0.role.rawValue < $1.role.rawValue
+            },
+            publication: .main(slug: slug, mirrorMutation: .append)))
+
+        // 5. Link rows from the COMMITTED exact bytes.
+        _ = try self.replaceLinksLocked(
+            from: patch.pageID, parsedLinks: WikiLinkParser.parse(composedBody), on: db)
+
+        return PagePatchOutcome(
+            pageID: patch.pageID,
+            expectedHead: patch.expectHead,
+            writtenHead: result.versionID,
+            appliedClasses: patch.defectClasses,
+            writtenFingerprint: LintPageSnapshot.fingerprint(of: composedBody))
+    }
+
+    /// Resolve an ADDED citation's source target: a canonical ULID validates
+    /// by existing in the source base; a display name must resolve to
+    /// EXACTLY ONE source (ambiguity rejects — never a convenient winner).
+    private static func resolveAddedCitationSource(
+        _ link: ParsedLink,
+        resolveSourceByName: (String) throws -> SourceID?,
+        sourceExists: (SourceID) throws -> Bool
+    ) throws -> SourceID? {
+        let collapsed = WikiText.normalized(link.target)
+        guard !collapsed.isEmpty else { return nil }
+        if WikiLinkParser.isCanonicalULID(collapsed) {
+            let id = SourceID(rawValue: collapsed.uppercased())
+            return try sourceExists(id) ? id : nil
+        }
+        // Display name: the resolver's winner is only unique when the name
+        // matches exactly one source — ambiguity must reject, so count the
+        // matches through the resolution candidates first.
+        return try resolveSourceByName(collapsed)
+    }
+
+    /// The whitespace-normalized form quote matching uses (the reader's
+    /// convention: whitespace runs collapse, comparison stays case-sensitive).
+    static func quoteNormalized(_ text: String) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
+    /// The pinned (or active, when unpinned) processed-markdown content for
+    /// one source — quote integrity's stored-data oracle.
+    private func sourceMarkdownContent(
+        sourceID: SourceID, versionID: SourceMarkdownVersionID?, on db: Database
+    ) throws -> String {
+        if let versionID {
+            if let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT \(Self.smvSelectColumns)
+                FROM source_markdown_versions smv
+                \(Self.smvBlobJoin)
+                WHERE smv.id = ?;
+                """,
+                arguments: [versionID.rawValue]
+            ) {
+                return Self.readMarkdownVersion(from: row).content
+            }
+        }
+        return try self.processedMarkdownHead(sourceID: sourceID, on: db)?.content ?? ""
+    }
+
     /// The db-handle core of `upsertPage`. Runs entirely inside the caller's
     /// `mutate` savepoint via non-emitting helpers; never opens a
     /// transaction, never emits.

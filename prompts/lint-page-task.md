@@ -42,7 +42,8 @@ A concern outside validity scope is reported as such, never repaired here.
 
 1. Read the page: `wikictl page get --title "{{pageTitle}}" --json` — body
    and head_version_id from ONE read. That snapshot is the basis of every
-   repair you propose.
+   repair you propose. Record the head_version_id; every hunk you submit
+   must target exactly those bytes.
 2. For each broken link listed above:
    - `[[Page Title]]` (page link): search `wikictl page list` for the correct
      target and rewrite the link to it. If no target exists, report it
@@ -60,26 +61,37 @@ A concern outside validity scope is reported as such, never repaired here.
    not list it. If a target is not the bare canonical SourceID, rewrite it to
    that ID and preserve its fragment, quote, or alias. Verify each rewritten
    citation resolves against the source you named.
-4. Apply your repairs by rewriting the page with the body you read, changed
-   only where a repair applies. Keep every byte you are not repairing
-   identical — do not reorder, reformat, or normalize anything else.
+4. Apply your repairs as PATCH HUNKS — small exact ranged edits, never a
+   full-body rewrite. Each hunk carries: half-open byte bounds into the body
+   you read, the EXACT text at that range, the replacement text, a short
+   validity reason, and its defect class (D01–D28; only repairable classes
+   may authorize hunks — report-only classes are listed, not repaired).
+   Untouched bytes are preserved by construction; do not attempt to
+   normalize, reformat, or "improve" anything else.
 5. Record your findings: `wikictl log append --kind lint --title "…"
    --note "…"`, including any defect you could not repair and why.
 
-## Write and CAS discipline (interim repair path)
+## Write and CAS discipline (patch write)
 
-This task currently repairs through a full-body compare-and-swap write. All
-wiki changes go through the exact trusted wiki-tool invocation given in your
-RUN ENVIRONMENT block — same wiki selector for reads and writes.
+This task repairs ONLY through `wikictl page patch`. There is no full-body
+write path for this run — `page add` is not available for repairs. All wiki
+changes go through the exact trusted wiki-tool invocation given in your RUN
+ENVIRONMENT block — same wiki selector for reads and writes.
 
 - Read first: `wikictl page get --title "{{pageTitle}}" --json` gives the
   body and its `head_version_id` in one read.
-- Write with: `wikictl page add --title "{{pageTitle}}" --body-file <file>
-  --expect-head <head_version_id>` — the head_version_id from your read.
-- On exit code 3 (CAS conflict — the page changed since your read): re-read
-  the body and head in ONE fresh `--json` read, reapply your repairs to the
-  NEW body (never replay your old body with a refreshed head), and retry
-  ONCE.
+- Submit repairs with:
+  `wikictl page patch --id <page-id> --expect-head <head_version_id>
+  --hunk '<json>' --defect <class>` — one `--hunk`/`--defect` pair per
+  repair, or `--hunk-file <path>` for several hunks at once. The hunk JSON
+  is `{"startByte":N,"endByte":N,"oldText":"…","newText":"…","reason":"…"}`
+  with byte bounds into the body you read.
+- Exact application: the stored bytes at each hunk's range must equal
+  `oldText` exactly. A mismatch is a conflict — RE-READ the body in one
+  fresh `--json` read, recompute your hunks against the NEW bytes (never
+  replay old hunks with a refreshed head), and retry ONCE.
 - A second conflict ends the repair: stop writing, and report the conflict.
   Never loop, and never claim a fix that was not committed.
-- After a successful write, read the page back to confirm what is stored.
+- After a successful patch, read the page back for context, then re-run your
+  structural checks on what is stored: a boundary repair can expose a later
+  defect, which you repair in the same run.
