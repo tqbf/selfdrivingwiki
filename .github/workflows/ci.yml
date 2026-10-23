@@ -43,6 +43,12 @@ jobs:
     # skipped. Separate opt-in steps set WIKIFS_APP_TESTS=1 and run targeted
     # WikiFSAppTests suites; CI does not yet run that app-test target in full.
     runs-on: macos-latest
+    env:
+      # Poll leashes scale per environment (TestTimeouts.leash in
+      # Tests/TestSupport): the shared runner starves detached-task polls past
+      # local-scale defaults, so CI grants a wider leash. A real wedge still
+      # fails — just later, and with the same diagnosed message.
+      WIKI_TEST_LEASH_SECONDS: "120"
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
