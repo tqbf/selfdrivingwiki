@@ -598,6 +598,17 @@ public actor ACPBackend: AgentBackend {
             effectiveSpawn = configuredSpawn
         }
 
+        // §7 one-unit invariant at the TOOL-subprocess layer: the composed
+        // child environment pins the adapter stacks' own inherit-full-
+        // environment switch when a scoped lease is active, so the dedicated
+        // credential keys survive the adapter's exec layer into the agent's
+        // wikictl grandchildren. No lease → byte-unchanged environment.
+        let escalatedEnvironment = AgentScopedRunToolEnvironment.resolvedEnvironment(
+            current: env,
+            scopedRun: profile.runContext?.scopedRun,
+            executablePath: effectiveSpawn.executablePath,
+            arguments: effectiveSpawn.arguments)
+
         // Issue #1279: the package-runner policy (home allowances + trusted
         // temp root) runs on the EFFECTIVE spawn — post-canonicalization, and
         // post-staleness-fallback — so a canonicalized npx launch receives
@@ -611,14 +622,14 @@ public actor ACPBackend: AgentBackend {
 
         var spawnExecutablePath = effectiveSpawn.executablePath
         var spawnArguments = effectiveSpawn.arguments
-        var spawnEnvironment = env
+        var spawnEnvironment = escalatedEnvironment
         #if os(macOS)
         if let sandbox = profile.sandbox {
             let plan = Self.sandboxedSpawnPlan(
                 invocation: sandbox,
                 executablePath: effectiveSpawn.executablePath,
                 arguments: effectiveSpawn.arguments,
-                environment: env,
+                environment: escalatedEnvironment,
                 scratchDirectory: profile.scratchDirectory,
                 packageRunnerTempURL: profile.packageRunnerTempURL)
             spawnExecutablePath = plan.executablePath
