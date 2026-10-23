@@ -58,11 +58,12 @@ public enum WikiOperation: Equatable, Sendable {
   /// `WIKI_STATE.md` snapshot.
   case lint(stateFilePath: String)
 
-  /// Health-check a single page. `brokenLinks` is the pre-computed list of
-  /// `[[page titles]]` that do not resolve to existing pages (computed in-app
-  /// by `WikiStoreModel.preflightLint` before the LLM run so the agent has
-  /// concrete targets rather than having to discover issues itself).
-  case lintPage(pageTitle: String, brokenLinks: [String], stateFilePath: String)
+  /// Health-check a single page. `brokenLinks` is the pre-computed pre-flight
+  /// worklist (computed in-app by `WikiStoreModel.preflightLint` before the
+  /// LLM run so the agent has concrete targets rather than having to discover
+  /// issues itself): broken links plus the factual raw-URL / malformed-table
+  /// content scans (#1461).
+  case lintPage(pageTitle: String, brokenLinks: LintPagePreflight, stateFilePath: String)
 
   /// A short, stable identifier for the operation kind (logging / UI).
   public var kind: Kind {
@@ -149,10 +150,10 @@ extension WikiOperation {
       return Self.queryChatPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
     case .lint(let stateFilePath):
       return Self.lintPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
-    case .lintPage(let pageTitle, let brokenLinks, let stateFilePath):
+    case .lintPage(let pageTitle, let findings, let stateFilePath):
       return Self.lintPagePrompt(
         wikiRoot: wikiRoot, pageTitle: pageTitle,
-        brokenLinks: brokenLinks, stateFilePath: stateFilePath)
+        findings: findings, stateFilePath: stateFilePath)
     }
   }
 
@@ -314,8 +315,9 @@ extension WikiOperation {
     """
   }
 
-  /// Lint stays single-agent Opus, with the write rule (it logs and may file a
-  /// report) + the staged-state / don't-rediscover directive.
+  /// Whole-wiki lint: single agent with the write rule (it logs and may file a
+  /// report) + the staged-state / don't-rediscover directive. The model comes
+  /// from the run configuration, not from this prompt.
   private static func lintPrompt(wikiRoot: String, stateFilePath: String) -> String {
     return """
     \(IngestWriteRule.writes)
@@ -328,28 +330,52 @@ extension WikiOperation {
     """
   }
 
-  /// Single-page lint: pre-flight results (bracket fixes + broken links) are
-  /// passed in so the agent has concrete targets rather than discovering issues
-  /// itself. Runs Opus single-agent with full write permissions.
+  /// Single-page lint: pre-flight results (bracket fixes plus the factual
+  /// broken-links / raw-URL / malformed-table worklist) are passed in so the
+  /// agent has concrete targets rather than discovering issues itself. Runs
+  /// single-agent with full write permissions; the model comes from the run
+  /// configuration.
   private static func lintPagePrompt(
     wikiRoot: String,
     pageTitle: String,
-    brokenLinks: [String],
+    findings: LintPagePreflight,
     stateFilePath: String
   ) -> String {
     let linksSection: String
-    if brokenLinks.isEmpty {
+    if findings.brokenLinks.isEmpty {
       linksSection = "Broken wiki links: none detected."
     } else {
-      let list = brokenLinks.map { "  - \($0)" }.joined(separator: "\n")
+      let list = findings.brokenLinks.map { "  - \($0)" }.joined(separator: "\n")
       linksSection = """
         Broken wiki links (targets not found in the wiki):
+        \(list)
+        """
+    }
+    let rawURLsSection: String
+    if findings.rawExternalURLs.isEmpty {
+      rawURLsSection = "Raw external URLs: none detected."
+    } else {
+      let list = findings.rawExternalURLs.map { "  - \($0)" }.joined(separator: "\n")
+      rawURLsSection = """
+        Raw external URLs (bare http(s) links in the body — listed as facts):
+        \(list)
+        """
+    }
+    let tablesSection: String
+    if findings.malformedTables.isEmpty {
+      tablesSection = "Malformed markdown tables: none detected."
+    } else {
+      let list = findings.malformedTables.map { "  - \($0)" }.joined(separator: "\n")
+      tablesSection = """
+        Malformed markdown tables (missing/invalid separator row or inconsistent column counts):
         \(list)
         """
     }
     let task = PromptTemplate.fill(GeneratedPrompts.lintPageTask, [
       "pageTitle": pageTitle,
       "linksSection": linksSection,
+      "rawURLsSection": rawURLsSection,
+      "tablesSection": tablesSection,
     ])
     return """
       \(IngestWriteRule.writes)

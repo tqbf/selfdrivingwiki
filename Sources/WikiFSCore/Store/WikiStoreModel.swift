@@ -1818,8 +1818,9 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Pre-flight checks run before an LLM page-lint: apply `WikiLinkFixer` fixes and
-    /// detect broken `[[wiki links]]`. Reads fresh from the store so it works for any
+    /// Pre-flight checks run before an LLM page-lint: apply `WikiLinkFixer` fixes,
+    /// detect broken `[[wiki links]]`, and factually list raw external URLs and
+    /// malformed markdown tables (#1461). Reads fresh from the store so it works for any
     /// page, not just the loaded draft. If the current page is loaded, also syncs the
     /// draft (without marking it dirty). Returns `nil` when the page cannot be read.
     public struct LintPreflight: Sendable {
@@ -1834,6 +1835,13 @@ public final class WikiStoreModel {
         /// Chat titles referenced by `[[chat:…]]` in the page that do not resolve
         /// to an existing chat.
         public let brokenChatLinks: [String]
+        /// Raw external URLs present in the page body — a factual list; the
+        /// lint model decides whether each should become a wiki link or a
+        /// `[[source:…]]` citation (#1461).
+        public let rawExternalURLs: [String]
+        /// Malformed markdown tables (missing/invalid separator row or
+        /// inconsistent column counts), one factual description per table (#1461).
+        public let malformedTables: [String]
     }
 
     public func preflightLint(pageID: PageID) -> LintPreflight? {
@@ -1948,7 +1956,9 @@ public final class WikiStoreModel {
         return LintPreflight(didFixLinks: didFix,
                              brokenPageLinks: brokenPages,
                              brokenSourceLinks: brokenSources,
-                             brokenChatLinks: brokenChats)
+                             brokenChatLinks: brokenChats,
+                             rawExternalURLs: LintPreflightScanner.rawExternalURLs(in: body),
+                             malformedTables: LintPreflightScanner.malformedTables(in: body))
     }
 
     /// Cancel any pending debounce and save synchronously. Called on page
