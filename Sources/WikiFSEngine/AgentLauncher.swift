@@ -344,6 +344,23 @@ public final class AgentLauncher {
     /// time; tests/the daemon default to nil (no deny rule emitted).
     @ObservationIgnored public var pdf2mdScriptPathResolver: () -> String? = { nil }
 
+    /// The trusted-host scoped-run lease manager (§5), installed by the daemon
+    /// that owns the in-process registration broker. When installed, EVERY
+    /// managed run issues a scoped lease before its child spawns: the child
+    /// gets the scoped Seatbelt profile and the dedicated credential
+    /// environment keys, and the lease is renewed at half-life and revoked
+    /// through every teardown path. `nil` (the app host has no authenticated
+    /// registration channel — Phase 2 §5 audit) keeps today's unscoped
+    /// launches unchanged.
+    @ObservationIgnored public var scopedRunLeaseManager: (any AgentScopedRunLeaseManaging)?
+    /// The live run's issued lease. Set by `issueScopedRunIfConfigured`,
+    /// cleared exactly by `teardownScopedRun` (idempotent).
+    @ObservationIgnored private var activeScopedRunLease: AgentScopedRunLease?
+    /// The half-life renewal loop for `activeScopedRunLease`. Cancelled by
+    /// `teardownScopedRun` before revocation (§5: the OWNER renews — never
+    /// the child — and a dead owner's lease expires on its bound).
+    @ObservationIgnored private var scopedRunRenewalTask: Task<Void, Never>?
+
     /// Wiki strategies phase 4 — title resolver for pre-launch plan
     /// validation (`ACPIngestPlanValidation`). Resolves a SANITIZED page
     /// title to an existing page id using the store's `resolveTitleToID`
@@ -371,20 +388,79 @@ public final class AgentLauncher {
         await UserEnvironmentPath.userPATH()
     }
 
-    /// The single wiki-database derivation for this launcher: the container
-    /// layout `<containerDirectory>/<wikiID>.sqlite` (mirrors the registry).
-    /// MainActor like every caller (run context, seatbelt fence, in-plan title
-    /// validation). There is no override: since the fixture-binary split
-    /// (plans/cli-domain-commands.md §"The fixture binary") every run targets
-    /// a real registered wiki and every agent command resolves through the
-    /// daemon; disposable fixture databases live only in the build-only
-    /// `wikictl-fixture` binary.
-    public func wikiDatabaseURL(
-        for wikiID: WikiID,
-        container containerDirectory: URL
-    ) -> URL {
-        containerDirectory
-            .appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
+    // MARK: - Scoped daemon runs (plans/agent-sandbox-scoping.md §5/§7)
+
+    /// Issue the managed run's scoped lease when a trusted manager is
+    /// installed, and start its half-life renewal. Returns nil when no
+    /// manager is installed (today's unscoped launches). Registration failure
+    /// THROWS — the caller fails the launch; there is no unscoped fallback.
+    ///
+    /// Call ordering contract: this runs AFTER every preflight early-return
+    /// in the caller (so a refused launch never holds authority) and BEFORE
+    /// the spawn is composed (§5: the capability is registered before any
+    /// child can start).
+    private func issueScopedRunIfConfigured(wikiID: WikiID) async throws -> AgentScopedRunLease? {
+        guard let manager = scopedRunLeaseManager else { return nil }
+        // Any leftover lease from a prior run revokes first (idempotent; a
+        // normally-finished run already revoked in finish()).
+        teardownScopedRun()
+        do {
+            let lease = try await manager.issueScopedRun(for: wikiID)
+            activeScopedRunLease = lease
+            startScopedRunRenewal(lease)
+            DebugLog.agent(
+                "scoped run: issued lease for wiki \(wikiID.rawValue) "
+                    + "(endpoint \(lease.credentials.endpointPath))")
+            return lease
+        } catch {
+            throw AgentScopedRunError.registrationFailed("\(error)")
+        }
+    }
+
+    /// The owner-side renewal loop: sleeps HALF the bounded lease lifetime,
+    /// renews, repeats — until cancelled by teardown (§5: the trusted owner
+    /// renews; the child is never asked to renew its own authority).
+    private func startScopedRunRenewal(_ lease: AgentScopedRunLease) {
+        let interval = lease.leaseLifetime / 2
+        let manager = scopedRunLeaseManager
+        scopedRunRenewalTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: interval)
+                } catch {
+                    return  // cancelled — teardown owns the lease now
+                }
+                guard let self, self.activeScopedRunLease == lease else { return }
+                do {
+                    try await manager?.renewScopedRun(lease)
+                    DebugLog.agent("scoped run: lease renewed for endpoint \(lease.credentials.endpointPath)")
+                } catch {
+                    // The lease is gone (revoked or expired). Keep the loop
+                    // bounded: stop renewing; the run's commands will fail
+                    // typed (authorizationExpired) until teardown.
+                    DebugLog.agent("scoped run: renewal failed — \(error)")
+                    return
+                }
+            }
+        }
+    }
+
+    /// Revoke the live lease and stop its renewal. Idempotent (guarded on the
+    /// stored lease) so every teardown path — success, error, cancellation,
+    /// spawn failure, owner disconnect — can call it unconditionally.
+    /// Revocation itself runs in a detached task: `finish` is synchronous on
+    /// the main actor, and the broker's revoke is idempotent + ordered (it
+    /// unlinks the endpoint, so post-teardown child commands fail fast).
+    private func teardownScopedRun() {
+        scopedRunRenewalTask?.cancel()
+        scopedRunRenewalTask = nil
+        guard let lease = activeScopedRunLease else { return }
+        activeScopedRunLease = nil
+        let manager = scopedRunLeaseManager
+        Task {
+            await manager?.revokeScopedRun(lease)
+            DebugLog.agent("scoped run: lease revoked (endpoint unlinked)")
+        }
     }
 
     /// Build the run context for one spawn: resolves the user environment
@@ -396,7 +472,8 @@ public final class AgentLauncher {
         scratch: URL,
         wikiID: WikiID,
         wikictlDirectory: String,
-        operation: WikiOperation? = nil
+        operation: WikiOperation? = nil,
+        scopedRun: AgentScopedRunCredentials? = nil
     ) async -> AgentRunContext {
         // #1368: keep the RAW login-shell resolution on the context — the
         // ACP spawn seam (`ACPBackend.resolveSpawnConfig`) injects the
@@ -413,7 +490,8 @@ public final class AgentLauncher {
             userPATH: userPath,
             resolvedLoginShellPATH: resolvedLoginShellPATH,
             stateFilePath: operation?.stateFilePath,
-            stagedSourcePaths: operation?.stagedSourcePaths ?? [])
+            stagedSourcePaths: operation?.stagedSourcePaths ?? [],
+            scopedRun: scopedRun)
         context.createTempDirectories()
         return context
     }
@@ -1532,7 +1610,7 @@ public final class AgentLauncher {
 
         // Resolved fresh at spawn time so Settings changes apply without a
         // restart.
-        let dir = containerDirectory ?? DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() }) ?? FileManager.default.temporaryDirectory
+        _ = containerDirectory ?? DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() }) ?? FileManager.default.temporaryDirectory
 
         // #607: per-operation permission policy. The kind is known from the
         // `request` parameter (the staged `WikiOperation` isn't built yet, but
@@ -1670,12 +1748,36 @@ public final class AgentLauncher {
             return
         }
 
+        // §5/§7: register the scoped run BEFORE the child can start. A
+        // registration failure fails the command with a typed error — there
+        // is no unscoped fallback for a managed run. Issued here (after every
+        // preflight early-return) so a refused launch never holds authority.
+        let scopedRunLease: AgentScopedRunLease?
+        do {
+            scopedRunLease = try await issueScopedRunIfConfigured(wikiID: wikiID)
+        } catch {
+            preflightError = error.localizedDescription
+            finish(status: -1)
+            return
+        }
         // Resolve the seatbelt confinement BEFORE the resume attempt: the
         // resume path may itself spawn a fresh process, and the one-shot spawn
         // below reuses the same invocation (issue #1251).
         let pdf2mdScriptPath = resolvePdf2mdScriptPath()
-        let sandbox = resolveSandboxInvocation(
-            wikiID: wikiID, scratch: scratch, dir: dir, pdf2mdScriptPath: pdf2mdScriptPath)
+        let sandbox: SandboxProfile.SandboxInvocation?
+        do {
+            sandbox = try resolveSandboxInvocation(
+                scratch: scratch,
+                pdf2mdScriptPath: pdf2mdScriptPath,
+                scopedRunLease: scopedRunLease)
+        } catch {
+            // A scoped-profile construction failure (e.g. the endpoint path
+            // cannot fit a socket address) must fail the launch, never fall
+            // back to an unscoped profile.
+            preflightError = "Could not build the sandbox profile: \(error.localizedDescription)"
+            finish(status: -1)
+            return
+        }
 
         // Typed per-run capability context (created BEFORE any spawn, sandbox
         // or not): resolves the user-environment PATH once and creates the
@@ -1686,7 +1788,8 @@ public final class AgentLauncher {
             scratch: scratch,
             wikiID: wikiID,
             wikictlDirectory: wikictlDirectory,
-            operation: operation)
+            operation: operation,
+            scopedRun: scopedRunLease?.credentials)
 
         // #813 Phase 3: Attempt to resume from a previous ACP session if available
         var resumedSession: SessionHandle? = nil
@@ -1951,6 +2054,9 @@ public final class AgentLauncher {
             // the "Ingesting…" row label or the cross-file Ingest greyout. finish()
             // is not called on this path, so we clear explicitly here.
             self.ingestingSourceIDs = []
+            // §5: spawn failure revokes the scoped lease (this path bypasses
+            // finish(), so the teardown is explicit).
+            teardownScopedRun()
             releaseRunLifecycle()
             // Release the generation gate so a queued peer isn't stranded.
             // Also clear isRunning (set above at gate acquire; spawn failed).
@@ -3644,9 +3750,6 @@ public final class AgentLauncher {
         // the user message the model already seeded at chat creation.
         self.firstMessagePrePersisted = firstMessagePrePersisted
 
-        // Resolved fresh at spawn time.
-        let dir = containerDirectory ?? DebugLog.trying("appGroupContainerDirectory", operation: { try DatabaseLocation.appGroupContainerDirectory() }) ?? FileManager.default.temporaryDirectory
-
         // Chat uses the bypass permission policy. The ACP agent spawn is
         // threaded into providerHints below. #606: chat is interactive, so no
         // auto-reject budget —
@@ -3793,8 +3896,30 @@ public final class AgentLauncher {
         // (SandboxProfile.readOnlyInvocation) is retained in-tree but no longer
         // wired to the chat path.
         let pdf2mdScriptPath = resolvePdf2mdScriptPath()
-        let sandbox = resolveSandboxInvocation(
-            wikiID: wikiID, scratch: scratch, dir: dir, pdf2mdScriptPath: pdf2mdScriptPath)
+        // §5/§7: the interactive session's scoped lease is issued before the
+        // spawn and revoked when the session closes (not per turn). No gate
+        // and no `isRunning` are held yet, so a failure here tears the lease
+        // down explicitly and returns (the provider-op defer handles release);
+        // `finish` would be a no-op at this point.
+        let scopedRunLease: AgentScopedRunLease?
+        do {
+            scopedRunLease = try await issueScopedRunIfConfigured(wikiID: wikiID)
+        } catch {
+            preflightError = error.localizedDescription
+            teardownScopedRun()
+            return
+        }
+        let sandbox: SandboxProfile.SandboxInvocation?
+        do {
+            sandbox = try resolveSandboxInvocation(
+                scratch: scratch,
+                pdf2mdScriptPath: pdf2mdScriptPath,
+                scopedRunLease: scopedRunLease)
+        } catch {
+            preflightError = "Could not build the sandbox profile: \(error.localizedDescription)"
+            teardownScopedRun()
+            return
+        }
 
         // Typed per-run capability context (created BEFORE any spawn, sandbox
         // or not): user-environment PATH + scratch temp roots. The chat prompt
@@ -3804,7 +3929,8 @@ public final class AgentLauncher {
             scratch: scratch,
             wikiID: wikiID,
             wikictlDirectory: wikictlDirectory,
-            operation: operation)
+            operation: operation,
+            scopedRun: scopedRunLease?.credentials)
 
         // RESERVE per-run metadata. isRunning will be set at spawn commit below
         // (after backend.start succeeds). runStartedAt is set inside
@@ -4049,6 +4175,9 @@ public final class AgentLauncher {
             preflightError = "Failed to launch \(provider.displayName): \(error.localizedDescription)"
             closeLogFiles()
             DebugLog.trying("remove scratch on backend.start failure", operation: { try FileManager.default.removeItem(at: scratch) })
+            // §5: spawn failure revokes the scoped lease (this path clears
+            // isRunning directly and never reaches finish()).
+            teardownScopedRun()
             isInteractiveSession = false
             isRunning = false
             runningKind = nil
@@ -4571,6 +4700,10 @@ public final class AgentLauncher {
             return
         }
         DebugLog.agent("finish: status=\(status) events=\(events.count) activeChatID=\(activeChatID?.rawValue ?? "nil")")
+        // §5: revoke the run's scoped lease on EVERY exit path that reaches
+        // the run funnel — success, error, cancellation (stopAgent), process
+        // death. Idempotent; renewal stops first.
+        teardownScopedRun()
         watchdogTask?.cancel()
         watchdogTask = nil
         watchdogHasWarned = false
@@ -4715,6 +4848,11 @@ public final class AgentLauncher {
     /// before staging/preflight at the top of each launch path.
     private func resetRunArtifacts() {
         releaseProviderOperation()
+        // §5 hygiene: a new run revokes any lease a prior run left behind
+        // (idempotent no-op after a normal finish()). This closes the last
+        // gap where a bypass path between issue and spawn could leak
+        // authority into the next run's reset.
+        teardownScopedRun()
         DebugLog.agent("resetRunArtifacts: clearing per-run artifacts (prior activeChatID=\(activeChatID?.rawValue ?? "nil"))")
         watchdogTask?.cancel()
         watchdogTask = nil
@@ -4947,43 +5085,56 @@ public final class AgentLauncher {
     /// write-capable. The former read-only Ask sandbox is retained in-tree but
     /// unwired.)
     private func resolveSandboxInvocation(
-        wikiID: WikiID,
         scratch: URL,
-        dir: URL,
-        pdf2mdScriptPath: String?
-    ) -> SandboxProfile.SandboxInvocation? {
+        pdf2mdScriptPath: String?,
+        scopedRunLease: AgentScopedRunLease?
+    ) throws -> SandboxProfile.SandboxInvocation? {
         // HOME for the `-D HOME` profile param. Read from the environment the child
         // will inherit (fall back to the process home). Forwarded for forward-compat
         // and debugging; the current whitelist profile does not reference it.
         let homePath = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 
-        // The active wiki's SQLite DB path — the launcher's single derivation
-        // (`wikiDatabaseURL`): `<container>/<ulid>.sqlite`. Symlink resolution
-        // is performed inside `SandboxProfile.invocation` (the tested core
-        // layer) so the canonical path reaches the seatbelt profile.
-        let dbPath = wikiDatabaseURL(for: wikiID, container: dir).path
-        // The central queue database is a container artifact; the fence
-        // targets its path beside the wiki database so agent writes stay
-        // confined to the wiki surface.
-        let queueDBPath = dir.appendingPathComponent("queue.sqlite", isDirectory: false).path
+        // §8: a scoped run wraps the child in the scoped profile — NO
+        // database grants, terminal App Group denies, the ordinary endpoint
+        // and sibling run endpoints denied, the assigned run endpoint allowed
+        // LAST. The lease carries the canonical paths (the trusted host owns
+        // the endpoint layout), so the engine never restates them. This branch
+        // NEVER fails open: a profile error (e.g. endpoint path over the
+        // socket-length budget) throws and fails the launch.
+        if let lease = scopedRunLease {
+            let invocation = try SandboxProfile.scopedRunInvocation(
+                homePath: homePath,
+                scratchDir: scratch.path,
+                appGroupContainerPath: lease.seatbeltInputs.appGroupContainerPath,
+                daemonEndpointPath: lease.seatbeltInputs.daemonEndpointPath,
+                runsDirectoryPath: lease.seatbeltInputs.runsDirectoryPath,
+                runEndpointPath: lease.credentials.endpointPath,
+                pdf2mdScriptPath: pdf2mdScriptPath)
+            DebugLog.agent(
+                "sandbox: SCOPED run — App Group container denied, run endpoint allowed: \(lease.credentials.endpointPath)")
+            return invocation
+        }
+
+        // Phase 3 (plans/agent-sandbox-scoping.md §8): the unscoped profile
+        // no longer carries database grants — production edit permission
+        // lives in the daemon's scoped-run operation policy, and every child
+        // (scoped or not) is kernel-denied the database files. Wiki writes
+        // ride the bundled CLI through the daemon.
 
         // Fail-open if any required path is empty/relative (misconfiguration).
-        guard !scratch.path.isEmpty, scratch.path.hasPrefix("/"),
-              !dbPath.isEmpty, dbPath.hasPrefix("/") else {
-            DebugLog.agent("sandbox: could not resolve scratch/db path — running UNSANDBOXED")
+        guard !scratch.path.isEmpty, scratch.path.hasPrefix("/") else {
+            DebugLog.agent("sandbox: could not resolve scratch path — running UNSANDBOXED")
             return nil
         }
 
         let invocation = SandboxProfile.invocation(
             homePath: homePath,
             scratchDir: scratch.path,
-            wikiDBPath: dbPath,
-            queueDBPath: queueDBPath,
             pdf2mdScriptPath: pdf2mdScriptPath
         )
         let pdf2mdNote = pdf2mdScriptPath.map { " + denying pdf2md @ \($0)" } ?? ""
         DebugLog.agent(
-            "sandbox: confining Ingest/Edit agent writes to scratch + \(dbPath) + \(queueDBPath)\(pdf2mdNote)")
+            "sandbox: confining Ingest/Edit agent writes to scratch + runtime state (no database grants)\(pdf2mdNote)")
         return invocation
     }
 

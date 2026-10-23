@@ -674,7 +674,7 @@ public struct DaemonCommandRouter: Sendable {
     public typealias Executor = @Sendable (
         _ call: DaemonCommandCall,
         _ selector: String,
-        _ containerDirectory: URL
+        _ containerDirectory: URL?
     ) async throws -> RoutedOutput
 
     private let executor: Executor
@@ -688,18 +688,21 @@ public struct DaemonCommandRouter: Sendable {
             // Resolution FIRST — an unknown wiki is the daemon's typed
             // notFound ("no wiki matching <selector>"), and nothing opens for
             // a wiki that does not exist.
-            let registry = try DaemonWikiRegistryClient(
-                containerDirectory: containerDirectory)
+            //
+            // §7: the shared scoped-run factory resolves the credential
+            // environment — both keys → the run endpoint + v2 authorization,
+            // both absent → the ordinary socket via the CALLER's container
+            // (the injected resolver's — tests rely on it), exactly one →
+            // typed failure. A scoped child's container is kernel-denied, so
+            // runOrdinary passes nil there and the factory never resolves.
+            let scopedSocket = try DaemonScopedRunEnvironment.domainSocketClient(
+                environment: ProcessInfo.processInfo.environment,
+                containerDirectory: containerDirectory,
+                timeout: call.timeout)
+            let registry = DaemonWikiRegistryClient(socket: scopedSocket)
             let descriptor = try await registry.resolveWiki(selector: selector)
             let payload = try call.payload(descriptor.id.rawValue)
-            let socket = try DaemonDomainSocketClient(
-                containerDirectory: containerDirectory,
-                // Per-endpoint client deadline (DaemonDomainBudgets): the
-                // long-running operations open with a deadline ABOVE the
-                // daemon's elevated handler budget so the true outcome rides
-                // back instead of the client giving up first.
-                timeout: call.timeout)
-            let reply = try await socket.send(
+            let reply = try await scopedSocket.send(
                 family: call.family, operation: call.operation, payload: payload)
             let outcome = try DaemonCommandOutcome.decode(reply.payload)
             return RoutedOutput(
@@ -718,7 +721,7 @@ public struct DaemonCommandRouter: Sendable {
     public func run(
         _ call: DaemonCommandCall,
         selector: String,
-        containerDirectory: URL
+        containerDirectory: URL?
     ) async throws -> RoutedOutput {
         do {
             return try await executor(call, selector, containerDirectory)
@@ -822,7 +825,7 @@ public struct DaemonCommandRouter: Sendable {
     public func runJob(
         _ action: JobCommand.Action,
         selector: String,
-        containerDirectory: URL
+        containerDirectory: URL? = nil
     ) async throws -> (output: String, emptyList: Bool) {
         let itemID: String?
         let json: Bool
@@ -835,9 +838,15 @@ public struct DaemonCommandRouter: Sendable {
             json = wantsJSON
         }
         do {
-            let registry = try DaemonWikiRegistryClient(containerDirectory: containerDirectory)
+            // §7: same credential resolution as every other family — scoped
+            // runs resolve the selector and read jobs through the run endpoint;
+            // the container resolves only on the ordinary branch (nil passes
+            // through to the factory).
+            let socket = try DaemonScopedRunEnvironment.domainSocketClient(
+                environment: ProcessInfo.processInfo.environment,
+                containerDirectory: containerDirectory)
+            let registry = DaemonWikiRegistryClient(socket: socket)
             let descriptor = try await registry.resolveWiki(selector: selector)
-            let socket = try DaemonDomainSocketClient(containerDirectory: containerDirectory)
             let reply = try await socket.send(
                 family: .queue,
                 operation: DaemonDomainOperation.Queue.queueWikiItems,

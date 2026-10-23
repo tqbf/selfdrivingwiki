@@ -111,23 +111,21 @@ public enum SandboxProfile {
 
     /// Generate the seatbelt profile text. Pure `String → String` — no shell, no IO.
     ///
+    /// Phase 3 of plans/agent-sandbox-scoping.md (§8): the obsolete
+    /// `WIKI_DB`/`QUEUE_DB` write allowances are GONE — production edit
+    /// permission moved into the daemon's scoped-run operation policy, and
+    /// every child (scoped or not) is kernel-denied the databases. Wiki
+    /// writes ride the bundled CLI through the daemon, never a direct file.
+    ///
     /// - Parameters:
     ///   - scratchDir: the per-run scratch directory absolute path (the writable cwd).
-    ///   - wikiDBPath: the active wiki's `<ulid>.sqlite` absolute file path.
-    ///   - queueDBPath: when non-nil, the central `queue.sqlite` absolute path —
-    ///     emits `QUEUE_DB` literal write allows (base + the SQLite sidecar
-    ///     suffixes) so a sandboxed agent can persist extraction jobs (issue
-    ///     #1314). Nil (default) emits nothing — the write fence is unchanged.
     ///   - pdf2mdScriptPath: when non-nil, the resolved absolute path to the bundled
     ///     `pdf2md` PEP 723 script. Emits `process-exec*` + `file-read*` denies (by
     ///     `literal` on the script file) so a sandboxed agent can't run it or feed it
     ///     to `uv --script`. See `pdf2mdDenyRules()` for why this is `literal`, not
-    ///     `subpath`. Nil (default) emits nothing — byte-identical to the pre-denial
-    ///     profile, so call sites that don't care are unaffected.
+    ///     `subpath`. Nil (default) emits nothing — the write fence is unchanged.
     public static func generate(
         scratchDir: String,
-        wikiDBPath: String,
-        queueDBPath: String? = nil,
         pdf2mdScriptPath: String? = nil
     ) -> String {
         var lines: [String] = [
@@ -148,26 +146,10 @@ public enum SandboxProfile {
             // mkdir's this dir before running any command, so without this allow rule the
             // sandboxed agent's shell dies with EPERM on the first invocation.
             "(allow file-write* (subpath (param \"CLAUDE_TMP\")))",
-            // The active wiki DB and its SQLite sidecars are exact files.
-            "(allow file-write* (literal (param \"WIKI_DB\")))",
         ]
-        if queueDBPath != nil {
-            // Acquisition sync writes its durable job to the central queue DB.
-            lines.append("(allow file-write* (literal (param \"QUEUE_DB\")))")
-        }
         // Layer the ~/.claude execution-vector / credential denies over the subtree allow.
         lines.append(contentsOf: claudeHomeDenyRules())
         lines.append(contentsOf: agentRuntimeWriteRules())
-        for suffix in sqliteSidecarSuffixes {
-            lines.append(
-                "(allow file-write* (literal (string-append (param \"WIKI_DB\") \"\(suffix)\")))"
-            )
-            if queueDBPath != nil {
-                lines.append(
-                    "(allow file-write* (literal (string-append (param \"QUEUE_DB\") \"\(suffix)\")))"
-                )
-            }
-        }
         // The deny rules reference only the `PDF2MD_SCRIPT` param NAME; the resolved
         // value flows in via `-D` at sandbox-exec time. Guard just to avoid emitting
         // rules with nothing to deny (and to keep the default-nil profile identical to
@@ -225,6 +207,204 @@ public enum SandboxProfile {
             lines.append(contentsOf: pdf2mdDenyRules())
         }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    // MARK: - Scoped-run profile (plans/agent-sandbox-scoping.md §8)
+
+    /// `sockaddr_un.sun_path` holds 104 bytes on macOS INCLUDING the NUL, so
+    /// a socket path may carry at most 103 UTF-8 bytes. Mirrors
+    /// `SearchSocketWire.maxPathBytes` in the daemon contract — restated here
+    /// because this module sits below that import; the launcher-side profile
+    /// builder is the FIRST validation point, and the broker re-validates at
+    /// bind time (fail closed in both layers).
+    public static let maxSocketPathBytes = 103
+
+    /// Scoped-profile construction failures. Operator-actionable, like the
+    /// socket transport's own long-path error (issue #1468).
+    public enum ProfileError: Error, Equatable {
+        /// The run endpoint's complete UTF-8 path cannot fit a macOS
+        /// unix-domain socket address.
+        case runEndpointPathTooLong(limit: Int, actual: Int)
+    }
+
+    /// Generate the SCOPED-RUN seatbelt profile — the managed-run profile the
+    /// launcher wraps every sandboxed agent child in once scoped launches go
+    /// live (Phase 3). The existing `generate` keeps its exact shape (and its
+    /// database grants) for the current unscoped launches; THIS profile is
+    /// the one plans/agent-sandbox-scoping.md §8 specifies, and the two must
+    /// not drift on runtime allowances.
+    ///
+    /// Differences from `generate`, all §8:
+    /// - NO `WIKI_DB` / `QUEUE_DB` write allowances (rules, sidecars, or
+    ///   parameters): production edit permission moves into the daemon
+    ///   operation policy, and the terminal container denies below would
+    ///   override them anyway.
+    /// - TERMINAL data denies (last matching rules in the base): the child
+    ///   cannot READ or WRITE anything under the App Group container —
+    ///   registered wiki databases, the central queue database, the wiki
+    ///   registry, and every SQLite sidecar — regardless of what provider
+    ///   layering allows (provider additions are HOME-relative and can never
+    ///   re-open the container).
+    /// - Daemon endpoint connection rules: `network-outbound` DENIED to the
+    ///   ordinary daemon endpoint and to the whole per-run directory
+    ///   (`r/`), then ALLOWED to exactly the assigned run endpoint — the
+    ///   assigned-endpoint allow is deliberately the LAST endpoint rule
+    ///   (the seatbelt is last-match-wins).
+    ///
+    /// The order and effectiveness of the endpoint rules were verified LIVE
+    /// (Phase 2 gate, real `sandbox-exec` + real listeners, macOS 27.0.1):
+    /// the assigned endpoint connects and completes a request; the ordinary
+    /// endpoint and a sibling run endpoint are connect-denied with EPERM;
+    /// a symlink from a writable path to a denied socket is ALSO denied (the
+    /// matcher resolves the vnode); container file reads/writes (sqlite3,
+    /// registry JSON) are kernel-denied while scratch writes keep working.
+    /// Profile-string assertions alone prove none of this — see
+    /// `ScopedSandboxGateTests` for the live suite.
+    ///
+    /// - Throws: ``ProfileError/runEndpointPathTooLong(limit:actual:)`` when
+    ///   `runEndpointPath` exceeds ``maxSocketPathBytes`` — the operator
+    ///   shortens the App Group id (or relocates the container); the profile
+    ///   is never silently generated with an unbindable endpoint.
+    public static func generateScopedRun(
+        scratchDir: String,
+        appGroupContainerPath: String,
+        daemonEndpointPath: String,
+        runsDirectoryPath: String,
+        runEndpointPath: String,
+        pdf2mdScriptPath: String? = nil
+    ) throws -> String {
+        let runEndpointBytes = runEndpointPath.utf8.count
+        guard runEndpointBytes <= maxSocketPathBytes else {
+            throw ProfileError.runEndpointPathTooLong(
+                limit: maxSocketPathBytes, actual: runEndpointBytes)
+        }
+        var lines: [String] = [
+            "(version 1)",
+            "(allow default)",
+            "(deny file-write*)",
+            // Runtime allowances — IDENTICAL to `generate` (shared helpers
+            // below keep the two profiles from drifting): scratch, the Claude
+            // runtime state, and the per-session temp base.
+            "(allow file-write* (subpath (param \"SCRATCH_DIR\")))",
+            "(allow file-write* (subpath (string-append (param \"HOME\") \"/.claude\")))",
+            "(allow file-write* (literal (string-append (param \"HOME\") \"/.claude.json\")))",
+            "(allow file-write* (subpath (param \"CLAUDE_TMP\")))",
+        ]
+        // §8 "Retain direct-write allowances": scratch/runtime stays; the
+        // ~/.claude execution-vector/credential denies and the shell device
+        // allowances ride along unchanged.
+        lines.append(contentsOf: claudeHomeDenyRules())
+        lines.append(contentsOf: agentRuntimeWriteRules())
+        if let pdf2mdScriptPath, !pdf2mdScriptPath.isEmpty {
+            lines.append(contentsOf: pdf2mdDenyRules())
+        }
+        // TERMINAL SECTION (§8): emitted AFTER every allowance so each rule
+        // is the last matching rule for what it names. File and network
+        // operations are independent filter classes; the assigned endpoint's
+        // ALLOW follows both endpoint DENIES.
+        lines.append(contentsOf: scopedRunDenyRules())
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// The scoped-run terminal rules. Emitted last in the base profile; the
+    /// strict trailer (which carries no file or network rules) is appended
+    /// after them without shadowing. `invocation(_:addingHomeSubpaths:)`
+    /// layering appends HOME-relative write allows AFTER this section — they
+    /// can never match the container subtree, so these denies survive
+    /// provider layering by construction.
+    private static func scopedRunDenyRules() -> [String] {
+        [
+            // The App Group data subtree: wiki databases, the central queue
+            // database, the registry JSON, and every SQLite sidecar. Reads
+            // AND writes (with open network, a read is exfiltration).
+            "(deny file-read* (subpath (param \"APP_GROUP_DIR\")))",
+            "(deny file-write* (subpath (param \"APP_GROUP_DIR\")))",
+            // Daemon endpoints: the ordinary CLI socket and every per-run
+            // endpoint (the whole runs directory), then the ONE assigned
+            // endpoint. LAST-MATCH-WINS: this allow must stay after the
+            // denies above (verified live — see generateScopedRun).
+            "(deny network-outbound (literal (param \"DAEMON_ENDPOINT\")))",
+            "(deny network-outbound (subpath (param \"RUNS_DIR\")))",
+            "(allow network-outbound (literal (param \"RUN_ENDPOINT\")))",
+        ]
+    }
+
+    /// Build the scoped-run `SandboxInvocation` from canonical spawn-time
+    /// paths. Every path is symlink-resolved with `canonical(_:)` — the same
+    /// rule as `invocation(...)`: the seatbelt matchers match the CANONICAL
+    /// path, so a symlinked component must not make a rule silently fail.
+    ///
+    /// The run endpoint path is length-validated AFTER canonicalization (the
+    /// canonical form is what the kernel matcher and `bind(2)` both see);
+    /// the operator-actionable failure (#1468) names the remedy.
+    public static func scopedRunInvocation(
+        homePath: String,
+        scratchDir: String,
+        appGroupContainerPath: String,
+        daemonEndpointPath: String,
+        runsDirectoryPath: String,
+        runEndpointPath: String,
+        claudeTempBase: String = defaultClaudeTempBase(),
+        pdf2mdScriptPath: String? = nil
+    ) throws -> SandboxInvocation {
+        let resolvedHome = canonical(homePath)
+        let resolvedScratch = canonical(scratchDir)
+        let resolvedContainer = canonical(appGroupContainerPath)
+        let resolvedDaemonEndpoint = canonical(daemonEndpointPath)
+        let resolvedRunsDirectory = canonical(runsDirectoryPath)
+        let resolvedRunEndpoint = canonical(runEndpointPath)
+        let resolvedPdf2md = pdf2mdScriptPath.map { canonical($0) }
+        let profile = try generateScopedRun(
+            scratchDir: resolvedScratch,
+            appGroupContainerPath: resolvedContainer,
+            daemonEndpointPath: resolvedDaemonEndpoint,
+            runsDirectoryPath: resolvedRunsDirectory,
+            runEndpointPath: resolvedRunEndpoint,
+            pdf2mdScriptPath: resolvedPdf2md)
+        var defines: [(String, String)] = [
+            ("HOME", resolvedHome),
+            ("SCRATCH_DIR", resolvedScratch),
+            ("CLAUDE_TMP", canonical(claudeTempBase)),
+            ("APP_GROUP_DIR", resolvedContainer),
+            ("DAEMON_ENDPOINT", resolvedDaemonEndpoint),
+            ("RUNS_DIR", resolvedRunsDirectory),
+            ("RUN_ENDPOINT", resolvedRunEndpoint),
+        ]
+        if let resolvedPdf2md, !resolvedPdf2md.isEmpty {
+            defines.append(("PDF2MD_SCRIPT", resolvedPdf2md))
+        }
+        return SandboxInvocation(profile: profile, defines: defines)
+    }
+
+    /// The scoped-run profile with the STRICT trailer: the managed-run base
+    /// above, plus the last-matching pivot/credential/W^X denies the strict
+    /// read-only tier applies (§8: "Apply known external-launch and
+    /// automation pivot denies to managed wiki agents"). The trailer carries
+    /// no file-read/file-write/network rules, so the terminal scoped-run
+    /// denies and the assigned-endpoint allow keep their positions.
+    public static func strictScopedRunInvocation(
+        homePath: String,
+        scratchDir: String,
+        appGroupContainerPath: String,
+        daemonEndpointPath: String,
+        runsDirectoryPath: String,
+        runEndpointPath: String,
+        claudeTempBase: String = defaultClaudeTempBase(),
+        pdf2mdScriptPath: String? = nil
+    ) throws -> SandboxInvocation {
+        let base = try scopedRunInvocation(
+            homePath: homePath,
+            scratchDir: scratchDir,
+            appGroupContainerPath: appGroupContainerPath,
+            daemonEndpointPath: daemonEndpointPath,
+            runsDirectoryPath: runsDirectoryPath,
+            runEndpointPath: runEndpointPath,
+            claudeTempBase: claudeTempBase,
+            pdf2mdScriptPath: pdf2mdScriptPath)
+        return SandboxInvocation(
+            baseProfile: base.baseProfile,
+            trailer: strictDenyTrailer(),
+            defines: base.defines)
     }
 
     /// Build a read-only `SandboxInvocation` that confines the agent to scratch
@@ -391,8 +571,6 @@ public enum SandboxProfile {
     public static func invocation(
         homePath: String,
         scratchDir: String,
-        wikiDBPath: String,
-        queueDBPath: String? = nil,
         claudeTempBase: String = defaultClaudeTempBase(),
         pdf2mdScriptPath: String? = nil
     ) -> SandboxInvocation {
@@ -405,8 +583,6 @@ public enum SandboxProfile {
         // paths fall back to the input (realpath returns nil for non-existent paths).
         let resolvedHome = realPath(homePath)
         let resolvedScratch = realPath(scratchDir)
-        let resolvedDB = realPath(wikiDBPath)
-        let resolvedQueueDB = queueDBPath.map(realPath)
         let resolvedClaudeTemp = realPath(claudeTempBase)
         // The script file exists when the launcher hands it to us (it probed
         // `isExecutableFile`), so `realpath` fully resolves it — important because
@@ -416,24 +592,16 @@ public enum SandboxProfile {
         let resolvedPdf2md = pdf2mdScriptPath.map { realPath($0) }
         let profile = generate(
             scratchDir: resolvedScratch,
-            wikiDBPath: resolvedDB,
-            queueDBPath: resolvedQueueDB,
             pdf2mdScriptPath: resolvedPdf2md
         )
-        // NOTE: these are profile parameters, NOT child env vars. `-D WIKI_DB=<path>`
-        // is consumed by `(param "WIKI_DB")`; it does not touch the `WIKI_DB=<ulid>`
-        // env var the agent/wikictl use. Search runs through the daemon, so the
-        // child needs no index write permission. `PDF2MD_SCRIPT` is appended only
-        // when the caller supplies a path.
+        // NOTE: these are profile parameters, NOT child env vars. Search runs
+        // through the daemon, so the child needs no index write permission.
+        // `PDF2MD_SCRIPT` is appended only when the caller supplies a path.
         var defines: [(String, String)] = [
             ("HOME", resolvedHome),
             ("SCRATCH_DIR", resolvedScratch),
-            ("WIKI_DB", resolvedDB),
             ("CLAUDE_TMP", resolvedClaudeTemp),
         ]
-        if let resolvedQueueDB {
-            defines.append(("QUEUE_DB", resolvedQueueDB))
-        }
         if let resolvedPdf2md, !resolvedPdf2md.isEmpty {
             defines.append(("PDF2MD_SCRIPT", resolvedPdf2md))
         }

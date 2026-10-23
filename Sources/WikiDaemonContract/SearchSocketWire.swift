@@ -147,6 +147,11 @@ public enum SearchSocketError: Error, Equatable, Sendable {
     case daemonNotRunning(path: String)
     /// Container path too long for `sockaddr_un.sun_path`.
     case pathTooLong(limit: Int, actual: Int)
+    /// A run endpoint's path already holds a file — a live sibling listener
+    /// or a leftover from a crashed daemon. Run endpoints are never
+    /// resurrected or stale-unlinked (unlike the ordinary socket), so the
+    /// bind fails closed; the broker's revocation is the only unlink.
+    case endpointInUse(path: String)
     /// A frame length prefix exceeded ``SearchSocketWire/maxFrameSize``.
     case frameTooLarge(UInt32)
     /// The peer closed the connection before the frame completed.
@@ -176,7 +181,18 @@ extension SearchSocketError: LocalizedError {
             // cause. Never imply "no wiki exists".
             return "the wikid daemon is not running — launch the app"
         case .pathTooLong(let limit, let actual):
-            return "socket path is \(actual) bytes; sockaddr_un allows at most \(limit)"
+            // Operator-actionable (issue #1468): the limit is fixed by
+            // sockaddr_un, and the dominant length term is the App Group
+            // container path — the fix is a shorter group id or container
+            // location, then relaunch.
+            return "socket path is \(actual) bytes; macOS allows at most "
+                + "\(limit) for a unix-domain socket. The configured App Group "
+                + "container path is too long — use a shorter App Group id "
+                + "(or relocate the container), then relaunch the app"
+        case .endpointInUse(let path):
+            return "a listener already owns the run endpoint at \(path); "
+                + "revoke the run (or quit and relaunch the app) before "
+                + "binding it again"
         case .frameTooLarge(let length):
             return "frame of \(length) bytes exceeds the \(SearchSocketWire.maxFrameSize)-byte cap"
         case .incompleteFrame:

@@ -44,7 +44,13 @@ public struct WikiCtlRunner {
         environment: [String: String]
     ) async throws -> Output {
         let resolvedCommand = ArgumentParser.applyEnv(command, env: environment)
-        let resolver = try resolveContainer()
+        // §7: a scoped run NEVER resolves the App Group container — the
+        // endpoint + capability arrive through the environment and the
+        // container subtree is kernel-denied to this child (resolving it
+        // would fail the command before any request). The router's scoped
+        // branch ignores the container value.
+        let scoped = try DaemonScopedRunEnvironment.resolve(from: environment)
+        let resolver = try scoped.isScoped ? nil : resolveContainer()
         guard let call = DaemonCommandRoute.call(for: resolvedCommand) else {
             throw PageCommand.Failure.message(
                 "no daemon route for this wikictl command — every --wiki command "
@@ -54,7 +60,7 @@ public struct WikiCtlRunner {
         let routed = try await daemonCommandRouter.run(
             call,
             selector: wikiSelector,
-            containerDirectory: resolver.containerDirectory)
+            containerDirectory: resolver?.containerDirectory)
         return Self.output(
             for: routed.result,
             command: resolvedCommand,
@@ -153,10 +159,15 @@ public enum CLITantivyLegResolver {
 
         /// The standalone CLI uses the daemon's shared local socket.
         /// Embedded XPC service lookup is available only to the host app.
+        /// §6: a scoped managed run's search rides the SAME envelope
+        /// authorization as every other family — resolved once here.
         private func daemonBackend() throws -> DaemonSearchClient {
             if let daemonClient { return daemonClient }
             let directory = try DatabaseLocation.appGroupContainerDirectory()
-            let transport = try DaemonSearchSocketClient.transport(containerDirectory: directory)
+            let transport = try DaemonSearchSocketClient.transport(
+                containerDirectory: directory,
+                authorization: try DaemonScopedRunEnvironment.authorization(
+                    from: ProcessInfo.processInfo.environment))
             let client = DaemonSearchClient(transport: transport)
             daemonClient = client
             return client

@@ -58,11 +58,17 @@ enum DaemonSocketRoundTrip {
 /// `requestID` must echo the request's and a typed `DaemonDomainError` in the
 /// reply is thrown as-is, so family code sees the daemon's rejections typed.
 //
-// Immutable Sendable values (socket path + timeout).
+// Immutable Sendable values (socket path + timeout + optional run
+// authorization).
 public struct DaemonDomainSocketClient: Sendable {
 
     public let socketPath: String
     public let timeout: TimeInterval
+    /// The envelope authorization attached to every request this client
+    /// sends unless the caller passes one explicitly (§6: on a SCOPED
+    /// listener absence is never unrestricted access — a scoped client always
+    /// carries its capability). nil for ordinary clients.
+    public let authorization: DaemonDomainAuthorization?
 
     /// Binds the client to one container directory (the same directory the
     /// daemon was handed at boot). Throws eagerly when the resolved socket
@@ -73,20 +79,53 @@ public struct DaemonDomainSocketClient: Sendable {
     ) throws {
         self.socketPath = try SearchSocketWire.socketPath(inContainerDirectory: containerDirectory)
         self.timeout = timeout
+        self.authorization = nil
+    }
+
+    /// Binds the client to an EXPLICIT socket path — the scoped-run client's
+    /// shape (plans/agent-sandbox-scoping.md §4): the run endpoint path is
+    /// delivered out of band, not derived from the container. Throws eagerly
+    /// when the path cannot fit `sockaddr_un`.
+    public init(
+        socketPath: String,
+        authorization: DaemonDomainAuthorization? = nil,
+        timeout: TimeInterval = DaemonWorkloadClient.defaultTimeout
+    ) throws {
+        let byteCount = socketPath.utf8.count
+        guard byteCount <= SearchSocketWire.maxPathBytes else {
+            throw SearchSocketError.pathTooLong(
+                limit: SearchSocketWire.maxPathBytes, actual: byteCount)
+        }
+        self.socketPath = socketPath
+        self.authorization = authorization
+        self.timeout = timeout
     }
 
     /// One envelope round trip. Throws `DaemonDomainError` for daemon
-    /// rejections and `SearchSocketError` for transport faults.
+    /// rejections and `SearchSocketError` for transport faults. `version` and
+    /// `authorization` default to the uncredentialed current-version request
+    /// every ordinary CLI command sends; the scoped-run client (plans/
+    /// agent-sandbox-scoping.md) overrides both — v2 only, with the run
+    /// capability carried in the envelope's authorization object.
     public func send(
         family: DaemonDomainFamily,
         operation: String,
-        payload: Data? = nil
+        payload: Data? = nil,
+        version: UInt16 = DaemonDomainVersion.current,
+        authorization: DaemonDomainAuthorization? = nil
     ) async throws -> DaemonDomainReply {
+        // §7: a scoped client's stored authorization applies to EVERY request
+        // it sends (there is no way to force-absent it — a scoped listener
+        // never sees an uncredentialed request from this client); an explicit
+        // parameter overrides the stored binding.
+        let effectiveAuthorization = authorization ?? self.authorization
         let request = DaemonDomainRequest(
+            version: version,
             requestID: UUID().uuidString,
             family: family,
             operation: operation,
-            payload: payload)
+            payload: payload,
+            authorization: effectiveAuthorization)
         let replyBytes = try await DaemonSocketRoundTrip.perform(
             socketPath: socketPath,
             requestBytes: try DaemonDomainWire.encode(request),

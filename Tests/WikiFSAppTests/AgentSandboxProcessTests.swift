@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Testing
+import WikiDaemonContract
 import WikiFSCore
 import WikiFSEngine
 import WikiFSSearch
@@ -29,6 +30,23 @@ struct AgentSandboxProcessTests {
     /// registered wikis (each seeded with a source + a processed-markdown
     /// chain), and a scratch workspace with the relocated temp roots.
     final class Fixture {
+
+        /// Where the fixture's App Group container lives. Both shapes are
+        /// reachable by same-user children; only the sibling shape is
+        /// resolvable by the production CLI's App Group id lookup, so tests
+        /// that spawn `wikictl` MUST use it — and suites that don't MUST
+        /// take the temp shape, so parallel suites never share (and collide
+        /// on) one container's daemon socket and wiki registry.
+        enum ContainerLocation {
+            /// The App Group SIBLING of the real container
+            /// (`group.test.selfdrivingwiki`) — `wikictl` resolves it via
+            /// `WIKI_APP_GROUP_ID`.
+            case groupContainerSibling
+            /// A short temp-root container — explicit-path probes only
+            /// (also keeps the run endpoint under `sockaddr_un`'s budget).
+            case tempRoot
+        }
+
         let root: URL
         let home: URL
         let container: URL
@@ -41,18 +59,33 @@ struct AgentSandboxProcessTests {
         let sourceA: SourceSummary
         let headA: SourceMarkdownVersion
 
-        init() throws {
-            root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("sandbox-suite-\(UUID().uuidString)", isDirectory: true)
+        init(containerLocation: ContainerLocation = .groupContainerSibling) throws {
+            switch containerLocation {
+            case .groupContainerSibling:
+                root = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(
+                        "sandbox-suite-\(UUID().uuidString)", isDirectory: true)
+                // wikictl resolves the container under the REAL account home
+                // (`homeDirectoryForCurrentUser` does not honor $HOME in the
+                // child), so the fixture container is a test-prefixed App Group
+                // SIBLING of the developer's real container — never the real one.
+                container = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library", isDirectory: true)
+                    .appendingPathComponent("Group Containers", isDirectory: true)
+                    .appendingPathComponent("group.test.selfdrivingwiki", isDirectory: true)
+            case .tempRoot:
+                // Short names: the CANONICAL temp root is ~58 bytes
+                // (/private/var/folders/...), so the fixture keeps every
+                // fixture path (including `r/<24hex>.sock`) inside
+                // `sockaddr_un`'s 103-byte budget — an 8-hex root leaf and
+                // a one-letter container leaf are the slack that
+                // guarantees it.
+                let name = String(UUID().uuidString.prefix(8))
+                root = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(name, isDirectory: true)
+                container = root.appendingPathComponent("c", isDirectory: true)
+            }
             home = root.appendingPathComponent("home", isDirectory: true)
-            // wikictl resolves the container under the REAL account home
-            // (`homeDirectoryForCurrentUser` does not honor $HOME in the
-            // child), so the fixture container is a test-prefixed App Group
-            // SIBLING of the developer's real container — never the real one.
-            container = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library", isDirectory: true)
-                .appendingPathComponent("Group Containers", isDirectory: true)
-                .appendingPathComponent("group.test.selfdrivingwiki", isDirectory: true)
             scratch = root.appendingPathComponent("scratch", isDirectory: true)
             queueDatabase = container.appendingPathComponent("queue.sqlite", isDirectory: false)
             for dir in [home, container, scratch] {
@@ -90,6 +123,11 @@ struct AgentSandboxProcessTests {
 
         private var fixtureDaemon: WikiDaemon?
         private var daemonServer: DaemonSearchSocketServer?
+        /// The trusted registration broker sharing the daemon's registry
+        /// (Phase 2): `startDaemon()` constructs it; scoped-run tests launch
+        /// runs through it and build their Seatbelt invocations around the
+        /// returned endpoints.
+        private(set) var runBroker: DaemonRunRegistrationBroker?
 
         /// Hosts the fixture daemon's domain dispatcher over the fixture
         /// container's socket. Registry-selected `wikictl` children ride the
@@ -98,13 +136,22 @@ struct AgentSandboxProcessTests {
         func startDaemon() throws {
             guard daemonServer == nil else { return }
             let daemon = WikiDaemon(containerDirectory: container)
-            let dispatcher = DaemonDomainSocketDispatcher(daemon: daemon)
+            // ONE registry shared by the dispatcher and the broker, so a
+            // scoped run registered by the broker authorizes on the same
+            // dispatcher the ordinary socket serves.
+            let runRegistry = DaemonRunRegistry()
+            let dispatcher = DaemonDomainSocketDispatcher(
+                daemon: daemon, runRegistry: runRegistry)
             let server = try DaemonSearchSocketServer(containerDirectory: container) { request in
                 await dispatcher.handle(request)
             }
             try server.start()
             fixtureDaemon = daemon
             daemonServer = server
+            runBroker = DaemonRunRegistrationBroker(
+                registry: runRegistry,
+                dispatcher: dispatcher,
+                containerDirectory: container)
         }
 
         func cleanup() {
@@ -119,15 +166,34 @@ struct AgentSandboxProcessTests {
             try? FileManager.default.removeItem(at: root)
         }
 
-        /// The production-shaped write-fence invocation for wiki A: writes
-        /// allowed ONLY under scratch (+ the wiki-A DB, temp home's .claude,
-        /// the Claude temp base, and device aliases). Wiki B is OUTSIDE.
+        /// The production-shaped write-fence invocation for wiki A. Phase 3
+        /// (plans/agent-sandbox-scoping.md §8): NO database grants anywhere —
+        /// writes are allowed ONLY under scratch (+ the temp home's .claude,
+        /// the Claude temp base, and device aliases). Wiki B is OUTSIDE, and
+        /// so is every database.
         func sandboxInvocationForWikiA() throws -> SandboxProfile.SandboxInvocation {
             SandboxProfile.invocation(
                 homePath: home.path,
+                scratchDir: scratch.path)
+        }
+
+        /// The SCOPED-RUN invocation (plans/agent-sandbox-scoping.md §8):
+        /// the App Group data subtree read+write denied, the ordinary daemon
+        /// endpoint and every run endpoint connect-denied EXCEPT the
+        /// assigned one, scratch/runtime allowances intact. The endpoint
+        /// paths come from the same layout the broker and the daemon use.
+        func scopedRunInvocationForWikiA(
+            runEndpointPath: String
+        ) throws -> SandboxProfile.SandboxInvocation {
+            try SandboxProfile.scopedRunInvocation(
+                homePath: home.path,
                 scratchDir: scratch.path,
-                wikiDBPath: container.appendingPathComponent(wikiA.dbFileName, isDirectory: false).path,
-                queueDBPath: queueDatabase.path)
+                appGroupContainerPath: container.path,
+                daemonEndpointPath: SearchSocketWire.socketPath(
+                    inContainerDirectory: container),
+                runsDirectoryPath: container.appendingPathComponent(
+                    DaemonRunRegistrationBroker.runsDirectoryName, isDirectory: true).path,
+                runEndpointPath: runEndpointPath)
         }
 
         /// The child environment an adapter would receive: scratch-relocated
@@ -205,7 +271,26 @@ struct AgentSandboxProcessTests {
         timeout: Duration = .seconds(120),
         stdinData: Data? = nil
     ) async throws -> ProcessResult {
-        let invocation = try fixture.sandboxInvocationForWikiA()
+        try await runSandboxed(
+            invocation: fixture.sandboxInvocationForWikiA(),
+            executablePath: executablePath,
+            arguments: arguments,
+            environment: environment ?? fixture.childEnvironment(),
+            timeout: timeout,
+            stdinData: stdinData)
+    }
+
+    /// Wrap a spawn in an EXPLICIT seatbelt invocation — the scoped-run
+    /// matrix's shape: the caller composes the §8 profile (with the assigned
+    /// run endpoint) and hands it in verbatim.
+    private func runSandboxed(
+        invocation: SandboxProfile.SandboxInvocation,
+        executablePath: String,
+        arguments: [String],
+        environment: [String: String],
+        timeout: Duration = .seconds(120),
+        stdinData: Data? = nil
+    ) async throws -> ProcessResult {
         let wrapped = SandboxProfile.wrappedArguments(
             executablePath: executablePath,
             arguments: arguments,
@@ -213,7 +298,7 @@ struct AgentSandboxProcessTests {
         return try await run(
             executablePath: SandboxProfile.sandboxExecutablePath,
             arguments: wrapped,
-            environment: environment ?? fixture.childEnvironment(),
+            environment: environment,
             timeout: timeout,
             stdinData: stdinData)
     }
@@ -305,81 +390,18 @@ struct AgentSandboxProcessTests {
                 "a denied write must not leave an artifact")
     }
 
-    /// Issue #1314: an agent-launched `wikictl extractor sync … --force`
-    /// reads the existing source from the active wiki, then persists its
-    /// extraction request in the sibling central queue database. Exercise the
-    /// same SQLite write under the real Seatbelt profile, entirely inside the
-    /// disposable test App Group container.
-    @Test func writeProfileAllowsCentralQueueSQLiteInsert() async throws {
-        let fixture = try Fixture()
-        defer { fixture.cleanup() }
-
-        let queue = try QueueStore(databaseURL: fixture.queueDatabase)
-        queue.close()
-
-        var environment = fixture.childEnvironment()
-        environment["QUEUE_DB"] = fixture.queueDatabase.path
-        let result = try await runSandboxed(
-            fixture,
-            executablePath: "/usr/bin/sqlite3",
-            arguments: [
-                fixture.queueDatabase.path,
-                "INSERT INTO queue_items "
-                    + "(id, queue, wiki_id, payload, state, ordering_key, attempt, created_at) "
-                    + "VALUES ('issue-1314', 'extraction', 'test-wiki', "
-                    + "'{\"sourceIDs\":[\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"]}', 'queued', 1000, 0, 0);",
-            ],
-            environment: environment)
-
-        #expect(result.status == 0, "queue INSERT failed: \(result.errorText)")
-        let reopened = try QueueStore(databaseURL: fixture.queueDatabase)
-        defer { reopened.close() }
-        #expect(try reopened.loadActive(for: .extraction).count == 1)
-    }
-
-    /// Issue #1314 root-cause control: the PRE-FIX write fence — the production
-    /// invocation WITHOUT the queue DB allowance — denies the same central-queue
-    /// INSERT, and SQLite surfaces the seatbelt denial as its classic
-    /// "attempt to write a readonly database" (SQLITE_READONLY, error 8): the
-    /// exact failure the issue reports for `extractor sync --force`. The denial
-    /// must also leave no durable row behind (the zero-byte, never-extracted
-    /// source the issue describes).
-    @Test func profileWithoutQueueAllowanceDeniesCentralQueueSQLiteInsert() async throws {
-        let fixture = try Fixture()
-        defer { fixture.cleanup() }
-
-        let queue = try QueueStore(databaseURL: fixture.queueDatabase)
-        queue.close()
-
-        let invocation = SandboxProfile.invocation(
-            homePath: fixture.home.path,
-            scratchDir: fixture.scratch.path,
-            wikiDBPath: fixture.container.appendingPathComponent(
-                fixture.wikiA.dbFileName, isDirectory: false).path)
-        let wrapped = SandboxProfile.wrappedArguments(
-            executablePath: "/usr/bin/sqlite3",
-            arguments: [
-                fixture.queueDatabase.path,
-                "INSERT INTO queue_items "
-                    + "(id, queue, wiki_id, payload, state, ordering_key, attempt, created_at) "
-                    + "VALUES ('issue-1314-denied', 'extraction', 'test-wiki', "
-                    + "'{\"sourceIDs\":[\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"]}', 'queued', 1000, 0, 0);",
-            ],
-            invocation: invocation)
-        let result = try await run(
-            executablePath: SandboxProfile.sandboxExecutablePath,
-            arguments: wrapped,
-            environment: fixture.childEnvironment())
-
-        #expect(result.status != 0,
-                "the queue INSERT must be denied under the pre-fix fence")
-        #expect(result.errorText.contains("attempt to write a readonly database"),
-                "the denial must surface as SQLITE_READONLY (error 8), got: \(result.errorText)")
-        let reopened = try QueueStore(databaseURL: fixture.queueDatabase)
-        defer { reopened.close() }
-        #expect(try reopened.loadActive(for: .extraction).isEmpty,
-                "a denied enqueue must not persist a durable row")
-    }
+    /// Issue #1314's direct central-queue write channel is CLOSED by the
+    /// scoped-run world (plans/agent-sandbox-scoping.md §8 + §10): the child
+    /// persists extraction jobs through a SCOPED daemon request instead, and
+    /// the terminal container denies make direct queue/wiki/registry access
+    /// a kernel denial. The replacement coverage lives in
+    /// `ScopedSandboxGateTests.directWikiQueueRegistryAccessIsKernelDeniedWhileScratchWritesWork`
+    /// (denial matrix, live sandbox-exec) and
+    /// `DaemonRunEndpointTests.scopedEnqueueThroughRunEndpointPersistsWikiJob`
+    /// (the successful scoped enqueue). The pre-scoping tests
+    /// (`writeProfileAllowsCentralQueueSQLiteInsert`,
+    /// `profileWithoutQueueAllowanceDeniesCentralQueueSQLiteInsert`) were
+    /// removed with their allowance.
 
     @Test func posixShellHeredocWorksInsideScratch() async throws {
         let fixture = try Fixture()
@@ -536,7 +558,7 @@ struct AgentSandboxProcessTests {
         #expect(String(decoding: out, as: UTF8.self) == "SCRATCH INPUT\n")
     }
 
-    // MARK: - AC.5: absolute wiki-tool invocation + cross-wiki denial
+    // MARK: - AC.5: absolute wiki-tool invocation + the cross-wiki boundary
 
     /// The absolute `wikictl --wiki <id>` invocation performs a CAS
     /// processed-markdown rewrite from a scratch file with WIKI_DB, WIKICTL,
@@ -593,12 +615,23 @@ struct AgentSandboxProcessTests {
         #expect(readBack.outputText == "# cleaned by scratch script\n")
     }
 
-    /// Targeting wiki B under wiki A's production sandbox must be prevented
-    /// by Seatbelt: B's DB is not in the allowlist, so the mutation is denied
-    /// and B's data is unchanged.
-    @Test func productionSandboxPreventsCrossWikiMutation() async throws {
+    /// THE ENFORCEMENT TEST (plans/agent-sandbox-scoping.md §10; flips the
+    /// Phase 0 regression `crossWikiMutationReachesDaemonWithoutAuthorization`).
+    /// A managed child runs under the REAL scoped Seatbelt profile with a REAL
+    /// broker-issued capability against a REAL scoped listener, and its CLI
+    /// resolves the credential environment keys at execution time — the full
+    /// Phase 3 delivery chain. Cross-wiki discipline, §10: the child first
+    /// completes a successful scoped wiki-A read through the SAME live
+    /// endpoint and credential, THEN attempts the wiki-B write. The A success
+    /// is the false-evidence control: the endpoint was live, the framing
+    /// correct, and the credential valid, so the B outcome can only be the
+    /// run-scope decision — never daemonNotRunning, a timeout, or a malformed
+    /// reply. Wiki B's history is unchanged after the denial.
+    @Test func scopedRunBlocksCrossWikiMutationWithValidCapability() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
+        try fixture.startDaemon()
+        let broker = try #require(fixture.runBroker)
         let wikictl = try wikictlPath()
 
         // Seed wiki B with its own chain (a second wiki's independent data).
@@ -607,11 +640,37 @@ struct AgentSandboxProcessTests {
             sourceID: sourceB.id, content: "# b v1", origin: .extraction, note: nil)
         let headBBefore = try #require(try fixture.storeB.processedMarkdownHead(sourceID: sourceB.id))
 
+        // The trusted-owner sequence, exactly as a managed launch performs it
+        // before spawn: register + bind + activate ONE run scoped to wiki A.
+        let run = try await broker.launchScopedRun(
+            scope: DaemonRunScope(wikiID: fixture.wikiA.id),
+            operationClasses: [.wikiRead, .wikiEdit, .wikiAcquire])
+        let invocation = try fixture.scopedRunInvocationForWikiA(runEndpointPath: run.endpointPath)
+        var credentials = fixture.childEnvironment()
+        credentials[AgentScopedRunCredentials.endpointEnvironmentKey] = run.endpointPath
+        credentials[AgentScopedRunCredentials.capabilityEnvironmentKey] =
+            run.capability.printable
+
+        // §10 discipline step 1: the scoped A read SUCCEEDS through the same
+        // live endpoint — allowed scope, valid capability, real domain reply.
+        let allowedRead = try await runSandboxed(
+            invocation: invocation,
+            executablePath: wikictl,
+            arguments: [
+                "--wiki", fixture.wikiA.id.rawValue,
+                "source", "cat", "--id", fixture.sourceA.id.rawValue, "--markdown",
+            ],
+            environment: credentials)
+        #expect(allowedRead.status == 0,
+                "the scoped A read must succeed before the B attempt (stderr: \(allowedRead.errorText))")
+        #expect(allowedRead.outputText == "# processed v1\n")
+
+        // §10 discipline step 2: the wiki-B write attempt through the SAME
+        // live endpoint with the SAME valid capability.
         let cleanedPath = fixture.scratch.appendingPathComponent("cross-wiki.md")
         try Data("# cross-wiki attack\n".utf8).write(to: cleanedPath)
-
-        let result = try await runSandboxed(
-            fixture,
+        let denied = try await runSandboxed(
+            invocation: invocation,
             executablePath: wikictl,
             arguments: [
                 "--wiki", fixture.wikiB.id.rawValue,
@@ -619,15 +678,337 @@ struct AgentSandboxProcessTests {
                 "--id", sourceB.id.rawValue,
                 "--file", cleanedPath.path,
                 "--expect-head", headBBefore.id.rawValue,
-            ])
+            ],
+            environment: credentials)
 
-        // Seatbelt (or SQLite's EPERM surface of it) denies the write.
-        #expect(result.status != 0,
-                "the cross-wiki write must be denied under wiki A's sandbox")
+        // Typed domain denial — the fixed generic text, so no wiki name and
+        // no existence signal leaks — and explicitly NOT false evidence: the
+        // sibling A read proved the daemon was live and reachable, and this
+        // error is the scope decision, not a transport fault.
+        #expect(denied.status == 1, "the cross-wiki write must fail (stderr: \(denied.errorText))")
+        #expect(denied.errorText.contains("the request is outside the scope of this run"),
+                "expected the typed scopeDenied message (stderr: \(denied.errorText))")
+        #expect(!denied.errorText.contains("not running"),
+                "a dead daemon would fake this pass (stderr: \(denied.errorText))")
+        #expect(!denied.errorText.contains("timed out"),
+                "a timeout would fake this pass (stderr: \(denied.errorText))")
+
+        // Wiki B's history is unchanged: no new head, no new version, raw
+        // bytes untouched.
         let headBAfter = try #require(try fixture.storeB.processedMarkdownHead(sourceID: sourceB.id))
-        #expect(headBAfter.id == headBBefore.id, "wiki B's head must be unchanged")
+        #expect(headBAfter.id == headBBefore.id, "wiki B must have no new head after the denial")
         let historyB = try fixture.storeB.processedMarkdownHistory(sourceID: sourceB.id)
-        #expect(historyB.count == 1, "no version may be appended to wiki B")
+        #expect(historyB.count == 1, "the denial must not append a wiki B version")
+        let rawB = try fixture.storeB.sourceContent(id: sourceB.id)
+        #expect(String(decoding: rawB, as: UTF8.self) == "B RAW")
+
+        // Teardown: revoke (idempotent) so the endpoint unlinks before the
+        // fixture container goes away.
+        await broker.revoke(runID: run.runID)
+    }
+
+    // MARK: - §10 live matrix (Phase 3): the scoped profile + real CLI + real endpoint
+
+    /// Rows 2 and 15 — assigned-wiki authority is REAL: a CAS edit through
+    /// the run endpoint succeeds (one new version, parent chain preserved,
+    /// raw bytes untouched), and a wiki-B READ through the same endpoint and
+    /// credential is typed-denied with no B content. §10 discipline: the
+    /// successful A read comes FIRST, then the B attempt.
+    @Test func scopedRunAllowsAssignedWikiEditAndDeniesForeignReads() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.startDaemon()
+        let broker = try #require(fixture.runBroker)
+        let wikictl = try wikictlPath()
+
+        let run = try await broker.launchScopedRun(
+            scope: DaemonRunScope(wikiID: fixture.wikiA.id),
+            operationClasses: [.wikiRead, .wikiEdit, .wikiAcquire])
+        let invocation = try fixture.scopedRunInvocationForWikiA(runEndpointPath: run.endpointPath)
+        var credentials = fixture.childEnvironment()
+        credentials[AgentScopedRunCredentials.endpointEnvironmentKey] = run.endpointPath
+        credentials[AgentScopedRunCredentials.capabilityEnvironmentKey] =
+            run.capability.printable
+
+        // The A read that anchors the discipline (and row 1).
+        let allowedRead = try await runSandboxed(
+            invocation: invocation,
+            executablePath: wikictl,
+            arguments: [
+                "--wiki", fixture.wikiA.id.rawValue,
+                "source", "cat", "--id", fixture.sourceA.id.rawValue, "--markdown",
+            ],
+            environment: credentials)
+        #expect(allowedRead.status == 0, "scoped A read (stderr: \(allowedRead.errorText))")
+
+        // Row 2: the A CAS edit succeeds — exactly one new version.
+        let editedPath = fixture.scratch.appendingPathComponent("scoped-edit.md")
+        try Data("# cleaned by the scoped run\n".utf8).write(to: editedPath)
+        let edit = try await runSandboxed(
+            invocation: invocation,
+            executablePath: wikictl,
+            arguments: [
+                "--wiki", fixture.wikiA.id.rawValue,
+                "source", "edit-markdown",
+                "--id", fixture.sourceA.id.rawValue,
+                "--file", editedPath.path,
+                "--expect-head", fixture.headA.id.rawValue,
+            ],
+            environment: credentials)
+        #expect(edit.status == 0, "the assigned wiki's CAS edit must succeed (stderr: \(edit.errorText))")
+        let historyA = try fixture.storeA.processedMarkdownHistory(sourceID: fixture.sourceA.id)
+        #expect(historyA.count == 2, "exactly one new version on the assigned wiki")
+        #expect(historyA[0].content == "# cleaned by the scoped run\n")
+        #expect(historyA[0].parentID == fixture.headA.id)
+        // Row 15: the raw-byte digest is untouched by the markdown edit.
+        let rawA = try fixture.storeA.sourceContent(id: fixture.sourceA.id)
+        #expect(String(decoding: rawA, as: UTF8.self) == "RAW BYTES v0")
+
+        // Row 4: a wiki-B read through the same endpoint + credential.
+        let foreignRead = try await runSandboxed(
+            invocation: invocation,
+            executablePath: wikictl,
+            arguments: [
+                "--wiki", fixture.wikiB.id.rawValue,
+                "page", "list",
+            ],
+            environment: credentials)
+        #expect(foreignRead.status == 1, "the foreign read must fail (stderr: \(foreignRead.errorText))")
+        #expect(foreignRead.errorText.contains("the request is outside the scope of this run"))
+
+        await broker.revoke(runID: run.runID)
+    }
+
+    /// Rows 5 and 8 — credential honesty. A MISSING capability key is a typed
+    /// authorization failure (absence is never unrestricted access on a
+    /// scoped listener); a MALFORMED capability is the same generic
+    /// authorization failure; with BOTH keys removed the child cannot fall
+    /// back to the ordinary endpoint — the scoped Seatbelt profile kernel-
+    /// denies the connect (the EPERM-while-live proof lives in
+    /// `ScopedSandboxGateTests`; through the CLI it surfaces as a transport
+    /// failure, never a successful write) — and, as a side probe (row 13),
+    /// the profile still denies a host-file write outside every allowance.
+    @Test func scopedRunRejectsMissingCapabilityAndCannotFallBack() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.startDaemon()
+        let broker = try #require(fixture.runBroker)
+        let wikictl = try wikictlPath()
+
+        let run = try await broker.launchScopedRun(
+            scope: DaemonRunScope(wikiID: fixture.wikiA.id),
+            operationClasses: [.wikiRead, .wikiEdit, .wikiAcquire])
+        let invocation = try fixture.scopedRunInvocationForWikiA(runEndpointPath: run.endpointPath)
+        // The BASE credential pair a managed child receives (§7).
+        var credentials = fixture.childEnvironment()
+        credentials[AgentScopedRunCredentials.endpointEnvironmentKey] = run.endpointPath
+        credentials[AgentScopedRunCredentials.capabilityEnvironmentKey] =
+            run.capability.printable
+        let arguments = [
+            "--wiki", fixture.wikiA.id.rawValue,
+            "source", "cat", "--id", fixture.sourceA.id.rawValue, "--markdown",
+        ]
+
+        // Row 5a: capability key REMOVED — exactly one key set. The CLI
+        // refuses typed BEFORE any request: a half-delivered credential must
+        // never select the unrestricted listener.
+        var missing = credentials
+        missing[AgentScopedRunCredentials.capabilityEnvironmentKey] = nil
+        let missingResult = try await runSandboxed(
+            invocation: invocation, executablePath: wikictl,
+            arguments: arguments, environment: missing)
+        #expect(missingResult.status == 1)
+        #expect(missingResult.errorText.contains("must be set TOGETHER"),
+                "a half-delivered credential must fail typed (stderr: \(missingResult.errorText))")
+
+        // Row 5b: capability present but MALFORMED (never registered) — the
+        // request rides the run endpoint and the daemon's typed
+        // authorizationInvalid comes back as the fixed generic message.
+        var malformed = credentials
+        malformed[AgentScopedRunCredentials.capabilityEnvironmentKey] =
+            Data("not-a-real-capability".utf8).base64EncodedString()
+        let malformedResult = try await runSandboxed(
+            invocation: invocation, executablePath: wikictl,
+            arguments: arguments, environment: malformed)
+        #expect(malformedResult.status == 1)
+        #expect(malformedResult.errorText.contains(
+            "the request is not authorized for this daemon connection"),
+            "an unknown capability must not reveal run existence (stderr: \(malformedResult.errorText))")
+
+        // Row 8: BOTH keys removed — no unrestricted fallback. The connect is
+        // kernel-denied by the scoped profile; the CLI reports a transport
+        // failure (never a typed scope decision, never success).
+        var noCredentials = credentials
+        noCredentials[AgentScopedRunCredentials.endpointEnvironmentKey] = nil
+        noCredentials[AgentScopedRunCredentials.capabilityEnvironmentKey] = nil
+        let fallback = try await runSandboxed(
+            invocation: invocation, executablePath: wikictl,
+            arguments: arguments, environment: noCredentials)
+        #expect(fallback.status != 0, "removing the credentials must not restore access")
+        #expect(!fallback.outputText.contains("processed v1"),
+                "no wiki content may leak without credentials")
+        #expect(!fallback.errorText.contains("outside the scope"),
+                "a kernel connect denial is a transport failure, not a domain reply")
+
+        // Row 13: a host-file write outside every allowance is kernel-denied
+        // under the same profile (scratch writes still work — proven by the
+        // edits above landing in scratch). If the write were ALLOWED, sh
+        // would fall through to `exit 7`; the denied redirection takes the
+        // `|| exit 42` branch.
+        let escapeTarget = fixture.root.appendingPathComponent("escape.txt").path
+        let hostWriteScript = "echo escaped > \(escapeTarget) 2>&1 || exit 42\nexit 7\n"
+        let hostWrite = try await runSandboxed(
+            invocation: invocation,
+            executablePath: "/bin/sh",
+            arguments: ["-c", hostWriteScript],
+            environment: credentials)
+        #expect(hostWrite.status == 42, "the host write must be denied, and the deny path taken")
+
+        await broker.revoke(runID: run.runID)
+    }
+
+    /// Rows 14, 16, 17 — the denial surfaces the §6 policy through the REAL
+    /// CLI: scoped `source export` is denied with the sentinel file unchanged
+    /// (§13.3), global queue controls are denied (§13.4), registry mutation
+    /// (`wiki create`) is denied, and a foreign wiki's job listing is denied
+    /// at selector resolution (item-ownership checks are additionally proven
+    /// at the wire level in `DaemonScopedSocketTests`).
+    @Test func scopedRunDeniesExportAndGlobalSurfacesThroughRealCLI() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.startDaemon()
+        let broker = try #require(fixture.runBroker)
+        let wikictl = try wikictlPath()
+
+        let run = try await broker.launchScopedRun(
+            scope: DaemonRunScope(wikiID: fixture.wikiA.id),
+            operationClasses: [.wikiRead, .wikiEdit, .wikiAcquire])
+        let invocation = try fixture.scopedRunInvocationForWikiA(runEndpointPath: run.endpointPath)
+        var credentials = fixture.childEnvironment()
+        credentials[AgentScopedRunCredentials.endpointEnvironmentKey] = run.endpointPath
+        credentials[AgentScopedRunCredentials.capabilityEnvironmentKey] =
+            run.capability.printable
+
+        // Row 14: scoped export denied; the sentinel target file unchanged.
+        let sentinel = fixture.scratch.appendingPathComponent("export-sentinel.txt")
+        try Data("SENTINEL\n".utf8).write(to: sentinel)
+        let export = try await runSandboxed(
+            invocation: invocation,
+            executablePath: wikictl,
+            arguments: [
+                "--wiki", fixture.wikiA.id.rawValue,
+                "source", "export",
+                "--id", fixture.sourceA.id.rawValue,
+                "--out", sentinel.path,
+            ],
+            environment: credentials)
+        #expect(export.status == 1, "scoped export must be denied (stderr: \(export.errorText))")
+        #expect(export.errorText.contains("outside the scope of this run"))
+        #expect(String(decoding: (try? Data(contentsOf: sentinel)) ?? Data(), as: UTF8.self) == "SENTINEL\n",
+                "the denied export must not touch the sentinel")
+
+        // Row 16a: global queue control denied (the queue family takes the
+        // same --wiki selector; the control itself is global and denied).
+        let queuePause = try await runSandboxed(
+            invocation: invocation,
+            executablePath: wikictl,
+            arguments: [
+                "--wiki", fixture.wikiA.id.rawValue,
+                "queue", "pause", "--lane", "extraction",
+            ],
+            environment: credentials)
+        #expect(queuePause.status == 1, "global queue controls are denied (stderr: \(queuePause.errorText))")
+        #expect(queuePause.errorText.contains("outside the scope of this run"))
+
+        // Row 16b: registry mutation denied.
+        let create = try await runSandboxed(
+            invocation: invocation,
+            executablePath: wikictl,
+            arguments: ["wiki", "create", "--name", "Scoped Intrusion"],
+            environment: credentials)
+        #expect(create.status == 1, "registry mutation is denied (stderr: \(create.errorText))")
+        #expect(create.errorText.contains("outside the scope of this run"))
+
+        // Row 17: a foreign wiki's job surface is denied at selector
+        // resolution through the same endpoint.
+        let foreignJobs = try await runSandboxed(
+            invocation: invocation,
+            executablePath: wikictl,
+            arguments: ["--wiki", fixture.wikiB.id.rawValue, "job", "list"],
+            environment: credentials)
+        #expect(foreignJobs.status == 1, "the foreign job listing must fail (stderr: \(foreignJobs.errorText))")
+        #expect(foreignJobs.errorText.contains("outside the scope of this run"))
+
+        await broker.revoke(runID: run.runID)
+    }
+
+    /// Row 19 — two concurrent runs, no credential or wiki crossover. Each
+    /// run's child succeeds ONLY on its own wiki through its OWN endpoint,
+    /// and is denied on the sibling wiki; neither capability authorizes on
+    /// the other run's listener (the cross-RUN capability check is
+    /// additionally proven at the wire level in `DaemonScopedSocketTests`).
+    @Test func twoConcurrentScopedRunsDoNotCrossCredentials() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.startDaemon()
+        let broker = try #require(fixture.runBroker)
+        let wikictl = try wikictlPath()
+
+        let runA = try await broker.launchScopedRun(
+            scope: DaemonRunScope(wikiID: fixture.wikiA.id),
+            operationClasses: [.wikiRead])
+        let runB = try await broker.launchScopedRun(
+            scope: DaemonRunScope(wikiID: fixture.wikiB.id),
+            operationClasses: [.wikiRead])
+        // Wiki B's own source, so each run's OWN read carries real content.
+        let sourceB = try fixture.storeB.addSource(filename: "b.md", data: Data("B RAW".utf8))
+        _ = try fixture.storeB.appendProcessedMarkdown(
+            sourceID: sourceB.id, content: "# b v1", origin: .extraction, note: nil)
+        let invocationA = try fixture.scopedRunInvocationForWikiA(runEndpointPath: runA.endpointPath)
+        let invocationB = try fixture.scopedRunInvocationForWikiA(runEndpointPath: runB.endpointPath)
+        var credentialsA = fixture.childEnvironment()
+        credentialsA[AgentScopedRunCredentials.endpointEnvironmentKey] = runA.endpointPath
+        credentialsA[AgentScopedRunCredentials.capabilityEnvironmentKey] = runA.capability.printable
+        var credentialsB = fixture.childEnvironment()
+        credentialsB[AgentScopedRunCredentials.endpointEnvironmentKey] = runB.endpointPath
+        credentialsB[AgentScopedRunCredentials.capabilityEnvironmentKey] = runB.capability.printable
+
+        func read(_ wikiID: WikiID, sourceID: SourceID, invocation: SandboxProfile.SandboxInvocation,
+                  credentials: [String: String]) async throws -> ProcessResult {
+            try await runSandboxed(
+                invocation: invocation,
+                executablePath: wikictl,
+                arguments: [
+                    "--wiki", wikiID.rawValue,
+                    "source", "cat", "--id", sourceID.rawValue, "--markdown",
+                ],
+                environment: credentials)
+        }
+
+        // Each run reads its OWN wiki successfully — through live, distinct
+        // endpoints (a dead endpoint would fake the denials below; these two
+        // successes prove both listeners are live).
+        let ownA = try await read(fixture.wikiA.id, sourceID: fixture.sourceA.id,
+                                  invocation: invocationA, credentials: credentialsA)
+        #expect(ownA.status == 0, "run A reads wiki A (stderr: \(ownA.errorText))")
+        let ownB = try await read(fixture.wikiB.id, sourceID: sourceB.id,
+                                  invocation: invocationB, credentials: credentialsB)
+        #expect(ownB.status == 0, "run B reads wiki B through its own endpoint (stderr: \(ownB.errorText))")
+        #expect(ownB.outputText == "# b v1\n")
+
+        // The crossovers: A's credentials on B's target and B's credentials
+        // on A's target are both typed denials.
+        let crossAtoB = try await read(fixture.wikiB.id, sourceID: sourceB.id,
+                                       invocation: invocationA, credentials: credentialsA)
+        #expect(crossAtoB.status == 1)
+        #expect(crossAtoB.errorText.contains("outside the scope of this run"))
+        let crossBtoA = try await read(fixture.wikiA.id, sourceID: fixture.sourceA.id,
+                                       invocation: invocationB, credentials: credentialsB)
+        #expect(crossBtoA.status == 1)
+        #expect(crossBtoA.errorText.contains("outside the scope of this run"))
+
+        await broker.revoke(runID: runA.runID)
+        await broker.revoke(runID: runB.runID)
     }
 
     // MARK: - AC.7 (issue #1276): the extraction-shaped fence, live
