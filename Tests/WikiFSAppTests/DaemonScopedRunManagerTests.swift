@@ -266,4 +266,157 @@ struct AgentScopedRunCredentialDeliveryTests {
                 == credentials.endpointPath)
     }
 }
+
+// The live chat regression (chat 01M5KMBENCMD2AJ8PYSNVJJ2NP, 2026-10-22):
+// the codex adapter stack builds its tool-command environment from a
+// whitelist, so the dedicated credential keys — present in the adapter
+// process — never reached the agent's wikictl grandchildren. Under the scoped
+// profile those grandchildren took the ordinary branch and failed on the
+// kernel-denied App Group container ("couldn't be saved in the folder Group
+// Containers"). The chat spawn shape's composed environment must carry BOTH
+// credential keys when a lease is active — plus the codex stack's
+// inherit-full-environment switch so the keys survive into every
+// tool subprocess the scoped profile covers — and neither key nor escalation
+// when no lease exists.
+@Suite("Scoped run tool-subprocess delivery", .serialized)
+struct AgentScopedRunToolEnvironmentTests {
+
+    private let credentials = AgentScopedRunCredentials(
+        endpointPath: "/group/r/abc123.sock",
+        capability: "QUJDREVGR0hJSktMTU5PUA==")
+
+    /// Fixed base so the "neither key" assertions can't observe the test
+    /// process's own environment.
+    private let baseEnvironment = ["PATH": "/usr/bin:/bin"]
+
+    /// The live failing chat shape: codex-acp under the bun package runner
+    /// (the identifier rides the ARGUMENTS, not the executable).
+    private let codexExecutable = "/opt/homebrew/bin/bun"
+    private let codexArguments = ["x", "@agentclientprotocol/codex-acp@2.2.2"]
+    private let codexHints = [
+        HintKey.acpAgentPath.rawValue: "/opt/homebrew/bin/bun",
+        HintKey.acpAgentArgs.rawValue: "x @agentclientprotocol/codex-acp@2.2.2",
+    ]
+
+    private func context(scopedRun: AgentScopedRunCredentials?) -> AgentRunContext {
+        AgentRunContext(
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch", isDirectory: true),
+            wikiID: WikiID(rawValue: "01HWIKI"),
+            wikictlDirectory: "/app/helpers",
+            userPATH: "/usr/bin:/bin",
+            scopedRun: scopedRun)
+    }
+
+    /// The composition `ACPBackend.startProcess` performs: spawn config →
+    /// run-context protected merge → tool-environment escalation.
+    private func composedEnvironment(
+        profile: BackendProfile
+    ) throws -> [String: String] {
+        let runContext = try #require(profile.runContext)
+        let spawn = try #require(ACPBackend.resolveSpawnConfig(from: profile))
+        let env = runContext.environment(
+            providerEnvironment: spawn.environment,
+            baseEnvironment: baseEnvironment)
+        return AgentScopedRunToolEnvironment.resolvedEnvironment(
+            current: env,
+            scopedRun: runContext.scopedRun,
+            executablePath: spawn.executablePath,
+            arguments: spawn.arguments)
+    }
+
+    /// The composed `CODEX_CONFIG` value of one profile, parsed.
+    private func composedCodexConfig(
+        _ final: [String: String]
+    ) throws -> [String: Any] {
+        let raw = try #require(final[AgentScopedRunToolEnvironment.codexConfigEnvironmentKey])
+        return try #require(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+    }
+
+    /// Lease active + the live codex chat shape: both credential keys survive
+    /// the composition AND the escalation pins codex's inherit-all policy so
+    /// the keys reach the tool subprocesses.
+    @Test func codexChatSpawnWithActiveLeaseDeliversBothKeysAndInheritAll() throws {
+        let profile = BackendProfile(
+            providerHints: codexHints,
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch", isDirectory: true),
+            runContext: context(scopedRun: credentials))
+        let final = try composedEnvironment(profile: profile)
+
+        #expect(final[AgentScopedRunCredentials.endpointEnvironmentKey] == credentials.endpointPath,
+                Comment(rawValue: "the endpoint key survives the chat spawn composition"))
+        #expect(final[AgentScopedRunCredentials.capabilityEnvironmentKey] == credentials.capability,
+                Comment(rawValue: "the capability key survives the chat spawn composition"))
+
+        let pinned = try composedCodexConfig(final)
+        let policy = try #require(pinned["shell_environment_policy"] as? [String: Any])
+        #expect(policy["inherit"] as? String == "all",
+                Comment(rawValue: "codex tool subprocesses inherit the full environment"))
+    }
+
+    /// No lease manager → no keys AND no escalation: the unscoped codex path
+    /// is byte-unchanged.
+    @Test func codexChatSpawnWithoutLeaseExportsNothing() throws {
+        let profile = BackendProfile(
+            providerHints: codexHints,
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch", isDirectory: true),
+            runContext: context(scopedRun: nil))
+        let final = try composedEnvironment(profile: profile)
+
+        #expect(final[AgentScopedRunCredentials.endpointEnvironmentKey] == nil)
+        #expect(final[AgentScopedRunCredentials.capabilityEnvironmentKey] == nil)
+        #expect(final[AgentScopedRunToolEnvironment.codexConfigEnvironmentKey] == nil,
+                Comment(rawValue: "no lease → no pinned inherit-all config"))
+    }
+
+    /// A scoped run on a NON-codex shape (claude) keeps both credential keys
+    /// — they already flow through that stack — and adds no codex config.
+    @Test func scopedClaudeSpawnKeepsKeysWithoutCodexEscalation() throws {
+        let profile = BackendProfile(
+            providerHints: [
+                HintKey.acpAgentPath.rawValue: "/opt/homebrew/bin/claude",
+            ],
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch", isDirectory: true),
+            runContext: context(scopedRun: credentials))
+        let final = try composedEnvironment(profile: profile)
+
+        #expect(final[AgentScopedRunCredentials.endpointEnvironmentKey] == credentials.endpointPath)
+        #expect(final[AgentScopedRunCredentials.capabilityEnvironmentKey] == credentials.capability)
+        #expect(final[AgentScopedRunToolEnvironment.codexConfigEnvironmentKey] == nil,
+                Comment(rawValue: "the escalation is codex-shaped spawns only"))
+    }
+
+    /// An operator-provided CODEX_CONFIG hint is MERGED, not clobbered: the
+    /// operator's keys survive and the inherit-all policy wins.
+    @Test func operatorCodexConfigHintIsMergedNotClobbered() throws {
+        let operatorConfig = #"{"hooks":{"turn":"off"},"model":"gpt-6.1-sol"}"#
+        let final = AgentScopedRunToolEnvironment.resolvedEnvironment(
+            current: [AgentScopedRunToolEnvironment.codexConfigEnvironmentKey: operatorConfig],
+            scopedRun: credentials,
+            executablePath: codexExecutable,
+            arguments: codexArguments)
+
+        let merged = try #require(JSONSerialization.jsonObject(
+            with: Data(final[AgentScopedRunToolEnvironment.codexConfigEnvironmentKey]!.utf8))
+            as? [String: Any])
+        #expect(merged["model"] as? String == "gpt-6.1-sol",
+                Comment(rawValue: "the operator's own config keys survive"))
+        #expect((merged["hooks"] as? [String: Any])?["turn"] as? String == "off")
+        let policy = try #require(merged["shell_environment_policy"] as? [String: Any])
+        #expect(policy["inherit"] as? String == "all",
+                Comment(rawValue: "the policy that delivers the credentials cannot be re-narrowed"))
+    }
+
+    /// A malformed operator hint falls back to the pinned policy wholesale —
+    /// a broken hint must not strip the credential delivery.
+    @Test func malformedOperatorHintFallsBackToPinnedPolicy() {
+        let final = AgentScopedRunToolEnvironment.resolvedEnvironment(
+            current: [AgentScopedRunToolEnvironment.codexConfigEnvironmentKey: "not json"],
+            scopedRun: credentials,
+            executablePath: codexExecutable,
+            arguments: codexArguments)
+
+        #expect(final[AgentScopedRunToolEnvironment.codexConfigEnvironmentKey]
+                == AgentScopedRunToolEnvironment.codexInheritAllConfig)
+    }
+}
 #endif

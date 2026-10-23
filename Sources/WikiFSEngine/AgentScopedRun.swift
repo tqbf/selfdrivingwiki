@@ -131,4 +131,129 @@ public enum AgentScopedRunError: Error, LocalizedError, Equatable {
         }
     }
 }
+
+// MARK: - Tool-subprocess credential delivery (§7, live chat regression)
+
+/// The scoped credential keys reach the managed child's own environment, but
+/// some adapter stacks then build their TOOL-command environment from a
+/// whitelist — the codex stack's `shell_environment_policy` default keeps
+/// only a core set (HOME/PATH/SHELL/…), so the dedicated keys died before the
+/// agent's `wikictl` grandchildren. Under the scoped profile those
+/// grandchildren then took the ordinary branch and hit the kernel-denied App
+/// Group container (the live chat regression of 2026-10-22: "couldn't be
+/// saved in the folder Group Containers").
+///
+/// §7's one-unit invariant covers EVERY process the scoped profile reaches,
+/// not just the direct child, so for those stacks the composed child
+/// environment pins the adapter's own inherit-full-environment switch. The
+/// capability never travels through this type — it rides the dedicated keys
+/// from ``AgentScopedRunCredentials`` and simply survives the adapter's exec
+/// layer once the whitelist is disabled.
+public enum AgentScopedRunToolEnvironment {
+
+    /// The codex adapter stack reads its per-session config overrides from
+    /// this environment key (a JSON object the adapter merges into every
+    /// codex session's config).
+    public static let codexConfigEnvironmentKey = "CODEX_CONFIG"
+
+    /// Codex's documented switch that disables the tool-command environment
+    /// whitelist (`shell_environment_policy.inherit = "all"` — pinned by the
+    /// `codex sandbox -c shell_environment_policy.inherit=all` seam the same
+    /// way).
+    public static let codexInheritAllConfig =
+        #"{"shell_environment_policy":{"inherit":"all"}}"#
+
+    /// The escalation environment for one spawn: non-empty ONLY for a scoped
+    /// run whose command launches the codex stack. Detection follows the house
+    /// rule (`providerHomeSubpaths`, `launchHint`): match the command tokens —
+    /// the executable AND the arguments, since `bun x
+    /// @agentclientprotocol/codex-acp` puts the identifier in the arguments —
+    /// never a provider id.
+    public static func environment(
+        scopedRun: AgentScopedRunCredentials?,
+        executablePath: String,
+        arguments: [String]
+    ) -> [String: String] {
+        guard scopedRun != nil else { return [:] }
+        let fullCommand = ([executablePath] + arguments)
+            .joined(separator: " ")
+            .lowercased()
+        guard fullCommand.contains("codex") else { return [:] }
+        return [codexConfigEnvironmentKey: codexInheritAllConfig]
+    }
+
+    /// `environment` applied to an already-composed child environment: the
+    /// escalation overwrites a bare key and MERGES with an operator-provided
+    /// `CODEX_CONFIG` JSON object (the operator's other keys survive; the
+    /// inherit-all policy wins so the scoped unit cannot be re-narrowed). A
+    /// non-object operator value falls back to the escalation wholesale.
+    public static func resolvedEnvironment(
+        current: [String: String],
+        scopedRun: AgentScopedRunCredentials?,
+        executablePath: String,
+        arguments: [String]
+    ) -> [String: String] {
+        let escalation = environment(
+            scopedRun: scopedRun,
+            executablePath: executablePath,
+            arguments: arguments)
+        guard let pinned = escalation[codexConfigEnvironmentKey] else {
+            return current
+        }
+        var resolved = current
+        resolved[codexConfigEnvironmentKey] = mergingOperatorValue(
+            operatorValue: current[codexConfigEnvironmentKey],
+            pinnedValue: pinned)
+        return resolved
+    }
+
+    /// The merged `CODEX_CONFIG` for one scoped spawn: the operator's JSON
+    /// object with the inherit-all policy overlaid. Any parse failure (the
+    /// operator value is not a JSON object) yields the pinned value alone —
+    /// a malformed hint must not strip the policy that delivers the
+    /// credentials.
+    static func mergingOperatorValue(
+        operatorValue: String?,
+        pinnedValue: String
+    ) -> String {
+        guard let operatorValue,
+              let operatorObject = Self.jsonObject(operatorValue),
+              let pinnedObject = Self.jsonObject(pinnedValue) else {
+            return pinnedValue
+        }
+        var merged = operatorObject
+        for (key, value) in pinnedObject {
+            merged[key] = value
+        }
+        guard JSONSerialization.isValidJSONObject(merged) else {
+            return pinnedValue
+        }
+        do {
+            let data = try JSONSerialization.data(withJSONObject: merged)
+            return String(data: data, encoding: .utf8) ?? pinnedValue
+        } catch {
+            // Unreachable for freshly parsed JSON objects, but a failure
+            // falls back to the pinned policy by design.
+            return pinnedValue
+        }
+    }
+
+    private static func jsonObject(_ value: String) -> [String: Any]? {
+        guard let data = value.data(using: .utf8) else {
+            return nil
+        }
+        do {
+            let object = try JSONSerialization.jsonObject(with: data)
+            // A nested dictionary value (e.g. an operator `hooks` object)
+            // survives JSONSerialization round-trips only if it contains no
+            // non-JSON types, which a fresh parse guarantees.
+            return object as? [String: Any]
+        } catch {
+            // A malformed hint is the DESIGNED fallback signal: the merge
+            // helper drops to the pinned policy wholesale, so the nil here
+            // is the typed outcome, not a swallowed error.
+            return nil
+        }
+    }
+}
 #endif
