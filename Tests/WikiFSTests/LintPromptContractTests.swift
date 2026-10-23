@@ -100,25 +100,20 @@ struct LintPromptContractTests {
         #expect(body.lowercased().contains("second conflict"))
     }
 
-    /// The final write contract (Phase 3): repairs go through the patch
-    /// write only — `page patch --id --expect-head --hunk --defect` — and
-    /// the task states NO full-body write path. CAS conflict recovery is
-    /// bounded: one fresh read + recomposition, stop after a second.
-    @Test func finalTaskHasNoFullBodyWritePath() {
+    /// The interim (Phase 0) write contract is stated explicitly: full-body
+    /// `page add --expect-head` reads head+body in one JSON read, recomposes
+    /// once after a conflict against the NEW body, and stops after a second
+    /// conflict. (The Phase 3 patch path replaces this section; the flip is
+    /// covered by the final contract test.)
+    @Test func interimCASPathIsExplicit() {
         let body = promptFile("lint-page-task.md")
         #expect(body != nil)
         guard let body else { return }
         #expect(body.contains("--expect-head"), "the CAS flag must be named")
         #expect(body.contains("--json"), "body+head must come from one JSON read")
-        #expect(body.contains("page patch"), "repairs go through the patch write")
-        #expect(!body.contains("--body-file"), "no full-body rewrite instruction may appear")
-        #expect(body.lowercased().contains("no full-body"), "the task states the missing full-body path explicitly")
-        #expect(body.contains("--defect"), "each hunk carries its defect class")
-        #expect(body.contains("--hunk"), "the hunk submission form is stated")
-        #expect(body.contains("ONCE"), "one recomposition after a conflict")
-        #expect(body.lowercased().contains("second conflict"))
-        // The read-back is context; re-scan on the stored bytes is the gate.
-        #expect(body.lowercased().contains("read the page back"))
+        #expect(body.contains("exit code 3"), "the conflict signal must be stated")
+        #expect(body.contains("reapply your repairs to the"), "recomposition against the new body, never a replay")
+        #expect(body.contains("page add"), "the interim full-body write path is explicit until patches exist")
     }
 
     /// The whole-wiki task states its own report-only policy: no content
