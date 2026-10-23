@@ -4743,6 +4743,33 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    public func readPageCoherent(id: PageID) throws -> PageCoherentRead {
+        try dbWriter.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT id, title, slug, body_markdown, created_at, updated_at, version, created_by, last_edited_by
+                FROM pages WHERE id = ?;
+                """,
+                arguments: [id.rawValue]
+            ) else {
+                throw WikiStoreError.notFound(id)
+            }
+            // Head + provenance resolve inside the SAME read transaction, so
+            // a concurrent writer's commit lands entirely before or after
+            // this snapshot — never between its body and its head.
+            let head = try Self.pageHeadVersionIDLocked(pageID: id, on: db)
+            let headInputs = try head.map { try self.pageVersionSourceInputs(versionID: $0, on: db) } ?? []
+            return PageCoherentRead(
+                id: PageID(rawValue: row["id"]),
+                title: row["title"],
+                body: row["body_markdown"],
+                headVersionID: head,
+                headSourceInputs: headInputs
+            )
+        }
+    }
+
     public func createPage(
         title: String, body: String, createdBy: String? = nil,
         provenance: [PageVersionSourceInput] = []

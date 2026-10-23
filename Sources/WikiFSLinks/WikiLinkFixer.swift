@@ -36,6 +36,26 @@ public enum WikiLinkFixer {
     /// Scan the markdown for `[[wiki-links]]` outside code blocks and rewrite any
     /// that `fix()` corrects. Returns the original string unchanged when no fixes apply.
     public static func applyFixes(to markdown: String) -> String {
+        applyFixesWithRanges(to: markdown).text
+    }
+
+    /// The result of a bracket-fix pass: the rewritten text plus the UTF-16
+    /// ranges in the ORIGINAL text of each rewritten `[[…]]` span.
+    public struct AppliedFixes: Equatable, Sendable {
+        /// The fixed text (byte-identical to the input when nothing changed).
+        public let text: String
+        /// UTF-16 ranges in the ORIGINAL text — one per rewritten link span,
+        /// in source order. Empty when nothing was rewritten.
+        public let fixedRanges: [NSRange]
+
+        /// `true` when at least one link span was rewritten.
+        public var didModify: Bool { !fixedRanges.isEmpty }
+    }
+
+    /// ``applyFixes(to:)`` with reporting: the same rewrite, plus the original
+    /// ranges it replaced so a caller (lint pre-flight) can record where the
+    /// repair touched the body.
+    public static func applyFixesWithRanges(to markdown: String) -> AppliedFixes {
         let ns = markdown as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: markdown)
         let matches = WikiLinkSpan.matches(in: markdown)
@@ -43,6 +63,7 @@ public enum WikiLinkFixer {
         var out = ""
         var cursor = 0
         var didModify = false
+        var fixedRanges: [NSRange] = []
         for match in matches {
             let full = match.range
 
@@ -65,13 +86,14 @@ public enum WikiLinkFixer {
             let aliasPart = result.alias != nil ? "|\(result.alias!)" : ""
             out += "[[\(result.target)\(aliasPart)]]"
             didModify = true
+            fixedRanges.append(full)
         }
 
-        if !didModify { return markdown }
+        if !didModify { return AppliedFixes(text: markdown, fixedRanges: []) }
 
         if cursor < ns.length {
             out += ns.substring(with: NSRange(location: cursor, length: ns.length - cursor))
         }
-        return out
+        return AppliedFixes(text: out, fixedRanges: fixedRanges)
     }
 }

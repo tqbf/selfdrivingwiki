@@ -1786,6 +1786,13 @@ public final class WikiStoreModel {
     /// `markdownSaveWarning` that doesn't match the just-saved body.
     @ObservationIgnored private var markdownWarningTask: Task<Void, Never>?
 
+    /// Test/evaluation seam: invoked before each pre-flight bracket-fix write
+    /// attempt with the 1-based attempt number — the exact window a competing
+    /// writer races into (read head → write). Deterministic conflict tests
+    /// commit a real concurrent version here through a second connection.
+    /// `nil` (the default) in production.
+    @ObservationIgnored var preflightBeforeWriteAttempt: ((Int) -> Void)?
+
     /// Lint `body` for cosmetic markdown issues and set `markdownSaveWarning`.
     /// Unlike the fence validation (a cheap line scan), markdownlint runs all
     /// ~20 cosmetic rules over the whole body — so the computation runs on a
@@ -1818,13 +1825,43 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Pre-flight checks run before an LLM page-lint: apply `WikiLinkFixer` fixes and
-    /// detect broken `[[wiki links]]`. Reads fresh from the store so it works for any
-    /// page, not just the loaded draft. If the current page is loaded, also syncs the
-    /// draft (without marking it dirty). Returns `nil` when the page cannot be read.
+    /// Pre-flight checks run before an LLM page-lint: apply `WikiLinkFixer` fixes under
+    /// CAS and detect broken `[[wiki links]]`. Reads the page through ONE coherent store
+    /// read (body + head + provenance from a single transaction) so the CAS write composes
+    /// against exactly the bytes it inspected. Works for any page, not just the loaded
+    /// draft. Returns `nil` when the page cannot be read.
     public struct LintPreflight: Sendable {
-        /// `true` when `WikiLinkFixer.applyFixes` rewrote one or more `\]]` brackets.
+        /// Why the bracket auto-fix did not persist, when a fix was needed but
+        /// no fixed body reached the store.
+        public enum BracketFixFailure: Equatable, Sendable {
+            /// The CAS check failed twice (initial attempt + one recomposition):
+            /// the page kept moving under the fix. Nothing was written; the
+            /// concurrent edits stand.
+            case conflictLimitReached
+            /// A write committed, but the stored body no longer matches the
+            /// fixed body (another writer advanced the page immediately after).
+            case postWriteVerificationMismatch
+            /// The write failed for a non-conflict reason.
+            case writeFailed(String)
+        }
+
+        /// `true` only when a `WikiLinkFixer.applyFixes` rewrite actually
+        /// COMMITTED — a fix that was needed but failed to persist is
+        /// `false`, with `fixFailure` carrying the reason. Never claim an
+        /// unsuccessful fix occurred.
         public let didFixLinks: Bool
+        /// The head version id pre-flight first read (the snapshot the fix,
+        /// when any, was composed against). `nil` for a page with no versions.
+        public let inspectedHead: PageVersionID?
+        /// The head version id after a committed fix — `nil` when no fix was
+        /// needed or none committed.
+        public let writtenHead: PageVersionID?
+        /// UTF-16 ranges in the ORIGINAL (pre-fix) body of each committed
+        /// bracket repair. Empty when nothing was repaired.
+        public let repairLocations: [NSRange]
+        /// Why a needed fix did not persist; `nil` when the fix committed or
+        /// no fix was needed.
+        public let fixFailure: BracketFixFailure?
         /// Page titles referenced by `[[wiki links]]` in the page that do not resolve
         /// to an existing page.
         public let brokenPageLinks: [String]
@@ -1837,34 +1874,86 @@ public final class WikiStoreModel {
     }
 
     public func preflightLint(pageID: PageID) -> LintPreflight? {
-        guard let page = DebugLog.trying("getPage", operation: { try store.getPage(id: pageID) }) else { return nil }
+        // ONE coherent read: body, head, and provenance from a single
+        // transaction — the write below composes against exactly these bytes.
+        guard var snapshot = DebugLog.trying("readPageCoherent", operation: { try store.readPageCoherent(id: pageID) }) else {
+            return nil
+        }
+        let inspectedHead = snapshot.headVersionID
 
-        // Apply WikiLinkFixer and persist if anything changed.
-        let original = page.bodyMarkdown
-        let fixedBody = WikiLinkFixer.applyFixes(to: original)
-        let didFix = fixedBody != original
-        if didFix {
-            do {
-                // #797: pre-fix this passed no `author:`, defaulting to nil,
-                // which mapped to the shared `legacy-import` agent and erased
-                // the prior `chat:<id>` / `agent:<kind>` provenance on the
-                // HEAD row. The lint auto-fix is an explicit action by the
-                // "lint" one-shot executor, NOT an unknown editor — stamp
-                // `agent:lint` so the activity carries the real identity.
-                try PageUpsert.upsert(in: store, id: pageID, title: page.title, body: fixedBody,
-                                      author: PageAuthor.agent("lint").rawValue)
-                // No manual reload — the bus fires reloadFromStore() async after the upsert.
-                if loadedPage == pageID {
-                    draftBody = fixedBody
-                    isDraftDirty = false
+        var writtenHead: PageVersionID?
+        var fixFailure: LintPreflight.BracketFixFailure?
+        var repairLocations: [NSRange] = []
+
+        // Bracket auto-fix (temporary Phase 0 behavior): a CAS write carrying
+        // the captured head and the head's unchanged source inputs. On a
+        // conflict, read a fresh coherent snapshot and recompose ONCE; a
+        // second conflict stops the repair entirely — the page keeps moving
+        // and replaying our body would clobber a concurrent writer.
+        let firstPass = WikiLinkFixer.applyFixesWithRanges(to: snapshot.body)
+        if firstPass.didModify {
+            for attempt in 1...2 {
+                // Test seam: let a deterministic competing writer commit here.
+                preflightBeforeWriteAttempt?(attempt)
+                guard let expectedHead = snapshot.headVersionID else {
+                    fixFailure = .writeFailed("page has no head version to write against")
+                    break
                 }
-            } catch {
-                DebugLog.store("WikiStoreModel.preflightLint fix failed: \(error)")
+                let fixed = WikiLinkFixer.applyFixesWithRanges(to: snapshot.body)
+                guard fixed.didModify else { break }
+                do {
+                    _ = try PageUpsert.upsert(
+                        in: store, id: pageID, title: snapshot.title, body: fixed.text,
+                        expectedHeadVersionID: expectedHead,
+                        author: PageAuthor.agent("lint").rawValue,
+                        provenance: snapshot.headSourceInputs)
+                    // Re-read the persisted snapshot — success is what the
+                    // store holds now, not what we proposed. The store
+                    // canonicalizes bodies on write, so the check is the
+                    // property the fix exists for: no bracket damage remains
+                    // in the stored bytes.
+                    let reread = try store.readPageCoherent(id: pageID)
+                    if !WikiLinkFixer.applyFixesWithRanges(to: reread.body).didModify {
+                        writtenHead = reread.headVersionID
+                        repairLocations = fixed.fixedRanges
+                        fixFailure = nil
+                    } else {
+                        fixFailure = .postWriteVerificationMismatch
+                    }
+                    snapshot = reread
+                    break
+                } catch let error as PageConflictError {
+                    if attempt == 2 {
+                        fixFailure = .conflictLimitReached
+                        break
+                    }
+                    DebugLog.store(
+                        "WikiStoreModel.preflightLint: CAS conflict (\(error.actualVersionID?.rawValue ?? "?")) — one fresh read + recomposition")
+                    // Recompose against the NEW head's body — never replay
+                    // the old proposal.
+                    if let fresh = DebugLog.trying("readPageCoherent", operation: { try store.readPageCoherent(id: pageID) }) {
+                        snapshot = fresh
+                    }
+                } catch {
+                    fixFailure = .writeFailed(String(describing: error))
+                    DebugLog.store("WikiStoreModel.preflightLint fix failed: \(error)")
+                    break
+                }
             }
         }
 
-        // Detect broken wiki links across all three namespaces.
-        let body = didFix ? fixedBody : original
+        // A committed fix replaces the loaded draft only when the draft is
+        // CLEAN — never overwrite a dirty editor draft (the user's unsaved
+        // edits outrank the auto-fix).
+        if writtenHead != nil, loadedPage == pageID, !isDraftDirty {
+            draftBody = snapshot.body
+            isDraftDirty = false
+        }
+
+        // Detect broken wiki links across all three namespaces — against the
+        // ACTUAL stored body (the post-fix snapshot), never a proposed body
+        // that failed to persist.
+        let body = snapshot.body
         let ns = body as NSString
         let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
         let matches = WikiLinkSpan.matches(in: body)
@@ -1945,7 +2034,11 @@ public final class WikiStoreModel {
             }
         }
 
-        return LintPreflight(didFixLinks: didFix,
+        return LintPreflight(didFixLinks: writtenHead != nil,
+                             inspectedHead: inspectedHead,
+                             writtenHead: writtenHead,
+                             repairLocations: repairLocations,
+                             fixFailure: fixFailure,
                              brokenPageLinks: brokenPages,
                              brokenSourceLinks: brokenSources,
                              brokenChatLinks: brokenChats)

@@ -268,6 +268,11 @@ public protocol WikiStore: AnyObject, Sendable {
     /// Page summaries ordered by the given sort criterion.
     func listPages(sortBy: PageSortOrder) throws -> [WikiPageSummary]
     func getPage(id: PageID) throws -> WikiPage
+    /// One coherent read of a page (identity, title, body, active head
+    /// version id, head source inputs) inside a single read transaction —
+    /// see ``PageCoherentRead``. Throws `WikiStoreError.notFound` for a
+    /// missing page. Read-only; emits nothing.
+    func readPageCoherent(id: PageID) throws -> PageCoherentRead
     /// Create a page with no author. Convenience so callers omitting
     /// `createdBy` (the common case) route through a protocol requirement —
     /// protocol requirements can't declare default arguments, so both backends

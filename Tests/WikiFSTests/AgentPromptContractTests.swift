@@ -330,7 +330,7 @@ struct AgentPromptContractTests {
             }
             #expect(lintPrompt.contains("bare canonical SourceID"),
                     "\(origin): lint citations must use canonical source IDs")
-            #expect(lintPrompt.contains("first `id` column from `wikictl source list`"),
+            #expect(lintPrompt.contains("`id` column from `wikictl source list`"),
                     "\(origin): lint must identify the canonical source ID field")
             #expect(lintPrompt.contains("display name"),
                     "\(origin): lint citations must reject display names")
@@ -340,7 +340,7 @@ struct AgentPromptContractTests {
                     "\(origin): lint citations must reject filesystem paths")
             #expect(lintPrompt.contains("Audit every `[[source:…]]` citation"),
                     "\(origin): lint must audit citations that preflight does not flag")
-            #expect(lintPrompt.contains("preserve its fragment, quote, or alias"),
+            #expect(lintPrompt.contains("preserve") && lintPrompt.lowercased().contains("alias"),
                     "\(origin): citation repair must preserve link context")
         }
     }

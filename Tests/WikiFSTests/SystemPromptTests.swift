@@ -92,10 +92,10 @@ struct SystemPromptTests {
         #expect(body.lowercased().contains("entity"))
         #expect(body.lowercased().contains("concept"))
         #expect(body.lowercased().contains("cite"))
-        // The three workflows.
+        // The two workflows. Lint has NO system-prompt workflow — its policy
+        // lives entirely in the task prompts (see LintPromptContractTests).
         #expect(body.contains("Ingest"))
         #expect(body.contains("Query"))
-        #expect(body.contains("Lint"))
         // Sources may be PDFs/images, read with the Read tool.
         #expect(body.contains("Read"))
         #expect(body.contains("PDF"))

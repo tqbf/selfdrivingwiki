@@ -195,14 +195,19 @@ struct CumulativeIngestContractTests {
         #expect(!planner.contains("--create-only"))
     }
 
-    /// Lint's "don't rewrite existing page content" restriction stays
-    /// explicitly lint-scoped in the compiled base — it must not read as a
-    /// general ban that contradicts cumulative ingest updates.
+    /// Lint policy no longer lives in the system prompt at all: the
+    /// "don't rewrite existing page content" restriction moved into the lint
+    /// task prompts (`lint-page-task.md` / `lint-task.md`), which state it
+    /// alongside their own scope. The compiled base must not carry a lint
+    /// workflow that could contradict cumulative ingest updates.
     @Test func lintRestrictionsStayLintScoped() {
         let base = SystemPrompt.defaultBody
-        #expect(base.contains("Lint-specific restriction"),
-                "the no-rewrite rule must be marked as lint-scoped")
-        #expect(base.contains("ingest and explicit user edits still update"))
+        #expect(!base.lowercased().contains("lint"),
+                "the system prompt says nothing about lint (D1)")
+        // The restriction itself lives in the whole-wiki task prompt.
+        let task = GeneratedPrompts.lintTask
+        #expect(task.lowercased().contains("do not modify"),
+                "the report-only restriction must be stated in the lint task prompt")
     }
 
     // MARK: - Instruction precedence (compiled base)

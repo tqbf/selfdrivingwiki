@@ -37,6 +37,10 @@ public struct WikiReadAccess: ~Copyable {
         try store.getPage(id: id)
     }
 
+    public func readPageCoherent(id: PageID) throws -> PageCoherentRead {
+        try store.readPageCoherent(id: id)
+    }
+
     public func listSources() throws -> [SourceSummary] {
         try store.listSources()
     }

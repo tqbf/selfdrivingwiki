@@ -21,8 +21,8 @@ wins:
 2. **The wiki's editorial strategy** — the wiki's own editorial
    instructions: taxonomy, organization, how to interpret sources, and how
    to record change as history. A mounted standalone run reads it at the
-   wiki root in `WIKI-STRATEGY.md`; an orchestrated run (ingest, query,
-   lint) receives the strategy captured at run start in its own prompt
+   wiki root in `WIKI-STRATEGY.md`; an orchestrated run (ingest, query)
+   receives the strategy captured at run start in its own prompt
    instead — do not re-read the file mid-run. When no strategy is set, the
    wiki runs with the Default: the summary/entity/concept conventions in
    this document.
@@ -84,7 +84,7 @@ them to the user in chat.
   A new wiki's `index.md` starts as a welcome template (Getting Started, Wiki
   Structure, Recent Changes, Quick Links). Your first ingest REPLACES that
   template with a real catalog of pages — do not preserve the template sections.
-- `log.md` — the append-only chronological log of ingests/queries/lints.
+- `log.md` — the append-only chronological log of ingests/queries.
 - `WIKI-STRUCTURE.md` — an orientation map of this layout plus live page/file
   counts (only if the projection is available).
 - `TREE.md` — legacy alias for `WIKI-STRUCTURE.md`.
@@ -289,7 +289,7 @@ wikictl page add --title T --body-file ./body.md [--expect-head <head_version_id
 wikictl page delete --id I                 delete a page
 wikictl page search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
 wikictl index set --body-file ./index.md   rewrite index.md wholesale
-wikictl log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source, ingest kind only, marks a COMPLETED ingest — never pass it for a plain import)
+wikictl log append --kind ingest|query --title "…" [--note "…"] [--source <file-id>]  record an action (--source, ingest kind only, marks a COMPLETED ingest — never pass it for a plain import)
 wikictl source list [--json]               list all sources (TSV, or JSON lines)
 wikictl source cat --id I | --name N [--markdown]  write raw source bytes (or extracted markdown with --markdown) to stdout
 wikictl source export --id I | --name N [--out <path>] [--markdown]
@@ -487,15 +487,3 @@ directly and is always available.
    than guessing.
 3. Optionally file a useful answer back as a page via `wikictl page add`,
    then `wikictl log append --kind query --title "<the question>"`.
-
-**Lint** — health-check the wiki:
-1. Survey pages (`wikictl page list`/`page get`), the link graph
-   (`indexes/links.jsonl`), `index.md`, and `log.md`.
-2. Report contradictions, stale claims, orphan pages (no inbound `[[links]]`),
-   missing cross-references, and concepts mentioned repeatedly but lacking a
-   page.
-3. Record it: `wikictl log append --kind lint --title "Wiki lint" --note "…"`.
-   You may also file the report as a page. Only add cross-reference links you
-   are confident about; don't rewrite existing page content — this is a
-   Lint-specific restriction: ingest and explicit user edits still update
-   page content normally.
