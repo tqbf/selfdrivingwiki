@@ -356,12 +356,12 @@ struct WikiStoreModelHtmlExtractionTests {
         #expect(model.importExtractingSourceIDs.contains(summary.id))
 
         let clock = ContinuousClock()
-        // The leash scales per environment (TestTimeouts.leash): the detached
-        // main-actor task can wait on scheduling far past this suite's own
+        // Interim 60s leash (the environment-scaled support API is gone): the
+        // detached main-actor task can wait on scheduling far past this suite's own
         // budget on a loaded CI runner (observed missing a 30s local default
         // while concurrent 47s plugin-boot suites finished). The leash only
         // has to turn a wedged gate into a diagnosed failure.
-        let deadline = clock.now.advanced(by: TestTimeouts.leash(defaultSeconds: 30))
+        let deadline = clock.now.advanced(by: .seconds(60))
         while try store.processedMarkdownHead(sourceID: summary.id) == nil {
             guard clock.now < deadline else {
                 Issue.record("gated import extraction did not land within the time limit")
@@ -421,9 +421,9 @@ struct WikiStoreModelHtmlExtractionTests {
         // Poll for the NOMINATED package head (the materializer sidecar is
         // already head before the detached import task lands).
         let clock = ContinuousClock()
-        // Same environment-scaled leash as the gated-ingest test above: the
+        // Same interim 60s leash as the gated-ingest test above: the
         // detached import task waits on scheduling, not on compute.
-        let deadline = clock.now.advanced(by: TestTimeouts.leash(defaultSeconds: 30))
+        let deadline = clock.now.advanced(by: .seconds(60))
         while true {
             if let head = try store.processedMarkdownHead(sourceID: id),
                head.content.contains("# Snapshot defuddle") {
