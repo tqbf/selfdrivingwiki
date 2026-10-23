@@ -355,20 +355,13 @@ struct WikiStoreModelHtmlExtractionTests {
         model.autoExtractIfRegistered(summary)
         #expect(model.importExtractingSourceIDs.contains(summary.id))
 
-        let clock = ContinuousClock()
-        // The leash scales per environment (TestTimeouts.leash): the detached
-        // main-actor task can wait on scheduling far past this suite's own
-        // budget on a loaded CI runner (observed missing a 30s local default
-        // while concurrent 47s plugin-boot suites finished). The leash only
-        // has to turn a wedged gate into a diagnosed failure.
-        let deadline = clock.now.advanced(by: TestTimeouts.leash(defaultSeconds: 30))
-        while try store.processedMarkdownHead(sourceID: summary.id) == nil {
-            guard clock.now < deadline else {
-                Issue.record("gated import extraction did not land within the time limit")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        // The detached task's landing time is scheduling, not compute, so it
+        // waits with integration patience (a loaded CI runner was observed
+        // starving it past a 30s local-scale leash).
+        try await Patience.poll(
+            until: { try store.processedMarkdownHead(sourceID: summary.id) != nil },
+            config: .integration,
+            description: "gated import extraction")
         #expect(model.importExtractingSourceIDs.isEmpty)
         #expect(try store.sourceContent(id: summary.id) == Data(sampleHTML.utf8))
     }
@@ -419,22 +412,17 @@ struct WikiStoreModelHtmlExtractionTests {
         let id = try #require(model.sources.first?.id)
 
         // Poll for the NOMINATED package head (the materializer sidecar is
-        // already head before the detached import task lands).
-        let clock = ContinuousClock()
-        // Same environment-scaled leash as the gated-ingest test above: the
-        // detached import task waits on scheduling, not on compute.
-        let deadline = clock.now.advanced(by: TestTimeouts.leash(defaultSeconds: 30))
-        while true {
-            if let head = try store.processedMarkdownHead(sourceID: id),
-               head.content.contains("# Snapshot defuddle") {
-                break
-            }
-            guard clock.now < deadline else {
-                Issue.record("snapshot import extraction did not land within the time limit")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        // already head before the detached import task lands). The landing
+        // time is scheduling, not compute — integration patience.
+        try await Patience.poll(
+            until: {
+                if let head = try store.processedMarkdownHead(sourceID: id),
+                   head.content.contains("# Snapshot defuddle") {
+                    return true
+                }
+                return false
+            },
+            description: "snapshot import extraction")
 
         guard let head = try store.processedMarkdownHead(sourceID: id) else {
             Issue.record("no extraction head landed")
