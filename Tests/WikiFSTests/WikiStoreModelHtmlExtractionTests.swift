@@ -355,10 +355,13 @@ struct WikiStoreModelHtmlExtractionTests {
         #expect(model.importExtractingSourceIDs.contains(summary.id))
 
         let clock = ContinuousClock()
-        // 30s: under the full parallel suite the detached main-actor task can
-        // wait on scheduling long past this suite's own 5s budget; the leash
-        // only has to turn a wedged gate into a diagnosed failure.
-        let deadline = clock.now.advanced(by: .seconds(30))
+        // 60s: under the full parallel suite the detached main-actor task can
+        // wait on scheduling long past this suite's own 5s budget (observed
+        // missing a 30s leash on a saturated CI runner while concurrent
+        // 47s plugin-boot suites finished); the leash only has to turn a
+        // wedged gate into a diagnosed failure, and a real wedge does not
+        // recover at 60s either.
+        let deadline = clock.now.advanced(by: .seconds(60))
         while try store.processedMarkdownHead(sourceID: summary.id) == nil {
             guard clock.now < deadline else {
                 Issue.record("gated import extraction did not land within the time limit")
