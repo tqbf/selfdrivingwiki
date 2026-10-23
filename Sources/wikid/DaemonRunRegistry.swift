@@ -187,11 +187,15 @@ public struct DaemonRunScope: Hashable, Codable, Sendable {
 }
 
 /// One registered run's lease. The digest is stored; the printable secret is
-/// not a field, so it cannot leak out of the registry.
+/// not a field, so it cannot leak out of the registry. The operation policy
+/// is the trusted host's launch intent, immutable for the run's lifetime.
 public struct DaemonRunLease: Sendable {
     public let id: DaemonRunID
     public let scope: DaemonRunScope
     public let operationClasses: Set<DaemonRunOperationClass>
+    /// The typed managed-run policy (plan Phase 2) — fixed at registration,
+    /// never widened by renewal.
+    public let operationPolicy: ManagedRunPolicy
     public let digest: DaemonRunCapabilityDigest
     /// The run's endpoint identity (§5: stored per run). `nil` for a lease
     /// registered without an endpoint — direct registry use that never binds
@@ -205,6 +209,7 @@ public struct DaemonRunLease: Sendable {
         id: DaemonRunID,
         scope: DaemonRunScope,
         operationClasses: Set<DaemonRunOperationClass>,
+        operationPolicy: ManagedRunPolicy,
         digest: DaemonRunCapabilityDigest,
         endpointName: DaemonRunEndpointName?,
         state: DaemonRunLeaseState,
@@ -213,6 +218,7 @@ public struct DaemonRunLease: Sendable {
         self.id = id
         self.scope = scope
         self.operationClasses = operationClasses
+        self.operationPolicy = operationPolicy
         self.digest = digest
         self.endpointName = endpointName
         self.state = state
@@ -226,6 +232,9 @@ public struct DaemonRunGrant: Equatable, Sendable {
     public let runID: DaemonRunID
     public let scope: DaemonRunScope
     public let operationClasses: Set<DaemonRunOperationClass>
+    /// The run's immutable operation policy — the dispatcher's policy gate
+    /// narrows lint grants beyond the classes.
+    public let operationPolicy: ManagedRunPolicy
 }
 
 /// The registration outcome. The printable capability exists HERE and only
@@ -269,6 +278,7 @@ public actor DaemonRunRegistry {
     public func prepareRun(
         scope: DaemonRunScope,
         operationClasses: Set<DaemonRunOperationClass>,
+        operationPolicy: ManagedRunPolicy = .ordinaryManaged,
         endpointName: DaemonRunEndpointName? = nil,
         lifetime: Duration = DaemonRunRegistry.defaultLeaseLifetime
     ) throws -> DaemonRunRegistration {
@@ -282,6 +292,7 @@ public actor DaemonRunRegistry {
             id: runID,
             scope: scope,
             operationClasses: operationClasses,
+            operationPolicy: operationPolicy,
             digest: digest,
             endpointName: endpointName,
             state: .prepared,
@@ -367,7 +378,8 @@ public actor DaemonRunRegistry {
         return DaemonRunGrant(
             runID: runID,
             scope: lease.scope,
-            operationClasses: lease.operationClasses)
+            operationClasses: lease.operationClasses,
+            operationPolicy: lease.operationPolicy)
     }
 
     /// The current lease, for diagnostics and tests. No capability material.

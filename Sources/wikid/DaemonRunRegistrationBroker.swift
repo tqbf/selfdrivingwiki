@@ -92,6 +92,7 @@ actor DaemonRunRegistrationBroker {
     func launchScopedRun(
         scope: DaemonRunScope,
         operationClasses: Set<DaemonRunOperationClass>,
+        operationPolicy: ManagedRunPolicy = .ordinaryManaged,
         lifetime: Duration = DaemonRunRegistry.defaultLeaseLifetime
     ) async throws -> DaemonScopedRunHandle {
         let name = try DaemonRunEndpointName.generate()
@@ -107,6 +108,7 @@ actor DaemonRunRegistrationBroker {
         let registration = try await registry.prepareRun(
             scope: scope,
             operationClasses: operationClasses,
+            operationPolicy: operationPolicy,
             endpointName: name,
             lifetime: lifetime)
         let listener: DaemonRunSocketListener

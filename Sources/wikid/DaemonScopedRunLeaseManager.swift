@@ -61,18 +61,29 @@ actor DaemonScopedRunLeaseManager: AgentScopedRunLeaseManaging {
                 DaemonRunRegistrationBroker.runsDirectoryName, isDirectory: true).path)
     }
 
-    func issueScopedRun(for wikiID: WikiID) async throws -> AgentScopedRunLease {
+    func issueScopedRun(for wikiID: WikiID, policy: ManagedRunPolicy) async throws -> AgentScopedRunLease {
         let handle = try await broker.launchScopedRun(
             scope: DaemonRunScope(wikiID: wikiID),
-            operationClasses: Self.managedRunOperationClasses)
+            operationClasses: Self.operationClasses(for: policy),
+            operationPolicy: policy)
         let lease = AgentScopedRunLease(
             credentials: AgentScopedRunCredentials(
                 endpointPath: handle.endpointPath,
                 capability: handle.capability.printable),
             seatbeltInputs: seatbeltInputs,
-            leaseLifetime: DaemonRunRegistry.defaultLeaseLifetime)
+            leaseLifetime: DaemonRunRegistry.defaultLeaseLifetime,
+            policy: policy)
         runIDsByLease[lease] = handle.runID
         return lease
+    }
+
+    /// The registry operation classes a policy's lease carries. Lint runs
+    /// get READS ONLY — every other permission they exercise comes from the
+    /// payload-conditioned policy gate (lint log appends, the Phase 3 patch
+    /// seam), never from a broad class. A missing lint policy NEVER falls
+    /// back to broad `wikiEdit` (plan Phase 2.7).
+    static func operationClasses(for policy: ManagedRunPolicy) -> Set<DaemonRunOperationClass> {
+        policy.isLint ? [.wikiRead] : Self.managedRunOperationClasses
     }
 
     func renewScopedRun(_ lease: AgentScopedRunLease) async throws {

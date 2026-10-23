@@ -77,10 +77,11 @@ public struct AgentScopedRunSeatbeltInputs: Hashable, Sendable {
     }
 }
 
-/// One issued scoped run: the child credentials, the seatbelt inputs, and the
-/// bounded-lease cadence. Opaque to everyone except the trusted host — the
-/// launcher treats it as a revocation token. `Equatable` so the renewal loop
-/// can confirm the lease it observed is still the one it issued.
+/// One issued scoped run: the child credentials, the seatbelt inputs, the
+/// bounded-lease cadence, and the run's IMMUTABLE operation policy. Opaque to
+/// everyone except the trusted host — the launcher treats it as a revocation
+/// token. `Equatable` so the renewal loop can confirm the lease it observed
+/// is still the one it issued.
 public struct AgentScopedRunLease: Hashable, Sendable {
     public let credentials: AgentScopedRunCredentials
     public let seatbeltInputs: AgentScopedRunSeatbeltInputs
@@ -88,15 +89,20 @@ public struct AgentScopedRunLease: Hashable, Sendable {
     /// protection). The launcher renews at HALF this cadence while the run is
     /// live, so a live session never crosses the expiry.
     public let leaseLifetime: Duration
+    /// The run's typed operation policy, fixed at issue time. Renewals and
+    /// provider fallbacks carry the SAME policy — a lease never widens.
+    public let policy: ManagedRunPolicy
 
     public init(
         credentials: AgentScopedRunCredentials,
         seatbeltInputs: AgentScopedRunSeatbeltInputs,
-        leaseLifetime: Duration
+        leaseLifetime: Duration,
+        policy: ManagedRunPolicy = .ordinaryManaged
     ) {
         self.credentials = credentials
         self.seatbeltInputs = seatbeltInputs
         self.leaseLifetime = leaseLifetime
+        self.policy = policy
     }
 }
 
@@ -105,12 +111,13 @@ public struct AgentScopedRunLease: Hashable, Sendable {
 /// a same-user child can never mint, renew, or widen a run.
 public protocol AgentScopedRunLeaseManaging: Sendable {
     /// Register + bind + activate one run for `wikiID` BEFORE the child
-    /// spawns. Throws when registration, endpoint binding, or activation
-    /// fails — the caller must fail the launch (never fall back to an
-    /// unscoped child).
-    func issueScopedRun(for wikiID: WikiID) async throws -> AgentScopedRunLease
+    /// spawns, under `policy`. The policy is the trusted launch intent: the
+    /// child cannot select, widen, or replace it. Throws when registration,
+    /// endpoint binding, or activation fails — the caller must fail the launch
+    /// (never fall back to an unscoped child).
+    func issueScopedRun(for wikiID: WikiID, policy: ManagedRunPolicy) async throws -> AgentScopedRunLease
     /// Push the bounded lease's expiry out while the run is live. The
-    /// launcher calls this at half-life.
+    /// launcher calls this at half-life. The lease's policy is unchanged.
     func renewScopedRun(_ lease: AgentScopedRunLease) async throws
     /// Revoke the run: terminal registry revocation plus endpoint teardown.
     /// MUST be idempotent — every teardown path calls it unconditionally.

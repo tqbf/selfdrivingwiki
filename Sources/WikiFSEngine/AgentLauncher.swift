@@ -405,7 +405,7 @@ public final class AgentLauncher {
         // normally-finished run already revoked in finish()).
         teardownScopedRun()
         do {
-            let lease = try await manager.issueScopedRun(for: wikiID)
+            let lease = try await manager.issueScopedRun(for: wikiID, policy: .ordinaryManaged)
             activeScopedRunLease = lease
             startScopedRunRenewal(lease)
             DebugLog.agent(

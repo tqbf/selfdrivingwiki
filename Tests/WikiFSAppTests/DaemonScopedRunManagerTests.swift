@@ -54,8 +54,8 @@ struct DaemonScopedRunLeaseManagerTests {
         let wikiA = WikiDescriptor.make(displayName: "Lease A").id
         let wikiB = WikiDescriptor.make(displayName: "Lease B").id
 
-        let leaseA = try await fixture.manager.issueScopedRun(for: wikiA)
-        let leaseB = try await fixture.manager.issueScopedRun(for: wikiB)
+        let leaseA = try await fixture.manager.issueScopedRun(for: wikiA, policy: .ordinaryManaged)
+        let leaseB = try await fixture.manager.issueScopedRun(for: wikiB, policy: .ordinaryManaged)
         #expect(leaseA.credentials.endpointPath != leaseB.credentials.endpointPath)
         #expect(leaseA.credentials.capability != leaseB.credentials.capability)
         #expect(leaseA.leaseLifetime == DaemonRunRegistry.defaultLeaseLifetime)
@@ -78,7 +78,7 @@ struct DaemonScopedRunLeaseManagerTests {
         let fixture = try makeFixture()
         defer { fixture.cleanup() }
         let wiki = WikiDescriptor.make(displayName: "Lease R").id
-        let lease = try await fixture.manager.issueScopedRun(for: wiki)
+        let lease = try await fixture.manager.issueScopedRun(for: wiki, policy: .ordinaryManaged)
         #expect(FileManager.default.fileExists(atPath: lease.credentials.endpointPath))
 
         await fixture.manager.revokeScopedRun(lease)
@@ -108,8 +108,8 @@ struct DaemonScopedRunLeaseManagerTests {
         defer { fixture.cleanup() }
         let wikiA = WikiDescriptor.make(displayName: "Sibling A").id
         let wikiB = WikiDescriptor.make(displayName: "Sibling B").id
-        let leaseA = try await fixture.manager.issueScopedRun(for: wikiA)
-        let leaseB = try await fixture.manager.issueScopedRun(for: wikiB)
+        let leaseA = try await fixture.manager.issueScopedRun(for: wikiA, policy: .ordinaryManaged)
+        let leaseB = try await fixture.manager.issueScopedRun(for: wikiB, policy: .ordinaryManaged)
 
         await fixture.manager.revokeScopedRun(leaseA)
         #expect(!FileManager.default.fileExists(atPath: leaseA.credentials.endpointPath))
@@ -139,7 +139,7 @@ struct DaemonScopedRunLeaseManagerTests {
         let fixture = try makeFixture()
         defer { fixture.cleanup() }
         let wiki = WikiDescriptor.make(displayName: "Unknown").id
-        let real = try await fixture.manager.issueScopedRun(for: wiki)
+        let real = try await fixture.manager.issueScopedRun(for: wiki, policy: .ordinaryManaged)
         // A HAND-COOKED lease with the same credentials but different
         // seatbelt inputs must not renew the real run.
         let cooked = AgentScopedRunLease(

@@ -335,17 +335,30 @@ struct DaemonScopedRequestGuard: Sendable {
         }
 
         // 3. OPERATION POLICY — the exhaustive table; unknown pairs deny.
+        // Ordinary managed runs classify by operation class. Lint policies
+        // substitute their own allowlist: reads pass (their lease carries
+        // wikiRead), the lint-kind log append is the one payload-conditioned
+        // write, and everything else denies generically (plan Phase 2).
         let decision = DaemonScopedOperationPolicy.decision(
             family: request.family, operation: request.operation)
-        switch decision {
-        case .deny:
-            throw Self.scopeDenied()
-        case .protocolOnly:
-            return grant
-        case .allow(let operationClass):
-            guard grant.operationClasses.contains(operationClass) else {
+        switch grant.operationPolicy {
+        case .ordinaryManaged:
+            switch decision {
+            case .deny:
                 throw Self.scopeDenied()
+            case .protocolOnly:
+                return grant
+            case .allow(let operationClass):
+                guard grant.operationClasses.contains(operationClass) else {
+                    throw Self.scopeDenied()
+                }
             }
+        case .lintSelectedPageRepair(let selectedPage):
+            try Self.evaluateLintAllowances(request, selectedPageID: selectedPage)
+        case .lintSelectedPageReportOnly(let selectedPage):
+            try Self.evaluateLintAllowances(request, selectedPageID: selectedPage)
+        case .lintWholeWikiReportOnly:
+            try Self.evaluateLintAllowances(request, selectedPageID: nil)
         }
 
         // 4. TARGET SCOPE — the target must be the registered wiki; queue
@@ -382,6 +395,63 @@ struct DaemonScopedRequestGuard: Sendable {
         DaemonDomainError(
             code: .scopeDenied,
             message: "the request is outside the scope of this run")
+    }
+
+    // MARK: - Lint policy allowances (plan Phase 2)
+
+    /// The operation the lint policy gate recognizes as a log append.
+    static let lintLogAppendOperation = DaemonDomainOperation.Log.logAppend
+
+    /// Payload-conditioned lint allowances, evaluated AFTER the class gate:
+    /// a lint run's lease carries reads only, so every allowed-by-table wiki
+    /// read passes untouched and EVERYTHING else must be an explicit
+    /// allowance here or it denies generically.
+    ///
+    /// - `log append`: allowed only when the minimally-decoded payload names
+    ///   kind `lint` (the same minimal-decode posture as target extraction —
+    ///   the guard never decodes the full operation). Any other kind, or an
+    ///   unreadable payload, denies generically.
+    static func evaluateLintAllowances(
+        _ request: DaemonDomainRequest,
+        selectedPageID: PageID?
+    ) throws {
+        let decision = DaemonScopedOperationPolicy.decision(
+            family: request.family, operation: request.operation)
+        // Protocol-only traffic (the credentialed hello) passes like any
+        // other scoped connection.
+        if case .protocolOnly = decision {
+            return
+        }
+        // Reads pass (the lint lease carries wikiRead, so the class gate
+        // already accepted these).
+        if case .allow(.wikiRead) = decision {
+            return
+        }
+        // The one write allowance: a lint log append, kind-checked.
+        if request.family == .log, request.operation == Self.lintLogAppendOperation,
+           Self.logAppendPayloadKind(request.payload) == "lint" {
+            return
+        }
+        // Everything else — page add/delete/revert, OKF writes, source
+        // writes, index set, strategy/bookmark/chat/workspace writes, queue
+        // controls, registry mutation — denies generically. The Phase 3
+        // `page patch` seam adds its selected-page identity check here.
+        throw scopeDenied()
+    }
+
+    /// Minimally decode the log-append payload's `kind` field; nil when the
+    /// payload is absent or unreadable (which denies). The decode failure is
+    /// the typed denial signal here, not a swallowed error.
+    static func logAppendPayloadKind(_ payload: Data?) -> String? {
+        guard let payload else { return nil }
+        struct LogKind: Decodable { let kind: String? }
+        do {
+            return try JSONDecoder().decode(LogKind.self, from: payload).kind
+        } catch {
+            // An unreadable payload is a denial by design — the allowlist
+            // treats "cannot see the kind" as "not a lint log".
+            return nil
+        }
     }
 }
 #endif
