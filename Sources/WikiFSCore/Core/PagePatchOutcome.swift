@@ -39,6 +39,10 @@ public enum PagePatchIntegrityError: Error, Equatable, CustomStringConvertible {
     /// An added citation's quote fragment does not appear in the citation's
     /// target version's stored text.
     case quoteNotInSource(sourceID: SourceID, quote: String)
+    /// An added citation carries a `@vN` version pin that names no
+    /// extraction of that source (review M5 — a pin must resolve; it never
+    /// silently falls back to the active head).
+    case unresolvedPin(sourceID: SourceID, pin: Int)
 
     public var description: String {
         switch self {
@@ -46,6 +50,8 @@ public enum PagePatchIntegrityError: Error, Equatable, CustomStringConvertible {
             return "added citation does not resolve to exactly one existing source: \(link)"
         case .quoteNotInSource(let sourceID, let quote):
             return "added citation's quote does not appear in source \(sourceID.rawValue): \(quote.debugDescription)"
+        case .unresolvedPin(let sourceID, let pin):
+            return "added citation's version pin @v\(pin) names no extraction of source \(sourceID.rawValue)"
         }
     }
 }

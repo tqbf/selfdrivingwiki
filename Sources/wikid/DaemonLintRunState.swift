@@ -76,11 +76,18 @@ public actor DaemonLintRunState {
         return receipt
     }
 
-    /// Validate that a patch request presents the run's CURRENT receipt.
-    /// Throws `staleReceipt` for anything else — an old body cannot pass
-    /// with a refreshed head, and a fabricated token cannot pass at all.
-    public func validateReceipt(runID: DaemonRunID, token: String) throws {
+    /// Validate that a patch request presents the run's CURRENT receipt AND
+    /// that the receipt's head matches the patch's `expectHead` (review M4:
+    /// an old body cannot pass with a refreshed head — a receipt minted
+    /// from H1 cannot authorize hunks declared against H2). Throws
+    /// `staleReceipt` for anything else.
+    public func validateReceipt(
+        runID: DaemonRunID, token: String, expectedHead: PageVersionID
+    ) throws {
         guard let current = receipts[runID], current.token == token else {
+            throw LintCASBudgetError.staleReceipt
+        }
+        guard current.headVersionID == expectedHead else {
             throw LintCASBudgetError.staleReceipt
         }
     }

@@ -5056,12 +5056,27 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 let versionID = try link.versionPin.flatMap {
                     try self.resolveVersionPin($0, sourceID: sourceID, in: db)
                 }
+                // Review M5: a pin that names no extraction is a REJECTION —
+                // the quote must never silently fall back to the active head.
+                if let pin = link.versionPin,
+                   try self.resolveVersionPin(pin, sourceID: sourceID, in: db) == nil {
+                    throw PagePatchIntegrityError.unresolvedPin(
+                        sourceID: sourceID, pin: Int(pin) ?? 0)
+                }
                 let content = try self.sourceMarkdownContent(
                     sourceID: sourceID, versionID: versionID, on: db)
                 let normalized = Self.quoteNormalized(content)
                 guard normalized.contains(Self.quoteNormalized(quoteText)) else {
                     throw PagePatchIntegrityError.quoteNotInSource(
                         sourceID: sourceID, quote: quoteText)
+                }
+            } else if let pin = link.versionPin {
+                // Review M5: a pin WITHOUT a fragment is checked too — the
+                // pin must name a real extraction even when there is no quote
+                // to verify against it.
+                if try self.resolveVersionPin(pin, sourceID: sourceID, in: db) == nil {
+                    throw PagePatchIntegrityError.unresolvedPin(
+                        sourceID: sourceID, pin: Int(pin) ?? 0)
                 }
             }
             // The added citation names its source input (REQ-17) — union it

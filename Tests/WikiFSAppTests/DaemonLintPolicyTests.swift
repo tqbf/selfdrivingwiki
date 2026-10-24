@@ -123,16 +123,48 @@ struct DaemonLintPolicyTests {
         #expect(current?.token == token)
         #expect(current?.bodyFingerprint == LintPageSnapshot.fingerprint(of: "# Body\n"))
         await #expect(throws: Never.self) {
-            try await state.validateReceipt(runID: fixture.runID, token: token)
+            try await state.validateReceipt(
+                runID: fixture.runID, token: token,
+                expectedHead: PageVersionID(rawValue: "01HZHEAD00000000000000000001"))
+        }
+        // A receipt minted from H1 cannot authorize hunks against H2 (M4).
+        await #expect(throws: DaemonLintRunState.LintCASBudgetError.self) {
+            try await state.validateReceipt(
+                runID: fixture.runID, token: token,
+                expectedHead: PageVersionID(rawValue: "01HZHEAD00000000000000000002"))
         }
         // A stale/fabricated token throws.
         await #expect(throws: DaemonLintRunState.LintCASBudgetError.self) {
-            try await state.validateReceipt(runID: fixture.runID, token: "forged")
+            try await state.validateReceipt(
+                runID: fixture.runID, token: "forged",
+                expectedHead: PageVersionID(rawValue: "01HZHEAD00000000000000000001"))
         }
         // A commit kills the receipt — the old token can never replay.
         await state.invalidateReceipt(runID: fixture.runID)
         await #expect(throws: DaemonLintRunState.LintCASBudgetError.self) {
-            try await state.validateReceipt(runID: fixture.runID, token: token)
+            try await state.validateReceipt(
+                runID: fixture.runID, token: token,
+                expectedHead: PageVersionID(rawValue: "01HZHEAD00000000000000000001"))
+        }
+
+        // Review M4: a conflict also kills the receipt — after the head
+        // moves, the old body is gone and the recomposition needs a fresh
+        // minting read.
+        let reminted = await state.issueReceipt(
+            runID: fixture.runID,
+            head: PageVersionID(rawValue: "01HZHEAD00000000000000000002"),
+            bodyFingerprint: "fp2")
+        await #expect(throws: Never.self) {
+            try await state.validateReceipt(
+                runID: fixture.runID, token: reminted.token,
+                expectedHead: PageVersionID(rawValue: "01HZHEAD00000000000000000002"))
+        }
+        await state.recordConflict(runID: fixture.runID)
+        await state.invalidateReceipt(runID: fixture.runID)
+        await #expect(throws: DaemonLintRunState.LintCASBudgetError.self) {
+            try await state.validateReceipt(
+                runID: fixture.runID, token: reminted.token,
+                expectedHead: PageVersionID(rawValue: "01HZHEAD00000000000000000002"))
         }
 
         // The conflict budget: one recomposition allowed, the second closes.
@@ -327,29 +359,37 @@ struct DaemonLintPolicyTests {
         // Fresh state: receipt lifecycle.
         let fresh = DaemonLintRunState()
         let r1 = await fresh.issueReceipt(runID: runID, head: head1, bodyFingerprint: "aa")
-        try await fresh.validateReceipt(runID: runID, token: r1.token)
+        try await fresh.validateReceipt(
+            runID: runID, token: r1.token, expectedHead: head1)
         // A fabricated token denies.
         await #expect(throws: DaemonLintRunState.LintCASBudgetError.staleReceipt.self) {
-            try await fresh.validateReceipt(runID: runID, token: "forged")
+            try await fresh.validateReceipt(
+                runID: runID, token: "forged", expectedHead: head1)
+        }
+        // Review M4: a receipt minted from head1 cannot authorize hunks
+        // declared against head2 — token AND head must both match.
+        await #expect(throws: DaemonLintRunState.LintCASBudgetError.staleReceipt.self) {
+            try await fresh.validateReceipt(
+                runID: runID, token: r1.token, expectedHead: head2)
         }
         // A new read invalidates the old receipt — the old BODY's token can
         // never pass after the head moved (AC.7 staleReceiptCannotReplayBody).
         let r2 = await fresh.issueReceipt(runID: runID, head: head2, bodyFingerprint: "bb")
         #expect(r2.token != r1.token)
         await #expect(throws: DaemonLintRunState.LintCASBudgetError.staleReceipt.self) {
-            try await fresh.validateReceipt(runID: runID, token: r1.token)
+            try await fresh.validateReceipt(runID: runID, token: r1.token, expectedHead: head2)
         }
-        try await fresh.validateReceipt(runID: runID, token: r2.token)
+        try await fresh.validateReceipt(runID: runID, token: r2.token, expectedHead: head2)
         // A committed patch invalidates the receipt — no replay after a write.
         await fresh.invalidateReceipt(runID: runID)
         await #expect(throws: DaemonLintRunState.LintCASBudgetError.staleReceipt.self) {
-            try await fresh.validateReceipt(runID: runID, token: r2.token)
+            try await fresh.validateReceipt(runID: runID, token: r2.token, expectedHead: head2)
         }
         // A conflict after a fresh receipt demands a NEW receipt before the
         // next patch (tied to the new head + fingerprint).
         #expect(await fresh.recordConflict(runID: runID) == true)
         let r3 = await fresh.issueReceipt(runID: runID, head: head2, bodyFingerprint: "bb")
-        try await fresh.validateReceipt(runID: runID, token: r3.token)
+        try await fresh.validateReceipt(runID: runID, token: r3.token, expectedHead: head2)
     }
 }
 #endif

@@ -112,6 +112,9 @@ public enum PagePatchValidationError: Error, Equatable, CustomStringConvertible 
     case overlappingRanges(first: PagePatchHunk, second: PagePatchHunk)
     /// The payload exceeds ``PagePatch/maxPayloadBytes``.
     case oversizedPayload(bytes: Int)
+    /// Every hunk's new text equals its old text — the composed body is
+    /// byte-identical to the original, so there is nothing to commit.
+    case noOpPatch
 
     public var description: String {
         switch self {
@@ -129,6 +132,8 @@ public enum PagePatchValidationError: Error, Equatable, CustomStringConvertible 
             return "hunk ranges overlap; apply one repair per location"
         case .oversizedPayload(let bytes):
             return "patch payload is \(bytes) bytes; the budget is \(PagePatch.maxPayloadBytes)"
+        case .noOpPatch:
+            return "patch changes nothing (every hunk's new text equals its old text) — nothing to commit"
         }
     }
 }
@@ -202,6 +207,12 @@ public enum PagePatchValidator {
             cursor = hunk.endByte
         }
         composed += String(decoding: utf8[cursor...], as: UTF8.self)
+        // m2: a NO-OP patch (old text == new text everywhere) is not an
+        // edit — it must not create a version, emit an event, or invalidate
+        // a receipt. The store's caller treats this as a typed rejection.
+        if composed == body {
+            throw PagePatchValidationError.noOpPatch
+        }
         return composed
     }
 

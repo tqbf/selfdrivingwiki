@@ -220,9 +220,11 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                 throw Self.scopeDeniedError()
             }
             let payload = try decodePatchPayload(request.payload)
+            let expectHead = PageVersionID(rawValue: payload?.expectHead ?? "")
             do {
                 try await self.lintRunState.validateReceipt(
-                    runID: grant.runID, token: payload?.lintReceipt ?? "")
+                    runID: grant.runID, token: payload?.lintReceipt ?? "",
+                    expectedHead: expectHead)
             } catch {
                 // The budget stays opaque: stale, forged, and absent tokens
                 // all deny with the generic scope message.
@@ -254,6 +256,10 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                         DebugLog.store(
                             "wikid: lint run \(grant.runID) exhausted its CAS conflict budget")
                     }
+                    // Review M4: a conflict means the head moved — the old
+                    // receipt's body no longer exists, so it dies here too.
+                    // The recomposition requires a fresh minting read.
+                    await self.lintRunState.invalidateReceipt(runID: grant.runID)
                 }
             }
             return reply
