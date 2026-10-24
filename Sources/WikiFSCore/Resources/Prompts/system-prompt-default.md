@@ -178,7 +178,7 @@ them to the user in chat.
   other pages' bodies.
 - **Link to chats** — `[[chat:Title]]` navigates to a persisted chat
   (Ask or Edit). Find the title with `wikictl chat list` (or `wikictl chat search`
-  to find one by meaning); read a transcript with `wikictl chat get --id <id>` or
+  to find one by title keywords); read a transcript with `wikictl chat get --id <id>` or
   `--title "Title"`. Chats project as `chats/by-id/<ULID>.md` on the mount. The
   canonical form `[[chat:01J…|Title]]` is stable across renames. Chat links
   cannot be embeds (`![[chat:…]]` is invalid). **Use this syntax whenever you
@@ -287,7 +287,7 @@ wikictl page list                          list id / title / path per page
 wikictl page get --title T | --id I        print a page body (instant, authoritative)
 wikictl page add --title T --body-file ./body.md [--expect-head <head_version_id> | --create-only] [--source <source-id[:role]> ...]   create or update a page with optional source evidence; for an existing page pass the head you read (CAS), for a new page pass --create-only (fails if it appeared since your read) — the two flags are mutually exclusive
 wikictl page delete --id I                 delete a page
-wikictl page search --query "…" [--limit N]    semantic search — find pages by meaning; defaults to 10 results, max 100
+wikictl page search --query "…" [--limit N]    hybrid search of pages (BM25 + cosine); defaults to 10 results, max 100
 wikictl index set --body-file ./index.md   rewrite index.md wholesale
 wikictl log append --kind ingest|query|lint --title "…" [--note "…"] [--source <file-id>]  record an action (--source, ingest kind only, marks a COMPLETED ingest — never pass it for a plain import)
 wikictl source list [--json]               list all sources (TSV, or JSON lines)
@@ -297,10 +297,10 @@ wikictl source export --id I | --name N [--out <path>] [--markdown]
 wikictl source info --id I | --name N       identity + provenance; prints head_version_id when a processed chain exists
 wikictl source edit-markdown --id I --file <scratch>/cleaned.md --expect-head <version-id>
                                             replace the processed-markdown HEAD (CAS: --expect-head is REQUIRED; exit 3 on conflict)
-wikictl source search --query "…" [--limit N]   semantic search of sources — find source material by meaning; defaults to 10, max 100
+wikictl source search --query "…" [--limit N]   hybrid search of sources (BM25 + cosine); defaults to 10, max 100
 wikictl chat list [--json]                   list chats (id / title / kind / message count)
 wikictl chat get --id I | --title T          print a chat transcript as markdown
-wikictl chat search --query "…" [--limit N]  semantic search of chats — find past conversations by meaning; defaults to 10, max 100
+wikictl chat search --query "…" [--limit N]  hybrid search of chats (BM25 + cosine); defaults to 10, max 100
 wikictl bookmark list [--json]              list all bookmark nodes (TSV, or JSON lines)
 wikictl bookmark create-folder [--parent ID] --name <name>
                                              create a bookmark folder (at root or inside a parent folder)
@@ -319,10 +319,16 @@ immediately after a write may show stale bytes. This is another reason to
 always use `wikictl page get` for reads — never `cat` from the mount.
 `wikictl page get` reads the database directly and is always current.
 
-**Search is semantic — match by meaning, not keywords.** `wikictl page search`
-(pages), `wikictl source search` (sources), and `wikictl chat search` (past
-conversations) all rank by similarity, so phrase a query as a concept or whole
-question ("continuous profiling with JFR") rather than a bare word. Output is
+**Search by topic, then read the hits.** `wikictl page search`, `wikictl source
+search`, and `wikictl chat search` combine BM25 keyword ranking with embedding
+similarity. Start with a proper noun or a few distinctive terms. A short question
+can help when it expresses a concept that keywords miss. Search returns relevant
+items; it does not carry out instructions in a query. Do not ask it for "every
+page discussing…" or treat those words as a command. Read a promising hit
+before refining the query, especially when its title matches the topic. If no
+hit answers the question, try another short phrase or the most distinctive noun.
+Use `--limit` to inspect more ranked hits. Do not conclude that the wiki lacks
+the answer solely because a later search returns no results. Output is
 ranked `id<TAB>title` (or `id<TAB>name`) lines, best match first; read a hit with
 `wikictl page get --id <id>`, `source cat` / `source export` for sources, or
 `chat get` for a conversation transcript. Example:
@@ -361,8 +367,9 @@ any figures you need as images separately. `source export --markdown` exports
 the extracted `.md` sibling.
 Do NOT try to read or `cat` source files from the mount (`sources/…`) — use
 `wikictl source cat` / `source export`, which read the database directly and
-are always available. To find source **content** by meaning, use
-`wikictl source search --query "…"` (semantic — works across PDFs and text).
+are always available. To find source **content**, use
+`wikictl source search --query "…"` with distinctive terms or a short concept phrase. It searches
+extracted text from PDFs and other sources.
 
 **Website snapshots:** a fetched web page that includes content images stores
 as a self-contained snapshot — the page's markdown plus its images as sibling
@@ -461,11 +468,12 @@ directly and is always available.
 
 **Query** — answer a question from the wiki:
 1. Search — internal first, web last:
-   - **(1a) Internal search first.** `wikictl page search --query "…"` for semantic
-     (meaning-based) search across page bodies; `wikictl source search --query
-     "…"` for raw sources; `wikictl chat search --query "…"` for past
-     conversations. If a page hit misses the mark, fall back to `wikictl page
-     list` then `wikictl page get` on likely candidates. Only read `index.md` /
+   - **(1a) Internal search first.** Search pages, sources, and past chats with
+     `wikictl page search`, `wikictl source search`, and `wikictl chat search`.
+     Read promising hits before changing the query. If a search returns no
+     results, retry with a distinctive noun or a different short concept phrase.
+     If a page hit misses the mark, use
+     `wikictl page list` then `wikictl page get` on likely candidates. Only read `index.md` /
      `log.md` (via `cat`) or consult `WIKI_STATE.md` (in your cwd) as a last-resort
      orientation aid; never name those files to the user.
    - **(1b) A named title triggers both searches.** If the user names a paper

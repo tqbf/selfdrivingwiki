@@ -111,6 +111,16 @@ public struct WikiStateSnapshot: Equatable, Sendable {
       lines.append(WikiStrategyRenderer.render(strategy).trimmingCharacters(in: .newlines))
     }
 
+    // Search guidance assumes hybrid BM25 and cosine retrieval is available.
+    lines.append("")
+    lines.append("## Search guidance")
+    lines.append(
+      "`wikictl page search`, `source search`, and `chat search` combine BM25 keyword matching with cosine similarity over embeddings. "
+        + "Search with the topic or concept you mean; a natural-language question is fine. Avoid instruction-style queries that tell the search tool what to do, such as ‘find every page discussing…’.")
+    lines.append(
+      "Review the returned hits and open relevant pages or chats before deciding the wiki has no answer. "
+        + "If there are no useful hits, retry with a distinctive term, a shorter phrase, or different wording for the concept. Use `--limit` to show more hits.")
+
     // Existing pages.
     lines.append("")
     lines.append("## Existing pages")
