@@ -163,6 +163,29 @@ critical defects in the deterministic core. Fix-or-rebut status:
   now state that the gate selects report-only for every current
   configuration and that production minting landed with `8d34ca5c`.
 
+## Advisor gate-design review (Opus 5.5, `plans/advisor-review-gate-design.md`)
+
+Product requirement set by the operator: **when shipped, lint must repair
+with no eval step and no custom configuration.** The advisor endorsed
+shipping the acceptance approval with the app ("approvals are public by
+design — safety comes from enforcement, not secret keys") with this shape:
+
+- **Shipped manifest** in the signed bundle: pipeline block (prompt hash,
+  detector revision, patch/verification contract versions) + approvals
+  matrix (runtime, model selector, effort, evidence digests) +
+  `defaultReportOnly` flag. Runtime config checked against the matrix:
+  match → repair lease; no match → report-only with plain reason.
+- **New enforcement for on-by-default repairs:** Undo ("N fixes applied" →
+  revert to inspected head under CAS); local circuit breaker (≥2
+  verification failures or ≥2 undos in last 10 → report-only; resets on
+  app update); auto-revert on verification failure (CAS on written head);
+  patch budget (hunks + changed bytes per run); `approvalID` +
+  `authorityTier` on receipts; unsandboxed lint child → report-only.
+- **Module boundary:** WikiFSEngine must NOT import WikiLintEval — replace
+  `LintCoordinatorGate`'s dependency with build-generated constants in
+  WikiFSCore (GeneratedPrompts pattern). WikiLintEval stays dev-only.
+- Whole-wiki lint stays report-only with a "Fix N pages" affordance later.
+
 ## Phase 6/7 remaining (authoritative)
 
 1. Phase 6: `WikiLintEval`/`WikiLintEvalRunner` targets +
