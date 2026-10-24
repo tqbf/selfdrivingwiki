@@ -69,4 +69,11 @@ public struct LintInventoryTotals: Equatable, Sendable {
             }
         }
     }
+
+    /// Compact one-line form for report messages ("tables=2 citations=1 …").
+    public var summary: String {
+        "tables=\(tables) source-citations=\(sourceCitations) raw-urls=\(rawURLs) "
+            + "footnote-references=\(footnoteReferences) footnote-definitions=\(footnoteDefinitions) "
+            + "fences=\(fences)"
+    }
 }
