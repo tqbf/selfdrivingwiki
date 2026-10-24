@@ -64,7 +64,14 @@ run's `page get --id <selected> --json` mints a receipt into the JSON reply;
 `page patch --lint-receipt` must present the CURRENT token — stale/absent/
 closed deny with the generic scope message; commit invalidates; a typed
 casConflict burns one recomposition and the second closes the run;
-lint-page-task.md + CLIReference teach `--lint-receipt`).
+lint-page-task.md + CLIReference teach `--lint-receipt`), and **`e824e9a3`** (AC.5 LANDED:
+`AgentSandboxProcessTests.lintCannotBypassEndpointPolicy` drives the real
+sandboxed CLI through the real scoped endpoint — mint on the selected JSON
+read, generic denials for missing/forged receipts, non-selected pages and
+non-lint log kinds, the receipted patch commits exactly, the replayed
+receipt then denies, the non-selected page stays byte-identical; plus
+receipt-budget errors now convert to the generic scope denial and minting
+handles the DaemonCommandOutcome envelope).
 
 1. **`--kind lint` host log (§5.12).** After each completed audit the host
    appends the required log entry (inspected/written heads, server-observed
