@@ -63,13 +63,24 @@ public struct LintResolutionFacts: Sendable, Equatable {
 public enum LintPagePreflight {
 
     /// Scan one snapshot and produce the full report in REQ-23 section order.
+    /// The optional facts inputs carry store-derived and package-derived
+    /// checks (D09 citation fragments, D11 origin URLs, D27 history
+    /// regression, D28 rich-fence validation); a `nil` fact leaves that
+    /// check unevaluated and records an honest limit in its section — it
+    /// never renders as a pass.
     public static func scan(
         snapshot: LintPageSnapshot,
-        resolution: LintResolutionFacts
+        resolution: LintResolutionFacts,
+        citations: LintCitationFacts? = nil,
+        originURLs: LintOriginURLFacts? = nil,
+        history: LintHistoryFacts? = nil,
+        fenceValidation: LintFenceValidationFacts? = nil
     ) -> LintPreflightReport {
         let parsed = ParsedMarkdownDocument(parsing: snapshot.body)
         let protection = parsed.codeProtection
         let protectedUTF16 = WikiFootnoteMarkdown.utf16Ranges(of: protection, in: snapshot.body)
+        let protectedUTF8 = protectedUTF16.compactMap { utf8Range($0, in: snapshot.body) }
+        let maskedBody = byteMasked(snapshot.body, protectedUTF8: protectedUTF8)
         let fenceFacts = parsed.fenceFacts
         let footnotes = MarkdownFootnoteAnalysis.analyze(
             in: snapshot.body, protectedRanges: protectedUTF16)
@@ -86,30 +97,34 @@ public enum LintPagePreflight {
         var sections: [LintPreflightReport.Section] = []
         var occurrenceCounters: [String: Int] = [:]
 
-        // §3 fence boundaries: D25 whole-body wrap, D01 boundary facts.
-        sections.append(fenceSection(snapshot, fenceFacts, protection, &occurrenceCounters))
+        // §3 fence boundaries: D25 whole-body wrap, D01 boundary candidates.
+        sections.append(fenceSection(
+            snapshot, fenceFacts, protection, &occurrenceCounters))
 
-        // §4 markdown structure: table candidates from the AST (D03); the
-        // report-only list/heading/delimiter classes are Phase 4.
-        sections.append(markdownStructureSection(snapshot, parsed, &occurrenceCounters))
+        // §4 markdown structure: D03 tables, D02/D04/D05 report-only.
+        sections.append(markdownStructureSection(
+            snapshot, parsed, protectedUTF8, &occurrenceCounters))
 
-        // §5 wiki references: D06, D07, D08, D10, D22.
+        // §5 wiki references: D06, D07, D08, D09, D10, D22.
         sections.append(wikiReferencesSection(
-            snapshot, wikiNodes, footnotes, resolution, &occurrenceCounters))
+            snapshot, wikiNodes, footnotes, resolution, citations,
+            &occurrenceCounters))
 
-        // §6 raw URLs and rich fences: D11 inventory + exact-match facts are
-        // store-derived (Phase 4 completes candidate repairs).
-        sections.append(rawURLsSection(inventory))
+        // §6 raw URLs and rich fences: D11, D20, D28.
+        sections.append(rawURLsSection(
+            snapshot, parsed, inventory, maskedBody, fenceFacts,
+            originURLs, fenceValidation, &occurrenceCounters))
+
+        // §7 integrity and history: D14, D15, D17, D18, D23, D24, D26, D27.
+        sections.append(integrityAndHistorySection(
+            snapshot, parsed, wikiNodes, footnotes, maskedBody,
+            protectedUTF8, history, &occurrenceCounters))
 
         // §1 identity, §2 scan failures, §8 metadata, §9 judgment audits.
         sections.append(LintPreflightReport.Section(
             section: .identity, status: .completed, findings: [], dialectLimits: []))
         sections.append(LintPreflightReport.Section(
             section: .scanFailures, status: .completed, findings: [], dialectLimits: []))
-        sections.append(LintPreflightReport.Section(
-            section: .integrityAndHistory, status: .notChecked(
-                reason: "integrity and history-regression detectors land with detector phase 4"),
-            findings: [], dialectLimits: []))
         sections.append(LintPreflightReport.Section(
             section: .metadata, status: .completed, findings: [], dialectLimits: [
                 "D19: no page metadata contract exists in v1; metadata validation is off"
@@ -126,6 +141,54 @@ public enum LintPagePreflight {
             sections: sections,
             inventory: inventory,
             repairs: [])
+    }
+
+    // MARK: - Section assembly
+
+    /// Number detector output into stable per-class occurrence IDs.
+    static func numbered(
+        _ detected: [DetectedFinding],
+        _ counters: inout [String: Int]
+    ) -> [LintFinding] {
+        detected.map { finding in
+            counters[finding.defectClass.rawValue, default: 0] += 1
+            return LintFinding(
+                occurrenceID: "\(finding.defectClass.rawValue)-\(counters[finding.defectClass.rawValue].map(String.init) ?? "?")",
+                defectClass: finding.defectClass,
+                authoredRange: finding.range,
+                evidence: excerpt(of: finding.evidence),
+                message: finding.message,
+                severity: finding.severity,
+                confidence: finding.confidence,
+                candidateRepair: finding.candidateRepair)
+        }
+    }
+
+    /// Assemble a section, applying the named per-section finding limit —
+    /// an over-limit section reports truncation with the omitted count
+    /// rather than silently dropping findings (REQ-25).
+    static func makeSection(
+        _ section: LintScanSection,
+        detected: [DetectedFinding],
+        limits: [String],
+        _ counters: inout [String: Int]
+    ) -> LintPreflightReport.Section {
+        let findings = numbered(detected, &counters)
+        if findings.count > LintPreflightReport.Limits.findingsPerSection {
+            let kept = Array(findings.prefix(LintPreflightReport.Limits.findingsPerSection))
+            return LintPreflightReport.Section(
+                section: section,
+                status: .truncated(
+                    omittedCount: findings.count - kept.count,
+                    reason: "per-section finding limit (\(LintPreflightReport.Limits.findingsPerSection)); the complete set stays in the staged inventory"),
+                findings: kept,
+                dialectLimits: limits)
+        }
+        return LintPreflightReport.Section(
+            section: section,
+            status: .completed,
+            findings: findings,
+            dialectLimits: limits)
     }
 
     // MARK: - Inventory
@@ -202,7 +265,7 @@ public enum LintPagePreflight {
         return items
     }
 
-    private static func collectTables(
+    static func collectTables(
         from markup: Markup,
         parsed: ParsedMarkdownDocument,
         _ visit: (MarkdownSourceRange?) -> Void
@@ -223,71 +286,64 @@ public enum LintPagePreflight {
         _ protection: MarkdownCodeProtection,
         _ counters: inout [String: Int]
     ) -> LintPreflightReport.Section {
-        var findings: [LintFinding] = []
+        var detected: [DetectedFinding] = []
         let limits = [
             "Legal EOF-closed fences are valid — end-of-file closure alone is never a defect",
             "Fence facts derive from the reader's AST plus source slices; no heuristic fence scan",
+            "Inner lines resembling delimiters are candidates: literal fence examples inside code blocks also match",
         ]
 
         // D25 — whole-body fence wrap: one fence opens at the first content
         // line and closes at the last; everything else is inside it.
         if let wrap = wholeBodyWrap(in: snapshot.body, fenceFacts: fenceFacts) {
-            counters["D25", default: 0] += 1
-            let occurrence = "D25-\(counters["D25"].map(String.init) ?? "?")"
-            // Separate opening and closing deletion candidates (plan §4.1).
-            findings.append(LintFinding(
-                occurrenceID: occurrence + "-opening",
-                defectClass: .wholeBodyFenceWrap,
-                authoredRange: wrap.openingRange,
-                evidence: excerpt(of: slice(snapshot.body, wrap.openingRange)),
-                message: "The whole body is wrapped in a fence, so links and tables render as literal text",
-                severity: .critical,
-                confidence: .confirmed,
+            detected.append(DetectedFinding(
+                .wholeBodyFenceWrap,
+                wrap.openingRange,
+                excerpt(of: slice(snapshot.body, wrap.openingRange)),
+                "The whole body is wrapped in a fence, so links and tables render as literal text",
+                .critical,
+                .confirmed,
                 candidateRepair: LintCandidateRepair(
                     change: .deletion,
                     reason: "unwrap the whole-body fence so the body renders as Markdown")))
-            findings.append(LintFinding(
-                occurrenceID: occurrence + "-closing",
-                defectClass: .wholeBodyFenceWrap,
-                authoredRange: wrap.closingRange,
-                evidence: excerpt(of: slice(snapshot.body, wrap.closingRange)),
-                message: "Closing delimiter of the whole-body fence wrap",
-                severity: .critical,
-                confidence: .confirmed,
+            detected.append(DetectedFinding(
+                .wholeBodyFenceWrap,
+                wrap.closingRange,
+                excerpt(of: slice(snapshot.body, wrap.closingRange)),
+                "Closing delimiter of the whole-body fence wrap",
+                .critical,
+                .confirmed,
                 candidateRepair: LintCandidateRepair(
                     change: .deletion,
                     reason: "unwrap the whole-body fence so the body renders as Markdown")))
         }
 
-        // D01 — fence boundary damage candidates. A fence that closes AT
-        // end-of-file is legal (limit above). A fence inside a container
-        // whose observed closing fence sits OUTSIDE the block's own AST
-        // range would indicate boundary damage — facts only; judgment
-        // confirms. v1 reports nothing without such a mismatch.
-        return LintPreflightReport.Section(
-            section: .fenceBoundaries,
-            status: .completed,
-            findings: findings,
-            dialectLimits: limits)
+        // D01 — fence boundary damage: inner lines that resemble a closing
+        // delimiter but cannot close the block.
+        detected.append(contentsOf: fenceBoundaryCandidates(
+            body: snapshot.body, fenceFacts: fenceFacts))
+
+        return makeSection(.fenceBoundaries, detected: detected, limits: limits, &counters)
     }
 
     private static func markdownStructureSection(
         _ snapshot: LintPageSnapshot,
         _ parsed: ParsedMarkdownDocument,
+        _ protectedUTF8: [MarkdownSourceRange],
         _ counters: inout [String: Int]
     ) -> LintPreflightReport.Section {
-        // v1: D03 candidates come from malformed tables that parse as
-        // paragraphs (Phase 4 scanner). Report-only classes (D02/D04/D05)
-        // are likewise Phase 4. The section exists so the report renders its
-        // `none detected` state and its limits.
-        return LintPreflightReport.Section(
-            section: .markdownStructure,
-            status: .completed,
-            findings: [],
-            dialectLimits: [
-                "Tables are inventoried from AST table nodes; malformed tables that parse as paragraphs are Phase 4",
-                "D02/D04/D05 are report-only in v1 (D4)",
-            ])
+        var detected: [DetectedFinding] = []
+        let limits = [
+            "Tables are inventoried from AST table nodes; malformed shapes that failed to parse are reported, never reconstructed",
+            "D02/D04/D05 are report-only in v1 (D4): style conventions never become confirmed defects",
+        ]
+        detected.append(contentsOf: tableCandidates(parsed: parsed))
+        detected.append(contentsOf: inlineDelimiterCandidates(
+            parsed: parsed, protectedUTF8: protectedUTF8))
+        detected.append(contentsOf: indentationCandidates(
+            parsed: parsed, fenceFacts: parsed.fenceFacts, protectedUTF8: protectedUTF8))
+        detected.append(contentsOf: headingCandidates(parsed: parsed))
+        return makeSection(.markdownStructure, detected: detected, limits: limits, &counters)
     }
 
     private static func wikiReferencesSection(
@@ -295,9 +351,15 @@ public enum LintPagePreflight {
         _ wikiNodes: [WikiMarkdownSyntaxNode],
         _ footnotes: MarkdownFootnoteAnalysis,
         _ resolution: LintResolutionFacts,
+        _ citations: LintCitationFacts?,
         _ counters: inout [String: Int]
     ) -> LintPreflightReport.Section {
-        var findings: [LintFinding] = []
+        var detected: [DetectedFinding] = []
+        var limits = [
+            "Wiki-link parsing reuses WikiLinkParser/WikiLinkResolver identity rules — no parallel grammar (REQ-41)",
+            "Literal examples inside AST-protected code are never findings (REQ-42)",
+            "Source-name resolution enumerates all matches; ambiguity is reported, never resolved to a winner",
+        ]
 
         func finding(
             _ defectClass: LintDefectClass,
@@ -308,15 +370,8 @@ public enum LintPagePreflight {
             confidence: LintConfidence,
             candidateRepair: LintCandidateRepair? = nil
         ) {
-            counters[defectClass.rawValue, default: 0] += 1
-            findings.append(LintFinding(
-                occurrenceID: "\(defectClass.rawValue)-\(counters[defectClass.rawValue].map(String.init) ?? "?")",
-                defectClass: defectClass,
-                authoredRange: range,
-                evidence: excerpt(of: evidence),
-                message: message,
-                severity: severity,
-                confidence: confidence,
+            detected.append(DetectedFinding(
+                defectClass, range, evidence, message, severity, confidence,
                 candidateRepair: candidateRepair))
         }
 
@@ -333,7 +388,7 @@ public enum LintPagePreflight {
                 confidence: .confirmed)
         }
 
-        // D07 / D08 / D10 — reference identity and embed roles.
+        // D07 / D08 / D09 / D10 — reference identity, fragments, embed roles.
         for node in wikiNodes {
             let (target, isEmbed): (WikiMarkdownTarget, Bool)
             switch node {
@@ -421,6 +476,18 @@ public enum LintPagePreflight {
                             confidence: .candidate)
                     }
                 }
+
+                // D09 — pin and fragment availability against the source
+                // store (only for citations whose target itself resolves;
+                // unresolvable targets are already D07 findings).
+                if let canonical = target.canonicalID ?? resolution.sourceMatches(for: target.literal).first.map(\.rawValue),
+                   target.fragment != nil || target.sourceVersionPin != nil {
+                    appendCitationFragmentFindings(
+                        target: target,
+                        canonicalLiteral: canonical,
+                        citations: citations,
+                        finding: finding)
+                }
             case .chat:
                 let resolved: Bool
                 if let canonical = target.canonicalID {
@@ -475,31 +542,251 @@ public enum LintPagePreflight {
                 confidence: .confirmed)
         }
 
-        return LintPreflightReport.Section(
-            section: .wikiReferences,
-            status: .completed,
-            findings: findings,
-            dialectLimits: [
-                "Wiki-link parsing reuses WikiLinkParser/WikiLinkResolver identity rules — no parallel grammar (REQ-41)",
-                "Literal examples inside AST-protected code are never findings (REQ-42)",
-                "Source-name resolution enumerates all matches; ambiguity is reported, never resolved to a winner",
-            ])
+        if citations == nil {
+            limits.append(
+                "D09 pin/fragment availability was not evaluated: no citation facts were supplied to this scan")
+        } else {
+            limits.append(
+                "D09 quote/anchor availability uses the patch integrity rule: whitespace-normalized, case-sensitive substring of the pinned (or active) version")
+        }
+        return makeSection(.wikiReferences, detected: detected, limits: limits, &counters)
+    }
+
+    /// D09 findings for one resolved source citation's pin and fragment.
+    /// Facts-less scans record a section limit instead (see above); a source
+    /// absent from the facts (not cited at load time) is skipped silently.
+    private static func appendCitationFragmentFindings(
+        target: WikiMarkdownTarget,
+        canonicalLiteral: String,
+        citations: LintCitationFacts?,
+        finding: (LintDefectClass, MarkdownSourceRange?, String, String, LintSeverity, LintConfidence, LintCandidateRepair?) -> Void
+    ) {
+        guard let citations else { return }
+        // The pin must name an existing extraction.
+        if let pin = target.sourceVersionPin,
+           citations.pinExists(sourceLiteral: canonicalLiteral, ordinal: pin) == false {
+            let known = citations.sources[canonicalLiteral]?.availablePinOrdinals.count ?? 0
+            finding(
+                .citationFragmentDamage,
+                nil,
+                "@v\(pin)",
+                "Version pin @v\(pin) names no extraction of this source (chain has \(known) extraction(s)).",
+                .major,
+                .confirmed,
+                nil)
+        }
+        // The fragment text (quote or anchor) must be present in the pinned
+        // (or active) version.
+        guard var fragment = target.fragment else { return }
+        let quoted = fragment.hasPrefix("\"") && fragment.hasSuffix("\"") && fragment.count >= 2
+        if quoted {
+            fragment = String(fragment.dropFirst().dropLast())
+        }
+        guard WikiText.normalized(fragment).isEmpty == false else { return }
+        let authority = citations.normalizedText(sourceLiteral: canonicalLiteral, pin: target.sourceVersionPin)
+        guard let authority else { return } // unknown version: the pin finding above covers it
+        if LintCitationFacts.normalizedFragment(fragment).isEmpty
+            || authority.contains(LintCitationFacts.normalizedFragment(fragment)) == false {
+            finding(
+                .citationFragmentDamage,
+                nil,
+                fragment,
+                quoted
+                    ? "The quoted text is not present in the pinned version's content (or the active head when unpinned)."
+                    : "The anchor text is not present in the pinned version's content (or the active head when unpinned).",
+                .major,
+                .confirmed,
+                nil)
+        }
     }
 
     private static func rawURLsSection(
-        _ inventory: [LintInventoryItem]
+        _ snapshot: LintPageSnapshot,
+        _ parsed: ParsedMarkdownDocument,
+        _ inventory: [LintInventoryItem],
+        _ maskedBody: String,
+        _ fenceFacts: [MarkdownFenceFact],
+        _ originURLs: LintOriginURLFacts?,
+        _ fenceValidation: LintFenceValidationFacts?,
+        _ counters: inout [String: Int]
     ) -> LintPreflightReport.Section {
-        // v1: raw URL occurrences are inventoried; exact origin-URL matches
-        // (D11 candidate repairs) need the source store's origin URLs —
-        // Phase 4 wires the verified-equivalent check.
-        return LintPreflightReport.Section(
-            section: .rawURLsAndMedia,
-            status: .completed,
-            findings: [],
-            dialectLimits: [
-                "Raw external URLs are inventoried; a URL is a candidate repair only on an exact origin-URL match with one verified resource (REQ-40)",
-                "External-link style is otherwise strategy-owned (S)",
-            ])
+        var detected: [DetectedFinding] = []
+        var limits = [
+            "Raw external URLs are inventoried; a URL is a candidate repair only on an exact origin-URL match with one verified resource (REQ-40)",
+            "External-link style is otherwise strategy-owned (S)",
+        ]
+
+        // D11 — raw URLs whose exact origin identity matches exactly one
+        // verified source become citation-repair candidates; ambiguity is
+        // reported without a repair; zero matches stays inventory-only.
+        for item in inventory where item.kind == .rawURL {
+            guard let range = item.authoredRange else { continue }
+            let url = slice(snapshot.body, range)
+            guard let identity = URLFetchService.urlIdentity(url) else { continue }
+            guard let originURLs else { continue }
+            let matchCount = originURLs.matchCount(identity: identity)
+            if matchCount == 1, let sourceID = originURLs.uniqueMatch(identity: identity) {
+                detected.append(DetectedFinding(
+                    .rawExternalURL,
+                    range,
+                    excerpt(of: url),
+                    "This raw URL exactly matches the origin of one verified source — cite the source instead of the bare URL.",
+                    .minor,
+                    .confirmed,
+                    candidateRepair: LintCandidateRepair(
+                        change: .replacement(text: "[[source:\(sourceID.rawValue)]]"),
+                        reason: "replace the raw URL with its verified source citation")))
+            } else if matchCount > 1 {
+                detected.append(DetectedFinding(
+                    .rawExternalURL,
+                    range,
+                    excerpt(of: url),
+                    "This raw URL matches the origin of \(matchCount) sources — ambiguous, so no citation repair is proposed; resolve with source evidence.",
+                    .minor,
+                    .candidate))
+            }
+        }
+        if originURLs == nil {
+            limits.append(
+                "D11 origin-URL matching was not evaluated: no origin facts were supplied to this scan")
+        }
+
+        // D20 — reference labels and local media destinations.
+        detected.append(contentsOf: referenceAndMediaCandidates(
+            parsed: parsed, maskedBody: maskedBody))
+
+        // D28 — rich-fence re-validation against package claims.
+        for (index, fence) in fenceFacts.enumerated() {
+            guard case .rich = MarkdownFenceInfo.parse(fence.infoString) else { continue }
+            guard let fenceValidation, let outcome = fenceValidation.outcome(fenceIndex: index) else {
+                continue
+            }
+            switch outcome {
+            case .validated:
+                continue
+            case .invalid(let errors):
+                detected.append(DetectedFinding(
+                    .richFenceRevalidation,
+                    fence.openingRange,
+                    excerpt(of: fence.infoString),
+                    "Rich fence failed its claiming package's validation: \(errors.isEmpty ? "invalid" : errors.joined(separator: "; ")). Report-only — the fence is never force-converted.",
+                    .major,
+                    .confirmed))
+            case .unclaimed:
+                detected.append(DetectedFinding(
+                    .richFenceRevalidation,
+                    fence.openingRange,
+                    excerpt(of: fence.infoString),
+                    "No installed renderer package claims this rich-fence format, so it renders as a plain code block. Report-only — never force-converted.",
+                    .minor,
+                    .candidate))
+            case .suppressed:
+                limits.append(
+                    "D28 validation for one present rich-fence alias is suppressed (safe mode) — recorded, never rendered as a pass")
+            case .unavailable(let reason):
+                limits.append("D28 validation unavailable: \(reason)")
+            }
+        }
+        if fenceValidation == nil {
+            limits.append(
+                "D28 rich-fence re-validation was not evaluated: no package-validation facts were supplied to this scan")
+        }
+
+        return makeSection(.rawURLsAndMedia, detected: detected, limits: limits, &counters)
+    }
+
+    /// §7 — placeholder, duplicate, conflict-marker, encoding and escaping
+    /// damage, active content, truncation, meta-text leakage, and history
+    /// regression. A failed parent-version read blocks the section (REQ-43).
+    private static func integrityAndHistorySection(
+        _ snapshot: LintPageSnapshot,
+        _ parsed: ParsedMarkdownDocument,
+        _ wikiNodes: [WikiMarkdownSyntaxNode],
+        _ footnotes: MarkdownFootnoteAnalysis,
+        _ maskedBody: String,
+        _ protectedUTF8: [MarkdownSourceRange],
+        _ history: LintHistoryFacts?,
+        _ counters: inout [String: Int]
+    ) -> LintPreflightReport.Section {
+        var detected: [DetectedFinding] = []
+        var limits = [
+            "Placeholder markers (D14) are report-only in v1 (D4)",
+            "Duplicate blocks need ≥\(DetectorConstants.duplicateBlockMinimumCharacters) non-whitespace characters and exact equality; intentional repetition stays possible",
+            "Replacement characters and mojibake candidates are never guessed",
+            "Active content (D18) is report-only: the lint never executes or sanitizes content",
+            "History regression (D27) compares the inspected head with its ACTUAL parent version; the shrinkage threshold is 30% and loss alone never restores content",
+        ]
+        var blockedReason: String?
+
+        detected.append(contentsOf: placeholderCandidates(
+            maskedBody: maskedBody, source: snapshot.body))
+        detected.append(contentsOf: mergeMarkerAndDuplicateCandidates(
+            parsed: parsed, protectedUTF8: protectedUTF8))
+        detected.append(contentsOf: encodingAndEscapingCandidates(
+            source: snapshot.body, maskedBody: maskedBody, wikiNodes: wikiNodes))
+        detected.append(contentsOf: activeContentCandidates(
+            source: snapshot.body, maskedBody: maskedBody))
+        detected.append(contentsOf: truncationCandidates(
+            source: snapshot.body, maskedBody: maskedBody))
+        detected.append(contentsOf: metaTextLeakageCandidates(
+            source: snapshot.body, maskedBody: maskedBody))
+
+        // D27 — history regression against the ACTUAL parent version.
+        switch history?.availability {
+        case .parentAvailable(_, let parentBody):
+            detected.append(contentsOf: historyRegressionCandidates(
+                parentBody: parentBody,
+                headByteCount: snapshot.body.utf8.count,
+                headTableTexts: headTableTexts(parsed: parsed),
+                headCitationKeys: Set(wikiNodes.compactMap { node -> String? in
+                    switch node {
+                    case .link(let link) where link.target.namespace == .source:
+                        return citationKey(for: link.target)
+                    case .embed(let embed) where embed.target.namespace == .source:
+                        return citationKey(for: embed.target)
+                    default: return nil
+                    }
+                }),
+                headHeadingTexts: headHeadingTexts(parsed: parsed),
+                headFootnoteDefinitionIDs: Set(footnotes.definitions.map(\.id))))
+        case .readFailed(let reason):
+            blockedReason = "history regression (D27) could not run: \(reason)"
+        case .firstVersion, nil:
+            limits.append(
+                history == nil
+                    ? "D27 not evaluated: no parent-version facts were supplied to this scan"
+                    : "D27 not applicable: the inspected head is the page's first version")
+        }
+
+        if let blockedReason {
+            let findings = numbered(detected, &counters)
+            return LintPreflightReport.Section(
+                section: .integrityAndHistory,
+                status: .blocked(reason: blockedReason),
+                findings: findings,
+                dialectLimits: limits)
+        }
+        return makeSection(
+            .integrityAndHistory, detected: detected, limits: limits, &counters)
+    }
+
+    /// Normalized text of every table in the parsed document.
+    private static func headTableTexts(parsed: ParsedMarkdownDocument) -> Set<String> {
+        var texts: Set<String> = []
+        collectTables(from: parsed.document, parsed: parsed) { range in
+            guard let range else { return }
+            texts.insert(LintCitationFacts.normalizedFragment(slice(parsed.sourceMarkdown, range)))
+        }
+        return texts
+    }
+
+    /// Normalized text of every heading in the parsed document.
+    private static func headHeadingTexts(parsed: ParsedMarkdownDocument) -> Set<String> {
+        var texts: Set<String> = []
+        forEachNode(parsed.document, of: Heading.self) { heading in
+            texts.insert(LintCitationFacts.normalizedFragment(flattenedText(heading)))
+        }
+        return texts
     }
 
     // MARK: - Detection helpers

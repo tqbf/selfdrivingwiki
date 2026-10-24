@@ -47,15 +47,16 @@ struct LintPreflightTests {
     @Test func orderedCoverageStatuses() {
         let report = scan("# Clean\n\nA healthy page with `code` and [[Calvin Cycle]].")
         #expect(report.sections.map(\.section) == LintScanSection.allCases.sorted())
-        // Completed sections carry no findings; the interim report is honest
-        // that integrity/history detection is not implemented yet (REQ-43:
-        // an unavailable detector never renders as clean).
+        // Completed sections carry no findings; integrity/history now runs
+        // its detectors (REQ-43: an unavailable check never renders clean —
+        // a scan without parent-version facts records that limit instead).
         for section in report.sections where section.status.isClean {
             #expect(section.findings.isEmpty)
         }
-        if case .notChecked = report.sections.first(where: { $0.section == .integrityAndHistory })?.status {} else {
-            Issue.record("integrity/history is interim notChecked until detector phase 4")
-        }
+        let integrity = report.sections.first { $0.section == .integrityAndHistory }
+        #expect(integrity?.status.isClean == true)
+        #expect(integrity?.dialectLimits.contains(
+            "D27 not evaluated: no parent-version facts were supplied to this scan") == true)
         // Metadata records the v1 state: no page metadata contract.
         let metadata = report.sections.first { $0.section == .metadata }
         #expect(metadata?.status.isClean == true)

@@ -71,7 +71,7 @@ public struct LintPreflightReport: Equatable, Sendable {
 
     /// The audit's detector revision — bump when detector behavior changes,
     /// so evaluation artifacts and gate keys can tell scans apart.
-    public static let detectorRevision = "lint-preflight-v1"
+    public static let detectorRevision = "lint-preflight-v2"
 
     /// One published report section.
     public struct Section: Equatable, Sendable {

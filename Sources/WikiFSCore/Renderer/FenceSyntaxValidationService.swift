@@ -101,6 +101,105 @@ public final class FenceSyntaxValidationService: FenceSyntaxValidating, @uncheck
         return "validation skipped for \(names): no installed renderer package declares it"
     }
 
+    // MARK: - Detailed validation (lint D28)
+
+    /// The per-alias outcome of the detailed validation API. Unlike the
+    /// save-warning path (which can only warn or pass silently), this exposes
+    /// WHY validation produced nothing: unclaimed, suppressed, or unavailable
+    /// are distinct from a validated pass — a lint report must never render
+    /// an unavailable check as clean (REQ-43).
+    public struct DetailedFenceValidation: Sendable, Equatable {
+
+        public enum AliasOutcome: Sendable, Equatable {
+            /// The claiming package's engine accepted every claimed block.
+            case validated
+            /// At least one block failed: 0-based block index → messages.
+            case invalid(blockErrors: [Int: [String]])
+            /// No installed renderer package declares this rich-fence format.
+            case unclaimed
+            /// A package declares the format, but safe mode suppresses it.
+            case suppressed
+            /// The format is claimed but its validation engine could not run.
+            case unavailable(reason: String)
+        }
+
+        /// Outcome per rich-fence alias present in the markdown.
+        public var aliases: [RendererFenceAlias: AliasOutcome] = [:]
+        /// Non-nil when validation could not run at all (the machine package
+        /// index was unreadable) — every alias is then unavailable.
+        public var unavailabilityReason: String?
+
+        public init() {}
+    }
+
+    /// Validate every rich-fence alias present in `markdown` in detail,
+    /// reporting validated / invalid / unclaimed / suppressed / unavailable
+    /// per alias. Async: the machine package index is read with `await`
+    /// directly instead of the save path's bounded semaphore bridge. The
+    /// save-warning API above is unchanged.
+    public func detailedFenceValidation(for markdown: String) async -> DetailedFenceValidation {
+        var result = DetailedFenceValidation()
+        let index: RendererMachineIndex
+        do {
+            index = try await RendererMachineIndexStore(layout: layout).read()
+        } catch {
+            DebugLog.store("FenceSyntaxValidationService: machine index read failed: \(error)")
+            result.unavailabilityReason = "the renderer package index could not be read"
+            return result
+        }
+
+        // Partition claims by alias: a usable claim (validated package, safe
+        // mode off) outranks a suppressed one; an alias only suppressed
+        // packages declare reports as suppressed, not unclaimed.
+        var byAlias: [RendererFenceAlias: (usable: FenceClaimRecord?, suppressed: Bool)] = [:]
+        for record in index.records where record.state == .validated {
+            let reservation = RendererPackageReservation(packageID: record.packageID, version: record.version)
+            for descriptor in record.validatedDescriptors {
+                for claim in descriptor.fenceClaims {
+                    guard let validation = claim.validation else { continue }
+                    var entry = byAlias[claim.alias] ?? (nil, false)
+                    if record.isSafeModeSuppressed {
+                        entry.suppressed = true
+                    } else if entry.usable == nil {
+                        entry.usable = FenceClaimRecord(
+                            reservation: reservation,
+                            alias: claim.alias,
+                            validation: validation,
+                            expectedPackageHash: record.expectedPackageHash)
+                    }
+                    byAlias[claim.alias] = entry
+                }
+            }
+        }
+
+        for alias in FenceSyntaxValidator.richFenceAliases(in: markdown) {
+            guard let entry = byAlias[alias] else {
+                result.aliases[alias] = .unclaimed
+                continue
+            }
+            guard let claim = entry.usable else {
+                result.aliases[alias] = .suppressed
+                continue
+            }
+            guard let runner = runner(for: claim) else {
+                result.aliases[alias] = .unavailable(
+                    reason: "the claiming package's validation engine is unavailable")
+                continue
+            }
+            let results = runner.validate(markdown: markdown, alias: alias)
+            let invalid = Dictionary(
+                uniqueKeysWithValues: results.filter { !$0.isValid }.map { block in
+                    (block.index, block.errors.compactMap { $0.message ?? $0.code })
+                })
+            if invalid.isEmpty {
+                result.aliases[alias] = .validated
+            } else {
+                result.aliases[alias] = .invalid(blockErrors: invalid)
+            }
+        }
+        return result
+    }
+
     private func resolveClaimingPackages() -> [FenceClaimRecord]? {
         lock.lock()
         defer { lock.unlock() }
