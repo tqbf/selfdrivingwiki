@@ -73,26 +73,13 @@ receipt then denies, the non-selected page stays byte-identical; plus
 receipt-budget errors now convert to the generic scope denial and minting
 handles the DaemonCommandOutcome envelope).
 
-1. **`--kind lint` host log (§5.12).** After each completed audit the host
-   appends the required log entry (inspected/written heads, server-observed
-   hunk classes, named audit outcomes, retained candidates, unresolved
-   findings, CAS/readback/validation/log outcomes), detects whether the
-   agent's own append committed, and records failures in artifacts + queue
-   state — never reporting complete success on a log failure.
-2. **REQ-54 app-side re-scan via `LintVerification.compare`** is wired into
-   the coverage path for claims; the FULL compare (before/written hunks from
-   server-observed receipts) lands with the daemon verification record.
-   Exposed defects must join the same run's worklist (§4.10).
-3. **Run Details surfaces (§5.14).** Render repaired / valid-as-written /
-   unresolved / outside-scope / blocked outcomes in the existing Activity/Run
-   Details rows (the completion summary already carries observed facts).
-4. **AC.5 test** `AgentSandboxProcessTests.lintCannotBypassEndpointPolicy`
-   (raw frames, omitted credentials, alternate endpoint, direct DB writes),
-   plus an end-to-end socket test of the receipt loop in
-   DaemonScopedSocketTests (the unit-level semantics are pinned in
-   DaemonLintPolicyTests.receiptLifecycleMintValidateInvalidateClose).
-5. **Whole-wiki prompt alignment (§5.15)** — report-only, never fanned into
-   repair runs.
+1. ~~`--kind lint` host log (§5.12)~~ **LANDED `6280f47c`** — the host appends its audit record per page (written head, coverage verdict, unresolved ids, agent-log detection; missing agent log or failed append = run failure), app-side and daemon-side.
+2. **REQ-54 full compare** — feed `LintVerification.compare` the BEFORE scan + server-observed hunks + the WRITTEN head's re-scan (the daemon knows the written version; the coordinator re-scans it). Exposed defects join the same run's worklist (§4.10). The claims-half is already wired in the dispatch coverage path.
+3. **Run Details surfaces (§5.14)** — the completion summary already carries observed per-page facts; verify the existing Run Details rows render them (they render `resultSummary`), and that `.available` availability renders. Likely a small/no-op change with a UI test.
+4. **End-to-end socket receipt test** in DaemonScopedSocketTests (unit semantics pinned in DaemonLintPolicyTests; AC.5 covers the live path already — this is the raw-frame form).
+5. **Whole-wiki prompt alignment (§5.15)** — VERIFIED done: `lint-task.md` is
+   explicitly REPORT-ONLY (no repair fan-out), pinned by
+   `LintPromptContractTests.wholeWikiIsReportOnly`.
 7. **Phase 6** (`WikiLintEval`/`WikiLintEvalRunner` targets,
    `scripts/run-wiki-lint-eval.sh`, fixture manifests §8.3 with held-out
    split, diff oracle from server-observed bytes, per-class scoring,
