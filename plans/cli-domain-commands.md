@@ -409,6 +409,29 @@ CAS crosses the wire as typed error codes, not strings: `casConflict`
 `strategyRevision`. The CLI maps them to exit code 3. The 0/1/2/3 contract and
 byte-stable stdout formats are scripting contracts; preserve both.
 
+## Page patch (the lint write path)
+
+`wikictl page patch --id <page-id> --expect-head <ver> (--hunk <json> --defect
+<class>)… [--hunk-file <path>] [--author <who>] [--lint-receipt <token>]` is
+the exact ranged write: half-open authored UTF-8 bounds, the EXACT old text at
+that range, a replacement, a short validity reason, and a defect class
+(D01–D28; report-only classes cannot authorize hunks). Inline pairs must
+strictly alternate; `--hunk-file` is a versioned JSON array of the same fields
+with per-hunk classes; the two forms are mutually exclusive.
+
+- **Exact-body mode.** The store applies hunks in reverse range order and
+  preserves every byte outside them — no canonicalization, no cosmetic
+  fixup; links re-parse from the committed bytes. A rejected, conflicted
+  (exit 3), or empty patch writes nothing and emits no page event.
+- **Receipts (managed lint runs).** A repair-policy lint run's
+  `page get --id <selected> --json` reply carries `lint_receipt` — an opaque
+  token the daemon minted over the read's head + body fingerprint. Patches
+  must present the CURRENT token via `--lint-receipt`; stale/absent/forged
+  tokens and closed conflict budgets all deny with the generic scope message
+  (the budget state never leaks). A committed patch invalidates the receipt;
+  a typed `casConflict` burns one recomposition and the second conflict
+  closes the run. The standalone trusted CLI passes no receipt.
+
 ## Phases
 
 0. **Land `bugfix/concurrent-cli-search`** — the search socket, safe index
