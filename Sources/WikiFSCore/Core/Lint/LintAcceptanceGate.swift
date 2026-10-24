@@ -1,5 +1,4 @@
 import Foundation
-import WikiFSCore
 import WikiFSTypes
 
 /// The rollout gate (plan §6.13/§6.14): a configuration earns generalized

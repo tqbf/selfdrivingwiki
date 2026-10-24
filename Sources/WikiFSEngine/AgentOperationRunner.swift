@@ -517,6 +517,10 @@ public enum AgentOperationRunner {
         public let request: OperationRequest
         public let snapshot: LintPageSnapshot
         public let preflight: LintPreflightReport
+        /// The rollout gate's decision (§6.13): a report-only plan instructs
+        /// the agent not to patch and records the gate reason.
+        public let repairAuthorized: Bool
+        public let gateReason: String
     }
 
     /// Build one page's lint plan: coherent snapshot → injected facts →
@@ -568,12 +572,39 @@ public enum AgentOperationRunner {
             snapshot: snapshot, resolution: resolution,
             citations: citations, originURLs: origins,
             history: history, fenceValidation: fenceValidation)
+        // The rollout gate (§6.13): consult BEFORE authorizing repairs.
+        // Components that need a configured provider/model resolve to
+        // "unconfigured" until a real configuration is wired through the
+        // live path — an unconfigured key never matches a record, so the
+        // gate selects report-only, exactly the approved default posture.
+        let gateSelection: LintRolloutSelection
+        do {
+            gateSelection = try LintCoordinatorGate.selection(
+                provider: "unconfigured", model: "unconfigured",
+                modelRevision: nil, effort: "unconfigured")
+        } catch {
+            gateSelection = .reportOnly(reason: "gate unavailable: \(error)")
+        }
+        let repairAuthorized: Bool
+        let gateReason: String
+        switch gateSelection {
+        case .repairAuthorized:
+            repairAuthorized = true
+            gateReason = "accepted configuration"
+        case .reportOnly(let reason):
+            repairAuthorized = false
+            gateReason = reason
+        }
         let request = OperationRequest.lintPage(
             page: LintPageIdentity(snapshot),
+            repairAuthorized: repairAuthorized,
+            gateReason: gateReason,
             preflightReportMarkdown: report.renderedMarkdown(),
             runReportMarkdown: LintRunReportText.render(snapshot: snapshot, preflight: report),
             stateMarkdown: stateMarkdown)
-        return LintPagePlan(request: request, snapshot: snapshot, preflight: report)
+        return LintPagePlan(
+            request: request, snapshot: snapshot, preflight: report,
+            repairAuthorized: repairAuthorized, gateReason: gateReason)
     }
 
     /// Package-validation facts for the body's rich fences, or `nil` when the

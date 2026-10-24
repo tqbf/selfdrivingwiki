@@ -58,10 +58,18 @@ public enum WikiOperation: Equatable, Sendable {
   /// `WIKI_STATE.md` snapshot.
   case lint(stateFilePath: String)
 
-  /// Health-check a single page. The run carries the TYPED page identity
-  /// (never joined titles) and the staged pre-flight report artifact — the
+  /// Lint a single page. The run carries the TYPED page identity (never
+  /// joined titles) and the staged pre-flight report artifact — the
   /// complete mechanical inventory and findings the agent must account for.
-  case lintPage(page: LintPageIdentity, reportFilePath: String, runReportPath: String, stateFilePath: String)
+  /// `repairAuthorized` is the ROLLOUT GATE's decision: a report-only run
+  /// must not call the patch write at all.
+  case lintPage(
+    page: LintPageIdentity,
+    repairAuthorized: Bool,
+    gateReason: String,
+    reportFilePath: String,
+    runReportPath: String,
+    stateFilePath: String)
 
   /// A short, stable identifier for the operation kind (logging / UI).
   public var kind: Kind {
@@ -81,10 +89,9 @@ public enum WikiOperation: Equatable, Sendable {
     case .query(_, let stateFilePath): return stateFilePath
     case .queryChat(let stateFilePath, _): return stateFilePath
     case .lint(let stateFilePath): return stateFilePath
-    case .lintPage(_, _, _, let stateFilePath): return stateFilePath
+    case .lintPage(_, _, _, _, _, let stateFilePath): return stateFilePath
     }
   }
-
   /// The staged raw-source scratch paths (ingest only — the other ops stage
   /// no source bytes).
   public var stagedSourcePaths: [String] {
@@ -148,9 +155,10 @@ extension WikiOperation {
       return Self.queryChatPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
     case .lint(let stateFilePath):
       return Self.lintPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
-    case .lintPage(let page, let reportFilePath, let runReportPath, let stateFilePath):
+    case .lintPage(let page, let repairAuthorized, let gateReason, let reportFilePath, let runReportPath, let stateFilePath):
       return Self.lintPagePrompt(
         wikiRoot: wikiRoot, page: page,
+        repairAuthorized: repairAuthorized, gateReason: gateReason,
         reportFilePath: reportFilePath, runReportPath: runReportPath,
         stateFilePath: stateFilePath)
     }
@@ -334,15 +342,21 @@ extension WikiOperation {
   private static func lintPagePrompt(
     wikiRoot: String,
     page: LintPageIdentity,
+    repairAuthorized: Bool,
+    gateReason: String,
     reportFilePath: String,
     runReportPath: String,
     stateFilePath: String
   ) -> String {
+    let repairAuthorization = repairAuthorized
+      ? "Repairs ARE authorized for this configuration: patch hunks may be submitted as instructed below."
+      : "Repairs are NOT authorized for this configuration (gate: \(gateReason)). This run is REPORT-ONLY: do NOT call `page patch`; report every defect as unresolved with the reason \"report-only configuration\". Every other check and the report contract still apply."
     let task = PromptTemplate.fill(GeneratedPrompts.lintPageTask, [
       "pageTitle": page.title,
       "pageID": page.pageID.rawValue,
       "preflightArtifactPath": reportFilePath,
       "runReportPath": runReportPath,
+      "repairAuthorization": repairAuthorization,
     ])
     return """
       \(IngestWriteRule.writes)

@@ -104,6 +104,8 @@ with `verification <written-head|none> <your-claim>`.
 
 ## Write and CAS discipline (patch write)
 
+{{repairAuthorization}}
+
 This task repairs ONLY through `wikictl page patch`. There is no full-body
 write path for this run — `page add` is not available for repairs. All wiki
 changes go through the exact trusted wiki-tool invocation given in your RUN

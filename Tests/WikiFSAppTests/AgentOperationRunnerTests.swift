@@ -61,7 +61,7 @@ struct AgentOperationRunnerTests {
         let plan = try #require(await AgentOperationRunner.makeLintPagePlan(
             store: store, pageID: page.id, stateMarkdown: "# state\n"))
         // Typed identity — the exact page, not a joined title.
-        guard case .lintPage(let identity, _, _, _) = plan.request else {
+        guard case .lintPage(let identity, _, _, _, _, _) = plan.request else {
             Issue.record("expected a .lintPage request")
             return
         }
@@ -72,7 +72,7 @@ struct AgentOperationRunnerTests {
             .appendingPathComponent("wikifs-plan-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         let op = try plan.request.stage(into: scratch)
-        guard case .lintPage(_, let reportPath, let runReportPath, _) = op else {
+        guard case .lintPage(_, _, _, let reportPath, let runReportPath, _) = op else {
             Issue.record("expected a staged .lintPage operation")
             return
         }

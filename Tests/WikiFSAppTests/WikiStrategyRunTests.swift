@@ -274,6 +274,7 @@ struct WikiStrategyRunTests {
                 page: LintPageIdentity(
                     pageID: PageID(rawValue: "01HZPAGE00000000000000000A"),
                     title: "Existing Page", headVersionID: nil),
+                repairAuthorized: false, gateReason: "unaccepted",
                 preflightReportMarkdown: "# preflight\n",
                 runReportMarkdown: "lint-run-report v1\n",
                 stateMarkdown: appStateMarkdown)),

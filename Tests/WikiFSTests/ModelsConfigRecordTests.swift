@@ -251,6 +251,7 @@ struct ModelsConfigRecordTests {
             page: LintPageIdentity(
                 pageID: PageID(rawValue: "01HZPAGE00000000000000000A"),
                 title: "X", headVersionID: nil),
+            repairAuthorized: false, gateReason: "unaccepted",
             reportFilePath: "/x/LINT_PREFLIGHT.md",
             runReportPath: "/x/LINT_RUN_REPORT.md",
             stateFilePath: "/x/WIKI_STATE.md")

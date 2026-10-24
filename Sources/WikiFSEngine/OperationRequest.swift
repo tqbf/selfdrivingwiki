@@ -49,6 +49,8 @@ public enum OperationRequest: Sendable {
   /// run-report skeleton the agent must fill in (REQ-29..32).
   case lintPage(
     page: LintPageIdentity,
+    repairAuthorized: Bool,
+    gateReason: String,
     preflightReportMarkdown: String,
     runReportMarkdown: String,
     stateMarkdown: String)
@@ -92,14 +94,15 @@ public enum OperationRequest: Sendable {
       let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
       return .lint(stateFilePath: stateFilePath)
 
-    case .lintPage(let page, let preflightReport, let runReport, let stateMarkdown):
+    case .lintPage(let page, let repairAuthorized, let gateReason, let preflightReport, let runReport, let stateMarkdown):
       let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
       let reportFilePath = try AgentStaging.stageTextFile(
         preflightReport, name: AgentStaging.lintPreflightReportFileName, in: scratch)
       let runReportPath = try AgentStaging.stageTextFile(
         runReport, name: AgentStaging.lintRunReportFileName, in: scratch)
       return .lintPage(
-        page: page, reportFilePath: reportFilePath,
+        page: page, repairAuthorized: repairAuthorized, gateReason: gateReason,
+        reportFilePath: reportFilePath,
         runReportPath: runReportPath, stateFilePath: stateFilePath)
     }
   }

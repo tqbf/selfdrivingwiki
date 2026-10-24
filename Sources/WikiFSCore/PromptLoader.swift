@@ -73,3 +73,13 @@ public enum PublicPrompts {
     /// dedicated transcript-cleanup stage after a raw transcript lands.
     public static let transcriptCleanup = GeneratedPrompts.transcriptCleanup
 }
+
+/// Public seam for gate components that must hash prompt bytes (the lint
+/// rollout gate's prompt component) without exposing the loader itself.
+public enum LintPromptBodies {
+    /// SHA-256 hex of the synced lint-page-task template bytes — the gate's
+    /// prompt-hash component. A template change invalidates gate evidence.
+    public static var lintPageTaskSHA256: String {
+        RendererSHA256.digest(Data(GeneratedPrompts.lintPageTask.utf8)).hex
+    }
+}
