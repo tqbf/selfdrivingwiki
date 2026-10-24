@@ -338,8 +338,21 @@ extension LintPagePreflight {
     }
 
     /// Cell count of a pipe row, dropping the optional outer-pipe artifacts.
+    /// Escaped pipes (`\|`) do not delimit cells (review m3).
     static func pipeCells(_ line: Substring) -> Int {
-        var cells = line.components(separatedBy: "|")
+        var cells: [Substring] = []
+        var current = line[line.startIndex...]
+        while let bar = current.firstIndex(of: "|") {
+            // An escaped pipe is content, not a delimiter — skip both chars.
+            if bar > current.startIndex,
+               line[line.index(before: bar)] == "\\" {
+                current = current[bar...].dropFirst(2)
+                continue
+            }
+            cells.append(current[current.startIndex..<bar])
+            current = current[bar...].dropFirst()
+        }
+        cells.append(current)
         if let first = cells.first, first.trimmingCharacters(in: .whitespaces).isEmpty {
             cells.removeFirst()
         }

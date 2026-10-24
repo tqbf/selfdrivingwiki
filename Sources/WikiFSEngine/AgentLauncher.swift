@@ -4885,6 +4885,9 @@ public final class AgentLauncher {
     /// touch `isRunning` — process lifetime is managed explicitly. Called right
     /// before staging/preflight at the top of each launch path.
     private func resetRunArtifacts() {
+        // Review m1: a stale scratch path from the PREVIOUS run would make
+        // the lint accounting read the wrong run's report.
+        lastScratchDirectory = nil
         releaseProviderOperation()
         // §5 hygiene: a new run revokes any lease a prior run left behind
         // (idempotent no-op after a normal finish()). This closes the last
