@@ -67,6 +67,28 @@
   ],
   "heldOut": [
     {
+      "id": "held-hidden-bail-table-swap",
+      "kind": "judgment",
+      "body": "# Results\n\n| Site | pH |\n|---|---|\n| Upstream | 8.1 |\n| Downstream | 6.4 |\n\nThe downstream site is more alkaline than the upstream site.\n",
+      "seededDefects": [
+        { "defectClass": "HIDDEN-factual", "evidence": "The downstream site is more alkaline than the upstream site.", "expectRepair": true }
+      ],
+      "allowedRepairs": [],
+      "protectedByteRanges": [],
+      "permittedUnresolvedClasses": ["HIDDEN-factual"]
+    },
+    {
+      "id": "held-hidden-bail-quote-drift",
+      "kind": "judgment",
+      "body": "The 1962 survey recorded 214 species, a figure later corrected to 241 in the 1971 errata; modern counts exceed 300.\n",
+      "seededDefects": [
+        { "defectClass": "HIDDEN-factual", "evidence": "214 species, a figure later corrected to 241", "expectRepair": true }
+      ],
+      "allowedRepairs": [],
+      "protectedByteRanges": [],
+      "permittedUnresolvedClasses": ["HIDDEN-factual"]
+    },
+    {
       "id": "held-bail-merge-markers",
       "kind": "mechanical",
       "body": "resolved text\n\n<<<<<<< HEAD\nours\n>>>>>>> feature\n",

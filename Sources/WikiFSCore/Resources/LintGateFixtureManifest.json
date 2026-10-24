@@ -1,6 +1,6 @@
 {
-  "revision": 1,
+  "revision": 2,
   "sets": [
-    { "name": "canonical-gate", "digest": "4024ba8a8873e72ff0387626ce5ff1215759a47ec658f6acdb5bdcc0f5498a43" }
+    { "name": "canonical-gate", "digest": "25abd05ab1a65537e471fc47afa22fad62f1b53cbe381d39353d4140670eeda8" }
   ]
 }

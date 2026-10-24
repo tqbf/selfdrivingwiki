@@ -43,11 +43,22 @@ public enum LintCoordinatorGate {
     }
 
     /// Consult the production gate. Never throws for "no record" — that is
-    /// a report-only selection, not an error.
+    /// a report-only selection, not an error. Review M8: an UNKNOWN
+    /// component (a provider/model/effort that was never resolved through
+    /// the live configuration path) hard-fails to report-only BEFORE any
+    /// record lookup — a constant key would be publicly computable, and one
+    /// same-user file at that key must never authorize repairs for every
+    /// provider and model.
     public static func selection(
         provider: String, model: String, modelRevision: String?, effort: String
     ) throws -> LintRolloutSelection {
-        try LintAcceptanceGate.production()
+        let unknownComponents = [provider, model, effort]
+            .filter { $0.isEmpty || $0 == "unconfigured" }
+        if unknownComponents.isEmpty == false || modelRevision == nil {
+            return .reportOnly(
+                reason: "gate components not fully resolved (provider/model/revision/effort) — a configuration must be wired through the live path before repairs can be authorized")
+        }
+        return try LintAcceptanceGate.production()
             .selection(for: components(
                 provider: provider, model: model,
                 modelRevision: modelRevision, effort: effort))

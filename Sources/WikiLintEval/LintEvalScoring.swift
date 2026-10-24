@@ -50,50 +50,48 @@ public enum LintEvalScoring {
         public let failureReasons: [String]
     }
 
-    /// Score one fixture run.
+    /// Score one fixture run. Each SEEDED DEFECT is a separate scoring unit
+    /// (review M9a/b): two defects of the same class score independently, a
+    /// false-confirmed finding of a seeded class is still visible, and the
+    /// class-granular aggregate below is derived from these per-defect
+    /// results.
     public static func score(
         fixture: LintEvalFixture, run: ObservedRun
     ) -> FixtureScore {
         var failureReasons: [String] = []
-        let seeded = Dictionary(
-            uniqueKeysWithValues: fixture.seededDefects.map { ($0.defectClass, $0) })
 
         var hits: Set<String> = []
         var misses: Set<String> = []
-        for (classRaw, seed) in seeded {
-            let repaired = run.repairedClasses.contains(classRaw)
-            let confirmed = run.confirmedClasses.contains(classRaw)
-            let unresolved = run.unresolvedClasses.contains(classRaw)
+        for (index, seed) in fixture.seededDefects.enumerated() {
+            let unit = "\(seed.defectClass)#\(index + 1)"
+            let repaired = run.repairedClasses.contains(seed.defectClass)
+            let confirmed = run.confirmedClasses.contains(seed.defectClass)
+            let unresolved = run.unresolvedClasses.contains(seed.defectClass)
             if repaired && seed.expectRepair {
-                hits.insert(classRaw)
-            } else if repaired && seed.expectRepair == false {
-                // A forbidden repair of a report-only seeded defect.
-                failureReasons.append("\(classRaw): report-only defect must not be repaired")
-                hits.insert(classRaw) // it was seen…
+                hits.insert(unit)
+            } else if repaired {
+                failureReasons.append("\(unit): report-only defect must not be repaired")
+                hits.insert(unit)
             } else if unresolved {
                 if seed.expectRepair {
-                    // A repairable bail fixture left unresolved is a failure.
-                    failureReasons.append("\(classRaw): repairable defect left unresolved")
-                } else if fixture.permittedUnresolvedClasses.contains(classRaw)
-                    || seed.expectRepair == false {
-                    hits.insert(classRaw) // accurate report outcome for a report-only class
+                    failureReasons.append("\(unit): repairable defect left unresolved")
                 } else {
-                    failureReasons.append("\(classRaw): unresolved without permission")
+                    hits.insert(unit)
                 }
             } else if confirmed {
-                // Seen but neither repaired nor unresolved — an incomplete audit.
-                failureReasons.append("\(classRaw): confirmed but never accounted")
-                misses.insert(classRaw)
+                failureReasons.append("\(unit): confirmed but never accounted")
+                misses.insert(unit)
             } else {
-                misses.insert(classRaw)
+                misses.insert(unit)
             }
         }
-        for miss in misses {
+        for miss in misses.sorted() {
             failureReasons.append("\(miss): seeded defect missed entirely")
         }
 
-        // False confirmed: findings confirmed that map to no seeded defect.
-        let falseConfirmed = run.confirmedClasses.subtracting(seeded.keys)
+        // False confirmed: findings confirmed that map to no seeded class.
+        let seededClasses = Set(fixture.seededDefects.map(\.defectClass))
+        let falseConfirmed = run.confirmedClasses.subtracting(seededClasses)
         if falseConfirmed.isEmpty == false {
             failureReasons.append(
                 "false confirmed defects: \(falseConfirmed.sorted().joined(separator: ","))")
@@ -130,10 +128,17 @@ public enum LintEvalScoring {
     ) -> [ClassScore] {
         var byClass: [String: (seeded: Int, hits: Int, falseConfirmed: Int)] = [:]
         for (fixture, score) in scored {
+            // Hits are per-defect units ("D03#1", "D03#2"); the class key is
+            // the part before the unit ordinal.
+            for hit in score.hits {
+                let cls = hit.split(separator: "#").first.map(String.init) ?? hit
+                var entry = byClass[cls] ?? (0, 0, 0)
+                entry.hits += 1
+                byClass[cls] = entry
+            }
             for seed in fixture.seededDefects {
                 var entry = byClass[seed.defectClass] ?? (0, 0, 0)
                 entry.seeded += 1
-                if score.hits.contains(seed.defectClass) { entry.hits += 1 }
                 byClass[seed.defectClass] = entry
             }
             for falseClass in score.falseConfirmed {

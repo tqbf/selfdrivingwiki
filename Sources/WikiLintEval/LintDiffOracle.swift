@@ -81,32 +81,54 @@ public enum LintDiffOracle {
             }
         }
 
-        // 4. Full-body replacement: a single hunk covering nearly the whole
-        //    original is a rewrite disguised as a repair.
+        // 4. Full-body replacement: hunks whose MERGED coverage spans nearly
+        //    the whole original are a rewrite disguised as repairs (review
+        //    M9d — two 50% hunks or one 79% hunk no longer evade this).
         let bodyBytes = original.utf8.count
-        if let pair = hunks.first, hunks.count == 1,
-           bodyBytes > 0,
-           Double(pair.hunk.endByte - pair.hunk.startByte)
-               >= Double(bodyBytes) * 0.8 {
-            rejections.append(.fullBodyReplacement)
+        if bodyBytes > 0 {
+            let ranges = hunks.map { pair -> (Int, Int) in
+                (max(pair.hunk.startByte, 0), min(pair.hunk.endByte, bodyBytes))
+            }
+            .filter { $0.0 < $0.1 }
+            .sorted { $0.0 < $1.0 }
+            var merged: [(start: Int, end: Int)] = []
+            for range in ranges {
+                if var last = merged.last, range.0 <= last.end {
+                    last.end = max(last.end, range.1)
+                    merged[merged.count - 1] = last
+                } else {
+                    merged.append((start: range.0, end: range.1))
+                }
+            }
+            let coveredBytes = merged.reduce(0) { $0 + ($1.end - $1.start) }
+            if Double(coveredBytes) >= Double(bodyBytes) * 0.8 {
+                rejections.append(.fullBodyReplacement)
+            }
         }
 
         // 5. Declaration match — mechanical fixtures only: every hunk must
-        //    pair its class with the fixture's exact old/new texts. Judgment
-        //    fixtures defer to human review (the oracle only rejects the
-        //    known-bad shapes above).
+        //    pair its class with a fixture-declared exact old/new repair,
+        //    and each declaration is CONSUMED once (review M9c — the same
+        //    declared repair applied twice, or at a second occurrence of
+        //    the same text, no longer passes). Judgment fixtures defer to
+        //    human review (the oracle only rejects the known-bad shapes
+        //    above).
         if fixture.kind == "mechanical" {
+            var consumed: Set<Int> = []
             for (index, pair) in hunks.enumerated() {
                 let attributed = pair.defectClass
-                let declared = fixture.allowedRepairs.first {
-                    $0.defectClass == attributed.rawValue && $0.oldText == pair.hunk.oldText
+                let declaredIndex = fixture.allowedRepairs.indices.first { declIndex in
+                    guard consumed.contains(declIndex) == false else { return false }
+                    let decl = fixture.allowedRepairs[declIndex]
+                    return decl.defectClass == attributed.rawValue
+                        && decl.oldText == pair.hunk.oldText
+                        && decl.newText == pair.hunk.newText
                 }
-                switch declared {
-                case .some(let repair) where repair.newText == pair.hunk.newText:
-                    continue
-                default:
+                guard let declIndex = declaredIndex else {
                     rejections.append(.undeclaredRepair(hunkIndex: index))
+                    continue
                 }
+                consumed.insert(declIndex)
             }
         }
 

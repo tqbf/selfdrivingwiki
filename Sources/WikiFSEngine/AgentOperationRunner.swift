@@ -573,27 +573,30 @@ public enum AgentOperationRunner {
             citations: citations, originURLs: origins,
             history: history, fenceValidation: fenceValidation)
         // The rollout gate (§6.13): consult BEFORE authorizing repairs.
-        // Components that need a configured provider/model resolve to
-        // "unconfigured" until a real configuration is wired through the
-        // live path — an unconfigured key never matches a record, so the
-        // gate selects report-only, exactly the approved default posture.
-        let gateSelection: LintRolloutSelection
-        do {
-            gateSelection = try LintCoordinatorGate.selection(
-                provider: "unconfigured", model: "unconfigured",
-                modelRevision: nil, effort: "unconfigured")
-        } catch {
-            gateSelection = .reportOnly(reason: "gate unavailable: \(error)")
-        }
+        // Review M8: components that need a configured provider/model are
+        // NOT silently hashed as constants — an unknown component
+        // hard-fails to report-only BEFORE any record lookup, because a
+        // constant key would be publicly computable and one same-user file
+        // could otherwise authorize repairs for every provider and model.
         let repairAuthorized: Bool
         let gateReason: String
-        switch gateSelection {
-        case .repairAuthorized:
-            repairAuthorized = true
-            gateReason = "accepted configuration"
-        case .reportOnly(let reason):
+        do {
+            switch try LintCoordinatorGate.selection(
+                provider: "unconfigured", model: "unconfigured",
+                modelRevision: nil, effort: "unconfigured") {
+            case .repairAuthorized:
+                // Unreachable today (the constant key above can never match
+                // a real record) — kept explicit so a future wiring of real
+                // components cannot silently enable repairs.
+                repairAuthorized = true
+                gateReason = "accepted configuration"
+            case .reportOnly(let reason):
+                repairAuthorized = false
+                gateReason = reason
+            }
+        } catch {
             repairAuthorized = false
-            gateReason = reason
+            gateReason = "gate unavailable: \(error)"
         }
         let request = OperationRequest.lintPage(
             page: LintPageIdentity(snapshot),

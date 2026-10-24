@@ -132,7 +132,7 @@ struct WikiLintEvaluationHarnessTests {
         #expect(forbidden.failureReasons.contains { $0.contains("must not be repaired") })
         let missed = LintEvalScoring.score(
             fixture: try bailFixture, run: observed())
-        #expect(missed.passed == false && missed.misses.contains("D25"))
+        #expect(missed.passed == false && missed.misses.contains { $0.hasPrefix("D25#") })
         let unresolvedBail = LintEvalScoring.score(
             fixture: try bailFixture, run: observed(confirmed: ["D25"], unresolved: ["D25"]))
         #expect(unresolvedBail.passed == false)
