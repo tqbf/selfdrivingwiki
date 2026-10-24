@@ -753,7 +753,13 @@ let daemon = WikiDaemon(
 // §5 audit found the XPC channel unauthenticated, and registration stays an
 // in-process API.
 let runRegistry = DaemonRunRegistry()
-let domainDispatcher = DaemonDomainSocketDispatcher(daemon: daemon, runRegistry: runRegistry)
+// ONE shared lint receipt/verification state: the dispatcher mints receipts
+// and publishes written-version verification records; the queue host reads
+// them for its per-page summaries (plan §5.8/§5.12).
+let lintRunState = DaemonLintRunState()
+daemon.queueHostLintRunState = lintRunState
+let domainDispatcher = DaemonDomainSocketDispatcher(
+    daemon: daemon, runRegistry: runRegistry, lintRunState: lintRunState)
 let scopedRunBroker = DaemonRunRegistrationBroker(
     registry: runRegistry,
     dispatcher: domainDispatcher,

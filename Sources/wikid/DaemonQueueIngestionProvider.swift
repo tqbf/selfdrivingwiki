@@ -21,6 +21,10 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     private let resolveSelectedProvider: @Sendable () -> AgentProvider
     private let resolveProviderConfig: @Sendable () -> AgentProvidersConfig
     private let providerServices: any AgentProviderServices
+    /// The daemon's shared lint receipt/verification state — the host reads
+    /// the dispatcher's published written-version records here. `nil` in
+    /// stub conformances that never patch.
+    private let lintRunState: DaemonLintRunState?
 
     init(
         containerDirectory: URL,
@@ -29,7 +33,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         queueStore: QueueStore,
         resolveSelectedProvider: @escaping @Sendable () -> AgentProvider,
         resolveProviderConfig: @escaping @Sendable () -> AgentProvidersConfig,
-        providerServices: any AgentProviderServices
+        providerServices: any AgentProviderServices,
+        lintRunState: DaemonLintRunState? = nil
     ) {
         self.containerDirectory = containerDirectory
         self.storeResolver = storeResolver
@@ -38,6 +43,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         self.resolveSelectedProvider = resolveSelectedProvider
         self.resolveProviderConfig = resolveProviderConfig
         self.providerServices = providerServices
+        self.lintRunState = lintRunState
     }
 
     // MARK: - Readiness (#440, extended #635)
@@ -325,16 +331,25 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 onLiveUsage: onLiveUsage,
                 onPendingPermission: onPendingPermission)
             // §5.12: the host appends its own --kind lint record per page —
-            // the daemon-side facts it can prove (dispatch + written head).
+            // the daemon-side facts it can prove (dispatch + written head +
+            // the dispatcher's published written-version verification).
             // A failed append is visible in the observed summary, never
             // silently dropped.
             let writtenHead = (try? store.readPageCoherent(id: pageID).headVersionID)?  // swiftlint:disable:this silent_try_optional
                 .rawValue ?? "none"
+            var verificationSummary = "none"
+            if let lintRunState,
+               let record = await lintRunState.latestVerificationRecord(pageID: pageID) {
+                verificationSummary = "written \(record.writtenHead.rawValue); "
+                    + "classes=\(record.appliedClasses.map(\.rawValue).joined(separator: ",")); "
+                    + "remaining=\(record.remainingFindings.count)"
+            }
             do {
                 _ = try store.appendLog(
                     kind: .lint,
                     title: "Selected-page lint — \(plan.snapshot.title)",
-                    note: "host dispatch record; written_head=\(writtenHead)")
+                    note: "host dispatch record; written_head=\(writtenHead); "
+                        + "verification=\(verificationSummary)")
                 observed.append("\(plan.snapshot.title): run completed")
             } catch {
                 observed.append("\(plan.snapshot.title): run completed; HOST LOG APPEND FAILED: \(error)")

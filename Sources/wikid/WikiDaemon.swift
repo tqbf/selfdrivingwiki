@@ -1834,6 +1834,14 @@ final class WikiDaemon: @unchecked Sendable {
         await daemonQueueHost.status()
     }
 
+    /// The daemon's shared lint receipt/verification state. The DOMAIN
+    /// DISPATCHER mints receipts and publishes written-version verification
+    /// records here; the queue host reads them for its per-page summaries.
+    /// Set BEFORE the first queue operation (buildQueueResources is lazy).
+    /// `nil` (fixtures without a dispatcher) leaves the host's verification
+    /// summary honest: "none".
+    public var queueHostLintRunState: DaemonLintRunState?
+
     private func buildQueueResources() async throws -> DaemonQueueResources {
         let runtime = try await runtimeServices()
         let extractionServices = runtime.extraction
@@ -1887,7 +1895,8 @@ final class WikiDaemon: @unchecked Sendable {
             resolveProviderConfig: {
                 AgentProvidersConfig.loadOrSeed(from: dir)
             },
-            providerServices: runtime.provider)
+            providerServices: runtime.provider,
+            lintRunState: queueHostLintRunState)
 
         let outputChannel = QueueWorkerOutputChannel(store: queueStore)
         let extractionFactory = QueueExtractionWorkerFactory(

@@ -131,6 +131,15 @@ public actor DaemonLintRunState {
         verificationRecords[runID]
     }
 
+    /// The latest written-version verification record for one page across
+    /// every run this state serves — the queue host's summary lookup (it
+    /// knows the page, not the child's run id).
+    public func latestVerificationRecord(pageID: PageID) -> DaemonLintVerificationRecord? {
+        verificationRecords.values
+            .filter { $0.pageID == pageID }
+            .max { $0.recordedAt < $1.recordedAt }
+    }
+
     /// Tear down a run's state (the lease revocation path).
     public func forget(runID: DaemonRunID) {
         receipts.removeValue(forKey: runID)

@@ -454,5 +454,119 @@ struct DaemonScopedSocketTests {
                 "the denial leaked a wiki id: \(error.message)")
         }
     }
+    // MARK: - Raw-frame receipt gate (plan §5.8)
+
+    /// A repair-policy lint run's `page patch` through a RAW frame: without
+    /// the daemon's current receipt it denies generically — a fabricated
+    /// token, an absent token, and a patch of a non-selected page all deny
+    /// identically, and the store gains no version. The mint path (a fresh
+    /// selected-page `page get --json` through the same endpoint) then
+    /// makes the real patch succeed, proving the denials were the policy.
+    @Test("raw frames cannot patch without the run's receipt")
+    func rawFramePatchRequiresReceipt() async throws {
+        // One wiki, one selected page, one lint-repair run, one scoped
+        // server — the same production wiring as the fixture above.
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "dwreceipt-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: container, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+        var descriptor = WikiDescriptor.make(displayName: "Receipt Wiki")
+        descriptor.lastUsedAt = Date()
+        var diskRegistry = WikiRegistry.load(from: container)
+        diskRegistry.add(descriptor)
+        try diskRegistry.save(to: container)
+        let store = try GRDBWikiStore(
+            databaseURL: container.appendingPathComponent(descriptor.dbFileName, isDirectory: false))
+        let page = try store.createPage(title: "Receipt Target", body: "# Target\n\nold text\n")
+        let head = try #require(
+            try store.readPageCoherent(id: page.id).headVersionID)
+
+        let daemon = WikiDaemon(containerDirectory: container)
+        let runRegistry = DaemonRunRegistry()
+        let lintRunState = DaemonLintRunState()
+        daemon.queueHostLintRunState = lintRunState
+        let registration = try await runRegistry.prepareRun(
+            scope: DaemonRunScope(wikiID: descriptor.id),
+            operationClasses: [.wikiRead],
+            operationPolicy: .lintSelectedPageRepair(pageID: page.id))
+        try await runRegistry.activate(runID: registration.runID)
+        let dispatcher = DaemonDomainSocketDispatcher(
+            daemon: daemon, runRegistry: runRegistry, lintRunState: lintRunState)
+        let listenerRunID = registration.runID
+        let server = try DaemonSearchSocketServer(containerDirectory: container) { request in
+            await dispatcher.handle(request, context: .scopedRun(listenerRunID))
+        }
+        try server.start()
+        defer { server.stop() }
+        let client = try DaemonDomainSocketClient(
+            containerDirectory: container, timeout: 10)
+        let authorization = DaemonDomainAuthorization(
+            capability: registration.capability.printable)
+
+        // The mint: the selected `page get --json` returns the receipt.
+        let getReply = try await client.send(
+            family: .page,
+            operation: DaemonDomainOperation.Page.get,
+            payload: try JSONEncoder().encode(DaemonPageGetRequest(
+                wikiID: descriptor.id.rawValue,
+                selector: DaemonCommandSelector(id: page.id.rawValue),
+                json: true,
+                workspace: nil)),
+            authorization: authorization)
+        let outcome = try DaemonCommandOutcome.decode(getReply.payload)
+        let pageJSON = try #require(
+            JSONSerialization.jsonObject(with: Data((outcome.text ?? "").utf8))
+                as? [String: Any])
+        let receipt = try #require(pageJSON["lint_receipt"] as? String)
+
+        func patchReply(receiptToken: String?, pageID: String) async throws -> DaemonDomainReply {
+            try await client.send(
+                family: .page,
+                operation: DaemonDomainOperation.Page.patch,
+                payload: try JSONEncoder().encode(DaemonPagePatchRequest(
+                    wikiID: descriptor.id.rawValue,
+                    id: pageID,
+                    expectHead: head.rawValue,
+                    hunks: [DaemonPagePatchRequest.WireHunk(
+                        defect: "D25", startByte: 10, endByte: 18,
+                        oldText: "old text", newText: "new text",
+                        reason: "repair the defect")],
+                    author: "agent:lint",
+                    lintReceipt: receiptToken)),
+                authorization: authorization)
+        }
+
+        func expectPatchDenied(
+            receiptToken: String?, pageID: String, label: String
+        ) async {
+            do {
+                _ = try await patchReply(receiptToken: receiptToken, pageID: pageID)
+                Issue.record("\(label): expected a denial, but the patch was accepted")
+            } catch let error as DaemonDomainError {
+                #expect(error.code == DaemonDomainErrorCode.scopeDenied,
+                        "\(label) must deny generically, got \(error.code.rawValue): \(error.message)")
+            } catch {
+                Issue.record("\(label): unexpected transport error: \(error)")
+            }
+        }
+
+        // Bypasses deny with the generic scope message, and no version lands.
+        await expectPatchDenied(receiptToken: nil, pageID: page.id.rawValue, label: "missing receipt")
+        await expectPatchDenied(receiptToken: "forged-token", pageID: page.id.rawValue, label: "forged receipt")
+        await expectPatchDenied(receiptToken: receipt, pageID: "01HZOTHER00000000000000000X", label: "non-selected page")
+
+        // The REAL patch with the CURRENT receipt commits.
+        let ok = try await patchReply(receiptToken: receipt, pageID: page.id.rawValue)
+        #expect(ok.error == nil, "the receipted patch must commit: \(ok.error?.message ?? "")")
+        let body = try store.readPageCoherent(id: page.id).body
+        #expect(body.contains("new text"), "the hunk must be applied exactly")
+        // The written-version verification record was published.
+        let record = await lintRunState.latestVerificationRecord(pageID: page.id)
+        #expect(record?.writtenHead != nil, "the daemon must publish the written-version verification record")
+        // The replayed receipt is dead.
+        await expectPatchDenied(receiptToken: receipt, pageID: page.id.rawValue, label: "replayed committed receipt")
+    }
 }
 #endif
