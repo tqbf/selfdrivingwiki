@@ -55,33 +55,36 @@ Phases 0–3 plus the commits below are on
 ## Remaining (Phase 5 wiring, then 6–7)
 
 Landed since this note was first written: **`ddfe43f6`** (audit checklist +
-run-report contract + coverage/verification gates) and **`5bd10c7e`** (typed
+run-report contract + coverage/verification gates), **`5bd10c7e`** (typed
 identity + staged artifacts + per-page sequential dispatch through all three
 entrypoints; observed per-page outcomes replace `.notReported` only when the
 host supplies them; title-join tests replaced with coordinator dispatch
-tests). `make prompts` already synced; prompt-contract suite green.
+tests), and **`28f00312`** (daemon snapshot receipts WIRED: a repair-policy
+run's `page get --id <selected> --json` mints a receipt into the JSON reply;
+`page patch --lint-receipt` must present the CURRENT token — stale/absent/
+closed deny with the generic scope message; commit invalidates; a typed
+casConflict burns one recomposition and the second closes the run;
+lint-page-task.md + CLIReference teach `--lint-receipt`).
 
-1. **Daemon receipts (§5.8).** Mint `DaemonLintRunState` receipts on fresh
-   `page get --json` reads of the selected page, validate on patch, record
-   conflicts; the daemon patch handler pre-flights the WRITTEN immutable
-   version and publishes its verification record to the host. Record
-   written-head vs current-head divergence separately.
-2. **`--kind lint` host log (§5.12).** After each completed audit the host
+1. **`--kind lint` host log (§5.12).** After each completed audit the host
    appends the required log entry (inspected/written heads, server-observed
    hunk classes, named audit outcomes, retained candidates, unresolved
    findings, CAS/readback/validation/log outcomes), detects whether the
    agent's own append committed, and records failures in artifacts + queue
    state — never reporting complete success on a log failure.
-3. **REQ-54 app-side re-scan via `LintVerification.compare`** is wired into
+2. **REQ-54 app-side re-scan via `LintVerification.compare`** is wired into
    the coverage path for claims; the FULL compare (before/written hunks from
-   server-observed receipts) lands with item 1. Exposed defects must join the
-   same run's worklist (§4.10).
-4. **Run Details surfaces (§5.14).** Render repaired / valid-as-written /
+   server-observed receipts) lands with the daemon verification record.
+   Exposed defects must join the same run's worklist (§4.10).
+3. **Run Details surfaces (§5.14).** Render repaired / valid-as-written /
    unresolved / outside-scope / blocked outcomes in the existing Activity/Run
    Details rows (the completion summary already carries observed facts).
-5. **AC.5 test** `AgentSandboxProcessTests.lintCannotBypassEndpointPolicy`
-   (raw frames, omitted credentials, alternate endpoint, direct DB writes).
-6. **Whole-wiki prompt alignment (§5.15)** — report-only, never fanned into
+4. **AC.5 test** `AgentSandboxProcessTests.lintCannotBypassEndpointPolicy`
+   (raw frames, omitted credentials, alternate endpoint, direct DB writes),
+   plus an end-to-end socket test of the receipt loop in
+   DaemonScopedSocketTests (the unit-level semantics are pinned in
+   DaemonLintPolicyTests.receiptLifecycleMintValidateInvalidateClose).
+5. **Whole-wiki prompt alignment (§5.15)** — report-only, never fanned into
    repair runs.
 7. **Phase 6** (`WikiLintEval`/`WikiLintEvalRunner` targets,
    `scripts/run-wiki-lint-eval.sh`, fixture manifests §8.3 with held-out
