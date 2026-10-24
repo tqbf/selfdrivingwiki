@@ -575,9 +575,9 @@ public enum AgentOperationRunner {
         // The rollout gate (§6.13): consult BEFORE authorizing repairs.
         // Review M8: components that need a configured provider/model are
         // NOT silently hashed as constants — an unknown component
-        // hard-fails to report-only BEFORE any record lookup, because a
-        // constant key would be publicly computable and one same-user file
-        // could otherwise authorize repairs for every provider and model.
+        // hard-fails to report-only BEFORE any manifest consultation, so a
+        // placeholder configuration is never matched against the shipped
+        // approval matrix.
         let repairAuthorized: Bool
         let gateReason: String
         do {
@@ -585,9 +585,10 @@ public enum AgentOperationRunner {
                 provider: "unconfigured", model: "unconfigured",
                 modelRevision: nil, effort: "unconfigured") {
             case .repairAuthorized:
-                // Unreachable today (the constant key above can never match
-                // a real record) — kept explicit so a future wiring of real
-                // components cannot silently enable repairs.
+                // Unreachable today (the placeholder components above fail
+                // M8 first) — kept explicit so a future wiring of real
+                // components cannot silently enable repairs. The approval
+                // id is not plumbed into the receipt yet.
                 repairAuthorized = true
                 gateReason = "accepted configuration"
             case .reportOnly(let reason):

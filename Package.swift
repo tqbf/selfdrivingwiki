@@ -371,6 +371,8 @@ let package = Package(
                 // Loaded via Bundle.module (see PromptLoader.swift).
                 .copy("Resources/Prompts"),
                 .copy("Resources/LintGateFixtureManifest.json"),
+                // The shipped rollout approval (LintAcceptanceManifest).
+                .copy("Resources/LintAcceptance"),
                 .copy("Resources/Extraction"),
                 .copy("../../docs/skills/renderer-package-maintainer/references/wiki-state-chat-reference.md"),
             ],

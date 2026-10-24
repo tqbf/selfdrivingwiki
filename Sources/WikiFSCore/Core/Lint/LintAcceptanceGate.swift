@@ -1,10 +1,11 @@
 import Foundation
 import WikiFSTypes
 
-/// The rollout gate (plan §6.13/§6.14): a configuration earns generalized
-/// repairs only with a complete, fresh, human-approved acceptance record
-/// whose key matches EXACTLY. Everything else selects report-only — never a
-/// downgrade of the safety posture, and never a CLI-writable mutation.
+/// The acceptance key (plan §6.13/§6.14): the digest of every component an
+/// evaluation was run against. The eval harness names its evidence with it,
+/// and a shipped approval row may carry it for traceability. The rollout
+/// gate itself matches the shipped manifest structurally — see
+/// `LintAcceptanceGate`.
 public struct LintAcceptanceKey: Equatable, Sendable, Hashable {
 
     /// Every component that changes the key: provider, model, the provider's
@@ -52,163 +53,116 @@ public struct LintAcceptanceKey: Equatable, Sendable, Hashable {
         }
     }
 
-    /// The SHA-256 hex of the canonical components — the record's filename
-    /// stem and the gate's match key.
+    /// The SHA-256 hex of the canonical components — the evidence name and
+    /// an approval row's `acceptanceKeySHA256`.
     public static func digest(_ components: Components) -> String {
         RendererSHA256.digest(Data(components.canonical.utf8)).hex
     }
 }
 
-/// One accepted-rollout record. Versioned JSON, written ATOMICALLY by the
-/// trusted host ONLY after complete scoring and required human rubric
-/// approval. The hash identifies evidence; it is not an authorization
-/// signature by itself — the rubric metadata is required.
-public struct LintAcceptanceRecord: Codable, Equatable, Sendable {
-    public static let version = 1
-
-    public let recordVersion: Int
-    public let key: String
-    /// The manifest digest this record's evidence was produced against.
-    public let artifactManifestDigest: String
-    public let verdict: String // "accepted"
-    /// The human rubric: who reviewed, when, and the fixture ids covered.
-    public let rubricReviewer: String
-    public let rubricDecidedAt: Date
-    public let rubricFixtureIDs: [String]
-    public let recordedAt: Date
-
-    public init(
-        key: String, artifactManifestDigest: String,
-        rubricReviewer: String, rubricDecidedAt: Date,
-        rubricFixtureIDs: [String], recordedAt: Date
-    ) {
-        self.recordVersion = Self.version
-        self.key = key
-        self.artifactManifestDigest = artifactManifestDigest
-        self.verdict = "accepted"
-        self.rubricReviewer = rubricReviewer
-        self.rubricDecidedAt = rubricDecidedAt
-        self.rubricFixtureIDs = rubricFixtureIDs
-        self.recordedAt = recordedAt
-    }
-
-    /// Structural validation: complete, version-matched, human-approved.
-    public var isValid: Bool {
-        recordVersion == Self.version
-            && key.count == 64
-            && verdict == "accepted"
-            && artifactManifestDigest.count == 64
-            && rubricReviewer.trimmingCharacters(in: .whitespaces).isEmpty == false
-            && rubricFixtureIDs.isEmpty == false
-    }
-}
-
 /// What the trusted coordinator selects for a configuration.
 public enum LintRolloutSelection: Equatable, Sendable {
-    /// A valid, matching, fresh record exists — the repair-capable lease.
-    case repairAuthorized
-    /// No valid record: report-only instructions and authority, with the
-    /// reason recorded in artifacts and queue/UI state.
+    /// A shipped approval row matches — the repair-capable lease. The id
+    /// names the row that authorized it.
+    case repairAuthorized(approvalID: String)
+    /// No matching approval: report-only instructions and authority, with
+    /// the reason recorded in artifacts and queue/UI state.
     case reportOnly(reason: String)
 }
 
-/// The gate itself: records live in `<gate directory>/<key>.json`. The
-/// directory defaults to the App Group's `lint-acceptance/`; tests inject a
-/// temp directory. There is NO CLI mutation path — the trusted host writes.
+/// The gate itself: structural matching against the SHIPPED approval
+/// manifest (`LintAcceptanceManifest`). There is no per-machine record and
+/// no write path — the approval ships inside the app, keyed to the
+/// pipeline. Every outcome is a selection; nothing here throws.
 public struct LintAcceptanceGate: Sendable {
 
-    public let directory: URL
-
-    public init(directory: URL) {
-        self.directory = directory
+    enum Source: Sendable {
+        case manifest(LintAcceptanceManifest)
+        case unavailable(reason: String)
     }
 
-    /// The production gate directory: the resolved App Group container's
-    /// `lint-acceptance/` folder (created on demand by the writer).
-    public static func production() throws -> LintAcceptanceGate {
-        let container = try DatabaseLocation.appGroupContainerDirectory()
-        return LintAcceptanceGate(
-            directory: container.appendingPathComponent("lint-acceptance", isDirectory: true))
+    let source: Source
+
+    /// A gate over an already-decoded manifest (tests, tooling).
+    public init(manifest: LintAcceptanceManifest) {
+        self.source = .manifest(manifest)
     }
 
-    func recordURL(key: String) -> URL {
-        directory.appendingPathComponent("\(key).json", isDirectory: false)
-    }
-
-    /// Load and validate the record for a key. Returns nil when no record
-    /// exists; THROWS when one exists but is malformed (a malformed record
-    /// is a finding, not silence). Records are written with ISO-8601 dates.
-    public func record(for key: String) throws -> LintAcceptanceRecord? {
-        let url = recordURL(key: key)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let data: Data
+    /// A gate over raw manifest bytes. Bytes that do not decode select
+    /// report-only at gate time.
+    public init(manifestData: Data) {
         do {
-            data = try Data(contentsOf: url)
+            self.source = .manifest(try LintAcceptanceManifest.decode(manifestData))
         } catch {
-            throw LintAcceptanceGateError.unreadable(
-                key: key, underlying: String(describing: error))
+            self.source = .unavailable(reason: "manifest does not decode: \(error)")
         }
+    }
+
+    /// A gate whose manifest could not be read at all.
+    public init(unavailableReason reason: String) {
+        self.source = .unavailable(reason: reason)
+    }
+
+    /// The production gate: the manifest shipped in the WikiFSCore bundle.
+    /// A missing or unreadable resource yields a gate that selects
+    /// report-only — never a crash.
+    public static func production() -> LintAcceptanceGate {
         do {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let record = try decoder.decode(LintAcceptanceRecord.self, from: data)
-            guard record.isValid else {
-                throw LintAcceptanceGateError.malformedRecord(key: key)
-            }
-            guard record.key == key else {
-                throw LintAcceptanceGateError.keyMismatch(key: key)
-            }
-            return record
-        } catch let error as LintAcceptanceGateError {
-            throw error
+            return LintAcceptanceGate(manifestData: try LintAcceptanceManifest.shippedData())
         } catch {
-            throw LintAcceptanceGateError.malformedRecord(key: key)
+            return LintAcceptanceGate(unavailableReason: "shipped manifest unavailable: \(error)")
         }
     }
 
-    /// The rollout selection for one configuration.
-    public func selection(for components: LintAcceptanceKey.Components) throws
-        -> LintRolloutSelection {
-        let key = LintAcceptanceKey.digest(components)
-        guard let record = try record(for: key) else {
+    /// The rollout selection for one configuration. Checks run in order; the
+    /// first one that fails selects report-only with a plain reason.
+    public func selection(for components: LintAcceptanceKey.Components) -> LintRolloutSelection {
+        let manifest: LintAcceptanceManifest
+        switch source {
+        case .unavailable(let reason):
             return .reportOnly(
-                reason: "no acceptance record for this configuration — generalized repairs stay disabled until a fresh gate passes")
+                reason: "the shipped lint approval manifest is missing or invalid (\(reason)) — generalized repairs stay disabled")
+        case .manifest(let loaded):
+            manifest = loaded
         }
-        guard record.artifactManifestDigest == components.fixtureDigest else {
+        if let problem = manifest.structuralProblem {
             return .reportOnly(
-                reason: "acceptance record's fixture digest does not match the shipped gate fixtures")
+                reason: "the shipped lint approval manifest is missing or invalid (\(problem)) — generalized repairs stay disabled")
         }
-        return .repairAuthorized
-    }
-
-    /// HOST-ONLY write: persist an accepted record atomically. The evaluation
-    /// runner and the agent CLI never call this.
-    public func write(record: LintAcceptanceRecord) throws {
-        guard record.isValid else {
-            throw LintAcceptanceGateError.malformedRecord(key: record.key)
+        if manifest.defaultReportOnly {
+            return .reportOnly(
+                reason: "generalized repairs are not enabled in this build — approval pending")
         }
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(record)
-        try data.write(to: recordURL(key: record.key), options: .atomic)
+        if LintAcceptanceManifest.Pipeline(components) != manifest.pipeline {
+            return .reportOnly(
+                reason: "the lint pipeline changed since the shipped approval — a fresh gate is required")
+        }
+        guard let row = manifest.approvals.first(where: {
+            $0.provider == components.provider
+                && $0.model == components.model
+                && $0.effort == components.effort
+        }) else {
+            return .reportOnly(
+                reason: "this provider/model/effort configuration is not in the approved matrix")
+        }
+        // Documented limitation: a revision missing on EITHER side does not
+        // fail the match — only two known, different revisions do.
+        if let evaluated = row.evaluatedRevision,
+           let current = components.modelRevision,
+           evaluated != current {
+            return .reportOnly(
+                reason: "the provider's model revision changed since evaluation")
+        }
+        return .repairAuthorized(approvalID: row.id)
     }
 
     /// The evaluation admission (plan §6.13): a harness-only restricted
     /// admission for the disposable wiki ids the harness JUST created, for
     /// the exact evaluated configuration. It can never authorize an operator
-    /// wiki and never writes acceptance records.
+    /// wiki.
     public static func evaluationAdmission(
         admittedWikiIDs: Set<WikiID>, requestedWikiID: WikiID
     ) -> Bool {
         admittedWikiIDs.contains(requestedWikiID)
     }
-}
-
-public enum LintAcceptanceGateError: Error, Equatable, Sendable {
-    case unreadable(key: String, underlying: String)
-    case malformedRecord(key: String)
-    case keyMismatch(key: String)
 }

@@ -5,12 +5,14 @@ import WikiFSTypes
 import WikiLintEval
 
 /// AC.12/AC.14: the diff oracle rejects known-bad edits; scoring separates
-/// report-only recall from forbidden repairs; the acceptance gate accepts
-/// only complete matching records; canned runs cannot claim live; the
-/// shipped gate digests match the canonical manifests.
+/// report-only recall from forbidden repairs; canned runs cannot claim
+/// live; the shipped gate digests match the canonical manifests. The
+/// shipped-manifest gate itself is covered in `LintAcceptanceGateTests`.
 struct WikiLintEvaluationHarnessTests {
 
     // MARK: - Fixtures
+
+    private struct UnknownFixture: Error { let id: String }
 
     private func canonical() throws -> LintEvalFixtureManifest {
         try LintEvalCanonicalFixtures.loadGateManifest()
@@ -19,7 +21,7 @@ struct WikiLintEvaluationHarnessTests {
     private func fixture(_ id: String) throws -> LintEvalFixture {
         let all = try canonical().tuning + canonical().heldOut
         guard let match = all.first(where: { $0.id == id }) else {
-            throw LintAcceptanceGateError.malformedRecord(key: id)
+            throw UnknownFixture(id: id)
         }
         return match
     }
@@ -168,76 +170,7 @@ struct WikiLintEvaluationHarnessTests {
 
     // MARK: - Acceptance gate (AC.14)
 
-    private func tempGate() -> LintAcceptanceGate {
-        LintAcceptanceGate(directory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("lint-gate-\(UUID().uuidString)", isDirectory: true))
-    }
-
-    private var components: LintAcceptanceKey.Components {
-        LintAcceptanceKey.Components(
-            provider: "anthropic", model: "claude-sonnet", modelRevision: "20260101",
-            effort: "low", promptSHA256: String(repeating: "a", count: 64),
-            detectorRevision: LintPreflightReport.detectorRevision,
-            fixtureDigest: String(repeating: "b", count: 64))
-    }
-
-    @Test func changedConfigurationInvalidatesEvidence() throws {
-        let gate = tempGate()
-        let key = LintAcceptanceKey.digest(components)
-        try gate.write(record: LintAcceptanceRecord(
-            key: key, artifactManifestDigest: components.fixtureDigest,
-            rubricReviewer: "operator", rubricDecidedAt: Date(),
-            rubricFixtureIDs: ["bail-d25-wrap"], recordedAt: Date()))
-        #expect(try gate.selection(for: components) == .repairAuthorized)
-        // A changed model revision is a DIFFERENT configuration — report-only.
-        var changed = components
-        changed = LintAcceptanceKey.Components(
-            provider: changed.provider, model: changed.model,
-            modelRevision: "20260201", effort: changed.effort,
-            promptSHA256: changed.promptSHA256,
-            detectorRevision: changed.detectorRevision,
-            fixtureDigest: changed.fixtureDigest)
-        if case .repairAuthorized = try gate.selection(for: changed) {
-            Issue.record("a changed configuration must not inherit prior evidence")
-        } else {
-            // expected report-only
-        }
-        // A changed fixture digest likewise.
-        var refixtured = components
-        refixtured = LintAcceptanceKey.Components(
-            provider: refixtured.provider, model: refixtured.model,
-            modelRevision: refixtured.modelRevision, effort: refixtured.effort,
-            promptSHA256: refixtured.promptSHA256,
-            detectorRevision: refixtured.detectorRevision,
-            fixtureDigest: String(repeating: "c", count: 64))
-        if case .repairAuthorized = try gate.selection(for: refixtured) {
-            Issue.record("a changed fixture digest must not inherit prior evidence")
-        } else {
-            // expected report-only
-        }
-    }
-
-    @Test func missingOrMalformedGateCannotEnableRepairs() throws {
-        let gate = tempGate()
-        // Missing record: report-only.
-        if case .repairAuthorized = try gate.selection(for: components) {
-            Issue.record("a missing record must not authorize repairs")
-        } else {
-            // expected
-        }
-        // Malformed record (missing rubric): throws as a finding.
-        let key = LintAcceptanceKey.digest(components)
-        try FileManager.default.createDirectory(at: gate.directory, withIntermediateDirectories: true)
-        try Data(#"{"recordVersion":1,"key":"\#(key)"}"#.utf8)
-            .write(to: gate.directory.appendingPathComponent("\(key).json"))
-        #expect(throws: LintAcceptanceGateError.self) {
-            _ = try gate.selection(for: components)
-        }
-    }
-
-    /// AC.14: canned/dry-run results cannot claim live acceptance — a
-    /// record without the LIVE evidence digest simply never matches, and
-    /// the evaluation admission cannot authorize operator wikis.
+    /// AC.14: the evaluation admission cannot authorize operator wikis.
     @Test func cannedCannotClaimLiveAndAdmissionIsScoped() {
         // Admission: disposable wiki ids only.
         let disposable = WikiID(rawValue: "01HZDISPOSABLE00000000000000A")
