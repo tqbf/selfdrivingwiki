@@ -59,7 +59,7 @@ run-report contract + coverage/verification gates), **`5bd10c7e`** (typed
 identity + staged artifacts + per-page sequential dispatch through all three
 entrypoints; observed per-page outcomes replace `.notReported` only when the
 host supplies them; title-join tests replaced with coordinator dispatch
-tests), and **`28f00312`** (daemon snapshot receipts WIRED: a repair-policy
+tests), and **`17105b0b`** (daemon snapshot receipts WIRED: a repair-policy
 run's `page get --id <selected> --json` mints a receipt into the JSON reply;
 `page patch --lint-receipt` must present the CURRENT token — stale/absent/
 closed deny with the generic scope message; commit invalidates; a typed
