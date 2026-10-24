@@ -117,19 +117,39 @@ critical defects in the deterministic core. Fix-or-rebut status:
   called per page by BOTH queue providers — coverage-rejected /
   verification-failed / agent-log-missing pages are `.failed` in the
   observed outcomes and fail the item, never "run completed".
-- **M3 (major) — accepted, fix next:** written-head scan must use the same
-  facts; written head must come from the patch outcome; per-hunk change
-  regions from the server outcome.
-- **M4/M5/M6/M7/M8/M9, m1–m3/m5–m8 — accepted, queued** in order: M4
-  receipt↔expectHead binding, M5 unresolved-pin rejection, M6 run-scoped
-  verification lookups + `forget`, M7 log query by window/page, M8 real
-  gate components + freshness + hard-fail to report-only when
-  unconfigured, M9 evaluator controls (per-defect scoring, consumed
-  declarations, hidden bail fixtures before freezing), then the minors.
-- **Doc overclaims** (review verdict ¶): the implementation doc's "Key
-  semantics" and the scoping doc's "Status: IMPLEMENTED" for lint policies
-  are qualified — the gate selects report-only for every current
-  configuration, and C1's production minting is the open item.
+- **M3 (major) — FIXED `015646ec`.** Written-head verification scan loads
+  the same facts as the pre-run scan; D28's async fence facts stay
+  pre-scan-only (documented — no candidate repairs, cannot flip verdicts).
+- **M4 (major) — FIXED `4dad557f`.** Receipt validates head == expectHead;
+  casConflict invalidates the receipt too.
+- **M5 (major) — FIXED `4dad557f`.** Added citation with an unresolved
+  `@vN` pin is a typed rejection, with or without a fragment.
+- **M6 (major) + m5 (minor) — FIXED `015646ec`.** Broker revoke calls
+  `forgetLintState` — receipts, counters, and records die with the run.
+- **M7 (major) — FIXED `015646ec`.** Task prompt REQUIRES the agent's log
+  title to start with the page title; the host matches entries by page,
+  window widened to 200.
+- **M8 (major) — FIXED `7fec64cf`.** Unresolved gate components hard-fail
+  to report-only BEFORE record lookup (a constant key is publicly
+  computable); child-writable lint-acceptance/ is outside the seatbelt
+  boundary by construction.
+- **M9 (major) — FIXED `7fec64cf`.** Per-defect scoring (duplicate-class
+  trap gone), declaration consumption in the oracle, merged-coverage
+  rewrite detection, hidden bail fixtures added to held-out (manifest
+  revision 2, digest regenerated — prior evidence invalid).
+- **m1 (minor) — accepted, queued** with the launcher wiring follow-up.
+- **m2 (minor) — FIXED `4dad557f`.**
+- **m3/m4 (minors) — accepted:** escaped-pipe cell counting and CR-only
+  line tables queued; m4's dedup semantics documented.
+- **m6 (minor) — REBUTTED in part:** `preflightLint` remains the Phase 0
+  interim CAS path pinned by `LintBracketRepairTests`/`LintSnapshotTests`;
+  its removal is the scoped-run launcher's decision, not this plan's.
+- **m7 (minor) — FIXED `8d34ca5c`.** Per-page outcomes now fail the item.
+- **m8 (minor) — accepted:** digest-over-decoded-struct noted in the
+  manifest doc; fails safe.
+- **Doc overclaims — FIXED `df358a97`/`c700cbbc` + this note:** both docs
+  now state that the gate selects report-only for every current
+  configuration and that production minting landed with `8d34ca5c`.
 
 ## Phase 6/7 remaining (authoritative)
 
