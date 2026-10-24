@@ -309,7 +309,9 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         onReport?(QueueIngestionReporting.runningMutation())
 
         // Per-page sequential runs — one typed request per page, never
-        // joined titles (plan §5.2/§5.3). Missing pages stay visible.
+        // joined titles (plan §5.2/§5.3). Missing pages stay visible. The
+        // SAME host-agnostic accounting as the app UI runs after each page.
+        let runStart = Date()
         var observed: [String] = []
         for pageID in pageIDs {
             if Task.isCancelled {
@@ -330,13 +332,15 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 onTranscript: onTranscript,
                 onLiveUsage: onLiveUsage,
                 onPendingPermission: onPendingPermission)
-            // §5.12: the host appends its own --kind lint record per page —
-            // the daemon-side facts it can prove (dispatch + written head +
-            // the dispatcher's published written-version verification).
-            // A failed append is visible in the observed summary, never
-            // silently dropped.
-            let writtenHead = (try? store.readPageCoherent(id: pageID).headVersionID)?  // swiftlint:disable:this silent_try_optional
-                .rawValue ?? "none"
+            // §5.12 + review M1: the host runs the SAME post-run accounting
+            // as the app UI (coverage, verification, agent-log detection)
+            // and appends its own --kind lint record with the dispatcher's
+            // published written-version verification when one exists.
+            let outcome = await MainActor.run {
+                AgentOperationRunner.accountForLintRun(
+                    plan: plan, pageID: pageID, launcher: launcher,
+                    store: store, runStart: runStart)
+            }
             var verificationSummary = "none"
             if let lintRunState,
                let record = await lintRunState.latestVerificationRecord(pageID: pageID) {
@@ -348,11 +352,13 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 _ = try store.appendLog(
                     kind: .lint,
                     title: "Selected-page lint — \(plan.snapshot.title)",
-                    note: "host dispatch record; written_head=\(writtenHead); "
-                        + "verification=\(verificationSummary)")
-                observed.append("\(plan.snapshot.title): run completed")
+                    note: "host dispatch record; verification=\(verificationSummary); "
+                        + "\(outcome.detail)")
+                observed.append("\(outcome.title): \(outcome.status) — \(outcome.detail); "
+                    + "verification=\(verificationSummary)")
             } catch {
-                observed.append("\(plan.snapshot.title): run completed; HOST LOG APPEND FAILED: \(error)")
+                observed.append("\(outcome.title): \(outcome.status); "
+                    + "HOST LOG APPEND FAILED: \(error)")
             }
         }
         let results = await launcherResults(launcher)

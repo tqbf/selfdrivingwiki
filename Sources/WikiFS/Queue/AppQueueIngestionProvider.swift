@@ -465,7 +465,11 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // Run the per-page lint plans SEQUENTIALLY — one run, one typed
         // request, one outcome per page (plan §5.2/§5.3). Titles are never
         // joined; a page's failure never becomes another page's clean audit.
+        // The SAME host-agnostic accounting as the app UI runs after each
+        // page (coverage, verification, agent-log detection, host log).
+        let runStart = Date()
         var observed: [String] = []
+        var anyFailed = false
         for pageID in pageIDs {
             if Task.isCancelled {
                 observed.append("\(pageID.rawValue): skipped (cancelled)")
@@ -488,15 +492,11 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                 onLiveUsage: onLiveUsage,
                 onPendingPermission: onPendingPermission
             )
-            do {
-                try Self.validateLauncherOutcome(
-                    exitStatus: launcher.exitStatus,
-                    preflightError: launcher.preflightError,
-                    turnFailure: launcher.runTurnFailureFact)
-                observed.append("\(plan.snapshot.title): run completed")
-            } catch {
-                observed.append("\(plan.snapshot.title): run failed (\(error.localizedDescription))")
-            }
+            let outcome = AgentOperationRunner.accountForLintRun(
+                plan: plan, pageID: pageID, launcher: launcher,
+                store: store.internalStore, runStart: runStart)
+            if outcome.status != .dispatched { anyFailed = true }
+            observed.append("\(outcome.title): \(outcome.status) — \(outcome.detail)")
         }
         onUsage?(launcher.runTotalUsage)
         onLogPaths?(launcher.logFileURL, launcher.debugFolderURL)
@@ -510,6 +510,10 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             operation: .lint,
             usage: launcher.runTotalUsage,
             observedSummary: observed.isEmpty ? nil : observed.joined(separator: "; ")))
+        if anyFailed {
+            throw QueueIngestionError.spawnFailed(
+                "one or more lint pages failed host accounting — see the per-page outcomes")
+        }
     }
 
     /// The app host's seam over the shared #1354 contract

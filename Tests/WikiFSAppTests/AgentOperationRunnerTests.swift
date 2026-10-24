@@ -83,6 +83,32 @@ struct AgentOperationRunnerTests {
         #expect(skeleton.contains("finding D07-1 pending"), "the broken citation is a finding to account for")
     }
 
+    /// The launcher derives the managed-run policy from the request alone
+    /// (review C1): repair-authorized lintPage → repair lease on that page,
+    /// unauthorized lintPage → report-only lease on that page, `.lint` →
+    /// whole-wiki report-only, everything else ordinary.
+    @Test func managedRunPolicyDerivesFromRequest() {
+        let page = LintPageIdentity(
+            pageID: PageID(rawValue: "01HZPAGE00000000000000000A"),
+            title: "P", headVersionID: nil)
+        func request(_ repairAuthorized: Bool) -> OperationRequest {
+            .lintPage(
+                page: page, repairAuthorized: repairAuthorized, gateReason: "g",
+                preflightReportMarkdown: "# p\n", runReportMarkdown: "r\n",
+                stateMarkdown: "# s\n")
+        }
+        #expect(AgentLauncher.managedRunPolicy(for: request(true))
+            == .lintSelectedPageRepair(pageID: page.pageID))
+        #expect(AgentLauncher.managedRunPolicy(for: request(false))
+            == .lintSelectedPageReportOnly(pageID: page.pageID))
+        #expect(AgentLauncher.managedRunPolicy(for: .lint(stateMarkdown: "# s\n"))
+            == .lintWholeWikiReportOnly)
+        #expect(AgentLauncher.managedRunPolicy(
+            for: .ingest(sources: [], stateMarkdown: "# s\n")) == .ordinaryManaged)
+        #expect(AgentLauncher.managedRunPolicy(
+            for: .query(question: "q", stateMarkdown: "# s\n")) == .ordinaryManaged)
+    }
+
     /// A page deleted or renamed before its run is SKIPPED with a reason —
     /// never an empty clean audit (AC.9).
     @Test func missingPagePlanIsNil() async throws {

@@ -706,6 +706,26 @@ public enum AgentOperationRunner {
             changeSignaler: changeSignaler,
             wikictlDirectory: wikictlDirectory)
 
+        return accountForLintRun(
+            plan: plan, pageID: pageID, launcher: launcher,
+            store: store.internalStore, runStart: runStart)
+    }
+
+    /// The host-agnostic POST-RUN ACCOUNTING for one lint page (plan
+    /// §5.9–§5.13, review M1): read the filled run report from the run
+    /// scratch, validate coverage against THIS plan's inventory, re-scan
+    /// the written bytes and run the REQ-54 compare with store-observed
+    /// change regions, detect the agent's own log append, and append the
+    /// host's `--kind lint` record. Every host (app UI, app queue, daemon
+    /// queue) runs the SAME accounting; a launcher exit status alone never
+    /// produces a passing outcome.
+    public static func accountForLintRun(
+        plan: LintPagePlan,
+        pageID: PageID,
+        launcher: AgentLauncher,
+        store: WikiStore,
+        runStart: Date
+    ) -> LintPageDispatchOutcome {
         // Post-run accounting: the host reads the filled run report back
         // from the run's scratch and validates coverage against THIS plan's
         // inventory (REQ-31/32). The agent's claims never stand alone.
@@ -765,10 +785,10 @@ public enum AgentOperationRunner {
                     return id
                 })
                 do {
-                    let writtenRead = try store.internalStore.readPageCoherent(id: pageID)
+                    let writtenRead = try store.readPageCoherent(id: pageID)
                     let resolution: LintResolutionFacts
                     do {
-                        resolution = try LintResolutionFacts.load(from: store.internalStore)
+                        resolution = try LintResolutionFacts.load(from: store)
                     } catch {
                         DebugLog.agent("lint dispatch: resolution facts unavailable for verification: \(error)")
                         resolution = LintResolutionFacts()
@@ -815,7 +835,7 @@ public enum AgentOperationRunner {
         // run can never report complete success.
         let writtenHead: PageVersionID?
         do {
-            writtenHead = try store.internalStore.readPageCoherent(id: pageID).headVersionID
+            writtenHead = try store.readPageCoherent(id: pageID).headVersionID
         } catch {
             DebugLog.agent("lint dispatch: post-run read failed: \(error)")
             writtenHead = nil
@@ -823,7 +843,7 @@ public enum AgentOperationRunner {
         detail += "; written_head=\(writtenHead?.rawValue ?? plan.snapshot.headVersionID?.rawValue ?? "none")"
         let agentLogCommitted: Bool
         do {
-            agentLogCommitted = try store.internalStore.recentLogEntries(limit: 50)
+            agentLogCommitted = try store.recentLogEntries(limit: 50)
                 .contains { $0.kind == .lint && $0.timestamp >= runStart }
         } catch {
             DebugLog.agent("lint dispatch: log read failed; treating the agent log as missing: \(error)")
@@ -834,7 +854,7 @@ public enum AgentOperationRunner {
             detail += "; AGENT LOG MISSING — the agent never appended its --kind lint entry"
         }
         do {
-            try store.internalStore.appendLog(
+            try store.appendLog(
                 kind: .lint,
                 title: "Selected-page lint — \(plan.snapshot.title)",
                 note: "host audit record; \(detail)")

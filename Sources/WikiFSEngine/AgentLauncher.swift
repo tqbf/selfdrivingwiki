@@ -392,28 +392,59 @@ public final class AgentLauncher {
 
     /// Issue the managed run's scoped lease when a trusted manager is
     /// installed, and start its half-life renewal. Returns nil when no
-    /// manager is installed (today's unscoped launches). Registration failure
-    /// THROWS — the caller fails the launch; there is no unscoped fallback.
+    /// manager is installed AND the policy permits that (today's unscoped
+    /// launches). Registration failure THROWS — the caller fails the launch;
+    /// there is no unscoped fallback.
+    ///
+    /// Lint policies REQUIRE the scoped lease: without it a lint child would
+    /// run with unscoped ordinary authority and nothing would enforce the
+    /// receipt gate, page pinning, or report-only selection — so a lint
+    /// launch without a configured manager is refused, never degraded.
     ///
     /// Call ordering contract: this runs AFTER every preflight early-return
     /// in the caller (so a refused launch never holds authority) and BEFORE
     /// the spawn is composed (§5: the capability is registered before any
     /// child can start).
-    private func issueScopedRunIfConfigured(wikiID: WikiID) async throws -> AgentScopedRunLease? {
-        guard let manager = scopedRunLeaseManager else { return nil }
+    private func issueScopedRunIfConfigured(wikiID: WikiID, policy: ManagedRunPolicy) async throws -> AgentScopedRunLease? {
+        guard let manager = scopedRunLeaseManager else {
+            if policy.isLint {
+                throw AgentScopedRunError.registrationFailed(
+                    "lint runs require the scoped-run daemon lease manager — none is configured, so the lint policy could not be enforced")
+            }
+            return nil
+        }
         // Any leftover lease from a prior run revokes first (idempotent; a
         // normally-finished run already revoked in finish()).
         teardownScopedRun()
         do {
-            let lease = try await manager.issueScopedRun(for: wikiID, policy: .ordinaryManaged)
+            let lease = try await manager.issueScopedRun(for: wikiID, policy: policy)
             activeScopedRunLease = lease
             startScopedRunRenewal(lease)
             DebugLog.agent(
                 "scoped run: issued lease for wiki \(wikiID.rawValue) "
-                    + "(endpoint \(lease.credentials.endpointPath))")
+                    + "(endpoint \(lease.credentials.endpointPath), policy \(policy)")
             return lease
         } catch {
             throw AgentScopedRunError.registrationFailed("\(error)")
+        }
+    }
+
+    /// The managed-run policy for one operation request (plan §6.13): lint
+    /// requests get LINT policies — selected-page repair only when the
+    /// rollout gate authorized repairs, selected-page report-only otherwise,
+    /// whole-wiki report-only for `.lint` — and everything else stays
+    /// ordinary. The launcher derives this from the request alone; the child
+    /// cannot influence it.
+    public static func managedRunPolicy(for request: OperationRequest) -> ManagedRunPolicy {
+        switch request {
+        case .lintPage(let page, let repairAuthorized, _, _, _, _):
+            return repairAuthorized
+                ? .lintSelectedPageRepair(pageID: page.pageID)
+                : .lintSelectedPageReportOnly(pageID: page.pageID)
+        case .lint:
+            return .lintWholeWikiReportOnly
+        case .ingest, .query:
+            return .ordinaryManaged
         }
     }
 
@@ -1759,7 +1790,8 @@ public final class AgentLauncher {
         // preflight early-return) so a refused launch never holds authority.
         let scopedRunLease: AgentScopedRunLease?
         do {
-            scopedRunLease = try await issueScopedRunIfConfigured(wikiID: wikiID)
+            scopedRunLease = try await issueScopedRunIfConfigured(
+                wikiID: wikiID, policy: Self.managedRunPolicy(for: request))
         } catch {
             preflightError = error.localizedDescription
             finish(status: -1)
@@ -3908,7 +3940,8 @@ public final class AgentLauncher {
         // `finish` would be a no-op at this point.
         let scopedRunLease: AgentScopedRunLease?
         do {
-            scopedRunLease = try await issueScopedRunIfConfigured(wikiID: wikiID)
+            scopedRunLease = try await issueScopedRunIfConfigured(
+                wikiID: wikiID, policy: .ordinaryManaged)
         } catch {
             preflightError = error.localizedDescription
             teardownScopedRun()
