@@ -65,6 +65,32 @@ reporting with observed facts, Run Details via the existing `.available`
 summary rows, whole-wiki report-only (verified), and the AC.5 live sandbox
 test.
 
+## Phase 6 remaining (after `be711293` core)
+
+**LANDED `be711293`**: WikiLintEval target (manifest model + canonical gate
+manifest JSON + diff oracle + scoring + acceptance gate), shipped
+`LintGateFixtureManifest.json` (frozen digest `4024ba8a…`) + loader,
+WikiLintEvalRunner (inspect/replay/live-refusal), scripts/run-wiki-lint-eval.sh,
+9 harness tests (oracle, scoring controls, held-out frozen, gate
+invalidation, admission scoping, shipped-digest match).
+
+Still open in Phase 6:
+1. Coordinator gate wiring — `LintAcceptanceGate.production().selection`
+   consulted before requesting a repair-capable lease; unaccepted →
+   report-only policy + reason in artifacts/queue state
+   (`LintAcceptanceGateIntegrationTests`: unacceptedConfigurationRunsReportOnly,
+   acceptedConfigurationReceivesNarrowRepairLease,
+   evaluationAdmissionCannotTargetOperatorWiki — the last is unit-covered,
+   needs the integration form).
+2. Live trial plumbing (20 bail trials at lowest tier, 3× remaining groups,
+   transcripts + per-class scores persisted under tmp/wiki-lint-eval/<run>/)
+   — the RUNNER refuses `--live` today; the trials themselves stay BLOCKED
+   on operator-confirmed provider access + budget + human rubric (plan
+   §6.14). Do not claim rollout readiness.
+3. Harness-only evaluation admission restricted to disposable daemon-created
+   wikis for the exact evaluated configuration (unit logic landed; wire the
+   disposable-wiki lifecycle through the live path when unblocked).
+
 ## Phase 6/7 remaining (authoritative)
 
 1. Phase 6: `WikiLintEval`/`WikiLintEvalRunner` targets +
