@@ -1,0 +1,95 @@
+{
+  "manifestVersion": 1,
+  "tuning": [
+    {
+      "id": "bail-d25-wrap",
+      "kind": "mechanical",
+      "body": "```markdown\n# Wrapped\n[[Nowhere]]\n```\n",
+      "seededDefects": [
+        { "defectClass": "D25", "evidence": "```markdown", "expectRepair": true }
+      ],
+      "allowedRepairs": [
+        { "defectClass": "D25", "oldText": "```markdown\n", "newText": "" },
+        { "defectClass": "D25", "oldText": "```\n", "newText": "" }
+      ],
+      "protectedByteRanges": [],
+      "permittedUnresolvedClasses": []
+    },
+    {
+      "id": "mech-d08-canonicalize",
+      "kind": "mechanical",
+      "body": "See [[source:Smith2023]].\n",
+      "seededDefects": [
+        { "defectClass": "D08", "evidence": "[[source:Smith2023]]", "expectRepair": true }
+      ],
+      "allowedRepairs": [
+        { "defectClass": "D08", "oldText": "[[source:Smith2023]]", "newText": "[[source:01HZSRCFIXTURE000000000000001]]" }
+      ],
+      "protectedByteRanges": [],
+      "permittedUnresolvedClasses": []
+    },
+    {
+      "id": "clean-page",
+      "kind": "mechanical",
+      "body": "# Clean\n\nA healthy page with `code` and [[Nowhere]].\n",
+      "seededDefects": [],
+      "allowedRepairs": [],
+      "protectedByteRanges": [],
+      "permittedUnresolvedClasses": ["D07"]
+    },
+    {
+      "id": "boundary-cascade-table",
+      "kind": "mechanical",
+      "body": "````markdown\n| A | B |\n| -- | -- |\n| 1 |\n````\n",
+      "seededDefects": [
+        { "defectClass": "D25", "evidence": "````markdown", "expectRepair": true },
+        { "defectClass": "D03", "evidence": "| 1 |", "expectRepair": true }
+      ],
+      "allowedRepairs": [
+        { "defectClass": "D25", "oldText": "````markdown\n", "newText": "" },
+        { "defectClass": "D25", "oldText": "````\n", "newText": "" },
+        { "defectClass": "D03", "oldText": "| 1 |", "newText": "| 1 | 2 |" }
+      ],
+      "protectedByteRanges": [],
+      "permittedUnresolvedClasses": []
+    },
+    {
+      "id": "judgment-d05-report-only",
+      "kind": "judgment",
+      "body": "# Same\n\nA.\n\n# Same\n\nB.\n",
+      "seededDefects": [
+        { "defectClass": "D05", "evidence": "# Same", "expectRepair": false }
+      ],
+      "allowedRepairs": [],
+      "protectedByteRanges": [],
+      "permittedUnresolvedClasses": ["D05"]
+    }
+  ],
+  "heldOut": [
+    {
+      "id": "held-bail-merge-markers",
+      "kind": "mechanical",
+      "body": "resolved text\n\n<<<<<<< HEAD\nours\n>>>>>>> feature\n",
+      "seededDefects": [
+        { "defectClass": "D15", "evidence": "<<<<<<< HEAD", "expectRepair": true }
+      ],
+      "allowedRepairs": [
+        { "defectClass": "D15", "oldText": "<<<<<<< HEAD\n", "newText": "" },
+        { "defectClass": "D15", "oldText": ">>>>>>> feature\n", "newText": "" }
+      ],
+      "protectedByteRanges": [],
+      "permittedUnresolvedClasses": []
+    },
+    {
+      "id": "held-judgment-long-late-todo",
+      "kind": "judgment",
+      "body": "# Long\n\nLeading paragraph with real content that pushes the defect late in the page so an early-exit audit would miss it.\n\nThe seed sits here: TODO fix the table below.\n",
+      "seededDefects": [
+        { "defectClass": "D14", "evidence": "TODO", "expectRepair": false }
+      ],
+      "allowedRepairs": [],
+      "protectedByteRanges": [],
+      "permittedUnresolvedClasses": ["D14"]
+    }
+  ]
+}

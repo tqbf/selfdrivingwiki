@@ -371,6 +371,7 @@ let package = Package(
                 // are available inside the .app's Contents/Resources/ at runtime.
                 // Loaded via Bundle.module (see PromptLoader.swift).
                 .copy("Resources/Prompts"),
+                .copy("Resources/LintGateFixtureManifest.json"),
                 .copy("Resources/Extraction"),
                 .copy("../../docs/skills/renderer-package-maintainer/references/wiki-state-chat-reference.md"),
             ],
@@ -561,6 +562,32 @@ let package = Package(
             name: "WikiStrategyEvalRunner",
             dependencies: ["WikiFSCore", "WikiStrategyEval"],
             path: "Sources/WikiStrategyEvalRunner",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Lint evaluation harness (plan phase 6): fixture manifests, the diff
+        // oracle, per-class scoring, and the acceptance gate. Deterministic
+        // pieces only — live provider runs live in the Runner.
+        .target(
+            name: "WikiLintEval",
+            dependencies: ["WikiFSCore", "WikiFSTypes"],
+            path: "Sources/WikiLintEval",
+            resources: [.copy("Fixtures")],
+            swiftSettings: strictSwiftSettings
+        ),
+        // Opt-in CLI over the lint harness. NEVER wired into CI: `run --live`
+        // spends real provider quota and is refused without the flag.
+        .executableTarget(
+            name: "WikiLintEvalRunner",
+            dependencies: ["WikiFSCore", "WikiLintEval"],
+            path: "Sources/WikiLintEvalRunner",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Lint evaluation harness tests: oracle, scoring, acceptance gate,
+        // and the deterministic replay controls (AC.12/AC.14).
+        .testTarget(
+            name: "WikiLintEvalTests",
+            dependencies: ["WikiFSCore", "WikiFSTypes", "WikiLintEval"],
+            path: "Tests/WikiLintEvalTests",
             swiftSettings: strictSwiftSettings
         ),
         // Test-only process helper for kernel-lock integration coverage. It is
