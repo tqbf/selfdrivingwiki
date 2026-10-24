@@ -141,9 +141,12 @@ critical defects in the deterministic core. Fix-or-rebut status:
   `lastScratchDirectory` at run start — a stale path can no longer make
   the accounting read the previous run's report.
 - **m2 (minor) — FIXED `4dad557f`.**
-- **m3 (minor) — FIXED `131a4237` (partial).** `pipeCells` skips escaped
-  pipes; CR-only line endings remain a documented v1 limit (store bodies
-  are LF-normalized).
+- **m3 (minor) — FIXED `131a4237` + `48d9a727`.** `pipeCells` skips escaped
+  pipes AND pipes inside `[[wiki-link]]` alias spans — production lint
+  `01M5QY0GWWR9S270DDGRJ7TQ0B` produced 8 false D03s on a valid episode
+  table whose rows carry `[[page:X|alias]]` links (the reader transforms
+  wiki links before table parsing, so alias pipes never reach GFM).
+  CR-only line endings remain a documented v1 limit.
 - **m4 (minor) — accepted:** dedup semantics documented.
 - **m6 (minor) — REBUTTED in part:** `preflightLint` remains the Phase 0
   interim CAS path pinned by `LintBracketRepairTests`/`LintSnapshotTests`;
