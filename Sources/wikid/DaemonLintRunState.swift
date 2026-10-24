@@ -21,6 +21,19 @@ public struct DaemonLintSnapshotReceipt: Hashable, Sendable {
     public let bodyFingerprint: String
 }
 
+/// The daemon's own verification record for one committed lint patch
+/// (plan §5.8): the trusted side scanned the WRITTEN immutable version right
+/// after its commit — never whichever head happens to be current later.
+public struct DaemonLintVerificationRecord: Hashable, Sendable {
+    public let pageID: PageID
+    public let writtenHead: PageVersionID
+    public let appliedClasses: [LintDefectClass]
+    public let writtenFingerprint: String
+    /// The written-version scan's finding ids (class@range summaries).
+    public let remainingFindings: [String]
+    public let recordedAt: Date
+}
+
 /// The CAS budget and receipt bookkeeping for one daemon's lint runs.
 /// Actor-isolated; entries live only for the daemon process.
 public actor DaemonLintRunState {
@@ -41,6 +54,7 @@ public actor DaemonLintRunState {
     private var receipts: [DaemonRunID: DaemonLintSnapshotReceipt] = [:]
     private var conflictCounts: [DaemonRunID: Int] = [:]
     private var closedRuns: Set<DaemonRunID> = []
+    private var verificationRecords: [DaemonRunID: DaemonLintVerificationRecord] = [:]
 
     public init() {}
 
@@ -102,6 +116,19 @@ public actor DaemonLintRunState {
     /// patch rejects until the run ends.
     public func isClosed(runID: DaemonRunID) -> Bool {
         closedRuns.contains(runID)
+    }
+
+    // MARK: - Verification records (plan §5.8)
+
+    /// Publish the written-version verification record for a committed lint
+    /// patch (the latest one wins — a second patch replaces it).
+    public func recordVerification(runID: DaemonRunID, record: DaemonLintVerificationRecord) {
+        verificationRecords[runID] = record
+    }
+
+    /// The run's latest written-version verification record, if any.
+    public func verificationRecord(runID: DaemonRunID) -> DaemonLintVerificationRecord? {
+        verificationRecords[runID]
     }
 
     /// Tear down a run's state (the lease revocation path).

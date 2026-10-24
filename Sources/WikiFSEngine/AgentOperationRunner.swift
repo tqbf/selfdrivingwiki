@@ -620,6 +620,34 @@ public enum AgentOperationRunner {
         }
     }
 
+    /// The byte ranges where `after` actually differs from `before`, observed
+    /// from the store's own bytes (common prefix/suffix trim → the changed
+    /// middle region). This is the verification gate's "applied hunks" input:
+    /// findings inside these ranges were legitimately rewritten; a finding
+    /// that vanishes OUTSIDE them changed in an unattributed way.
+    public static func observedChangeRanges(before: String, after: String) -> [PagePatchHunk] {
+        let a = Array(before.utf8)
+        let b = Array(after.utf8)
+        var prefix = 0
+        while prefix < a.count, prefix < b.count, a[prefix] == b[prefix] {
+            prefix += 1
+        }
+        var suffix = 0
+        while suffix < a.count - prefix, suffix < b.count - prefix,
+              a[a.count - 1 - suffix] == b[b.count - 1 - suffix] {
+            suffix += 1
+        }
+        let oldEnd = a.count - suffix
+        let newEnd = b.count - suffix
+        guard prefix < oldEnd || prefix < newEnd else { return [] } // identical
+        return [PagePatchHunk(
+            startByte: prefix,
+            endByte: oldEnd,
+            oldText: String(decoding: a[prefix..<oldEnd], as: UTF8.self),
+            newText: String(decoding: b[prefix..<newEnd], as: UTF8.self),
+            reason: "observed change region (store bytes)")]
+    }
+
     /// Dispatch ONE selected-page lint run and return its outcome. A page's
     /// failure never becomes another page's clean audit; the caller decides
     /// whether to continue.
@@ -695,6 +723,52 @@ public enum AgentOperationRunner {
                 }
                 if openFindings.isEmpty == false {
                     detail += "; unresolved: \(openFindings.joined(separator: ","))"
+                }
+                // REQ-54: the app-side verification gate — re-scan the
+                // WRITTEN bytes and compare against the pre-run scan using
+                // hunks OBSERVED from the store (prefix/suffix-trimmed
+                // change region), never the agent's claims alone.
+                let claimedRepairs = Set(parsed.entries.compactMap { entry -> String? in
+                    guard case .finding(let id) = entry.kind,
+                          case .repaired = entry.outcome else { return nil }
+                    return id
+                })
+                do {
+                    let writtenRead = try store.internalStore.readPageCoherent(id: pageID)
+                    let resolution: LintResolutionFacts
+                    do {
+                        resolution = try LintResolutionFacts.load(from: store.internalStore)
+                    } catch {
+                        DebugLog.agent("lint dispatch: resolution facts unavailable for verification: \(error)")
+                        resolution = LintResolutionFacts()
+                    }
+                    let writtenSnapshot = LintPageSnapshot(writtenRead)
+                    let writtenScan = LintPagePreflight.scan(
+                        snapshot: writtenSnapshot,
+                        resolution: resolution)
+                    let observed = Self.observedChangeRanges(
+                        before: plan.snapshot.body, after: writtenSnapshot.body)
+                    let verdict = LintVerification.compare(
+                        before: plan.preflight,
+                        written: writtenScan,
+                        appliedHunks: observed,
+                        claimedRepairFindingIDs: claimedRepairs,
+                        writtenHead: writtenRead.headVersionID,
+                        currentHead: writtenRead.headVersionID,
+                        requiredChecksAvailable: true)
+                    switch verdict.status {
+                    case .verified:
+                        detail += "; verification verified on the written head"
+                    case .verifiedWrittenHeadDiverged(let current):
+                        detail += "; verification verified on the written head; current head diverged to \(current.rawValue)"
+                    case .failed(let reasons):
+                        status = .failed
+                        detail += "; verification failed: "
+                            + reasons.prefix(3).joined(separator: "; ")
+                    }
+                } catch {
+                    status = .failed
+                    detail += "; written-version verification could not run: \(error)"
                 }
             } else {
                 status = .failed

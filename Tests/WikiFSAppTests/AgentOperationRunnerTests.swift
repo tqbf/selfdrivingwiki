@@ -93,6 +93,26 @@ struct AgentOperationRunnerTests {
         #expect(plan == nil)
     }
 
+    /// The verification gate's change observation: prefix/suffix trim to the
+    /// changed middle, from the store's own bytes.
+    @Test func observedChangeRangesTrimToTheChangedMiddle() {
+        // Identical bytes: no change region.
+        #expect(AgentOperationRunner.observedChangeRanges(
+            before: "# Same\n", after: "# Same\n").isEmpty)
+        // A middle edit: the region covers exactly the changed span (the
+        // trailing newline is a common suffix).
+        let ranges = AgentOperationRunner.observedChangeRanges(
+            before: "# T\n\nold text\n", after: "# T\n\nnew text here\n")
+        #expect(ranges.count == 1)
+        #expect(ranges[0].startByte == 5)
+        #expect(ranges[0].endByte == "# T\n\nold text\n".utf8.count - 1)
+        // An append: the region is empty on the old side.
+        let appended = AgentOperationRunner.observedChangeRanges(
+            before: "# T\n", after: "# T\n\nmore\n")
+        #expect(appended.count == 1 && appended[0].startByte == 4)
+        #expect(appended[0].endByte == 4)
+    }
+
     // MARK: - Canonical ULID links are not false positives
 
     @Test func canonicalULIDPageLinkIsNotBroken() throws {

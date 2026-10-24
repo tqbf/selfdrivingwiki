@@ -242,6 +242,12 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                     // needs a fresh read even though the head this run wrote
                     // is now current.
                     await self.lintRunState.invalidateReceipt(runID: grant.runID)
+                    // §5.8: scan the WRITTEN immutable version right after
+                    // the commit and publish the run's verification record.
+                    await Self.recordWrittenVersionVerification(
+                        request: request, selectedPage: selectedPage,
+                        runID: grant.runID, daemon: self.daemon,
+                        lintRunState: self.lintRunState)
                 } else if envelope.error?.code == .casConflict {
                     let stillOpen = await self.lintRunState.recordConflict(runID: grant.runID)
                     if !stillOpen {
@@ -360,6 +366,62 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
         DaemonDomainError(
             code: .scopeDenied,
             message: "the request is outside the scope of this run")
+    }
+
+    /// §5.8: after a committed lint patch, scan the WRITTEN immutable version
+    /// (pure scan + store-derived facts) and publish the run's verification
+    /// record. A failure logs and skips the record — it never fails the
+    /// already-committed write.
+    static func recordWrittenVersionVerification(
+        request: DaemonDomainRequest,
+        selectedPage: PageID,
+        runID: DaemonRunID,
+        daemon: WikiDaemon,
+        lintRunState: DaemonLintRunState
+    ) async {
+        do {
+            let wire: DaemonPagePatchRequest?
+            if let raw = request.payload {
+                wire = try JSONDecoder().decode(DaemonPagePatchRequest.self, from: raw)
+            } else {
+                wire = nil
+            }
+            let store = try await daemon.domainCommandStore(
+                wikiID: WikiID(rawValue: wire?.wikiID ?? ""))
+            let read = try store.readPageCoherent(id: selectedPage)
+            guard let writtenHead = read.headVersionID else { return }
+            let snapshot = LintPageSnapshot(read)
+            let resolution = try LintResolutionFacts.load(from: store)
+            let written = LintPagePreflight.scan(snapshot: snapshot, resolution: resolution)
+            let record = DaemonLintVerificationRecord(
+                pageID: selectedPage,
+                writtenHead: writtenHead,
+                appliedClasses: patchPayloadClasses(request.payload ?? Data()),
+                writtenFingerprint: snapshot.bodyFingerprint,
+                remainingFindings: written.sections.flatMap(\.findings).map { (finding: LintFinding) -> String in
+                    let range = finding.authoredRange.map { "@\($0.lowerBound)" } ?? "@whole"
+                    return "\(finding.defectClass.rawValue)\(range) \(finding.occurrenceID)"
+                },
+                recordedAt: Date())
+            await lintRunState.recordVerification(runID: runID, record: record)
+        } catch {
+            DebugLog.store(
+                "wikid: written-version verification could not run for run \(runID): \(error)")
+        }
+    }
+
+    /// The defect classes of a patch payload's hunks, in order.
+    static func patchPayloadClasses(_ payload: Data) -> [LintDefectClass] {
+        struct Wire: Decodable {
+            struct Hunk: Decodable { let defect: String }
+            let hunks: [Hunk]
+        }
+        // A shape probe on an already-validated payload; unreadable → none.
+        // swiftlint:disable:next silent_try_optional
+        guard let wire = try? JSONDecoder().decode(Wire.self, from: payload) else {
+            return []
+        }
+        return wire.hunks.compactMap { LintDefectClass(rawValue: $0.defect) }
     }
 
     /// Scoped `wiki resolveWiki`: the assigned descriptor or a GENERIC scope
