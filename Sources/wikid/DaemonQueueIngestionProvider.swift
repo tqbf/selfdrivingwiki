@@ -324,7 +324,21 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 onTranscript: onTranscript,
                 onLiveUsage: onLiveUsage,
                 onPendingPermission: onPendingPermission)
-            observed.append("\(plan.snapshot.title): run completed")
+            // §5.12: the host appends its own --kind lint record per page —
+            // the daemon-side facts it can prove (dispatch + written head).
+            // A failed append is visible in the observed summary, never
+            // silently dropped.
+            let writtenHead = (try? store.readPageCoherent(id: pageID).headVersionID)?  // swiftlint:disable:this silent_try_optional
+                .rawValue ?? "none"
+            do {
+                _ = try store.appendLog(
+                    kind: .lint,
+                    title: "Selected-page lint — \(plan.snapshot.title)",
+                    note: "host dispatch record; written_head=\(writtenHead)")
+                observed.append("\(plan.snapshot.title): run completed")
+            } catch {
+                observed.append("\(plan.snapshot.title): run completed; HOST LOG APPEND FAILED: \(error)")
+            }
         }
         let results = await launcherResults(launcher)
         onUsage?(results.usage)

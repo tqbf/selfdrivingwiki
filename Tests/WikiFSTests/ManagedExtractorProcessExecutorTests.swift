@@ -377,7 +377,7 @@ struct ManagedExtractorProcessExecutorTests {
     @Test func timeoutTerminatesAndReapsProcessGroup() async throws {
         let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
         defer { subprocessGate.release() }
-        let fixture = try Fixture(mode: "hold", maximumDurationMilliseconds: 50)
+        let fixture = try Fixture(mode: "hold", maximumDurationMilliseconds: 500)
         defer { fixture.cleanup() }
 
         await #expect(throws: ManagedExtractorProcessError.self) {

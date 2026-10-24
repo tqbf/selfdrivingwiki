@@ -631,6 +631,7 @@ public enum AgentOperationRunner {
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async -> LintPageDispatchOutcome {
+        let runStart = Date()
         guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher),
               let plan = await makeLintPagePlan(
                 store: store.internalStore, pageID: pageID, stateMarkdown: stateMarkdown) else {
@@ -681,12 +682,60 @@ public enum AgentOperationRunner {
                     detail += "; run-report coverage rejected: "
                         + reasons.prefix(3).joined(separator: "; ")
                 }
+                // §5.12: unresolved/blocked findings stay named in the host
+                // record — a coverage-complete report can still carry them.
+                let openFindings = parsed.entries.compactMap { entry -> String? in
+                    guard case .finding(let id) = entry.kind else { return nil }
+                    switch entry.outcome {
+                    case .unresolved, .checkBlocked:
+                        return id
+                    case .repaired, .validAsWritten, .outsideLintScope:
+                        return nil
+                    }
+                }
+                if openFindings.isEmpty == false {
+                    detail += "; unresolved: \(openFindings.joined(separator: ","))"
+                }
             } else {
                 status = .failed
                 detail += "; run report missing or unparseable in the run scratch"
             }
         } else {
             detail += "; no run scratch to read the run report from"
+        }
+
+        // §5.12: the HOST appends the required `--kind lint` entry for the
+        // completed audit and detects whether the AGENT's own append
+        // committed. A missing agent log (or a failed host append) means the
+        // run can never report complete success.
+        let writtenHead: PageVersionID?
+        do {
+            writtenHead = try store.internalStore.readPageCoherent(id: pageID).headVersionID
+        } catch {
+            DebugLog.agent("lint dispatch: post-run read failed: \(error)")
+            writtenHead = nil
+        }
+        detail += "; written_head=\(writtenHead?.rawValue ?? plan.snapshot.headVersionID?.rawValue ?? "none")"
+        let agentLogCommitted: Bool
+        do {
+            agentLogCommitted = try store.internalStore.recentLogEntries(limit: 50)
+                .contains { $0.kind == .lint && $0.timestamp >= runStart }
+        } catch {
+            DebugLog.agent("lint dispatch: log read failed; treating the agent log as missing: \(error)")
+            agentLogCommitted = false
+        }
+        if agentLogCommitted == false {
+            status = .failed
+            detail += "; AGENT LOG MISSING — the agent never appended its --kind lint entry"
+        }
+        do {
+            try store.internalStore.appendLog(
+                kind: .lint,
+                title: "Selected-page lint — \(plan.snapshot.title)",
+                note: "host audit record; \(detail)")
+        } catch {
+            status = .failed
+            detail += "; HOST LOG APPEND FAILED: \(error)"
         }
         return LintPageDispatchOutcome(
             pageID: pageID, title: plan.snapshot.title, status: status, detail: detail)
