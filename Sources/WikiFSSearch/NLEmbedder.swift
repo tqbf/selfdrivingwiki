@@ -3,13 +3,13 @@ import Foundation
 @preconcurrency import NaturalLanguage
 
 /// Apple `NLEmbedding` behind the `Embedder` protocol (512-dim). This is the
-/// **fallback** embedder, used when the MiniLM model is not bundled (e.g. dev
-/// builds, fresh clones without the prepare step, test/CLI contexts).
+/// legacy fallback embedder. An app caller must explicitly configure it when
+/// MiniLM is absent; normal startup skips that path.
 ///
 /// NLEmbedding/CoreNLP is **not** safe off the main thread
-/// (`BNNSFilterApplyBatch` crashes), so the Phase 3 backfill keeps the NLEmbedder
-/// path on the main actor; this wrapper itself is just the lazy model load + the
-/// vector call.
+/// (`BNNSFilterApplyBatch` crashes). Any caller that opts into this fallback
+/// must keep vector calls on the main actor. This wrapper loads the model and
+/// returns its vectors.
 public struct NLEmbedder: Embedder {
     public static let identifier = "nlembedding-512"
     public let dimension = 512
@@ -21,8 +21,8 @@ public struct NLEmbedder: Embedder {
         lock.lock()
         defer { lock.unlock() }
         if let m = _model { return m }
-        // NLEmbedding is used on the app's main actor. The daemon searches
-        // off-main, so it must use MiniLM or keep the cosine leg unavailable.
+        // Keep NLEmbedding in the app bundle. The daemon searches off-main,
+        // so it uses MiniLM or keeps the cosine leg unavailable.
         guard Bundle.main.bundlePath.hasSuffix(".app") else { return nil }
         guard #available(macOS 15, *) else { return nil }
         let m = NLEmbedding.sentenceEmbedding(for: .english)

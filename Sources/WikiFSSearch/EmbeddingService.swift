@@ -2,7 +2,8 @@ import Foundation
 
 /// Embedding generation for semantic search. Holds the active `Embedder`,
 /// selected at launch: `MiniLMEmbedder` (384-dim, Metal/GPU) when the model is
-/// bundled, else `NLEmbedder` (512-dim) — the prior behavior.
+/// bundled. The legacy `NLEmbedder` (512-dim) branch requires an explicit
+/// app-bundle `configure()` call; normal startup skips it when MiniLM is absent.
 ///
 /// The store depends on the `Embedder` abstraction, so swapping the embedder is a
 /// behind-the-scenes change: the chunk index stores opaque Float32 BLOBs and the
@@ -29,7 +30,8 @@ public enum EmbeddingService {
     /// Factory that builds the MiniLM embedder from a bundled model directory.
     /// Installed by the app or daemon (`WikiFSMLX.EmbedderBootstrap`) at launch; `nil` in
     /// other contexts (the extension, `wikictl`, tests without the MLX target).
-    /// The app can use NLEmbedding when MiniLM is absent. Core never imports MLX.
+    /// An app caller can explicitly configure NLEmbedding when MiniLM is absent.
+    /// Normal startup does not take that path. Core never imports MLX.
     public nonisolated(unsafe) static var miniLMFactory: (@Sendable (URL) async throws -> any Embedder)?
 
     /// The identifier of the embedder selected for the current bundle, WITHOUT
