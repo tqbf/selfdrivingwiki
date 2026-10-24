@@ -9049,41 +9049,62 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         try mutate(event: { _ in
             self.localEvent(.page, id: pageID.rawValue, change: .updated)
         }) { db in
-            // Fetch the target version's blob + title.
-            guard let row = try Row.fetchOne(db, sql: """
-            SELECT pv.blob_hash, pv.title, b.content
-            FROM page_versions pv
-            JOIN blobs b ON b.hash = pv.blob_hash
-            WHERE pv.id = ? AND pv.page_id = ?;
-            """, arguments: [versionID.rawValue, pageID.rawValue]) else {
-                throw WikiStoreError.unexpected("version \(versionID.rawValue) not found for page \(pageID.rawValue)")
-            }
-            let title: String = row["title"]
-            let bodyData: Data = row["content"]
-            let body = String(data: bodyData, encoding: .utf8) ?? ""
-
-            // Update the denormalized pages mirror.
-            let sanitizedTitle = WikiNameRules.sanitized(title)
-            let slug = try self.uniqueSlug(from: sanitizedTitle, id: pageID, on: db)
-            let now = Date().timeIntervalSince1970
-            try db.execute(sql: """
-            UPDATE pages
-            SET title = ?, slug = ?, body_markdown = ?,
-                updated_at = ?, version = version + 1
-            WHERE id = ?;
-            """, arguments: [sanitizedTitle, slug, body, now, pageID.rawValue])
-            guard db.changesCount > 0 else { throw WikiStoreError.notFound(pageID) }
-
-            // Repoint the page-content ref to the target version.
-            try db.execute(sql: """
-            INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
-            VALUES ('page-content', ?, ?, 1, ?)
-            ON CONFLICT(kind, owner_id) DO UPDATE SET
-                version_id = excluded.version_id,
-                generation = generation + 1,
-                updated_at = excluded.updated_at;
-            """, arguments: [pageID.rawValue, versionID.rawValue, now])
+            try self.revertPageLocked(pageID: pageID, to: versionID, on: db)
         }
+    }
+
+    public func revertPage(pageID: PageID, to versionID: PageVersionID, expectingHead: PageVersionID) throws {
+        try mutate(event: { _ in
+            self.localEvent(.page, id: pageID.rawValue, change: .updated)
+        }) { db in
+            // The CAS check runs inside the transaction, so no writer can
+            // slip between the check and the repoint.
+            let head = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
+            guard head == expectingHead else {
+                throw PageConflictError(
+                    pageID: pageID, expectedVersionID: expectingHead, actualVersionID: head)
+            }
+            try self.revertPageLocked(pageID: pageID, to: versionID, on: db)
+        }
+    }
+
+    /// The shared body of both `revertPage` forms. Runs inside the caller's
+    /// `mutate` transaction.
+    private func revertPageLocked(pageID: PageID, to versionID: PageVersionID, on db: Database) throws {
+        // Fetch the target version's blob + title.
+        guard let row = try Row.fetchOne(db, sql: """
+        SELECT pv.blob_hash, pv.title, b.content
+        FROM page_versions pv
+        JOIN blobs b ON b.hash = pv.blob_hash
+        WHERE pv.id = ? AND pv.page_id = ?;
+        """, arguments: [versionID.rawValue, pageID.rawValue]) else {
+            throw WikiStoreError.unexpected("version \(versionID.rawValue) not found for page \(pageID.rawValue)")
+        }
+        let title: String = row["title"]
+        let bodyData: Data = row["content"]
+        let body = String(data: bodyData, encoding: .utf8) ?? ""
+
+        // Update the denormalized pages mirror.
+        let sanitizedTitle = WikiNameRules.sanitized(title)
+        let slug = try self.uniqueSlug(from: sanitizedTitle, id: pageID, on: db)
+        let now = Date().timeIntervalSince1970
+        try db.execute(sql: """
+        UPDATE pages
+        SET title = ?, slug = ?, body_markdown = ?,
+            updated_at = ?, version = version + 1
+        WHERE id = ?;
+        """, arguments: [sanitizedTitle, slug, body, now, pageID.rawValue])
+        guard db.changesCount > 0 else { throw WikiStoreError.notFound(pageID) }
+
+        // Repoint the page-content ref to the target version.
+        try db.execute(sql: """
+        INSERT INTO refs (kind, owner_id, version_id, generation, updated_at)
+        VALUES ('page-content', ?, ?, 1, ?)
+        ON CONFLICT(kind, owner_id) DO UPDATE SET
+            version_id = excluded.version_id,
+            generation = generation + 1,
+            updated_at = excluded.updated_at;
+        """, arguments: [pageID.rawValue, versionID.rawValue, now])
     }
 
 

@@ -169,6 +169,58 @@ struct StoreEmissionTests {
         #expect(events.last?.id == page.id.rawValue)
     }
 
+    /// W2a — the CAS-guarded `revertPage(…expectingHead:)` repoints the head
+    /// and emits exactly one `.page .updated` through `mutate()`.
+    @Test func expectingHeadRevertEmitsPageUpdated() async throws {
+        let (store, _, rec) = try makeHarness()
+        let page = try store.createPage(title: "CAS Revert Emit")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "CAS Revert Emit", body: "v1",
+            expectedHeadVersionID: nil)
+        let v1 = try #require(try store.pageHeadVersionID(pageID: page.id))
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "CAS Revert Emit", body: "v2",
+            expectedHeadVersionID: v1)
+        let v2 = try #require(try store.pageHeadVersionID(pageID: page.id))
+        try await drain(rec, expected: 3)
+
+        try store.revertPage(pageID: page.id, to: v1, expectingHead: v2)
+        let events = try await awaitEvents(rec)
+        #expect(events.count == 1)
+        #expect(events.last?.kind == .page)
+        #expect(events.last?.change == .updated)
+        #expect(events.last?.id == page.id.rawValue)
+        #expect(try store.pageHeadVersionID(pageID: page.id) == v1)
+        #expect(try store.readPageCoherent(id: page.id).body == "v1")
+    }
+
+    /// A stale expected head throws `PageConflictError`, leaves the head and
+    /// body alone, and emits nothing.
+    @Test func expectingHeadRevertConflictWritesNothing() async throws {
+        let (store, _, rec) = try makeHarness()
+        let page = try store.createPage(title: "CAS Revert Conflict")
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "CAS Revert Conflict", body: "v1",
+            expectedHeadVersionID: nil)
+        let v1 = try #require(try store.pageHeadVersionID(pageID: page.id))
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "CAS Revert Conflict", body: "v2",
+            expectedHeadVersionID: v1)
+        let v2 = try #require(try store.pageHeadVersionID(pageID: page.id))
+        _ = try store.appendPageVersion(
+            pageID: page.id, title: "CAS Revert Conflict", body: "v3 concurrent",
+            expectedHeadVersionID: v2)
+        let v3 = try #require(try store.pageHeadVersionID(pageID: page.id))
+        try await drain(rec, expected: 4)
+
+        #expect(throws: PageConflictError.self) {
+            try store.revertPage(pageID: page.id, to: v1, expectingHead: v2)
+        }
+        await assertNoEventsDelivered(rec)
+        #expect(try store.pageHeadVersionID(pageID: page.id) == v3)
+        #expect(try store.readPageCoherent(id: page.id).body == "v3 concurrent")
+    }
+
     // MARK: - OKF metadata
 
     @Test func pageOKFStatusEmitsOneOwningPageUpdate() async throws {

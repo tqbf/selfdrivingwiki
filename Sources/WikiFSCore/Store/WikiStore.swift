@@ -950,6 +950,14 @@ public protocol WikiStore: AnyObject, Sendable {
     /// version's blob. Emits a `.page .updated` change event.
     func revertPage(pageID: PageID, to versionID: PageVersionID) throws
 
+    /// `revertPage` with an expected-head CAS precondition, checked inside
+    /// the SAME transaction as the repoint: the revert proceeds only while
+    /// the page's current head still equals `expectingHead`. Otherwise it
+    /// throws `PageConflictError` (carrying the actual head) and writes
+    /// nothing — a concurrent edit is never clobbered. Emits a `.page
+    /// .updated` change event on success only.
+    func revertPage(pageID: PageID, to versionID: PageVersionID, expectingHead: PageVersionID) throws
+
     /// Restore a page to a previous version by **appending a new version node**
     /// (mirrors `revertProcessedMarkdown` for sources). The new row reuses the
     /// target's `blob_hash` (CAS dedup — zero new blob bytes), records a

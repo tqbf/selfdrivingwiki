@@ -20,6 +20,7 @@ struct StoreEmissionExhaustivenessTests {
             "public func workspaceResolveConflict(",
             "public func restorePage(",
             "public func revertPage(",
+            "public func revertPage(pageID: PageID, to versionID: PageVersionID, expectingHead",
             "public func appendDerivedMarkdown(",
             "public func appendUserProcessedMarkdown(",
         ] {
