@@ -811,8 +811,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
 
         // v6 → v7: page embeddings for semantic search.
-        // The BLOB holds 512 × Float32 (2048 bytes) produced by Apple
-        // NLEmbedding. ON DELETE CASCADE mirrors the v0 attachment FK:
+        // The BLOB holds 512 × Float32 (2048 bytes) from the original
+        // embedding model. ON DELETE CASCADE mirrors the v0 attachment FK:
         // removing a page removes its embedding.
         if version < 7 {
             try db.execute(sql: """
@@ -986,9 +986,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         // `source_embeddings`) with one embedding BLOB per text chunk, so a
         // query can match the single best passage of a large document
         // (best-chunk-per-doc ranking) instead of a blurry document centroid.
-        // Also fixes NLEmbedding's hard limit: a whole document fed to
-        // NLEmbedding throws an uncatchable std::bad_alloc above ~250k chars;
-        // chunking keeps each embedding input small.
+        // Chunking keeps each embedding input small and preserves passages.
         //
         // FK ON DELETE CASCADE: deleting a page/source removes its chunks. The
         // semantic query ranks by each document's best-matching chunk (Swift-side
@@ -13852,13 +13850,14 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         // The app and its XPC daemon use the same bundled model. The CLI and
         // File Provider must not replace that model's chunk index.
         let bundlePath = Bundle.main.bundlePath
-        // If the daemon cannot load MiniLM, do not replace the app's vectors
-        // with the NLEmbedding identifier while search runs in BM25-only mode.
-        if bundlePath.hasSuffix(".xpc") && !EmbeddingService.isAvailable { return }
         guard activeIdentifierOverride != nil
                 || bundlePath.hasSuffix(".app")
                 || bundlePath.hasSuffix(".xpc") else { return }
-        let activeIdentifier = activeIdentifierOverride ?? EmbeddingService.selectedEmbedderIdentifier()
+        // The app can reconcile at open from its bundled model. The daemon
+        // needs a loaded model before it can replace the shared chunk index.
+        if activeIdentifierOverride == nil && bundlePath.hasSuffix(".xpc")
+            && !EmbeddingService.isAvailable { return }
+        guard let activeIdentifier = activeIdentifierOverride ?? EmbeddingService.selectedEmbedderIdentifier() else { return }
         do {
             try dbWriter.writeWithoutTransaction { db in
                 let stored = DebugLog.trying("dropChunksOnEmbedderSwitch", operation: { try String.fetchOne(

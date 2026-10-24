@@ -170,7 +170,7 @@ public enum DebugLog {
     /// Chatty diagnostic that should NOT clutter the persisted production log.
     /// Emits at `.debug` — captured only with `log show --debug` (or Console's
     /// "Include Debug Messages"). Use for per-call / per-iteration traces (e.g.
-    /// every `NLEmbedding` inference, cache hits, availability checks); reserve
+    /// every embedding inference, cache hits, availability checks); reserve
     /// the category helpers above (`store`, `tabs`, …) — which emit at `.default`
     /// (notice) — for signal-worthy events that must survive in `log show`.
     public static func debug(_ message: @autoclosure () -> String) {

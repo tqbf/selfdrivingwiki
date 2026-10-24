@@ -2,13 +2,13 @@ import Foundation
 
 /// An embedder produces a fixed-dimension, L2-normalized Float32 vector for a
 /// short text (a search query or a document chunk). The store depends on this
-/// abstraction — not on any specific embedder (NLEmbedding vs MiniLM) — so the
+/// abstraction, so the
 /// active embedder can be swapped behind `EmbeddingService` without touching the
 /// chunk index or the Swift-side dot product (which is dimension-agnostic as
 /// long as every vector uses one dimension).
 public protocol Embedder: Sendable {
     /// Stable identifier for this embedder + its output dimension, e.g.
-    /// `"nlembedding-512"`, `"minilm-384"`. Stored in `embedding_meta`; a mismatch
+    /// `"minilm-384"`. Stored in `embedding_meta`; a mismatch
     /// with the stored value triggers the dimension-cutover wipe.
     static var identifier: String { get }
 

@@ -308,12 +308,11 @@ let package = Package(
             path: "Sources/WikiFSMarkdown",
             swiftSettings: strictSwiftSettings
         ),
-        // Search/embedding cluster — Embedder protocol, NLEmbedder, embedding
+        // Search/embedding cluster — Embedder protocol, embedding
         // service, text chunker, rank fusion, wiki index. Depends only on
         // WikiFSTypes (PageID/DebugLog). Extracted from WikiFSCore in module
         // restructuring Phase 3 (#532). Re-exported by WikiFSCore via
         // ModuleExports.swift. Previously Sources/WikiFSCore/Search/.
-        // NaturalLanguage: NLEmbedder uses NLEmbedding for on-device vectors.
         .target(
             name: "WikiFSSearch",
             dependencies: [

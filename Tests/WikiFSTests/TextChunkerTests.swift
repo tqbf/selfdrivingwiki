@@ -2,9 +2,8 @@ import Testing
 @testable import WikiFSCore
 
 /// `TextChunker` (recursive character splitter) — pure, deterministic behavior.
-/// The chunker exists to keep every `NLEmbedding.vector(for:)` call small: whole
-/// documents crash NLEmbedding with an uncatchable `std::bad_alloc` above ~250k
-/// chars, and are slow long before that.
+/// The chunker exists to keep every embedding input small: long
+/// documents otherwise lose content when the model truncates input.
 @Suite struct TextChunkerTests {
 
     @Test func emptyReturnsEmpty() {
@@ -46,8 +45,7 @@ import Testing
     }
 
     @Test func giantStringWithNoSeparatorsDoesNotCrash() {
-        // A single 300k run with NO whitespace would have crashed NLEmbedding.
-        // The chunker hard-splits it into bounded runs.
+        // A single 300k run with no whitespace must be split into bounded inputs.
         let giant = String(repeating: "a", count: 300_000)
         let chunks = TextChunker.chunk(giant, chunkSize: 4000, overlap: 0)
         #expect(chunks.count >= 75)            // 300000 / 4000
