@@ -13,8 +13,7 @@ All deterministic phases (0–6 deterministic core, 7 documentation) are
 implemented and committed on `feature/generalized-page-validity-lint`; the
 full suite is green after every phase commit.
 
-## Progress (final stretch)
-
+## Progress
 - **`be711293` — Phase 6 core.** `WikiLintEval` target: fixture manifests
   (versioned tuning/held-out split, seeded defects, declared exact repairs,
   protected bytes, permitted unresolved, mechanical/judgment kinds), the
@@ -41,7 +40,7 @@ full suite is green after every phase commit.
   `plans/agent-sandbox-scoping.md` gains "Lint operation policies"
   (policy descriptor, receipt loop, rollout-gate selection).
 
-## Verification (final)
+## Verification
 
 - `make prompts`, `make build`, bare `swift build` — clean.
 - `make test`: **4722 tests / 487 suites passed** (~240s).

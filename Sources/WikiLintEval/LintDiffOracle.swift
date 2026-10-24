@@ -114,18 +114,25 @@ public enum LintDiffOracle {
         return Verdict(accepted: false, rejections: rejections)
     }
 
-    /// Apply hunks (original coordinates, reverse order) to a body — the
-    /// same shape the patch write uses, for oracle reproduction. Public so
-    /// the harness tests can compose expected outcomes from declared
-    /// repairs without re-implementing the application.
+    /// Apply hunks to a body — the SAME concatenation composer the patch
+    /// write uses (sorted by (start, end), gaps copied from the original),
+    /// so oracle reproduction can never accept an application-order
+    /// artifact the store would not produce. Public so the harness tests
+    /// can compose expected outcomes from declared repairs without
+    /// re-implementing the application.
     public static func apply(hunks: [PagePatchHunk], to original: String) -> String {
-        var bytes = Array(original.utf8)
-        for hunk in hunks.sorted(by: { $0.startByte > $1.startByte }) {
-            let start = hunk.startByte
-            let end = hunk.endByte
-            guard start >= 0, end <= bytes.count, start <= end else { continue }
-            bytes.replaceSubrange(start..<end, with: Array(hunk.newText.utf8))
+        let bytes = Array(original.utf8)
+        var composed = String()
+        composed.reserveCapacity(bytes.count)
+        var cursor = 0
+        for hunk in hunks.sorted(by: { $0.startByte == $1.startByte ? $0.endByte < $1.endByte : $0.startByte < $1.startByte }) {
+            guard hunk.startByte >= cursor, hunk.endByte <= bytes.count, hunk.startByte <= hunk.endByte
+            else { continue }
+            composed += String(decoding: bytes[cursor..<hunk.startByte], as: UTF8.self)
+            composed += hunk.newText
+            cursor = hunk.endByte
         }
-        return String(decoding: bytes, as: UTF8.self)
+        composed += String(decoding: bytes[cursor...], as: UTF8.self)
+        return composed
     }
 }

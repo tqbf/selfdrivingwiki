@@ -69,17 +69,23 @@ struct LintOutcomeCoverageTests {
     @Test func parserRoundTripsFilledReport() throws {
         let rendered = LintRunReportText.render(snapshot: snapshot, preflight: preflight)
         var filled = rendered
-            .replacingOccurrences(of: "check read-body-and-head pending",
-                                  with: "check read-body-and-head valid-as-written|snapshot recorded")
             .replacingOccurrences(of: "finding D08-1 pending",
                                   with: "finding D08-1 repaired")
             .replacingOccurrences(of: "finding D18-1 pending",
                                   with: "finding D18-1 unresolved|needs human judgment")
-            .replacingOccurrences(of: "verification none pending",
-                                  with: "verification none clean")
-        filled = filled
             .replacingOccurrences(of: "item sourceCitation-1 pending",
                                   with: "item sourceCitation-1 repaired")
+            .replacingOccurrences(of: "verification none pending",
+                                  with: "verification none clean")
+        // Fill EVERY remaining check line (an unfilled `pending` is a parse
+        // error by design — M2).
+        filled = filled.split(separator: "\n").map { line -> String in
+            if line.hasPrefix("check "), line.hasSuffix("pending") {
+                return line.replacingOccurrences(
+                    of: " pending", with: " valid-as-written|recorded")
+            }
+            return String(line)
+        }.joined(separator: "\n") + "\n"
         let parsed = try LintRunReportParser.parse(filled)
         #expect(parsed.pageID == pageID)
         #expect(parsed.headVersionID == head)
@@ -115,8 +121,10 @@ struct LintOutcomeCoverageTests {
 
     // MARK: - Coverage validation (REQ-31/32)
 
-    /// Build a fully-covered report text from the skeleton, applying
-    /// per-line overrides.
+    /// Build a fully-covered report text from the skeleton: every check,
+    /// item, and finding line gets a valid default outcome, then per-test
+    /// overrides/drops apply. The skeleton's own `pending` lines are parse
+    /// errors by design (M2), so a harness report must be COMPLETE.
     private func filledReport(
         overrides: [String: String] = [:],
         dropLines: [String] = [],
@@ -131,14 +139,29 @@ struct LintOutcomeCoverageTests {
         if let headLine {
             lines = lines.map { $0.hasPrefix("head ") ? headLine : $0 }
         }
+        // Defaults for every line kind, so the base report is COMPLETE.
+        var filled = lines.map { line -> String in
+            guard line.hasSuffix("pending") else { return line }
+            if line.hasPrefix("check ") {
+                return line.replacingOccurrences(
+                    of: " pending", with: " valid-as-written|recorded")
+            }
+            return line.replacingOccurrences(
+                of: " pending", with: " unresolved|pending review")
+        }
         for (prefix, replacement) in overrides {
-            lines = lines.map { line in
+            filled = filled.map { line in
                 line.hasPrefix(prefix) ? replacement : line
             }
         }
-        lines.removeAll { line in dropLines.contains { line.hasPrefix($0) } }
-        lines.append(contentsOf: extraLines)
-        return lines.joined(separator: "\n") + "\n"
+        filled.removeAll { line in dropLines.contains { line.hasPrefix($0) } }
+        filled.append(contentsOf: extraLines)
+        // The verification line always ends filled.
+        filled = filled.map { line in
+            line.hasPrefix("verification") && line.hasSuffix("pending")
+                ? "verification none clean" : line
+        }
+        return filled.joined(separator: "\n") + "\n"
     }
 
     private func verdict(for text: String) -> LintCoverageVerdict {

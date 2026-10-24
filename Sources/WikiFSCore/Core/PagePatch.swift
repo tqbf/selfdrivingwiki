@@ -177,21 +177,31 @@ public enum PagePatchValidator {
             if let previous {
                 // Overlap (a zero-length hunk at the SAME offset as another
                 // insertion also rejects — repeated insertion positions).
+                // A zero-length hunk sharing its start with a NON-zero-length
+                // hunk is likewise ambiguous: an insertion plus a replacement
+                // at one offset makes the composed bytes depend on
+                // application order, so both orders reject.
                 if hunk.startByte < previous.endByte
-                    || (hunk.startByte == previous.startByte && hunk.endByte == previous.endByte) {
+                    || hunk.startByte == previous.startByte {
                     throw PagePatchValidationError.overlappingRanges(first: previous, second: hunk)
                 }
             }
             previous = hunk
         }
 
-        // Apply in reverse range order over the original snapshot.
-        var composed = body
-        for hunk in patch.hunks.sorted(by: { $0.startByte > $1.startByte }) {
-            let start = composed.utf8.index(composed.utf8.startIndex, offsetBy: hunk.startByte)
-            let end = composed.utf8.index(composed.utf8.startIndex, offsetBy: hunk.endByte)
-            composed.replaceSubrange(start..<end, with: hunk.newText)
+        // Compose by CONCATENATION over the original snapshot: sort by
+        // (start, end) ascending, copy the untouched gap, then the new text.
+        // Order-independent by construction — the committed bytes are exactly
+        // the validated edit, never an application-order artifact.
+        var composed = String()
+        composed.reserveCapacity(body.utf8.count)
+        var cursor = 0
+        for hunk in ordered.map(\.1) {
+            composed += String(decoding: utf8[cursor..<hunk.startByte], as: UTF8.self)
+            composed += hunk.newText
+            cursor = hunk.endByte
         }
+        composed += String(decoding: utf8[cursor...], as: UTF8.self)
         return composed
     }
 

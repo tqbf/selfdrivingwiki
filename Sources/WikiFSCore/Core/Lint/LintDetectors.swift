@@ -109,6 +109,25 @@ extension LintPagePreflight {
         try! NSRegularExpression(pattern: pattern)
     }
 
+    /// A regex match found in `maskedBody`, mapped back to the authored
+    /// source. `byteMasked` preserves UTF-8 byte offsets (one space per
+    /// protected byte) but NOT UTF-16 offsets (a masked multi-byte scalar
+    /// becomes k single-unit spaces), so the match's UTF-16 range must be
+    /// converted through the MASKED text — its UTF-8 offsets equal the
+    /// source's — and the evidence sliced from the SOURCE by that range.
+    static func authoredMatch(
+        _ match: NSTextCheckingResult, maskedBody: String, source: String
+    ) -> (range: MarkdownSourceRange, evidence: String) {
+        let range = utf8Range(match.range, in: maskedBody)
+        let bytes = Array(source.utf8)
+        guard range.upperBound <= bytes.count, range.lowerBound <= range.upperBound else {
+            return (range, "")
+        }
+        let lower = bytes.index(bytes.startIndex, offsetBy: range.lowerBound)
+        let upper = bytes.index(bytes.startIndex, offsetBy: range.upperBound)
+        return (range, String(decoding: bytes[lower..<upper], as: UTF8.self))
+    }
+
     /// Matches of `regexes` over masked text, in pattern then position order.
     private static func regexMatches(
         _ regexes: [NSRegularExpression],
@@ -535,8 +554,8 @@ extension LintPagePreflight {
         return regexMatches(regexes, in: maskedBody).map { match, _ in
             DetectedFinding(
                 .placeholderResidue,
-                utf8Range(match.range, in: source),
-                excerpt(of: (source as NSString).substring(with: match.range)),
+                authoredMatch(match, maskedBody: maskedBody, source: source).range,
+                excerpt(of: authoredMatch(match, maskedBody: maskedBody, source: source).evidence),
                 "Placeholder marker present — content may be unfinished (report-only in v1).",
                 .minor,
                 .candidate)
@@ -681,8 +700,8 @@ extension LintPagePreflight {
         for (match, _) in regexMatches(mojibakeRegexes, in: maskedBody) {
             findings.append(DetectedFinding(
                 .encodingDamage,
-                utf8Range(match.range, in: source),
-                excerpt(of: (source as NSString).substring(with: match.range)),
+                authoredMatch(match, maskedBody: maskedBody, source: source).range,
+                excerpt(of: authoredMatch(match, maskedBody: maskedBody, source: source).evidence),
                 "Mojibake candidate — text that looks like UTF-8 bytes decoded as Latin-1. Confirm the intended characters; they are never guessed.",
                 .minor,
                 .candidate))
@@ -690,11 +709,11 @@ extension LintPagePreflight {
 
         let doubleEntityPattern = constantRegex(#"&amp;[a-zA-Z]{2,8};"#)
         for (match, _) in regexMatches([doubleEntityPattern], in: maskedBody) {
-            let matched = (source as NSString).substring(with: match.range)
+            let matched = authoredMatch(match, maskedBody: maskedBody, source: source).evidence
             let decoded = "&" + matched.dropFirst("&amp;".count)
             findings.append(DetectedFinding(
                 .escapingLayerDamage,
-                utf8Range(match.range, in: source),
+                authoredMatch(match, maskedBody: maskedBody, source: source).range,
                 excerpt(of: matched),
                 "Double-escaped HTML entity — the entity was escaped twice, so it renders as literal entity text.",
                 .minor,
@@ -708,8 +727,8 @@ extension LintPagePreflight {
         for (match, _) in regexMatches([escapedWikiPattern], in: maskedBody) {
             findings.append(DetectedFinding(
                 .escapingLayerDamage,
-                utf8Range(match.range, in: source),
-                excerpt(of: (source as NSString).substring(with: match.range)),
+                authoredMatch(match, maskedBody: maskedBody, source: source).range,
+                excerpt(of: authoredMatch(match, maskedBody: maskedBody, source: source).evidence),
                 "Escaped wiki-link syntax outside code — confirm whether the brackets were meant to render literally or the escape is layer damage.",
                 .minor,
                 .candidate))
@@ -734,8 +753,8 @@ extension LintPagePreflight {
         return regexMatches(regexes, in: maskedBody).map { match, _ in
             DetectedFinding(
                 .pastedActiveContent,
-                utf8Range(match.range, in: source),
-                excerpt(of: (source as NSString).substring(with: match.range)),
+                authoredMatch(match, maskedBody: maskedBody, source: source).range,
+                excerpt(of: authoredMatch(match, maskedBody: maskedBody, source: source).evidence),
                 "Active content construct present (report-only): the lint never executes or sanitizes content — confirm this is intended literal text.",
                 .major,
                 .confirmed)
@@ -801,8 +820,8 @@ extension LintPagePreflight {
         for (match, _) in regexMatches(phraseRegexes, in: maskedBody) {
             findings.append(DetectedFinding(
                 .metaTextLeakage,
-                utf8Range(match.range, in: source),
-                excerpt(of: (source as NSString).substring(with: match.range)),
+                authoredMatch(match, maskedBody: maskedBody, source: source).range,
+                excerpt(of: authoredMatch(match, maskedBody: maskedBody, source: source).evidence),
                 "Meta-text phrase candidate — confirm whether this is page content or pasted assistant output.",
                 .minor,
                 .candidate))
@@ -813,8 +832,8 @@ extension LintPagePreflight {
         for (match, _) in regexMatches(markerRegexes, in: maskedBody) {
             findings.append(DetectedFinding(
                 .metaTextLeakage,
-                utf8Range(match.range, in: source),
-                excerpt(of: (source as NSString).substring(with: match.range)),
+                authoredMatch(match, maskedBody: maskedBody, source: source).range,
+                excerpt(of: authoredMatch(match, maskedBody: maskedBody, source: source).evidence),
                 "Tool-output marker present — this looks like pasted tool traffic rather than page content.",
                 .major,
                 .confirmed))
@@ -864,8 +883,8 @@ extension LintPagePreflight {
             guard definedLabels.contains(key) == false else { continue }
             findings.append(DetectedFinding(
                 .missingMediaReference,
-                utf8Range(match.range, in: source),
-                excerpt(of: ns.substring(with: match.range)),
+                authoredMatch(match, maskedBody: maskedBody, source: source).range,
+                excerpt(of: authoredMatch(match, maskedBody: maskedBody, source: source).evidence),
                 "Reference-style usage names label “\(label)”, which has no `[\(label)]: …` definition — it renders as literal text.",
                 .major,
                 .confirmed))

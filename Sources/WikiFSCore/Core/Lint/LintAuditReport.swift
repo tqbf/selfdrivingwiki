@@ -286,7 +286,7 @@ public enum LintRunReportParser {
                 // keeping one authority for accounting failures.
                 entries.append(LintRunReportEntry(
                     kind: .check(step),
-                    outcome: parseOutcome(tokens, from: 2, line: line)))
+                    outcome: try parseOutcome(tokens, from: 2, line: line)))
             case "item", "finding":
                 guard tokens.count >= 3 else {
                     throw LintRunReportParseError.malformedLine(line: index + 1, text: line)
@@ -294,7 +294,7 @@ public enum LintRunReportParser {
                 let occurrenceID = tokens[1]
                 entries.append(LintRunReportEntry(
                     kind: label == "item" ? .item(occurrenceID) : .finding(occurrenceID),
-                    outcome: parseOutcome(tokens, from: 2, line: line)))
+                    outcome: try parseOutcome(tokens, from: 2, line: line)))
             case "verification":
                 guard !seenKeys.contains("verification") else {
                     throw LintRunReportParseError.duplicateLine("verification")
@@ -327,22 +327,30 @@ public enum LintRunReportParser {
         _ tokens: [String],
         from index: Int,
         line: String
-    ) -> LintFindingOutcome {
-        let name = tokens[index]
-        let reason = tokens.count > index + 1
-            ? tokens[index + 1]
-            : ""
-        let trimmedReason = reason == "|" ? "" : reason
+    ) throws -> LintFindingOutcome {
+        let token = tokens[index]
+        let (name, reason): (String, String)
+        if let bar = token.firstIndex(of: "|") {
+            // The reason is everything after the first `|` and may contain
+            // spaces (the line split's last token keeps the remainder).
+            name = String(token[token.startIndex..<bar])
+            reason = String(token[token.index(after: bar)...])
+        } else {
+            name = token
+            reason = ""
+        }
         switch name {
         case "repaired": return .repaired
-        case "valid-as-written": return .validAsWritten(reason: trimmedReason)
-        case "unresolved": return .unresolved(reason: trimmedReason)
-        case "outside-scope": return .outsideLintScope(reason: trimmedReason)
-        case "blocked": return .checkBlocked(reason: trimmedReason)
+        case "valid-as-written": return .validAsWritten(reason: reason)
+        case "unresolved": return .unresolved(reason: reason)
+        case "outside-scope": return .outsideLintScope(reason: reason)
+        case "blocked": return .checkBlocked(reason: reason)
         default:
-            // Unknown outcome names are malformed lines; surface via reason
-            // loss by throwing through the caller's validation instead.
-            return .unresolved(reason: "unparseable outcome token in: \(line)")
+            // Unknown outcome tokens — including the skeleton's own
+            // `pending` — are malformed lines. An UNFILLED skeleton must be
+            // a parse error, never a silently-accepted report (plan §5.7's
+            // checklist-theater defense).
+            throw LintRunReportParseError.malformedLine(line: index + 1, text: line)
         }
     }
 }
@@ -407,10 +415,31 @@ public enum LintCoverageValidator {
                     reasons.append("duplicate outcome for \(id)")
                     continue
                 }
+                // Reason-bearing outcomes need their reason on items and
+                // findings too — `valid-as-written` with no reason is an
+                // unfilled line, not an accounted one.
+                if entry.outcome.requiresReason {
+                    switch entry.outcome {
+                    case .validAsWritten(let r), .unresolved(let r),
+                         .outsideLintScope(let r), .checkBlocked(let r):
+                        if r.trimmingCharacters(in: .whitespaces).isEmpty {
+                            reasons.append("outcome for \(id) requires a reason")
+                        }
+                    case .repaired: break
+                    }
+                }
             }
         }
         for missing in expectedIDs.subtracting(covered).sorted() {
             reasons.append("no outcome for \(missing)")
+        }
+
+        // The verification line must be FILLED — the skeleton's `pending`
+        // verdict is an unfilled form, not a completed audit.
+        if let verification = parsed.verification,
+           verification.verdict.trimmingCharacters(in: .whitespaces).isEmpty
+               || verification.verdict == "pending" {
+            reasons.append("verification line is unfilled")
         }
 
         // Every named audit step, exactly once, with a valid outcome
