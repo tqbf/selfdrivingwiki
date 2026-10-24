@@ -42,7 +42,7 @@ public struct TantivySearchProvider: Sendable {
 /// Lazy access to the existing process-wide embedding composition.
 public struct EmbeddingsSearchProvider: Sendable {
     public typealias Configure = @Sendable () async -> Void
-    public typealias SelectedIdentifier = @Sendable () -> String
+    public typealias SelectedIdentifier = @Sendable () -> String?
     public typealias Availability = @Sendable () -> Bool
 
     private let configureOperation: Configure
@@ -63,7 +63,7 @@ public struct EmbeddingsSearchProvider: Sendable {
         await configureOperation()
     }
 
-    public func selectedIdentifier() -> String {
+    public func selectedIdentifier() -> String? {
         selectedIdentifierOperation()
     }
 

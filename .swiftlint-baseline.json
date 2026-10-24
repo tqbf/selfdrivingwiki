@@ -1785,21 +1785,6 @@
     }
   },
   {
-    "text": "    nonisolated(unsafe) private static var _model: NLEmbedding?",
-    "violation": {
-      "severity": "error",
-      "reason": "`nonisolated(unsafe)` opts a declaration out of actor isolation checking entirely \u2014 it is an assertion, not a fix. Prefer actor isolation, a `let` constant, or a lock-guarded box. If it is genuinely required, say why in a comment, then `// swiftlint:disable:next nonisolated_unsafe`.",
-      "ruleDescription": "",
-      "location": {
-        "line": 17,
-        "file": "Sources/WikiFSSearch/NLEmbedder.swift",
-        "character": 5
-      },
-      "ruleIdentifier": "nonisolated_unsafe",
-      "ruleName": "nonisolated(unsafe)"
-    }
-  },
-  {
     "text": "            let sa = score[a]!, sb = score[b]!",
     "violation": {
       "reason": "Force unwrapping should be avoided",

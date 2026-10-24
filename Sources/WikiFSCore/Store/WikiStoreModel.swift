@@ -69,7 +69,7 @@ public final class WikiStoreModel {
     /// the upgrade is the SOLE owner of the store while it runs (SQLite is never
     /// touched off-main), so there can be no concurrent-statement race. It only
     /// runs when MiniLM is the selected embedder AND there is missing content
-    /// (first run, an NLEmbedding→MiniLM cutover, or `wikictl`-written content);
+    /// (first run, a legacy embedding cutover, or `wikictl`-written content);
     /// the common launch is an instant no-op and shows nothing.
     /// A user-facing error from a store mutation (e.g. a delete that violated a
     /// foreign-key constraint, or files skipped as duplicates during ingest).
@@ -801,9 +801,7 @@ public final class WikiStoreModel {
     /// hybrid search (FTS5 bm25 always; +MiniLM cosine fused via RRF when the
     /// model is available). Runs the query embedding + SQLite on the main actor
     /// — fine for the one-shot callers (the "Find Similar…" link menu builds its
-    /// submenu once per right-click, not per render). The old per-row sidebar
-    /// caller that froze the UI was removed; MiniLM inference is now ms, not the
-    /// ~5 s/100k chars NLEmbedding cliff that motivated disabling this.
+    /// submenu once per right-click, not per render). The old per-row sidebar caller that froze the UI was removed.
     ///
     /// Routes through the no-BM25-leg path (`bm25Leg: nil`) — post-#634 this
     /// means cosine-only (the FTS5 fallback it used to surface was dropped). Kept
@@ -834,7 +832,7 @@ public final class WikiStoreModel {
     /// Returns cosine-only results (`bm25Leg: nil`) when Tantivy is unavailable
     /// or returns no hits — post-#634 that's the documented contract (FTS5 was
     /// dropped; nil leg = no BM25 leg, cosine still answers when
-    /// NLEmbedding/MLX are loaded).
+    /// MiniLM is loaded).
     public func searchSimilarResolvingTantivy(query: String, limit: Int = 8) async -> [WikiPageSummary] {
         guard !query.isEmpty else { return [] }
         let leg = await resolveTantivyLeg(
@@ -4181,7 +4179,7 @@ public final class WikiStoreModel {
     /// Only runs when MiniLM is the selected embedder (fast, ~ms/sentence) AND
     /// there is missing content. On builds without the bundled model
     /// (`selectedEmbedderIdentifier()` ≠ MiniLM) it is a no-op so we never block
-    /// launch on the slow NLEmbedder path; search falls back to FTS. The common
+    /// launch without a model; search uses BM25. The common
     /// warm-DB launch has no missing work → no sheet, instant.
     public func upgradeSearchIndex() async {
         // Single-flight: set BEFORE any `await`. The scenePhase `.active` and

@@ -317,12 +317,11 @@ let package = Package(
             path: "Sources/WikiFSMarkdown",
             swiftSettings: strictSwiftSettings
         ),
-        // Search/embedding cluster — Embedder protocol, NLEmbedder, embedding
+        // Search/embedding cluster — Embedder protocol, embedding
         // service, text chunker, rank fusion, wiki index. Depends only on
         // WikiFSTypes (PageID/DebugLog). Extracted from WikiFSCore in module
         // restructuring Phase 3 (#532). Re-exported by WikiFSCore via
         // ModuleExports.swift. Previously Sources/WikiFSCore/Search/.
-        // NaturalLanguage: NLEmbedder uses NLEmbedding for on-device vectors.
         .target(
             name: "WikiFSSearch",
             dependencies: [
@@ -616,6 +615,8 @@ let package = Package(
             name: "wikid",
             dependencies: [
                 "WikiFSCore",
+                .target(name: "WikiFSMLX",
+                        condition: .when(platforms: [.macOS])),
                 // The XPC contract — the daemon IS the server: it implements
                 // WikiDaemonProtocol + holds WikiDaemonEventSink proxies. Empty
                 // on Linux (the daemon uses the stdio transport there).
@@ -715,7 +716,7 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiFSExtractorStore", "WikiCtlCore", "ProviderConfigMutationHelper", "ExtractorPackageStoreProcessHelper", "WikiStrategyEval",
+            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiFSSearch", "WikiFSExtractorStore", "WikiCtlCore", "ProviderConfigMutationHelper", "ExtractorPackageStoreProcessHelper", "WikiStrategyEval",
                            "WikiFSTestSupport",
                            // WikiFSEngine is macOS-only at build time because it
                            // depends on the `ACP` product (macOS-only). On Linux

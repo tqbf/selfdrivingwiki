@@ -351,10 +351,12 @@ fi
 if [ -d "Resources/all-MiniLM-L6-v2" ]; then
   echo "  Bundling all-MiniLM-L6-v2 ..."
   cp -r "Resources/all-MiniLM-L6-v2" "${RESOURCES_DIR}/all-MiniLM-L6-v2"
+  cp -r "Resources/all-MiniLM-L6-v2" "${DAEMON_XPC_CONTENTS}/Resources/all-MiniLM-L6-v2"
 fi
 if [ -f "Resources/mlx.metallib" ]; then
   echo "  Bundling mlx.metallib ..."
   cp "Resources/mlx.metallib" "${RESOURCES_DIR}/mlx.metallib"
+  cp "Resources/mlx.metallib" "${DAEMON_XPC_CONTENTS}/Resources/mlx.metallib"
   # MLX's C++ load_default_library searches for the metallib RELATIVE TO THE
   # BINARY (<binary_dir>/mlx.metallib, then <binary_dir>/Resources/mlx.metallib)
   # — NOT via NSBundle resource lookup. The binary lives in Contents/MacOS/, so
@@ -366,6 +368,7 @@ if [ -f "Resources/mlx.metallib" ]; then
   # the symlink; codesign seals it by reference. (.build/debug already has the
   # metallib adjacent to the executable, which is why running it directly worked.)
   ln -sf "../Resources/mlx.metallib" "${MACOS_DIR}/mlx.metallib"
+  ln -sf "../Resources/mlx.metallib" "${DAEMON_XPC_MACOS}/mlx.metallib"
 fi
 
 # SwiftPM module resources — the prompt .md files loaded at runtime via

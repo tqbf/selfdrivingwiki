@@ -5,7 +5,7 @@ import Testing
 /// Verifies AC3: the embedding_meta-driven dimension-cutover wipe.
 ///
 /// Uses `activeIdentifierOverride` so tests never touch the real
-/// EmbeddingService (which is app-bundle-gated and does NLEmbedder in tests).
+/// EmbeddingService, which does not load a model in tests.
 struct EmbeddingMetaCutoverTests {
 
     private func tempStore() throws -> GRDBWikiStore {
@@ -17,16 +17,12 @@ struct EmbeddingMetaCutoverTests {
 
     // MARK: - Fresh DB seeds nlembedding-512
 
-    @Test func freshDBSeedsNLEmbedderIdentifier() throws {
+    @Test func freshDBSeedsLegacyEmbedderIdentifier() throws {
         let store = try tempStore()
         let stored = store.pragmaValue("user_version")
         #expect(stored == "\(GRDBWikiStore.schemaVersion)")
-        // ensureEmbedderConsistency with the default identifier (nlembedding-512)
-        // is a no-op: the seed matches, so nothing is wiped.
-        //
-        // Use the literal "nlembedding-512" rather than NLEmbedder.identifier
-        // (which is itself just this literal) so this test is portable —
-        // NLEmbedder is macOS-only (#754, #780).
+        // The historical identifier stays in fresh DBs so old 512-dimensional
+        // chunks are replaced when MiniLM first loads.
         store.ensureEmbedderConsistency(activeIdentifierOverride: "nlembedding-512")
         // Source added after the no-op must still have no chunks (never embedded).
         let summary = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
@@ -36,7 +32,7 @@ struct EmbeddingMetaCutoverTests {
 
     // MARK: - Cutover wipes chunks on identifier mismatch
 
-    @Test func cutoverFromNLEmbedderToMiniLMWipesSourceChunks() throws {
+    @Test func cutoverFromLegacyEmbeddingsToMiniLMWipesSourceChunks() throws {
         let store = try tempStore()
 
         // Store a dummy chunk for a real source (FK requires the source row to exist).
@@ -63,14 +59,12 @@ struct EmbeddingMetaCutoverTests {
 
     /// A non-app process (`wikictl`, the File Provider extension, tests) opening
     /// the store writable must NOT wipe chunks or rewrite `embedding_meta`, even
-    /// when the stored identifier mismatches what `selectedEmbedderIdentifier()`
-    /// returns in that context (the NLEmbedder fallback). Only the app owns
-    /// embeddings; letting the CLI assert its fallback was the per-launch
-    /// tug-of-war that wiped every chunk on each app launch.
+    /// when the stored identifier differs from the active model. A non-app
+    /// process without a model must keep the persisted chunk index.
     @Test func nonAppOpenDoesNotWipeChunksOnIdentifierMismatch() throws {
         let store = try tempStore()
 
-        // Fresh seed is nlemmbedding-512. Switch meta to minilm-384 via the
+        // Fresh seed is nlembedding-512. Switch meta to minilm-384 via the
         // override path while there are no chunks to wipe (simulates the app
         // having embedded with MiniLM on a prior launch).
         store.ensureEmbedderConsistency(activeIdentifierOverride: EmbeddingService.miniLMIdentifier)
@@ -83,9 +77,7 @@ struct EmbeddingMetaCutoverTests {
 
         // wikictl (CLI) opens the same DB writable. Tests run outside an .app
         // bundle, so this no-override call is exactly the CLI path:
-        // `selectedEmbedderIdentifier()` returns nlemmbedding-512, which MISMATCHES
-        // the stored minilm-384. Without the ownership gate this would wipe; the
-        // gate must make it a no-op so the app's chunks survive.
+        // A CLI open has no loaded model and must keep the stored chunks.
         store.ensureEmbedderConsistency()
 
         #expect(!store.missingSourceEmbeddingWork().contains(where: { $0.id == summary.id }),

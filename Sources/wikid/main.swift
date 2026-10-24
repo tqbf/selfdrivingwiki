@@ -1,6 +1,9 @@
 import Foundation
 import WikiDaemonContract
 import WikiFSCore
+#if canImport(WikiFSMLX)
+import WikiFSMLX
+#endif
 #if canImport(WikiFSEngine)
 import WikiFSEngine
 #endif
@@ -737,6 +740,9 @@ do {
     DebugLog.extraction("wikid: stale extractor operation cleanup failed: \(error)")
 }
 
+#if canImport(WikiFSMLX)
+EmbedderBootstrap.install()
+#endif
 let profileOwner = try DaemonProcessProfileOwner.production(
     containerDirectory: containerDirectory)
 let daemon = WikiDaemon(

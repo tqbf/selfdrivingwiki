@@ -10,10 +10,8 @@ import Foundation
 /// largest meaningful boundary first (paragraph, then line, then word) so
 /// chunks stay coherent.
 ///
-/// Why this exists: Apple's `NLEmbedding.vector(for:)` is slow on long input
-/// (~5 s per 100k chars) and throws an **uncatchable C++ `std::bad_alloc`**
-/// above ~250k chars, crashing the app. Chunking keeps every embedding input
-/// small, fast, and crash-free.
+/// MiniLM accepts a limited number of tokens per input. Chunking keeps each
+/// input small and preserves content throughout a long document.
 ///
 /// Pure + deterministic: no I/O, no globals. Unit-testable in isolation.
 public enum TextChunker {

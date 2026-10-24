@@ -811,8 +811,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
 
         // v6 → v7: page embeddings for semantic search.
-        // The BLOB holds 512 × Float32 (2048 bytes) produced by Apple
-        // NLEmbedding. ON DELETE CASCADE mirrors the v0 attachment FK:
+        // The BLOB holds 512 × Float32 (2048 bytes) from the original
+        // embedding model. ON DELETE CASCADE mirrors the v0 attachment FK:
         // removing a page removes its embedding.
         if version < 7 {
             try db.execute(sql: """
@@ -986,9 +986,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         // `source_embeddings`) with one embedding BLOB per text chunk, so a
         // query can match the single best passage of a large document
         // (best-chunk-per-doc ranking) instead of a blurry document centroid.
-        // Also fixes NLEmbedding's hard limit: a whole document fed to
-        // NLEmbedding throws an uncatchable std::bad_alloc above ~250k chars;
-        // chunking keeps each embedding input small.
+        // Chunking keeps each embedding input small and preserves passages.
         //
         // FK ON DELETE CASCADE: deleting a page/source removes its chunks. The
         // semantic query ranks by each document's best-matching chunk (Swift-side
@@ -9930,9 +9928,9 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             // L2-normalized vectors (issue #628 — vendored C scalar retired).
             // Stored vectors are unit-norm (`Embedder` contract), so dot == cosine.
             // Gated on the embedder being loaded (else there's no query vector).
-            if EmbeddingService.isAvailable,
-               let queryBlob = EmbeddingService.embeddingBlob(for: query),
-               let queryVec = VectorCosine.decode(queryBlob) {
+            let embedderAvailable = EmbeddingService.isAvailable
+            let queryBlob = embedderAvailable ? EmbeddingService.embeddingBlob(for: query) : nil
+            if let queryBlob, let queryVec = VectorCosine.decode(queryBlob) {
                 DebugLog.store("search[pages]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=true")
                 // Single query: carry the summary columns + chunk embedding per row.
                 // Group by page keeping the best (max-sim) row in Swift — one
@@ -9969,7 +9967,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                     }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[pages]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=false")
+            let reason = !embedderAvailable ? "embedder-unavailable" : (queryBlob == nil ? "query-vector-unavailable" : "query-vector-invalid")
+            DebugLog.store("search[pages]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=false reason=\(reason)")
             return Array(ftsRows.prefix(limit))
         }
     }
@@ -10029,9 +10028,9 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             // --- Semantic (cosine) pass + RRF ---
             // Swift-side dot product (issue #628) over L2-normalized chunk
             // embeddings. Same shape as `searchSimilar` (pages).
-            if EmbeddingService.isAvailable,
-               let queryBlob = EmbeddingService.embeddingBlob(for: query),
-               let queryVec = VectorCosine.decode(queryBlob) {
+            let embedderAvailable = EmbeddingService.isAvailable
+            let queryBlob = embedderAvailable ? EmbeddingService.embeddingBlob(for: query) : nil
+            if let queryBlob, let queryVec = VectorCosine.decode(queryBlob) {
                 DebugLog.store("search[sources]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=true")
                 // Single query: carry the 12 summary columns + chunk embedding per
                 // row. The explicit column list (NEVER `SELECT s.*`) is the
@@ -10062,7 +10061,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                     .map { _, entry in try Self.readSourceSummary(from: entry.row) }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[sources]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=false")
+            let reason = !embedderAvailable ? "embedder-unavailable" : (queryBlob == nil ? "query-vector-unavailable" : "query-vector-invalid")
+            DebugLog.store("search[sources]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=false reason=\(reason)")
             return Array(ftsRows.prefix(limit))
         }
     }
@@ -11843,10 +11843,9 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             // --- Semantic (cosine) pass + RRF ---
             // Swift-side dot product (issue #628) over L2-normalized chunk
             // embeddings. Same shape as `searchSimilar` (pages).
-            if schemaReady,
-               EmbeddingService.isAvailable,
-               let queryBlob = EmbeddingService.embeddingBlob(for: query),
-               let queryVec = VectorCosine.decode(queryBlob) {
+            let embedderAvailable = EmbeddingService.isAvailable
+            let queryBlob = schemaReady && embedderAvailable ? EmbeddingService.embeddingBlob(for: query) : nil
+            if let queryBlob, let queryVec = VectorCosine.decode(queryBlob) {
                 DebugLog.store("search[chats]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=true")
                 let rows = try Row.fetchAll(db, sql: """
                     SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
@@ -11877,7 +11876,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                     }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
-            DebugLog.store("search[chats]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=false")
+            let reason = !schemaReady ? "schema-unavailable" : (!embedderAvailable ? "embedder-unavailable" : (queryBlob == nil ? "query-vector-unavailable" : "query-vector-invalid"))
+            DebugLog.store("search[chats]: query=\(query) \(ftsRows.isEmpty ? "no-BM25" : "Tantivy-BM25"), cosine=false reason=\(reason)")
             return Array(ftsRows.prefix(limit))
         }
     }
@@ -14034,16 +14034,17 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// `activeIdentifierOverride` is injected by tests; production passes `nil`
     /// and the live `EmbeddingService.selectedEmbedderIdentifier()` is used.
     func ensureEmbedderConsistency(activeIdentifierOverride: String? = nil) {
-        // Only the app owns embeddings — it's the sole producer of chunk vectors —
-        // so only it reconciles `embedding_meta`. The CLI (`wikictl`) and the File
-        // Provider extension open the store writable too, but they never embed; in
-        // those contexts `selectedEmbedderIdentifier()` returns the NLEmbedder
-        // fallback (no bundled model). Letting them assert that fallback would
-        // create an app⇄CLI tug-of-war that wipes every chunk on each launch
-        // (issue #165). Tests inject `activeIdentifierOverride` to bypass this gate.
+        // The app and its XPC daemon use the same bundled model. The CLI and
+        // File Provider must not replace that model's chunk index.
+        let bundlePath = Bundle.main.bundlePath
         guard activeIdentifierOverride != nil
-                || Bundle.main.bundlePath.hasSuffix(".app") else { return }
-        let activeIdentifier = activeIdentifierOverride ?? EmbeddingService.selectedEmbedderIdentifier()
+                || bundlePath.hasSuffix(".app")
+                || bundlePath.hasSuffix(".xpc") else { return }
+        // The app can reconcile at open from its bundled model. The daemon
+        // needs a loaded model before it can replace the shared chunk index.
+        if activeIdentifierOverride == nil && bundlePath.hasSuffix(".xpc")
+            && !EmbeddingService.isAvailable { return }
+        guard let activeIdentifier = activeIdentifierOverride ?? EmbeddingService.selectedEmbedderIdentifier() else { return }
         do {
             try dbWriter.writeWithoutTransaction { db in
                 let stored = DebugLog.trying("dropChunksOnEmbedderSwitch", operation: { try String.fetchOne(
