@@ -50,8 +50,10 @@ public enum PageCommand {
         /// atomically in EXACT-BODY MODE against `expectHead` (CAS). Every
         /// hunk carries its defect class; a rejected, conflicted, or empty
         /// patch writes nothing and emits no event. This is the ONLY write
-        /// path lint runs get; full-body rewrites stay on `add`.
-        case patch(id: PageID, expectHead: PageVersionID, hunks: [PagePatchHunk], defectClasses: [LintDefectClass], author: String? = nil)
+        /// path lint runs get; full-body rewrites stay on `add`. `lintReceipt`
+        /// is the managed-run snapshot receipt — the daemon validates it on
+        /// the scoped path; the trusted CLI passes nil.
+        case patch(id: PageID, expectHead: PageVersionID, hunks: [PagePatchHunk], defectClasses: [LintDefectClass], author: String? = nil, lintReceipt: String? = nil)
         /// Delete the page through the store's protected contract (issue #219
         /// hardening): bookmarks targeting the page are ALWAYS removed, and
         /// `unlinkIncoming` picks whether incoming `[[link]]` spans become
@@ -125,7 +127,10 @@ public enum PageCommand {
             let body = try resolveBodySource(bodySource)
             return try upsert(id: id, title: title, body: body, expectHead: expectHead, createOnly: createOnly, workspace: workspace, author: author,
                               provenance: mergedAgentIngestProvenance(provenance), in: store, validator: validator, linter: linter)
-        case .patch(let id, let expectHead, let hunks, let defectClasses, let author):
+        case .patch(let id, let expectHead, let hunks, let defectClasses, let author, _):
+            // `lintReceipt` is validated daemon-side BEFORE this action runs;
+            // the command layer itself is receipt-agnostic (the trusted CLI
+            // path has none).
             guard !hunks.isEmpty, hunks.count == defectClasses.count else {
                 throw PagePatchValidationError.emptyOrUnpaired(
                     defectCount: defectClasses.count, hunkCount: hunks.count)

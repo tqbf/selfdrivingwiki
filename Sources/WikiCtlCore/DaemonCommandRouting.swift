@@ -133,7 +133,7 @@ public enum DaemonCommandRoute {
                 try JSONEncoder().encode(DaemonPageSelectorRequest(
                     wikiID: wikiID, selector: wireSelector))
             }
-        case .patch(let id, let expectHead, let hunks, let defectClasses, let author):
+        case .patch(let id, let expectHead, let hunks, let defectClasses, let author, let lintReceipt):
             return DaemonCommandCall(
                 family: .page, operation: DaemonDomainOperation.Page.patch) { wikiID in
                 try JSONEncoder().encode(DaemonPagePatchRequest(
@@ -149,7 +149,8 @@ public enum DaemonCommandRoute {
                             newText: hunk.newText,
                             reason: hunk.reason)
                     },
-                    author: author))
+                    author: author,
+                    lintReceipt: lintReceipt))
             }
         case .info(let selector):
             let wireSelector = DaemonCommandSelector(page: selector)

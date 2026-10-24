@@ -64,12 +64,20 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
     /// connections — the ordinary path below is byte-identical to the
     /// pre-scoping dispatcher.
     private let scopeGuard: DaemonScopedRequestGuard
+    /// The trusted per-run lint receipt/conflict state (plan §5.8). One
+    /// instance per dispatcher; the child only ever sees opaque tokens.
+    private let lintRunState: DaemonLintRunState
 
-    init(daemon: WikiDaemon, runRegistry: DaemonRunRegistry = DaemonRunRegistry()) {
+    init(
+        daemon: WikiDaemon,
+        runRegistry: DaemonRunRegistry = DaemonRunRegistry(),
+        lintRunState: DaemonLintRunState = DaemonLintRunState()
+    ) {
         self.daemon = daemon
         self.exporter = WikiDaemonExporter(daemon: daemon)
         self.commands = DaemonDomainCommands(daemon: daemon)
         self.runRegistry = runRegistry
+        self.lintRunState = lintRunState
         self.scopeGuard = DaemonScopedRequestGuard(
             registry: runRegistry,
             // The run's OWN descriptor — resolved by its registered ULID,
@@ -182,7 +190,147 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
         {
             return try await scopedResolveWikiReply(for: request, grant: grant)
         }
+        // Lint receipt lifecycle (plan §5.8): a REPAIR-policy run mints a
+        // receipt on a fresh selected-page JSON read, presents it on every
+        // patch, loses it on commit, and burns its conflict budget on CAS
+        // conflicts. The state lives ONLY in the trusted daemon.
+        if let intercepted = try await applyLintReceiptLifecycle(request, grant: grant) {
+            return intercepted
+        }
         return try await dispatchFamilies(request)
+    }
+
+    // MARK: - Lint receipt lifecycle (plan §5.8)
+
+    /// Mint/validate the snapshot receipts for a repair-policy lint run.
+    /// Returns `nil` when the request needs no interception (any operation
+    /// under other policies, and every non-get/patch page operation).
+    private func applyLintReceiptLifecycle(
+        _ request: DaemonDomainRequest,
+        grant: DaemonRunGrant
+    ) async throws -> Data? {
+        guard case .lintSelectedPageRepair(let selectedPage) = grant.operationPolicy else {
+            return nil
+        }
+        // PATCH — the presented receipt must be the run's CURRENT one, and
+        // the run's conflict budget must be open. Both failures deny with
+        // the generic scope message (the budget stays opaque to the child).
+        if request.family == .page, request.operation == DaemonDomainOperation.Page.patch {
+            if await self.lintRunState.isClosed(runID: grant.runID) {
+                throw Self.scopeDeniedError()
+            }
+            let payload = try decodePatchPayload(request.payload)
+            try await self.lintRunState.validateReceipt(
+                runID: grant.runID, token: payload?.lintReceipt ?? "")
+            let reply = try await dispatchFamilies(request)
+            let envelope: DaemonDomainReply?
+            do {
+                envelope = try DaemonDomainWire.decodeReply(reply)
+            } catch {
+                DebugLog.store("wikid: lint patch reply was not a domain envelope; receipt state unchanged: \(error)")
+                envelope = nil
+            }
+            if let envelope {
+                if envelope.error == nil {
+                    // A committed patch kills the receipt — the next write
+                    // needs a fresh read even though the head this run wrote
+                    // is now current.
+                    await self.lintRunState.invalidateReceipt(runID: grant.runID)
+                } else if envelope.error?.code == .casConflict {
+                    let stillOpen = await self.lintRunState.recordConflict(runID: grant.runID)
+                    if !stillOpen {
+                        DebugLog.store(
+                            "wikid: lint run \(grant.runID) exhausted its CAS conflict budget")
+                    }
+                }
+            }
+            return reply
+        }
+        // GET — a fresh selected-page read mints the receipt the patch will
+        // present. Only an id-selector read of the selected page mints (the
+        // task contract reads `--id`); a title read mints nothing, so a
+        // patch without a receipt fails closed. An unreadable payload is by
+        // design a pass-through (no mint), not a swallowed error.
+        // swiftlint:disable:next silent_try_optional
+        if request.family == .page, request.operation == DaemonDomainOperation.Page.get,
+           // An unreadable payload is by design a pass-through (no mint), not
+           // a swallowed store error.
+           // swiftlint:disable:next silent_try_optional
+           let payload = try? JSONDecoder().decode(DaemonPageGetRequest.self, from: request.payload ?? Data()),
+           payload.selector.id == selectedPage.rawValue {
+            let reply = try await dispatchFamilies(request)
+            let envelope: DaemonDomainReply?
+            do {
+                envelope = try DaemonDomainWire.decodeReply(reply)
+            } catch {
+                DebugLog.store("wikid: lint get reply was not a domain envelope; no receipt minted: \(error)")
+                envelope = nil
+            }
+            guard let envelope, envelope.error == nil, let payloadData = envelope.payload else {
+                return reply
+            }
+            if let minted = await Self.mintReceipt(
+                into: payloadData, runID: grant.runID,
+                selectedPage: selectedPage, lintRunState: self.lintRunState) {
+                return try DaemonDomainWire.encode(DaemonDomainReply.success(
+                    requestID: envelope.requestID,
+                    family: envelope.family,
+                    operation: envelope.operation,
+                    payload: minted))
+            }
+            return reply
+        }
+        return nil
+    }
+
+    /// Extract `head_version_id` + `body_markdown` from a successful
+    /// `page get --json` payload, mint the run's receipt over them, and
+    /// return the payload with `"lint_receipt"` injected. Returns nil when
+    /// the payload is not the expected JSON object shape.
+    static func mintReceipt(
+        into payload: Data,
+        runID: DaemonRunID,
+        selectedPage: PageID,
+        lintRunState: DaemonLintRunState
+    ) async -> Data? {
+        // A non-JSON (or non-object) payload is simply not a `page get
+        // --json` read — no receipt mints. This is a shape probe, not a
+        // swallowed store error.
+        // swiftlint:disable:next silent_try_optional
+        guard var object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let head = object["head_version_id"] as? String,
+              let body = object["body_markdown"] as? String else {
+            return nil
+        }
+        let receipt = await lintRunState.issueReceipt(
+            runID: runID,
+            head: PageVersionID(rawValue: head),
+            bodyFingerprint: LintPageSnapshot.fingerprint(of: body))
+        object["lint_receipt"] = receipt.token
+        do {
+            return try JSONSerialization.data(withJSONObject: object)
+        } catch {
+            DebugLog.store("wikid: lint receipt payload re-encode failed: \(error)")
+            return nil
+        }
+    }
+
+    private func decodePatchPayload(_ payload: Data?) throws -> DaemonPagePatchRequest? {
+        guard let payload else { return nil }
+        do {
+            return try JSONDecoder().decode(DaemonPagePatchRequest.self, from: payload)
+        } catch {
+            throw Self.scopeDeniedError()
+        }
+    }
+
+    /// The generic scope denial — the receipt budget never leaks its state
+    /// (stale receipt, absent receipt, closed run, and unreadable payload all
+    /// deny identically).
+    static func scopeDeniedError() -> DaemonDomainError {
+        DaemonDomainError(
+            code: .scopeDenied,
+            message: "the request is outside the scope of this run")
     }
 
     /// Scoped `wiki resolveWiki`: the assigned descriptor or a GENERIC scope

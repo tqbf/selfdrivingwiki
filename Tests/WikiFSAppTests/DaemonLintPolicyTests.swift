@@ -94,6 +94,53 @@ struct DaemonLintPolicyTests {
         }
     }
 
+    // MARK: - Receipt lifecycle semantics (plan §5.8 wiring)
+
+    /// The wired semantics the dispatcher relies on: a selected-page JSON
+    /// read mints a receipt bound to head+fingerprint; the patch validates
+    /// the CURRENT token; a commit kills it; two conflicts close the run.
+    /// `mintReceipt` is the dispatcher's payload post-processor — same
+    /// computation, no daemon needed.
+    @Test func receiptLifecycleMintValidateInvalidateClose() async throws {
+        let fixture = try await Fixture(
+            policy: .lintSelectedPageRepair(pageID: selectedPage))
+        let state = DaemonLintRunState()
+
+        // The payload post-processor mints only from a `page get --json`
+        // shape and injects the token.
+        let payloadJSON = ##"{"body_markdown":"# Body\n","head_version_id":"01HZHEAD00000000000000000001"}"##
+        let payload = Data(payloadJSON.utf8)
+        let minted = await DaemonDomainSocketDispatcher.mintReceipt(
+            into: payload, runID: fixture.runID,
+            selectedPage: selectedPage, lintRunState: state)
+        let mintedData = try #require(minted)
+        let mintedObject = try #require(
+            JSONSerialization.jsonObject(with: mintedData) as? [String: Any])
+        let token = try #require(mintedObject["lint_receipt"] as? String)
+
+        // The current receipt validates; the minted fingerprint is the body's.
+        let current = await state.currentReceipt(runID: fixture.runID)
+        #expect(current?.token == token)
+        #expect(current?.bodyFingerprint == LintPageSnapshot.fingerprint(of: "# Body\n"))
+        await #expect(throws: Never.self) {
+            try await state.validateReceipt(runID: fixture.runID, token: token)
+        }
+        // A stale/fabricated token throws.
+        await #expect(throws: DaemonLintRunState.LintCASBudgetError.self) {
+            try await state.validateReceipt(runID: fixture.runID, token: "forged")
+        }
+        // A commit kills the receipt — the old token can never replay.
+        await state.invalidateReceipt(runID: fixture.runID)
+        await #expect(throws: DaemonLintRunState.LintCASBudgetError.self) {
+            try await state.validateReceipt(runID: fixture.runID, token: token)
+        }
+
+        // The conflict budget: one recomposition allowed, the second closes.
+        #expect(await state.recordConflict(runID: fixture.runID) == true)
+        #expect(await state.recordConflict(runID: fixture.runID) == false)
+        #expect(await state.isClosed(runID: fixture.runID))
+    }
+
     // MARK: - The exhaustive operation matrix
 
     /// All four policy kinds × the operation families that matter: lint runs

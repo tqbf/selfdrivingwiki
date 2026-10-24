@@ -507,13 +507,22 @@ public struct DaemonPagePatchRequest: Codable, Equatable, Sendable {
     public let expectHead: String
     public let hunks: [WireHunk]
     public let author: String?
+    /// The opaque snapshot receipt a MANAGED lint run presents (minted by the
+    /// daemon on a fresh selected-page JSON read, plan §5.8). `nil` for the
+    /// standalone trusted CLI — receipts exist only on the scoped path, and a
+    /// wrong/absent receipt denies there.
+    public let lintReceipt: String?
 
-    public init(wikiID: String, id: String, expectHead: String, hunks: [WireHunk], author: String?) {
+    public init(
+        wikiID: String, id: String, expectHead: String, hunks: [WireHunk],
+        author: String?, lintReceipt: String? = nil
+    ) {
         self.wikiID = wikiID
         self.id = id
         self.expectHead = expectHead
         self.hunks = hunks
         self.author = author
+        self.lintReceipt = lintReceipt
     }
 
     /// The payload's page identity as the raw string — the scope guard's

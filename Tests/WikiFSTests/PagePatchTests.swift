@@ -34,7 +34,7 @@ struct PagePatchCommandTests {
                 "--defect", "D15",
             ],
             env: { _ in nil })
-        guard case .page(.patch(let id, let expectHead, let hunks, let classes, _)) = invocation.command else {
+        guard case .page(.patch(let id, let expectHead, let hunks, let classes, _, _)) = invocation.command else {
             Issue.record("expected .page(.patch)")
             return
         }
@@ -122,7 +122,7 @@ struct PagePatchCommandTests {
                 "--hunk-file", path.path,
             ],
             env: { _ in nil })
-        guard case .page(.patch(_, _, let hunks, let classes, _)) = invocation.command else {
+        guard case .page(.patch(_, _, let hunks, let classes, _, _)) = invocation.command else {
             Issue.record("expected .page(.patch)")
             return
         }

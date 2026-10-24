@@ -271,7 +271,7 @@ public enum CLIReference {
                 CLILeaf(
                     "patch",
                     summary: "exact ranged write — apply hunk repairs with per-hunk defect classes under CAS (the lint write path; no full-body rewrite)",
-                    commandLine: "patch --id <page-id> --expect-head <ver> (--hunk <json> --defect <class>)… [--hunk-file <path>] [--author <who>]",
+                    commandLine: "patch --id <page-id> --expect-head <ver> (--hunk <json> --defect <class>)… [--hunk-file <path>] [--author <who>] [--lint-receipt <token>]",
                     options: [
                         CLIOption("--id <page-id>", required: true, summary: "the page to patch (stable identity, never a title)"),
                         CLIOption("--expect-head <ver>", required: true, summary: "CAS: the head_version_id the hunks were composed against"),
@@ -279,6 +279,7 @@ public enum CLIReference {
                         CLIOption("--defect <class>", repeated: true, summary: "the hunk's defect class (D01–D28); must directly follow its --hunk"),
                         CLIOption("--hunk-file <path>", summary: #"alternative to inline pairs: {"version":1,"hunks":[{"defect":"Dxx",…}]} — cannot combine with --hunk/--defect"#),
                         CLIOption("--author <who>", summary: "stamp last_edited_by (lint repairs use agent:lint)"),
+                        CLIOption("--lint-receipt <token>", summary: "managed lint runs ONLY: the lint_receipt from the latest `page get --json` — validated by the daemon against the run's current receipt; a stale or absent token is denied"),
                     ],
                     details: [
                         "Exact application: the stored bytes at each hunk's range must equal oldText exactly — no fuzzy matching, no partial commit.",

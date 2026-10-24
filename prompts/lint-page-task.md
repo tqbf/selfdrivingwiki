@@ -71,7 +71,10 @@ with `verification <written-head|none> <your-claim>`.
 1. Read the page: `wikictl page get --id {{pageID}} --json` — body and
    head_version_id from ONE read. That snapshot is the basis of every repair
    you propose. Record the head_version_id; every hunk you submit must target
-   exactly those bytes.
+   exactly those bytes. The JSON also carries a `lint_receipt` for this
+   managed run — record it too: the patch write below requires it, and a
+   fresh read (after any conflict or committed patch) is the ONLY way to get
+   a current one.
 2. For each reference finding in the pre-flight report:
    - `[[Page Title]]` (page link): search `wikictl page list` for the correct
      target and rewrite the link to it. If no target exists, report it
@@ -110,16 +113,21 @@ ENVIRONMENT block — same wiki selector for reads and writes.
   body and its `head_version_id` in one read.
 - Submit repairs with:
   `wikictl page patch --id <page-id> --expect-head <head_version_id>
-  --hunk '<json>' --defect <class>` — one `--hunk`/`--defect` pair per
-  repair, or `--hunk-file <path>` for several hunks at once. The hunk JSON
+  --hunk '<json>' --defect <class> --lint-receipt <token>` — one
+  `--hunk`/`--defect` pair per repair, or `--hunk-file <path>` for several
+  hunks at once, plus the `--lint-receipt` token from your latest read (a
+  patch without the CURRENT receipt is denied). The hunk JSON
   is `{"startByte":N,"endByte":N,"oldText":"…","newText":"…","reason":"…"}`
   with byte bounds into the body you read.
 - Exact application: the stored bytes at each hunk's range must equal
   `oldText` exactly. A mismatch is a conflict — RE-READ the body in one
-  fresh `--json` read, recompute your hunks against the NEW bytes (never
-  replay old hunks with a refreshed head), and retry ONCE.
+  fresh `--json` read (which mints a NEW `lint_receipt`), recompute your
+  hunks against the NEW bytes (never replay old hunks with a refreshed
+  head), and retry ONCE with the new receipt.
 - A second conflict ends the repair: stop writing, and report the conflict.
-  Never loop, and never claim a fix that was not committed.
+  A committed patch also invalidates the receipt — after ANY successful
+  patch, a further patch needs another fresh read first. Never loop, and
+  never claim a fix that was not committed.
 - After a successful patch, read the page back for context, then re-run your
   structural checks on what is stored: a boundary repair can expose a later
   defect, which you repair in the same run.

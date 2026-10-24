@@ -387,12 +387,14 @@ public enum ArgumentParser {
                 }
             }
             let author = options.value("--author")
+            let lintReceipt = options.value("--lint-receipt")
             return .page(.patch(
                 id: PageID(rawValue: id),
                 expectHead: expectHead,
                 hunks: pairs.map(\.hunk),
                 defectClasses: pairs.map(\.defect),
-                author: author))
+                author: author,
+                lintReceipt: lintReceipt))
 
         case "delete":
             guard let id = options.value("--id") else {
