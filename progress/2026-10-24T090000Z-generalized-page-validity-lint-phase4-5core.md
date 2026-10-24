@@ -52,7 +52,34 @@ Phases 0–3 plus the commits below are on
   moving current head → `verifiedWrittenHeadDiverged`).
   12 tests in `LintOutcomeCoverageTests`.
 
-## Remaining (Phase 5 wiring, then 6–7)
+## Phase 5 COMPLETE (`01c2127f`)
+
+All §5.1–§5.15 landed: typed identity, shared coordinator, sequential
+per-page runs, coordinator dispatch tests, REQ-29 ten-check prompt, fixed
+run-report format + strict parser, coverage validation, daemon receipts
+(mint/validate/invalidate/conflict-budget) through the scoped socket, daemon
+written-version verification records (read by the queue host via the shared
+`queueHostLintRunState`), host `--kind lint` audit log (agent-log
+detection), REQ-54 full compare with store-observed change regions, queue
+reporting with observed facts, Run Details via the existing `.available`
+summary rows, whole-wiki report-only (verified), and the AC.5 live sandbox
+test.
+
+## Phase 6/7 remaining (authoritative)
+
+1. Phase 6: `WikiLintEval`/`WikiLintEvalRunner` targets +
+   `scripts/run-wiki-lint-eval.sh`; fixture manifests (§8.3 groups,
+   held-out split, frozen digests); diff oracle from observed bytes;
+   per-class scoring; `inspect`/replay/`run --live --gate`; harness-only
+   evaluation admission; acceptance records (`lint-acceptance/<key>.json`),
+   shipped `LintGateFixtureManifest.json`, unaccepted→report-only,
+   `LintAcceptanceGate*` tests. LIVE GATE BLOCKED on provider access +
+   operator budget + human rubric.
+2. Phase 7: implementation doc + PLAN.md link, CLI patch JSON +
+   sandbox-scoping docs, progress notes, independent non-OpenAI review
+   (GLM 5.3 High), conventional commits.
+
+## Superseded remaining list (Phase 5 wiring — historical)
 
 Landed since this note was first written: **`ddfe43f6`** (audit checklist +
 run-report contract + coverage/verification gates), **`5bd10c7e`** (typed
