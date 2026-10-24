@@ -86,6 +86,45 @@ Still open in Phase 6:
 2. Live trial plumbing … (BLOCKED as below)
 3. Harness-only evaluation admission … (BLOCKED with the live path)
 
+## Independent review (Opus 5.5) — triage
+
+`plans/independent-review-opus55.md` (verbatim, commit `e39d2dfc`). Verdict:
+building blocks sound; enforcement layers not connected to production; two
+critical defects in the deterministic core. Fix-or-rebut status:
+
+- **C2 (critical) — FIXED `6f314c9a`.** Masked-regex offset drift (UTF-16
+  conversion against the source) → wrong ranges, EOF `NSRangeException`.
+  All sites convert via `authoredMatch` (masked text for ranges, source
+  for evidence); regression tests with CJK-in-fence and drift-past-EOF.
+- **C3 (critical) — FIXED `6f314c9a`.** Composer order-dependence
+  (insertion+replacement at one offset committed undeclared bytes).
+  Shared-start hunks reject; composition is concatenation; the oracle
+  mirrors the same composer.
+- **M2 (major) — FIXED `6f314c9a`.** Untouched skeleton now a PARSE error
+  (`pending` is never a valid outcome token); `name|reason` splitting
+  fixed for multi-word reasons; validator requires reasons on
+  items/findings and a filled verification line.
+- **m4 (minor) — addressed en passant** (documented dedup semantics).
+- **C1 (critical) + M1 (major) — TRIAGED, next.** No production path mints
+  lint policies or runs the post-run accounting. Fix: derive the policy
+  from the `OperationRequest` in `AgentLauncher` (repairAuthorized →
+  repair lease, else report-only lease; `.lint` → whole-wiki report-only;
+  refuse lint without scoped runs), and factor `runOneLintPage`'s
+  accounting into a host-agnostic function the queue providers call.
+- **M3 (major) — accepted, fix next:** written-head scan must use the same
+  facts; written head must come from the patch outcome; per-hunk change
+  regions from the server outcome.
+- **M4/M5/M6/M7/M8/M9, m1–m3/m5–m8 — accepted, queued** in order: M4
+  receipt↔expectHead binding, M5 unresolved-pin rejection, M6 run-scoped
+  verification lookups + `forget`, M7 log query by window/page, M8 real
+  gate components + freshness + hard-fail to report-only when
+  unconfigured, M9 evaluator controls (per-defect scoring, consumed
+  declarations, hidden bail fixtures before freezing), then the minors.
+- **Doc overclaims** (review verdict ¶): the implementation doc's "Key
+  semantics" and the scoping doc's "Status: IMPLEMENTED" for lint policies
+  are qualified — the gate selects report-only for every current
+  configuration, and C1's production minting is the open item.
+
 ## Phase 6/7 remaining (authoritative)
 
 1. Phase 6: `WikiLintEval`/`WikiLintEvalRunner` targets +
