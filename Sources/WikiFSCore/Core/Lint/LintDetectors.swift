@@ -338,18 +338,50 @@ extension LintPagePreflight {
     }
 
     /// Cell count of a pipe row, dropping the optional outer-pipe artifacts.
-    /// Escaped pipes (`\|`) do not delimit cells (review m3).
+    /// Escaped pipes (`\|`) and pipes inside `[[wiki-link]]` spans do not
+    /// delimit cells (review m3 + production finding: the reader transforms
+    /// wiki links before table parsing, so alias pipes never reach GFM).
     static func pipeCells(_ line: Substring) -> Int {
         var cells: [Substring] = []
         var current = line[line.startIndex...]
+        var linkDepth = 0
         while let bar = current.firstIndex(of: "|") {
+            let segment = current[current.startIndex..<bar]
+            // Track `[[` openers and `]]` closers in the gap before the
+            // pipe — bracket state carries across segments (the `[[` may
+            // sit in an earlier gap than its `]]`).
+            var scan = segment[...]
+            while true {
+                let open = scan.range(of: "[[")
+                let close = scan.range(of: "]]")
+                switch (open, close) {
+                case (let o?, let c?) where o.lowerBound < c.lowerBound:
+                    linkDepth += 1
+                    scan = scan[o.upperBound...]
+                case (let o?, _):
+                    linkDepth += 1
+                    scan = scan[o.upperBound...]
+                case (_, let c?):
+                    linkDepth = max(0, linkDepth - 1)
+                    scan = scan[c.upperBound...]
+                case (nil, nil):
+                    scan = scan[scan.endIndex...]
+                }
+                if scan.isEmpty { break }
+            }
+            if linkDepth > 0 {
+                // The pipe is inside a `[[…]]` wiki link — alias syntax the
+                // reader resolves before table parsing. Skip it as content.
+                current = current[bar...].dropFirst()
+                continue
+            }
             // An escaped pipe is content, not a delimiter — skip both chars.
             if bar > current.startIndex,
                line[line.index(before: bar)] == "\\" {
                 current = current[bar...].dropFirst(2)
                 continue
             }
-            cells.append(current[current.startIndex..<bar])
+            cells.append(segment)
             current = current[bar...].dropFirst()
         }
         cells.append(current)
@@ -362,8 +394,15 @@ extension LintPagePreflight {
         return max(cells.count, 0)
     }
 
+    /// `prefix` match on a Substring at an exact index.
+    static func hasPrefix(_ s: Substring, at index: String.Index, prefix: String) -> Bool {
+        s[index...].hasPrefix(prefix)
+    }
+
     /// `true` when the line carries a pipe that is neither escaped nor inside
-    /// an inline-code span (backtick-run parity approximation).
+    /// an inline-code span. (Pipes inside `[[wiki-link]]` aliases are also
+    /// real delimiters at this stage only when outside the brackets — the
+    /// outer bracket pipes still count.)
     static func containsUnescapedPipe(_ line: Substring) -> Bool {
         var inCode = false
         var previous: Character?
