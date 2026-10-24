@@ -34,6 +34,32 @@ public struct DaemonLintVerificationRecord: Hashable, Sendable {
     public let recordedAt: Date
 }
 
+/// The trusted daemon's record of a patch it rejected WHOLE for exceeding
+/// the run's patch budget (W2a §3). The run's write phase is closed after it.
+public struct DaemonLintBudgetRejection: Hashable, Sendable {
+    public let pageID: PageID
+    public let rejection: LintPatchBudget.Rejection
+    public let recordedAt: Date
+}
+
+/// The host's accounted outcome for one selected-page lint run (W2a §4): the
+/// authority it ran under (tier + approval row + reason) and the auto-revert
+/// outcome, so the daemon's run state traces every outcome back to what
+/// allowed it.
+public struct DaemonLintAccountedOutcome: Equatable, Sendable {
+    public let pageID: PageID
+    public let authority: LintRepairAuthority
+    public let revert: LintRevertOutcome?
+    public let recordedAt: Date
+
+    public init(pageID: PageID, authority: LintRepairAuthority, revert: LintRevertOutcome?, recordedAt: Date) {
+        self.pageID = pageID
+        self.authority = authority
+        self.revert = revert
+        self.recordedAt = recordedAt
+    }
+}
+
 /// The CAS budget and receipt bookkeeping for one daemon's lint runs.
 /// Actor-isolated; entries live only for the daemon process.
 public actor DaemonLintRunState {
@@ -55,6 +81,10 @@ public actor DaemonLintRunState {
     private var conflictCounts: [DaemonRunID: Int] = [:]
     private var closedRuns: Set<DaemonRunID> = []
     private var verificationRecords: [DaemonRunID: DaemonLintVerificationRecord] = [:]
+    private var patchBudgets: [DaemonRunID: LintPatchBudget] = [:]
+    private var patchSpend: [DaemonRunID: LintPatchBudget.Usage] = [:]
+    private var budgetRejections: [DaemonRunID: DaemonLintBudgetRejection] = [:]
+    private var accountedOutcomes: [PageID: DaemonLintAccountedOutcome] = [:]
 
     public init() {}
 
@@ -147,11 +177,86 @@ public actor DaemonLintRunState {
             .max { $0.recordedAt < $1.recordedAt }
     }
 
-    /// Tear down a run's state (the lease revocation path).
+    // MARK: - Patch budget (W2a §3)
+
+    /// Fix the run's patch budget from its INSPECTED page — the first
+    /// minting read. Later reads (after a commit, the page has fewer
+    /// findings) never shrink or grow it.
+    public func setBudgetIfAbsent(runID: DaemonRunID, budget: LintPatchBudget) {
+        if patchBudgets[runID] == nil {
+            patchBudgets[runID] = budget
+        }
+    }
+
+    /// The run's patch budget. A run whose inspected page could not be
+    /// scanned gets the floor budget — never an unbounded one.
+    public func budget(runID: DaemonRunID) -> LintPatchBudget {
+        patchBudgets[runID] ?? LintPatchBudget(confirmedRepairableFindings: 0)
+    }
+
+    /// What the run's committed patches have spent so far.
+    public func spent(runID: DaemonRunID) -> LintPatchBudget.Usage {
+        patchSpend[runID] ?? .zero
+    }
+
+    /// Check one patch against the run's remaining budget. Only committed
+    /// patches spend (`recordSpend`), so a CAS-conflict recomposition is
+    /// not charged twice. One run's patches arrive one at a time from its
+    /// child, so check-then-record needs no reservation.
+    public func checkBudget(runID: DaemonRunID, request: LintPatchBudget.Usage) -> LintPatchBudget.Verdict {
+        budget(runID: runID).check(request: request, alreadySpent: spent(runID: runID))
+    }
+
+    /// Charge a committed patch to the run.
+    public func recordSpend(runID: DaemonRunID, usage: LintPatchBudget.Usage) {
+        patchSpend[runID] = spent(runID: runID) + usage
+    }
+
+    /// Record a whole-patch budget rejection and CLOSE the run's write
+    /// phase: splitting the same change into smaller patches must not get
+    /// around the cap.
+    public func recordBudgetRejection(
+        runID: DaemonRunID, pageID: PageID, rejection: LintPatchBudget.Rejection
+    ) {
+        budgetRejections[runID] = DaemonLintBudgetRejection(
+            pageID: pageID, rejection: rejection, recordedAt: Date())
+        closedRuns.insert(runID)
+    }
+
+    /// The run's budget rejection, if one happened.
+    public func budgetRejection(runID: DaemonRunID) -> DaemonLintBudgetRejection? {
+        budgetRejections[runID]
+    }
+
+    /// The latest budget rejection for one page across every run (the
+    /// queue host knows the page, not the child's run id).
+    public func latestBudgetRejection(pageID: PageID) -> DaemonLintBudgetRejection? {
+        budgetRejections.values
+            .filter { $0.pageID == pageID }
+            .max { $0.recordedAt < $1.recordedAt }
+    }
+
+    // MARK: - Accounted outcomes (W2a §4)
+
+    /// Publish the host's accounted outcome for a page (latest wins).
+    public func recordAccountedOutcome(_ outcome: DaemonLintAccountedOutcome) {
+        accountedOutcomes[outcome.pageID] = outcome
+    }
+
+    /// The latest accounted outcome for one page.
+    public func latestAccountedOutcome(pageID: PageID) -> DaemonLintAccountedOutcome? {
+        accountedOutcomes[pageID]
+    }
+
+    /// Tear down a run's state (the lease revocation path). Verification
+    /// records and budget rejections stay: the queue host reads them AFTER
+    /// the run's lease is revoked.
     public func forget(runID: DaemonRunID) {
         receipts.removeValue(forKey: runID)
         conflictCounts.removeValue(forKey: runID)
         closedRuns.remove(runID)
+        patchBudgets.removeValue(forKey: runID)
+        patchSpend.removeValue(forKey: runID)
     }
 }
 #endif

@@ -517,10 +517,35 @@ public enum AgentOperationRunner {
         public let request: OperationRequest
         public let snapshot: LintPageSnapshot
         public let preflight: LintPreflightReport
-        /// The rollout gate's decision (§6.13): a report-only plan instructs
-        /// the agent not to patch and records the gate reason.
-        public let repairAuthorized: Bool
-        public let gateReason: String
+        /// The rollout gate's decision (§6.13) after the local circuit
+        /// breaker had its say: the tier, the approval row, and the reason
+        /// for any report-only outcome.
+        public let authority: LintRepairAuthority
+        /// The breaker configuration this run records its outcome under —
+        /// set only when the gate matched an approval.
+        public let breakerKey: LintRepairBreakerKey?
+        /// The breaker the trusted host consulted, so the accounting records
+        /// into the SAME state it read.
+        public let breaker: LintRepairBreaker?
+
+        /// A report-only plan instructs the agent not to patch.
+        public var repairAuthorized: Bool { authority.isRepairCapable }
+        /// The recorded reason for the plan's authority.
+        public var gateReason: String { authority.reason ?? "accepted configuration" }
+    }
+
+    /// The gate components the coordinator consults with. Today every field
+    /// is the `unconfigured` placeholder (review M8 hard-fails it to
+    /// report-only); a later wiring passes the live configuration.
+    struct LintGateInputs: Sendable {
+        let provider: String
+        let model: String
+        let modelRevision: String?
+        let effort: String
+
+        static let unconfigured = LintGateInputs(
+            provider: "unconfigured", model: "unconfigured",
+            modelRevision: nil, effort: "unconfigured")
     }
 
     /// Build one page's lint plan: coherent snapshot → injected facts →
@@ -531,6 +556,28 @@ public enum AgentOperationRunner {
         store: WikiStore,
         pageID: PageID,
         stateMarkdown: String
+    ) async -> LintPagePlan? {
+        await makeLintPagePlan(
+            store: store, pageID: pageID, stateMarkdown: stateMarkdown,
+            gateInputs: .unconfigured,
+            selection: { inputs in
+                try LintCoordinatorGate.selection(
+                    provider: inputs.provider, model: inputs.model,
+                    modelRevision: inputs.modelRevision, effort: inputs.effort)
+            },
+            breaker: LintRepairBreaker.production())
+    }
+
+    /// The plan builder with the gate and breaker injected (tests drive a
+    /// repair-authorized selection through here; production always passes
+    /// the shipped gate).
+    static func makeLintPagePlan(
+        store: WikiStore,
+        pageID: PageID,
+        stateMarkdown: String,
+        gateInputs: LintGateInputs,
+        selection: (LintGateInputs) throws -> LintRolloutSelection,
+        breaker: LintRepairBreaker
     ) async -> LintPagePlan? {
         let read: PageCoherentRead?
         do {
@@ -577,28 +624,30 @@ public enum AgentOperationRunner {
         // NOT silently hashed as constants — an unknown component
         // hard-fails to report-only BEFORE any manifest consultation, so a
         // placeholder configuration is never matched against the shipped
-        // approval matrix.
-        let repairAuthorized: Bool
-        let gateReason: String
+        // approval matrix. W2a: a matched approval then passes the local
+        // circuit breaker, which can only demote it.
+        let gateSelection: LintRolloutSelection
         do {
-            switch try LintCoordinatorGate.selection(
-                provider: "unconfigured", model: "unconfigured",
-                modelRevision: nil, effort: "unconfigured") {
-            case .repairAuthorized:
-                // Unreachable today (the placeholder components above fail
-                // M8 first) — kept explicit so a future wiring of real
-                // components cannot silently enable repairs. The approval
-                // id is not plumbed into the receipt yet.
-                repairAuthorized = true
-                gateReason = "accepted configuration"
-            case .reportOnly(let reason):
-                repairAuthorized = false
-                gateReason = reason
-            }
+            gateSelection = try selection(gateInputs)
         } catch {
-            repairAuthorized = false
-            gateReason = "gate unavailable: \(error)"
+            gateSelection = .reportOnly(reason: "gate unavailable: \(error)")
         }
+        var breakerKey: LintRepairBreakerKey?
+        if case .repairAuthorized = gateSelection {
+            do {
+                breakerKey = LintRepairBreakerKey(
+                    pipeline: try LintAcceptanceManifest.Pipeline.live(),
+                    provider: gateInputs.provider, model: gateInputs.model,
+                    effort: gateInputs.effort)
+            } catch {
+                // `authority(after:key:)` demotes a nil key.
+                DebugLog.agent("lint plan: breaker key unavailable, demoting: \(error)")
+                breakerKey = nil
+            }
+        }
+        let authority = breaker.authority(after: gateSelection, key: breakerKey)
+        let repairAuthorized = authority.isRepairCapable
+        let gateReason = authority.reason ?? "accepted configuration"
         let request = OperationRequest.lintPage(
             page: LintPageIdentity(snapshot),
             repairAuthorized: repairAuthorized,
@@ -608,7 +657,7 @@ public enum AgentOperationRunner {
             stateMarkdown: stateMarkdown)
         return LintPagePlan(
             request: request, snapshot: snapshot, preflight: report,
-            repairAuthorized: repairAuthorized, gateReason: gateReason)
+            authority: authority, breakerKey: breakerKey, breaker: breaker)
     }
 
     /// Package-validation facts for the body's rich fences, or `nil` when the
@@ -646,12 +695,39 @@ public enum AgentOperationRunner {
         public let title: String
         public let status: Status
         public let detail: String
+        /// The authority the run ended under (nil for pages that never got a
+        /// plan). A rejected patch moves it to `.budgetExceeded`.
+        public let authority: LintRepairAuthority?
+        /// The auto-revert outcome after a verification failure, as its own
+        /// fact — the status stays `.failed` either way.
+        public let revert: LintRevertOutcome?
 
-        public init(pageID: PageID, title: String, status: Status, detail: String) {
+        public init(
+            pageID: PageID, title: String, status: Status, detail: String,
+            authority: LintRepairAuthority? = nil, revert: LintRevertOutcome? = nil
+        ) {
             self.pageID = pageID
             self.title = title
             self.status = status
             self.detail = detail
+            self.authority = authority
+            self.revert = revert
+        }
+
+        /// The bad write may still be in place: a human must look.
+        public var isFlagged: Bool { revert?.isFlagged == true }
+
+        /// The queue report's per-page outcome record input.
+        public var queueReportOutcome: QueueIngestionReporting.LintPageOutcome {
+            let result: QueueIngestionReporting.LintPageOutcome.Result
+            switch status {
+            case .dispatched: result = .passed
+            case .skipped: result = .skipped
+            case .failed: result = .failed
+            }
+            return QueueIngestionReporting.LintPageOutcome(
+                pageID: pageID, title: title, result: result, detail: detail,
+                authority: authority, revert: revert)
         }
     }
 
@@ -723,19 +799,68 @@ public enum AgentOperationRunner {
     /// host's `--kind lint` record. Every host (app UI, app queue, daemon
     /// queue) runs the SAME accounting; a launcher exit status alone never
     /// produces a passing outcome.
+    ///
+    /// W2a enforcement: a verification failure triggers ONE CAS-guarded
+    /// revert to the inspected head; a daemon patch-budget rejection marks
+    /// the write phase not performed; a repair-authorized run records its
+    /// outcome in the circuit breaker; and the audit line names the
+    /// authority tier and approval row. `producedHead` is the head the run's
+    /// own write produced when the host knows it (the daemon's
+    /// written-version record); otherwise the head read after the run
+    /// stands in for it.
     public static func accountForLintRun(
         plan: LintPagePlan,
         pageID: PageID,
         launcher: AgentLauncher,
         store: WikiStore,
-        runStart: Date
+        runStart: Date,
+        producedHead: PageVersionID? = nil
+    ) -> LintPageDispatchOutcome {
+        accountForLintRun(
+            plan: plan, pageID: pageID,
+            scratchDirectory: launcher.lastScratchDirectory,
+            store: store, runStart: runStart, producedHead: producedHead)
+    }
+
+    /// The accounting body over an explicit run scratch (tests stage a
+    /// filled run report there directly).
+    static func accountForLintRun(
+        plan: LintPagePlan,
+        pageID: PageID,
+        scratchDirectory: URL?,
+        store: WikiStore,
+        runStart: Date,
+        producedHead: PageVersionID?
     ) -> LintPageDispatchOutcome {
         // Post-run accounting: the host reads the filled run report back
         // from the run's scratch and validates coverage against THIS plan's
         // inventory (REQ-31/32). The agent's claims never stand alone.
         var detail = "audited head \(plan.snapshot.headVersionID?.rawValue ?? "none")"
         var status = LintPageDispatchOutcome.Status.dispatched
-        if let scratch = launcher.lastScratchDirectory {
+        var authority = plan.authority
+        var revert: LintRevertOutcome?
+        let pageTitleToken = plan.snapshot.title
+
+        // The run's lint log entries, read once: the daemon's budget
+        // rejection record and the agent's own append both live here.
+        let recentLintEntries: [LogEntry]?
+        do {
+            recentLintEntries = try store.recentLogEntries(limit: 200)
+                .filter { $0.kind == .lint && $0.timestamp >= runStart }
+        } catch {
+            DebugLog.agent("lint dispatch: log read failed; treating the agent log as missing: \(error)")
+            recentLintEntries = nil
+        }
+        // W2a §3: the trusted daemon rejected this page's patch WHOLE for
+        // exceeding the run's patch budget — no repair happened.
+        let budgetTitle = LintPatchBudget.auditTitlePrefix + pageTitleToken
+        if let rejection = recentLintEntries?.first(where: { $0.title == budgetTitle }) {
+            let numbers = rejection.note ?? "budget_exceeded"
+            authority = authority.demoted(to: .budgetExceeded, reason: numbers)
+            detail += "; write phase not performed — patch rejected whole: \(numbers)"
+        }
+
+        if let scratch = scratchDirectory {
             let reportURL = scratch.appendingPathComponent(AgentStaging.lintRunReportFileName)
             let reportText: String?
             do {
@@ -830,23 +955,38 @@ public enum AgentOperationRunner {
                         history: history)
                     let observed = Self.observedChangeRanges(
                         before: plan.snapshot.body, after: writtenSnapshot.body)
+                    // The run's written head: the daemon's record when the
+                    // host has it, else the head read now. A difference is
+                    // the written-vs-current divergence the compare reports.
+                    let writtenHead = producedHead ?? writtenRead.headVersionID
                     let verdict = LintVerification.compare(
                         before: plan.preflight,
                         written: writtenScan,
                         appliedHunks: observed,
                         claimedRepairFindingIDs: claimedRepairs,
-                        writtenHead: writtenRead.headVersionID,
+                        writtenHead: writtenHead,
                         currentHead: writtenRead.headVersionID,
                         requiredChecksAvailable: true)
                     switch verdict.status {
                     case .verified:
                         detail += "; verification verified on the written head"
+                        Self.recordBreakerOutcome(.clean, plan: plan, authority: authority)
                     case .verifiedWrittenHeadDiverged(let current):
                         detail += "; verification verified on the written head; current head diverged to \(current.rawValue)"
+                        Self.recordBreakerOutcome(.clean, plan: plan, authority: authority)
                     case .failed(let reasons):
                         status = .failed
                         detail += "; verification failed: "
                             + reasons.prefix(3).joined(separator: "; ")
+                        // W2a §2: never leave a bad write in place silently,
+                        // never clobber a concurrent edit.
+                        let outcome = Self.revertFailedLintWrite(
+                            store: store, pageID: pageID,
+                            inspectedHead: plan.snapshot.headVersionID,
+                            writtenHead: writtenHead)
+                        revert = outcome
+                        detail += "; \(outcome.auditLabel)"
+                        Self.recordBreakerOutcome(.verificationFailure, plan: plan, authority: authority)
                     }
                 } catch {
                     status = .failed
@@ -875,25 +1015,19 @@ public enum AgentOperationRunner {
         // Review M7: the agent's log entry must name THIS page (the task
         // template's title includes the page name), not just any lint entry
         // appended since the run started — a concurrent lint elsewhere must
-        // not satisfy this page's contract.
-        let pageTitleToken = plan.snapshot.title
-        let agentLogCommitted: Bool
-        do {
-            agentLogCommitted = try store.recentLogEntries(limit: 200)
-                .contains { entry in
-                    entry.kind == .lint
-                        && entry.timestamp >= runStart
-                        && (entry.title.contains(pageTitleToken)
-                            || entry.note?.contains(pageTitleToken) == true)
-                }
-        } catch {
-            DebugLog.agent("lint dispatch: log read failed; treating the agent log as missing: \(error)")
-            agentLogCommitted = false
-        }
+        // not satisfy this page's contract. The daemon's budget rejection
+        // record names the page too, but it is not the agent's log.
+        let agentLogCommitted = recentLintEntries?.contains { entry in
+            entry.title.hasPrefix(LintPatchBudget.auditTitlePrefix) == false
+                && (entry.title.contains(pageTitleToken)
+                    || entry.note?.contains(pageTitleToken) == true)
+        } ?? false
         if agentLogCommitted == false {
             status = .failed
             detail += "; AGENT LOG MISSING — the agent never appended its --kind lint entry"
         }
+        // W2a §4: every outcome traces back to what allowed it.
+        detail += "; \(authority.auditLabels)"
         do {
             try store.appendLog(
                 kind: .lint,
@@ -904,7 +1038,54 @@ public enum AgentOperationRunner {
             detail += "; HOST LOG APPEND FAILED: \(error)"
         }
         return LintPageDispatchOutcome(
-            pageID: pageID, title: plan.snapshot.title, status: status, detail: detail)
+            pageID: pageID, title: plan.snapshot.title, status: status, detail: detail,
+            authority: authority, revert: revert)
+    }
+
+    /// W2a §2: put a verification-failed page back to the run's inspected
+    /// head — ONLY while the current head is still the head this run wrote
+    /// (an expected-head CAS inside the store transaction). A concurrent
+    /// writer's version is never clobbered: the revert is refused and the
+    /// page flagged.
+    static func revertFailedLintWrite(
+        store: WikiStore,
+        pageID: PageID,
+        inspectedHead: PageVersionID?,
+        writtenHead: PageVersionID?
+    ) -> LintRevertOutcome {
+        guard let inspectedHead else {
+            return .notAttempted(reason: "no inspected head to return to")
+        }
+        guard let writtenHead else {
+            return .notAttempted(reason: "no written head")
+        }
+        guard writtenHead != inspectedHead else {
+            return .notAttempted(reason: "the run wrote nothing")
+        }
+        do {
+            try store.revertPage(pageID: pageID, to: inspectedHead, expectingHead: writtenHead)
+            DebugLog.agent("lint dispatch: reverted \(pageID.rawValue) to \(inspectedHead.rawValue) after a verification failure")
+            return .reverted(to: inspectedHead, from: writtenHead)
+        } catch let conflict as PageConflictError {
+            DebugLog.agent("lint dispatch: revert refused for \(pageID.rawValue) — head moved to \(conflict.actualVersionID?.rawValue ?? "none")")
+            return .refusedHeadDiverged(written: writtenHead, current: conflict.actualVersionID)
+        } catch {
+            DebugLog.agent("lint dispatch: revert failed for \(pageID.rawValue): \(error)")
+            return .failed(reason: "\(error)")
+        }
+    }
+
+    /// Record a repair run's outcome in the breaker — only for runs that ran
+    /// under a shipped approval (a report-only, demoted, or budget-rejected
+    /// run made no repair to judge).
+    private static func recordBreakerOutcome(
+        _ kind: LintRepairOutcomeKind,
+        plan: LintPagePlan,
+        authority: LintRepairAuthority
+    ) {
+        guard authority.tier == .shippedApproval,
+              let breaker = plan.breaker, let key = plan.breakerKey else { return }
+        breaker.record(kind, for: key)
     }
 
     /// Dispatch selected-page lint runs SEQUENTIALLY — one run, scope, and

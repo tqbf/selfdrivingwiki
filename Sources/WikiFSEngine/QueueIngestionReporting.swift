@@ -118,6 +118,76 @@ public enum QueueIngestionReporting {
             outputs: outputs)
     }
 
+    /// One selected-page lint run's ACCOUNTED outcome (W2a §4): what the
+    /// host's post-run accounting observed, plus the authority the run ran
+    /// under and any auto-revert, so the per-page record traces back to what
+    /// allowed it.
+    public struct LintPageOutcome: Sendable, Equatable {
+        public enum Result: Sendable, Equatable {
+            case passed
+            case skipped
+            case failed
+        }
+
+        public let pageID: PageID
+        public let title: String
+        public let result: Result
+        public let detail: String
+        public let authority: LintRepairAuthority?
+        public let revert: LintRevertOutcome?
+
+        public init(
+            pageID: PageID, title: String, result: Result, detail: String,
+            authority: LintRepairAuthority?, revert: LintRevertOutcome?
+        ) {
+            self.pageID = pageID
+            self.title = title
+            self.result = result
+            self.detail = detail
+            self.authority = authority
+            self.revert = revert
+        }
+
+        /// The structured traceability labels, leading the record detail:
+        /// tier, approval row, reason, and the revert outcome.
+        public var traceLabels: String {
+            var labels: [String] = []
+            if let authority {
+                labels.append(authority.auditLabels)
+            }
+            if let revert {
+                labels.append(revert.auditLabel)
+            }
+            return labels.joined(separator: "; ")
+        }
+    }
+
+    /// The per-page outcome mutation for a selected-page lint attempt: each
+    /// page's `.processing` record becomes the OBSERVED accounted outcome,
+    /// with the authority tier, approval id, reason, and revert outcome in
+    /// its detail (plan §5.13 — replaced only when actual records exist).
+    public static func lintPageOutcomesMutation(_ outcomes: [LintPageOutcome]) -> QueueReportMutation {
+        QueueReportMutation(targetUpserts: outcomes.map { outcome in
+            let state: QueueReportTargetState
+            switch outcome.result {
+            case .passed:
+                state = .succeeded
+            case .skipped:
+                state = .skipped(reason: outcome.detail)
+            case .failed:
+                state = .failed(reason: outcome.revert?.isFlagged == true
+                    ? "lint verification failed; FLAGGED — the write could not be reverted"
+                    : "lint host accounting failed")
+            }
+            let labels = outcome.traceLabels
+            return QueueReportTargetRecord(
+                target: .page(outcome.pageID),
+                displayName: outcome.title,
+                state: state,
+                detail: labels.isEmpty ? outcome.detail : "\(labels); \(outcome.detail)")
+        })
+    }
+
     /// The lint-page staging mutation: resolved pages are recorded by their
     /// actual titles; requested pages that could not be resolved are recorded
     /// `.skipped` (never silently dropped from the inventory).

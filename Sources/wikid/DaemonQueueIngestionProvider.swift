@@ -313,6 +313,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         // SAME host-agnostic accounting as the app UI runs after each page.
         let runStart = Date()
         var observed: [String] = []
+        var pageOutcomes: [QueueIngestionReporting.LintPageOutcome] = []
         for pageID in pageIDs {
             if Task.isCancelled {
                 observed.append("\(pageID.rawValue): skipped (cancelled)")
@@ -323,6 +324,9 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 observed.append("\(pageID.rawValue): skipped (page does not exist)")
                 continue
             }
+            // Records from an EARLIER run of the same page must not stand in
+            // for this run's write.
+            let pageRunStart = Date()
             await runLintAgent(
                 request: plan.request,
                 launcher: launcher,
@@ -336,18 +340,32 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             // as the app UI (coverage, verification, agent-log detection)
             // and appends its own --kind lint record with the dispatcher's
             // published written-version verification when one exists.
+            // The dispatcher's written-version record names the head THIS
+            // run's write produced — the auto-revert's CAS precondition.
+            var thisRunRecord: DaemonLintVerificationRecord?
+            if let lintRunState,
+               let record = await lintRunState.latestVerificationRecord(pageID: pageID),
+               record.recordedAt >= pageRunStart {
+                thisRunRecord = record
+            }
+            let producedHead = thisRunRecord?.writtenHead
             let outcome = await MainActor.run {
                 AgentOperationRunner.accountForLintRun(
                     plan: plan, pageID: pageID, launcher: launcher,
-                    store: store, runStart: runStart)
+                    store: store, runStart: runStart, producedHead: producedHead)
             }
             var verificationSummary = "none"
-            if let lintRunState,
-               let record = await lintRunState.latestVerificationRecord(pageID: pageID) {
+            if let record = thisRunRecord {
                 verificationSummary = "written \(record.writtenHead.rawValue); "
                     + "classes=\(record.appliedClasses.map(\.rawValue).joined(separator: ",")); "
                     + "remaining=\(record.remainingFindings.count)"
             }
+            if let lintRunState, let authority = outcome.authority {
+                await lintRunState.recordAccountedOutcome(DaemonLintAccountedOutcome(
+                    pageID: pageID, authority: authority, revert: outcome.revert,
+                    recordedAt: Date()))
+            }
+            pageOutcomes.append(outcome.queueReportOutcome)
             do {
                 _ = try store.appendLog(
                     kind: .lint,
@@ -360,6 +378,9 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 observed.append("\(outcome.title): \(outcome.status); "
                     + "HOST LOG APPEND FAILED: \(error)")
             }
+        }
+        if pageOutcomes.isEmpty == false {
+            onReport?(QueueIngestionReporting.lintPageOutcomesMutation(pageOutcomes))
         }
         let results = await launcherResults(launcher)
         onUsage?(results.usage)

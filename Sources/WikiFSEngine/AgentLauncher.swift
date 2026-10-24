@@ -405,7 +405,7 @@ public final class AgentLauncher {
     /// in the caller (so a refused launch never holds authority) and BEFORE
     /// the spawn is composed (§5: the capability is registered before any
     /// child can start).
-    private func issueScopedRunIfConfigured(wikiID: WikiID, policy: ManagedRunPolicy) async throws -> AgentScopedRunLease? {
+    func issueScopedRunIfConfigured(wikiID: WikiID, policy: ManagedRunPolicy) async throws -> AgentScopedRunLease? {
         guard let manager = scopedRunLeaseManager else {
             if policy.isLint {
                 throw AgentScopedRunError.registrationFailed(
@@ -5125,7 +5125,7 @@ public final class AgentLauncher {
     /// (The chat path uses this write invocation directly — chats are always
     /// write-capable. The former read-only Ask sandbox is retained in-tree but
     /// unwired.)
-    private func resolveSandboxInvocation(
+    func resolveSandboxInvocation(
         scratch: URL,
         pdf2mdScriptPath: String?,
         scopedRunLease: AgentScopedRunLease?

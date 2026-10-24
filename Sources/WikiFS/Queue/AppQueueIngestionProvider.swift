@@ -469,6 +469,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // page (coverage, verification, agent-log detection, host log).
         let runStart = Date()
         var observed: [String] = []
+        var pageOutcomes: [QueueIngestionReporting.LintPageOutcome] = []
         var anyFailed = false
         for pageID in pageIDs {
             if Task.isCancelled {
@@ -497,6 +498,10 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                 store: store.internalStore, runStart: runStart)
             if outcome.status != .dispatched { anyFailed = true }
             observed.append("\(outcome.title): \(outcome.status) — \(outcome.detail)")
+            pageOutcomes.append(outcome.queueReportOutcome)
+        }
+        if pageOutcomes.isEmpty == false {
+            onReport?(QueueIngestionReporting.lintPageOutcomesMutation(pageOutcomes))
         }
         onUsage?(launcher.runTotalUsage)
         onLogPaths?(launcher.logFileURL, launcher.debugFolderURL)

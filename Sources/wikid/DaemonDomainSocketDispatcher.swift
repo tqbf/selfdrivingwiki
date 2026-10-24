@@ -235,6 +235,23 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                 // all deny with the generic scope message.
                 throw Self.scopeDeniedError()
             }
+            // W2a §3: the per-run patch budget, checked BEFORE the patch
+            // reaches the store. Above the cap the WHOLE patch is rejected
+            // (nothing commits) and the run's write phase closes.
+            let usage = Self.patchUsage(payload)
+            if case .exceeded(let rejection) = await self.lintRunState.checkBudget(
+                runID: grant.runID, request: usage) {
+                await self.lintRunState.recordBudgetRejection(
+                    runID: grant.runID, pageID: selectedPage, rejection: rejection)
+                await self.lintRunState.invalidateReceipt(runID: grant.runID)
+                await Self.appendBudgetRejectionAudit(
+                    rejection: rejection, selectedPage: selectedPage,
+                    wikiID: grant.scope.wikiID, daemon: self.daemon)
+                DebugLog.store("wikid: lint run \(grant.runID) patch rejected whole: \(rejection.summary)")
+                throw DaemonDomainError(
+                    code: .operationFailed,
+                    message: "lint patch rejected whole — \(rejection.summary). No change was written; report the findings without repairs.")
+            }
             let reply = try await dispatchFamilies(request)
             let envelope: DaemonDomainReply?
             do {
@@ -249,6 +266,7 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                     // needs a fresh read even though the head this run wrote
                     // is now current.
                     await self.lintRunState.invalidateReceipt(runID: grant.runID)
+                    await self.lintRunState.recordSpend(runID: grant.runID, usage: usage)
                     // §5.8: scan the WRITTEN immutable version right after
                     // the commit and publish the run's verification record.
                     await Self.recordWrittenVersionVerification(
@@ -292,6 +310,12 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             guard let envelope, envelope.error == nil, let payloadData = envelope.payload else {
                 return reply
             }
+            // W2a §3: the first minting read is the run's inspected page —
+            // its confirmed repairable findings fix the run's patch budget.
+            await Self.establishPatchBudget(
+                runID: grant.runID, selectedPage: selectedPage,
+                wikiID: grant.scope.wikiID, daemon: self.daemon,
+                lintRunState: self.lintRunState)
             if let minted = await Self.mintReceipt(
                 into: payloadData, runID: grant.runID,
                 selectedPage: selectedPage, lintRunState: self.lintRunState) {
@@ -425,6 +449,62 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
         } catch {
             DebugLog.store(
                 "wikid: written-version verification could not run for run \(runID): \(error)")
+        }
+    }
+
+    /// The hunks and changed bytes one patch payload asks for. An absent
+    /// payload asks for nothing (the patch command rejects it anyway).
+    static func patchUsage(_ payload: DaemonPagePatchRequest?) -> LintPatchBudget.Usage {
+        guard let payload else { return .zero }
+        return LintPatchBudget.Usage(
+            hunks: payload.hunks.count,
+            changedBytes: payload.hunks.reduce(0) { total, hunk in
+                total + LintPatchBudget.changedBytes(
+                    startByte: hunk.startByte, endByte: hunk.endByte, newText: hunk.newText)
+            })
+    }
+
+    /// Fix the run's patch budget from the selected page's CURRENT scan (the
+    /// first minting read; later reads never change it). A scan failure
+    /// leaves the floor budget in force — never an unbounded one.
+    static func establishPatchBudget(
+        runID: DaemonRunID,
+        selectedPage: PageID,
+        wikiID: WikiID,
+        daemon: WikiDaemon,
+        lintRunState: DaemonLintRunState
+    ) async {
+        do {
+            let store = try await daemon.domainCommandStore(wikiID: wikiID)
+            let snapshot = LintPageSnapshot(try store.readPageCoherent(id: selectedPage))
+            let resolution = try LintResolutionFacts.load(from: store)
+            let inspected = LintPagePreflight.scan(snapshot: snapshot, resolution: resolution)
+            await lintRunState.setBudgetIfAbsent(
+                runID: runID, budget: LintPatchBudget(preflight: inspected))
+        } catch {
+            DebugLog.store(
+                "wikid: patch budget scan failed for run \(runID); the floor budget applies: \(error)")
+        }
+    }
+
+    /// The trusted `--kind lint` audit entry for a whole-patch budget
+    /// rejection. Host accounting (any host — app or daemon) reads it back
+    /// by its title to mark the run's write phase not performed.
+    static func appendBudgetRejectionAudit(
+        rejection: LintPatchBudget.Rejection,
+        selectedPage: PageID,
+        wikiID: WikiID,
+        daemon: WikiDaemon
+    ) async {
+        do {
+            let store = try await daemon.domainCommandStore(wikiID: wikiID)
+            let title = try store.readPageCoherent(id: selectedPage).title
+            _ = try store.appendLog(
+                kind: .lint,
+                title: LintPatchBudget.auditTitlePrefix + title,
+                note: rejection.summary)
+        } catch {
+            DebugLog.store("wikid: budget rejection audit append failed for \(selectedPage.rawValue): \(error)")
         }
     }
 
