@@ -1,6 +1,6 @@
 ---
 timestamp: 2026-10-24T09:00:00Z
-title: "Generalized page-validity lint: Phase 4 landed, Phase 5 core contract landed"
+title: "Generalized page-validity lint: Phase 4 landed, Phase 5 core + dispatch landed"
 branch: feature/generalized-page-validity-lint
 status: in-progress
 ---
@@ -8,7 +8,7 @@ status: in-progress
 # Generalized page-validity lint — Phase 4 + Phase 5 core contract
 
 Continuation of `progress/2026-10-23T123000Z-generalized-page-validity-lint-phases-0-3.md`.
-Phases 0–3 plus the two commits below are on
+Phases 0–3 plus the commits below are on
 `feature/generalized-page-validity-lint`; full suite green after each.
 
 ## Progress
@@ -54,38 +54,59 @@ Phases 0–3 plus the two commits below are on
 
 ## Remaining (Phase 5 wiring, then 6–7)
 
-1. **Typed operation cases.** `OperationRequest.lintPage(pageTitle:brokenLinks:
-   stateMarkdown:)` (Sources/WikiFSEngine/OperationRequest.swift:48) and
-   `WikiOperation.lintPage` (Sources/WikiFSCore/Core/WikiOperation.swift:65)
-   carry joined titles; change to carry `LintPageSnapshot` (pageID+title+head)
-   plus the staged pre-flight artifact; `lintPagePrompt` consumes the
-   snapshot identity + artifact path + `LintAuditStep` instructions +
-   `LintRunReportText.render` skeleton. Runners at
-   `AgentOperationRunner.runLintPages` (:514), `AppQueueIngestionProvider.
-   runLintPages` (:416), `DaemonQueueIngestionProvider.runLintPages` (:269)
-   still title-join.
-2. **Coordinator.** One shared selected-page coordinator (WikiFSEngine): per
-   page sequentially — coherent read → facts load (off-main via WikiReadService)
-   → `LintPagePreflight.scan` → own agent run → parse report → coverage
-   validate → patch (existing `page patch` path) → re-scan WRITTEN head →
-   `LintVerification` → `--kind lint` log append (detect committed) → outcome
-   map (missing pages blocked/skipped with reasons; cancellation stops future
-   pages; no retry of completed pages).
-3. **Daemon receipts** into `page get --json` + patch handling
-   (`DaemonLintRunState` already exists from Phase 2).
-4. **Queue reporting** (`QueueReportMutation.targetUpserts`) with observed
-   findings/verification; replace `.notReported` only with real records; Run
-   Details rows for repaired/valid-as-written/unresolved/outside-scope/blocked.
-5. **AC.5 test** `AgentSandboxProcessTests.lintCannotBypassEndpointPolicy`.
+Landed since this note was first written: **`ddfe43f6`** (audit checklist +
+run-report contract + coverage/verification gates) and **`5bd10c7e`** (typed
+identity + staged artifacts + per-page sequential dispatch through all three
+entrypoints; observed per-page outcomes replace `.notReported` only when the
+host supplies them; title-join tests replaced with coordinator dispatch
+tests). `make prompts` already synced; prompt-contract suite green.
+
+1. **Daemon receipts (§5.8).** Mint `DaemonLintRunState` receipts on fresh
+   `page get --json` reads of the selected page, validate on patch, record
+   conflicts; the daemon patch handler pre-flights the WRITTEN immutable
+   version and publishes its verification record to the host. Record
+   written-head vs current-head divergence separately.
+2. **`--kind lint` host log (§5.12).** After each completed audit the host
+   appends the required log entry (inspected/written heads, server-observed
+   hunk classes, named audit outcomes, retained candidates, unresolved
+   findings, CAS/readback/validation/log outcomes), detects whether the
+   agent's own append committed, and records failures in artifacts + queue
+   state — never reporting complete success on a log failure.
+3. **REQ-54 app-side re-scan via `LintVerification.compare`** is wired into
+   the coverage path for claims; the FULL compare (before/written hunks from
+   server-observed receipts) lands with item 1. Exposed defects must join the
+   same run's worklist (§4.10).
+4. **Run Details surfaces (§5.14).** Render repaired / valid-as-written /
+   unresolved / outside-scope / blocked outcomes in the existing Activity/Run
+   Details rows (the completion summary already carries observed facts).
+5. **AC.5 test** `AgentSandboxProcessTests.lintCannotBypassEndpointPolicy`
+   (raw frames, omitted credentials, alternate endpoint, direct DB writes).
+6. **Whole-wiki prompt alignment (§5.15)** — report-only, never fanned into
+   repair runs.
+7. **Phase 6** (`WikiLintEval`/`WikiLintEvalRunner` targets,
+   `scripts/run-wiki-lint-eval.sh`, fixture manifests §8.3 with held-out
+   split, diff oracle from server-observed bytes, per-class scoring,
+   `run --live --gate`, acceptance records under the App Group
+   `lint-acceptance/<key>.json`, shipped `LintGateFixtureManifest.json`,
+   unaccepted→report-only selection, harness-only evaluation admission) —
+   LIVE GATE BLOCKED on provider access + operator budget + human rubric.
+8. **Phase 7** — `plans/generalized-page-validity-lint-implementation.md` +
+   `PLAN.md` link; CLI patch JSON in `plans/cli-domain-commands.md`; policy in
+   `plans/agent-sandbox-scoping.md`; independent non-OpenAI implementation
+   review (operator selected GLM 5.3 High); conventional commits per phase.
 
 ## Verification
 
 - `make build`, `make lint` (0 violations/781 files) clean; pre-commit
   bare-try? gate clean.
-- Full suite after Phase 4 commit: **4710 tests / 486 suites passed**
-  (`make test`, ~240s). Focused suites green after `ddfe43f6` (12 + 39).
+- Full suite after `5bd10c7e`: **4722 tests / 487 suites passed**
+  (`make test`, ~240s). WIKIFS_APP_TESTS=1 suites touched by this work pass.
 - Gotchas that cost time: swift-markdown `Image.source` (not `.destination`);
   `Table.Body.rows`; `firstMatch` IS optional; `firstIndex(where:)` needs its
   label; converted AST ranges start at content (use overlap, not containment);
   tuples break synthesized `Equatable`; report tokens are kebab-case while
-  occurrence IDs keep camelCase kind rawValues (`sourceCitation-1`).
+  occurrence IDs keep camelCase kind rawValues (`sourceCitation-1`);
+  `silent_try_optional` rejects bare `try?` in Sources (do/catch + DebugLog);
+  `AgentOperationRunner` is MainActor — returned plans must be `Sendable`;
+  the daemon queue path has a plain `WikiStore` (no model), so the shared plan
+  builder takes `WikiStore` + `stateMarkdown` directly.
