@@ -21,8 +21,8 @@ public struct NLEmbedder: Embedder {
         lock.lock()
         defer { lock.unlock() }
         if let m = _model { return m }
-        // NLEmbedding only works in a real .app context; never touch it from
-        // `swift test` / CLI (where Bundle.main is not an .app).
+        // NLEmbedding is used on the app's main actor. The daemon searches
+        // off-main, so it must use MiniLM or keep the cosine leg unavailable.
         guard Bundle.main.bundlePath.hasSuffix(".app") else { return nil }
         guard #available(macOS 15, *) else { return nil }
         let m = NLEmbedding.sentenceEmbedding(for: .english)

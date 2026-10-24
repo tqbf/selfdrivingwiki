@@ -576,6 +576,8 @@ let package = Package(
             name: "wikid",
             dependencies: [
                 "WikiFSCore",
+                .target(name: "WikiFSMLX",
+                        condition: .when(platforms: [.macOS])),
                 // The XPC contract — the daemon IS the server: it implements
                 // WikiDaemonProtocol + holds WikiDaemonEventSink proxies. Empty
                 // on Linux (the daemon uses the stdio transport there).
@@ -675,7 +677,7 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiFSExtractorStore", "WikiCtlCore", "ProviderConfigMutationHelper", "ExtractorPackageStoreProcessHelper", "WikiStrategyEval",
+            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiFSSearch", "WikiFSExtractorStore", "WikiCtlCore", "ProviderConfigMutationHelper", "ExtractorPackageStoreProcessHelper", "WikiStrategyEval",
                            "WikiFSTestSupport",
                            // WikiFSEngine is macOS-only at build time because it
                            // depends on the `ACP` product (macOS-only). On Linux

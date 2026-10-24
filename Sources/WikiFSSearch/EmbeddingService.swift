@@ -27,9 +27,9 @@ public enum EmbeddingService {
     public static let miniLMIdentifier = "minilm-384"
 
     /// Factory that builds the MiniLM embedder from a bundled model directory.
-    /// Installed by the app (`WikiFSMLX.EmbedderBootstrap`) at launch; `nil` in
-    /// non-app contexts (the extension, `wikictl`, tests without the app target)
-    /// → MiniLM unavailable, `NLEmbedder` fallback used. Core never imports MLX.
+    /// Installed by the app or daemon (`WikiFSMLX.EmbedderBootstrap`) at launch; `nil` in
+    /// other contexts (the extension, `wikictl`, tests without the MLX target).
+    /// The app can use NLEmbedding when MiniLM is absent. Core never imports MLX.
     public nonisolated(unsafe) static var miniLMFactory: (@Sendable (URL) async throws -> any Embedder)?
 
     /// The identifier of the embedder selected for the current bundle, WITHOUT
@@ -38,7 +38,7 @@ public enum EmbeddingService {
     /// `embedding_meta` cutover check.
     public static func selectedEmbedderIdentifier() -> String {
         #if os(macOS)
-        guard Bundle.main.bundlePath.hasSuffix(".app") else {
+        guard isModelHostBundle(path: Bundle.main.bundlePath) else {
             return NLEmbedder.identifier  // test / CLI context: no model loads
         }
         if Bundle.main.url(forResource: "all-MiniLM-L6-v2", withExtension: nil) != nil {
@@ -56,7 +56,7 @@ public enum EmbeddingService {
     public static func configure() async {
         #if os(macOS)
         guard lock.withLock({ _embedder == nil }) else { return }
-        guard Bundle.main.bundlePath.hasSuffix(".app") else { return }
+        guard isModelHostBundle(path: Bundle.main.bundlePath) else { return }
 
         let t0 = DispatchTime.now()
         let signpostState = DebugLog.signposter.beginInterval("embed.modelLoad")
@@ -78,6 +78,9 @@ public enum EmbeddingService {
                 // upgrade no-ops; embedding_meta retains "minilm-384" so the next launch retries.
                 DebugLog.store("EmbeddingService.configure: MiniLM load failed — \(error). Search-index upgrade disabled until the model loads.")
             }
+        } else if Bundle.main.bundlePath.hasSuffix(".xpc") {
+            // Daemon search can run off-main; NLEmbedding is not safe there.
+            DebugLog.store("EmbeddingService.configure: daemon MiniLM model unavailable")
         } else {
             lock.withLock { _embedder = NLEmbedder() }
             let loadMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
@@ -96,6 +99,11 @@ public enum EmbeddingService {
         let available = lock.withLock { _embedder } != nil
         DebugLog.debug("embed.isAvailable → \(available)")
         return available
+    }
+
+    /// The app and its bundled XPC daemon can load the same model resources.
+    static func isModelHostBundle(path: String) -> Bool {
+        return path.hasSuffix(".app") || path.hasSuffix(".xpc")
     }
 
     #if DEBUG

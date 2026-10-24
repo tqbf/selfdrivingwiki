@@ -527,8 +527,12 @@ public actor DaemonProcessProfileOwner {
                     packageProcessRole: .daemon)
             ),
             makeEmbeddings: {
-                ProcessRuntimeLease(
-                    service: .unavailable(identifier: "unavailable-daemon"),
+                await EmbeddingService.configure()
+                return ProcessRuntimeLease(
+                    service: EmbeddingsSearchProvider(
+                        configure: { await EmbeddingService.configure() },
+                        selectedIdentifier: { EmbeddingService.selectedEmbedderIdentifier() },
+                        isAvailable: { EmbeddingService.isAvailable }),
                     dispose: {})
             })
         let processCatalog = try ProcessPluginCatalog.build(factories: processFactories)
