@@ -141,12 +141,17 @@ critical defects in the deterministic core. Fix-or-rebut status:
   `lastScratchDirectory` at run start — a stale path can no longer make
   the accounting read the previous run's report.
 - **m2 (minor) — FIXED `4dad557f`.**
-- **m3 (minor) — FIXED `131a4237` + `48d9a727`.** `pipeCells` skips escaped
-  pipes AND pipes inside `[[wiki-link]]` alias spans — production lint
-  `01M5QY0GWWR9S270DDGRJ7TQ0B` produced 8 false D03s on a valid episode
-  table whose rows carry `[[page:X|alias]]` links (the reader transforms
-  wiki links before table parsing, so alias pipes never reach GFM).
-  CR-only line endings remain a documented v1 limit.
+- **m3 (minor) — FIXED `131a4237`/`48d9a727`, then CORRECTED after the
+  operator confirmed the table renders broken.** Alias pipes inside
+  `[[page:X|alias]]` in a table row ARE cell delimiters per the GFM table
+  extension (sourced verdict in the implementation doc) — the production
+  D03s on lint `01M5QY0GWWR9S270DDGRJ7TQ0B` were TRUE positives and the
+  interim alias-pipe skip in `pipeCells` was reverted. Escaped pipes still
+  don't delimit. A regression test now pins that alias-piped rows FIRE D03
+  with no mechanical repair. CR-only line endings remain a documented v1
+  limit. The design follow-up (accept `\|` inside wiki links, or protect
+  wiki spans before the table scanner) is a reader/parser enhancement,
+  out of this plan's scope.
 - **m4 (minor) — accepted:** dedup semantics documented.
 - **m6 (minor) — REBUTTED in part:** `preflightLint` remains the Phase 0
   interim CAS path pinned by `LintBracketRepairTests`/`LintSnapshotTests`;

@@ -26,6 +26,25 @@ Branch: `feature/generalized-page-validity-lint`.
 
 ## Key semantics (where to look)
 
+- **Table alias-pipe semantics (sourced verdict).** A GFM table row like
+  `| [[page:X|alias]] | text |` is MALFORMED per the GFM table extension:
+  every unescaped `|` is a cell delimiter, and the extension requires
+  pipes inside inline spans (links included) to be escaped. cmark-gfm and
+  markdown-it scan rows block-first with no bracket awareness — excess
+  cells are truncated, so the alias is severed from the link and the
+  entry renders broken. Obsidian users report the same failure and the
+  same workaround. Sources: github.github.com/gfm/#tables-extension-,
+  github.com/github/cmark-gfm/blob/master/extensions/table.c,
+  forum.obsidian.md/t/55052. Consequences:
+  - D03 findings on such rows are TRUE positives (the production lint
+    01M5QY0GWWR9S270DDGRJ7TQ0B was correct); the honest agent outcome is
+    `unresolved` — the repair is not mechanical.
+  - Correct authoring: escape the alias pipe (`[[page:X\|alias]]`) or use
+    a pipe-free form. (Whether the wiki-link parser should accept `\|` as
+    an alias separator is a follow-up reader/parser enhancement.)
+  - A renderer MAY protect wiki spans before the table scanner to make
+    unescaped aliases work — that is a deliberate GFM deviation, not a
+    bug fix, and this plan does not make it.
 - **Pure scanning.** `LintPagePreflight.scan` never touches the store; all
   store/package inputs are injected facts (`Sources/WikiFSCore/Core/Lint/`).
   Protected code is byte-masked to spaces so textual detectors share authored

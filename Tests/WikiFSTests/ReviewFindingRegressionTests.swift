@@ -11,26 +11,34 @@ struct ReviewFindingRegressionTests {
 
     // MARK: - C2: masked-regex offsets with non-ASCII protected code
 
-    /// Production false positive (lint 01M5QY0GWWR9S270DDGRJ7TQ0B): a valid
-    /// GFM table whose body rows contain `[[page:X|alias]]` links — the
-    /// alias pipes are wiki-link syntax the reader transforms away, so the
-    /// rows have exactly the header's cell count and D03 must stay silent.
-    @Test func wikiLinkAliasPipesDoNotCountAsCells() throws {
+    /// Production finding (lint 01M5QY0GWWR9S270DDGRJ7TQ0B, confirmed by the
+    /// operator: the table does not render correctly): a GFM table whose body
+    /// rows carry `[[page:X|alias]]` links IS damaged — the raw alias pipe is
+    /// a real cell delimiter at parse time (wiki links are transformed only
+    /// at render, after truncation), so the rows have more cells than the
+    /// header and the link is severed. D03 must fire.
+    @Test func wikiLinkAliasPipesInsideTablesAreDamage() throws {
         let body = """
         | Installment | Reader state |
         | --- | --- |
-        | [[page:01M5ATYXK1A76HSRMN9Q9W9EPQ|158: Fate Inescapable]] | She qualifies her nature.[^nature] |
-        | [[page:01M5AVQY2H9NZGV60B6VEDMW6W|164: Fate Inescapable]] | She warns Su about rash bargaining.[^bargain] |
+        | [[page:01M5ATYXK1A76HSRMN9Q9W9EPQ|158: Fate Inescapable]] | She qualifies her nature. |
+        | [[page:01M5AVQY2H9NZGV60B6VEDMW6W|164: Fate Inescapable]] | She warns Su about rash bargaining. |
         """
         let snapshot = LintPageSnapshot(
             pageID: PageID(rawValue: "01HZPAGE00000000000000000A"),
             title: "T", headVersionID: nil, body: body, sourceInputs: [])
-        var resolution = LintResolutionFacts()
-        resolution.knownPageTitles = ["152", "164"]
-        let report = LintPagePreflight.scan(snapshot: snapshot, resolution: resolution)
+        let report = LintPagePreflight.scan(
+            snapshot: snapshot, resolution: LintResolutionFacts())
         let d03 = report.sections.first { $0.section == .markdownStructure }?
             .findings.filter { $0.defectClass == .tableDamage } ?? []
-        #expect(d03.isEmpty, "alias pipes inside wiki links are not cell delimiters: \(d03.map(\.message))")
+        #expect(d03.count == 2,
+            "both alias-piped rows are genuine damage: \(d03.map(\.message))")
+        // The honest agent outcome is unresolved — the repair (removing the
+        // alias or escaping the pipe) risks the link's meaning.
+        for finding in d03 {
+            #expect(finding.candidateRepair == nil,
+                "no mechanical repair for alias-piped rows")
+        }
     }
 
     /// A regex-detected marker AFTER protected non-ASCII code must report
