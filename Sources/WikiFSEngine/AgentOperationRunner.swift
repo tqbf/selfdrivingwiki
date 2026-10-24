@@ -786,6 +786,10 @@ public enum AgentOperationRunner {
                 })
                 do {
                     let writtenRead = try store.readPageCoherent(id: pageID)
+                    // Review M3(a): the written scan runs with the SAME
+                    // fact set as the pre-run scan (M3(a) fix) so D09/D27/
+                    // D28 findings persist or resolve consistently — never
+                    // vanishing because the second scan was facts-less.
                     let resolution: LintResolutionFacts
                     do {
                         resolution = try LintResolutionFacts.load(from: store)
@@ -793,10 +797,33 @@ public enum AgentOperationRunner {
                         DebugLog.agent("lint dispatch: resolution facts unavailable for verification: \(error)")
                         resolution = LintResolutionFacts()
                     }
+                    let citations: LintCitationFacts?
+                    do {
+                        citations = try LintCitationFacts.load(from: store, body: writtenRead.body)
+                    } catch {
+                        DebugLog.agent("lint dispatch: citation facts unavailable for written scan: \(error)")
+                        citations = nil
+                    }
+                    let origins: LintOriginURLFacts?
+                    do {
+                        origins = try LintOriginURLFacts.load(from: store, body: writtenRead.body)
+                    } catch {
+                        DebugLog.agent("lint dispatch: origin facts unavailable for written scan: \(error)")
+                        origins = nil
+                    }
                     let writtenSnapshot = LintPageSnapshot(writtenRead)
+                    let history = LintHistoryFacts.load(
+                        from: store, snapshot: writtenSnapshot)
+                    // D28's fence-validation facts are async; the compare
+                    // only needs findings that carry candidate repairs, and
+                    // D28 findings never do — omitting them here cannot
+                    // flip a verdict.
                     let writtenScan = LintPagePreflight.scan(
                         snapshot: writtenSnapshot,
-                        resolution: resolution)
+                        resolution: resolution,
+                        citations: citations,
+                        originURLs: origins,
+                        history: history)
                     let observed = Self.observedChangeRanges(
                         before: plan.snapshot.body, after: writtenSnapshot.body)
                     let verdict = LintVerification.compare(
@@ -841,10 +868,20 @@ public enum AgentOperationRunner {
             writtenHead = nil
         }
         detail += "; written_head=\(writtenHead?.rawValue ?? plan.snapshot.headVersionID?.rawValue ?? "none")"
+        // Review M7: the agent's log entry must name THIS page (the task
+        // template's title includes the page name), not just any lint entry
+        // appended since the run started — a concurrent lint elsewhere must
+        // not satisfy this page's contract.
+        let pageTitleToken = plan.snapshot.title
         let agentLogCommitted: Bool
         do {
-            agentLogCommitted = try store.recentLogEntries(limit: 50)
-                .contains { $0.kind == .lint && $0.timestamp >= runStart }
+            agentLogCommitted = try store.recentLogEntries(limit: 200)
+                .contains { entry in
+                    entry.kind == .lint
+                        && entry.timestamp >= runStart
+                        && (entry.title.contains(pageTitleToken)
+                            || entry.note?.contains(pageTitleToken) == true)
+                }
         } catch {
             DebugLog.agent("lint dispatch: log read failed; treating the agent log as missing: \(error)")
             agentLogCommitted = false
@@ -856,7 +893,7 @@ public enum AgentOperationRunner {
         do {
             try store.appendLog(
                 kind: .lint,
-                title: "Selected-page lint — \(plan.snapshot.title)",
+                title: "Selected-page lint — \(pageTitleToken)",
                 note: "host audit record; \(detail)")
         } catch {
             status = .failed

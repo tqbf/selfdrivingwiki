@@ -68,6 +68,11 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
     /// instance per dispatcher; the child only ever sees opaque tokens.
     private let lintRunState: DaemonLintRunState
 
+    /// M6/m5 teardown hook: the broker's revoke calls this so per-run lint
+    /// state (receipts, conflict counters, verification records) cannot grow
+    /// for the daemon's lifetime.
+    var lintStateTeardown: ((DaemonRunID) async -> Void)?
+
     init(
         daemon: WikiDaemon,
         runRegistry: DaemonRunRegistry = DaemonRunRegistry(),
@@ -372,6 +377,13 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
         DaemonDomainError(
             code: .scopeDenied,
             message: "the request is outside the scope of this run")
+    }
+
+    /// Review m5/M6: drop ALL per-run lint state (receipts, conflict
+    /// counters, verification records). Called from the broker's revoke so
+    /// teardown paths can never leave lint state behind.
+    func forgetLintState(runID: DaemonRunID) async {
+        await lintRunState.forget(runID: runID)
     }
 
     /// §5.8: after a committed lint patch, scan the WRITTEN immutable version

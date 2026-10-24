@@ -157,6 +157,10 @@ actor DaemonRunRegistrationBroker {
     /// connections fail with ENOENT once the file is unlinked.
     func revoke(runID: DaemonRunID) async {
         await registry.revoke(runID: runID)
+        // Review m5/M6: per-run lint state (receipts, conflict counters,
+        // verification records) dies with the run — it never grows for the
+        // daemon's lifetime.
+        await dispatcher.forgetLintState(runID: runID)
         if let listener = listeners.removeValue(forKey: runID) {
             listener.stop()
         }

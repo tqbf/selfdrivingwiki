@@ -149,21 +149,24 @@ struct DaemonLintPolicyTests {
 
         // Review M4: a conflict also kills the receipt — after the head
         // moves, the old body is gone and the recomposition needs a fresh
-        // minting read.
-        let reminted = await state.issueReceipt(
-            runID: fixture.runID,
+        // minting read. Exercised on a FRESH state so the budget-closure
+        // assertions below stay exact.
+        let conflictState = DaemonLintRunState()
+        let conflictRun = DaemonRunID(rawValue: "run-m4")
+        let reminted = await conflictState.issueReceipt(
+            runID: conflictRun,
             head: PageVersionID(rawValue: "01HZHEAD00000000000000000002"),
             bodyFingerprint: "fp2")
         await #expect(throws: Never.self) {
-            try await state.validateReceipt(
-                runID: fixture.runID, token: reminted.token,
+            try await conflictState.validateReceipt(
+                runID: conflictRun, token: reminted.token,
                 expectedHead: PageVersionID(rawValue: "01HZHEAD00000000000000000002"))
         }
-        await state.recordConflict(runID: fixture.runID)
-        await state.invalidateReceipt(runID: fixture.runID)
+        _ = await conflictState.recordConflict(runID: conflictRun)
+        await conflictState.invalidateReceipt(runID: conflictRun)
         await #expect(throws: DaemonLintRunState.LintCASBudgetError.self) {
-            try await state.validateReceipt(
-                runID: fixture.runID, token: reminted.token,
+            try await conflictState.validateReceipt(
+                runID: conflictRun, token: reminted.token,
                 expectedHead: PageVersionID(rawValue: "01HZHEAD00000000000000000002"))
         }
 
