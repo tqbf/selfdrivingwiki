@@ -947,6 +947,140 @@ struct AgentSandboxProcessTests {
     /// and is denied on the sibling wiki; neither capability authorizes on
     /// the other run's listener (the cross-RUN capability check is
     /// additionally proven at the wire level in `DaemonScopedSocketTests`).
+    // MARK: - AC.5: a lint child cannot bypass its policy (Phase 5 §5.8)
+
+    /// A repair-policy lint run can patch ONLY its selected page, ONLY with
+    /// the daemon's CURRENT snapshot receipt, and log ONLY kind `lint`.
+    /// Every bypass attempt — forged receipt, missing receipt, another
+    /// page, another log kind — denies with the generic scope message, and
+    /// the store stays byte-identical. The positive path (real read mints a
+    /// receipt; the first real patch commits; the same receipt then fails)
+    /// proves the denials are the policy, not a dead endpoint.
+    @Test func lintCannotBypassEndpointPolicy() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try fixture.startDaemon()
+        let broker = try #require(fixture.runBroker)
+        let wikictl = try wikictlPath()
+
+        let selected = try fixture.storeA.createPage(
+            title: "Lint Target", body: "# Target\n\nold text\n")
+        let other = try fixture.storeA.createPage(title: "Untouched", body: "# Untouched\n")
+        let head = try #require(
+            try fixture.storeA.readPageCoherent(id: selected.id).headVersionID)
+
+        let run = try await broker.launchScopedRun(
+            scope: DaemonRunScope(wikiID: fixture.wikiA.id),
+            operationClasses: [.wikiRead],
+            operationPolicy: .lintSelectedPageRepair(pageID: selected.id))
+        let invocation = try fixture.scopedRunInvocationForWikiA(runEndpointPath: run.endpointPath)
+        var credentials = fixture.childEnvironment()
+        credentials[AgentScopedRunCredentials.endpointEnvironmentKey] = run.endpointPath
+        credentials[AgentScopedRunCredentials.capabilityEnvironmentKey] =
+            run.capability.printable
+
+        let hunk = #"{"startByte":10,"endByte":18,"oldText":"old text","newText":"new text","reason":"repair the defect"}"#
+        func patchArgs(_ page: PageID, headVersion: String, receipt: String?) -> [String] {
+            var args = [
+                "--wiki", fixture.wikiA.id.rawValue, "page", "patch",
+                "--id", page.rawValue, "--expect-head", headVersion,
+                "--hunk", hunk, "--defect", "D25",
+            ]
+            if let receipt { args += ["--lint-receipt", receipt] }
+            return args
+        }
+        func expectDenied(_ result: ProcessResult, _ label: String) {
+            if result.status != 1 {
+                Issue.record("\(label): expected denial, got status \(result.status); stderr: \(result.errorText); stdout: \(result.outputText)")
+            }
+            if !result.errorText.contains("the request is outside the scope of this run") {
+                Issue.record("\(label): expected the generic denial, got stderr: \(result.errorText)")
+            }
+            #expect(!result.errorText.contains("not running"),
+                    "a dead daemon would fake this pass (stderr: \(result.errorText))")
+            #expect(!result.errorText.contains("timed out"),
+                    "a timeout would fake this pass (stderr: \(result.errorText))")
+        }
+
+        // §10 discipline: the selected read SUCCEEDS first — the endpoint is
+        // live and the minted receipt rides the JSON reply.
+        let read = try await runSandboxed(
+            invocation: invocation,
+            executablePath: wikictl,
+            arguments: [
+                "--wiki", fixture.wikiA.id.rawValue,
+                "page", "get", "--id", selected.id.rawValue, "--json",
+            ],
+            environment: credentials)
+        #expect(read.status == 0, "the selected read must succeed (stderr: \(read.errorText))")
+        let readObject = try #require(
+            JSONSerialization.jsonObject(with: Data(read.outputText.utf8)) as? [String: Any])
+        let receipt = try #require(readObject["lint_receipt"] as? String)
+
+        // Bypass 1 — no receipt at all.
+        expectDenied(try await runSandboxed(
+            invocation: invocation, executablePath: wikictl,
+            arguments: patchArgs(selected.id, headVersion: head.rawValue, receipt: nil),
+            environment: credentials), "patch without a receipt")
+        // Bypass 2 — a forged token.
+        expectDenied(try await runSandboxed(
+            invocation: invocation, executablePath: wikictl,
+            arguments: patchArgs(selected.id, headVersion: head.rawValue, receipt: "forged-token"),
+            environment: credentials), "patch with a forged receipt")
+        // Bypass 3 — the OTHER page, even with the valid receipt.
+        expectDenied(try await runSandboxed(
+            invocation: invocation, executablePath: wikictl,
+            arguments: patchArgs(other.id, headVersion: head.rawValue, receipt: receipt),
+            environment: credentials), "patch of a non-selected page")
+        // Bypass 4 — a non-lint log kind. The CLI rejects unknown kinds
+        // client-side (status 2) and the daemon's allowlist would reject a
+        // raw frame with a known-but-non-lint kind — either way no append
+        // of a non-lint kind can happen.
+        let noteBypass = try await runSandboxed(
+            invocation: invocation, executablePath: wikictl,
+            arguments: [
+                "--wiki", fixture.wikiA.id.rawValue, "log", "append",
+                "--kind", "note", "--title", "t", "--note", "bypass",
+            ],
+            environment: credentials)
+        #expect(noteBypass.status != 0, "a non-lint log kind must not append")
+        #expect(noteBypass.errorText.contains("--kind must be one of")
+            || noteBypass.errorText.contains("the request is outside the scope of this run"),
+            "the non-lint kind must be rejected as a kind error or a scope denial (stderr: \(noteBypass.errorText))")
+
+        // The allowed log kind passes (the one payload-conditioned write).
+        let logOK = try await runSandboxed(
+            invocation: invocation,
+            executablePath: wikictl,
+            arguments: [
+                "--wiki", fixture.wikiA.id.rawValue, "log", "append",
+                "--kind", "lint", "--title", "audit", "--note", "findings",
+            ],
+            environment: credentials)
+        #expect(logOK.status == 0, "the lint-kind log append must succeed (stderr: \(logOK.errorText))")
+
+        // The REAL repair with the CURRENT receipt commits…
+        let patch = try await runSandboxed(
+            invocation: invocation, executablePath: wikictl,
+            arguments: patchArgs(selected.id, headVersion: head.rawValue, receipt: receipt),
+            environment: credentials)
+        #expect(patch.status == 0, "the receipted patch must commit (stderr: \(patch.errorText))")
+        let body = try fixture.storeA.readPageCoherent(id: selected.id).body
+        #expect(body.contains("new text"), "the hunk must be applied exactly")
+
+        // …and the SAME receipt is now stale: a second patch denies, and no
+        // further mutation slips through any bypass.
+        expectDenied(try await runSandboxed(
+            invocation: invocation, executablePath: wikictl,
+            arguments: patchArgs(selected.id, headVersion: head.rawValue, receipt: receipt),
+            environment: credentials), "replay of the committed receipt")
+
+        // Store facts: exactly the intended single repair happened.
+        let otherBody = try fixture.storeA.readPageCoherent(id: other.id).body
+        #expect(otherBody == "# Untouched\n", "the non-selected page is byte-identical")
+        await broker.revoke(runID: run.runID)
+    }
+
     @Test func twoConcurrentScopedRunsDoNotCrossCredentials() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

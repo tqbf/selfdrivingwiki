@@ -220,8 +220,14 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                 throw Self.scopeDeniedError()
             }
             let payload = try decodePatchPayload(request.payload)
-            try await self.lintRunState.validateReceipt(
-                runID: grant.runID, token: payload?.lintReceipt ?? "")
+            do {
+                try await self.lintRunState.validateReceipt(
+                    runID: grant.runID, token: payload?.lintReceipt ?? "")
+            } catch {
+                // The budget stays opaque: stale, forged, and absent tokens
+                // all deny with the generic scope message.
+                throw Self.scopeDeniedError()
+            }
             let reply = try await dispatchFamilies(request)
             let envelope: DaemonDomainReply?
             do {
@@ -285,19 +291,27 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
 
     /// Extract `head_version_id` + `body_markdown` from a successful
     /// `page get --json` payload, mint the run's receipt over them, and
-    /// return the payload with `"lint_receipt"` injected. Returns nil when
-    /// the payload is not the expected JSON object shape.
+    /// return the payload with `"lint_receipt"` injected. The daemon wraps
+    /// command output in a ``DaemonCommandOutcome`` envelope (the CLI prints
+    /// `text` verbatim), so both the wrapped and bare shapes are handled.
+    /// Returns nil when the payload is neither shape.
     static func mintReceipt(
         into payload: Data,
         runID: DaemonRunID,
         selectedPage: PageID,
         lintRunState: DaemonLintRunState
     ) async -> Data? {
-        // A non-JSON (or non-object) payload is simply not a `page get
-        // --json` read — no receipt mints. This is a shape probe, not a
-        // swallowed store error.
+        // The envelope probe is a shape test, not a swallowed store error.
         // swiftlint:disable:next silent_try_optional
-        guard var object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+        let outcome = try? JSONDecoder().decode(DaemonCommandOutcome.self, from: payload)
+        let pageJSONText: String
+        if let text = outcome?.text {
+            pageJSONText = text
+        } else {
+            pageJSONText = String(decoding: payload, as: UTF8.self)
+        }
+        // swiftlint:disable:next silent_try_optional
+        guard var object = try? JSONSerialization.jsonObject(with: Data(pageJSONText.utf8)) as? [String: Any],
               let head = object["head_version_id"] as? String,
               let body = object["body_markdown"] as? String else {
             return nil
@@ -307,12 +321,27 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             head: PageVersionID(rawValue: head),
             bodyFingerprint: LintPageSnapshot.fingerprint(of: body))
         object["lint_receipt"] = receipt.token
+        let updatedPageJSON: Data
         do {
-            return try JSONSerialization.data(withJSONObject: object)
+            updatedPageJSON = try JSONSerialization.data(withJSONObject: object)
         } catch {
             DebugLog.store("wikid: lint receipt payload re-encode failed: \(error)")
             return nil
         }
+        if let outcome {
+            let updatedOutcome = DaemonCommandOutcome(
+                text: String(decoding: updatedPageJSON, as: UTF8.self),
+                bytesBase64: outcome.bytesBase64,
+                didCommit: outcome.didCommit,
+                stderr: outcome.stderr)
+            do {
+                return try JSONEncoder().encode(updatedOutcome)
+            } catch {
+                DebugLog.store("wikid: lint receipt outcome re-encode failed: \(error)")
+                return nil
+            }
+        }
+        return updatedPageJSON
     }
 
     private func decodePatchPayload(_ payload: Data?) throws -> DaemonPagePatchRequest? {
