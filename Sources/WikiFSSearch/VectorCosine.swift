@@ -10,8 +10,7 @@ import Accelerate
 ///
 /// Because every stored vector is **L2-normalized at write time** (see the
 /// `Embedder` protocol contract — `MiniLMEmbedder` re-normalizes via `vDSP_svesq`
-/// after pooling, and `NLEmbedder` returns unit-length vectors from
-/// `NLEmbedding.vector(for:)`), cosine similarity == dot product:
+/// after pooling), cosine similarity == dot product:
 ///
 ///     cosine_distance = 1 − cos(a, b) = 1 − (a·b)/(|a||b|)
 ///                  ⟶  1 − (a·b)        (unit vectors)

@@ -2,7 +2,7 @@ import Foundation
 
 /// Embedding generation for semantic search. Holds the active `Embedder`,
 /// selected at launch: `MiniLMEmbedder` (384-dim, Metal/GPU) when the model is
-/// bundled, else `NLEmbedder` (512-dim) — the prior behavior.
+/// bundled. Without the model, embeddings remain unavailable.
 ///
 /// The store depends on the `Embedder` abstraction, so swapping the embedder is a
 /// behind-the-scenes change: the chunk index stores opaque Float32 BLOBs and the
@@ -13,9 +13,8 @@ import Foundation
 /// Two entry points:
 /// - ``embeddingBlob(for:)`` — one vector for a **short query** string.
 /// - ``chunkedEmbeddings(for:maxChunks:)`` — one vector per **chunk** of a
-///   (possibly long) document, via ``TextChunker``. NLEmbedding is slow on long
-///   input and throws an uncatchable `std::bad_alloc` above ~250k chars, so
-///   documents are always chunked first (MiniLM truncates at 512 tokens instead).
+///   (possibly long) document, via ``TextChunker``. MiniLM truncates long
+///   inputs, so documents are always chunked first.
 public enum EmbeddingService {
     nonisolated(unsafe) private static var _embedder: (any Embedder)?
     private static let lock = NSLock()
@@ -27,27 +26,24 @@ public enum EmbeddingService {
     public static let miniLMIdentifier = "minilm-384"
 
     /// Factory that builds the MiniLM embedder from a bundled model directory.
-    /// Installed by the app (`WikiFSMLX.EmbedderBootstrap`) at launch; `nil` in
-    /// non-app contexts (the extension, `wikictl`, tests without the app target)
-    /// → MiniLM unavailable, `NLEmbedder` fallback used. Core never imports MLX.
+    /// Installed by the app or daemon (`WikiFSMLX.EmbedderBootstrap`) at launch; `nil` in
+    /// other contexts (the extension, `wikictl`, tests without the MLX target).
+    /// Core never imports MLX.
     public nonisolated(unsafe) static var miniLMFactory: (@Sendable (URL) async throws -> any Embedder)?
 
-    /// The identifier of the embedder selected for the current bundle, WITHOUT
-    /// loading the model. Cheap + safe to call synchronously from any context.
+    /// The identifier of the embedder selected for the current bundle, without
+    /// loading the model. Returns nil when the bundle has no model.
     /// Used by `GRDBWikiStore.ensureEmbedderConsistency()` for the
     /// `embedding_meta` cutover check.
-    public static func selectedEmbedderIdentifier() -> String {
+    public static func selectedEmbedderIdentifier() -> String? {
         #if os(macOS)
-        guard Bundle.main.bundlePath.hasSuffix(".app") else {
-            return NLEmbedder.identifier  // test / CLI context: no model loads
-        }
+        guard isModelHostBundle(path: Bundle.main.bundlePath) else { return nil }
         if Bundle.main.url(forResource: "all-MiniLM-L6-v2", withExtension: nil) != nil {
             return miniLMIdentifier
         }
-        return NLEmbedder.identifier
+        return nil
         #else
-        // Linux: no NLEmbedder, no MiniLM — embeddings are unavailable.
-        return "unavailable-linux"
+        return nil
         #endif
     }
 
@@ -56,35 +52,28 @@ public enum EmbeddingService {
     public static func configure() async {
         #if os(macOS)
         guard lock.withLock({ _embedder == nil }) else { return }
-        guard Bundle.main.bundlePath.hasSuffix(".app") else { return }
+        guard isModelHostBundle(path: Bundle.main.bundlePath) else { return }
 
         let t0 = DispatchTime.now()
         let signpostState = DebugLog.signposter.beginInterval("embed.modelLoad")
         defer { DebugLog.signposter.endInterval("embed.modelLoad", signpostState) }
 
-        if let modelDir = Bundle.main.url(forResource: "all-MiniLM-L6-v2", withExtension: nil),
-           let factory = miniLMFactory {
-            do {
-                let embedder = try await factory(modelDir)
-                lock.withLock { _embedder = embedder }
-                let loadMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
-                DebugLog.store("embed.model LOAD \(String(format: "%.1f", loadMs)) ms minilm main=\(Thread.isMainThread) loaded=true")
-            } catch {
-                // MiniLM is bundled but failed to load — leave _embedder = nil.
-                // IMPORTANT: do NOT fall back to NLEmbedder here. selectedEmbedderIdentifier()
-                // already returned "minilm-384" (bundle present), so embedding_meta would be
-                // written "minilm-384" while NLEmbedder produced 512-dim vectors → a dimension
-                // mismatch on next launch. Leaving nil means isAvailable = false → the
-                // upgrade no-ops; embedding_meta retains "minilm-384" so the next launch retries.
-                DebugLog.store("EmbeddingService.configure: MiniLM load failed — \(error). Search-index upgrade disabled until the model loads.")
-            }
-        } else {
-            lock.withLock { _embedder = NLEmbedder() }
+        guard let modelDir = Bundle.main.url(forResource: "all-MiniLM-L6-v2", withExtension: nil),
+              let factory = miniLMFactory else {
+            DebugLog.store("EmbeddingService.configure: MiniLM model or factory unavailable")
+            return
+        }
+        do {
+            let embedder = try await factory(modelDir)
+            lock.withLock { _embedder = embedder }
             let loadMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
-            DebugLog.store("embed.model LOAD \(String(format: "%.1f", loadMs)) ms nlembedder main=\(Thread.isMainThread) loaded=true")
+            DebugLog.store("embed.model LOAD \(String(format: "%.1f", loadMs)) ms minilm main=\(Thread.isMainThread) loaded=true")
+        } catch {
+            // Keep the embedder unavailable so the next launch can retry.
+            DebugLog.store("EmbeddingService.configure: MiniLM load failed — \(error). Search-index upgrade disabled until the model loads.")
         }
         #else
-        // Linux: no NLEmbedder, no MiniLM — embeddings are permanently unavailable.
+        // Linux: embeddings are unavailable.
         // isAvailable stays false; the store handles this (cosine leg skipped, search
         // returns BM25-less results — acceptable per issue #754 acceptance).
         DebugLog.store("EmbeddingService.configure: no-op on Linux (embeddings unavailable)")
@@ -98,10 +87,15 @@ public enum EmbeddingService {
         return available
     }
 
+    /// The app and its bundled XPC daemon can load the same model resources.
+    static func isModelHostBundle(path: String) -> Bool {
+        return path.hasSuffix(".app") || path.hasSuffix(".xpc")
+    }
+
     #if DEBUG
     /// Test-only hook: install a stub embedder so the Swift-side cosine path
     /// (`searchSimilar*`) can be exercised under `swift test` without the
-    /// app-gated NLEmbedding/MiniLM. The caller is responsible for calling
+    /// bundled MiniLM model. The caller is responsible for calling
     /// ``resetTestEmbedder`` to restore the default (nil) state afterwards.
     public static func installTestEmbedder(_ embedder: any Embedder) {
         lock.withLock { _embedder = embedder }

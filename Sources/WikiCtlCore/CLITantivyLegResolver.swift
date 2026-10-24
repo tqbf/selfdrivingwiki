@@ -276,7 +276,7 @@ public enum CLITantivyLegResolver {
     /// Resolve the daemon's BM25 leg for `wikictl page search`. Returns `nil`
     /// when the daemon answers no hits — that means no BM25 leg (the store
     /// runs without a lexical leg; the cosine leg still answers when
-    /// NLEmbedding/MLX is loaded).
+    /// MiniLM is loaded).
     public static func resolvePageLeg(
         wikiID: WikiID,
         store: WikiStore,

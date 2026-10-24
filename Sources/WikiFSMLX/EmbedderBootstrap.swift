@@ -13,20 +13,19 @@ import WikiFSCore
 /// `Sources/WikiFS/PDFTitleExtractor.swift`.
 ///
 /// Core reaches the MiniLM implementation through `EmbeddingService.miniLMFactory`
-/// (default `nil`); the app installs it here at launch. Non-app contexts (the
-/// extension, `wikictl`, tests without this target linked) keep the default and
-/// fall back to `NLEmbedder`.
+/// (default `nil`). The app and daemon install it at launch. The extension,
+/// `wikictl`, and tests without this target have no MiniLM factory.
 public enum EmbedderBootstrap {
 
     /// Register the MiniLM embedder factory with Core. Idempotent. Call once at
-    /// launch from `WikiFSApp.init` (before the store opens / backfill begins).
+    /// app or daemon launch (before the store opens / backfill begins).
     /// `MiniLMEmbedder.identifier` must equal `EmbeddingService.miniLMIdentifier`.
     public static func install() {
         EmbeddingService.miniLMFactory = { modelDirectoryURL in
             // Wrap MLX model construction in `withError` so any failure in the
             // one-time GPU init (e.g. the metallib not being found) becomes a
             // Swift throw that EmbeddingService.configure()'s do/catch handles
-            // (→ _embedder stays nil → NLEmbedder fallback / backfill no-ops).
+            // (→ _embedder stays nil → cosine search and backfill no-op).
             // WITHOUT this, MLX's *default* C++ error handler is still active
             // (mlx-swift only installs its handler lazily on first withError
             // call) and calls exit() — an uncatchable process death that leaves

@@ -1062,14 +1062,13 @@ public protocol WikiStore: AnyObject, Sendable {
 
     /// Search pages semantically (cosine similarity via Swift-side
     /// `VectorCosine`, ranked by each page's best-matching chunk). The cosine
-    /// leg runs only when `EmbeddingService.isAvailable` (NLEmbedding/MiniLM,
-    /// app-gated) AND `EmbeddingService.embeddingBlob(for:)` both resolve —
+    /// leg runs only when `EmbeddingService.isAvailable` (bundled MiniLM) AND `EmbeddingService.embeddingBlob(for:)` both resolve —
     /// otherwise the BM25 leg alone is returned.
     ///
     /// - Parameter bm25Leg: The pre-computed, best-first BM25 leg from Tantivy
     ///   (Phase 2 / #649). This is the SOLE lexical path after #634 dropped
     ///   FTS5. nil/empty means no BM25 leg at all — the result is cosine-only
-    ///   (empty under `swift test` where NLEmbedding is unavailable). Callers
+    ///   (empty under `swift test` where MiniLM is unavailable). Callers
     ///   (the model, `wikictl`) resolve the Tantivy leg before calling; the
     ///   store fuses both legs via `RankFusion.rrf` exactly as before.
     func searchSimilar(query: String, limit: Int, bm25Leg: [WikiPageSummary]?) throws -> [WikiPageSummary]
@@ -1450,7 +1449,7 @@ public protocol WikiStore: AnyObject, Sendable {
 // entry points live here. As of #634 (FTS5 dropped), `bm25Leg == nil` has NO
 // BM25 leg at all (the store's FTS5 fallback was removed — Tantivy is the sole
 // lexical path now). The semantic cosine leg still runs; with no Tantivy leg
-// AND no cosine query blob (NLEmbedding app-gated under `swift test`), the
+// AND no cosine query blob (MiniLM unavailable under `swift test`), the
 // result is empty. Callers MUST resolve a Tantivy leg explicitly to get
 // lexical matches. Migrate to `searchSimilar(query:limit:bm25Leg:)` (or the
 // kind-specific equivalent) and resolve a Tantivy leg first.
@@ -1513,7 +1512,7 @@ extension WikiStore {
     /// Deprecated (#637 / #634): call `searchSimilar(query:limit:bm25Leg:)`
     /// and resolve a Tantivy leg via `WikiStoreModel.resolveTantivyLeg(...)` (app)
     /// or `CLITantivyLegResolver` (CLI). A `nil` leg yields cosine-only (empty
-    /// under `swift test` where NLEmbedding is unavailable).
+    /// under `swift test` where MiniLM is unavailable).
     @available(*, deprecated, message: "Pass an explicit `bm25Leg:` — resolve a Tantivy leg for the BM25 leg, or `nil` for cosine-only. See #637 / #634.")
     public func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary] {
         try searchSimilar(query: query, limit: limit, bm25Leg: nil)

@@ -8,7 +8,7 @@ import WikiFSCore
 /// the launch `EXC_BREAKPOINT` from two threads racing one cached statement).
 /// The sheet dismisses itself when the model sets `searchUpgrade = nil` on
 /// completion. It is a one-time, usually-instant operation (no sheet at all on a
-/// warm DB) — only first run, an NLEmbedding→MiniLM cutover, or `wikictl`-written
+/// warm DB) — only first run, a legacy embedding cutover, or `wikictl`-written
 /// content produces missing work.
 struct SearchUpgradeView: View {
     @Bindable var store: WikiStoreModel

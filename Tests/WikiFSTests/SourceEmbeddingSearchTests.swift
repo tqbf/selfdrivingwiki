@@ -9,7 +9,7 @@ import Testing
 @testable import WikiFSCore
 
 /// Semantic source search tests. The cosine-ranking semantic path cannot run
-/// under `swift test` (NLEmbedding is app-bundle-gated — Swift-side cosine
+/// under `swift test` (MiniLM is unavailable — Swift-side cosine
 /// ranking via `VectorCosine` IS active, but there's no embedder to produce a
 /// query vector under `swift test`; see `VectorCosineTests` for the pure-math
 /// correctness anchor), so these tests exercise: the v13 schema migration, the
@@ -77,7 +77,7 @@ struct SourceEmbeddingSearchTests {
     @Test func searchSimilarSourcesUsesSwiftCosineRankerWhenEmbedderLoaded() throws {
         // Post-#628: the semantic cosine leg is pure Swift (`VectorCosine` over
         // L2-normalized BLOBs). With no embedder loaded under `swift test`
-        // (NLEmbedding is app-gated), `searchSimilarSources` falls back to the
+        // (MiniLM is unavailable), `searchSimilarSources` falls back to the
         // Tantivy bm25Leg only — the cosine leg is silently empty. This test
         // pins that contract: a fabricated Tantivy leg passes through unchanged
         // when the embedder is unavailable, and the store does NOT throw or
@@ -108,8 +108,8 @@ struct SourceEmbeddingSearchTests {
     // MARK: - searchSimilarSources with a Tantivy bm25Leg (the post-#634 path)
     //
     // #634 dropped the FTS5 fallback path; `searchSimilarSources(query:bm25Leg:)`
-    // returns EMPTY when the leg is nil/empty (cosine-only — NLEmbedding is
-    // app-gated, so under `swift test` the semantic leg is empty too). The
+    // returns EMPTY when the leg is nil/empty (cosine-only). MiniLM is absent
+    // under `swift test`, so the semantic leg is empty too. The
     // tests below fabricate a Tantivy-like leg and assert it passes through
     // unchanged — the store must NOT augment or filter it.
 
@@ -157,7 +157,7 @@ struct SourceEmbeddingSearchTests {
     @Test func searchSimilarSourcesEmptyLegReturnsEmpty() throws {
         // Post-#634: an empty leg (`[]`) and nil leg are equivalent — both mean
         // no BM25 results. With no cosine results either (the embedder is
-        // unavailable under `swift test` — NLEmbedding is app-gated), the
+        // unavailable under `swift test`), the
         // output is empty.
         let store = try tempStore()
         _ = try store.addSource(filename: "alpha.txt", data: Data("a".utf8))

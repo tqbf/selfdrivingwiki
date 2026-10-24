@@ -59,7 +59,7 @@ struct InMemoryStoreTests {
     @Test func inMemoryStore_ftsIndexIsPopulatedAfterCreate() throws {
         // Post-#634: FTS5 is gone — `:memory:` no longer has an FTS5 leg for
         // `searchSimilar` to fall back on. With `bm25Leg: nil` and the cosine
-        // leg empty under `swift test` (NLEmbedding is app-gated — Swift-side
+        // leg empty under `swift test` (MiniLM is unavailable — Swift-side
         // `VectorCosine` is wired but has no query vector to rank with), the
         // result is empty. Prove the contract holds on `:memory:` by supplying
         // a fabricated leg (mirroring `TantivyBM25LegCutoverTests`): with no

@@ -10,7 +10,7 @@ import WikiFSSearch
 ///
 /// **Test seam:** `EmbeddingService.installTestEmbedder` (a `#if DEBUG` hook)
 /// installs a ``StubEmbedder`` so the cosine path can run under `swift test`
-/// without the app-gated NLEmbedding/MiniLM. The stub maps known query strings
+/// without the bundled MiniLM. The stub maps known query strings
 /// to deterministic unit vectors, and the test seeds matching chunk embeddings
 /// so the ranking is fully predictable.
 ///
