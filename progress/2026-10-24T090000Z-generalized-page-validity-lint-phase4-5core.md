@@ -137,10 +137,14 @@ critical defects in the deterministic core. Fix-or-rebut status:
   trap gone), declaration consumption in the oracle, merged-coverage
   rewrite detection, hidden bail fixtures added to held-out (manifest
   revision 2, digest regenerated — prior evidence invalid).
-- **m1 (minor) — accepted, queued** with the launcher wiring follow-up.
+- **m1 (minor) — FIXED `131a4237`.** `resetRunArtifacts` clears
+  `lastScratchDirectory` at run start — a stale path can no longer make
+  the accounting read the previous run's report.
 - **m2 (minor) — FIXED `4dad557f`.**
-- **m3/m4 (minors) — accepted:** escaped-pipe cell counting and CR-only
-  line tables queued; m4's dedup semantics documented.
+- **m3 (minor) — FIXED `131a4237` (partial).** `pipeCells` skips escaped
+  pipes; CR-only line endings remain a documented v1 limit (store bodies
+  are LF-normalized).
+- **m4 (minor) — accepted:** dedup semantics documented.
 - **m6 (minor) — REBUTTED in part:** `preflightLint` remains the Phase 0
   interim CAS path pinned by `LintBracketRepairTests`/`LintSnapshotTests`;
   its removal is the scoped-run launcher's decision, not this plan's.
