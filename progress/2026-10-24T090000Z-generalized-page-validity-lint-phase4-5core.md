@@ -75,21 +75,16 @@ WikiLintEvalRunner (inspect/replay/live-refusal), scripts/run-wiki-lint-eval.sh,
 invalidation, admission scoping, shipped-digest match).
 
 Still open in Phase 6:
-1. Coordinator gate wiring — `LintAcceptanceGate.production().selection`
-   consulted before requesting a repair-capable lease; unaccepted →
-   report-only policy + reason in artifacts/queue state
-   (`LintAcceptanceGateIntegrationTests`: unacceptedConfigurationRunsReportOnly,
-   acceptedConfigurationReceivesNarrowRepairLease,
-   evaluationAdmissionCannotTargetOperatorWiki — the last is unit-covered,
-   needs the integration form).
-2. Live trial plumbing (20 bail trials at lowest tier, 3× remaining groups,
-   transcripts + per-class scores persisted under tmp/wiki-lint-eval/<run>/)
-   — the RUNNER refuses `--live` today; the trials themselves stay BLOCKED
-   on operator-confirmed provider access + budget + human rubric (plan
-   §6.14). Do not claim rollout readiness.
-3. Harness-only evaluation admission restricted to disposable daemon-created
-   wikis for the exact evaluated configuration (unit logic landed; wire the
-   disposable-wiki lifecycle through the live path when unblocked).
+1. ~~Coordinator gate wiring~~ **LANDED `4d4d07b9`** — LintAcceptanceGate moved
+   to WikiFSCore; LintCoordinatorGate (WikiFSEngine) computes the live key
+   (provider/model/revision/effort + LintPromptBodies.lintPageTaskSHA256 +
+   detector revision + shipped fixture digest) and consults production;
+   makeLintPagePlan threads repairAuthorized/gateReason into the request
+   and the prompt's {{repairAuthorization}} block — unaccepted runs are
+   REPORT-ONLY by construction (unconfigured keys never match records).
+   Remaining integration test: LintAcceptanceGateIntegrationTests forms.
+2. Live trial plumbing … (BLOCKED as below)
+3. Harness-only evaluation admission … (BLOCKED with the live path)
 
 ## Phase 6/7 remaining (authoritative)
 
