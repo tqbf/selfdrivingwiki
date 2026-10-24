@@ -105,12 +105,18 @@ critical defects in the deterministic core. Fix-or-rebut status:
   fixed for multi-word reasons; validator requires reasons on
   items/findings and a filled verification line.
 - **m4 (minor) — addressed en passant** (documented dedup semantics).
-- **C1 (critical) + M1 (major) — TRIAGED, next.** No production path mints
-  lint policies or runs the post-run accounting. Fix: derive the policy
-  from the `OperationRequest` in `AgentLauncher` (repairAuthorized →
-  repair lease, else report-only lease; `.lint` → whole-wiki report-only;
-  refuse lint without scoped runs), and factor `runOneLintPage`'s
-  accounting into a host-agnostic function the queue providers call.
+- **C1 (critical) + M1 (major) — FIXED `8d34ca5c`.** `AgentLauncher`
+  derives the managed-run policy from the request alone (repair-authorized
+  lintPage → repair lease, unauthorized → report-only lease, `.lint` →
+  whole-wiki report-only, others ordinary; pure mapping, unit-tested); a
+  lint launch without a configured scoped-run manager is REFUSED (no
+  unscoped fallback for lint). Both issue sites pass the policy; the
+  rollout-gate's repairAuthorized decision now reaches the LEASE, not just
+  the prompt. Post-run accounting factored into
+  `AgentOperationRunner.accountForLintRun` over the WikiStore protocol and
+  called per page by BOTH queue providers — coverage-rejected /
+  verification-failed / agent-log-missing pages are `.failed` in the
+  observed outcomes and fail the item, never "run completed".
 - **M3 (major) — accepted, fix next:** written-head scan must use the same
   facts; written head must come from the patch outcome; per-hunk change
   regions from the server outcome.
