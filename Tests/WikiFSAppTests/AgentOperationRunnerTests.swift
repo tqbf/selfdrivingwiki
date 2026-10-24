@@ -48,42 +48,49 @@ struct AgentOperationRunnerTests {
         #expect(pb?.brokenPageLinks == ["MissingTwo"])
     }
 
-    @Test func combinedTitlesJoinWithComma() throws {
-        // The runLintPages method joins titles with ", ".
-        // Verify the combination pattern used in the implementation.
-        let pages: [(id: String, title: String)] = [
-            ("a", "Alpha"), ("b", "Beta"), ("c", "Gamma"),
-        ]
-        let combined = pages.map(\.title).joined(separator: ", ")
-        #expect(combined == "Alpha, Beta, Gamma")
+    // MARK: - Coordinator dispatch (plan §5.2/§5.4 — replaces title-join tests)
+
+    /// The shared plan builder carries the TYPED page identity (never joined
+    /// titles) and stages the pre-flight + run-report artifacts.
+    @Test func lintPagePlanCarriesTypedIdentityAndStagesArtifacts() async throws {
+        let (model, store) = try tempStore()
+        let page = try store.createPage(title: "Alpha")
+        try store.updatePage(id: page.id, title: "Alpha", body: "See [[source:Smith2023]].\n")
+        _ = model
+
+        let plan = try #require(await AgentOperationRunner.makeLintPagePlan(
+            store: store, pageID: page.id, stateMarkdown: "# state\n"))
+        // Typed identity — the exact page, not a joined title.
+        guard case .lintPage(let identity, _, _, _) = plan.request else {
+            Issue.record("expected a .lintPage request")
+            return
+        }
+        #expect(identity.pageID == page.id)
+        #expect(identity.title == "Alpha")
+        // The request stages both artifacts and the state file.
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-plan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let op = try plan.request.stage(into: scratch)
+        guard case .lintPage(_, let reportPath, let runReportPath, _) = op else {
+            Issue.record("expected a staged .lintPage operation")
+            return
+        }
+        let preflight = try String(contentsOfFile: reportPath, encoding: .utf8)
+        #expect(preflight.contains("sourceCitation-1"), "the worklist inventories every occurrence")
+        let skeleton = try String(contentsOfFile: runReportPath, encoding: .utf8)
+        #expect(skeleton.hasPrefix(LintRunReportText.formatMarker))
+        #expect(skeleton.contains("finding D07-1 pending"), "the broken citation is a finding to account for")
     }
 
-    @Test func combinedBrokenLinksFlatMap() throws {
-        // The runLintPages method uses flatMap to combine broken links.
-        let preflights: [(title: String, brokenLinks: [String])] = [
-            ("A", ["One"]),
-            ("B", ["Two", "Three"]),
-            ("C", []),
-        ]
-        let combined = preflights.flatMap(\.brokenLinks)
-        #expect(combined == ["One", "Two", "Three"])
-    }
-
-    @Test func brokenLinksPreserveNamespaceInPrompt() throws {
-        // runLintPages formats each broken link with its wiki-link namespace
-        // prefix so the agent can distinguish page/source/chat links (was a
-        // flat [String] that stripped the namespace, making broken source/chat
-        // links look like broken page links).
-        let brokenPageLinks = ["Some Page"]
-        let brokenSourceLinks = ["Some Source"]
-        let brokenChatLinks = ["Some Chat"]
-
-        let pageLinks = brokenPageLinks.map { "[[\($0)]]" }
-        let sourceLinks = brokenSourceLinks.map { "[[source:\($0)]]" }
-        let chatLinks = brokenChatLinks.map { "[[chat:\($0)]]" }
-        let allBroken = pageLinks + sourceLinks + chatLinks
-
-        #expect(allBroken == ["[[Some Page]]", "[[source:Some Source]]", "[[chat:Some Chat]]"])
+    /// A page deleted or renamed before its run is SKIPPED with a reason —
+    /// never an empty clean audit (AC.9).
+    @Test func missingPagePlanIsNil() async throws {
+        let (_, store) = try tempStore()
+        let ghost = PageID(rawValue: "01HZGHOST0000000000000000009")
+        let plan = await AgentOperationRunner.makeLintPagePlan(
+            store: store, pageID: ghost, stateMarkdown: "# state\n")
+        #expect(plan == nil)
     }
 
     // MARK: - Canonical ULID links are not false positives

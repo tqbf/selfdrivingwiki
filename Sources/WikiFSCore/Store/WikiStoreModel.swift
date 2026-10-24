@@ -465,7 +465,9 @@ public final class WikiStoreModel {
         try store.reapStaleWorkspaces(ttl: ttl)
     }
 
-    private let store: WikiStore
+    // Internal so same-module lint extensions (WikiStoreModel+LintFacts) can
+    // run the injected-facts loads through the model's actor discipline.
+    let store: WikiStore
 
     /// The underlying concrete `WikiStore` (concretely `GRDBWikiStore` in
     /// production). Exposed only for the explicit in-memory reader fallback.

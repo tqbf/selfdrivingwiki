@@ -1036,6 +1036,10 @@ public final class AgentLauncher {
     /// #813 Phase 3: Queue store and item ID for the current run (used for session ID persistence)
     @ObservationIgnored private var currentQueueStore: QueueStore?
     @ObservationIgnored private var currentQueueItemID: QueueItem.ID?
+    /// The scratch directory of the MOST RECENT run — the post-run
+    /// verification step reads the staged run-report back from here (the
+    /// agent edits the staged file in place). Nil before the first run.
+    @ObservationIgnored public private(set) var lastScratchDirectory: URL?
     /// The agent-run-lifecycle release closure for the current run (nil when no run is active).
     /// Stored so `finish()` — and thus the completion watchdog — can decrement
     /// the run counter even when the process's `terminationHandler` never fires.
@@ -1729,6 +1733,7 @@ public final class AgentLauncher {
             releaseGenerationSlot()
             return
         }
+        lastScratchDirectory = scratch
         if queueItemID != nil {
             retryCeilingKillContext = CeilingKillContext.loadLatestPriorRun(
                 in: scratch.deletingLastPathComponent(), excluding: scratch)

@@ -248,7 +248,12 @@ struct ModelsConfigRecordTests {
         #expect(AgentLauncher.sourceFilesAndIDs(for: lint).sourceFiles.isEmpty)
 
         let lintPage = WikiOperation.lintPage(
-            pageTitle: "X", brokenLinks: [], stateFilePath: "/x/WIKI_STATE.md")
+            page: LintPageIdentity(
+                pageID: PageID(rawValue: "01HZPAGE00000000000000000A"),
+                title: "X", headVersionID: nil),
+            reportFilePath: "/x/LINT_PREFLIGHT.md",
+            runReportPath: "/x/LINT_RUN_REPORT.md",
+            stateFilePath: "/x/WIKI_STATE.md")
         #expect(AgentLauncher.sourceFilesAndIDs(for: lintPage).sourceIDs.isEmpty)
 
         let chat = WikiOperation.queryChat(stateFilePath: "/x/WIKI_STATE.md")

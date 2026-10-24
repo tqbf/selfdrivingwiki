@@ -78,15 +78,28 @@ public enum QueueIngestionReporting {
 
     /// The completion mutation for a successful AGENT run whose per-target
     /// outcomes the runner cannot prove. Staged sources stay `.submitted`;
-    /// lint pages stay `.processing`; availability is `.notReported`.
+    /// lint pages stay `.processing`; availability is `.notReported` unless
+    /// the host supplies OBSERVED per-page facts (plan §5.13 — `.notReported`
+    /// is replaced only when actual records exist).
     /// The launcher's accumulated run-total usage rides along as the durable
     /// report-header `usage` — the same values the navigator showed live —
     /// so Run Details keeps final totals after completion/reload.
     public static func agentCompletionMutation(
         operation: QueueReportOperation,
         usage: SessionUsage?,
-        outputs: [QueueRecordedOutputPage]? = nil
+        outputs: [QueueRecordedOutputPage]? = nil,
+        observedSummary: String? = nil
     ) -> QueueReportMutation {
+        if operation == .lint, let observedSummary,
+           observedSummary.trimmingCharacters(in: .whitespaces).isEmpty == false {
+            return QueueReportMutation(
+                phase: .finished,
+                model: usage?.modelId.map { QueueReportModelName(rawValue: $0) },
+                availability: .available,
+                resultSummary: "Per-page lint outcomes: \(observedSummary)",
+                usage: usage.map(QueueReportUsage.init(sessionUsage:)),
+                outputs: outputs)
+        }
         let summary: String
         switch operation {
         case .ingest:

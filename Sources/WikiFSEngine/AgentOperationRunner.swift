@@ -508,40 +508,215 @@ public enum AgentOperationRunner {
             wikictlDirectory: wikictlDirectory)
     }
 
-    /// Pre-flight one or more pages (fix `\]]` brackets + detect broken links),
-    /// then run a single LLM lint with all the findings.  A single page gets
-    /// its own run; multiple pages are combined into one agent pass.
-    public static func runLintPages(
-        pages: [(id: PageID, title: String)],
+    /// The shared per-page lint plan (plan §5.2): the typed request plus the
+    /// exact snapshot and pre-flight report the run must account for. Built
+    /// identically for the app UI, the app queue, and the daemon queue —
+    /// each page gets its OWN run, artifacts, and outcome; titles are never
+    /// joined.
+    public struct LintPagePlan: Sendable {
+        public let request: OperationRequest
+        public let snapshot: LintPageSnapshot
+        public let preflight: LintPreflightReport
+    }
+
+    /// Build one page's lint plan: coherent snapshot → injected facts →
+    /// pure scan → staged artifact contents. Shared by the app UI, the app
+    /// queue, and the daemon queue (plan §5.2). Returns `nil` when the page
+    /// does not exist (the caller records a skipped outcome).
+    public static func makeLintPagePlan(
+        store: WikiStore,
+        pageID: PageID,
+        stateMarkdown: String
+    ) async -> LintPagePlan? {
+        let read: PageCoherentRead?
+        do {
+            read = try store.readPageCoherent(id: pageID)
+        } catch WikiStoreError.notFound {
+            return nil
+        } catch {
+            DebugLog.agent("lint plan: coherent read failed for \(pageID.rawValue): \(error)")
+            return nil
+        }
+        guard let read else { return nil }
+        let snapshot = LintPageSnapshot(read)
+        let resolution: LintResolutionFacts
+        do {
+            resolution = try LintResolutionFacts.load(from: store)
+        } catch {
+            DebugLog.agent("lint plan: resolution facts unavailable, scanning without identity facts: \(error)")
+            resolution = LintResolutionFacts()
+        }
+        let citations: LintCitationFacts?
+        do {
+            citations = try LintCitationFacts.load(from: store, body: snapshot.body)
+        } catch {
+            DebugLog.agent("lint plan: citation facts unavailable, D09 records its limit: \(error)")
+            citations = nil
+        }
+        let origins: LintOriginURLFacts?
+        do {
+            origins = try LintOriginURLFacts.load(from: store, body: snapshot.body)
+        } catch {
+            DebugLog.agent("lint plan: origin facts unavailable, D11 records its limit: \(error)")
+            origins = nil
+        }
+        let history = LintHistoryFacts.load(from: store, snapshot: snapshot)
+        let parsed = ParsedMarkdownDocument(parsing: snapshot.body)
+        let fenceValidation = await Self.lintFenceValidationFacts(
+            body: snapshot.body, fenceFacts: parsed.fenceFacts)
+        let report = LintPagePreflight.scan(
+            snapshot: snapshot, resolution: resolution,
+            citations: citations, originURLs: origins,
+            history: history, fenceValidation: fenceValidation)
+        let request = OperationRequest.lintPage(
+            page: LintPageIdentity(snapshot),
+            preflightReportMarkdown: report.renderedMarkdown(),
+            runReportMarkdown: LintRunReportText.render(snapshot: snapshot, preflight: report),
+            stateMarkdown: stateMarkdown)
+        return LintPagePlan(request: request, snapshot: snapshot, preflight: report)
+    }
+
+    /// Package-validation facts for the body's rich fences, or `nil` when the
+    /// machine package store cannot be opened (the scan records the limit).
+    public static func lintFenceValidationFacts(
+        body: String,
+        fenceFacts: [MarkdownFenceFact]
+    ) async -> LintFenceValidationFacts? {
+        let layout: RendererPackageStoreLayout?
+        do {
+            layout = try RendererPackageStoreLayout.production()
+        } catch {
+            // A machine without a resolvable package store has no validation
+            // service; the scan records D28's honest limit instead.
+            DebugLog.agent("lint plan: renderer package store unavailable, D28 records its limit: \(error)")
+            layout = nil
+        }
+        guard let layout else { return nil }
+        return await LintFenceValidationFacts.load(
+            body: body, fenceFacts: fenceFacts,
+            service: FenceSyntaxValidationService(layout: layout))
+    }
+
+    /// The dispatch outcome of one requested page (plan §5.3). Missing or
+    /// unreadable pages stay visible as skipped/blocked — never empty clean
+    /// audits.
+    public struct LintPageDispatchOutcome: Sendable, Equatable {
+        public enum Status: Equatable, Sendable {
+            case dispatched
+            case skipped
+            case failed
+        }
+
+        public let pageID: PageID
+        public let title: String
+        public let status: Status
+        public let detail: String
+
+        public init(pageID: PageID, title: String, status: Status, detail: String) {
+            self.pageID = pageID
+            self.title = title
+            self.status = status
+            self.detail = detail
+        }
+    }
+
+    /// Dispatch ONE selected-page lint run and return its outcome. A page's
+    /// failure never becomes another page's clean audit; the caller decides
+    /// whether to continue.
+    public static func runOneLintPage(
+        pageID: PageID,
         launcher: AgentLauncher,
         store: WikiStoreModel,
         wikiID: WikiID,
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
-    ) async {
-        let preflights = pages.map { page in
-            let preflight = store.preflightLint(pageID: page.id)
-            // Combine all three namespaces, preserving each link's namespace
-            // prefix so the agent can tell page links from source/chat links.
-            let pageLinks = (preflight?.brokenPageLinks ?? []).map { "[[\($0)]]" }
-            let sourceLinks = (preflight?.brokenSourceLinks ?? []).map { "[[source:\($0)]]" }
-            let chatLinks = (preflight?.brokenChatLinks ?? []).map { "[[chat:\($0)]]" }
-            let allBroken = pageLinks + sourceLinks + chatLinks
-            return (title: page.title, brokenLinks: allBroken)
+    ) async -> LintPageDispatchOutcome {
+        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher),
+              let plan = await makeLintPagePlan(
+                store: store.internalStore, pageID: pageID, stateMarkdown: stateMarkdown) else {
+            return LintPageDispatchOutcome(
+                pageID: pageID, title: "", status: .skipped,
+                detail: "page does not exist (deleted or renamed before the run)")
         }
-        let combinedTitle = pages.map(\.title).joined(separator: ", ")
-        let combinedBroken = preflights.flatMap(\.brokenLinks)
-        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
         await run(
-            request: .lintPage(
-                pageTitle: combinedTitle,
-                brokenLinks: combinedBroken,
-                stateMarkdown: stateMarkdown),
+            request: plan.request,
             launcher: launcher,
             store: store,
             wikiID: wikiID,
             changeSignaler: changeSignaler,
             wikictlDirectory: wikictlDirectory)
+
+        // Post-run accounting: the host reads the filled run report back
+        // from the run's scratch and validates coverage against THIS plan's
+        // inventory (REQ-31/32). The agent's claims never stand alone.
+        var detail = "audited head \(plan.snapshot.headVersionID?.rawValue ?? "none")"
+        var status = LintPageDispatchOutcome.Status.dispatched
+        if let scratch = launcher.lastScratchDirectory {
+            let reportURL = scratch.appendingPathComponent(AgentStaging.lintRunReportFileName)
+            let reportText: String?
+            do {
+                reportText = try String(contentsOf: reportURL, encoding: .utf8)
+            } catch {
+                DebugLog.agent("lint dispatch: run report unreadable at \(reportURL.path): \(error)")
+                reportText = nil
+            }
+            let parsed: ParsedLintRunReport?
+            if let text = reportText {
+                do {
+                    parsed = try LintRunReportParser.parse(text)
+                } catch {
+                    DebugLog.agent("lint dispatch: run report unparseable: \(error)")
+                    parsed = nil
+                }
+            } else {
+                parsed = nil
+            }
+            if let parsed {
+                switch LintCoverageValidator.validate(
+                    parsed: parsed, snapshot: plan.snapshot, preflight: plan.preflight) {
+                case .complete:
+                    detail += "; run-report coverage complete"
+                case .rejected(let reasons):
+                    status = .failed
+                    detail += "; run-report coverage rejected: "
+                        + reasons.prefix(3).joined(separator: "; ")
+                }
+            } else {
+                status = .failed
+                detail += "; run report missing or unparseable in the run scratch"
+            }
+        } else {
+            detail += "; no run scratch to read the run report from"
+        }
+        return LintPageDispatchOutcome(
+            pageID: pageID, title: plan.snapshot.title, status: status, detail: detail)
+    }
+
+    /// Dispatch selected-page lint runs SEQUENTIALLY — one run, scope, and
+    /// outcome per requested page. Pages already handled are never retried
+    /// because another page failed; cancellation stops future pages.
+    public static func runLintPages(
+        pages: [PageID],
+        launcher: AgentLauncher,
+        store: WikiStoreModel,
+        wikiID: WikiID,
+        changeSignaler: any ChangeSignaler,
+        wikictlDirectory: String
+    ) async -> [LintPageDispatchOutcome] {
+        var outcomes: [LintPageDispatchOutcome] = []
+        for pageID in pages {
+            if Task.isCancelled {
+                outcomes.append(LintPageDispatchOutcome(
+                    pageID: pageID, title: "", status: .skipped,
+                    detail: "run cancelled before this page started"))
+                continue
+            }
+            let outcome = await runOneLintPage(
+                pageID: pageID, launcher: launcher, store: store, wikiID: wikiID,
+                changeSignaler: changeSignaler, wikictlDirectory: wikictlDirectory)
+            outcomes.append(outcome)
+        }
+        return outcomes
     }
 
     /// Render the `WIKI_STATE.md` for one operation request, or surface the

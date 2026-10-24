@@ -43,9 +43,15 @@ public enum OperationRequest: Sendable {
   /// Lint the wiki. `stateMarkdown` is the rendered `WIKI_STATE.md`.
   case lint(stateMarkdown: String)
 
-  /// Lint a single page. `brokenLinks` comes from `WikiStoreModel.preflightLint`
-  /// (pre-computed before the LLM run so the agent has concrete targets).
-  case lintPage(pageTitle: String, brokenLinks: [String], stateMarkdown: String)
+  /// Lint a single page. The run carries the TYPED page identity (never
+  /// joined titles) plus the staged artifacts' CONTENTS: the pre-flight
+  /// report (the complete mechanical inventory + findings worklist) and the
+  /// run-report skeleton the agent must fill in (REQ-29..32).
+  case lintPage(
+    page: LintPageIdentity,
+    preflightReportMarkdown: String,
+    runReportMarkdown: String,
+    stateMarkdown: String)
 
   /// Which generation lane this request runs on (Phase 2: lane-aware gate).
   /// Ingest-class operations (ingest, lint, lintPage) serialize on `.ingest`;
@@ -86,9 +92,15 @@ public enum OperationRequest: Sendable {
       let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
       return .lint(stateFilePath: stateFilePath)
 
-    case .lintPage(let pageTitle, let brokenLinks, let stateMarkdown):
+    case .lintPage(let page, let preflightReport, let runReport, let stateMarkdown):
       let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
-      return .lintPage(pageTitle: pageTitle, brokenLinks: brokenLinks, stateFilePath: stateFilePath)
+      let reportFilePath = try AgentStaging.stageTextFile(
+        preflightReport, name: AgentStaging.lintPreflightReportFileName, in: scratch)
+      let runReportPath = try AgentStaging.stageTextFile(
+        runReport, name: AgentStaging.lintRunReportFileName, in: scratch)
+      return .lintPage(
+        page: page, reportFilePath: reportFilePath,
+        runReportPath: runReportPath, stateFilePath: stateFilePath)
     }
   }
 }

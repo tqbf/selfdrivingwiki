@@ -137,6 +137,65 @@ public struct LintPreflightReport: Equatable, Sendable {
             section.status.isClean && section.findings.isEmpty ? nil : (section.section, section.status)
         }
     }
+
+    /// The complete report as staged-artifact Markdown (plan §5.1): identity,
+    /// every section with its status/limits/findings, and the complete
+    /// inventory. This is the agent's worklist — nothing excerpt-bounded here
+    /// beyond the per-finding evidence limits already applied.
+    public func renderedMarkdown() -> String {
+        var lines: [String] = []
+        lines.append("# Pre-flight report — \(title)")
+        lines.append("")
+        lines.append("- page: \(pageID.rawValue)")
+        lines.append("- inspected head: \(inspectedHead?.rawValue ?? "none")")
+        lines.append("- body fingerprint: \(bodyFingerprint)")
+        lines.append("- detector revision: \(detectorRevision)")
+        lines.append("- inventory: \(inventoryTotals.summary)")
+        for section in sections {
+            lines.append("")
+            lines.append("## \(section.section.title)")
+            switch section.status {
+            case .completed:
+                lines.append("")
+                lines.append("Status: completed. \(section.findings.isEmpty ? "none detected" : "\(section.findings.count) finding(s)")")
+            case .notChecked(let reason):
+                lines.append("")
+                lines.append("Status: NOT CHECKED — \(reason)")
+            case .blocked(let reason):
+                lines.append("")
+                lines.append("Status: BLOCKED — \(reason)")
+            case .truncated(let omitted, let reason):
+                lines.append("")
+                lines.append("Status: TRUNCATED (\(omitted) omitted) — \(reason)")
+            }
+            for limit in section.dialectLimits {
+                lines.append("- limit: \(limit)")
+            }
+            for finding in section.findings {
+                let range = finding.authoredRange.map { "bytes \($0.lowerBound)..<\($0.upperBound)" } ?? "whole body"
+                lines.append("- [\(finding.occurrenceID)] \(finding.defectClass.rawValue) at \(range) — \(finding.message)")
+                lines.append("  - evidence: \(finding.evidence)")
+                lines.append("  - severity: \(finding.severity.rawValue), confidence: \(finding.confidence.rawValue)")
+                if let repair = finding.candidateRepair {
+                    let change: String
+                    switch repair.change {
+                    case .deletion: change = "delete the range"
+                    case .replacement(let text): change = "replace with: \(text)"
+                    case .insertion(let offset, let text): change = "insert at byte \(offset): \(text)"
+                    }
+                    lines.append("  - candidate repair: \(change) — reason: \(repair.reason)")
+                }
+            }
+        }
+        lines.append("")
+        lines.append("## Complete inventory (\(inventory.count) occurrences)")
+        lines.append("")
+        for item in inventory {
+            let range = item.authoredRange.map { "bytes \($0.lowerBound)..<\($0.upperBound)" } ?? "whole body"
+            lines.append("- [\(item.occurrenceID)] \(item.kind.rawValue) at \(range): \(item.evidence)")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
 }
 
 private extension Dictionary where Key == LintScanSection, Value == LintPreflightReport.Section {

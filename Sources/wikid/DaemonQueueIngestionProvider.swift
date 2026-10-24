@@ -296,34 +296,45 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             resolved: pages,
             requested: pageIDs))
 
-        let combinedTitle = pages.map(\.title).joined(separator: ", ")
         let stateMarkdown = try daemonStateMarkdown(from: store)
         let selectedProvider = resolveSelectedProvider()
         let providerLabel = selectedProvider.label
         onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
         onReport?(QueueIngestionReporting.runningMutation())
 
-        await runLintAgent(
-            request: .lintPage(
-                pageTitle: combinedTitle,
-                brokenLinks: [],
-                stateMarkdown: stateMarkdown),
-            launcher: launcher,
-            wikiID: wikiID,
-            queueItemID: queueItemID,
-            providerLabel: providerLabel,
-            onTranscript: onTranscript,
-            onLiveUsage: onLiveUsage,
-            onPendingPermission: onPendingPermission)
+        // Per-page sequential runs — one typed request per page, never
+        // joined titles (plan §5.2/§5.3). Missing pages stay visible.
+        var observed: [String] = []
+        for pageID in pageIDs {
+            if Task.isCancelled {
+                observed.append("\(pageID.rawValue): skipped (cancelled)")
+                continue
+            }
+            guard let plan = await AgentOperationRunner.makeLintPagePlan(
+                store: store, pageID: pageID, stateMarkdown: stateMarkdown) else {
+                observed.append("\(pageID.rawValue): skipped (page does not exist)")
+                continue
+            }
+            await runLintAgent(
+                request: plan.request,
+                launcher: launcher,
+                wikiID: wikiID,
+                queueItemID: queueItemID,
+                providerLabel: providerLabel,
+                onTranscript: onTranscript,
+                onLiveUsage: onLiveUsage,
+                onPendingPermission: onPendingPermission)
+            observed.append("\(plan.snapshot.title): run completed")
+        }
         let results = await launcherResults(launcher)
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
         try validateLauncherResults(results)
-        // No typed page findings/checked-page callback exists — completion
-        // availability stays notReported (never zero findings).
+        // Observed per-page facts ride the completion mutation's summary.
         onReport?(QueueIngestionReporting.agentCompletionMutation(
             operation: .lint,
-            usage: results.usage))
+            usage: results.usage,
+            observedSummary: observed.isEmpty ? nil : observed.joined(separator: "; ")))
     }
 
     // MARK: - Private

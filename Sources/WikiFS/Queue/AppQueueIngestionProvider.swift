@@ -462,44 +462,54 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
         onReport?(QueueIngestionReporting.runningMutation())
 
-        // Run the pre-flight + combined lint, mirroring
-        // AgentOperationRunner.runLintPages but with progress + transcript.
-        let preflights = pages.map { page in
-            let preflight = store.preflightLint(pageID: page.id)
-            let allBroken = (preflight?.brokenPageLinks ?? [])
-                + (preflight?.brokenSourceLinks ?? [])
-                + (preflight?.brokenChatLinks ?? [])
-            return (title: page.title, brokenLinks: allBroken)
+        // Run the per-page lint plans SEQUENTIALLY — one run, one typed
+        // request, one outcome per page (plan §5.2/§5.3). Titles are never
+        // joined; a page's failure never becomes another page's clean audit.
+        var observed: [String] = []
+        for pageID in pageIDs {
+            if Task.isCancelled {
+                observed.append("\(pageID.rawValue): skipped (cancelled)")
+                continue
+            }
+            guard let plan = await AgentOperationRunner.makeLintPagePlan(
+                store: store.internalStore, pageID: pageID, stateMarkdown: stateMarkdown) else {
+                observed.append("\(pageID.rawValue): skipped (page does not exist)")
+                continue
+            }
+            await runLintAgent(
+                request: plan.request,
+                launcher: launcher,
+                store: store,
+                wikiID: wikiID,
+                queueItemID: queueItemID,
+                changeSignaler: changeSignaler,
+                onProgress: onProgress,
+                onTranscript: onTranscript,
+                onLiveUsage: onLiveUsage,
+                onPendingPermission: onPendingPermission
+            )
+            do {
+                try Self.validateLauncherOutcome(
+                    exitStatus: launcher.exitStatus,
+                    preflightError: launcher.preflightError,
+                    turnFailure: launcher.runTurnFailureFact)
+                observed.append("\(plan.snapshot.title): run completed")
+            } catch {
+                observed.append("\(plan.snapshot.title): run failed (\(error.localizedDescription))")
+            }
         }
-        let combinedTitle = pages.map(\.title).joined(separator: ", ")
-        let combinedBroken = preflights.flatMap(\.brokenLinks)
-
-        await runLintAgent(
-            request: .lintPage(
-                pageTitle: combinedTitle,
-                brokenLinks: combinedBroken,
-                stateMarkdown: stateMarkdown),
-            launcher: launcher,
-            store: store,
-            wikiID: wikiID,
-            queueItemID: queueItemID,
-            changeSignaler: changeSignaler,
-            onProgress: onProgress,
-            onTranscript: onTranscript,
-            onLiveUsage: onLiveUsage,
-            onPendingPermission: onPendingPermission
-        )
         onUsage?(launcher.runTotalUsage)
         onLogPaths?(launcher.logFileURL, launcher.debugFolderURL)
         try Self.validateLauncherOutcome(
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
             turnFailure: launcher.runTurnFailureFact)
-        // No typed page findings/checked-page callback exists — completion
-        // availability stays notReported (never zero findings).
+        // Observed per-page facts ride the completion mutation's summary —
+        // never an inferred clean audit.
         onReport?(QueueIngestionReporting.agentCompletionMutation(
             operation: .lint,
-            usage: launcher.runTotalUsage))
+            usage: launcher.runTotalUsage,
+            observedSummary: observed.isEmpty ? nil : observed.joined(separator: "; ")))
     }
 
     /// The app host's seam over the shared #1354 contract

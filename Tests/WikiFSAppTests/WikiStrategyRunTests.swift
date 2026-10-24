@@ -270,7 +270,13 @@ struct WikiStrategyRunTests {
             ("ingest", .ingest(sources: [stagedSource], stateMarkdown: appStateMarkdown)),
             ("query", .query(question: "What is this wiki about?", stateMarkdown: appStateMarkdown)),
             ("lint", .lint(stateMarkdown: appStateMarkdown)),
-            ("lintPage", .lintPage(pageTitle: "Existing Page", brokenLinks: [], stateMarkdown: appStateMarkdown)),
+            ("lintPage", .lintPage(
+                page: LintPageIdentity(
+                    pageID: PageID(rawValue: "01HZPAGE00000000000000000A"),
+                    title: "Existing Page", headVersionID: nil),
+                preflightReportMarkdown: "# preflight\n",
+                runReportMarkdown: "lint-run-report v1\n",
+                stateMarkdown: appStateMarkdown)),
         ]
         for (label, request) in requests {
             let staged = try stagedStateFile(for: request, kindLabel: label)

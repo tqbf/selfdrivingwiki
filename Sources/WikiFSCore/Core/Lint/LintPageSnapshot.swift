@@ -2,6 +2,30 @@ import Foundation
 import WikiFSTypes
 import WikiFSMarkdown
 
+/// The typed page identity a selected-page lint run carries through the
+/// operation cases (plan §5.1) — never joined titles. The full
+/// ``LintPageSnapshot`` stays with the coordinator; the operation needs only
+/// the identity plus its staged report artifacts.
+public struct LintPageIdentity: Equatable, Sendable {
+    public let pageID: PageID
+    public let title: String
+    public let headVersionID: PageVersionID?
+
+    public init(pageID: PageID, title: String, headVersionID: PageVersionID?) {
+        self.pageID = pageID
+        self.title = title
+        self.headVersionID = headVersionID
+    }
+
+    /// The identity of one coherent snapshot.
+    public init(_ snapshot: LintPageSnapshot) {
+        self.init(
+            pageID: snapshot.pageID,
+            title: snapshot.title,
+            headVersionID: snapshot.headVersionID)
+    }
+}
+
 /// One immutable page snapshot for a lint run (REQ-14): page identity, exact
 /// title, the inspected head version, a body fingerprint, the exact body
 /// bytes, and the head's recorded source inputs — all captured from one

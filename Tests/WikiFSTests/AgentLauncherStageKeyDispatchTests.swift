@@ -70,7 +70,11 @@ struct AgentLauncherStageKeyDispatchTests {
     }
 
     @Test func lintPageMapsToLint() {
-        #expect(AgentLauncher.stageKey(for: .lintPage(pageTitle: "P", brokenLinks: [], stateMarkdown: emptyState)) == "lint")
+        #expect(AgentLauncher.stageKey(for: .lintPage(
+            page: LintPageIdentity(pageID: PageID(rawValue: "01HZPAGE00000000000000000A"), title: "P", headVersionID: nil),
+            preflightReportMarkdown: "# preflight\n",
+            runReportMarkdown: "lint-run-report v1\n",
+            stateMarkdown: emptyState)) == "lint")
     }
 
     @Test func queryMapsToChat() {

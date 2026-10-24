@@ -58,11 +58,10 @@ public enum WikiOperation: Equatable, Sendable {
   /// `WIKI_STATE.md` snapshot.
   case lint(stateFilePath: String)
 
-  /// Health-check a single page. `brokenLinks` is the pre-computed list of
-  /// `[[page titles]]` that do not resolve to existing pages (computed in-app
-  /// by `WikiStoreModel.preflightLint` before the LLM run so the agent has
-  /// concrete targets rather than having to discover issues itself).
-  case lintPage(pageTitle: String, brokenLinks: [String], stateFilePath: String)
+  /// Health-check a single page. The run carries the TYPED page identity
+  /// (never joined titles) and the staged pre-flight report artifact — the
+  /// complete mechanical inventory and findings the agent must account for.
+  case lintPage(page: LintPageIdentity, reportFilePath: String, runReportPath: String, stateFilePath: String)
 
   /// A short, stable identifier for the operation kind (logging / UI).
   public var kind: Kind {
@@ -82,7 +81,7 @@ public enum WikiOperation: Equatable, Sendable {
     case .query(_, let stateFilePath): return stateFilePath
     case .queryChat(let stateFilePath, _): return stateFilePath
     case .lint(let stateFilePath): return stateFilePath
-    case .lintPage(_, _, let stateFilePath): return stateFilePath
+    case .lintPage(_, _, _, let stateFilePath): return stateFilePath
     }
   }
 
@@ -149,10 +148,11 @@ extension WikiOperation {
       return Self.queryChatPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
     case .lint(let stateFilePath):
       return Self.lintPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
-    case .lintPage(let pageTitle, let brokenLinks, let stateFilePath):
+    case .lintPage(let page, let reportFilePath, let runReportPath, let stateFilePath):
       return Self.lintPagePrompt(
-        wikiRoot: wikiRoot, pageTitle: pageTitle,
-        brokenLinks: brokenLinks, stateFilePath: stateFilePath)
+        wikiRoot: wikiRoot, page: page,
+        reportFilePath: reportFilePath, runReportPath: runReportPath,
+        stateFilePath: stateFilePath)
     }
   }
 
@@ -333,23 +333,16 @@ extension WikiOperation {
   /// itself. Runs Opus single-agent with full write permissions.
   private static func lintPagePrompt(
     wikiRoot: String,
-    pageTitle: String,
-    brokenLinks: [String],
+    page: LintPageIdentity,
+    reportFilePath: String,
+    runReportPath: String,
     stateFilePath: String
   ) -> String {
-    let linksSection: String
-    if brokenLinks.isEmpty {
-      linksSection = "Broken wiki links: none detected."
-    } else {
-      let list = brokenLinks.map { "  - \($0)" }.joined(separator: "\n")
-      linksSection = """
-        Broken wiki links (targets not found in the wiki):
-        \(list)
-        """
-    }
     let task = PromptTemplate.fill(GeneratedPrompts.lintPageTask, [
-      "pageTitle": pageTitle,
-      "linksSection": linksSection,
+      "pageTitle": page.title,
+      "pageID": page.pageID.rawValue,
+      "preflightArtifactPath": reportFilePath,
+      "runReportPath": runReportPath,
     ])
     return """
       \(IngestWriteRule.writes)

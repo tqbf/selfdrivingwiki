@@ -26,6 +26,25 @@ public enum AgentStaging {
   /// The fixed leaf name of the staged wiki-state snapshot.
   public static let stateFileName = "WIKI_STATE.md"
 
+  /// The fixed leaf names of the staged lint artifacts: the pre-flight
+  /// report (inventory + findings worklist) and the run-report skeleton the
+  /// agent fills in (plan §5.1/§5.6).
+  public static let lintPreflightReportFileName = "LINT_PREFLIGHT.md"
+  public static let lintRunReportFileName = "LINT_RUN_REPORT.md"
+
+  /// Write a text file with a fixed leaf name into `scratchDirectory` and
+  /// return its absolute path. Throws on write failure.
+  @discardableResult
+  public static func stageTextFile(
+    _ content: String,
+    name: String,
+    in scratchDirectory: URL
+  ) throws -> String {
+    let url = scratchDirectory.appendingPathComponent(name, isDirectory: false)
+    try Data(content.utf8).write(to: url, options: .atomic)
+    return url.path
+  }
+
   /// Write `WIKI_STATE.md` into `scratchDirectory` and return its absolute path.
   /// Throws if the write fails (the caller surfaces it as a preflight error rather
   /// than launching a run that would fall back to probing the mount).
