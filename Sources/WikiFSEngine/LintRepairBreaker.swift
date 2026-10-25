@@ -228,6 +228,67 @@ public final class LintRepairBreaker: @unchecked Sendable {
         }
     }
 
+    /// What the breaker's window holds for one configuration right now: the
+    /// outcome counts the trip rules count, and whether the breaker is
+    /// currently tripped. Read-only — the Undo UI's "N of 2 allowed … used"
+    /// context line renders this; consulting it never mutates state.
+    public struct WindowStatus: Equatable, Sendable {
+        public let windowSize: Int
+        public let verificationFailures: Int
+        public let userUndos: Int
+        public let tripReason: String?
+
+        public var isTripped: Bool { tripReason != nil }
+
+        public init(windowSize: Int, verificationFailures: Int, userUndos: Int, tripReason: String?) {
+            self.windowSize = windowSize
+            self.verificationFailures = verificationFailures
+            self.userUndos = userUndos
+            self.tripReason = tripReason
+        }
+    }
+
+    /// The window status for one configuration. A pipeline change discards
+    /// the old state and answers an empty, clean window; unreadable state
+    /// answers a tripped window (the same demotion `consult` applies).
+    public func windowStatus(for key: LintRepairBreakerKey) -> WindowStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        let url: URL
+        switch stateFileURL(for: key) {
+        case .failure(let unavailable):
+            return WindowStatus(
+                windowSize: Self.windowSize, verificationFailures: 0, userUndos: 0,
+                tripReason: unavailable.reason)
+        case .success(let resolved):
+            url = resolved
+        }
+        switch load(url) {
+        case .missing:
+            return WindowStatus(
+                windowSize: Self.windowSize, verificationFailures: 0, userUndos: 0,
+                tripReason: nil)
+        case .unreadable(let reason):
+            DebugLog.agent("lint breaker: \(reason) at \(url.path) — demoting")
+            return WindowStatus(
+                windowSize: Self.windowSize, verificationFailures: 0, userUndos: 0,
+                tripReason: "breaker state unreadable")
+        case .loaded(let state):
+            guard state.pipelineDigest == key.pipelineDigest else {
+                // Stale-pipeline state reads as the reset it will become.
+                return WindowStatus(
+                    windowSize: Self.windowSize, verificationFailures: 0, userUndos: 0,
+                    tripReason: nil)
+            }
+            let window = state.outcomes.suffix(Self.windowSize)
+            return WindowStatus(
+                windowSize: Self.windowSize,
+                verificationFailures: window.filter { $0.kind == .verificationFailure }.count,
+                userUndos: window.filter { $0.kind == .userUndo }.count,
+                tripReason: state.trip?.reason)
+        }
+    }
+
     // MARK: - Record
 
     /// Record one repair-run outcome for a configuration and return the

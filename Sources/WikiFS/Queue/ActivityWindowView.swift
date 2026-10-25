@@ -151,6 +151,19 @@ struct ActivityWindowView: View {
     /// presentation-only.
     @State private var showsRunDetailsInspector = false
 
+    // MARK: Lint undo state (W2b) — one undo per selected run, reset on
+    // selection change. The batch result and breaker messages survive only
+    // while the same job stays selected; the durable record is untouched.
+
+    /// The undo batch is running (the button is disabled, never re-entrant).
+    @State private var lintUndoInFlight = false
+    /// The completed undo batch's per-page outcomes (the honest aggregate).
+    @State private var lintUndoResult: LintUndoService.BatchResult?
+    /// The breaker's read-only window status line for the disclosure.
+    @State private var lintBreakerContext: String?
+    /// The breaker's trip message when this undo tripped it.
+    @State private var lintBreakerNotice: String?
+
     /// The selected job's two workspace surfaces. Activity is the only
     /// transcript surface (plan §1); Overview is the complete inventory +
     /// Run Details.
@@ -280,6 +293,11 @@ struct ActivityWindowView: View {
         // auto-select, or a user click all land here.
         .onChange(of: selectedItemID) { _, _ in
             workspaceSurface = .overview
+            // The undo presentation belongs to the selected run only.
+            lintUndoInFlight = false
+            lintUndoResult = nil
+            lintBreakerContext = nil
+            lintBreakerNotice = nil
         }
         // Auto-select the most interesting item once, when the first snapshot
         // lands — a window opened from "1 running" should show that run.
@@ -1042,7 +1060,13 @@ struct ActivityWindowView: View {
             workspaceDetailPane
             if showsRunDetailsInspector {
                 Divider()
-                QueueRunDetailsView(selectedRunDetailsFacts)
+                QueueRunDetailsView(
+                    selectedRunDetailsFacts,
+                    lintRepair: selectedLintRepair,
+                    onUndo: selectedLintRepair?.showsUndoButton == true
+                        ? { undoLintFixes() } : nil,
+                    versionBody: selectedLintRepair != nil
+                        ? { wikiStoreModel?.pageVersionBody(for: $0) } : nil)
                     .frame(width: QueueWorkspaceMetrics.Inspector.width)
             }
         }
@@ -1062,6 +1086,101 @@ struct ActivityWindowView: View {
             report = loaded
         }
         return runDetailsFacts(for: item, report: report)
+    }
+
+    /// The selected lint run's repair section (W2b), or nil for every other
+    /// job: non-lint runs, whole-wiki report-only runs, report-only and
+    /// budget-rejected runs (their records name the tier and no surviving
+    /// repair), and already auto-reverted runs. The undo's presentation
+    /// state rides along from this window's @State.
+    private var selectedLintRepair: QueueRunDetailsLintRepair? {
+        guard let itemID = selectedItemID, let item = item(for: itemID),
+              case .loaded(let report) = viewModel.selectedReport,
+              Self.loadedReportMatches(report: report, item: item) else {
+            return nil
+        }
+        var repair = QueueRunDetailsLintRepair.make(
+            report: report, wikiID: item.wikiID,
+            undoInFlight: lintUndoInFlight, undoResult: lintUndoResult,
+            breakerContext: lintBreakerContext, breakerNotice: lintBreakerNotice)
+        // The disclosure's breaker context line resolves only when the run's
+        // records name a shipped approval row this build can map back to a
+        // configuration tuple — local file reads, no network, no mutation.
+        if repair != nil, lintBreakerContext == nil, let approvalID = repair?.approvalID,
+           let key = LintUndoService.breakerKey(forApprovalID: approvalID) {
+            let status = LintRepairBreaker.production().windowStatus(for: key)
+            repair?.breakerContext = Self.breakerContextLine(status)
+        }
+        return repair
+    }
+
+    /// The disclosure's breaker context: how much of the local breaker's
+    /// tolerance a configuration has used ("1 of 2 allowed user undos
+    /// used…"), or the trip state. Local and factual only.
+    nonisolated static func breakerContextLine(_ status: LintRepairBreaker.WindowStatus) -> String {
+        var line = "Breaker: \(status.userUndos) of \(LintRepairBreaker.userUndoTripCount) allowed user undos used; "
+            + "\(status.verificationFailures) of \(LintRepairBreaker.verificationFailureTripCount) allowed verification failures used."
+        if let reason = status.tripReason {
+            line += " Tripped — \(reason)."
+        }
+        return line
+    }
+
+    /// The one-click undo through the trusted host path: the session's own
+    /// wiki store (the same store the queue's lint runs and the page-history
+    /// window write through), one CAS revert per repaired page, then ONE
+    /// breaker undo for the run's configuration. Runs on the main actor; the
+    /// store is method-atomic per call.
+    private func undoLintFixes() {
+        guard lintUndoInFlight == false,
+              let repair = selectedLintRepair,
+              repair.showsUndoButton else { return }
+        let plans = repair.repairPages.map {
+            LintUndoService.PagePlan(
+                pageID: $0.pageID, inspectedHead: $0.inspectedHead,
+                writtenHead: $0.writtenHead)
+        }
+        guard plans.isEmpty == false else { return }
+        // The breaker records only when this build can name the run's
+        // configuration from its approval row — exactly the runs whose
+        // outcomes the breaker counts.
+        let key = repair.approvalID.flatMap { LintUndoService.breakerKey(forApprovalID: $0) }
+        let breaker = key != nil ? LintRepairBreaker.production() : nil
+        lintUndoInFlight = true
+        Task { @MainActor in
+            let result: LintUndoService.BatchResult
+            if let store = wikiStoreModel?.internalStore {
+                result = LintUndoService.undoRepairedPages(
+                    store: store, pages: plans, breaker: breaker, breakerKey: key)
+            } else {
+                // The wiki's window is closed — no store to revert through.
+                // Every page reports as failed rather than silently no-op'ing.
+                DebugLog.ingest(
+                    "lint undo: no open store for wiki \(repair.wikiID.rawValue); batch refused")
+                result = LintUndoService.BatchResult(
+                    pages: plans.map {
+                        LintUndoService.PageResult(
+                            pageID: $0.pageID,
+                            outcome: .failed(reason: "the wiki is not open — reopen it and undo again"))
+                    },
+                    breakerVerdict: nil)
+            }
+            lintUndoResult = result
+            if let verdict = result.breakerVerdict {
+                lintBreakerNotice = LintUndoService.breakerTripMessage(verdict)
+            }
+            lintUndoInFlight = false
+            DebugLog.ingest(
+                "lint undo: \(result.revertedCount) reverted, \(result.headMovedCount) changed since the run" +
+                (result.breakerVerdict != nil ? "; breaker recorded" : ""))
+        }
+    }
+
+    /// The selected item's wiki store model, when that wiki's window is
+    /// open — the same resolution the transcript's blob serving uses.
+    private var wikiStoreModel: WikiStoreModel? {
+        guard let itemID = selectedItemID, let item = item(for: itemID) else { return nil }
+        return sessionManager?.sessions[item.wikiID]?.store
     }
 
     /// The selected job's workspace (plan §1 "Selected job workspace"): the
