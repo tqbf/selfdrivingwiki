@@ -62,10 +62,16 @@ public struct DaemonRunEndpointName: Hashable, Codable, Sendable,
         self.rawValue = rawValue
     }
 
-    /// Random byte count behind one name: 12 bytes = 96 random bits (24
-    /// lowercase-hex characters). Endpoint paths are length-budgeted
-    /// (`SearchSocketWire.maxPathBytes`), so the leaf stays short while the
-    /// collision space stays astronomically beyond enumeration.
+    /// Random byte count behind one name: 12 bytes = 96 random bits,
+    /// base64url-encoded to 16 characters. Endpoint paths are length-budgeted
+    /// (`SearchSocketWire.maxPathBytes` = 103) and the leaf must fit even
+    /// under a LONG App Group id (the dedicated eval container
+    /// `group.eval.selfdrivingwiki.lintgate` is 9 characters longer than the
+    /// operator's, which pushed the old 24-character hex leaf's path to 108 —
+    /// every scoped-run registration in that container failed
+    /// `pathTooLong`). Base64url keeps the full 96 random bits in 2/3 the
+    /// characters; the collision space stays astronomically beyond
+    /// enumeration.
     static let randomByteCount = 12
 
     public enum GenerationError: Error, Equatable {
@@ -73,15 +79,20 @@ public struct DaemonRunEndpointName: Hashable, Codable, Sendable,
     }
 
     /// A fresh opaque name from the system random source (`SecRandomCopyBytes`
-    /// — the same source the capability uses).
+    /// — the same source the capability uses). Base64url (URL-safe alphabet,
+    /// no padding — 12 bytes encode exactly) so the name is one legal
+    /// filename component everywhere.
     public static func generate() throws -> DaemonRunEndpointName {
         var bytes = [UInt8](repeating: 0, count: randomByteCount)
         let status = SecRandomCopyBytes(kSecRandomDefault, randomByteCount, &bytes)
         guard status == errSecSuccess else {
             throw GenerationError.randomSourceUnavailable(status)
         }
-        let hex = bytes.map { String(format: "%02x", $0) }.joined()
-        return DaemonRunEndpointName(rawValue: hex)
+        let base64 = Data(bytes)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+        return DaemonRunEndpointName(rawValue: base64)
     }
 
     public var description: String { rawValue }

@@ -307,9 +307,9 @@ struct DaemonRunEndpointTests {
                 Issue.record("expected pathTooLong, got \(error)")
                 return
             }
-            // The broker's path carries a GENERATED 24-char endpoint name, so
-            // `actual` exceeds even the "aa"-named probe path — both are far
-            // over the budget, which is the point.
+            // The broker's path carries a GENERATED 16-char endpoint name
+            // (base64url), so `actual` exceeds even the "aa"-named probe
+            // path — both are far over the budget, which is the point.
             #expect(limit == SearchSocketWire.maxPathBytes)
             #expect(actual > SearchSocketWire.maxPathBytes)
             #expect(actual >= overlong.utf8.count)
@@ -318,6 +318,34 @@ struct DaemonRunEndpointTests {
         }
         let countAfter = await fixture.registry.runCount()
         #expect(countAfter == countBefore, "no lease may exist after a failed launch")
+    }
+
+    /// The W3 live gate's dedicated eval container
+    /// (`group.eval.selfdrivingwiki.lintgate`) is 9 bytes longer than the
+    /// operator's App Group id. At the reference home layout its container
+    /// prefix is 76 bytes, leaving only 103 - 76 = 27 bytes for the
+    /// `r/<name>.sock` leaf — and the old 24-char hex leaf (32 with the
+    /// separators) overflowed it, so EVERY scoped-run registration in the
+    /// eval container failed `pathTooLong` and the lint agent never
+    /// launched. The base64url leaf (16 chars, 22 with separators) fits with
+    /// room to spare while keeping the same 96 random bits.
+    @Test("a generated endpoint name fits the eval container's path budget")
+    func generatedNameFitsTheEvalContainerBudget() throws {
+        let name = try DaemonRunEndpointName.generate()
+        // Base64url of 12 random bytes: exactly 16 characters, no padding.
+        #expect(name.rawValue.count == 16)
+        // A container whose prefix matches the eval container's 76-byte
+        // reference length leaves 27 bytes for the leaf; the composed path
+        // must fit the sockaddr_un budget. (Absolute, so the broker's path
+        // standardization cannot prepend a working directory.)
+        let evalSizedContainer = URL(
+            fileURLWithPath: "/" + String(repeating: "c", count: 75))
+        let path = DaemonRunRegistrationBroker.endpointPath(
+            inContainerDirectory: evalSizedContainer, name: name)
+        // 76-byte container + "/r/" (the runs directory joins with a
+        // trailing slash) + the 16-char name + ".sock".
+        #expect(path.utf8.count == 76 + 3 + 16 + 5)
+        #expect(path.utf8.count <= SearchSocketWire.maxPathBytes)
     }
 }
 #endif

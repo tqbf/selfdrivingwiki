@@ -1809,6 +1809,7 @@ public final class AgentLauncher {
                 wikiID: wikiID, policy: Self.managedRunPolicy(for: request))
         } catch {
             preflightError = error.localizedDescription
+            DebugLog.agent("launch: scoped-run issue failed — \(error)")
             finish(status: -1)
             return
         }
@@ -1827,6 +1828,7 @@ public final class AgentLauncher {
             // cannot fit a socket address) must fail the launch, never fall
             // back to an unscoped profile.
             preflightError = "Could not build the sandbox profile: \(error.localizedDescription)"
+            DebugLog.agent("launch: sandbox profile build failed — \(error)")
             finish(status: -1)
             return
         }
