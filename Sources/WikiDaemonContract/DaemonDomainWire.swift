@@ -526,6 +526,11 @@ public enum DaemonDomainOperation {
         /// per-hunk defect classes, applied atomically in exact-body mode
         /// under CAS. Lint runs' only mutation.
         public static let patch = "patch"
+        /// W5a tier 2: the STAGED form of the patch write. Same request
+        /// shape, but the daemon validates the hunks and holds them as a
+        /// staged proposal for human review — the page is never written.
+        /// Proposal-policy lint runs' only mutation.
+        public static let proposePatch = "proposePatch"
         public static let delete = "delete"
         public static let revert = "revert"
     }

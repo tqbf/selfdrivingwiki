@@ -361,6 +361,9 @@ struct DaemonScopedRequestGuard: Sendable {
             try Self.evaluateLintAllowances(request, selectedPageID: selectedPage, allowsPatch: true)
         case .lintSelectedPageReportOnly(let selectedPage):
             try Self.evaluateLintAllowances(request, selectedPageID: selectedPage, allowsPatch: false)
+        case .lintSelectedPageProposal(let selectedPage):
+            try Self.evaluateLintAllowances(
+                request, selectedPageID: selectedPage, allowsPatch: false, allowsPropose: true)
         case .lintWholeWikiReportOnly:
             try Self.evaluateLintAllowances(request, selectedPageID: nil, allowsPatch: false)
         }
@@ -418,10 +421,15 @@ struct DaemonScopedRequestGuard: Sendable {
     ///   only when the payload's page id equals the lease's selected page
     ///   (identity resolved daemon-side from the typed payload). Report-only
     ///   policies and whole-wiki runs never patch.
+    /// - `page propose-patch` (W5a tier 2): allowed ONLY for the selected-page
+    ///   PROPOSAL policy, and only against the selected page's identity — the
+    ///   staging write. The repair policy never proposes (tier 1 patches
+    ///   directly), and the proposal policy never patches.
     static func evaluateLintAllowances(
         _ request: DaemonDomainRequest,
         selectedPageID: PageID?,
-        allowsPatch: Bool
+        allowsPatch: Bool,
+        allowsPropose: Bool = false
     ) throws {
         let decision = DaemonScopedOperationPolicy.decision(
             family: request.family, operation: request.operation)
@@ -444,6 +452,16 @@ struct DaemonScopedRequestGuard: Sendable {
         // page's identity (resolved daemon-side from the typed payload).
         if allowsPatch,
            request.family == .page, request.operation == DaemonDomainOperation.Page.patch,
+           let selectedPageID,
+           let payload = request.payload,
+           let presented = Self.patchPayloadPageID(payload),
+           presented == selectedPageID.rawValue {
+            return
+        }
+        // The STAGED seam (W5a tier 2): PROPOSAL-policy only, same identity
+        // pinning. Staging writes nothing — the daemon holds the hunks.
+        if allowsPropose,
+           request.family == .page, request.operation == DaemonDomainOperation.Page.proposePatch,
            let selectedPageID,
            let payload = request.payload,
            let presented = Self.patchPayloadPageID(payload),

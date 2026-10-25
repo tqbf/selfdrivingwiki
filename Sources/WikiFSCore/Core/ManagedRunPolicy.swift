@@ -23,6 +23,12 @@ public enum ManagedRunPolicy: Hashable, Codable, Sendable {
     /// pinning, no patch authority at all.
     case lintSelectedPageReportOnly(pageID: PageID)
 
+    /// Selected-page lint in staged-proposal form (W5a tier 2): reads the
+    /// assigned wiki, appends lint logs, and STAGES exact hunks against the
+    /// selected page via `page propose-patch` — never writes them. Every
+    /// other mutation, `page patch` included, denies.
+    case lintSelectedPageProposal(pageID: PageID)
+
     /// Whole-wiki lint: reads the assigned wiki and appends lint logs.
     /// Every content mutation is denied, including patches (REQ-49).
 
@@ -32,17 +38,20 @@ public enum ManagedRunPolicy: Hashable, Codable, Sendable {
     public var isLint: Bool {
         switch self {
         case .ordinaryManaged: return false
-        case .lintSelectedPageRepair, .lintSelectedPageReportOnly, .lintWholeWikiReportOnly:
+        case .lintSelectedPageRepair, .lintSelectedPageReportOnly,
+             .lintSelectedPageProposal, .lintWholeWikiReportOnly:
             return true
         }
     }
 
-    /// The selected page a selected-page lint policy may patch; `nil` for
-    /// every other policy (whole-wiki lint has no selected page).
+    /// The selected page a selected-page lint policy may patch or stage
+    /// proposals against; `nil` for every other policy (whole-wiki lint has
+    /// no selected page).
     public var selectedPageID: PageID? {
         switch self {
         case .ordinaryManaged, .lintWholeWikiReportOnly: return nil
-        case .lintSelectedPageRepair(let pageID), .lintSelectedPageReportOnly(let pageID):
+        case .lintSelectedPageRepair(let pageID), .lintSelectedPageReportOnly(let pageID),
+             .lintSelectedPageProposal(let pageID):
             return pageID
         }
     }

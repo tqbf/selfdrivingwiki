@@ -75,6 +75,7 @@ struct DaemonLintPolicyTests {
         .ordinaryManaged,
         .lintSelectedPageRepair(pageID: PageID(rawValue: "01HZLINTPAGE00000000000000001")),
         .lintSelectedPageReportOnly(pageID: PageID(rawValue: "01HZLINTPAGE00000000000000001")),
+        .lintSelectedPageProposal(pageID: PageID(rawValue: "01HZLINTPAGE00000000000000001")),
         .lintWholeWikiReportOnly,
     ]
 
@@ -92,6 +93,12 @@ struct DaemonLintPolicyTests {
             let lease = try #require(await fixture.registry.lease(for: fixture.runID))
             #expect(lease.operationPolicy == policy)
         }
+    }
+
+    /// The number of lint policy kinds — the log-kind test iterates all of
+    /// them, so adding a fifth lint shape updates this pin deliberately.
+    @Test func lintPolicyKindsArePinned() {
+        #expect(Self.allPolicies.filter(\.isLint).count == 4)
     }
 
     // MARK: - Receipt lifecycle semantics (plan §5.8 wiring)
@@ -281,6 +288,124 @@ struct DaemonLintPolicyTests {
             "ordinary managed runs keep the edit class for patches")
     }
 
+    /// The proposal seam (W5a tier 2): the selected-page PROPOSAL policy may
+    /// stage against ONLY its selected page; `page patch` denies (staging is
+    /// not writing); the tier-1 REPAIR policy never proposes; report-only
+    /// and whole-wiki runs do neither; an unreadable or other-page payload
+    /// denies.
+    @Test func proposeRequiresSelectedPageIdentityAndNeverPatches() async throws {
+        let selected = PageID(rawValue: "01HZLINTPAGE00000000000000001")
+        let other = PageID(rawValue: "01HZLINTPAGE00000000000000002")
+
+        func proposePayload(pageID: PageID?) -> String {
+            let id = pageID?.rawValue ?? "01HZLINTPAGE00000000000000009"
+            return """
+            {"wikiID":"\(Fixture.wikiIDValue.rawValue)","id":"\(id)","expectHead":"01HZHEAD00000000000000000001","hunks":[{"defect":"D25","startByte":0,"endByte":3,"oldText":"```","newText":"","reason":"unwrap"}],"author":"agent:lint"}
+            """
+        }
+
+        func patchPayload(pageID: PageID?) -> String {
+            var payload = proposePayload(pageID: pageID)
+            // Same shape; only the operation differs (the guard reads `id`).
+            payload.reserveCapacity(payload.count)
+            return payload
+        }
+
+        // Proposal policy: selected-page propose passes; any other page, an
+        // unreadable payload, and a patch attempt all deny.
+        let proposal = try await Fixture(policy: .lintSelectedPageProposal(pageID: selected))
+        #expect(await proposal.allowed(proposal.request(
+            family: .page, operation: DaemonDomainOperation.Page.proposePatch,
+            payloadJSON: proposePayload(pageID: selected))),
+            "the proposal run may stage exactly its selected page")
+        #expect(await !proposal.allowed(proposal.request(
+            family: .page, operation: DaemonDomainOperation.Page.proposePatch,
+            payloadJSON: proposePayload(pageID: other))),
+            "a proposal against ANY other page must deny")
+        #expect(await !proposal.allowed(proposal.request(
+            family: .page, operation: DaemonDomainOperation.Page.proposePatch,
+            payloadJSON: proposePayload(pageID: nil))),
+            "an unreadable propose payload must deny")
+        #expect(await !proposal.allowed(proposal.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: selected))),
+            "a proposal run never patches — staged hunks are held, not written")
+
+        // Tier-1 repair policy: patches its page, never proposes.
+        let repair = try await Fixture(policy: .lintSelectedPageRepair(pageID: selected))
+        #expect(await repair.allowed(repair.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: selected))),
+            "the repair run keeps its patch seam")
+        #expect(await !repair.allowed(repair.request(
+            family: .page, operation: DaemonDomainOperation.Page.proposePatch,
+            payloadJSON: proposePayload(pageID: selected))),
+            "a tier-1 run cannot propose — the child cannot widen or swap its tier")
+
+        // Report-only and whole-wiki: neither seam.
+        for policy in [
+            ManagedRunPolicy.lintSelectedPageReportOnly(pageID: selected),
+            .lintWholeWikiReportOnly,
+        ] {
+            let fixture = try await Fixture(policy: policy)
+            #expect(await !fixture.allowed(fixture.request(
+                family: .page, operation: DaemonDomainOperation.Page.proposePatch,
+                payloadJSON: proposePayload(pageID: selected))),
+                "\(policy): report-only runs never propose")
+            #expect(await !fixture.allowed(fixture.request(
+                family: .page, operation: DaemonDomainOperation.Page.patch,
+                payloadJSON: patchPayload(pageID: selected))),
+                "\(policy): report-only runs never patch")
+        }
+
+        // Ordinary managed runs patch (wikiEdit) but never propose (the op
+        // has no class-table entry — it is a managed-lint seam only).
+        let ordinary = try await Fixture(policy: .ordinaryManaged)
+        #expect(await ordinary.allowed(ordinary.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: other))),
+            "ordinary managed runs keep the edit class for patches")
+        #expect(await !ordinary.allowed(ordinary.request(
+            family: .page, operation: DaemonDomainOperation.Page.proposePatch,
+            payloadJSON: proposePayload(pageID: other))),
+            "propose-patch is not an ordinary-run operation")
+    }
+
+    /// The child cannot choose its policy: an argv/env-like marker inside the
+    /// payload must not select the proposal policy for a tier-1 run or vice
+    /// versa — the policy arrives only through the trusted coordinator's
+    /// lease, and the guard consults the LEASE's policy, never the payload.
+    @Test func payloadCannotSelectProposalPolicy() async throws {
+        let selected = PageID(rawValue: "01HZLINTPAGE00000000000000001")
+        // A tier-1 repair lease carrying a tier-2-styled payload ( proposing)
+        // still only patches; a tier-2 lease carrying a patch-shaped payload
+        // still only proposes.
+        let repair = try await Fixture(policy: .lintSelectedPageRepair(pageID: selected))
+        let proposal = try await Fixture(policy: .lintSelectedPageProposal(pageID: selected))
+        let proposeBody = """
+        {"wikiID":"\(Fixture.wikiIDValue.rawValue)","id":"\(selected.rawValue)","expectHead":"01HZHEAD00000000000000000001","hunks":[{"defect":"D25","startByte":0,"endByte":3,"oldText":"```","newText":"","reason":"unwrap"}],"policy":"lintSelectedPageProposal"}
+        """
+        let patchBody = """
+        {"wikiID":"\(Fixture.wikiIDValue.rawValue)","id":"\(selected.rawValue)","expectHead":"01HZHEAD00000000000000000001","hunks":[{"defect":"D25","startByte":0,"endByte":3,"oldText":"```","newText":"","reason":"unwrap"}],"policy":"lintSelectedPageRepair"}
+        """
+        #expect(await !repair.allowed(repair.request(
+            family: .page, operation: DaemonDomainOperation.Page.proposePatch,
+            payloadJSON: proposeBody)),
+            "a policy-naming payload cannot give a tier-1 run the proposal seam")
+        #expect(await repair.allowed(repair.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchBody)),
+            "the tier-1 run's patch seam is unchanged by payload markers")
+        #expect(await !proposal.allowed(proposal.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchBody)),
+            "a policy-naming payload cannot give a tier-2 run the patch seam")
+        #expect(await proposal.allowed(proposal.request(
+            family: .page, operation: DaemonDomainOperation.Page.proposePatch,
+            payloadJSON: proposeBody)),
+            "the tier-2 run's propose seam is unchanged by payload markers")
+    }
+
     // MARK: - Log append kind conditioning
 
     /// The log allowance is payload-conditioned for EVERY lint policy: kind
@@ -288,7 +413,7 @@ struct DaemonLintPolicyTests {
     /// get the generic denial. Raw-frame shapes included.
     @Test func logAppendRequiresLintKind() async throws {
         let lintPolicies = Self.allPolicies.filter(\.isLint)
-        #expect(lintPolicies.count == 3)
+        #expect(lintPolicies.count == 4)
         for policy in lintPolicies {
             let fixture = try await Fixture(policy: policy)
 
@@ -342,6 +467,9 @@ struct DaemonLintPolicyTests {
             for: .lintSelectedPageRepair(pageID: selectedPage)) == [.wikiRead])
         #expect(DaemonScopedRunLeaseManager.operationClasses(
             for: .lintSelectedPageReportOnly(pageID: selectedPage)) == [.wikiRead])
+        #expect(DaemonScopedRunLeaseManager.operationClasses(
+            for: .lintSelectedPageProposal(pageID: selectedPage)) == [.wikiRead],
+            "the proposal lease is read-only too — staging is an allowance, never a class")
     }
 
     // MARK: - Per-run CAS budget (plan Phase 2.8)
