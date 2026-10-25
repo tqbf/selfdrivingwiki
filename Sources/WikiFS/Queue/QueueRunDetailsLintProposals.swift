@@ -84,8 +84,11 @@ struct QueueRunDetailsLintProposals: Sendable, Equatable {
 
     /// The still-pending proposals, in the durable records' order.
     let pendingProposals: [PendingProposal]
-    /// The terminal outcomes, in the durable records' order.
-    let outcomeRows: [QueueLintProposalOutcome]
+    /// The terminal outcomes, in the durable records' order. `var` (like
+    /// the presentation fields below) so a caller that owns the section as
+    /// one value can append a resolved outcome in place; production wiring
+    /// keeps its own @State array and passes a fresh value instead.
+    var outcomeRows: [QueueLintProposalOutcome]
     /// How many proposals the run staged per its durable records — the
     /// visibility anchor ("N proposed") that survives daemon restarts.
     let recordedProposalCount: Int

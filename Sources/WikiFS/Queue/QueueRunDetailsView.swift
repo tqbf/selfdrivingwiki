@@ -392,20 +392,25 @@ struct QueueRunDetailsView: View {
 
     // MARK: - Staged-proposal review section (W5b)
 
-    /// The tier-2 review rows: one row per pending proposal (summary,
-    /// projected diff, Approve/Reject), an Approve-all row, the breaker
-    /// lines, and the collapsed outcome summary. After every proposal
-    /// resolves, only the summary (and the breaker lines) render — the
-    /// controls disappear rather than staying enabled.
+    /// The tier-2 review rows: per pending proposal a diff row (summary +
+    /// projected before/after, or the stale state with no buttons) and its
+    /// own controls row (the W2b shape — a real row the synthesized clicks
+    /// and VoiceOver can address), then Approve all, the breaker lines, and
+    /// the collapsed outcome summary. After every proposal resolves, only
+    /// the summary (and the breaker lines) render — the controls disappear
+    /// rather than staying enabled.
     @ViewBuilder
     private func lintProposalRows(_ proposals: QueueRunDetailsLintProposals) -> some View {
         if proposals.showsSection {
             proposalsHeaderRow(proposals)
             ForEach(proposals.pendingProposals) { pending in
-                ProposalReviewRow(
+                ProposalDiffRow(
+                    pending: pending,
+                    versionBody: versionBody,
+                    currentHead: currentHead)
+                ProposalControlsRow(
                     pending: pending,
                     section: proposals,
-                    versionBody: versionBody,
                     currentHead: currentHead,
                     onApprove: onApproveProposal.map { action in
                         { action(pending.proposal) }
@@ -509,19 +514,14 @@ struct QueueRunDetailsView: View {
             .accessibilityLabel(context)
     }
 
-    /// One pending proposal's review row: the staging-time title, the hunk
-    /// count and classes, the projected before/after diff (or the stale
-    /// state with NO buttons), and the Approve/Reject controls. Buttons are
-    /// hidden once the page head moved (the apply would refuse as stale
-    /// anyway) and disabled while any apply is in flight or the breaker
-    /// configuration is unresolvable.
-    private struct ProposalReviewRow: View {
+    /// One pending proposal's diff row: the staging-time title, the hunk
+    /// count and classes, and the projected before/after diff — or the
+    /// stale state (no diff, and the sibling controls row hides its
+    /// buttons through the same gate).
+    private struct ProposalDiffRow: View {
         let pending: QueueRunDetailsLintProposals.PendingProposal
-        let section: QueueRunDetailsLintProposals
         let versionBody: (@MainActor (_ versionID: PageVersionID) -> String?)?
         let currentHead: (@MainActor (_ pageID: PageID) -> PageVersionID?)?
-        let onApprove: (() -> Void)?
-        let onReject: (() -> Void)?
 
         @State private var isStale = false
         @State private var beforeBody: String?
@@ -541,9 +541,6 @@ struct QueueRunDetailsView: View {
                         .textSelection(.enabled)
                 }
                 diffRegion
-                if isStale == false {
-                    controls
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 3)
@@ -579,40 +576,9 @@ struct QueueRunDetailsView: View {
             }
         }
 
-        private var controls: some View {
-            HStack(spacing: QueueWorkspaceMetrics.Spacing.sm) {
-                Button {
-                    onApprove?()
-                } label: {
-                    Label("Approve", systemImage: "checkmark")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(section.isDisabled(proposal.id))
-                .help("Write these hunks to the page. The write is verified and reverted automatically if it does not check out.")
-                .accessibilityLabel("Approve proposal for \(pending.title)")
-                Button {
-                    onReject?()
-                } label: {
-                    Label("Reject", systemImage: "xmark")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(section.isDisabled(proposal.id))
-                .help("Discard this proposal without writing anything. Repeated rejections pause auto-repair for this configuration.")
-                .accessibilityLabel("Reject proposal for \(pending.title)")
-                if section.isDisabled(proposal.id), section.actionUnavailableReason == nil {
-                    Text("Applying…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-        }
-
         /// The stale gate + diff load. The page head must still be the head
         /// the hunks were composed against, and the inspected body must be
-        /// readable — otherwise the stale state renders with no buttons.
+        /// readable — otherwise the stale state renders.
         private func load() {
             let head = currentHead?(proposal.pageID)
             guard head == proposal.inspectedHead else {
@@ -632,6 +598,67 @@ struct QueueRunDetailsView: View {
             }
             beforeBody = before
             afterBody = after
+        }
+    }
+
+    /// One pending proposal's controls row — the Approve/Reject buttons in
+    /// their own List row (the W2b undo-row shape). The row renders EMPTY
+    /// once the page head moved past the inspected head (the apply would
+    /// refuse as stale anyway — the buttons hide, never disable-fake
+    /// availability) or the proposal resolved.
+    private struct ProposalControlsRow: View {
+        let pending: QueueRunDetailsLintProposals.PendingProposal
+        let section: QueueRunDetailsLintProposals
+        let currentHead: (@MainActor (_ pageID: PageID) -> PageVersionID?)?
+        let onApprove: (() -> Void)?
+        let onReject: (() -> Void)?
+
+        @State private var isStale = false
+
+        private var proposal: QueueLintStagedProposal { pending.proposal }
+
+        var body: some View {
+            Group {
+                if isStale {
+                    EmptyView()
+                } else {
+                    HStack(spacing: QueueWorkspaceMetrics.Spacing.sm) {
+                        Button {
+                            onApprove?()
+                        } label: {
+                            Label("Approve", systemImage: "checkmark")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(section.isDisabled(proposal.id))
+                        .help("Write these hunks to the page. The write is verified and reverted automatically if it does not check out.")
+                        .accessibilityLabel("Approve proposal for \(pending.title)")
+                        Button {
+                            onReject?()
+                        } label: {
+                            Label("Reject", systemImage: "xmark")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(section.isDisabled(proposal.id))
+                        .help("Discard this proposal without writing anything. Repeated rejections pause auto-repair for this configuration.")
+                        .accessibilityLabel("Reject proposal for \(pending.title)")
+                        if section.isBusy {
+                            Text("Applying…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            .task(id: "\(proposal.id)\u{0}\(proposal.inspectedHead.rawValue)") {
+                let head = currentHead?(proposal.pageID)
+                if head != proposal.inspectedHead {
+                    isStale = true
+                }
+            }
         }
     }
 
