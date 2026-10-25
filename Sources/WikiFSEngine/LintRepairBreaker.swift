@@ -6,10 +6,12 @@ import WikiFSTypes
 /// (the shipped manifest's pipeline block, hashed) plus the provider, model,
 /// and effort the gate matched.
 ///
-/// The state FILE is named by provider/model/effort only. The pipeline digest
-/// lives inside the file, so a pipeline change (an app update) finds the old
-/// file, sees a different digest, and discards it — the breaker resets in
-/// place instead of leaving stale files behind.
+/// The state FILE is named by provider/model/effort only; the pipeline digest
+/// lives inside the file. A loaded state must match the consulted key on ALL
+/// four components — any mismatch demotes with a state-identity mismatch
+/// (never a discard-and-clean reset, which a tampered file could use to
+/// erase its own trip evidence). A legitimate pipeline change therefore
+/// keeps demoting until the operator clears the old state file.
 public struct LintRepairBreakerKey: Hashable, Sendable {
     public let pipelineDigest: String
     public let provider: String
@@ -177,8 +179,14 @@ public final class LintRepairBreaker: @unchecked Sendable {
 
     // MARK: - Consult
 
-    /// The breaker's verdict for one configuration. A pipeline change
-    /// discards the old state and answers clean.
+    /// The breaker's verdict for one configuration. A loaded state whose
+    /// stored identity (pipeline digest, provider, model, or effort) does
+    /// not match the consulted key is a state-identity mismatch: the
+    /// breaker DEMOTES — it never discards a mismatched file and answers
+    /// clean, because discarding is exactly how a tampered file would
+    /// erase its own trip evidence. The stored trip is authoritative, and
+    /// a state whose outcomes already meet a trip threshold is tripped
+    /// even when its file lost (or never had) the trip record.
     public func consult(_ key: LintRepairBreakerKey) -> LintBreakerVerdict {
         lock.lock()
         defer { lock.unlock() }
@@ -196,12 +204,22 @@ public final class LintRepairBreaker: @unchecked Sendable {
             DebugLog.agent("lint breaker: \(reason) at \(url.path) — demoting")
             return .tripped(reason: "breaker state unreadable")
         case .loaded(let state):
-            if state.pipelineDigest != key.pipelineDigest {
-                discard(url)
-                return .clean
+            if state.pipelineDigest != key.pipelineDigest
+                || state.provider != key.provider
+                || state.model != key.model
+                || state.effort != key.effort {
+                DebugLog.agent(
+                    "lint breaker: state identity mismatch at \(url.path) — demoting")
+                return .tripped(reason: "state identity mismatch")
             }
             if let trip = state.trip {
                 return .tripped(reason: trip.reason)
+            }
+            // Decode-only validation is not enough: a file with two
+            // verification failures and no trip record must not load
+            // clean. Recompute the trip from the outcome window.
+            if let reason = Self.tripReason(for: state.outcomes) {
+                return .tripped(reason: reason)
             }
             return .clean
         }
@@ -277,9 +295,10 @@ public final class LintRepairBreaker: @unchecked Sendable {
         }
     }
 
-    /// The window status for one configuration. A pipeline change discards
-    /// the old state and answers an empty, clean window; unreadable state
-    /// answers a tripped window (the same demotion `consult` applies).
+    /// The window status for one configuration. A state-identity mismatch
+    /// answers a tripped window (the same demotion `consult` applies); an
+    /// outcome window that already meets a trip threshold reports the
+    /// recomputed trip even when the stored record is missing.
     public func windowStatus(for key: LintRepairBreakerKey) -> WindowStatus {
         lock.lock()
         defer { lock.unlock() }
@@ -303,11 +322,15 @@ public final class LintRepairBreaker: @unchecked Sendable {
                 windowSize: Self.windowSize, verificationFailures: 0, userUndos: 0,
                 tripReason: "breaker state unreadable")
         case .loaded(let state):
-            guard state.pipelineDigest == key.pipelineDigest else {
-                // Stale-pipeline state reads as the reset it will become.
+            guard state.pipelineDigest == key.pipelineDigest,
+                  state.provider == key.provider,
+                  state.model == key.model,
+                  state.effort == key.effort else {
+                DebugLog.agent(
+                    "lint breaker: state identity mismatch at \(url.path) — demoting")
                 return WindowStatus(
                     windowSize: Self.windowSize, verificationFailures: 0, userUndos: 0,
-                    tripReason: nil)
+                    tripReason: "state identity mismatch")
             }
             let window = state.outcomes.suffix(Self.windowSize)
             return WindowStatus(
@@ -315,7 +338,8 @@ public final class LintRepairBreaker: @unchecked Sendable {
                 verificationFailures: window.filter { $0.kind == .verificationFailure }.count,
                 userUndos: window.filter { $0.kind == .userUndo }.count,
                 userRejections: window.filter { $0.kind == .userRejected }.count,
-                tripReason: state.trip?.reason)
+                tripReason: state.trip?.reason
+                    ?? Self.tripReason(for: state.outcomes))
         }
     }
 
@@ -324,9 +348,10 @@ public final class LintRepairBreaker: @unchecked Sendable {
     /// Record one repair-run outcome for a configuration and return the
     /// verdict after it. Two verification failures (or two undos, or two
     /// rejected staged proposals) within the window trip the breaker; the
-    /// trip stays until the pipeline changes. Unreadable state is NEVER
-    /// overwritten — a damaged file stays tripped rather than healing itself
-    /// into a clean one.
+    /// trip stays until the operator clears the state. Unreadable or
+    /// identity-mismatched state is NEVER overwritten — a damaged or
+    /// tampered file stays tripped rather than healing itself into a clean
+    /// one.
     @discardableResult
     public func record(_ kind: LintRepairOutcomeKind, for key: LintRepairBreakerKey) -> LintBreakerVerdict {
         lock.lock()
@@ -347,7 +372,18 @@ public final class LintRepairBreaker: @unchecked Sendable {
         case .missing:
             state = Self.freshState(for: key)
         case .loaded(let existing):
-            state = existing.pipelineDigest == key.pipelineDigest ? existing : Self.freshState(for: key)
+            // An identity mismatch is never healed by overwriting: a fresh
+            // state here would erase the mismatched file's evidence. The
+            // record is refused and the breaker stays demoted.
+            guard existing.pipelineDigest == key.pipelineDigest,
+                  existing.provider == key.provider,
+                  existing.model == key.model,
+                  existing.effort == key.effort else {
+                DebugLog.agent(
+                    "lint breaker: state identity mismatch at \(url.path) — not overwriting; \(kind.rawValue) not recorded")
+                return .tripped(reason: "state identity mismatch")
+            }
+            state = existing
         }
         let at = now()
         state.outcomes.append(Outcome(at: at, kind: kind))
@@ -459,15 +495,5 @@ public final class LintRepairBreaker: @unchecked Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(state).write(to: url, options: .atomic)
-    }
-
-    private func discard(_ url: URL) {
-        do {
-            try FileManager.default.removeItem(at: url)
-        } catch {
-            // The next record() replaces a stale-pipeline file anyway; a
-            // failed removal only leaves the file until then.
-            DebugLog.agent("lint breaker: could not discard stale-pipeline state at \(url.path): \(error)")
-        }
     }
 }

@@ -202,10 +202,13 @@ struct LintRepairBreakerTests {
         #expect(authority == .reportOnly(reason: "not in the approved matrix"))
     }
 
-    // MARK: - Reset
+    // MARK: - State identity (mismatch demotes, never resets)
 
-    /// An app update that changes the pipeline discards the old state.
-    @Test func pipelineChangeResets() throws {
+    /// A state file whose stored pipeline digest does not match the
+    /// consulted key DEMOTES — the old discard-and-clean reset is exactly
+    /// how a tampered file would erase its own trip evidence. The file
+    /// survives untouched, and recording into it is refused.
+    @Test func pipelineMismatchDemotesInsteadOfResetting() throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         fixture.breaker.record(.verificationFailure, for: fixture.key)
@@ -216,12 +219,66 @@ struct LintRepairBreakerTests {
             pipelineDigest: "pipeline-b", provider: fixture.key.provider,
             model: fixture.key.model, effort: fixture.key.effort)
         #expect(updated.stateFileName == fixture.key.stateFileName,
-                "the same configuration reuses its file, so the reset happens in place")
-        #expect(fixture.breaker.consult(updated) == .clean)
-        #expect(FileManager.default.fileExists(atPath: fixture.stateFile.path) == false,
-                "the stale-pipeline state is discarded")
-        // Fresh state: one failure under the new pipeline does not trip.
-        #expect(fixture.breaker.record(.verificationFailure, for: updated) == .clean)
+                "the same configuration reuses its file, so a mismatch is visible in place")
+        #expect(
+            fixture.breaker.consult(updated)
+                == .tripped(reason: "state identity mismatch"),
+            "a digest mismatch demotes — never a discard-and-clean reset")
+        #expect(FileManager.default.fileExists(atPath: fixture.stateFile.path),
+                "the mismatched state file is not discarded — its evidence stays")
+        #expect(
+            fixture.breaker.record(.clean, for: updated)
+                == .tripped(reason: "state identity mismatch"),
+            "recording into mismatched state is refused, never healed")
+    }
+
+    /// Identity is more than the digest: a file whose stored provider,
+    /// model, or effort differs from the consulted key demotes too. The
+    /// mismatched identity is written INTO the consulted file, proving the
+    /// stored fields — not the file name — are what is validated.
+    @Test func providerModelEffortMismatchDemotes() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        // Write the mismatched identity INTO the consulted file to prove
+        // the stored fields (not the file name) are what is validated.
+        let mismatched = """
+        {"schema": 1, "pipelineDigest": "\(fixture.key.pipelineDigest)", \
+        "provider": "someone-else", "model": "\(fixture.key.model)", \
+        "effort": "\(fixture.key.effort)", "outcomes": []}
+        """
+        try FileManager.default.createDirectory(
+            at: fixture.stateFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(mismatched.utf8).write(to: fixture.stateFile)
+        #expect(
+            fixture.breaker.consult(fixture.key)
+                == .tripped(reason: "state identity mismatch"))
+    }
+
+    /// Decode-only validation is not enough: a schema-valid file with two
+    /// verification failures and NO trip record is tripped on load — the
+    /// trip is recomputed from the outcome window.
+    @Test func missingTripRecordIsRecomputedFromTheOutcomeWindow() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        try FileManager.default.createDirectory(
+            at: fixture.stateFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let forged = """
+        {"schema": 1, "pipelineDigest": "\(fixture.key.pipelineDigest)", \
+        "provider": "\(fixture.key.provider)", "model": "\(fixture.key.model)", \
+        "effort": "\(fixture.key.effort)", "outcomes": [\
+        {"at": "2026-01-01T00:00:00Z", "kind": "verificationFailure"}, \
+        {"at": "2026-01-01T00:00:01Z", "kind": "verificationFailure"}]}
+        """
+        try Data(forged.utf8).write(to: fixture.stateFile)
+
+        guard case .tripped(let reason) = fixture.breaker.consult(fixture.key) else {
+            Issue.record("a two-failure window with no trip record must still trip")
+            return
+        }
+        #expect(reason.contains("verification failures"),
+                "the recomputed trip names the threshold: \(reason)")
+        // The window status reports the same recomputed trip.
+        #expect(fixture.breaker.windowStatus(for: fixture.key).tripReason != nil)
     }
 
     // MARK: - Damaged or missing state demotes
