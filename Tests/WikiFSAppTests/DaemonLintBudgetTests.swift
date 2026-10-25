@@ -98,6 +98,19 @@ struct DaemonLintBudgetTests {
 
         /// Replace "old text" (bytes 10..<18) with `newText`.
         func patch(receipt: String, newText: String) async throws -> DaemonDomainReply {
+            try await patch(
+                receipt: receipt,
+                hunks: [DaemonPagePatchRequest.WireHunk(
+                    defect: "D25", startByte: 10, endByte: 18,
+                    oldText: "old text", newText: newText,
+                    reason: "repair the defect")])
+        }
+
+        /// A patch whose exact wire hunks the caller controls — the extreme-
+        /// offset tests need raw numbers, not the standard replacement.
+        func patch(
+            receipt: String, hunks: [DaemonPagePatchRequest.WireHunk]
+        ) async throws -> DaemonDomainReply {
             try await client.send(
                 family: .page,
                 operation: DaemonDomainOperation.Page.patch,
@@ -105,10 +118,7 @@ struct DaemonLintBudgetTests {
                     wikiID: descriptor.id.rawValue,
                     id: page.id.rawValue,
                     expectHead: head.rawValue,
-                    hunks: [DaemonPagePatchRequest.WireHunk(
-                        defect: "D25", startByte: 10, endByte: 18,
-                        oldText: "old text", newText: newText,
-                        reason: "repair the defect")],
+                    hunks: hunks,
                     author: "agent:lint",
                     lintReceipt: receipt)),
                 authorization: authorization)
@@ -168,6 +178,85 @@ struct DaemonLintBudgetTests {
             #expect(error.code == .scopeDenied)
         }
         #expect(try fixture.store.readPageCoherent(id: fixture.page.id).headVersionID == fixture.head)
+    }
+
+    // MARK: - Extreme offsets (rejected before any arithmetic)
+
+    /// Byte offsets are child-controlled, so the daemon validates them
+    /// BEFORE the budget arithmetic reads them: negative, inverted, and
+    /// Int.min-style ranges come back as `invalidRequest` rejections —
+    /// never a subtraction overflow, never a crash — and garbage input
+    /// closes nothing (the validator refusal path, not the budget path).
+    @Test("extreme hunk offsets are rejected, not trapped")
+    func extremeHunkOffsetsRejectWithoutTrapping() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.stop() }
+        let receipt = try await fixture.mintReceipt()
+
+        let extremes: [(startByte: Int, endByte: Int, label: String)] = [
+            (Int.min, 0, "Int.min start"),
+            (Int.min, Int.max, "Int.min start, Int.max end"),
+            (-1, 5, "negative start"),
+            (10, 3, "inverted span"),
+        ]
+        for case let (start, end, label) in extremes {
+            do {
+                _ = try await fixture.patch(
+                    receipt: receipt,
+                    hunks: [DaemonPagePatchRequest.WireHunk(
+                        defect: "D25", startByte: start, endByte: end,
+                        oldText: "old text", newText: "new text",
+                        reason: "repair the defect")])
+                Issue.record("\(label) must be rejected, not served")
+            } catch let error as DaemonDomainError {
+                #expect(error.code == .invalidRequest, "\(label): \(error.message)")
+            }
+        }
+
+        // The daemon survived every hostile payload: the page is untouched,
+        // nothing was recorded as a budget rejection, and the run's write
+        // phase is still open — a valid patch may still commit.
+        let read = try fixture.store.readPageCoherent(id: fixture.page.id)
+        #expect(read.headVersionID == fixture.head)
+        #expect(read.body == Fixture.body)
+        #expect(await fixture.lintRunState.budgetRejection(runID: fixture.runID) == nil)
+        #expect(await fixture.lintRunState.isClosed(runID: fixture.runID) == false)
+    }
+
+    /// A huge positive span cannot overflow the budget arithmetic into a
+    /// pass: the saturated usage exceeds the cap, the whole patch is
+    /// rejected with the budget's own semantics, and the daemon lives.
+    @Test("a huge span saturates the budget and rejects whole")
+    func hugeSpanSaturatesAndExceedsTheBudget() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.stop() }
+        let receipt = try await fixture.mintReceipt()
+
+        do {
+            _ = try await fixture.patch(
+                receipt: receipt,
+                hunks: [
+                    DaemonPagePatchRequest.WireHunk(
+                        defect: "D25", startByte: 0, endByte: Int.max,
+                        oldText: "old text", newText: "x", reason: "huge"),
+                    DaemonPagePatchRequest.WireHunk(
+                        defect: "D25", startByte: 0, endByte: Int.max,
+                        oldText: "old text", newText: "x", reason: "huge again"),
+                ])
+            Issue.record("an Int.max-span patch must be rejected, not served")
+        } catch let error as DaemonDomainError {
+            #expect(error.code == .operationFailed)
+            #expect(error.message.contains("budget_exceeded"))
+        }
+
+        // The saturated (not wrapped) usage is what the rejection recorded…
+        let rejection = try #require(await fixture.lintRunState.budgetRejection(runID: fixture.runID))
+        #expect(rejection.rejection.requested.changedBytes == Int.max)
+        // …and the phase is closed with the page untouched.
+        #expect(await fixture.lintRunState.isClosed(runID: fixture.runID))
+        let read = try fixture.store.readPageCoherent(id: fixture.page.id)
+        #expect(read.headVersionID == fixture.head)
+        #expect(read.body == Fixture.body)
     }
 
     @Test("a patch exactly at the cap commits")

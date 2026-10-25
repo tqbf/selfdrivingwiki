@@ -253,7 +253,11 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             }
             // W2a §3: the per-run patch budget, checked BEFORE the patch
             // reaches the store. Above the cap the WHOLE patch is rejected
-            // (nothing commits) and the run's write phase closes.
+            // (nothing commits) and the run's write phase closes. The hunk
+            // numbers are validated BEFORE the budget arithmetic reads them —
+            // the store validator re-checks ranges against the real body
+            // under its own transaction.
+            try Self.validateHunkNumericBounds(payload?.hunks ?? [], bodyBytes: nil)
             let usage = Self.patchUsage(payload)
             if case .exceeded(let rejection) = await self.lintRunState.checkBudget(
                 runID: grant.runID, request: usage) {
@@ -377,24 +381,7 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             // deny with the generic scope message.
             throw Self.scopeDeniedError()
         }
-        // W2a §3 mirrored: the budget is checked BEFORE anything is staged.
-        // Above the cap the WHOLE proposal is rejected and the run's write
-        // (staging) phase closes — splitting cannot get around the cap.
         let wireHunks = payload?.hunks ?? []
-        let usage = Self.hunkUsage(wireHunks)
-        if case .exceeded(let rejection) = await self.lintRunState.checkBudget(
-            runID: grant.runID, request: usage) {
-            await self.lintRunState.recordBudgetRejection(
-                runID: grant.runID, pageID: selectedPage, rejection: rejection)
-            await self.lintRunState.invalidateReceipt(runID: grant.runID)
-            await Self.appendBudgetRejectionAudit(
-                rejection: rejection, selectedPage: selectedPage,
-                wikiID: grant.scope.wikiID, daemon: self.daemon)
-            DebugLog.store("wikid: lint run \(grant.runID) proposal rejected whole: \(rejection.summary)")
-            throw DaemonDomainError(
-                code: .operationFailed,
-                message: "lint proposal rejected whole — \(rejection.summary). Nothing was staged; report the findings without repairs.")
-        }
         // Validator parity: the SAME rules the store applies to a patch
         // (ranges, boundaries, exact oldText, overlap, payload ceiling,
         // no-op) run against the page's CURRENT body. A mismatch (the page
@@ -418,6 +405,27 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             let store = try await daemon.domainCommandStore(wikiID: grant.scope.wikiID)
             let read = try store.readPageCoherent(id: selectedPage)
             let body = read.body
+            // W2a §3 mirrored: the budget is checked BEFORE anything is
+            // staged, and AFTER the hunk numbers are validated against the
+            // body's real size — a hostile offset is rejected outright
+            // before it reaches a subtraction. Above the cap the WHOLE
+            // proposal is rejected and the run's write (staging) phase
+            // closes — splitting cannot get around the cap.
+            try Self.validateHunkNumericBounds(wireHunks, bodyBytes: body.utf8.count)
+            let usage = Self.hunkUsage(wireHunks)
+            if case .exceeded(let rejection) = await self.lintRunState.checkBudget(
+                runID: grant.runID, request: usage) {
+                await self.lintRunState.recordBudgetRejection(
+                    runID: grant.runID, pageID: selectedPage, rejection: rejection)
+                await self.lintRunState.invalidateReceipt(runID: grant.runID)
+                await Self.appendBudgetRejectionAudit(
+                    rejection: rejection, selectedPage: selectedPage,
+                    wikiID: grant.scope.wikiID, daemon: self.daemon)
+                DebugLog.store("wikid: lint run \(grant.runID) proposal rejected whole: \(rejection.summary)")
+                throw DaemonDomainError(
+                    code: .operationFailed,
+                    message: "lint proposal rejected whole — \(rejection.summary). Nothing was staged; report the findings without repairs.")
+            }
             _ = try PagePatchValidator.composedBody(
                 applying: PagePatch(
                     pageID: pageID, expectHead: expectHead,
@@ -616,14 +624,41 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
     }
 
     /// The usage of a wire hunk list — shared by the patch and the staged
-    /// proposal paths so the budget means the same thing on both.
+    /// proposal paths so the budget means the same thing on both. Callers
+    /// MUST run ``validateHunkNumericBounds`` first: this aggregation is
+    /// total (it saturates), but bounded inputs keep the budget numbers
+    /// meaningful instead of pinned at `Int.max`.
     static func hunkUsage(_ hunks: [DaemonPagePatchRequest.WireHunk]) -> LintPatchBudget.Usage {
         LintPatchBudget.Usage(
             hunks: hunks.count,
             changedBytes: hunks.reduce(0) { total, hunk in
-                total + LintPatchBudget.changedBytes(
-                    startByte: hunk.startByte, endByte: hunk.endByte, newText: hunk.newText)
+                let (sum, overflow) = total.addingReportingOverflow(
+                    LintPatchBudget.changedBytes(
+                        startByte: hunk.startByte, endByte: hunk.endByte, newText: hunk.newText))
+                return overflow ? Int.max : sum
             })
+    }
+
+    /// The numeric-bounds gate BEFORE any budget arithmetic: every hunk's
+    /// range must be non-negative, ordered, and — when the document size is
+    /// known at this point — within the body. The offsets are child-
+    /// controlled; validating them here means a hostile payload is REJECTED
+    /// (`invalidRequest`) before its numbers reach a subtraction, never a
+    /// daemon trap. Past-body bounds without a known size stay the patch
+    /// validator's job (it reads the real body).
+    static func validateHunkNumericBounds(
+        _ hunks: [DaemonPagePatchRequest.WireHunk], bodyBytes: Int?
+    ) throws {
+        for hunk in hunks {
+            let withinBody = bodyBytes.map { hunk.endByte <= $0 } ?? true
+            guard hunk.startByte >= 0, hunk.endByte >= hunk.startByte, withinBody else {
+                throw DaemonDomainError(
+                    code: .invalidRequest,
+                    message: "page patch hunk range \(hunk.startByte)..<\(hunk.endByte) is invalid"
+                        + (bodyBytes.map { " for a body of \($0) bytes" } ?? "")
+                        + " — ranges are non-negative and ordered and end within the body")
+            }
+        }
     }
 
     /// Fix the run's patch budget from the selected page's CURRENT scan (the

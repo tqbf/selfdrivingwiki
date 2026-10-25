@@ -85,16 +85,37 @@ public struct LintPatchBudget: Hashable, Sendable {
 
         public static let zero = Usage(hunks: 0, changedBytes: 0)
 
+        /// Saturating sum: usage values aggregate child-controlled counts,
+        /// so an overflow saturates at `Int.max` — which exceeds every cap
+        /// and is rejected — instead of wrapping negative or trapping.
         public static func + (lhs: Usage, rhs: Usage) -> Usage {
-            Usage(hunks: lhs.hunks + rhs.hunks, changedBytes: lhs.changedBytes + rhs.changedBytes)
+            func saturating(_ a: Int, _ b: Int) -> Int {
+                let (sum, overflow) = a.addingReportingOverflow(b)
+                return overflow ? (b > 0 ? Int.max : Int.min) : sum
+            }
+            return Usage(
+                hunks: saturating(lhs.hunks, rhs.hunks),
+                changedBytes: saturating(lhs.changedBytes, rhs.changedBytes))
         }
     }
 
     /// The bytes one exact hunk changes: the replaced span plus the inserted
-    /// text. A malformed (inverted) span counts as zero replaced bytes; the
-    /// patch validator rejects it later anyway.
+    /// text. TOTAL for any input: the offsets are child-controlled, so a
+    /// malformed (inverted or negative) span counts as zero replaced bytes
+    /// — the patch validator rejects it later anyway — and extreme offsets
+    /// saturate instead of trapping. Every budget consumer can call this
+    /// before range validation without giving a hostile payload a crash.
     public static func changedBytes(startByte: Int, endByte: Int, newText: String) -> Int {
-        max(0, endByte - startByte) + newText.utf8.count
+        let replaced: Int
+        if startByte < 0 || endByte < startByte {
+            replaced = 0
+        } else {
+            // Both bounds are non-negative and ordered, so the subtraction
+            // cannot overflow; the guard keeps that invariant explicit.
+            replaced = endByte - startByte
+        }
+        let (sum, overflow) = replaced.addingReportingOverflow(newText.utf8.count)
+        return overflow ? Int.max : sum
     }
 
     /// Why a patch was rejected, with every number the audit needs.

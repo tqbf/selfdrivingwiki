@@ -101,6 +101,21 @@ struct DaemonLintProposalTests {
             receipt: String, newText: String, expectHead: PageVersionID? = nil,
             oldText: String = "old text"
         ) async throws -> DaemonDomainReply {
+            try await propose(
+                receipt: receipt, expectHead: expectHead,
+                hunks: [DaemonPagePatchRequest.WireHunk(
+                    defect: "D25", startByte: 10, endByte: 18,
+                    oldText: oldText, newText: newText,
+                    reason: "repair the defect")])
+        }
+
+        /// A proposal whose exact wire hunks the caller controls — the
+        /// extreme-offset tests need raw numbers, not the standard
+        /// replacement.
+        func propose(
+            receipt: String, expectHead: PageVersionID? = nil,
+            hunks: [DaemonPagePatchRequest.WireHunk]
+        ) async throws -> DaemonDomainReply {
             try await client.send(
                 family: .page,
                 operation: DaemonDomainOperation.Page.proposePatch,
@@ -108,10 +123,7 @@ struct DaemonLintProposalTests {
                     wikiID: descriptor.id.rawValue,
                     id: page.id.rawValue,
                     expectHead: (expectHead ?? head).rawValue,
-                    hunks: [DaemonPagePatchRequest.WireHunk(
-                        defect: "D25", startByte: 10, endByte: 18,
-                        oldText: oldText, newText: newText,
-                        reason: "repair the defect")],
+                    hunks: hunks,
                     author: "agent:lint",
                     lintReceipt: receipt)),
                 authorization: authorization)
@@ -234,6 +246,52 @@ struct DaemonLintProposalTests {
         // the run may recompose and stage a corrected proposal).
         let valid = try await fixture.propose(receipt: receipt, newText: "new text")
         #expect(valid.error == nil, "the same receipt may stage after a validator refusal")
+    }
+
+    // MARK: - Extreme offsets (rejected before any arithmetic)
+
+    /// The staging path reads the page BEFORE the budget arithmetic, so the
+    /// hunk numbers are validated against the body's real size first:
+    /// `Int.min`/`Int.max` offsets and huge spans are `invalidRequest`
+    /// rejections — never a subtraction overflow, never a crash — and
+    /// nothing stages and no phase closes for garbage input.
+    @Test("extreme proposal offsets are rejected, not trapped")
+    func extremeProposalOffsetsRejectWithoutTrapping() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.stop() }
+        let receipt = try await fixture.mintReceipt()
+
+        let extremes: [(startByte: Int, endByte: Int, label: String)] = [
+            (Int.min, 0, "Int.min start"),
+            (Int.min, Int.max, "Int.min start, Int.max end"),
+            (-1, 5, "negative start"),
+            (0, Int.max, "huge span past the body"),
+        ]
+        for case let (start, end, label) in extremes {
+            do {
+                _ = try await fixture.propose(
+                    receipt: receipt,
+                    hunks: [DaemonPagePatchRequest.WireHunk(
+                        defect: "D25", startByte: start, endByte: end,
+                        oldText: "old text", newText: "new text",
+                        reason: "repair the defect")])
+                Issue.record("\(label) must be rejected, not staged")
+            } catch let error as DaemonDomainError {
+                #expect(error.code == .invalidRequest, "\(label): \(error.message)")
+            }
+        }
+
+        // The daemon survived every hostile payload: nothing staged, the
+        // page is untouched, no budget rejection was recorded, and the run's
+        // write phase is still open — a valid proposal may still stage.
+        #expect(await fixture.lintRunState.stagedProposal(runID: fixture.runID, pageID: fixture.page.id) == nil)
+        let read = try fixture.store.readPageCoherent(id: fixture.page.id)
+        #expect(read.headVersionID == fixture.head)
+        #expect(read.body == Fixture.body)
+        #expect(await fixture.lintRunState.budgetRejection(runID: fixture.runID) == nil)
+        #expect(await fixture.lintRunState.isClosed(runID: fixture.runID) == false)
+        let valid = try await fixture.propose(receipt: receipt, newText: "new text")
+        #expect(valid.error == nil, "the same receipt may stage after extreme-offset refusals")
     }
 
     // MARK: - Receipt discipline

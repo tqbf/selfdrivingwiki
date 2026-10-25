@@ -62,6 +62,36 @@ struct LintPatchBudgetTests {
         #expect(LintPatchBudget.changedBytes(startByte: 9, endByte: 3, newText: "") == 0)
     }
 
+    // MARK: - Total arithmetic (offsets are child-controlled)
+
+    /// The budget math must be callable on RAW wire offsets — before any
+    /// range validation — without trapping: extreme offsets cost a
+    /// rejection, never a crash.
+    @Test func changedBytesIsTotalForExtremeOffsets() {
+        // Negative or Int.min-style offsets count zero replaced bytes.
+        #expect(LintPatchBudget.changedBytes(startByte: Int.min, endByte: 0, newText: "") == 0)
+        #expect(LintPatchBudget.changedBytes(startByte: -1, endByte: 5, newText: "") == 0)
+        // A huge ordered span saturates at Int.max instead of overflowing.
+        #expect(
+            LintPatchBudget.changedBytes(startByte: 0, endByte: Int.max, newText: "") == Int.max)
+        #expect(
+            LintPatchBudget.changedBytes(startByte: 0, endByte: Int.max, newText: "abcdefgh")
+                == Int.max)
+    }
+
+    @Test func usageAdditionSaturatesInsteadOfOverflowing() {
+        let huge = LintPatchBudget.Usage(hunks: Int.max - 1, changedBytes: Int.max - 1)
+        let sum = huge + huge
+        #expect(sum.hunks == Int.max)
+        #expect(sum.changedBytes == Int.max)
+        // The check stays a REJECTION — a wraparound can never read as a pass.
+        let budget = LintPatchBudget(maxHunks: 10, maxChangedBytes: 10)
+        guard case .exceeded = budget.check(request: huge, alreadySpent: huge) else {
+            Issue.record("a saturating sum past the cap must reject")
+            return
+        }
+    }
+
     @Test func onlyConfirmedRepairableFindingsCount() {
         let snapshot = LintPageSnapshot(
             pageID: PageID(rawValue: "01HZPAGE00000000000000000B"), title: "Budget",
