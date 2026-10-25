@@ -15,13 +15,15 @@ import WikiLintEval
 //   manifest [--approval id=..,provider=..,model=..,effort=..[,revision=..]]...
 //            [--report-sha256 <hex> --rubric-reviewer <name>
 //             --decided-at <ISO-8601> --bail-trials <text>]
-//            [--enable] [--output tmp/<file>.json]
+//            [--output tmp/<file>.json]
 //       Mint a candidate shipped approval manifest (LintAcceptance/
 //       manifest.json). The pipeline block is computed from THIS build.
-//       Approvals require all four evidence flags; --enable sets
-//       defaultReportOnly to false. Prints to stdout, or writes to an
-//       explicit path under tmp/ — never the app bundle or App Group. The
-//       operator reviews the candidate and commits it.
+//       Approvals require all four evidence flags; "enabled" under the W5a
+//       ladder is simply whether approval rows exist — unevaluated
+//       configurations run as staged proposals, so there is no --enable
+//       flag. Prints to stdout, or writes to an explicit path under tmp/ —
+//       never the app bundle or App Group. The operator reviews the
+//       candidate and commits it.
 //   run --live --gate --manifest <path> ...
 //       The live acceptance gate. Refuses without --live; with --live it
 //      still reports the rollout prerequisites that are missing (provider
@@ -79,13 +81,13 @@ func value(of flag: String, in arguments: [String]) -> String? {
 func emitAcceptanceManifest(arguments: [String]) {
     let known: Set<String> = [
         "--approval", "--report-sha256", "--rubric-reviewer", "--decided-at",
-        "--bail-trials", "--enable", "--output",
+        "--bail-trials", "--output",
     ]
     var index = 0
     while index < arguments.count {
         let argument = arguments[index]
         guard known.contains(argument) else { fail("manifest: unknown argument \(argument)") }
-        index += argument == "--enable" ? 1 : 2
+        index += 2
     }
 
     let pipeline: LintAcceptanceManifest.Pipeline
@@ -128,8 +130,7 @@ func emitAcceptanceManifest(arguments: [String]) {
     }
 
     let manifest = LintAcceptanceManifest(
-        pipeline: pipeline, evidence: evidence, approvals: approvals,
-        defaultReportOnly: arguments.contains("--enable") == false)
+        pipeline: pipeline, evidence: evidence, approvals: approvals)
     if let problem = manifest.structuralProblem {
         fail("manifest: candidate is invalid: \(problem)")
     }

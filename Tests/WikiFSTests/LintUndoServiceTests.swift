@@ -299,8 +299,7 @@ struct LintUndoServiceTests {
             pipeline: live, evidence: nil,
             approvals: [LintAcceptanceManifest.Approval(
                 id: "apr-1", provider: "anthropic", model: "claude-opus",
-                effort: "high", evaluatedRevision: nil, acceptanceKeySHA256: nil)],
-            defaultReportOnly: false)
+                effort: "high", evaluatedRevision: nil, acceptanceKeySHA256: nil)])
         let key = try #require(
             LintUndoService.breakerKey(
                 forApprovalID: LintApprovalID(rawValue: "apr-1"), manifest: manifest))

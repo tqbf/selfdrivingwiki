@@ -17,6 +17,10 @@ public enum LintAuthorityTier: String, CaseIterable, Sendable, Codable {
     case evaluationAdmission
     /// The rollout gate selected report-only.
     case reportOnly
+    /// The gate selected staged-proposal review (W5a tier 2): the run lints
+    /// and FIXES, but its hunks are staged for human approval — never
+    /// written directly by the run.
+    case stagedProposal
     /// The gate authorized repairs, but the local circuit breaker demoted
     /// the run to report-only.
     case breakerDemoted
@@ -29,9 +33,14 @@ public enum LintAuthorityTier: String, CaseIterable, Sendable, Codable {
         switch self {
         case .shippedApproval, .evaluationAdmission:
             return true
-        case .reportOnly, .breakerDemoted, .budgetExceeded:
+        case .reportOnly, .breakerDemoted, .budgetExceeded, .stagedProposal:
             return false
         }
+    }
+
+    /// Whether this tier may stage repair proposals (tier 2).
+    public var isProposalCapable: Bool {
+        self == .stagedProposal
     }
 }
 
@@ -52,6 +61,11 @@ public struct LintRepairAuthority: Equatable, Sendable {
     /// The gate selected report-only.
     public static func reportOnly(reason: String) -> LintRepairAuthority {
         LintRepairAuthority(tier: .reportOnly, approvalID: nil, reason: reason)
+    }
+
+    /// The gate selected staged-proposal review (tier 2).
+    public static func stagedProposal(reason: String) -> LintRepairAuthority {
+        LintRepairAuthority(tier: .stagedProposal, approvalID: nil, reason: reason)
     }
 
     /// A shipped approval row authorized repairs.

@@ -60,13 +60,20 @@ public struct LintAcceptanceKey: Equatable, Sendable, Hashable {
     }
 }
 
-/// What the trusted coordinator selects for a configuration.
+/// What the trusted coordinator selects for a configuration. The trust
+/// ladder (W5a): an evaluated configuration repairs directly, ANY
+/// unevaluated configuration still lints and fixes but stages its hunks for
+/// human review, and report-only is reserved for degradation.
 public enum LintRolloutSelection: Equatable, Sendable {
     /// A shipped approval row matches — the repair-capable lease. The id
     /// names the row that authorized it.
     case repairAuthorized(approvalID: String)
-    /// No matching approval: report-only instructions and authority, with
-    /// the reason recorded in artifacts and queue/UI state.
+    /// An unevaluated (or drifted) configuration: the run still lints and
+    /// FIXES, but its hunks are staged for human review — never written
+    /// directly. A stale approval downgrades to this tier, not to nothing.
+    case stagedProposal(reason: String)
+    /// An ERROR/degradation outcome: report-only instructions and
+    /// authority, with the reason recorded in artifacts and queue/UI state.
     case reportOnly(reason: String)
 }
 
@@ -114,44 +121,50 @@ public struct LintAcceptanceGate: Sendable {
         }
     }
 
-    /// The rollout selection for one configuration. Checks run in order; the
-    /// first one that fails selects report-only with a plain reason.
+    /// The rollout selection for one configuration. Checks run in order;
+    /// the first matching rule wins:
+    ///
+    /// 1. manifest missing/unreadable/undecodable/structurally invalid →
+    ///    `.reportOnly` (degradation);
+    /// 2. a row matches (provider/model/effort) AND the pipeline is equal
+    ///    AND the revision rule passes → `.repairAuthorized`;
+    /// 3. a row matches but the pipeline drifted or the revision changed →
+    ///    `.stagedProposal` (a stale approval downgrades to review);
+    /// 4. no matching row → `.stagedProposal` (any unevaluated
+    ///    configuration still lints and stages fixes for review).
     public func selection(for components: LintAcceptanceKey.Components) -> LintRolloutSelection {
         let manifest: LintAcceptanceManifest
         switch source {
         case .unavailable(let reason):
             return .reportOnly(
-                reason: "the shipped lint approval manifest is missing or invalid (\(reason)) — generalized repairs stay disabled")
+                reason: "the shipped lint approval manifest is missing or invalid (\(reason)) — run repairs stay staged for review")
         case .manifest(let loaded):
             manifest = loaded
         }
         if let problem = manifest.structuralProblem {
             return .reportOnly(
-                reason: "the shipped lint approval manifest is missing or invalid (\(problem)) — generalized repairs stay disabled")
+                reason: "the shipped lint approval manifest is missing or invalid (\(problem)) — run repairs stay staged for review")
         }
-        if manifest.defaultReportOnly {
-            return .reportOnly(
-                reason: "generalized repairs are not enabled in this build — approval pending")
-        }
-        if LintAcceptanceManifest.Pipeline(components) != manifest.pipeline {
-            return .reportOnly(
-                reason: "the lint pipeline changed since the shipped approval — a fresh gate is required")
-        }
+        let pipelineMatches = LintAcceptanceManifest.Pipeline(components) == manifest.pipeline
         guard let row = manifest.approvals.first(where: {
             $0.provider == components.provider
                 && $0.model == components.model
                 && $0.effort == components.effort
         }) else {
-            return .reportOnly(
-                reason: "this provider/model/effort configuration is not in the approved matrix")
+            return .stagedProposal(
+                reason: "configuration not yet evaluated — repairs staged for your review")
+        }
+        if pipelineMatches == false {
+            return .stagedProposal(
+                reason: "the lint pipeline changed since this configuration was evaluated — its approval downgraded to staged review until a fresh gate")
         }
         // Documented limitation: a revision missing on EITHER side does not
         // fail the match — only two known, different revisions do.
         if let evaluated = row.evaluatedRevision,
            let current = components.modelRevision,
            evaluated != current {
-            return .reportOnly(
-                reason: "the provider's model revision changed since evaluation")
+            return .stagedProposal(
+                reason: "the provider's model revision changed since evaluation — its approval downgraded to staged review until re-evaluation")
         }
         return .repairAuthorized(approvalID: row.id)
     }

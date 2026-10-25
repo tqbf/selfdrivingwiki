@@ -11,7 +11,7 @@ import Foundation
 public struct LintAcceptanceManifest: Codable, Equatable, Sendable {
 
     /// The only schema this build understands. Anything else is invalid.
-    public static let schema = 2
+    public static let schema = 3
 
     /// The authority values a row may carry.
     public static let knownAuthorities: Set<String> = ["full"]
@@ -115,21 +115,22 @@ public struct LintAcceptanceManifest: Codable, Equatable, Sendable {
     public let pipeline: Pipeline
     public let evidence: Evidence?
     public let approvals: [Approval]
-    public let defaultReportOnly: Bool
 
+    /// "Enabled" under the W5a ladder is simply whether approval rows exist
+    /// — unevaluated configurations run as staged proposals, so there is no
+    /// separate kill switch (schema 3 removed `defaultReportOnly`).
     public init(
         manifestSchema: Int = LintAcceptanceManifest.schema, pipeline: Pipeline,
-        evidence: Evidence?, approvals: [Approval], defaultReportOnly: Bool
+        evidence: Evidence?, approvals: [Approval]
     ) {
         self.manifestSchema = manifestSchema
         self.pipeline = pipeline
         self.evidence = evidence
         self.approvals = approvals
-        self.defaultReportOnly = defaultReportOnly
     }
 
     enum CodingKeys: String, CodingKey {
-        case manifestSchema, pipeline, evidence, approvals, defaultReportOnly
+        case manifestSchema, pipeline, evidence, approvals
     }
 
     // Explicit `"evidence": null`, so an emitted candidate matches the schema.
@@ -139,7 +140,6 @@ public struct LintAcceptanceManifest: Codable, Equatable, Sendable {
         try container.encode(pipeline, forKey: .pipeline)
         try container.encode(evidence, forKey: .evidence)
         try container.encode(approvals, forKey: .approvals)
-        try container.encode(defaultReportOnly, forKey: .defaultReportOnly)
     }
 
     /// The first structural problem, or nil when the manifest is valid. An

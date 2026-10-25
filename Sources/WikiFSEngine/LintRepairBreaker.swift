@@ -203,8 +203,10 @@ public final class LintRepairBreaker: @unchecked Sendable {
     /// The authority a gate selection earns after the breaker has its say
     /// (the engine calls this AFTER a `LintCoordinatorGate` match).
     /// `.reportOnly` passes through; `.repairAuthorized` survives only on a
-    /// clean breaker. `key == nil` (this build could not name its own
-    /// configuration) demotes.
+    /// clean breaker; a `.stagedProposal` selection survives as tier 2 on a
+    /// clean breaker and degrades to report-only when tripped (proposals
+    /// pause for that configuration). `key == nil` (this build could not
+    /// name its own configuration) demotes both.
     public func authority(
         after selection: LintRolloutSelection,
         key: LintRepairBreakerKey?
@@ -224,6 +226,21 @@ public final class LintRepairBreaker: @unchecked Sendable {
                 return approved
             case .tripped(let reason):
                 return approved.demoted(to: .breakerDemoted, reason: "circuit breaker tripped: \(reason)")
+            }
+        case .stagedProposal(let reason):
+            let proposed = LintRepairAuthority.stagedProposal(reason: reason)
+            guard let key else {
+                return proposed.demoted(
+                    to: .reportOnly,
+                    reason: "breaker configuration unavailable — proposals paused for this configuration")
+            }
+            switch consult(key) {
+            case .clean:
+                return proposed
+            case .tripped(let tripReason):
+                return proposed.demoted(
+                    to: .reportOnly,
+                    reason: "proposals paused for this configuration — circuit breaker tripped: \(tripReason)")
             }
         }
     }
