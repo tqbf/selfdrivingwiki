@@ -79,7 +79,7 @@ public struct LintAuditStepOutcome: Equatable, Sendable {
     /// reason-bearing outcome actually carries a reason.
     var isValid: Bool {
         switch outcome {
-        case .repaired:
+        case .repaired, .pending:
             return false
         case .validAsWritten(let reason), .unresolved(let reason),
              .outsideLintScope(let reason), .checkBlocked(let reason):
@@ -341,15 +341,19 @@ public enum LintRunReportParser {
         }
         switch name {
         case "repaired": return .repaired
+        case "pending": return .pending
         case "valid-as-written": return .validAsWritten(reason: reason)
         case "unresolved": return .unresolved(reason: reason)
         case "outside-scope": return .outsideLintScope(reason: reason)
         case "blocked": return .checkBlocked(reason: reason)
         default:
-            // Unknown outcome tokens — including the skeleton's own
-            // `pending` — are malformed lines. An UNFILLED skeleton must be
-            // a parse error, never a silently-accepted report (plan §5.7's
-            // checklist-theater defense).
+            // Unknown outcome tokens are malformed lines. The skeleton's own
+            // `pending` PARSES (the prompt seeds it and instructs the agent
+            // to replace it — an unfilled seeded template must not be a
+            // parse error), but the COVERAGE VALIDATOR rejects every
+            // `pending` row as unfilled, so checklist theater still fails
+            // the run (plan §5.7) — it fails with named accounting reasons
+            // instead of a parse error.
             throw LintRunReportParseError.malformedLine(line: index + 1, text: line)
         }
     }
@@ -421,6 +425,13 @@ public enum LintCoverageValidator {
                 reasons.append("duplicate outcome for \(id)")
                 return
             }
+            // The skeleton's own `pending` placeholder is present but
+            // unfilled: one named reason per row (it counts as present, so
+            // no second "no outcome" reason piles on).
+            if case .pending = outcome {
+                reasons.append("outcome for \(id) is unfilled (pending)")
+                return
+            }
             // Reason-bearing outcomes need their reason on items and
             // findings too — `valid-as-written` with no reason is an
             // unfilled line, not an accounted one.
@@ -431,7 +442,7 @@ public enum LintCoverageValidator {
                     if r.trimmingCharacters(in: .whitespaces).isEmpty {
                         reasons.append("outcome for \(id) requires a reason")
                     }
-                case .repaired: break
+                case .repaired, .pending: break
                 }
             }
         }
@@ -479,6 +490,8 @@ public enum LintCoverageValidator {
             let outcome = matches[0].1
             if case .repaired = outcome {
                 reasons.append("audit step \(step.reportToken) cannot claim repaired")
+            } else if case .pending = outcome {
+                reasons.append("audit step \(step.reportToken) is unfilled (pending)")
             } else if outcome.requiresReason {
                 switch outcome {
                 case .validAsWritten(let r), .unresolved(let r),
@@ -486,7 +499,7 @@ public enum LintCoverageValidator {
                     if r.trimmingCharacters(in: .whitespaces).isEmpty {
                         reasons.append("audit step \(step.reportToken) outcome requires a reason")
                     }
-                case .repaired: break
+                case .repaired, .pending: break
                 }
             }
         }

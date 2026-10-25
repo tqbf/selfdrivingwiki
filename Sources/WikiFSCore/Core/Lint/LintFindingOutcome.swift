@@ -16,10 +16,16 @@ public enum LintFindingOutcome: Equatable, Sendable {
     case outsideLintScope(reason: String)
     /// The agent could not complete a required check.
     case checkBlocked(reason: String)
+    /// The run-report skeleton's own unfilled placeholder. It PARSES (the
+    /// prompt seeds `pending` lines and instructs the agent to replace them,
+    /// so the seeded template must not be a parse error) but it never counts
+    /// as a completed outcome: the coverage validator rejects every `pending`
+    /// row as unfilled.
+    case pending
 
     public var requiresReason: Bool {
         switch self {
-        case .repaired: return false
+        case .repaired, .pending: return false
         case .validAsWritten, .unresolved, .outsideLintScope, .checkBlocked: return true
         }
     }

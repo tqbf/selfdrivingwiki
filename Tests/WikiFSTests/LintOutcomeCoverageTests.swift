@@ -77,8 +77,9 @@ struct LintOutcomeCoverageTests {
                                   with: "item sourceCitation-1 repaired")
             .replacingOccurrences(of: "verification none pending",
                                   with: "verification none clean")
-        // Fill EVERY remaining check line (an unfilled `pending` is a parse
-        // error by design — M2).
+        // Fill EVERY remaining check line (an unfilled `pending` parses but
+        // the coverage validator rejects it — the accounting layer owns the
+        // rejection).
         filled = filled.split(separator: "\n").map { line -> String in
             if line.hasPrefix("check "), line.hasSuffix("pending") {
                 return line.replacingOccurrences(
@@ -119,12 +120,51 @@ struct LintOutcomeCoverageTests {
         }
     }
 
+    /// The W3 live gate seeded the UNFILLED skeleton (every `check`, `item`,
+    /// and `finding` line still `pending`) and the parser rejected it as
+    /// malformed — a parse failure where accounting reasons belong. The
+    /// exact seeded template must PARSE, and the coverage validator must
+    /// reject it with named unfilled reasons instead (the checklist-theater
+    /// defense moves to the accounting layer; it never weakens).
+    @Test func seededTemplateParsesAndCoverageRejectsIt() throws {
+        let seeded = LintRunReportText.render(snapshot: snapshot, preflight: preflight)
+        // The parse succeeds on the EXACT template the prompt stages —
+        // including its `check … pending`, `item … pending`,
+        // `finding … pending`, and `verification none pending` lines.
+        let parsed = try LintRunReportParser.parse(seeded)
+        #expect(parsed.entries.count == preflight.inventory.count
+            + preflight.sections.flatMap(\.findings).count
+            + LintAuditStep.allCases.count)
+        #expect(parsed.entries.allSatisfy { $0.outcome == .pending })
+        guard case .rejected(let reasons) = LintCoverageValidator.validate(
+            parsed: parsed, snapshot: snapshot, preflight: preflight) else {
+            Issue.record("the unfilled seeded template must fail coverage")
+            return
+        }
+        // Every row kind gets a named unfilled reason.
+        #expect(reasons.contains { $0 == "audit step read-body-and-head is unfilled (pending)" })
+        #expect(reasons.contains { $0 == "outcome for D08-1 is unfilled (pending)" })
+        #expect(reasons.contains { $0 == "outcome for sourceCitation-1 is unfilled (pending)" })
+        #expect(reasons.contains { $0.contains("verification line is unfilled") })
+        // And a single half-filled line cannot sneak through: one real
+        // outcome does not complete a report whose other rows stay pending.
+        let halfFilled = seeded
+            .replacingOccurrences(of: "finding D08-1 pending",
+                                  with: "finding D08-1 repaired")
+        guard case .rejected(let halfReasons) = verdict(for: halfFilled) else {
+            Issue.record("one filled row cannot complete a pending report")
+            return
+        }
+        #expect(halfReasons.contains { $0 == "outcome for D18-1 is unfilled (pending)" })
+    }
+
     // MARK: - Coverage validation (REQ-31/32)
 
     /// Build a fully-covered report text from the skeleton: every check,
     /// item, and finding line gets a valid default outcome, then per-test
-    /// overrides/drops apply. The skeleton's own `pending` lines are parse
-    /// errors by design (M2), so a harness report must be COMPLETE.
+    /// overrides/drops apply. The skeleton's own `pending` lines PARSE (the
+    /// prompt seeds them) but the coverage validator rejects them as
+    /// unfilled, so a harness report must still be COMPLETE.
     private func filledReport(
         overrides: [String: String] = [:],
         dropLines: [String] = [],

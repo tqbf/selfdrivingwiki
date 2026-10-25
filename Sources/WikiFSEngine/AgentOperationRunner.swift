@@ -929,7 +929,7 @@ public enum AgentOperationRunner {
                 let openFindings = parsed.entries.compactMap { entry -> String? in
                     guard case .finding(let id) = entry.kind else { return nil }
                     switch entry.outcome {
-                    case .unresolved, .checkBlocked:
+                    case .unresolved, .checkBlocked, .pending:
                         return id
                     case .repaired, .validAsWritten, .outsideLintScope:
                         return nil
