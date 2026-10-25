@@ -432,6 +432,29 @@ with per-hunk classes; the two forms are mutually exclusive.
   a typed `casConflict` burns one recomposition and the second conflict
   closes the run. The standalone trusted CLI passes no receipt.
 
+## Page propose-patch (the tier-2 staging path)
+
+`wikictl page propose-patch --id <page-id> --expect-head <ver> (--hunk <json>
+--defect <class>)… [--hunk-file <path>] [--author <who>] --lint-receipt
+<token>` is the STAGED form of `page patch` (W5a tier 2). Same hunk JSON
+contract, same defect classes. `--expect-head` is required. The daemon
+validates the hunks with the same `PagePatchValidator` rules and the same
+patch budget as `page patch`, then holds them as a staged proposal for human
+review. Nothing is written: no version, no page event.
+
+- **Managed lint runs only.** Staging needs the run's snapshot receipt,
+  budget state, and staged records. The daemon owns all three. A bare-store
+  run refuses. The reply names the staged proposal id. Cite it in the run
+  report (`unresolved|staged proposal <id>`).
+- **One proposal per page per run.** A second propose for the same page is
+  refused. A validator or budget rejection closes the run and lands an audit
+  entry. The staged record survives run teardown, so review can happen after
+  the run ends.
+- **Review and apply.** The human approves per fix or with Approve all in
+  Run Details. Approval goes through `LintProposalApplyService`: stale-head
+  refusal, budget re-check at apply, post-apply verification, CAS
+  auto-revert. A rejection records a `userRejected` breaker outcome.
+
 ## Phases
 
 0. **Land `bugfix/concurrent-cli-search`** — the search socket, safe index

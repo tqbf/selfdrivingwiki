@@ -1,6 +1,7 @@
 # Generalized Page Validity Lint Requirements
 
 **Status:** Approved requirements. Operator decisions resolved 2026-10-23. Advisor review incorporated.
+**Amendment (2026-10-25):** an operator decision after approval changed the rollout design. The shipped design is the amended trust ladder. See "The amended trust ladder (what ships)" in [`generalized-page-validity-lint-implementation.md`](generalized-page-validity-lint-implementation.md).
 **Scope:** Validity checks and bounded repairs for LLM-maintained wiki pages.
 **Motivation:** The #1461 incident — a lint audit with a clean pre-flight report concluded "needs no changes" on a page with a malformed table and raw external URLs.
 

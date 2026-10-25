@@ -415,25 +415,35 @@ Status: IMPLEMENTED (`2b111de4`–final docs commit). `plans/sandbox-agent.md` n
 ### Lint operation policies (page-validity lint, phases 2/5)
 
 Status: IMPLEMENTED (`b5e6c036` policy descriptor + allowlist,
-`17105b0b` receipt seam, `4d4d07b9` rollout-gate selection). `ManagedRunPolicy`
-distinguishes ordinary managed operations, selected-page REPAIR lint (exactly
-one authorized `PageID`), selected-page REPORT-ONLY lint, and whole-wiki
-report-only lint; the descriptor is immutable across renewals and fallback.
+`17105b0b` receipt seam, `4d4d07b9` rollout-gate selection, `e968acf0`
+selected-page proposal policy). `ManagedRunPolicy` distinguishes five cases:
+ordinary managed operations, selected-page REPAIR lint (exactly one
+authorized `PageID`), selected-page PROPOSAL lint (exactly one pinned
+`PageID`), selected-page REPORT-ONLY lint, and whole-wiki report-only lint;
+the descriptor is immutable across renewals and fallback.
 Lint leases carry READS only plus one payload-conditioned write:
 `log append` with kind `lint` (minimally decoded; any other kind denies) — and,
 for the REPAIR policy only, `page patch` whose payload page id equals the
 lease's selected page AND whose `lint_receipt` is the run's CURRENT snapshot
-receipt. Receipts are minted by the daemon on a fresh selected-page
+receipt. The PROPOSAL policy earns exactly one allowance:
+`page propose-patch` against the pinned page, subject to the same receipt
+discipline. `page patch` is DENIED under the proposal policy; the tier-2 run
+never writes. Receipts are minted by the daemon on a fresh selected-page
 `page get --json` read (bound to head + body fingerprint, delivered as
 `lint_receipt` in the JSON reply), invalidated by a committed patch, and a
 typed `casConflict` burns one recomposition; the second conflict closes every
-further patch for the run. All budget failures deny with the generic scope
+further write for the run. All budget failures deny with the generic scope
 message — the budget state never leaks. The rollout gate
 (`LintCoordinatorGate` + `LintAcceptanceGate`, WikiFSCore/WikiFSEngine)
-selects the policy: a configuration without a complete, matching,
-human-approved acceptance record runs REPORT-ONLY (no patch authorization at
-all); `run --live` evaluation is admitted only against the disposable wiki
-ids the harness created. See
+selects the policy from the amended trust ladder: a shipped approval row
+matching the configuration on the live pipeline selects the REPAIR policy
+(tier 1); any unevaluated or drifted configuration selects the PROPOSAL
+policy (tier 2); degradation only — an invalid or missing manifest, or a
+breaker-tripped configuration — selects REPORT-ONLY (tier 3). The run
+payload cannot select the policy, and an unknown or unowned operation
+fails closed; `DaemonLintPolicyTests` holds the five-policy matrix with
+that fail-closed row. `run --live` evaluation is admitted only against the
+disposable wiki ids the harness created. See
 `plans/generalized-page-validity-lint-implementation.md`.
 
 ### Phase 4: documentation and release checks
