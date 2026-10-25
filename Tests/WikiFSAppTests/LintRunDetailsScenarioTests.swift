@@ -1136,24 +1136,29 @@ struct LintRunDetailsScenarioTests {
     /// the button is disconnected or unreachable, the press cannot engage
     /// and this scenario FAILS.
     ///
-    /// MARKED HARNESS LIMITATION (the re-review's sanctioned split): the
-    /// trailing List row's hosted gesture engages on a single-test run —
-    /// verified: the press applies the batch through the real control, and
-    /// the store shows both hunks written — but NOT reliably over a stacked
-    /// suite run, the same finding recorded in
+    /// HARNESS LIMITATION + OPT-IN FLAG: the trailing List row's hosted
+    /// gesture engages on a single-test run — verified: the press applies
+    /// the batch through the real control, and the store shows both hunks
+    /// written — but NOT reliably over a stacked suite run, the same
+    /// finding recorded in
     /// progress/2026-10-25T055556Z-w5b-proposal-review-hosted-scenarios.md
     /// (the List defers materializing trailing rows, and the hosted gesture
     /// does not engage mid-suite even after the scroll handling above).
-    /// The scenario is therefore marked disabled rather than shipping a red
-    /// suite or a fallback that would mask a broken control; the batch
+    /// The scenario therefore ships disabled BY DEFAULT and runs only when
+    /// the caller opts in with `WIKIFS_INTERACTION_TESTS=1`:
+    ///
+    ///     WIKIFS_APP_TESTS=1 WIKIFS_INTERACTION_TESTS=1 swift test \
+    ///         --filter approveAllInteractionPressesTheRealControl
+    ///
+    /// (standalone is the sanctioned harness for the press; a stacked-suite
+    /// run may still record the known press-delivery failure). The batch
     /// handler's flow coverage lives in
-    /// ``approveAllHandlerProducesTheHonestAggregate``. Run this scenario
-    /// standalone (`--filter approveAllInteractionPressesTheRealControl`)
-    /// to prove the REAL control engages the batch with no fallback.
+    /// ``approveAllHandlerProducesTheHonestAggregate``.
     @Test(
         "Approve all presses the real control with no fallback",
         .disabled(
-            "harness limitation: the trailing List row's hosted gesture does not engage over a stacked suite run; the press engages and applies the batch when the scenario runs standalone"
+            if: ProcessInfo.processInfo.environment["WIKIFS_INTERACTION_TESTS"] == nil,
+            "Set WIKIFS_INTERACTION_TESTS=1 to run the no-fallback Approve-all press — harness limitation: the trailing List row's hosted gesture does not engage over a stacked suite run; it engages standalone."
         ))
     func approveAllInteractionPressesTheRealControlWithNoFallback() async throws {
         let fixture = try await ProposalFixture()
