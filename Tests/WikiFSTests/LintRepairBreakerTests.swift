@@ -281,6 +281,50 @@ struct LintRepairBreakerTests {
         #expect(fixture.breaker.windowStatus(for: fixture.key).tripReason != nil)
     }
 
+    /// Recording must never erase a RECOMPUTED trip. A tripless full window
+    /// whose first two positions are failures reports tripped on consult —
+    /// recording `.clean` afterwards must LATCH that trip BEFORE the window
+    /// truncates, or the append+truncate would drop the head failure and
+    /// write a clean state over tripped evidence.
+    @Test func recordLatchesARecomputedTripBeforeModifyingTheWindow() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        try FileManager.default.createDirectory(
+            at: fixture.stateFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let failure = "{\"at\": \"2026-01-01T00:00:00Z\", \"kind\": \"verificationFailure\"}"
+        let clean = "{\"at\": \"2026-01-01T00:00:01Z\", \"kind\": \"clean\"}"
+        let outcomes = [failure, failure]
+            + Array(repeating: clean, count: LintRepairBreaker.windowSize - 2)
+        let tripless = """
+        {"schema": 1, "pipelineDigest": "\(fixture.key.pipelineDigest)", \
+        "provider": "\(fixture.key.provider)", "model": "\(fixture.key.model)", \
+        "effort": "\(fixture.key.effort)", "outcomes": [\(outcomes.joined(separator: ", "))]}
+        """
+        try Data(tripless.utf8).write(to: fixture.stateFile)
+
+        // The consult reports the recomputed trip: the two failures sit at
+        // the window's head.
+        guard case .tripped = fixture.breaker.consult(fixture.key) else {
+            Issue.record("a full window with two failures at its head must report tripped")
+            return
+        }
+
+        // Recording a CLEAN outcome keeps the trip: the latch runs before
+        // the append+truncate, so the verdict is tripped, never clean.
+        if case .clean = fixture.breaker.record(.clean, for: fixture.key) {
+            Issue.record("recording a clean outcome over a recomputed trip must keep the trip")
+            return
+        }
+        // And the latched trip survives in the state file for the next
+        // consult (the pre-fix behavior wrote a clean state here).
+        guard case .tripped = fixture.breaker.consult(fixture.key) else {
+            Issue.record("the latched trip must survive the recorded outcome")
+            return
+        }
+        #expect(fixture.breaker.windowStatus(for: fixture.key).isTripped,
+                "the window status reports the surviving trip too")
+    }
+
     // MARK: - Damaged or missing state demotes
 
     @Test func corruptStateFileDemotes() throws {

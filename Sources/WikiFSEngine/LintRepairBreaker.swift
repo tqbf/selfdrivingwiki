@@ -385,7 +385,19 @@ public final class LintRepairBreaker: @unchecked Sendable {
             }
             state = existing
         }
+        // Recompute and LATCH an existing trip BEFORE touching the window:
+        // a state whose stored outcomes already satisfy a trip condition (a
+        // tripless legacy file, or evidence the stored record lost) is
+        // tripped the moment it is consulted (``windowStatus`` recomputes
+        // the same way) — appending and truncating first would let a fresh
+        // `.clean` record drop the head failure and write a clean state
+        // over tripped evidence.
         let at = now()
+        if state.trip == nil, let reason = Self.tripReason(for: state.outcomes) {
+            state.trip = Trip(trippedAt: at, reason: reason)
+            DebugLog.agent(
+                "lint breaker: latched a recomputed trip for \(key.provider)/\(key.model)/\(key.effort): \(reason)")
+        }
         state.outcomes.append(Outcome(at: at, kind: kind))
         if state.outcomes.count > Self.windowSize {
             state.outcomes.removeFirst(state.outcomes.count - Self.windowSize)
