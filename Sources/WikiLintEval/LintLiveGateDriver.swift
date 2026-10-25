@@ -689,6 +689,12 @@ public struct LintLiveGateDriver: Sendable {
         // eval container, never the operator's. Set before any spawn.
         setenv("WIKI_APP_GROUP_ID", configuration.evalAppGroupID, 1)
 
+        // Pre-run container hygiene: evict what earlier runs left behind
+        // BEFORE the suite composes, so leaks surface as a loud count in
+        // this run's log instead of accumulating silently.
+        try await Self.evictPreexistingWikis(
+            containerDirectory: configuration.evalContainerDirectory)
+
         let manifest = try LintEvalCanonicalFixtures.loadGateManifest()
         let trials = try LintLiveGateSuiteComposer.compose(
             manifest: manifest, bailTrials: configuration.bailTrials,
@@ -976,6 +982,32 @@ public struct LintLiveGateDriver: Sendable {
             try await client.deleteWiki(id: id)
         } catch {
             DebugLog.agent("lint eval: throwaway wiki delete (\(reason)) failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// The eval container is a DEDICATED App Group whose wikis are all
+    /// disposable, so any wiki present at driver start is a leak from an
+    /// earlier run (a trial that died before its eviction ran). Evict every
+    /// one of them BEFORE the suite composes, log the count, and re-list
+    /// afterward: whatever survives eviction is named in the run log, never
+    /// silently dropped. Nothing here touches any other App Group.
+    static func evictPreexistingWikis(containerDirectory: URL) async throws {
+        let client = try DaemonWikiRegistryClient(containerDirectory: containerDirectory)
+        let preexisting = try await client.listWikis()
+        guard preexisting.isEmpty == false else {
+            DebugLog.agent("lint eval: eval container starts clean (no pre-existing wikis)")
+            return
+        }
+        DebugLog.agent("lint eval: PRE-RUN HYGIENE — evicting \(preexisting.count) wiki(s) left in the eval container by earlier runs")
+        for wiki in preexisting {
+            await Self.evictWiki(client, id: wiki.id, after: "pre-run container hygiene")
+        }
+        let remaining = try await client.listWikis()
+        if remaining.isEmpty {
+            DebugLog.agent("lint eval: pre-run eviction cleared all \(preexisting.count) leaked wiki(s)")
+        } else {
+            DebugLog.agent("lint eval: PRE-RUN EVICTION LEFT \(remaining.count) wiki(s) in the eval container: "
+                + remaining.map(\.displayName).sorted().joined(separator: ", "))
         }
     }
 
