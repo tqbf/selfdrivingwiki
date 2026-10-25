@@ -21,6 +21,11 @@ public enum LintLiveGateError: Error, Equatable, Sendable {
     /// The matched model advertises no thinking-effort tiers, so the
     /// "lowest production effort" cannot be pinned.
     case effortUnadvertised(provider: String, model: String)
+    /// The pi agent's model catalog is required (the provider's static
+    /// configuration carries no models) but is missing, unreadable, or
+    /// malformed. The detail names the path and the reason — model ids and
+    /// labels only, never credentials.
+    case piCatalogUnreadable(path: String, reason: String)
     /// The output directory is not isolated (it must live under tmp/).
     case outputDirectoryNotIsolated(String)
     /// The eval daemon substrate could not boot or serve its socket.
@@ -41,6 +46,9 @@ public enum LintLiveGateError: Error, Equatable, Sendable {
         case .effortUnadvertised(let provider, let model):
             "named prerequisite: model '\(model)' on provider '\(provider)' advertises no thinking-effort tiers, "
                 + "so the lowest production effort cannot be pinned"
+        case .piCatalogUnreadable(let path, let reason):
+            "named prerequisite: the pi agent model catalog at '\(path)' is missing or unreadable (\(reason)) — "
+                + "it is required because the provider's static configuration carries no models"
         case .outputDirectoryNotIsolated(let detail):
             "output directory is not isolated: \(detail)"
         case .daemonUnavailable(let detail):
@@ -157,11 +165,18 @@ public enum LintLiveGateResolution {
     /// configuration (WikiStrategyEval posture: the config directory is read
     /// with discovery disabled). Throws a NAMED prerequisite when the
     /// requested provider, model, or effort tier is absent.
+    ///
+    /// When the provider's static configuration carries NO models (models
+    /// advertise dynamically at runtime), the pi agent's on-disk model
+    /// catalog is consulted instead (`~/.pi/agent/models.json` by default,
+    /// overridable via `piCatalogURL`); the matched entry's advertised
+    /// id/label becomes the evaluated model identity.
     public static func resolve(
         configuration: AgentProvidersConfig,
         requestedProviderID: String,
         requestedModelID: String,
-        pipeline: LintAcceptanceManifest.Pipeline
+        pipeline: LintAcceptanceManifest.Pipeline,
+        piCatalogURL: URL? = nil
     ) throws -> LintEvaluatedConfiguration {
         let enabled = configuration.enabledProviders
         guard let provider = enabled.first(where: {
@@ -172,6 +187,14 @@ public enum LintLiveGateResolution {
                 configured: enabled.map(\.id.rawValue))
         }
         let models = configuration.cachedModels(forProvider: provider.id)
+        // No static models at all: the provider configuration carries no
+        // model lists (models advertise dynamically at runtime), so the
+        // advertised identity comes from the pi agent's catalog.
+        if models.isEmpty {
+            return try resolveFromPiCatalog(
+                provider: provider, requestedModelID: requestedModelID,
+                catalogURL: piCatalogURL, pipeline: pipeline)
+        }
         let requested = requestedModelID.lowercased()
         let matched = models.first { $0.modelId.rawValue.lowercased() == requested }
             ?? models.first { $0.name.lowercased() == requested }
@@ -217,6 +240,134 @@ public enum LintLiveGateResolution {
             modelRevision: nil,
             effort: lowest.id.rawValue,
             components: components)
+    }
+
+    /// The pi agent's catalog path relative to the operator's home.
+    static let piCatalogHomeRelativePath = ".pi/agent/models.json"
+
+    /// The effort recorded when the evaluated model came from the pi
+    /// catalog. The catalog advertises `reasoning` but NO thinking-effort
+    /// tier list, so there is no tier to pin and none is invented: the
+    /// value states the run ran at the agent default (the runtime degrades
+    /// an unadvertised pinned value to the agent default with a
+    /// diagnostic). Deliberately NOT a member of `effortRankLowestFirst`.
+    static let piCatalogAgentDefaultEffort = "agent-default"
+
+    /// Resolve the evaluated configuration from the pi agent's on-disk
+    /// model catalog. READ-ONLY and secrets-free: the catalog carries
+    /// model ids and labels only — auth data (auth.json) is never read.
+    private static func resolveFromPiCatalog(
+        provider: AgentProvider,
+        requestedModelID: String,
+        catalogURL: URL?,
+        pipeline: LintAcceptanceManifest.Pipeline
+    ) throws -> LintEvaluatedConfiguration {
+        let url = catalogURL ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(piCatalogHomeRelativePath, isDirectory: false)
+        let catalog = try PiAgentCatalog.load(at: url)
+        let candidates = catalog.models(forProvider: provider.id.rawValue)
+        let requested = requestedModelID.lowercased()
+        // Exact advertised id first, then any label CONTAINING the
+        // requested name ("GLM 5.3 Flash" matches "GLM 5.3 Flash (Latest)").
+        guard let entry = candidates.first(where: { $0.id.lowercased() == requested })
+            ?? candidates.first(where: { $0.label.lowercased().contains(requested) }) else {
+            throw LintLiveGateError.modelAbsent(
+                requested: requestedModelID, provider: provider.id.rawValue,
+                available: candidates.map(\.id))
+        }
+        let components = LintAcceptanceKey.Components(
+            provider: provider.id.rawValue,
+            model: entry.id,
+            modelRevision: nil,
+            effort: piCatalogAgentDefaultEffort,
+            promptSHA256: pipeline.promptSHA256,
+            detectorRevision: pipeline.detectorRevision,
+            fixtureDigest: pipeline.fixtureDigest)
+        return LintEvaluatedConfiguration(
+            providerID: provider.id.rawValue,
+            providerLabel: provider.label,
+            modelID: entry.id,
+            modelLabel: entry.label,
+            modelRevision: nil,
+            effort: piCatalogAgentDefaultEffort,
+            components: components)
+    }
+
+    /// The parsed pi agent model catalog (`~/.pi/agent/models.json`): the
+    /// models the pi agent advertises, keyed by the provider id the pi
+    /// agent itself uses (e.g. `fireworks`) — not the ACP provider id the
+    /// app configures (`pi-acp`). Secrets-free by construction: ids and
+    /// labels only.
+    struct PiAgentCatalog: Equatable, Sendable {
+        /// One advertised model: the routing id and the human label.
+        struct Model: Equatable, Sendable {
+            let id: String
+            let label: String
+        }
+
+        /// Advertised models per pi agent provider key.
+        let providers: [String: [Model]]
+
+        /// The advertised models for an ACP provider id: the exact-key
+        /// entry when the catalog carries one, else the union across all
+        /// keys (the catalog is keyed by upstream API provider ids, not
+        /// ACP ids). Deterministic: keys sorted, file order within a key,
+        /// deduplicated by id keeping the first.
+        func models(forProvider providerID: String) -> [Model] {
+            if let exact = providers[providerID] { return exact }
+            var seen = Set<String>()
+            var union: [Model] = []
+            for key in providers.keys.sorted() {
+                for model in providers[key] ?? [] where seen.insert(model.id).inserted {
+                    union.append(model)
+                }
+            }
+            return union
+        }
+
+        /// Parses the catalog defensively; a missing, unreadable, or
+        /// malformed file is a NAMED error, never a swallowed failure.
+        static func load(at url: URL) throws -> PiAgentCatalog {
+            let data: Data
+            do {
+                data = try Data(contentsOf: url)
+            } catch {
+                throw LintLiveGateError.piCatalogUnreadable(
+                    path: url.path, reason: error.localizedDescription)
+            }
+            do {
+                let file = try JSONDecoder().decode(FileRepresentation.self, from: data)
+                var parsed: [String: [Model]] = [:]
+                for (key, entry) in file.providers ?? [:] {
+                    parsed[key] = (entry.models ?? []).filter { !$0.id.isEmpty }
+                        .map { Model(id: $0.id, label: $0.label) }
+                }
+                return PiAgentCatalog(providers: parsed)
+            } catch {
+                throw LintLiveGateError.piCatalogUnreadable(
+                    path: url.path, reason: "malformed JSON: \(error.localizedDescription)")
+            }
+        }
+
+        /// The on-disk shape, decoded leniently: missing `providers` or
+        /// `models` decode as empty, an omitted label falls back to the id.
+        private struct FileRepresentation: Decodable {
+            struct ProviderEntry: Decodable {
+                let models: [ModelEntry]?
+            }
+            struct ModelEntry: Decodable {
+                let id: String
+                let label: String
+
+                init(from decoder: Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    id = try container.decode(String.self, forKey: .id)
+                    label = try container.decodeIfPresent(String.self, forKey: .name) ?? id
+                }
+                enum CodingKeys: String, CodingKey { case id, name }
+            }
+            let providers: [String: ProviderEntry]?
+        }
     }
 }
 

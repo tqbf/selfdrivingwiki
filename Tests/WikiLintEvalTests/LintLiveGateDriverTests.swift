@@ -148,11 +148,22 @@ struct LintLiveGateDriverTests {
                 configuration: config, requestedProviderID: "zai",
                 requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline())
         }
-        // Provider present, model absent.
-        #expect(throws: LintLiveGateError.self) {
+        // Provider present, model absent: the static catalog is empty, so
+        // the pi agent catalog fallback runs — a fixture catalog WITHOUT the
+        // requested model names the miss and lists what IS advertised.
+        let catalogWithoutModel = try writePiCatalog(
+            directory: root.appendingPathComponent("catalog"),
+            providers: ["fireworks": [
+                ["id": "accounts/fireworks/routers/deepseek-flash-latest",
+                 "name": "DeepSeek V4.1 Flash (Latest)"],
+            ]])
+        #expect(throws: LintLiveGateError.modelAbsent(
+            requested: "GLM 5.3 Flash", provider: "codex-acp",
+            available: ["accounts/fireworks/routers/deepseek-flash-latest"])) {
             _ = try LintLiveGateResolution.resolve(
                 configuration: config, requestedProviderID: "codex-acp",
-                requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline())
+                requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline(),
+                piCatalogURL: catalogWithoutModel)
         }
         // Provider + model, but no advertised effort tiers.
         let withModel = try writeConfig(
@@ -164,6 +175,183 @@ struct LintLiveGateDriverTests {
             _ = try LintLiveGateResolution.resolve(
                 configuration: config2, requestedProviderID: "zai",
                 requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline())
+        }
+    }
+
+    // MARK: - Pi agent catalog fallback
+
+    /// Write a pi-agent-shaped catalog file: `providers.<key>.models[]`
+    /// with entries carrying `id` + `name` (the real file's shape).
+    private func writePiCatalog(
+        directory: URL,
+        providers: [String: [[String: String]]]
+    ) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(
+            withJSONObject: ["providers": providers.mapValues { ["models": $0] }],
+            options: [.sortedKeys])
+        let url = directory.appendingPathComponent("models.json")
+        try data.write(to: url)
+        return url
+    }
+
+    /// A provider configuration whose enabled provider carries NO static
+    /// models — the state that triggers the catalog fallback.
+    private func configWithoutModels(
+        providerID: String, root: URL
+    ) throws -> AgentProvidersConfig {
+        let dir = try writeConfig(directory: root, enabledProviderID: providerID, models: [])
+        return AgentProvidersConfig.loadOrSeed(from: dir, discover: { [] })
+    }
+
+    /// The real catalog's GLM entries, fixture-shaped.
+    private func fireworksCatalogFixture() -> [String: [[String: String]]] {
+        ["fireworks": [
+            ["id": "auto", "name": "Auto"],
+            ["id": "accounts/fireworks/routers/glm-fast-latest", "name": "GLM 5.3 Fast (Latest)"],
+            ["id": "accounts/fireworks/routers/glm-flash-latest", "name": "GLM 5.3 Flash (Latest)"],
+        ]]
+    }
+
+    @Test func resolutionFallsBackToPiCatalogByLabel() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = try configWithoutModels(providerID: "pi-acp", root: root)
+        let catalog = try writePiCatalog(
+            directory: root.appendingPathComponent("catalog"),
+            providers: fireworksCatalogFixture())
+        // "GLM 5.3 Flash" (no suffix) matches the label "GLM 5.3 Flash (Latest)".
+        let evaluated = try LintLiveGateResolution.resolve(
+            configuration: config, requestedProviderID: "pi-acp",
+            requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline(),
+            piCatalogURL: catalog)
+        #expect(evaluated.modelID == "accounts/fireworks/routers/glm-flash-latest")
+        #expect(evaluated.modelLabel == "GLM 5.3 Flash (Latest)")
+        #expect(evaluated.providerID == "pi-acp")
+        // The pi catalog advertises no thinking tiers, so the effort names
+        // the agent default instead of inventing a tier id.
+        #expect(evaluated.effort == "agent-default")
+        #expect(evaluated.components.model == "accounts/fireworks/routers/glm-flash-latest")
+        #expect(evaluated.components.effort == "agent-default")
+    }
+
+    @Test func resolutionFallsBackToPiCatalogByExactID() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = try configWithoutModels(providerID: "pi-acp", root: root)
+        let catalog = try writePiCatalog(
+            directory: root.appendingPathComponent("catalog"),
+            providers: fireworksCatalogFixture())
+        let evaluated = try LintLiveGateResolution.resolve(
+            configuration: config, requestedProviderID: "pi-acp",
+            requestedModelID: "accounts/fireworks/routers/glm-flash-latest",
+            pipeline: try pipeline(), piCatalogURL: catalog)
+        #expect(evaluated.modelID == "accounts/fireworks/routers/glm-flash-latest")
+        #expect(evaluated.modelLabel == "GLM 5.3 Flash (Latest)")
+    }
+
+    @Test func resolutionPrefersExactCatalogProviderKeyOverUnion() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = try configWithoutModels(providerID: "pi-acp", root: root)
+        // The catalog carries BOTH a pi-acp key and an upstream key; the
+        // exact key's entry wins.
+        let catalog = try writePiCatalog(
+            directory: root.appendingPathComponent("catalog"),
+            providers: [
+                "pi-acp": [["id": "pi-acp-model", "name": "PI ACP Model"]],
+                "fireworks": [["id": "accounts/fireworks/routers/glm-flash-latest",
+                               "name": "GLM 5.3 Flash (Latest)"]],
+            ])
+        let evaluated = try LintLiveGateResolution.resolve(
+            configuration: config, requestedProviderID: "pi-acp",
+            requestedModelID: "PI ACP Model", pipeline: try pipeline(),
+            piCatalogURL: catalog)
+        #expect(evaluated.modelID == "pi-acp-model")
+        // And the upstream key's models are NOT visible to the exact-key
+        // provider: a request that only the union could satisfy must miss.
+        #expect(throws: LintLiveGateError.self) {
+            _ = try LintLiveGateResolution.resolve(
+                configuration: config, requestedProviderID: "pi-acp",
+                requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline(),
+                piCatalogURL: catalog)
+        }
+    }
+
+    @Test func resolutionCatalogMissNamesPrerequisiteAndListsAdvertised() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = try configWithoutModels(providerID: "pi-acp", root: root)
+        let catalog = try writePiCatalog(
+            directory: root.appendingPathComponent("catalog"),
+            providers: fireworksCatalogFixture())
+        do {
+            _ = try LintLiveGateResolution.resolve(
+                configuration: config, requestedProviderID: "pi-acp",
+                requestedModelID: "Nova 9 Ultra", pipeline: try pipeline(),
+                piCatalogURL: catalog)
+            Issue.record("expected modelAbsent")
+        } catch let error as LintLiveGateError {
+            #expect(error == .modelAbsent(
+                requested: "Nova 9 Ultra", provider: "pi-acp",
+                available: [
+                    "auto",
+                    "accounts/fireworks/routers/glm-fast-latest",
+                    "accounts/fireworks/routers/glm-flash-latest",
+                ]))
+            // The BLOCKED message lists the advertised ids.
+            #expect(error.localizedDescription.contains("glm-flash-latest"))
+        }
+    }
+
+    @Test func resolutionNamesMissingPiCatalogFile() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = try configWithoutModels(providerID: "pi-acp", root: root)
+        let missing = root.appendingPathComponent("absent").appendingPathComponent("models.json")
+        do {
+            _ = try LintLiveGateResolution.resolve(
+                configuration: config, requestedProviderID: "pi-acp",
+                requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline(),
+                piCatalogURL: missing)
+            Issue.record("expected piCatalogUnreadable")
+        } catch let error as LintLiveGateError {
+            guard case .piCatalogUnreadable(let path, let reason) = error else {
+                Issue.record("expected piCatalogUnreadable, got \(error)")
+                return
+            }
+            #expect(path == missing.path)
+            #expect(!reason.isEmpty)
+            #expect(error.localizedDescription.contains("named prerequisite"))
+        }
+    }
+
+    @Test func resolutionNamesMalformedPiCatalog() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = try configWithoutModels(providerID: "pi-acp", root: root)
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("catalog"), withIntermediateDirectories: true)
+        let malformed = root.appendingPathComponent("catalog").appendingPathComponent("models.json")
+        try Data("{ not json".utf8).write(to: malformed)
+        do {
+            _ = try LintLiveGateResolution.resolve(
+                configuration: config, requestedProviderID: "pi-acp",
+                requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline(),
+                piCatalogURL: malformed)
+            Issue.record("expected piCatalogUnreadable")
+        } catch let error as LintLiveGateError {
+            guard case .piCatalogUnreadable(_, let reason) = error else {
+                Issue.record("expected piCatalogUnreadable, got \(error)")
+                return
+            }
+            #expect(reason.contains("malformed"))
         }
     }
 
