@@ -25,6 +25,11 @@ public final class LintEvalDaemonSubstrate: @unchecked Sendable {
 
     private let server: DaemonSearchSocketServer
 
+    /// The socket path the substrate serves (the eval container's
+    /// `wikid-search.sock`). Diagnostics only — the host's stderr milestone
+    /// names it so a wedge points at the endpoint the client must reach.
+    public var socketPath: String { server.socketPath }
+
     /// Boot the substrate over `containerDirectory`'s socket with the
     /// PRODUCTION daemon composition (the same profile owner the wikid
     /// binary boots). Throws when the socket cannot be created or served —

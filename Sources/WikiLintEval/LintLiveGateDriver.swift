@@ -827,6 +827,17 @@ public struct LintLiveGateDriver: Sendable {
 
     // MARK: One trial
 
+    /// Holds the trial's store model so its LAST reference always dies on
+    /// the main actor (see the comment at the build site in
+    /// ``runTrialBody(trial:fixture:evaluated:services:substrate:factories:descriptor:)``).
+    /// `@unchecked Sendable`: the value is written once on the main actor at
+    /// build, read race-free during the trial, and emptied once on the main
+    /// actor at trial end — no concurrent access.
+    // swiftlint:disable:next unchecked_sendable
+    private final class MainActorStoreModelBox: @unchecked Sendable {
+        var value: WikiStoreModel?
+    }
+
     /// One trial: disposable wiki → seeded page → launcher → REAL coordinator
     /// dispatch → capture → evict. The wiki is evicted on EVERY exit path.
     func runTrial(
@@ -885,23 +896,30 @@ public struct LintLiveGateDriver: Sendable {
         let admission = AgentOperationRunner.LintEvaluationAdmission(
             evaluated: evaluated.components, admittedWikiIDs: [descriptor.id])
         let store = try factories.buildStore(databaseURL)
-        let storeModel = await MainActor.run { factories.buildStoreModel(store) }
-        let outcome = await AgentOperationRunner.runOneEvaluationLintPage(
-            pageID: pageID,
-            launcher: launcher,
-            store: storeModel,
-            wikiID: descriptor.id,
-            changeSignaler: LintEvalChangeSignaler(),
-            wikictlDirectory: HelpersLocation.wikictlDirectory,
-            admission: admission)
-        await launcher.awaitProviderRelease()
-
-        // Capture: final bytes from the store's OWN reads, transcripts from
-        // the launcher's run scratch. The second (repeat) lint run for
-        // idempotence pairs happens inside the same admitted wiki.
+        // WikiStoreModel is @MainActor and its deallocating deinit runs
+        // `MainActor.assumeIsolated` (cancelling the debounced tasks), so
+        // its LAST reference must die on the main actor. This frame is
+        // nonisolated — a bare scope exit releases the model wherever the
+        // task resumed and traps (`dispatch_assert_queue_fail` in
+        // `WikiStoreModel.deinit`; the first post-deadlock live-gate run
+        // died exactly there). The box carries the model between main-actor
+        // build and main-actor release; the scoped block below ends every
+        // non-main reference BEFORE the release, so the deinit always runs
+        // on the main actor.
+        let storeModelBox = MainActorStoreModelBox()
+        await MainActor.run { storeModelBox.value = factories.buildStoreModel(store) }
+        var outcome = AgentOperationRunner.LintPageDispatchOutcome(
+            pageID: pageID, title: trial.fixtureID, status: .failed,
+            detail: "lint dispatch did not run", authority: nil)
         var idempotenceWrites: [Int]? = nil
-        if trial.isIdempotencePair {
-            let secondOutcome = await AgentOperationRunner.runOneEvaluationLintPage(
+        do {
+            // Race-free read: `value` was set on the main actor above and
+            // is emptied only at this trial's end, also on the main actor.
+            guard let storeModel = storeModelBox.value else {
+                preconditionFailure(
+                    "lint trial: the store model box was emptied before the trial ran")
+            }
+            outcome = await AgentOperationRunner.runOneEvaluationLintPage(
                 pageID: pageID,
                 launcher: launcher,
                 store: storeModel,
@@ -909,18 +927,42 @@ public struct LintLiveGateDriver: Sendable {
                 changeSignaler: LintEvalChangeSignaler(),
                 wikictlDirectory: HelpersLocation.wikictlDirectory,
                 admission: admission)
-            idempotenceWrites = [
-                Self.writeCount(of: outcome), Self.writeCount(of: secondOutcome),
-            ]
-        }
+            await launcher.awaitProviderRelease()
 
-        let captured = try await Self.capture(
-            trial: trial, fixture: fixture, seededBody: seededBody,
-            outcome: outcome, launcher: launcher, databaseURL: databaseURL,
-            wikiID: descriptor.id, startedAt: startedAt,
-            idempotenceWrites: idempotenceWrites,
-            factories: factories,
-            outputDirectory: configuration.outputDirectory)
+            // The second (repeat) lint run for idempotence pairs happens
+            // inside the same admitted wiki.
+            if trial.isIdempotencePair {
+                let secondOutcome = await AgentOperationRunner.runOneEvaluationLintPage(
+                    pageID: pageID,
+                    launcher: launcher,
+                    store: storeModel,
+                    wikiID: descriptor.id,
+                    changeSignaler: LintEvalChangeSignaler(),
+                    wikictlDirectory: HelpersLocation.wikictlDirectory,
+                    admission: admission)
+                idempotenceWrites = [
+                    Self.writeCount(of: outcome), Self.writeCount(of: secondOutcome),
+                ]
+            }
+        }
+        // The block above ended the runner's and this frame's references;
+        // the box now holds the last one. Release it ON the main actor —
+        // including when capture throws (the model must die on the main
+        // actor on every exit path).
+        let captured: LintLiveTrialRecord
+        do {
+            captured = try await Self.capture(
+                trial: trial, fixture: fixture, seededBody: seededBody,
+                outcome: outcome, launcher: launcher, databaseURL: databaseURL,
+                wikiID: descriptor.id, startedAt: startedAt,
+                idempotenceWrites: idempotenceWrites,
+                factories: factories,
+                outputDirectory: configuration.outputDirectory)
+        } catch {
+            await MainActor.run { storeModelBox.value = nil }
+            throw error
+        }
+        await MainActor.run { storeModelBox.value = nil }
         return captured
     }
 

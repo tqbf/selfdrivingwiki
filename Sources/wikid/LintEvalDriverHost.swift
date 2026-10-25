@@ -18,6 +18,61 @@ public enum LintEvalDriverHost {
 
     public static let modeArgument = "lint-eval-driver"
 
+    /// The host's main-frame wait: hand `runIfRequested` to a detached task
+    /// and block THIS thread (the process main thread) on the run-loop gate
+    /// until it settles. The gate DRAINS the main run loop while waiting —
+    /// the same shape the ordinary daemon boot uses — because the host path
+    /// hops to the main actor (store-model and launcher construction in the
+    /// trial body, the profile boot's `AppServices.resolve`). A bare
+    /// semaphore here deadlocked the host: the first main-actor hop queued
+    /// onto the blocked main thread and never ran, the handler task for
+    /// every socket request never settled, and each trial starved its
+    /// client's 30 s deadline ("socket recv exceeded its deadline" on every
+    /// trial of the 2026-10-25 gate run).
+    public static func runAndWait(arguments: [String]) -> Int32 {
+        /// Lock-backed one-shot exit-code carrier (written by the detached
+        /// task, read by this waiting frame).
+        // swiftlint:disable:next unchecked_sendable
+        final class SettleBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value: Int32?
+            var isSettled: Bool { lock.withLock { value != nil } }
+            func settle(_ code: Int32) {
+                lock.withLock { if value == nil { value = code } }
+            }
+            var settledValue: Int32? { lock.withLock { value } }
+        }
+        let box = SettleBox()
+        Task.detached {
+            let code = await runIfRequested(arguments: arguments)
+            box.settle(code ?? 2)
+        }
+        _ = drainCurrentRunLoopUntil { box.isSettled }
+        return box.settledValue ?? 2
+    }
+
+    /// The run-loop gate primitive: drain the CALLING thread's run loop
+    /// until `isSettled`. Each `run(mode:before:)` processes whatever queued
+    /// on this thread's run loop — main-actor jobs, when this is the main
+    /// thread — and the `tick` bound re-enters the check even when no
+    /// sources fire. `budget` bounds the wait (the tests' fail-safe; the
+    /// host passes nil because a live gate legitimately runs for hours).
+    public static func drainCurrentRunLoopUntil(
+        _ isSettled: @escaping @Sendable () -> Bool,
+        tick: TimeInterval = 0.25,
+        budget: TimeInterval? = nil
+    ) -> Bool {
+        let startedAt = Date()
+        let runLoop = RunLoop.current
+        while !isSettled() {
+            if let budget, Date().timeIntervalSince(startedAt) >= budget {
+                return false
+            }
+            _ = runLoop.run(mode: .default, before: Date().addingTimeInterval(tick))
+        }
+        return true
+    }
+
     /// Returns the process exit code when `arguments` requests the driver
     /// mode, or `nil` when this is an ordinary daemon launch.
     public static func runIfRequested(
@@ -31,9 +86,16 @@ public enum LintEvalDriverHost {
             // the substrate, and the sandboxed child's wikictl all inherit
             // it).
             setenv("WIKI_APP_GROUP_ID", configuration.evalAppGroupID, 1)
+            // Boot milestones go to stderr (the runner inherits this
+            // terminal): when the host wedges, the LAST milestone names the
+            // phase that never completed.
+            FileHandle.standardError.write(Data(
+                "lint-eval-driver: booting eval substrate over \(configuration.evalContainerDirectory.path)\n".utf8))
             let substrate = try LintEvalDaemonSubstrate(
                 containerDirectory: configuration.evalContainerDirectory)
             defer { substrate.stop() }
+            FileHandle.standardError.write(Data(
+                "lint-eval-driver: substrate serving on \(substrate.socketPath)\n".utf8))
             // The daemon host owns the reserved constructions (store, store
             // model, launcher) and injects them into the driver engine —
             // the CORDIS boundary keeps them out of harness code.

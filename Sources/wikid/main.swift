@@ -16,26 +16,15 @@ import WikiFSEngine
 #if canImport(WikiFSEngine) && canImport(WikiLintEval) && os(macOS)
 if CommandLine.arguments.count > 1,
    CommandLine.arguments[1] == LintEvalDriverHost.modeArgument {
-    // Sendable invariant: `value` is the only mutable state and every
-    // access holds `lock` (one write from the detached task, one read
-    // from the waiting main thread).
-    // swiftlint:disable:next unchecked_sendable
-    final class ExitCodeBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var value: Int32?
-        func set(_ code: Int32) { lock.lock(); value = code; lock.unlock() }
-        func get() -> Int32? { lock.lock(); defer { lock.unlock() }; return value }
-    }
-    let box = ExitCodeBox()
-    let semaphore = DispatchSemaphore(value: 0)
-    Task.detached {
-        let code = await LintEvalDriverHost.runIfRequested(
-            arguments: Array(CommandLine.arguments.dropFirst()))
-        box.set(code ?? 2)
-        semaphore.signal()
-    }
-    semaphore.wait()
-    if let code = box.get() { exit(code) }
+    // The host's main-frame wait lives in `LintEvalDriverHost.runAndWait`:
+    // it blocks this thread on the RUN-LOOP gate while the detached host
+    // task runs, so the main-actor hops along the boot path are serviced.
+    // (A bare DispatchSemaphore here deadlocked the host: the hops queued
+    // onto the blocked main thread and never ran. The ordinary daemon boot
+    // below has the same constraint — see its `DaemonBootstrap` run-loop
+    // gate.)
+    exit(LintEvalDriverHost.runAndWait(
+        arguments: Array(CommandLine.arguments.dropFirst())))
 }
 #endif
 
