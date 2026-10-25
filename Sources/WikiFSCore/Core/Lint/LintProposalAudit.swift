@@ -87,3 +87,28 @@ public enum LintProposalAudit {
         return labels.joined(separator: "; ")
     }
 }
+
+/// The audit title prefixes ONLY the trusted host may write. Host accounting
+/// trusts `--kind lint` records by these titles (the staged reference, the
+/// apply outcome, and the budget rejection), so a scoped lint child — which
+/// controls its log-append payload's title, note, and author — must never be
+/// able to write one. The daemon's lint allowance rejects any child log
+/// append whose title matches a reserved prefix with the generic scope
+/// denial, and host-written outcome records keep flowing through the
+/// trusted host path.
+public enum LintHostAudit {
+
+    /// Every title prefix whose `--kind lint` records are host-authored
+    /// truth. Keep in sync with the producers (each prefix lives on the type
+    /// that writes it).
+    public static let reservedTitlePrefixes: [String] = [
+        LintPatchBudget.auditTitlePrefix,
+        LintProposalAudit.stagedAuditTitlePrefix,
+        LintProposalAudit.appliedAuditTitlePrefix,
+    ]
+
+    /// Whether a title claims a reserved host record shape.
+    public static func titleIsReserved(_ title: String) -> Bool {
+        reservedTitlePrefixes.contains { title.hasPrefix($0) }
+    }
+}

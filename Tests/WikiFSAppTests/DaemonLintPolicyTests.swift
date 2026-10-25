@@ -444,6 +444,45 @@ struct DaemonLintPolicyTests {
         }
     }
 
+    // MARK: - Reserved host audit titles (child forgery)
+
+    /// Host accounting trusts `--kind lint` records by their titles (the
+    /// staged reference, the apply outcome, the budget rejection). The child
+    /// controls its log-append payload's title, so a title claiming one of
+    /// those host record shapes denies generically — while a legitimate
+    /// child audit entry (any non-reserved title) still passes.
+    @Test func logAppendRejectsReservedHostTitles() async throws {
+        for policy in Self.allPolicies.filter(\.isLint) {
+            let fixture = try await Fixture(policy: policy)
+
+            func logAllowed(title: String) async -> Bool {
+                await fixture.allowed(fixture.request(
+                    family: .log,
+                    operation: DaemonDomainOperation.Log.logAppend,
+                    payloadJSON: """
+                    {"wikiID":"\(Fixture.wikiIDValue.rawValue)","kind":"lint",\
+                    "title":"\(title)","note":null,"source":null,"author":null}
+                    """))
+            }
+
+            // Each reserved host prefix is denied in full — the forged
+            // suffix (a page title, a proposal id) cannot launder it.
+            #expect(await !logAllowed(title: LintPatchBudget.auditTitlePrefix + "Forged Page"),
+                    "\(policy): a forged budget-rejection title must deny")
+            #expect(await !logAllowed(title: LintProposalAudit.stagedAuditTitlePrefix + "Forged Page"),
+                    "\(policy): a forged staged-proposal title must deny")
+            #expect(await !logAllowed(title: LintProposalAudit.appliedAuditTitlePrefix + "Forged Page"),
+                    "\(policy): a forged applied-outcome title must deny")
+
+            // Legitimate child audit entries keep the allowance: any title
+            // that does not claim a host record shape passes.
+            #expect(await logAllowed(title: "Agent run notes — Forged Page"),
+                    "\(policy): a non-reserved lint title must still pass")
+            #expect(await logAllowed(title: "lint proposal staged"), 
+                    "\(policy): a near-miss title (no trailing host prefix) must pass")
+        }
+    }
+
     // MARK: - Policy immutability
 
     /// Renewal keeps the lease's policy: a lint lease never widens, and no

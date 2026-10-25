@@ -449,9 +449,19 @@ struct DaemonScopedRequestGuard: Sendable {
         if case .allow(.wikiRead) = decision {
             return
         }
-        // The one write allowance: a lint log append, kind-checked.
+        // The one write allowance: a lint log append, kind-checked, with the
+        // trusted host audit titles RESERVED. The child controls the
+        // payload's title, note, and author; host accounting trusts `--kind
+        // lint` records by these titles, so a title claiming a host record
+        // shape (a forged staged reference, apply outcome, or budget
+        // rejection) denies generically — the host writes its own outcome
+        // records through its own trusted path.
         if request.family == .log, request.operation == Self.lintLogAppendOperation,
            Self.logAppendPayloadKind(request.payload) == "lint" {
+            if let title = Self.logAppendPayloadTitle(request.payload),
+               LintHostAudit.titleIsReserved(title) {
+                throw scopeDenied()
+            }
             return
         }
         // The patch seam: REPAIR-policy only, and only against the selected
@@ -505,6 +515,19 @@ struct DaemonScopedRequestGuard: Sendable {
         } catch {
             // An unreadable payload is a denial by design — the allowlist
             // treats "cannot see the kind" as "not a lint log".
+            return nil
+        }
+    }
+
+    /// Minimally decode the log-append payload's `title` field; nil when the
+    /// payload is absent or unreadable (the title check then has nothing to
+    /// reserve against — the kind check still applies).
+    static func logAppendPayloadTitle(_ payload: Data?) -> String? {
+        guard let payload else { return nil }
+        struct LogTitle: Decodable { let title: String? }
+        do {
+            return try JSONDecoder().decode(LogTitle.self, from: payload).title
+        } catch {
             return nil
         }
     }
