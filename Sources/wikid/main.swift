@@ -8,6 +8,37 @@ import WikiFSMLX
 import WikiFSEngine
 #endif
 
+// The live gate driver host (`wikid lint-eval-driver …`): intercept BEFORE
+// any daemon boot — the host mode boots its own eval substrate and exits
+// with the gate verdict instead of serving the XPC service. The wait is a
+// semaphore (NOT an await): the daemon's top level must stay synchronous
+// (RunLoop.current is unavailable from async contexts).
+#if canImport(WikiFSEngine) && canImport(WikiLintEval) && os(macOS)
+if CommandLine.arguments.count > 1,
+   CommandLine.arguments[1] == LintEvalDriverHost.modeArgument {
+    // Sendable invariant: `value` is the only mutable state and every
+    // access holds `lock` (one write from the detached task, one read
+    // from the waiting main thread).
+    // swiftlint:disable:next unchecked_sendable
+    final class ExitCodeBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Int32?
+        func set(_ code: Int32) { lock.lock(); value = code; lock.unlock() }
+        func get() -> Int32? { lock.lock(); defer { lock.unlock() }; return value }
+    }
+    let box = ExitCodeBox()
+    let semaphore = DispatchSemaphore(value: 0)
+    Task.detached {
+        let code = await LintEvalDriverHost.runIfRequested(
+            arguments: Array(CommandLine.arguments.dropFirst()))
+        box.set(code ?? 2)
+        semaphore.signal()
+    }
+    semaphore.wait()
+    if let code = box.get() { exit(code) }
+}
+#endif
+
 /// The XPC service name — must match the bundle identifier in the wikid.xpc
 /// Info.plist and `WikiDaemonConnection.serviceName` in the client. The system
 /// resolves this to `Contents/XPCServices/wikid.xpc` in the app bundle and

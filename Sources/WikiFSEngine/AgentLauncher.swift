@@ -1438,6 +1438,15 @@ public final class AgentLauncher {
         providerServices as? any AgentProviderPrivateServices
     }
 
+    /// The one-shot run's thinking-effort override: the `thought_level`
+    /// value id (e.g. `"low"`) passed through `services.prepare` as the
+    /// snapshot's thinking configuration. `nil` (every production call
+    /// site) resolves the provider's configured default. The live
+    /// evaluation harness sets this on ITS launcher before `run` so a
+    /// one-shot lint trial pins the evaluated effort tier instead of
+    /// inheriting whatever default the provider resolves.
+    @ObservationIgnored public var oneShotThinkingOverride: String?
+
     private func preparedProvider(
         for operation: AgentProviderOperationKind,
         providerOverride: ProviderID? = nil,
@@ -1451,7 +1460,7 @@ public final class AgentLauncher {
             operation,
             providerOverride: providerOverride,
             modelOverride: modelOverride,
-            thinkingOverride: thinkingOverride,
+            thinkingOverride: thinkingOverride ?? oneShotThinkingOverride,
             queuedWorkUnits: queuedWorkUnits)
         providerOperationToken = preparation.selection.token
         let prepared = try await services.preparedBackend(

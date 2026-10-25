@@ -277,28 +277,268 @@ case "manifest":
 
 case "run":
     // The live gate. Refusal is the DEFAULT: without --live this is a
-    // hard error, and with --live the rollout prerequisites are checked
-    // and named — a missing provider access, budget approval, or human
-    // rubric blocks the gate instead of pretending.
+    // hard error. With --live --gate the driver resolves the evaluated
+    // configuration from the operator's provider configuration and runs
+    // the canonical fixture suite through the REAL coordinator path;
+    // every missing prerequisite is NAMED and the run stops before any
+    // provider call.
     guard arguments.contains("--live") else {
         fail("run requires --live — live evaluation spends real provider quota")
     }
     guard arguments.contains("--gate") else {
-        fail("usage: run --live --gate --manifest <path> [--budget-file <path>]")
+        fail("usage: run --live --gate --manifest <path> [--provider <id>] [--model <id>] [--eval-group <id>] [--bail-trials <n>] [--group-runs <n>] [--output tmp/<dir>]")
     }
-    // Rollout prerequisites (plan §6.14): provider access, an operator
-    // budget, a ready daemon, and human rubric review are observable
-    // execution prerequisites. This runner is the deterministic harness —
-    // the live trials it would drive are gated OFF until the operator
-    // confirms provider/model/tier and budget. Report honestly and exit
-    // nonzero: the gate has NOT passed.
-    out("LIVE GATE BLOCKED: rollout prerequisites are not yet confirmed —")
-    out("  1. provider/model and the lowest production effort tier confirmed by the operator")
-    out("  2. total evaluation budget approved by the operator")
-    out("  3. human rubric reviewers available for judgment fixtures")
-    out("No provider calls were made.")
-    exit(3)
+    #if canImport(WikiFSEngine) && os(macOS)
+    await runLiveGate(arguments: Array(arguments.dropFirst()))
+    #else
+    fail("the live gate requires macOS (the ACP backend is macOS-only)")
+    #endif
 
 default:
     fail("unknown command \(command) — expected inspect|replay|manifest|run")
 }
+
+// MARK: - The live gate (W3)
+
+#if canImport(WikiFSEngine) && os(macOS)
+/// The wikid binary that hosts the eval driver: siblings of THIS executable
+/// (the same SwiftPM products directory), then the common .build layouts.
+func wikidBinaryPath() -> String? {
+    var candidates: [URL] = []
+    if let selfURL = Bundle.main.executableURL {
+        candidates.append(selfURL.deletingLastPathComponent()
+            .appendingPathComponent("wikid", isDirectory: false))
+    }
+    for relative in [
+        ".build/debug/wikid",
+        ".build/out/Products/Debug/wikid",
+        ".build/arm64-apple-macosx/debug/wikid",
+    ] {
+        candidates.append(URL(fileURLWithPath: relative, relativeTo: URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)))
+    }
+    return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }?.path
+}
+
+/// Resolve the live-gate arguments, spawn `wikid lint-eval-driver` (the only
+/// process that can boot the eval daemon substrate), poll the gate report it
+/// writes, and exit with the AC.13 gate verdict (0 PASSED / 1 FAILED / 2
+/// usage error / 3 blocked prerequisite).
+func runLiveGate(arguments: [String]) async -> Never {
+    let known: Set<String> = [
+        "--manifest", "--provider", "--model", "--provider-config-dir",
+        "--eval-group", "--bail-trials", "--group-runs", "--output",
+        "--wall-clock-hours",
+    ]
+    var index = 0
+    while index < arguments.count {
+        guard known.contains(arguments[index]) else {
+            fail("run: unknown argument \(arguments[index])")
+        }
+        guard arguments.indices.contains(index + 1) else {
+            fail("\(arguments[index]) needs a value")
+        }
+        index += 2
+    }
+    func value(_ flag: String) -> String? {
+        guard let at = arguments.firstIndex(of: flag),
+              arguments.indices.contains(at + 1) else { return nil }
+        return arguments[at + 1]
+    }
+
+    // The canonical manifest is baked into this target; --manifest (when
+    // given) must decode to the SAME canonical digest — the gate runs the
+    // frozen fixtures or nothing.
+    let canonical = try! LintEvalCanonicalFixtures.loadGateManifest() // swiftlint:disable:this force_try
+    let canonicalDigest = try! canonical.digest() // swiftlint:disable:this force_try
+    if let manifestPath = value("--manifest") {
+        let supplied = loadManifest(path: manifestPath)
+        guard try! supplied.digest() == canonicalDigest else { // swiftlint:disable:this force_try
+            fail("--manifest does not match this build's canonical gate fixtures")
+        }
+    }
+
+    // The operator's REAL provider-config directory: the running daemon's
+    // App Group container by default (read-only), overridable for tooling.
+    let providerConfigDirectory: URL
+    if let dir = value("--provider-config-dir") {
+        providerConfigDirectory = URL(
+            fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
+    } else {
+        do {
+            providerConfigDirectory = try DatabaseLocation.appGroupContainerDirectory()
+        } catch {
+            fail("provider config: cannot resolve the App Group container: \(error)")
+        }
+    }
+
+    // The eval container is a DEDICATED App Group directory — disposable
+    // wikis live only there, never beside operator wikis.
+    let evalGroupID = value("--eval-group") ?? "group.eval.selfdrivingwiki.lintgate"
+    let outputDirectory: URL
+    if let output = value("--output") {
+        outputDirectory = tmpOutputURL(output)
+    } else {
+        let stamp = ISO8601DateFormatter()
+            .string(from: Date())
+            .replacingOccurrences(of: ":", with: "")
+        outputDirectory = tmpOutputURL("tmp/wiki-lint-eval/\(stamp)")
+    }
+    let wallClockHours = value("--wall-clock-hours").flatMap { Double($0) } ?? 8
+
+    let childArguments = [
+        LintEvalDriverHostMode,
+        "--provider", value("--provider") ?? "zai",
+        "--model", value("--model") ?? "GLM 5.3 Flash",
+        "--provider-config-dir", providerConfigDirectory.path,
+        "--eval-group", evalGroupID,
+        "--output", outputDirectory.path,
+        "--bail-trials", value("--bail-trials") ?? "20",
+        "--group-runs", value("--group-runs") ?? "3",
+        "--wall-clock-hours", String(wallClockHours),
+    ]
+
+    out("live gate: provider '\(value("--provider") ?? "zai")' model '\(value("--model") ?? "GLM 5.3 Flash")' @ lowest advertised effort")
+    out("live gate: provider config (read-only): \(providerConfigDirectory.path)")
+    out("live gate: eval container: \(evalGroupID)")
+    out("live gate: artifacts: \(outputDirectory.path)")
+
+    guard let wikidPath = wikidBinaryPath() else {
+        fail("live gate: cannot locate the wikid binary — build it first (make build)")
+    }
+    do {
+        try FileManager.default.createDirectory(
+            at: outputDirectory, withIntermediateDirectories: true)
+    } catch {
+        fail("live gate: cannot create the output directory \(outputDirectory.path): \(error)")
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: wikidPath)
+    process.arguments = childArguments
+    // The child's stdout is the operator's progress trail; stderr carries
+    // preflight failures. Both pass through to this terminal.
+    let pipe = Pipe()
+    process.standardOutput = pipe.fileHandleForWriting
+    process.standardError = pipe.fileHandleForWriting
+    do {
+        try process.run()
+    } catch {
+        fail("live gate: could not launch the driver host at \(wikidPath): \(error)")
+    }
+
+    // Non-blocking wait (repo rule: never waitUntilExit): termination
+    // handler + continuation, raced against a generous wall clock (the
+    // child enforces its own ceiling; this adds a 1-hour grace).
+    let reportURL = outputDirectory.appendingPathComponent("gate-report.json")
+    let waitTask = Task {
+        try await withThrowingTaskGroup(of: Int32.self) { group in
+            group.addTask {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Int32, Error>) in
+                    if !process.isRunning {
+                        cont.resume(returning: process.terminationStatus)
+                        return
+                    }
+                    process.terminationHandler = { handler in
+                        cont.resume(returning: handler.terminationStatus)
+                    }
+                }
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(wallClockHours * 3600 + 3600))
+                throw LiveGateTimeout()
+            }
+            let status: Int32
+            if let next = try await group.next() {
+                status = next
+            } else {
+                throw LiveGateTimeout()
+            }
+            group.cancelAll()
+            return status
+        }
+    }
+
+    // Progress trail: the report's executed-trial count while the child runs.
+    while !Task.isCancelled, process.isRunning {
+        // A cancelled poll sleep ends the loop on the next check; nothing
+        // to report.
+        // swiftlint:disable:next silent_try_optional
+        try? await Task.sleep(for: .seconds(30))
+        guard process.isRunning, let data = FileManager.default.contents(atPath: reportURL.path),
+              let trialCount = liveGateExecutedTrials(from: data) else { continue }
+        standardOutput.write(Data("live gate: \(trialCount) trial(s) recorded…\n".utf8))
+    }
+    var exitStatus = process.terminationStatus
+    let result = await waitTask.result
+    // A wait-task failure (timeout race lost) falls back to the observed
+    // termination status.
+    // swiftlint:disable:next silent_try_optional
+    exitStatus = (try? result.get()) ?? exitStatus
+
+    // The child streams the verdict; print the report summary from disk.
+    if let data = FileManager.default.contents(atPath: reportURL.path) {
+        printLiveGateSummary(data)
+    }
+    // Closing an already-closed read pipe is hygiene, not signal.
+    // swiftlint:disable:next silent_try_optional
+    try? pipe.fileHandleForReading.close()
+    exit(exitStatus)
+}
+
+struct LiveGateTimeout: Error {}
+
+private let LintEvalDriverHostMode = "lint-eval-driver"
+
+/// Pull `executedTrials` out of a partially-written gate report (the child
+/// rewrites the file after every trial). A partially-written file reads as
+/// "no count yet" — the poll simply tries again.
+func liveGateExecutedTrials(from data: Data) -> Int? {
+    // swiftlint:disable:next silent_try_optional
+    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let count = json["executedTrials"] as? Int else { return nil }
+    return count
+}
+
+/// Print the gate report summary from the JSON the driver wrote.
+func printLiveGateSummary(_ data: Data) {
+    let json: [String: Any]
+    do {
+        guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            out("gate report: JSON is not an object at the output directory")
+            return
+        }
+        json = parsed
+    } catch {
+        out("gate report: unreadable JSON at the output directory (\(error))")
+        return
+    }
+    out("")
+    out("GATE VERDICT: \(json["verdict"] as? String ?? "unknown")")
+    if let reasons = json["blockingReasons"] as? [String], !reasons.isEmpty {
+        for reason in reasons { out("  - \(reason)") }
+    }
+    if let executed = json["executedTrials"] as? Int,
+       let planned = json["plannedTrials"] as? Int {
+        out("trials: \(executed)/\(planned) executed; wall clock \(json["wallClockConsumedSeconds"] as? Double ?? 0)s; rate-limit retries \(json["rateLimitRetries"] as? Int ?? 0)")
+    }
+    if let groups = json["groups"] as? [[String: Any]] {
+        for group in groups {
+            out("  \(group["fixtureID"] as? String ?? "?"): \(group["passed"] as? Int ?? 0)/\(group["trials"] as? Int ?? 0) passed")
+        }
+    }
+    if let classScores = json["classScores"] as? [[String: Any]] {
+        for line in classScores {
+            let seeded = line["seeded"] as? Int ?? 0
+            let hits = line["hits"] as? Int ?? 0
+            let recall = seeded == 0 ? 0 : Double(hits) / Double(seeded)
+            out("  class \(line["defectClass"] as? String ?? "?"): seeded \(seeded), hits \(hits), false confirmed \(line["falseConfirmed"] as? Int ?? 0), recall \(String(format: "%.2f", recall))")
+        }
+    }
+    out("human rubric judgment: \(json["humanRubricSections"] as? String ?? "PENDING OPERATOR")")
+    if let metadata = json["metadata"] as? [String: Any],
+       let acceptanceKey = metadata["acceptanceKeySHA256"] as? String {
+        out("acceptance key: \(acceptanceKey)")
+    }
+}
+#endif

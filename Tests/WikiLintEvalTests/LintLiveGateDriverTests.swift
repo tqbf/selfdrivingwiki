@@ -1,0 +1,302 @@
+import Foundation
+import Testing
+import WikiFSCore
+import WikiFSTypes
+import WikiLintEval
+
+#if canImport(WikiFSEngine) && os(macOS)
+/// Deterministic W3 driver plumbing: suite composition, budget/backoff,
+/// evaluated-configuration resolution (named prerequisites), oracle hunk
+/// attribution, and the AC.13 mechanical verdict. Live runs are NOT
+/// unit-tested — these cover the pure planning and reporting seams.
+struct LintLiveGateDriverTests {
+
+    // MARK: - Suite composition
+
+    private func canonical() throws -> LintEvalFixtureManifest {
+        try LintEvalCanonicalFixtures.loadGateManifest()
+    }
+
+    @Test func suiteComposesBailFloorPlusGroupRuns() throws {
+        let manifest = try canonical()
+        let trials = try LintLiveGateSuiteComposer.compose(
+            manifest: manifest, bailTrials: 20, groupRuns: 3)
+        let bail = trials.filter { $0.fixtureID == LintLiveGateSuiteComposer.bailFixtureID }
+        #expect(bail.count == 20)
+        #expect(Set(bail.map(\.trialIndex)).count == 20, "bail trials are independent")
+        // Every remaining fixture runs exactly 3 times.
+        let others = Set((manifest.tuning + manifest.heldOut).map(\.id))
+            .subtracting([LintLiveGateSuiteComposer.bailFixtureID])
+        for fixtureID in others {
+            let runs = trials.filter { $0.fixtureID == fixtureID }
+            #expect(runs.count == 3, "fixture \(fixtureID) must run 3 times")
+        }
+        #expect(trials.count == 20 + 3 * others.count)
+        // The clean fixture's runs are idempotence pairs (AC-06).
+        let clean = trials.filter { $0.fixtureID == "clean-page" }
+        #expect(!clean.isEmpty && clean.allSatisfy(\.isIdempotencePair))
+        let nonClean = trials.filter { $0.fixtureID != "clean-page" }
+        #expect(nonClean.allSatisfy { !$0.isIdempotencePair })
+    }
+
+    @Test func suiteComposerRejectsMissingBailFixture() throws {
+        let manifest = try canonical()
+        // A manifest without the bail fixture cannot compose a gate suite.
+        let withoutBail = LintEvalFixtureManifest(
+            tuning: manifest.tuning.filter { $0.id != LintLiveGateSuiteComposer.bailFixtureID },
+            heldOut: manifest.heldOut)
+        #expect(throws: LintLiveGateError.self) {
+            _ = try LintLiveGateSuiteComposer.compose(
+                manifest: withoutBail, bailTrials: 20, groupRuns: 3)
+        }
+    }
+
+    // MARK: - Budget + backoff
+
+    @Test func budgetBackoffIsExponentialAndCapped() {
+        let budget = LintLiveGateBudget(
+            now: .now, ceiling: .seconds(8 * 3600))
+        #expect(budget.backoffSeconds(retry: 1, base: 5, cap: 120) == 5)
+        #expect(budget.backoffSeconds(retry: 2, base: 5, cap: 120) == 10)
+        #expect(budget.backoffSeconds(retry: 3, base: 5, cap: 120) == 20)
+        #expect(budget.backoffSeconds(retry: 0, base: 5, cap: 120) == 0)
+        #expect(budget.backoffSeconds(retry: 10, base: 5, cap: 120) == 120, "capped")
+        #expect(budget.backoffSeconds(retry: 30, base: 5, cap: 120) == 120, "overflow-safe cap")
+    }
+
+    @Test func budgetExhaustsAtTheDeadline() async throws {
+        let clock = ContinuousClock()
+        let budget = LintLiveGateBudget(now: clock.now, ceiling: .milliseconds(50))
+        #expect(!budget.isExhausted(now: clock.now))
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(budget.isExhausted(now: clock.now))
+        #expect(budget.timeRemaining(now: clock.now) == .zero, "clamped at zero")
+    }
+
+    // MARK: - Evaluated-configuration resolution
+
+    /// Write a provider configuration with an enabled provider whose probed
+    /// model catalog carries effort choices.
+    private func writeConfig(
+        directory: URL,
+        enabledProviderID: String,
+        models: [[String: Any]]
+    ) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let config: [String: Any] = [
+            "generation": 1,
+            "providers": [[
+                "id": enabledProviderID,
+                "label": "Test Provider",
+                "enabled": true,
+                "isDefault": false,
+                "env": [String: String](),
+                "command": ["/bin/echo"],
+            ]],
+            "providerModels": [enabledProviderID: models],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+        try data.write(to: directory.appendingPathComponent("agent-providers.json"))
+        return directory
+    }
+
+    private func pipeline() throws -> LintAcceptanceManifest.Pipeline {
+        try LintAcceptanceManifest.Pipeline.live()
+    }
+
+    @Test func resolutionPicksTheLowestAdvertisedEffortByNamePrefix() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = try writeConfig(
+            directory: root,
+            enabledProviderID: "zai",
+            models: [[
+                "modelId": "glm-5.3-flash",
+                "name": "GLM 5.3 Flash (Latest)",
+                "thinkingOptionCatalog": [
+                    "configOptionID": "thought_level",
+                    "choices": [
+                        ["id": "high", "label": "High"],
+                        ["id": "medium", "label": "Medium"],
+                        ["id": "low", "label": "Low"],
+                    ],
+                ],
+            ]])
+        let config = AgentProvidersConfig.loadOrSeed(from: dir, discover: { [] })
+        let evaluated = try LintLiveGateResolution.resolve(
+            configuration: config, requestedProviderID: "zai",
+            requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline())
+        #expect(evaluated.providerID == "zai")
+        #expect(evaluated.modelID == "glm-5.3-flash")
+        #expect(evaluated.effort == "low", "the lowest advertised tier wins")
+        let expectedPipeline = try pipeline()
+        #expect(evaluated.components.promptSHA256 == expectedPipeline.promptSHA256)
+        #expect(evaluated.components.effort == "low")
+    }
+
+    @Test func resolutionNamesMissingPrerequisites() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        // No provider named zai — the exact state this machine is in.
+        let dir = try writeConfig(
+            directory: root, enabledProviderID: "codex-acp", models: [])
+        let config = AgentProvidersConfig.loadOrSeed(from: dir, discover: { [] })
+        #expect(throws: LintLiveGateError.providerAbsent(requested: "zai", configured: ["codex-acp"])) {
+            _ = try LintLiveGateResolution.resolve(
+                configuration: config, requestedProviderID: "zai",
+                requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline())
+        }
+        // Provider present, model absent.
+        #expect(throws: LintLiveGateError.self) {
+            _ = try LintLiveGateResolution.resolve(
+                configuration: config, requestedProviderID: "codex-acp",
+                requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline())
+        }
+        // Provider + model, but no advertised effort tiers.
+        let withModel = try writeConfig(
+            directory: root.appendingPathComponent("b"),
+            enabledProviderID: "zai",
+            models: [["modelId": "glm-5.3-flash", "name": "GLM 5.3 Flash"]])
+        let config2 = AgentProvidersConfig.loadOrSeed(from: withModel, discover: { [] })
+        #expect(throws: LintLiveGateError.effortUnadvertised(provider: "zai", model: "GLM 5.3 Flash")) {
+            _ = try LintLiveGateResolution.resolve(
+                configuration: config2, requestedProviderID: "zai",
+                requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline())
+        }
+    }
+
+    // MARK: - Oracle hunk attribution
+
+    private func fixture(
+        seeds: [LintEvalFixture.SeededDefect],
+        repairs: [LintEvalFixture.AllowedRepair]
+    ) -> LintEvalFixture {
+        LintEvalFixture(
+            id: "test", body: "", seededDefects: seeds,
+            allowedRepairs: repairs, protectedByteRanges: [],
+            permittedUnresolvedClasses: [], kind: "mechanical")
+    }
+
+    @Test func observedHunksAttributeByDeclaration() {
+        let original = "```markdown\n# page\n\nold text\n```\n"
+        let repaired = "# page\n\nold text\n"
+        // Both fence removals declared — the real bail fixture's shape.
+        let fixture = fixture(
+            seeds: [LintEvalFixture.SeededDefect(
+                defectClass: "D25", evidence: "```markdown\n", expectRepair: true)],
+            repairs: [
+                LintEvalFixture.AllowedRepair(
+                    defectClass: "D25", oldText: "```markdown\n", newText: ""),
+                LintEvalFixture.AllowedRepair(
+                    defectClass: "D25", oldText: "```\n", newText: ""),
+            ])
+        let reconstructed = LintLiveGateDriver.observedHunks(
+            before: original, after: repaired, fixture: fixture)
+        #expect(reconstructed.hunks.count == 2, "declaration-anchored: both removals")
+        #expect(reconstructed.hunks.allSatisfy { $0.defectClass.rawValue == "D25" })
+        #expect(reconstructed.repairedClasses == Set(["D25"]))
+        #expect(reconstructed.unresolvedClasses.isEmpty)
+        // The oracle accepts the reconstructed hunks (server-observed bytes
+        // reproduce; declarations match, each consumed once).
+        let verdict = LintDiffOracle.verify(
+            original: original, new: repaired,
+            hunks: reconstructed.hunks, fixture: fixture)
+        #expect(verdict.accepted, "rejections: \(verdict.rejections)")
+    }
+
+    @Test func observedHunksLeaveUnmatchedEditsUnattributable() {
+        let original = "# page\n\nbody\n"
+        let rewritten = "# replaced\n"
+        let fixture = fixture(
+            seeds: [LintEvalFixture.SeededDefect(
+                defectClass: "D03", evidence: "body", expectRepair: true)],
+            repairs: [LintEvalFixture.AllowedRepair(
+                defectClass: "D03", oldText: "body", newText: "new body")])
+        let reconstructed = LintLiveGateDriver.observedHunks(
+            before: original, after: rewritten, fixture: fixture)
+        // The edit matches no declaration and no seed evidence → the fence
+        // fallback class; the oracle rejects it as an undeclared repair.
+        let verdict = LintDiffOracle.verify(
+            original: original, new: rewritten,
+            hunks: reconstructed.hunks, fixture: fixture)
+        #expect(verdict.accepted == false)
+        #expect(verdict.rejections.contains(.undeclaredRepair(hunkIndex: 0)))
+    }
+
+    @Test func observedRegionsTrimCommonPrefixAndSuffix() {
+        let before = "aaaXYZbbb"
+        let after = "aaaWbbb"
+        let regions = LintLiveGateDriver.observedRegions(before: before, after: after)
+        #expect(regions.count == 1)
+        #expect(regions[0].old == 3..<6)
+        #expect(regions[0].new == 3..<4)
+        #expect(LintLiveGateDriver.observedRegions(before: "same", after: "same").isEmpty)
+    }
+
+    // MARK: - AC.13 mechanical verdict
+
+    private func record(
+        fixtureID: String, trialIndex: Int, passed: Bool
+    ) -> LintLiveTrialRecord {
+        LintLiveTrialRecord(
+            fixtureID: fixtureID, trialIndex: trialIndex, isIdempotencePair: false,
+            wikiID: "01TEST", startedAt: Date(), finishedAt: Date(),
+            authorityTier: "evaluationAdmission", authorityReason: nil,
+            runStatus: "dispatched", runDetail: "",
+            appliedClasses: passed ? ["D25"] : [], hits: passed ? ["D25#1"] : [],
+            oracleAccepted: passed, oracleRejections: [],
+            scorePassed: passed, scoreFailures: passed ? [] : ["D25#1: seeded defect missed entirely"],
+            idempotenceWrites: nil, rateLimitRetries: 0,
+            seededBodySHA256: "a", finalBodySHA256: "b",
+            transcriptDirectory: nil, error: nil)
+    }
+
+    @Test func verdictPassesOnlyOnAFullCleanSuite() throws {
+        let manifest = try canonical()
+        let trials = try LintLiveGateSuiteComposer.compose(
+            manifest: manifest, bailTrials: 20, groupRuns: 3)
+        let allPassed = trials.map { record(fixtureID: $0.fixtureID, trialIndex: $0.trialIndex, passed: true) }
+        let (passed, reasons) = LintLiveGateReport.verdict(
+            records: allPassed, plannedTrials: trials.count, bailTrials: 20,
+            groupRuns: 3, manifest: manifest, abortedEarly: false)
+        #expect(passed == "PASSED")
+        #expect(reasons.isEmpty)
+
+        // One bail failure fails the gate and names the count.
+        var oneFailed = allPassed
+        oneFailed[3] = record(fixtureID: LintLiveGateSuiteComposer.bailFixtureID, trialIndex: 4, passed: false)
+        let (failed, failedReasons) = LintLiveGateReport.verdict(
+            records: oneFailed, plannedTrials: trials.count, bailTrials: 20,
+            groupRuns: 3, manifest: manifest, abortedEarly: false)
+        #expect(failed == "FAILED")
+        #expect(failedReasons.contains { $0.contains("19/20") })
+        #expect(failedReasons.contains { $0.contains("1 failing trial") })
+
+        // An early abort fails the gate even with a clean record set.
+        let (aborted, abortReasons) = LintLiveGateReport.verdict(
+            records: [], plannedTrials: trials.count, bailTrials: 20,
+            groupRuns: 3, manifest: manifest, abortedEarly: true)
+        #expect(aborted == "FAILED")
+        #expect(abortReasons.contains { $0.contains("aborted") })
+    }
+
+    @Test func trialRecordFailsOnNonzeroIdempotenceWrites() {
+        // A clean/idempotence trial that WROTE anything fails, even when the
+        // oracle and score both read clean.
+        let wrote = LintLiveTrialRecord(
+            fixtureID: "clean-page", trialIndex: 1, isIdempotencePair: true,
+            wikiID: "01TEST", startedAt: Date(), finishedAt: Date(),
+            authorityTier: "evaluationAdmission", authorityReason: nil,
+            runStatus: "dispatched", runDetail: "",
+            appliedClasses: [], hits: [],
+            oracleAccepted: true, oracleRejections: [],
+            scorePassed: true, scoreFailures: [],
+            idempotenceWrites: [0, 1], rateLimitRetries: 0,
+            seededBodySHA256: "a", finalBodySHA256: "b",
+            transcriptDirectory: nil, error: nil)
+        #expect(wrote.passed == false)
+    }
+}
+#endif

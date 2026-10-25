@@ -58,7 +58,8 @@ reject_matches "makeStore remains outside a named bootstrap, backend, fallback, 
   Sources/WikiFSEngine/ProfileWikiSession.swift \
   Sources/WikiFSEngine/SessionManager.swift \
   Sources/WikiFSEngine/SessionsPlugin.swift \
-  Sources/WikiFSEngine/StorePlugin.swift || failed=1
+  Sources/WikiFSEngine/StorePlugin.swift \
+  Sources/wikid/LintEvalDriverHost.swift || failed=1
 reject_matches "public production facade exposes BootedProfile or CordisContext" \
   'public[[:space:]]+(let|var|typealias|func|init)[^\n]*(BootedProfile|CordisContext)' \
   Sources/Cordis/CordisContext.swift \
@@ -79,6 +80,9 @@ reject_matches "session facade is constructed outside its boot/factory boundary"
 # ProfileWikiSession documents its synchronous test-fixture boundary.
 # Projection is a separate extension process with query-only stores.
 # wikid/main.swift retains the Linux stdio compatibility fixture factory.
+# wikid/LintEvalDriverHost.swift is the live gate's daemon host: the eval
+# driver engine receives store/model/launcher constructions ONLY through
+# the LintLiveGateFactories this host fills (the disposable eval substrate).
 reject_matches "GRDBWikiStore is constructed outside a store plugin/factory" \
   '(^|[^[:alnum:]_])GRDBWikiStore\(' \
   Sources/WikiFS/Reader/TransclusionEmbedder.swift \
@@ -88,11 +92,13 @@ reject_matches "GRDBWikiStore is constructed outside a store plugin/factory" \
   Sources/WikiFSCore/Store/WikiReadService.swift \
   Sources/WikiFSEngine/ProfileWikiSession.swift \
   Sources/WikiFSFileProvider/Projection.swift \
+  Sources/wikid/LintEvalDriverHost.swift \
   Sources/wikid/main.swift || failed=1
 reject_matches "WikiStoreModel is constructed outside a plugin/factory" \
   '(^|[^[:alnum:]_])WikiStoreModel\(' \
   Sources/WikiFSCore/Core/WikiRegistryClient.swift \
-  Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
+  Sources/WikiFSEngine/SessionsPlugin.swift \
+  Sources/wikid/LintEvalDriverHost.swift || failed=1
 reject_matches "search composition is constructed outside a plugin/factory" \
   '(^|[^[:alnum:]_])SearchCompositionOwner\(' \
   Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
@@ -109,11 +115,14 @@ reject_matches "GenerationGate is constructed outside a plugin/factory or its ow
 # RendererCompositionOwner is an intentional app UI-shell adapter.
 # AgentLauncher owns its concrete launcher implementation.
 # SessionsPlugin provisions per-wiki launcher factories and test fixtures.
+# wikid/LintEvalDriverHost.swift is the live gate's daemon host; the driver
+# engine receives launchers ONLY through its injected factory.
 reject_matches "AgentLauncher is constructed outside a plugin/factory or launcher facade" \
   '(^|[^[:alnum:]_])AgentLauncher\(' \
   Sources/WikiFS/Renderer/RendererCompositionOwner.swift \
   Sources/WikiFSEngine/AgentLauncher.swift \
-  Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
+  Sources/WikiFSEngine/SessionsPlugin.swift \
+  Sources/wikid/LintEvalDriverHost.swift || failed=1
 
 # Scope-limited variant of reject_matches: the pattern is grepped under
 # "$source_root/<scope>" only. A missing scope directory (synthetic fixture

@@ -1266,7 +1266,9 @@ public enum AgentOperationRunner {
     /// strategy: authoritative editorial instructions cannot be invented from
     /// a store error (the same contract as the daemon chat's per-turn strategy
     /// read).
-    private static func stateMarkdownForRequest(
+    /// Internal so the evaluation dispatch (`LintEvaluationDispatch.swift`)
+    /// can drive the same preflight capture production runs use.
+    static func stateMarkdownForRequest(
         store: WikiStoreModel,
         launcher: AgentLauncher
     ) -> String? {
@@ -1279,7 +1281,9 @@ public enum AgentOperationRunner {
         }
     }
 
-    private static func run(
+    /// Internal so the evaluation dispatch (`LintEvaluationDispatch.swift`)
+    /// can drive the same launcher dispatch production runs use.
+    static func run(
         request: OperationRequest,
         launcher: AgentLauncher,
         store: WikiStoreModel,

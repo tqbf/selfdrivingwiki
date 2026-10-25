@@ -573,7 +573,18 @@ let package = Package(
         // pieces only — live provider runs live in the Runner.
         .target(
             name: "WikiLintEval",
-            dependencies: ["WikiFSCore", "WikiFSTypes"],
+            dependencies: [
+                "WikiFSCore",
+                "WikiFSTypes",
+                // The live gate driver engine (macOS-only): the production
+                // provider runtime, the coordinator evaluation dispatch, and
+                // the trusted daemon lifecycle APIs. The daemon substrate is
+                // booted by the `wikid` host mode and injected.
+                .target(name: "WikiFSEngine",
+                        condition: .when(platforms: [.macOS])),
+                .target(name: "WikiCtlCore",
+                        condition: .when(platforms: [.macOS])),
+            ],
             path: "Sources/WikiLintEval",
             resources: [.copy("Fixtures")],
             swiftSettings: strictSwiftSettings
@@ -645,6 +656,11 @@ let package = Package(
                 .target(name: "WikiFSTypes",
                         condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSMarkdown",
+                        condition: .when(platforms: [.macOS])),
+                // The live gate driver host (`wikid lint-eval-driver …`): the
+                // only process that can boot the eval daemon substrate (its
+                // own components), running the WikiLintEval driver engine.
+                .target(name: "WikiLintEval",
                         condition: .when(platforms: [.macOS])),
             ],
             path: "Sources/wikid",
