@@ -463,7 +463,7 @@ struct QueueRunDetailsView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(proposals.isDisabled(""))
+            .disabled(proposals.isApproveAllDisabled)
             .help("Apply every pending proposal. Each one is checked against the page's current state and reported individually.")
             .accessibilityLabel("Approve all proposals")
             Spacer()

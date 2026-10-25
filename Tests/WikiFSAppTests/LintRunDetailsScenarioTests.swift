@@ -568,13 +568,17 @@ struct LintRunDetailsScenarioTests {
         static let proposalBID = "prop-b"
         static let wikiID = WikiID(rawValue: "proposal-wiki")
 
-        init() throws {
+        init() async throws {
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("lint-proposals-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             store = try GRDBWikiStore(databaseURL: root.appendingPathComponent("WikiFS.sqlite"))
             let root = self.root
             breaker = LintRepairBreaker(containerResolver: { root.appendingPathComponent("appgroup") })
+            // The trusted host records the run's configuration identity —
+            // the same pre-staging record the production gate performs — so
+            // the resolved proposals carry their own key.
+            await lintRunState.recordRunBreakerKey(runID: runID, key: breakerKey)
 
             pageA = try store.createPage(title: "Gate page")
             try store.updatePage(id: pageA.id, title: "Gate page", body: Self.bodyA)
@@ -598,11 +602,12 @@ struct LintRunDetailsScenarioTests {
         }
 
         func stageProposal(
-            id: String, pageID: PageID, body: String, newText: String
+            id: String, pageID: PageID, body: String, newText: String,
+            runID: DaemonRunID? = nil
         ) async throws {
             let head = try #require(try store.pageHeadVersionID(pageID: pageID))
             try await lintRunState.stageProposal(DaemonLintStagedProposal(
-                id: id, runID: runID, pageID: pageID, stagedAt: Date(),
+                id: id, runID: runID ?? self.runID, pageID: pageID, stagedAt: Date(),
                 inspectedHead: head,
                 bodyFingerprint: "fp-\(id)",
                 hunks: [replacementHunk(body: body, newText: newText)],
@@ -652,6 +657,10 @@ struct LintRunDetailsScenarioTests {
 
         /// The app-side proposal values, mapped from the REAL daemon
         /// records through the same fields the production source maps.
+        /// The breaker key joins from the run's recorded configuration —
+        /// the exact join the daemon's read seam performs
+        /// (`DaemonDomainSocketDispatcher`'s staged-record export) — so a
+        /// proposal whose run recorded no key resolves keyless.
         func resolvedProposals(ids: [String]) async -> [QueueLintStagedProposal] {
             var out: [QueueLintStagedProposal] = []
             for page in [pageA, pageB] {
@@ -661,7 +670,8 @@ struct LintRunDetailsScenarioTests {
                         id: staged.id, pageID: staged.pageID, stagedAt: staged.stagedAt,
                         inspectedHead: staged.inspectedHead,
                         bodyFingerprint: staged.bodyFingerprint,
-                        hunks: staged.hunks, perHunkClasses: staged.perHunkClasses))
+                        hunks: staged.hunks, perHunkClasses: staged.perHunkClasses,
+                        breakerKey: await lintRunState.runBreakerKey(runID: staged.runID)))
                 }
             }
             return out
@@ -701,7 +711,6 @@ struct LintRunDetailsScenarioTests {
         @State var section: QueueRunDetailsLintProposals?
         let store: GRDBWikiStore
         let breaker: LintRepairBreaker
-        let breakerKey: LintRepairBreakerKey
         let sink: ProposalSectionSink
 
         var body: some View {
@@ -737,15 +746,23 @@ struct LintRunDetailsScenarioTests {
             }
         }
 
-        private func reject(_ proposal: QueueLintStagedProposal) {
+        /// Invoked by the Reject button and directly by the breaker-identity
+        /// scenarios (the same handler the window wires — the hosted
+        /// harness's stacked-window presses are unreliable across a suite
+        /// run, and these scenarios pin ACCOUNTING, not reachability; the
+        /// real-control reachability proofs live in the approve scenarios).
+        func reject(_ proposal: QueueLintStagedProposal) {
             guard let current = section,
                   current.showsReviewControls,
                   current.isDisabled(proposal.id) == false else { return }
             section?.inFlightProposalIDs.insert(proposal.id)
             Task { @MainActor in
                 defer { section?.inFlightProposalIDs.remove(proposal.id) }
+                // The rejection's breaker evidence lands on THIS proposal's
+                // own recorded key — the window's per-proposal wiring.
                 _ = LintProposalApplyService.recordRejection(
-                    breaker: breaker, breakerKey: breakerKey)
+                    breaker: proposal.breakerKey != nil ? breaker : nil,
+                    breakerKey: proposal.breakerKey)
                 record(QueueLintProposalOutcome(
                     proposalID: proposal.id, kind: .rejected, detail: nil))
                 noteBreakerTrip()
@@ -754,7 +771,8 @@ struct LintRunDetailsScenarioTests {
 
         /// Invoked by the Approve-all button and, when the harness's
         /// synthesized press cannot engage the trailing row's hosted
-        /// gesture, directly by the (e) scenario (same handler, same flow).
+        /// gesture, directly by the batch-service scenario (same handler,
+        /// same flow).
         func approveAll() {
             guard let current = section,
                   current.showsApproveAll,
@@ -768,7 +786,8 @@ struct LintRunDetailsScenarioTests {
 
         /// The window's apply path, verbatim: one service call per
         /// proposal, the outcome re-read from the durable audit trail, the
-        /// in-flight answer only as the fallback.
+        /// in-flight answer only as the fallback. Each proposal accounts
+        /// against its OWN recorded key.
         private func apply(_ proposals: [QueueLintStagedProposal]) {
             for proposal in proposals {
                 let outcome = LintProposalApplyService.apply(
@@ -778,7 +797,9 @@ struct LintRunDetailsScenarioTests {
                         bodyFingerprint: proposal.bodyFingerprint,
                         hunks: proposal.hunks,
                         perHunkClasses: proposal.perHunkClasses),
-                    store: store, breaker: breaker, breakerKey: breakerKey)
+                    store: store,
+                    breaker: proposal.breakerKey != nil ? breaker : nil,
+                    breakerKey: proposal.breakerKey)
                 // A log read failure falls back to the in-flight answer —
                 // the outcome the apply just returned is still rendered
                 // rather than lost.
@@ -817,6 +838,10 @@ struct LintRunDetailsScenarioTests {
         }
 
         private func noteBreakerTrip() {
+            // Presentation rides the SHARED key only; per-proposal
+            // accounting already landed on each proposal's own key.
+            let keys = Set(resolved.compactMap(\.breakerKey))
+            guard keys.count == 1, let breakerKey = keys.first else { return }
             let status = breaker.windowStatus(for: breakerKey)
             guard status.isTripped else { return }
             section?.breakerNotice =
@@ -860,7 +885,6 @@ struct LintRunDetailsScenarioTests {
             section: section,
             store: fixture.store,
             breaker: fixture.breaker,
-            breakerKey: fixture.breakerKey,
             sink: sink)
         let host = NSHostingController(rootView: panel)
         let window = NSWindow(contentViewController: host)
@@ -879,7 +903,7 @@ struct LintRunDetailsScenarioTests {
     // (a) The section renders for a tier-2 run with a staged proposal.
 
     @Test func proposalSectionRendersForTier2Run() async throws {
-        let fixture = try ProposalFixture()
+        let fixture = try await ProposalFixture()
         try await fixture.stageProposal(
             id: ProposalFixture.proposalAID, pageID: fixture.pageA.id,
             body: ProposalFixture.bodyA, newText: "new text A")
@@ -923,7 +947,7 @@ struct LintRunDetailsScenarioTests {
     // (b) Approve applies via the service and the section collapses.
 
     @Test func approvingAppliesThroughTheServiceAndCollapses() async throws {
-        let fixture = try ProposalFixture()
+        let fixture = try await ProposalFixture()
         try await fixture.stageProposal(
             id: ProposalFixture.proposalAID, pageID: fixture.pageA.id,
             body: ProposalFixture.bodyA, newText: "new text A")
@@ -1007,7 +1031,7 @@ struct LintRunDetailsScenarioTests {
     // (c) Reject records the breaker outcome; the threshold trips.
 
     @Test func rejectingRecordsBreakerOutcomeAndTripsAfterThreshold() async throws {
-        let fixture = try ProposalFixture()
+        let fixture = try await ProposalFixture()
         try await fixture.stageProposal(
             id: ProposalFixture.proposalAID, pageID: fixture.pageA.id,
             body: ProposalFixture.bodyA, newText: "new text A")
@@ -1062,7 +1086,7 @@ struct LintRunDetailsScenarioTests {
     // (d) A stale proposal renders the stale state with no store write.
 
     @Test func staleProposalShowsTheStaleStateWithNoButtons() async throws {
-        let fixture = try ProposalFixture()
+        let fixture = try await ProposalFixture()
         try await fixture.stageProposal(
             id: ProposalFixture.proposalAID, pageID: fixture.pageA.id,
             body: ProposalFixture.bodyA, newText: "new text A")
@@ -1107,7 +1131,7 @@ struct LintRunDetailsScenarioTests {
     // (e) Approve-all produces the honest aggregate.
 
     @Test func approveAllReportsHonestAggregate() async throws {
-        let fixture = try ProposalFixture()
+        let fixture = try await ProposalFixture()
         try await fixture.stageProposal(
             id: ProposalFixture.proposalAID, pageID: fixture.pageA.id,
             body: ProposalFixture.bodyA, newText: "new text A")
@@ -1210,5 +1234,118 @@ struct LintRunDetailsScenarioTests {
         #expect(bodyA.contains("new text A"))
         #expect(try fixture.store.pageHeadVersionID(pageID: fixture.pageB.id)
             == movedHeadB, "the stale proposal was refused — no further write")
+    }
+
+    // (f) R-A: breaker identity follows the SELECTED proposal, never a
+    // cached or unrelated one.
+
+    @Test func eachSelectionAccountsWithItsOwnProposalKey() async throws {
+        let fixture = try await ProposalFixture()
+        // One page, two runs, two configurations: run 1 stages proposal A,
+        // run 2 stages proposal A2 — the review source loads BOTH for the
+        // page (the read seam is per page, across runs).
+        let key2 = LintRepairBreakerKey(
+            pipelineDigest: "second-digest", provider: "openai",
+            model: "gpt", effort: "low")
+        let secondRun = DaemonRunID(rawValue: "proposal-run-2")
+        try await fixture.stageProposal(
+            id: "prop-a", pageID: fixture.pageA.id,
+            body: ProposalFixture.bodyA, newText: "new text A")
+        try await fixture.stageProposal(
+            id: "prop-a2", pageID: fixture.pageA.id,
+            body: ProposalFixture.bodyA, newText: "newer text",
+            runID: secondRun)
+        await fixture.lintRunState.recordRunBreakerKey(runID: secondRun, key: key2)
+        // Selection 1: the first run's report names proposal A only.
+        let resolved1 = await fixture.resolvedProposals(ids: ["prop-a"])
+        #expect(resolved1.count == 1)
+        #expect(resolved1.first?.breakerKey == fixture.breakerKey)
+        let (section1, report1) = try makeSectionAndReport(fixture: fixture, resolved: resolved1)
+        #expect(section1.breakerKey(for: ProposalFixture.proposalAID) == fixture.breakerKey)
+
+        // Selecting run 1 and rejecting its proposal records the rejection
+        // on run 1's configuration — and NEVER on run 2's, even though the
+        // source loaded both proposals for this page.
+        let mounted1 = mountProposals(
+            section: section1, report: report1, resolved: resolved1, fixture: fixture)
+        (mounted1.proposalPanel as? ProposalHostedPanel)?
+            .reject(resolved1[0])
+        let rejected1 = await waitUntil {
+            fixture.breaker.windowStatus(for: fixture.breakerKey).userRejections == 1
+        }
+        #expect(rejected1, "the rejection landed on the selected proposal's own key")
+        #expect(fixture.breaker.windowStatus(for: key2).userRejections == 0,
+                "an unrelated run's configuration was never touched")
+
+        // Selection 2: the second run's report names proposal A2 only —
+        // the keyed→keyed selection change. Its accounting uses key2.
+        let resolved2 = await fixture.resolvedProposals(ids: ["prop-a2"])
+        #expect(resolved2.count == 1)
+        #expect(resolved2.first?.breakerKey == key2)
+        let report2 = fixture.tier2Report(records: [
+            fixture.tier2Record(
+                fixture.pageA.id, title: "Gate page",
+                inspected: fixture.inspectedHeadA, proposalIDs: ["prop-a2"]),
+        ])
+        let section2 = try #require(QueueRunDetailsLintProposals.make(
+            report: report2, wikiID: ProposalFixture.wikiID, resolved: resolved2))
+        #expect(section2.breakerKey(for: "prop-a2") == key2,
+                "the second selection resolves its OWN configuration")
+        let mounted2 = mountProposals(
+            section: section2, report: report2, resolved: resolved2, fixture: fixture)
+        (mounted2.proposalPanel as? ProposalHostedPanel)?
+            .reject(resolved2[0])
+        let rejected2 = await waitUntil {
+            fixture.breaker.windowStatus(for: key2).userRejections == 1
+        }
+        #expect(rejected2, "the second selection's rejection landed on key2")
+        #expect(fixture.breaker.windowStatus(for: fixture.breakerKey).userRejections == 1,
+                "selection 2 never added evidence to selection 1's window")
+    }
+
+    @Test func unkeyedProposalKeepsItsActionsDisabled() async throws {
+        let fixture = try await ProposalFixture()
+        // Run 2 recorded NO breaker key — the honest unrecorded state. Its
+        // proposal must keep its actions disabled even though the source
+        // also loaded run 1's KEYED proposal for the same page.
+        let secondRun = DaemonRunID(rawValue: "proposal-run-2")
+        try await fixture.stageProposal(
+            id: "prop-a", pageID: fixture.pageA.id,
+            body: ProposalFixture.bodyA, newText: "new text A")
+        try await fixture.stageProposal(
+            id: "prop-a2", pageID: fixture.pageA.id,
+            body: ProposalFixture.bodyA, newText: "newer text",
+            runID: secondRun)
+
+        let resolved = await fixture.resolvedProposals(ids: ["prop-a2"])
+        #expect(resolved.count == 1)
+        #expect(resolved.first?.breakerKey == nil,
+                "the unkeyed run's proposal resolves keyless")
+        let report = fixture.tier2Report(records: [
+            fixture.tier2Record(
+                fixture.pageA.id, title: "Gate page",
+                inspected: fixture.inspectedHeadA, proposalIDs: ["prop-a2"]),
+        ])
+        var section = try #require(QueueRunDetailsLintProposals.make(
+            report: report, wikiID: ProposalFixture.wikiID, resolved: resolved))
+        // The window marks the section honestly (the load path sets the
+        // reason when any resolved proposal carries no key).
+        section.actionUnavailableReason = QueueStagedProposalSource.unavailableReason
+        #expect(section.isDisabled("prop-a2"),
+                "the unkeyed proposal's actions stay disabled")
+        #expect(section.isApproveAllDisabled,
+                "the batch never runs over an unresolvable configuration")
+
+        // The handler is the backstop: rejecting the unkeyed proposal is a
+        // no-op — no breaker evidence anywhere, no outcome row.
+        let before = fixture.breaker.windowStatus(for: fixture.breakerKey).userRejections
+        let mounted = mountProposals(
+            section: section, report: report, resolved: resolved, fixture: fixture)
+        (mounted.proposalPanel as? ProposalHostedPanel)?.reject(resolved[0])
+        await settle()
+        #expect(fixture.breaker.windowStatus(for: fixture.breakerKey).userRejections == before,
+                "an unkeyed proposal never records against another run's key")
+        #expect(sinkSection(in: mounted)?.outcomeRows.isEmpty == true,
+                "no outcome was recorded for the refused action")
     }
 }

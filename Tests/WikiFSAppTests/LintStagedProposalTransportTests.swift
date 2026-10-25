@@ -194,9 +194,8 @@ struct LintStagedProposalTransportTests {
         #expect(proposal.pageID == fixture.page.id)
         #expect(proposal.hunkCount == 1)
         #expect(proposal.classLabels == "D25")
-        #expect(proposal.breakerKey == Fixture.breakerKey)
-        let key = await source.breakerKey()
-        #expect(key == Fixture.breakerKey, "the run's configuration identity rides the records")
+        #expect(proposal.breakerKey == Fixture.breakerKey,
+                "the run's configuration identity rides the proposal's own record")
     }
 
     @Test("a run whose breaker key was never recorded resolves an unnamed configuration")
@@ -220,8 +219,8 @@ struct LintStagedProposalTransportTests {
         let source = QueueStagedProposalSource.production(engine: engine)
         let resolved = await source.proposals(fixture.page.id)
         #expect(resolved.count == 1, "the section still populates — display never depends on the key")
-        let key = await source.breakerKey()
-        #expect(key == nil, "no recorded key resolves unnamed, never a guessed one")
+        #expect(resolved.first?.breakerKey == nil,
+                "no recorded key resolves unnamed, never a guessed one")
     }
 
     @Test("a wire record with an unknown defect class does not map")

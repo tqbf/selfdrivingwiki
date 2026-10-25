@@ -184,9 +184,28 @@ struct QueueRunDetailsLintProposals: Sendable, Equatable {
     /// control so the store never sees concurrent applies.
     var isBusy: Bool { approveAllInFlight || inFlightProposalIDs.isEmpty == false }
 
-    /// Whether one proposal's controls are disabled: busy, or the actions
-    /// are unavailable.
-    func isDisabled(_ id: String) -> Bool { isBusy || actionUnavailableReason != nil }
+    /// Whether one proposal's controls are disabled: busy, the actions are
+    /// unavailable, or THIS proposal's record carries no breaker key —
+    /// fail-closed: an action is never accounted against another
+    /// proposal's key.
+    func isDisabled(_ id: String) -> Bool {
+        isBusy || actionUnavailableReason != nil || breakerKey(for: id) == nil
+    }
+
+    /// The breaker key the named pending proposal's OWN record carries —
+    /// the only key its apply/reject accounting may use. Nil for a
+    /// proposal whose run never named a configuration.
+    func breakerKey(for id: String) -> LintRepairBreakerKey? {
+        pendingProposals.first { $0.id == id }?.proposal.breakerKey
+    }
+
+    /// Whether the Approve-all batch is disabled: busy, the actions are
+    /// unavailable, or ANY pending proposal lacks its own recorded key —
+    /// the batch never mixes resolved and unresolvable accounting.
+    var isApproveAllDisabled: Bool {
+        isBusy || actionUnavailableReason != nil
+            || pendingProposals.contains { $0.proposal.breakerKey == nil }
+    }
 
     /// The honest aggregate ("Proposals: 2 applied, 1 stale.") — non-zero
     /// parts only, in outcome order. Nil while nothing has resolved.
@@ -403,63 +422,30 @@ static let staleMessage = "Page changed since this proposal — re-run lint."
 }
 
 /// The review section's data source (W5b): the caller-resolved staged
-/// records for a page plus the run's tier-2 breaker configuration.
-///
-/// The daemon owns the staged records (`DaemonLintRunState`, W5a's read
-/// seams), and this build ships NO daemon→app transport that can serve
-/// them — so production wiring passes `nil` and the section simply does
-/// not render rather than guessing. Hosted tests inject a source over a
-/// real `DaemonLintRunState`. `breakerKey` is the tier-2 key (live
-/// pipeline digest + provider/model/effort, no approval row); nil means
-/// the configuration cannot be named — the UI disables the buttons with
-/// an explanation instead of recording against a guessed key.
+/// records for a page. Each resolved proposal carries the breaker key ITS
+/// OWN run recorded — there is deliberately no source-level key and no
+/// cache: the review actions account against the key the selected
+/// proposal's record states, so one page's proposals from different runs
+/// can never borrow each other's configuration, and a record without a
+/// key keeps its actions disabled with ``QueueStagedProposalSource/unavailableReason``
+/// rather than guessing.
 struct QueueStagedProposalSource: Sendable {
     var proposals: @Sendable (PageID) async -> [QueueLintStagedProposal]
-    var breakerKey: @Sendable () async -> LintRepairBreakerKey?
 
-    /// Why the actions are unavailable when the key cannot be resolved.
+    /// Why a proposal's actions are unavailable when its record carries no
+    /// breaker key.
     static let unavailableReason =
-        "Review actions are unavailable — the run's repair-breaker configuration could not be resolved."
+        "Review actions are unavailable — this proposal's run has no recorded repair-breaker configuration."
 
     /// The production source: proposals resolve through the queue engine's
-    /// daemon read seam (the staged records' live values), and the breaker
-    /// key is the run configuration identity the daemon recorded — carried
-    /// by the resolved records themselves, so the review actions account
-    /// against the SAME breaker window the run used. A run whose key was
-    /// never recorded resolves `breakerKey` to nil: the actions stay
-    /// disabled with ``unavailableReason`` rather than guessing a key.
+    /// daemon read seam (the staged records' live values). The key rides
+    /// each record — matched by proposal id downstream — so the review
+    /// actions account against the SAME breaker window the run used.
     static func production(engine: any QueueEngineClient) -> QueueStagedProposalSource {
-        let keyBox = ProductionBreakerKeyBox()
-        return QueueStagedProposalSource(
+        QueueStagedProposalSource(
             proposals: { pageID in
                 let records = await engine.loadLintStagedProposals(for: pageID)
-                let mapped = records.compactMap(QueueLintStagedProposal.init(record:))
-                keyBox.storeIfEmpty(mapped.compactMap(\.breakerKey).first)
-                return mapped
-            },
-            breakerKey: { keyBox.load() })
-    }
-
-    /// The production source's breaker-key carrier: the proposals closure
-    /// stores the first recorded key of a load; the breakerKey closure reads
-    /// it back. The single `key` field is covered by `lock` on every access,
-    /// which is the invariant that makes the unchecked Sendable safe.
-    // swiftlint:disable:next unchecked_sendable
-    private final class ProductionBreakerKeyBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var key: LintRepairBreakerKey?
-
-        func storeIfEmpty(_ newKey: LintRepairBreakerKey?) {
-            guard let newKey else { return }
-            lock.lock()
-            defer { lock.unlock() }
-            if key == nil { key = newKey }
-        }
-
-        func load() -> LintRepairBreakerKey? {
-            lock.lock()
-            defer { lock.unlock() }
-            return key
-        }
+                return records.compactMap(QueueLintStagedProposal.init(record:))
+            })
     }
 }

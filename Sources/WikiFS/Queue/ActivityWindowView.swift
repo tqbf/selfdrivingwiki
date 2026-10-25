@@ -188,11 +188,9 @@ struct ActivityWindowView: View {
     @State private var lintProposalBreakerNotice: String?
     /// The tier-2 breaker's read-only window status line.
     @State private var lintProposalBreakerContext: String?
-    /// Why the review actions are unavailable (unresolvable configuration).
+    /// Why the review actions are unavailable (a proposal's record carries
+    /// no breaker key).
     @State private var lintProposalActionProblem: String?
-    /// The resolved tier-2 breaker key for the selected run, when the
-    /// source could name it.
-    @State private var lintProposalBreakerKey: LintRepairBreakerKey?
 
     /// The selected job's two workspace surfaces. Activity is the only
     /// transcript surface (plan §1); Overview is the complete inventory +
@@ -1246,7 +1244,6 @@ struct ActivityWindowView: View {
         lintProposalBreakerNotice = nil
         lintProposalBreakerContext = nil
         lintProposalActionProblem = nil
-        lintProposalBreakerKey = nil
     }
 
     /// Task identity for the staged-proposal load: the same report key the
@@ -1290,20 +1287,33 @@ struct ActivityWindowView: View {
                 resolved.append(proposal)
             }
         }
-        let key = await source.breakerKey()
         // A stale selection raced the load: only the current item's states
         // may be written (the same guard the report load uses).
         guard selectedItemID == item.id else { return }
         lintResolvedProposals = resolved
-        lintProposalBreakerKey = key
-        lintProposalActionProblem = key == nil ? QueueStagedProposalSource.unavailableReason : nil
-        if let key {
+        // Fail-closed presentation: a proposal whose own record carries no
+        // breaker key keeps its actions disabled — no proposal ever uses
+        // another proposal's key.
+        lintProposalActionProblem = resolved.contains { $0.breakerKey == nil }
+            ? QueueStagedProposalSource.unavailableReason : nil
+        // The status line needs ONE shared configuration; each action still
+        // accounts with its own proposal's key.
+        if let key = sharedProposalBreakerKey {
             let status = LintRepairBreaker.production().windowStatus(for: key)
             lintProposalBreakerContext = Self.breakerContextLine(status)
         }
         DebugLog.ingest(
             "proposal review: resolved \(resolved.count) of \(knownIDs.count) staged records" +
-                (key != nil ? "; breaker resolved" : "; breaker unresolved"))
+                (sharedProposalBreakerKey != nil ? "; breaker resolved" : "; breaker unresolved"))
+    }
+
+    /// The one breaker key every resolved proposal in the section carries,
+    /// or nil when the keys disagree or are absent — presentation-only
+    /// (the status line and the trip notice). Each apply/reject still
+    /// accounts with its own proposal's key.
+    private var sharedProposalBreakerKey: LintRepairBreakerKey? {
+        let keys = Set(lintResolvedProposals.compactMap(\.breakerKey))
+        return keys.count == 1 ? keys.first : nil
     }
 
     /// The selected run's proposal-review section, or nil for every other
@@ -1335,10 +1345,13 @@ struct ActivityWindowView: View {
         return section
     }
 
-    /// The tier-2 breaker for the selected run's configuration, or nil when
-    /// it could not be resolved (nothing is recorded rather than guessed).
-    private var proposalBreaker: LintRepairBreaker? {
-        lintProposalBreakerKey != nil ? LintRepairBreaker.production() : nil
+    /// The tier-2 breaker for ONE proposal's recorded configuration, or nil
+    /// when its record carries no key (nothing is recorded rather than
+    /// guessed). Each proposal accounts against its OWN key.
+    private func proposalBreaker(
+        for proposal: QueueLintStagedProposal
+    ) -> LintRepairBreaker? {
+        proposal.breakerKey != nil ? LintRepairBreaker.production() : nil
     }
 
     /// Approve one proposal: the apply service writes the exact hunks
@@ -1360,9 +1373,10 @@ struct ActivityWindowView: View {
         Task { @MainActor in
             defer { lintProposalInFlight.remove(proposal.id) }
             // A rejection writes nothing and appends no audit entry — the
-            // breaker evidence is the record.
+            // breaker evidence is the record. The evidence lands on THIS
+            // proposal's own recorded key, never another proposal's.
             let verdict = LintProposalApplyService.recordRejection(
-                breaker: proposalBreaker, breakerKey: lintProposalBreakerKey)
+                breaker: proposalBreaker(for: proposal), breakerKey: proposal.breakerKey)
             if verdict == nil {
                 DebugLog.ingest(
                     "proposal reject: breaker unresolvable, nothing recorded for \(proposal.id)")
@@ -1426,8 +1440,8 @@ struct ActivityWindowView: View {
                         hunks: proposal.hunks,
                         perHunkClasses: proposal.perHunkClasses),
                     store: store,
-                    breaker: proposalBreaker,
-                    breakerKey: lintProposalBreakerKey)
+                    breaker: proposalBreaker(for: proposal),
+                    breakerKey: proposal.breakerKey)
                 // The durable record is the truth: re-read the outcome from
                 // the trusted audit trail; the service's answer is only the
                 // fallback when the re-read cannot answer.
@@ -1455,11 +1469,13 @@ struct ActivityWindowView: View {
         }
     }
 
-    /// Render the breaker's plain trip message when the configuration is
-    /// now tripped (a rejection, or a post-apply verification failure,
-    /// crossed the threshold) — the same presentation as the W2b undo's.
+    /// Render the breaker's plain trip message when a configuration the
+    /// section's proposals share is now tripped (a rejection, or a post-apply
+    /// verification failure, crossed the threshold) — the same presentation
+    /// as the W2b undo's. Per-proposal accounting already landed on each
+    /// proposal's own key; this only refreshes the shared presentation.
     private func noteBreakerTripIfAny() {
-        guard let key = lintProposalBreakerKey else { return }
+        guard let key = sharedProposalBreakerKey else { return }
         let status = LintRepairBreaker.production().windowStatus(for: key)
         lintProposalBreakerContext = Self.breakerContextLine(status)
         if status.isTripped, lintProposalBreakerNotice == nil {
