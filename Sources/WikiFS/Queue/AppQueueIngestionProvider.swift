@@ -469,15 +469,22 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             let allBroken = (preflight?.brokenPageLinks ?? [])
                 + (preflight?.brokenSourceLinks ?? [])
                 + (preflight?.brokenChatLinks ?? [])
-            return (title: page.title, brokenLinks: allBroken)
+            let findings = LintPagePreflight(
+                brokenLinks: allBroken,
+                rawExternalURLs: preflight?.rawExternalURLs ?? [],
+                malformedTables: preflight?.malformedTables ?? [])
+            return (title: page.title, findings: findings)
         }
         let combinedTitle = pages.map(\.title).joined(separator: ", ")
-        let combinedBroken = preflights.flatMap(\.brokenLinks)
+        let combinedFindings = LintPagePreflight(
+            brokenLinks: preflights.flatMap { $0.findings.brokenLinks },
+            rawExternalURLs: preflights.flatMap { $0.findings.rawExternalURLs },
+            malformedTables: preflights.flatMap { $0.findings.malformedTables })
 
         await runLintAgent(
             request: .lintPage(
                 pageTitle: combinedTitle,
-                brokenLinks: combinedBroken,
+                brokenLinks: combinedFindings,
                 stateMarkdown: stateMarkdown),
             launcher: launcher,
             store: store,
