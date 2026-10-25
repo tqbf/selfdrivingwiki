@@ -49,6 +49,13 @@ guard let command = arguments.first else {
     fail("usage: WikiLintEvalRunner inspect|replay|manifest|run ...")
 }
 
+/// The `wikid` host-mode argv head. A STATIC (lazily initialized) value on a
+/// type — a top-level `let` declared after the dispatch switch reads as ""
+/// when the switch runs before the declaration executes.
+private enum LiveGateHostMode {
+    static let driver = "lint-eval-driver"
+}
+
 func loadManifest(path: String) -> LintEvalFixtureManifest {
     guard let data = FileManager.default.contents(atPath: path) else {
         fail("manifest not readable at \(path)")
@@ -301,9 +308,14 @@ default:
 // MARK: - The live gate (W3)
 
 #if canImport(WikiFSEngine) && os(macOS)
-/// The wikid binary that hosts the eval driver: siblings of THIS executable
-/// (the same SwiftPM products directory), then the common .build layouts.
+/// The wikid binary that hosts the eval driver: `LINT_EVAL_HOST_BIN` (a
+/// testing override), then siblings of THIS executable (the same SwiftPM
+/// products directory), then the common .build layouts.
 func wikidBinaryPath() -> String? {
+    if let override = ProcessInfo.processInfo.environment["LINT_EVAL_HOST_BIN"],
+       FileManager.default.isExecutableFile(atPath: override) {
+        return override
+    }
     var candidates: [URL] = []
     if let selfURL = Bundle.main.executableURL {
         candidates.append(selfURL.deletingLastPathComponent()
@@ -324,7 +336,10 @@ func wikidBinaryPath() -> String? {
 /// process that can boot the eval daemon substrate), poll the gate report it
 /// writes, and exit with the AC.13 gate verdict (0 PASSED / 1 FAILED / 2
 /// usage error / 3 blocked prerequisite).
-func runLiveGate(arguments: [String]) async -> Never {
+func runLiveGate(arguments rawArguments: [String]) async -> Never {
+    // `--live` / `--gate` are the boolean consent flags; every other flag
+    // takes a value.
+    let arguments = rawArguments.filter { $0 != "--live" && $0 != "--gate" }
     let known: Set<String> = [
         "--manifest", "--provider", "--model", "--provider-config-dir",
         "--eval-group", "--bail-trials", "--group-runs", "--output",
@@ -387,7 +402,7 @@ func runLiveGate(arguments: [String]) async -> Never {
     let wallClockHours = value("--wall-clock-hours").flatMap { Double($0) } ?? 8
 
     let childArguments = [
-        LintEvalDriverHostMode,
+        LiveGateHostMode.driver,
         "--provider", value("--provider") ?? "zai",
         "--model", value("--model") ?? "GLM 5.3 Flash",
         "--provider-config-dir", providerConfigDirectory.path,
@@ -406,6 +421,7 @@ func runLiveGate(arguments: [String]) async -> Never {
     guard let wikidPath = wikidBinaryPath() else {
         fail("live gate: cannot locate the wikid binary — build it first (make build)")
     }
+    out("live gate: driver host: \(wikidPath)")
     do {
         try FileManager.default.createDirectory(
             at: outputDirectory, withIntermediateDirectories: true)
@@ -416,11 +432,15 @@ func runLiveGate(arguments: [String]) async -> Never {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: wikidPath)
     process.arguments = childArguments
-    // The child's stdout is the operator's progress trail; stderr carries
-    // preflight failures. Both pass through to this terminal.
-    let pipe = Pipe()
-    process.standardOutput = pipe.fileHandleForWriting
-    process.standardError = pipe.fileHandleForWriting
+    // The child must resolve its App Group to the EVAL container from
+    // process start (static identifier resolution happens at first access).
+    // Set leg 1 in THIS process; the child inherits it. (An explicit
+    // `process.environment` replacement triggered the system's
+    // "An XPC Service cannot be run directly." refusal — inherited env
+    // does not.)
+    setenv("WIKI_APP_GROUP_ID", evalGroupID, 1)
+    // The child's stdout/stderr ARE the operator's progress trail and
+    // preflight verdicts — inherit this terminal; no pipe to drain.
     do {
         try process.run()
     } catch {
@@ -480,15 +500,10 @@ func runLiveGate(arguments: [String]) async -> Never {
     if let data = FileManager.default.contents(atPath: reportURL.path) {
         printLiveGateSummary(data)
     }
-    // Closing an already-closed read pipe is hygiene, not signal.
-    // swiftlint:disable:next silent_try_optional
-    try? pipe.fileHandleForReading.close()
     exit(exitStatus)
 }
 
 struct LiveGateTimeout: Error {}
-
-private let LintEvalDriverHostMode = "lint-eval-driver"
 
 /// Pull `executedTrials` out of a partially-written gate report (the child
 /// rewrites the file after every trial). A partially-written file reads as
