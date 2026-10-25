@@ -70,6 +70,9 @@ public enum LintRepairOutcomeKind: String, Codable, Sendable, CaseIterable {
     case verificationFailure
     /// The user undid a lint run's fixes.
     case userUndo
+    /// The user rejected a staged proposal (tier 2) — the hunks were held
+    /// for review and the human said no.
+    case userRejected
     /// The run's write verified.
     case clean
 }
@@ -113,6 +116,10 @@ public final class LintRepairBreaker: @unchecked Sendable {
     /// User undos within the window that trip the breaker. Two, for the same
     /// reason: one undo can be taste; two mean the repairs are unwanted.
     public static let userUndoTripCount = 2
+    /// User rejections of staged proposals within the window that trip the
+    /// breaker — same thresholds as undos: repeated rejections mean this
+    /// configuration's staged fixes are unwanted.
+    public static let userRejectedTripCount = 2
 
     /// The state file schema this build reads and writes. Any other value is
     /// unreadable state (and therefore tripped).
@@ -253,14 +260,19 @@ public final class LintRepairBreaker: @unchecked Sendable {
         public let windowSize: Int
         public let verificationFailures: Int
         public let userUndos: Int
+        public let userRejections: Int
         public let tripReason: String?
 
         public var isTripped: Bool { tripReason != nil }
 
-        public init(windowSize: Int, verificationFailures: Int, userUndos: Int, tripReason: String?) {
+        public init(
+            windowSize: Int, verificationFailures: Int, userUndos: Int,
+            userRejections: Int = 0, tripReason: String?
+        ) {
             self.windowSize = windowSize
             self.verificationFailures = verificationFailures
             self.userUndos = userUndos
+            self.userRejections = userRejections
             self.tripReason = tripReason
         }
     }
@@ -302,6 +314,7 @@ public final class LintRepairBreaker: @unchecked Sendable {
                 windowSize: Self.windowSize,
                 verificationFailures: window.filter { $0.kind == .verificationFailure }.count,
                 userUndos: window.filter { $0.kind == .userUndo }.count,
+                userRejections: window.filter { $0.kind == .userRejected }.count,
                 tripReason: state.trip?.reason)
         }
     }
@@ -309,10 +322,11 @@ public final class LintRepairBreaker: @unchecked Sendable {
     // MARK: - Record
 
     /// Record one repair-run outcome for a configuration and return the
-    /// verdict after it. Two verification failures (or two undos) within
-    /// the window trip the breaker; the trip stays until the pipeline
-    /// changes. Unreadable state is NEVER overwritten — a damaged file stays
-    /// tripped rather than healing itself into a clean one.
+    /// verdict after it. Two verification failures (or two undos, or two
+    /// rejected staged proposals) within the window trip the breaker; the
+    /// trip stays until the pipeline changes. Unreadable state is NEVER
+    /// overwritten — a damaged file stays tripped rather than healing itself
+    /// into a clean one.
     @discardableResult
     public func record(_ kind: LintRepairOutcomeKind, for key: LintRepairBreakerKey) -> LintBreakerVerdict {
         lock.lock()
@@ -362,6 +376,14 @@ public final class LintRepairBreaker: @unchecked Sendable {
         record(.userUndo, for: key)
     }
 
+    /// The trusted-host seam for a rejected staged proposal (tier 2): the
+    /// human reviewed the hunks and said no. Repeated rejections trip the
+    /// breaker with the same thresholds as undos.
+    @discardableResult
+    public func recordUserRejected(for key: LintRepairBreakerKey) -> LintBreakerVerdict {
+        record(.userRejected, for: key)
+    }
+
     // MARK: - Pure rules
 
     /// The trip reason for a window of outcomes, or nil while it stays clean.
@@ -374,6 +396,10 @@ public final class LintRepairBreaker: @unchecked Sendable {
         let undos = window.filter { $0.kind == .userUndo }.count
         if undos >= userUndoTripCount {
             return "\(undos) user undos in the last \(window.count) repair runs"
+        }
+        let rejections = window.filter { $0.kind == .userRejected }.count
+        if rejections >= userRejectedTripCount {
+            return "\(rejections) staged proposals rejected in the last \(window.count) runs"
         }
         return nil
     }

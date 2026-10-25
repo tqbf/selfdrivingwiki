@@ -75,6 +75,9 @@ public struct LintRepairAuthority: Equatable, Sendable {
 
     public var isRepairCapable: Bool { tier.isRepairCapable }
 
+    /// Whether this authority may stage repair proposals (tier 2).
+    public var isProposalCapable: Bool { tier.isProposalCapable }
+
     /// The same run under a lower tier. The approval id stays so a demoted
     /// run still names the row it would have used.
     public func demoted(to tier: LintAuthorityTier, reason: String) -> LintRepairAuthority {

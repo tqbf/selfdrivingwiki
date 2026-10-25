@@ -71,6 +71,100 @@ struct LintRepairBreakerTests {
         #expect(fixture.breaker.authority(after: approved, key: fixture.key).tier == .breakerDemoted)
     }
 
+    // MARK: - Tier-2 (staged proposal) wiring (W5a §2)
+
+    private let staged = LintRolloutSelection.stagedProposal(
+        reason: "configuration not yet evaluated — repairs staged for your review")
+
+    /// A clean breaker passes a staged selection through as tier 2: the run
+    /// keeps proposing, and the tier is NOT repair-capable (nothing writes
+    /// directly).
+    @Test func cleanBreakerKeepsStagedSelectionAsTierTwo() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let authority = fixture.breaker.authority(after: staged, key: fixture.key)
+        #expect(authority.tier == .stagedProposal)
+        #expect(authority.isRepairCapable == false)
+        #expect(authority.isProposalCapable)
+        #expect(authority.approvalID == nil,
+                "tier 2 has no approval row by definition")
+        #expect(authority.reason?.contains("not yet evaluated") == true)
+    }
+
+    /// A tripped breaker pauses proposals for that configuration — plain
+    /// report-only reason, tier 2 lost.
+    @Test func trippedBreakerDegradesStagedSelectionToReportOnly() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.breaker.record(.verificationFailure, for: fixture.key)
+        fixture.breaker.record(.verificationFailure, for: fixture.key)
+        let authority = fixture.breaker.authority(after: staged, key: fixture.key)
+        #expect(authority.tier == .reportOnly)
+        #expect(authority.isProposalCapable == false)
+        #expect(authority.reason?.hasPrefix("proposals paused for this configuration") == true)
+    }
+
+    /// A missing breaker key demotes a staged selection too (local state can
+    /// only reduce authority; "cannot consult" is "cannot stage").
+    @Test func missingKeyDegradesStagedSelectionToReportOnly() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let authority = fixture.breaker.authority(after: staged, key: nil)
+        #expect(authority.tier == .reportOnly)
+        #expect(authority.reason?.contains("breaker configuration unavailable") == true)
+    }
+
+    /// The tier-2 breaker key is constructed from the live pipeline digest +
+    /// provider/model/effort tuple DIRECTLY — no approval row involved (tier
+    /// 2 has none by definition). Two runs on the same configuration share
+    /// one breaker file.
+    @Test func tierTwoKeyResolvesWithoutApprovalRow() throws {
+        let pipeline = LintAcceptanceManifest.Pipeline(
+            promptSHA256: String(repeating: "1", count: 64),
+            detectorRevision: LintPreflightReport.detectorRevision,
+            fixtureDigest: String(repeating: "2", count: 64))
+        let key = LintRepairBreakerKey(
+            pipeline: pipeline, provider: "deepseek", model: "r1", effort: "low")
+        #expect(key.provider == "deepseek")
+        #expect(key.pipelineDigest == LintRepairBreakerKey.digest(of: pipeline))
+
+        // The same tuple always names the same state file — one breaker per
+        // configuration, regardless of any approval manifest content.
+        let again = LintRepairBreakerKey(
+            pipeline: pipeline, provider: "deepseek", model: "r1", effort: "low")
+        #expect(again.stateFileName == key.stateFileName)
+    }
+
+    /// Two rejected staged proposals trip the breaker with the same
+    /// thresholds as undos; the window counts them separately.
+    @Test func twoUserRejectionsTrip() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        #expect(fixture.breaker.recordUserRejected(for: fixture.key) == .clean)
+        #expect(fixture.breaker.windowStatus(for: fixture.key).userRejections == 1)
+        #expect(fixture.breaker.windowStatus(for: fixture.key).userUndos == 0)
+        guard case .tripped(let reason) = fixture.breaker.recordUserRejected(for: fixture.key) else {
+            Issue.record("a second rejection in the window must trip")
+            return
+        }
+        #expect(reason.contains("2 staged proposals rejected"))
+        let authority = fixture.breaker.authority(after: staged, key: fixture.key)
+        #expect(authority.tier == .reportOnly,
+                "a tripped breaker pauses proposals for the configuration")
+    }
+
+    /// Rejections and undos count in ONE shared window: a rejection plus an
+    /// undo does NOT trip (each kind needs its own two).
+    @Test func rejectionAndUndoDoNotTripEachOther() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.breaker.recordUserRejected(for: fixture.key)
+        #expect(fixture.breaker.recordUserUndo(for: fixture.key) == .clean)
+        let status = fixture.breaker.windowStatus(for: fixture.key)
+        #expect(status.userRejections == 1 && status.userUndos == 1)
+        #expect(status.isTripped == false)
+    }
+
     @Test func cleanOutcomesNeverTrip() throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
