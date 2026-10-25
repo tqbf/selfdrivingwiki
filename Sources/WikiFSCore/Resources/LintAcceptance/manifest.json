@@ -1,10 +1,12 @@
 {
-  "manifestSchema": 3,
-  "pipeline": {
-    "promptSHA256": "9f451986051fdfb8bd94b40d11659d451ccc8ffe2484394d55b1c67cb46fcc41",
-    "detectorRevision": "lint-preflight-v2",
-    "fixtureDigest": "25abd05ab1a65537e471fc47afa22fad62f1b53cbe381d39353d4140670eeda8"
-  },
-  "evidence": null,
-  "approvals": []
+  "approvals" : [
+
+  ],
+  "evidence" : null,
+  "manifestSchema" : 3,
+  "pipeline" : {
+    "detectorRevision" : "lint-preflight-v2",
+    "fixtureDigest" : "25abd05ab1a65537e471fc47afa22fad62f1b53cbe381d39353d4140670eeda8",
+    "promptSHA256" : "317b43c6b1eb00372c76e2bab03b3446407917ab2c10a5225a23993240e5b232"
+  }
 }

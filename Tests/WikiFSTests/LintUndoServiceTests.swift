@@ -162,6 +162,59 @@ struct LintUndoServiceTests {
         #expect(facts.wroteSurvivingRepair == false)
     }
 
+    // MARK: - Parser: tier-2 staged proposals (W5a)
+
+    /// A tier-2 record carries the proposal count and the staged record
+    /// references host accounting folded in from the daemon's audit
+    /// entries — the review UI's "N proposed" data source.
+    @Test func parsesStagedProposalRecordLabels() throws {
+        let detail = "authority_tier=stagedProposal; "
+            + "authority_reason=configuration not yet evaluated — repairs staged for your review; "
+            + "audited head v1; run-report coverage complete; "
+            + "proposals=2; staged_proposal=01HZPROP0000000000000000001; "
+            + "staged_proposal=01HZPROP0000000000000000002; "
+            + "written_head=v1; authority_tier=stagedProposal"
+        let facts = try #require(LintPageRecordFacts.parse(record: Self.record(
+            pageID: PageID(rawValue: "p1"), title: "S", state: .succeeded,
+            detail: detail)))
+        #expect(facts.tier == .stagedProposal)
+        #expect(facts.proposalCount == 2)
+        #expect(facts.stagedProposalIDs == [
+            "01HZPROP0000000000000000001", "01HZPROP0000000000000000002",
+        ])
+        #expect(facts.wroteSurvivingRepair == false,
+                "a staged proposal writes nothing — there is no surviving repair to undo")
+    }
+
+    @Test func recordWithoutProposalLabelsParsesNilCount() throws {
+        let facts = try #require(LintPageRecordFacts.parse(record: Self.record(
+            pageID: PageID(rawValue: "p1"), title: "P", state: .succeeded,
+            detail: "authority_tier=reportOnly; audited head v1")))
+        #expect(facts.proposalCount == nil)
+        #expect(facts.stagedProposalIDs.isEmpty)
+    }
+
+    /// The staged-note audit vocabulary round-trips (producer + parser).
+    @Test func stagedProposalAuditNoteRoundTrips() throws {
+        let note = LintProposalAudit.stagedNote(
+            proposalID: "01HZPROP0000000000000000009",
+            inspectedHead: PageVersionID(rawValue: "v7"),
+            bodyFingerprint: "abc123", hunkCount: 3)
+        let parsed = try #require(LintProposalAudit.parseStagedNote(note))
+        #expect(parsed.proposalID == "01HZPROP0000000000000000009")
+        #expect(parsed.inspectedHead == PageVersionID(rawValue: "v7"))
+        #expect(parsed.bodyFingerprint == "abc123")
+        #expect(parsed.hunkCount == 3)
+
+        // The record labels render count + references; empty is empty.
+        #expect(LintProposalAudit.recordLabels(proposals: [parsed])
+            == "proposals=1; staged_proposal=01HZPROP0000000000000000009")
+        #expect(LintProposalAudit.recordLabels(proposals: []).isEmpty)
+        // A note without a proposal id parses to nothing (lenient).
+        #expect(LintProposalAudit.parseStagedNote("hunks=2") == nil)
+        #expect(LintProposalAudit.parseStagedNote(nil) == nil)
+    }
+
     @Test func sourceRecordParsesToNil() {
         let source = QueueReportTargetRecord(
             target: .source(SourceID(rawValue: "s1")), displayName: "s",

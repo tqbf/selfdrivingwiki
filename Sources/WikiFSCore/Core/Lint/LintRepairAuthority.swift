@@ -44,6 +44,20 @@ public enum LintAuthorityTier: String, CaseIterable, Sendable, Codable {
     }
 }
 
+/// The three run shapes a selected-page lint request can carry (the W5a
+/// ladder, flattened for the request/prompt seam — the request cannot carry
+/// the full authority without dragging the approval row through prompt
+/// construction). Derived from `LintRepairAuthority`, never constructed
+/// independently, so impossible combinations are unrepresentable.
+public enum LintRunMode: Equatable, Sendable {
+    /// Tier 1: an accepted configuration — patches write directly.
+    case directRepair
+    /// Tier 2: hunks are staged for human review, never written directly.
+    case stagedProposal
+    /// Report-only: no mutation at all.
+    case reportOnly
+}
+
 /// The authority a selected-page lint run ran under: its tier, the approval
 /// row that matched (kept on demotions for traceability), and the plain
 /// reason for any report-only outcome.
@@ -77,6 +91,13 @@ public struct LintRepairAuthority: Equatable, Sendable {
 
     /// Whether this authority may stage repair proposals (tier 2).
     public var isProposalCapable: Bool { tier.isProposalCapable }
+
+    /// The run shape this authority drives the request/prompt seam with.
+    public var runMode: LintRunMode {
+        if isRepairCapable { return .directRepair }
+        if isProposalCapable { return .stagedProposal }
+        return .reportOnly
+    }
 
     /// The same run under a lower tier. The approval id stays so a demoted
     /// run still names the row it would have used.

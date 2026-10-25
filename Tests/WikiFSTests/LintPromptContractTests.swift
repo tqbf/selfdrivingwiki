@@ -130,4 +130,67 @@ struct LintPromptContractTests {
         // It must not rely on the system prompt's (removed) lint workflow.
         #expect(!body.lowercased().contains("from your instructions"))
     }
+
+    // MARK: - Tier-conditioned sections (W5a)
+
+    /// The template carries the tier placeholder so every tier renders a
+    /// complete task, and (AC.1) the placeholder mechanism is the ONLY way
+    /// tier text enters.
+    @Test func templateCarriesTheTierPlaceholder() {
+        let body = promptFile("lint-page-task.md")
+        #expect(body != nil)
+        guard let body else { return }
+        #expect(body.contains("{{tierSection}}"), "the tier-conditioned write discipline renders here")
+    }
+
+    private func renderedPrompt(mode: LintRunMode) -> String {
+        WikiOperation.lintPage(
+            page: LintPageIdentity(
+                pageID: PageID(rawValue: "01HZPAGE00000000000000000A"),
+                title: "Tier Target", headVersionID: nil),
+            mode: mode, gateReason: "gate says so",
+            reportFilePath: "/tmp/preflight.md", runReportPath: "/tmp/run-report.md",
+            stateFilePath: "/tmp/WIKI_STATE.md")
+            .prompt(wikiRoot: "/tmp/wiki")
+    }
+
+    /// Tier 1 renders the patch-write discipline unchanged — no staging
+    /// section, no propose-patch instruction.
+    @Test func directRepairRendersNoTierSection() {
+        let prompt = renderedPrompt(mode: .directRepair)
+        #expect(prompt.contains("Repairs ARE authorized"))
+        #expect(prompt.contains("page patch"))
+        #expect(prompt.contains("{{tierSection}}") == false,
+                "the fill replaced the placeholder")
+        #expect(prompt.lowercased().contains("propose-patch") == false,
+                "tier 1 never mentions the staging seam")
+    }
+
+    /// Tier 2 instructs propose-patch (held for review, never written),
+    /// keeps the validity scope, and maps staged repairs to unresolved
+    /// outcomes in the run report.
+    @Test func stagedProposalRendersTheStagingSection() {
+        let prompt = renderedPrompt(mode: .stagedProposal)
+        #expect(prompt.contains("Repairs are STAGED, never written"))
+        #expect(prompt.contains("page propose-patch"), "the tier-2 submission path is named")
+        #expect(prompt.contains("01HZPAGE00000000000000000A"),
+                "the propose command carries this run's page id")
+        #expect(prompt.contains("Do NOT call `page patch`"))
+        #expect(prompt.contains("--lint-receipt"), "the receipt discipline carries over")
+        #expect(prompt.lowercased().contains("one staged proposal per page per run"))
+        #expect(prompt.contains("staged proposal <id> awaiting human review"),
+                "staged repairs are recorded unresolved until a human applies them")
+        // Validity-scope rules unchanged.
+        #expect(prompt.contains("VALIDITY"))
+        #expect(prompt.lowercased().contains("untrusted"))
+        #expect(prompt.contains("--expect-head"))
+    }
+
+    /// Report-only renders the degradation text — no staging section.
+    @Test func reportOnlyRendersNoTierSection() {
+        let prompt = renderedPrompt(mode: .reportOnly)
+        #expect(prompt.contains("REPORT-ONLY"))
+        #expect(prompt.lowercased().contains("propose-patch") == false)
+        #expect(prompt.contains("{{tierSection}}") == false)
+    }
 }

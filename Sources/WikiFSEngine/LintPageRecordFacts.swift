@@ -41,12 +41,19 @@ public struct LintPageRecordFacts: Equatable, Sendable {
     /// The verification-failure reasons as persisted (bounded by the
     /// producer's prefix).
     public let verificationFailureReasons: [String]
+    /// How many proposals a tier-2 run staged for this page (W5a), if the
+    /// record carries the label — the review UI's "N proposed".
+    public let proposalCount: Int?
+    /// The staged record references (`staged_proposal=<id>`) the review UI
+    /// resolves against the daemon's staged records, in recorded order.
+    public let stagedProposalIDs: [String]
 
     init(
         pageID: PageID, title: String, tier: LintAuthorityTier?,
         approvalID: LintApprovalID?, inspectedHead: PageVersionID?,
         writtenHead: PageVersionID?, wasAutoReverted: Bool, isFlagged: Bool,
-        verificationFailureReasons: [String]
+        verificationFailureReasons: [String], proposalCount: Int? = nil,
+        stagedProposalIDs: [String] = []
     ) {
         self.pageID = pageID
         self.title = title
@@ -57,6 +64,8 @@ public struct LintPageRecordFacts: Equatable, Sendable {
         self.wasAutoReverted = wasAutoReverted
         self.isFlagged = isFlagged
         self.verificationFailureReasons = verificationFailureReasons
+        self.proposalCount = proposalCount
+        self.stagedProposalIDs = stagedProposalIDs
     }
 
     /// Parse one durable target record. Returns `nil` for records that are
@@ -75,6 +84,8 @@ public struct LintPageRecordFacts: Equatable, Sendable {
         var wasAutoReverted = false
         var isFlagged = false
         var reasons: [String] = []
+        var proposalCount: Int?
+        var stagedProposalIDs: [String] = []
         var failureSegmentOpen = false
 
         for segment in segments {
@@ -85,6 +96,16 @@ public struct LintPageRecordFacts: Equatable, Sendable {
             }
             if let value = Self.labeledValue("approval_id", in: segment) {
                 approvalID = approvalID ?? LintApprovalID(rawValue: value)
+                failureSegmentOpen = false
+                continue
+            }
+            if let value = Self.labeledValue("proposals", in: segment) {
+                proposalCount = proposalCount ?? Int(value)
+                failureSegmentOpen = false
+                continue
+            }
+            if let value = Self.labeledValue("staged_proposal", in: segment) {
+                stagedProposalIDs.append(value)
                 failureSegmentOpen = false
                 continue
             }
@@ -132,7 +153,8 @@ public struct LintPageRecordFacts: Equatable, Sendable {
             pageID: pageID, title: record.displayName, tier: tier,
             approvalID: approvalID, inspectedHead: inspectedHead,
             writtenHead: writtenHead, wasAutoReverted: wasAutoReverted,
-            isFlagged: isFlagged, verificationFailureReasons: reasons)
+            isFlagged: isFlagged, verificationFailureReasons: reasons,
+            proposalCount: proposalCount, stagedProposalIDs: stagedProposalIDs)
     }
 
     /// Whether the run left a SURVIVING written repair an undo can revert:
@@ -178,7 +200,8 @@ public struct LintPageRecordFacts: Equatable, Sendable {
         let prefixes = [
             inspectedHeadPrefix, revertLabelPrefix, "verification ",
             "run-report ", "unresolved:", "written_head=", "authority_tier=",
-            "approval_id=", "AGENT LOG", "HOST LOG", "write phase",
+            "approval_id=", "proposals=", "staged_proposal=",
+            "AGENT LOG", "HOST LOG", "write phase",
             "no run scratch",
         ]
         return prefixes.contains { segment.hasPrefix($0) }

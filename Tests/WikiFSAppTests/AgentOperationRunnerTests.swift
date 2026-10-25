@@ -85,21 +85,26 @@ struct AgentOperationRunnerTests {
 
     /// The launcher derives the managed-run policy from the request alone
     /// (review C1): repair-authorized lintPage → repair lease on that page,
-    /// unauthorized lintPage → report-only lease on that page, `.lint` →
-    /// whole-wiki report-only, everything else ordinary.
+    /// staged-proposal lintPage → proposal lease on that page, report-only
+    /// lintPage → report-only lease on that page, `.lint` → whole-wiki
+    /// report-only, everything else ordinary. The child cannot choose: the
+    /// policy comes from the request's mode, which the trusted coordinator
+    /// alone builds from the gate + breaker.
     @Test func managedRunPolicyDerivesFromRequest() {
         let page = LintPageIdentity(
             pageID: PageID(rawValue: "01HZPAGE00000000000000000A"),
             title: "P", headVersionID: nil)
-        func request(_ repairAuthorized: Bool) -> OperationRequest {
+        func request(_ mode: LintRunMode) -> OperationRequest {
             .lintPage(
-                page: page, repairAuthorized: repairAuthorized, gateReason: "g",
+                page: page, mode: mode, gateReason: "g",
                 preflightReportMarkdown: "# p\n", runReportMarkdown: "r\n",
                 stateMarkdown: "# s\n")
         }
-        #expect(AgentLauncher.managedRunPolicy(for: request(true))
+        #expect(AgentLauncher.managedRunPolicy(for: request(.directRepair))
             == .lintSelectedPageRepair(pageID: page.pageID))
-        #expect(AgentLauncher.managedRunPolicy(for: request(false))
+        #expect(AgentLauncher.managedRunPolicy(for: request(.stagedProposal))
+            == .lintSelectedPageProposal(pageID: page.pageID))
+        #expect(AgentLauncher.managedRunPolicy(for: request(.reportOnly))
             == .lintSelectedPageReportOnly(pageID: page.pageID))
         #expect(AgentLauncher.managedRunPolicy(for: .lint(stateMarkdown: "# s\n"))
             == .lintWholeWikiReportOnly)

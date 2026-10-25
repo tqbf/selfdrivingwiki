@@ -72,7 +72,7 @@ struct AgentLauncherStageKeyDispatchTests {
     @Test func lintPageMapsToLint() {
         #expect(AgentLauncher.stageKey(for: .lintPage(
             page: LintPageIdentity(pageID: PageID(rawValue: "01HZPAGE00000000000000000A"), title: "P", headVersionID: nil),
-            repairAuthorized: false, gateReason: "unaccepted",
+            mode: .reportOnly, gateReason: "unaccepted",
             preflightReportMarkdown: "# preflight\n",
             runReportMarkdown: "lint-run-report v1\n",
             stateMarkdown: emptyState)) == "lint")

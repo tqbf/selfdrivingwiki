@@ -431,16 +431,22 @@ public final class AgentLauncher {
 
     /// The managed-run policy for one operation request (plan §6.13): lint
     /// requests get LINT policies — selected-page repair only when the
-    /// rollout gate authorized repairs, selected-page report-only otherwise,
+    /// rollout gate authorized repairs, selected-page proposal for tier-2
+    /// staged-proposal runs, selected-page report-only otherwise,
     /// whole-wiki report-only for `.lint` — and everything else stays
     /// ordinary. The launcher derives this from the request alone; the child
     /// cannot influence it.
     public static func managedRunPolicy(for request: OperationRequest) -> ManagedRunPolicy {
         switch request {
-        case .lintPage(let page, let repairAuthorized, _, _, _, _):
-            return repairAuthorized
-                ? .lintSelectedPageRepair(pageID: page.pageID)
-                : .lintSelectedPageReportOnly(pageID: page.pageID)
+        case .lintPage(let page, let mode, _, _, _, _):
+            switch mode {
+            case .directRepair:
+                return .lintSelectedPageRepair(pageID: page.pageID)
+            case .stagedProposal:
+                return .lintSelectedPageProposal(pageID: page.pageID)
+            case .reportOnly:
+                return .lintSelectedPageReportOnly(pageID: page.pageID)
+            }
         case .lint:
             return .lintWholeWikiReportOnly
         case .ingest, .query:

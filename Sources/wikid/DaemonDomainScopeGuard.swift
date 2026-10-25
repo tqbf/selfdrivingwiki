@@ -131,6 +131,12 @@ enum DaemonScopedOperationPolicy {
             // lint policy gate additionally pins it to the run's selected
             // page by decoding the payload's id daemon-side.
             DaemonDomainOperation.Page.patch: .allow(.wikiEdit),
+            // The STAGED form (W5a tier 2) is NOT a class operation: staging
+            // is only ever reachable through the proposal policy's explicit
+            // allowance (the tier-2 interception, which owns the run's
+            // receipt, budget, and staged state). Explicitly denied so an
+            // ordinary managed run can never stage.
+            DaemonDomainOperation.Page.proposePatch: .deny,
             DaemonDomainOperation.Page.delete: .allow(.wikiEdit),
             DaemonDomainOperation.Page.revert: .allow(.wikiEdit),
         ],

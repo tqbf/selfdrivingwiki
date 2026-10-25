@@ -522,7 +522,9 @@ public enum AgentOperationRunner {
         /// for any report-only outcome.
         public let authority: LintRepairAuthority
         /// The breaker configuration this run records its outcome under —
-        /// set only when the gate matched an approval.
+        /// set for repair-authorized runs AND tier-2 staged-proposal runs
+        /// (the live pipeline + provider/model/effort tuple; tier 2 has no
+        /// approval row).
         public let breakerKey: LintRepairBreakerKey?
         /// The breaker the trusted host consulted, so the accounting records
         /// into the SAME state it read.
@@ -625,7 +627,11 @@ public enum AgentOperationRunner {
         // hard-fails to report-only BEFORE any manifest consultation, so a
         // placeholder configuration is never matched against the shipped
         // approval matrix. W2a: a matched approval then passes the local
-        // circuit breaker, which can only demote it.
+        // circuit breaker, which can only demote it. W5a: a staged-proposal
+        // selection passes the breaker too — tier 2 records under the SAME
+        // live-pipeline + provider/model/effort key (no approval row is
+        // involved), and a tripped breaker pauses proposals for that
+        // configuration.
         let gateSelection: LintRolloutSelection
         do {
             gateSelection = try selection(gateInputs)
@@ -633,7 +639,8 @@ public enum AgentOperationRunner {
             gateSelection = .reportOnly(reason: "gate unavailable: \(error)")
         }
         var breakerKey: LintRepairBreakerKey?
-        if case .repairAuthorized = gateSelection {
+        switch gateSelection {
+        case .repairAuthorized, .stagedProposal:
             do {
                 breakerKey = LintRepairBreakerKey(
                     pipeline: try LintAcceptanceManifest.Pipeline.live(),
@@ -644,13 +651,14 @@ public enum AgentOperationRunner {
                 DebugLog.agent("lint plan: breaker key unavailable, demoting: \(error)")
                 breakerKey = nil
             }
+        case .reportOnly:
+            breakerKey = nil
         }
         let authority = breaker.authority(after: gateSelection, key: breakerKey)
-        let repairAuthorized = authority.isRepairCapable
         let gateReason = authority.reason ?? "accepted configuration"
         let request = OperationRequest.lintPage(
             page: LintPageIdentity(snapshot),
-            repairAuthorized: repairAuthorized,
+            mode: authority.runMode,
             gateReason: gateReason,
             preflightReportMarkdown: report.renderedMarkdown(),
             runReportMarkdown: LintRunReportText.render(snapshot: snapshot, preflight: report),
@@ -904,93 +912,103 @@ public enum AgentOperationRunner {
                 if openFindings.isEmpty == false {
                     detail += "; unresolved: \(openFindings.joined(separator: ","))"
                 }
-                // REQ-54: the app-side verification gate — re-scan the
-                // WRITTEN bytes and compare against the pre-run scan using
-                // hunks OBSERVED from the store (prefix/suffix-trimmed
-                // change region), never the agent's claims alone.
-                let claimedRepairs = Set(parsed.entries.compactMap { entry -> String? in
-                    guard case .finding(let id) = entry.kind,
-                          case .repaired = entry.outcome else { return nil }
-                    return id
-                })
-                do {
-                    let writtenRead = try store.readPageCoherent(id: pageID)
-                    // Review M3(a): the written scan runs with the SAME
-                    // fact set as the pre-run scan (M3(a) fix) so D09/D27/
-                    // D28 findings persist or resolve consistently — never
-                    // vanishing because the second scan was facts-less.
-                    let resolution: LintResolutionFacts
+                if authority.tier == .stagedProposal {
+                    // W5a tier 2: the run STAGED proposals instead of
+                    // writing — there is no written head to verify. Fold
+                    // the daemon's staged-proposal audit entries into the
+                    // record so the durable per-page trace carries the
+                    // proposal count and record references ("N proposed").
+                    detail += Self.stagedProposalDetail(
+                        pageToken: pageTitleToken, runStart: runStart, store: store)
+                } else {
+                    // REQ-54: the app-side verification gate — re-scan the
+                    // WRITTEN bytes and compare against the pre-run scan using
+                    // hunks OBSERVED from the store (prefix/suffix-trimmed
+                    // change region), never the agent's claims alone.
+                    let claimedRepairs = Set(parsed.entries.compactMap { entry -> String? in
+                        guard case .finding(let id) = entry.kind,
+                              case .repaired = entry.outcome else { return nil }
+                        return id
+                    })
                     do {
-                        resolution = try LintResolutionFacts.load(from: store)
+                        let writtenRead = try store.readPageCoherent(id: pageID)
+                        // Review M3(a): the written scan runs with the SAME
+                        // fact set as the pre-run scan (M3(a) fix) so D09/D27/
+                        // D28 findings persist or resolve consistently — never
+                        // vanishing because the second scan was facts-less.
+                        let resolution: LintResolutionFacts
+                        do {
+                            resolution = try LintResolutionFacts.load(from: store)
+                        } catch {
+                            DebugLog.agent("lint dispatch: resolution facts unavailable for verification: \(error)")
+                            resolution = LintResolutionFacts()
+                        }
+                        let citations: LintCitationFacts?
+                        do {
+                            citations = try LintCitationFacts.load(from: store, body: writtenRead.body)
+                        } catch {
+                            DebugLog.agent("lint dispatch: citation facts unavailable for written scan: \(error)")
+                            citations = nil
+                        }
+                        let origins: LintOriginURLFacts?
+                        do {
+                            origins = try LintOriginURLFacts.load(from: store, body: writtenRead.body)
+                        } catch {
+                            DebugLog.agent("lint dispatch: origin facts unavailable for written scan: \(error)")
+                            origins = nil
+                        }
+                        let writtenSnapshot = LintPageSnapshot(writtenRead)
+                        let history = LintHistoryFacts.load(
+                            from: store, snapshot: writtenSnapshot)
+                        // D28's fence-validation facts are async; the compare
+                        // only needs findings that carry candidate repairs, and
+                        // D28 findings never do — omitting them here cannot
+                        // flip a verdict.
+                        let writtenScan = LintPagePreflight.scan(
+                            snapshot: writtenSnapshot,
+                            resolution: resolution,
+                            citations: citations,
+                            originURLs: origins,
+                            history: history)
+                        let observed = Self.observedChangeRanges(
+                            before: plan.snapshot.body, after: writtenSnapshot.body)
+                        // The run's written head: the daemon's record when the
+                        // host has it, else the head read now. A difference is
+                        // the written-vs-current divergence the compare reports.
+                        let writtenHead = producedHead ?? writtenRead.headVersionID
+                        let verdict = LintVerification.compare(
+                            before: plan.preflight,
+                            written: writtenScan,
+                            appliedHunks: observed,
+                            claimedRepairFindingIDs: claimedRepairs,
+                            writtenHead: writtenHead,
+                            currentHead: writtenRead.headVersionID,
+                            requiredChecksAvailable: true)
+                        switch verdict.status {
+                        case .verified:
+                            detail += "; verification verified on the written head"
+                            Self.recordBreakerOutcome(.clean, plan: plan, authority: authority)
+                        case .verifiedWrittenHeadDiverged(let current):
+                            detail += "; verification verified on the written head; current head diverged to \(current.rawValue)"
+                            Self.recordBreakerOutcome(.clean, plan: plan, authority: authority)
+                        case .failed(let reasons):
+                            status = .failed
+                            detail += "; verification failed: "
+                                + reasons.prefix(3).joined(separator: "; ")
+                            // W2a §2: never leave a bad write in place silently,
+                            // never clobber a concurrent edit.
+                            let outcome = Self.revertFailedLintWrite(
+                                store: store, pageID: pageID,
+                                inspectedHead: plan.snapshot.headVersionID,
+                                writtenHead: writtenHead)
+                            revert = outcome
+                            detail += "; \(outcome.auditLabel)"
+                            Self.recordBreakerOutcome(.verificationFailure, plan: plan, authority: authority)
+                        }
                     } catch {
-                        DebugLog.agent("lint dispatch: resolution facts unavailable for verification: \(error)")
-                        resolution = LintResolutionFacts()
-                    }
-                    let citations: LintCitationFacts?
-                    do {
-                        citations = try LintCitationFacts.load(from: store, body: writtenRead.body)
-                    } catch {
-                        DebugLog.agent("lint dispatch: citation facts unavailable for written scan: \(error)")
-                        citations = nil
-                    }
-                    let origins: LintOriginURLFacts?
-                    do {
-                        origins = try LintOriginURLFacts.load(from: store, body: writtenRead.body)
-                    } catch {
-                        DebugLog.agent("lint dispatch: origin facts unavailable for written scan: \(error)")
-                        origins = nil
-                    }
-                    let writtenSnapshot = LintPageSnapshot(writtenRead)
-                    let history = LintHistoryFacts.load(
-                        from: store, snapshot: writtenSnapshot)
-                    // D28's fence-validation facts are async; the compare
-                    // only needs findings that carry candidate repairs, and
-                    // D28 findings never do — omitting them here cannot
-                    // flip a verdict.
-                    let writtenScan = LintPagePreflight.scan(
-                        snapshot: writtenSnapshot,
-                        resolution: resolution,
-                        citations: citations,
-                        originURLs: origins,
-                        history: history)
-                    let observed = Self.observedChangeRanges(
-                        before: plan.snapshot.body, after: writtenSnapshot.body)
-                    // The run's written head: the daemon's record when the
-                    // host has it, else the head read now. A difference is
-                    // the written-vs-current divergence the compare reports.
-                    let writtenHead = producedHead ?? writtenRead.headVersionID
-                    let verdict = LintVerification.compare(
-                        before: plan.preflight,
-                        written: writtenScan,
-                        appliedHunks: observed,
-                        claimedRepairFindingIDs: claimedRepairs,
-                        writtenHead: writtenHead,
-                        currentHead: writtenRead.headVersionID,
-                        requiredChecksAvailable: true)
-                    switch verdict.status {
-                    case .verified:
-                        detail += "; verification verified on the written head"
-                        Self.recordBreakerOutcome(.clean, plan: plan, authority: authority)
-                    case .verifiedWrittenHeadDiverged(let current):
-                        detail += "; verification verified on the written head; current head diverged to \(current.rawValue)"
-                        Self.recordBreakerOutcome(.clean, plan: plan, authority: authority)
-                    case .failed(let reasons):
                         status = .failed
-                        detail += "; verification failed: "
-                            + reasons.prefix(3).joined(separator: "; ")
-                        // W2a §2: never leave a bad write in place silently,
-                        // never clobber a concurrent edit.
-                        let outcome = Self.revertFailedLintWrite(
-                            store: store, pageID: pageID,
-                            inspectedHead: plan.snapshot.headVersionID,
-                            writtenHead: writtenHead)
-                        revert = outcome
-                        detail += "; \(outcome.auditLabel)"
-                        Self.recordBreakerOutcome(.verificationFailure, plan: plan, authority: authority)
+                        detail += "; written-version verification could not run: \(error)"
                     }
-                } catch {
-                    status = .failed
-                    detail += "; written-version verification could not run: \(error)"
                 }
             } else {
                 status = .failed
@@ -1015,10 +1033,12 @@ public enum AgentOperationRunner {
         // Review M7: the agent's log entry must name THIS page (the task
         // template's title includes the page name), not just any lint entry
         // appended since the run started — a concurrent lint elsewhere must
-        // not satisfy this page's contract. The daemon's budget rejection
-        // record names the page too, but it is not the agent's log.
+        // not satisfy this page's contract. The daemon's own records (the
+        // budget rejection and the W5a staged-proposal entries) name the
+        // page too, but they are not the agent's log.
         let agentLogCommitted = recentLintEntries?.contains { entry in
             entry.title.hasPrefix(LintPatchBudget.auditTitlePrefix) == false
+                && entry.title.hasPrefix(LintProposalAudit.stagedAuditTitlePrefix) == false
                 && (entry.title.contains(pageTitleToken)
                     || entry.note?.contains(pageTitleToken) == true)
         } ?? false
@@ -1086,6 +1106,31 @@ public enum AgentOperationRunner {
         guard authority.tier == .shippedApproval,
               let breaker = plan.breaker, let key = plan.breakerKey else { return }
         breaker.record(kind, for: key)
+    }
+
+    /// The tier-2 record segments for one run's page (W5a §3): read the
+    /// daemon's staged-proposal audit entries back (the trusted host wrote
+    /// one per staged proposal, titled with the page) and render the
+    /// `proposals=N; staged_proposal=<id>` labels the durable per-page
+    /// record carries — the review UI's "N proposed" data source.
+    static func stagedProposalDetail(
+        pageToken: String,
+        runStart: Date,
+        store: WikiStore
+    ) -> String {
+        let entries: [LogEntry]
+        do {
+            entries = try store.recentLogEntries(limit: 200)
+                .filter { $0.kind == .lint && $0.timestamp >= runStart }
+        } catch {
+            DebugLog.agent("lint dispatch: log read failed; staged proposals not counted: \(error)")
+            return ""
+        }
+        let notes = entries
+            .filter { $0.title == LintProposalAudit.stagedAuditTitlePrefix + pageToken }
+            .compactMap { LintProposalAudit.parseStagedNote($0.note) }
+        let labels = LintProposalAudit.recordLabels(proposals: notes)
+        return labels.isEmpty ? "" : "; \(labels)"
     }
 
     /// Dispatch selected-page lint runs SEQUENTIALLY — one run, scope, and

@@ -46,10 +46,12 @@ public enum OperationRequest: Sendable {
   /// Lint a single page. The run carries the TYPED page identity (never
   /// joined titles) plus the staged artifacts' CONTENTS: the pre-flight
   /// report (the complete mechanical inventory + findings worklist) and the
-  /// run-report skeleton the agent must fill in (REQ-29..32).
+  /// run-report skeleton the agent must fill in (REQ-29..32). `mode` is
+  /// the rollout gate's decision (tier 1 direct repair / tier 2 staged
+  /// proposal / report-only).
   case lintPage(
     page: LintPageIdentity,
-    repairAuthorized: Bool,
+    mode: LintRunMode,
     gateReason: String,
     preflightReportMarkdown: String,
     runReportMarkdown: String,
@@ -94,14 +96,14 @@ public enum OperationRequest: Sendable {
       let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
       return .lint(stateFilePath: stateFilePath)
 
-    case .lintPage(let page, let repairAuthorized, let gateReason, let preflightReport, let runReport, let stateMarkdown):
+    case .lintPage(let page, let mode, let gateReason, let preflightReport, let runReport, let stateMarkdown):
       let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
       let reportFilePath = try AgentStaging.stageTextFile(
         preflightReport, name: AgentStaging.lintPreflightReportFileName, in: scratch)
       let runReportPath = try AgentStaging.stageTextFile(
         runReport, name: AgentStaging.lintRunReportFileName, in: scratch)
       return .lintPage(
-        page: page, repairAuthorized: repairAuthorized, gateReason: gateReason,
+        page: page, mode: mode, gateReason: gateReason,
         reportFilePath: reportFilePath,
         runReportPath: runReportPath, stateFilePath: stateFilePath)
     }

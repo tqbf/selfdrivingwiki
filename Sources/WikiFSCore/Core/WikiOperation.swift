@@ -61,11 +61,12 @@ public enum WikiOperation: Equatable, Sendable {
   /// Lint a single page. The run carries the TYPED page identity (never
   /// joined titles) and the staged pre-flight report artifact — the
   /// complete mechanical inventory and findings the agent must account for.
-  /// `repairAuthorized` is the ROLLOUT GATE's decision: a report-only run
-  /// must not call the patch write at all.
+  /// `mode` is the ROLLOUT GATE's decision: a report-only run must not call
+  /// the patch write at all; a staged-proposal run stages its hunks for
+  /// human review instead of writing them.
   case lintPage(
     page: LintPageIdentity,
-    repairAuthorized: Bool,
+    mode: LintRunMode,
     gateReason: String,
     reportFilePath: String,
     runReportPath: String,
@@ -155,10 +156,10 @@ extension WikiOperation {
       return Self.queryChatPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
     case .lint(let stateFilePath):
       return Self.lintPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
-    case .lintPage(let page, let repairAuthorized, let gateReason, let reportFilePath, let runReportPath, let stateFilePath):
+    case .lintPage(let page, let mode, let gateReason, let reportFilePath, let runReportPath, let stateFilePath):
       return Self.lintPagePrompt(
         wikiRoot: wikiRoot, page: page,
-        repairAuthorized: repairAuthorized, gateReason: gateReason,
+        mode: mode, gateReason: gateReason,
         reportFilePath: reportFilePath, runReportPath: runReportPath,
         stateFilePath: stateFilePath)
     }
@@ -338,25 +339,38 @@ extension WikiOperation {
 
   /// Single-page lint: pre-flight results (bracket fixes + broken links) are
   /// passed in so the agent has concrete targets rather than discovering issues
-  /// itself. Runs Opus single-agent with full write permissions.
+  /// itself. The run `mode` (the rollout gate's decision) renders the
+  /// tier-conditioned write discipline: tier 1 patches directly, tier 2
+  /// stages proposals, report-only never mutates.
   private static func lintPagePrompt(
     wikiRoot: String,
     page: LintPageIdentity,
-    repairAuthorized: Bool,
+    mode: LintRunMode,
     gateReason: String,
     reportFilePath: String,
     runReportPath: String,
     stateFilePath: String
   ) -> String {
-    let repairAuthorization = repairAuthorized
-      ? "Repairs ARE authorized for this configuration: patch hunks may be submitted as instructed below."
-      : "Repairs are NOT authorized for this configuration (gate: \(gateReason)). This run is REPORT-ONLY: do NOT call `page patch`; report every defect as unresolved with the reason \"report-only configuration\". Every other check and the report contract still apply."
+    let repairAuthorization: String
+    let tierSection: String
+    switch mode {
+    case .directRepair:
+      repairAuthorization = "Repairs ARE authorized for this configuration: patch hunks may be submitted as instructed below."
+      tierSection = ""
+    case .stagedProposal:
+      repairAuthorization = "Repairs are STAGED, never written, for this configuration (gate: \(gateReason)). The hunks you submit are held for a human to review and approve; until approval the page stays unchanged."
+      tierSection = Self.stagedProposalTierSection(pageID: page.pageID.rawValue)
+    case .reportOnly:
+      repairAuthorization = "Repairs are NOT authorized for this configuration (gate: \(gateReason)). This run is REPORT-ONLY: do NOT call `page patch`; report every defect as unresolved with the reason \"report-only configuration\". Every other check and the report contract still apply."
+      tierSection = ""
+    }
     let task = PromptTemplate.fill(GeneratedPrompts.lintPageTask, [
       "pageTitle": page.title,
       "pageID": page.pageID.rawValue,
       "preflightArtifactPath": reportFilePath,
       "runReportPath": runReportPath,
       "repairAuthorization": repairAuthorization,
+      "tierSection": tierSection,
     ])
     return """
       \(IngestWriteRule.writes)
@@ -367,5 +381,40 @@ extension WikiOperation {
 
       \(Self.wikiRootLine(wikiRoot))
       """
+  }
+
+  /// The tier-2 (staged proposal) write discipline, rendered into the task
+  /// template's `{{tierSection}}` placeholder. Tier-1 runs render an empty
+  /// section (the template's patch-write text stands unchanged); tier-2
+  /// runs render THIS, which overrides the patch write with the staging
+  /// seam. All validity-scope rules are unchanged — only the submission
+  /// path and the report mapping differ.
+  private static func stagedProposalTierSection(pageID: String) -> String {
+    """
+    ### This run: staged proposals (overrides the patch write above)
+
+    Do NOT call `page patch` — this run cannot write. Submit your repairs with
+    `wikictl page propose-patch` instead:
+
+    `wikictl page propose-patch --id \(pageID) --expect-head <head_version_id> --hunk '<json>' --defect <class> --lint-receipt <token>`
+
+    - Same hunk JSON, same defect classes, same exact-`oldText` rules as the
+      patch write: the daemon validates every hunk with the identical rules
+      BEFORE staging. A mismatch means the page moved — re-read once and
+      recompose, exactly like the patch path.
+    - The daemon validates and HOLDS your hunks: nothing is written, the page
+      stays unchanged, no version is created. A human reviews and approves;
+      approval applies the hunks through the same enforcement net.
+    - Use the `lint_receipt` from your latest `page get --json` read (the
+      same receipt discipline as the patch write above).
+    - At most ONE staged proposal per page per run: put ALL of your repairs
+      into ONE propose-patch call (use `--hunk-file <path>` for several
+      hunks). A second propose for the same page is refused.
+    - The reply names the staged proposal id (a `staged\\t<id>` line). In your
+      run report, record every repair you staged as
+      `unresolved|staged proposal <id> awaiting human review` — the finding
+      is NOT fixed until a human applies the proposal.
+    - Your final verification line: `verification none` — you wrote nothing.
+    """
   }
 }
