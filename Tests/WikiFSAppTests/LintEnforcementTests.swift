@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import SQLite3
 import Testing
 @testable import WikiFSCore
 @testable import WikiFSEngine
@@ -360,6 +361,67 @@ struct LintEnforcementTests {
     }
 
     // MARK: - Tier-2 report semantics (fabricated success)
+
+    /// Round-three R-E: a D27 history-read failure AT ACCOUNTING time —
+    /// the written scan's history check reads the parent of the written
+    /// head (the inspected head) — fails verification. The guarded
+    /// recovery path still runs and discloses honestly: the blocked check
+    /// and a successful revert are mutually exclusive by construction (the
+    /// revert restores exactly the body the history read could not fetch),
+    /// so the posture is failed verification + a failed revert attempt +
+    /// breaker evidence — never a clean verdict over a check that could
+    /// not run.
+    @Test func historyReadFailureAtAccountingFailsVerificationAndRecordsBreaker() async throws {
+        let fixture = try Fixture()
+        let runStart = Date()
+        let plan = try await fixture.authorizedPlan()
+        try fixture.stageAgentArtifacts(for: plan)
+        // The run writes a CLEAN body: the ONLY verification failure is
+        // the blocked history check.
+        let written = try fixture.agentWrite(
+            Fixture.originalBody + "\nOne more clean paragraph.\n")
+        // Sabotage the inspected head's body blob — the written scan's D27
+        // history read (parent of the written head = the inspected head).
+        try Self.deleteBlob(ofVersion: fixture.inspectedHead, in: fixture)
+
+        let outcome = fixture.account(plan, runStart: runStart, producedHead: written)
+
+        #expect(outcome.status == .failed)
+        #expect(outcome.detail.contains("verification failed"))
+        #expect(outcome.detail.contains("unavailable"),
+                "the blocked history check is named")
+        if case .failed = outcome.revert {
+            // The guarded revert attempted and disclosed the failure —
+            // never a fake success over unreadable state.
+        } else {
+            Issue.record("expected an honest failed revert attempt, got \(outcome.revert)")
+        }
+        #expect(
+            fixture.breaker.windowStatus(for: try fixture.breakerKey).verificationFailures == 1,
+            "the failed verification is breaker evidence for this configuration")
+    }
+
+    /// Delete one version's blob row — the D27 history-read fault: the
+    /// history load reads the parent body through the page_versions→blobs
+    /// join and reports `.readFailed` instead of throwing.
+    private static func deleteBlob(ofVersion versionID: PageVersionID, in fixture: Fixture) throws {
+        var db: OpaquePointer?
+        let path = fixture.root.appendingPathComponent("WikiFS.sqlite").path
+        guard sqlite3_open(path, &db) == SQLITE_OK else {
+            Issue.record("could not open the fixture database for fault injection")
+            return
+        }
+        defer { sqlite3_close(db) }
+        // ULIDs are alphanumeric — safe to interpolate.
+        let sql = """
+        DELETE FROM blobs WHERE hash = (
+            SELECT blob_hash FROM page_versions WHERE id = '\(versionID.rawValue)');
+        """
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            Issue.record("fault-injection statement failed: \(sql)")
+            return
+        }
+    }
 
     /// A tier-2 run's `.repaired` claims are the CHILD's words: a staging
     /// run may not claim repairs AT ALL — the report is a fabricated

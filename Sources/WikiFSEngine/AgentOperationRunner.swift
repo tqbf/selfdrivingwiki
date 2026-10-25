@@ -630,6 +630,13 @@ public enum AgentOperationRunner {
             requiredChecksAvailable = false
         }
         let history = LintHistoryFacts.load(from: store, snapshot: snapshot)
+        if case .readFailed(let reason) = history.availability {
+            DebugLog.agent("lint plan: history facts unavailable, D27 blocks its section: \(reason)")
+            // Same shape as the identity facts above: a required check that
+            // could not run gates the run's verification availability
+            // instead of reading clean over a blocked section.
+            requiredChecksAvailable = false
+        }
         let parsed = ParsedMarkdownDocument(parsing: snapshot.body)
         let fenceValidation = await Self.lintFenceValidationFacts(
             body: snapshot.body, fenceFacts: parsed.fenceFacts)
@@ -1031,6 +1038,15 @@ public enum AgentOperationRunner {
                         let writtenSnapshot = LintPageSnapshot(writtenRead)
                         let history = LintHistoryFacts.load(
                             from: store, snapshot: writtenSnapshot)
+                        if case .readFailed(let reason) = history.availability {
+                            DebugLog.agent("lint dispatch: history facts unavailable for written scan: \(reason)")
+                            // D27's read failure blocks its section, not a
+                            // finding — the written verification the run
+                            // promised cannot have run, so it gates the
+                            // compare's availability like every other fact
+                            // load.
+                            writtenChecksAvailable = false
+                        }
                         // D28's fence-validation facts are async; the compare
                         // only needs findings that carry candidate repairs, and
                         // D28 findings never do — omitting them here cannot

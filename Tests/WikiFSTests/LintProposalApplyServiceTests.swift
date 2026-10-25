@@ -339,6 +339,112 @@ struct LintProposalApplyServiceTests {
             == fixture.inspectedHead, "the bad write did not survive")
     }
 
+    /// A D27 HISTORY-read failure (the parent version's body is gone —
+    /// carried as `.readFailed`, never thrown) marks the required checks
+    /// unavailable, so the apply fails closed through the promised
+    /// recovery path — one CAS-guarded revert + breaker evidence — instead
+    /// of verifying over a blocked history check (round-three R-E).
+    @Test func historyReadFailureFailsApplyClosedThroughTheRecoveryPath() throws {
+        // A second, byte-DIFFERENT body (a distinct author defeats the
+        // amend-coalescing window; different bytes keep the two versions on
+        // distinct content-addressed blob rows), so the inspected head HAS
+        // a parent whose body the D27 history read fetches — while the
+        // head's own body stays readable.
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let store = fixture.store
+        let chainBody = Fixture.body + "A trailing line for the history chain.\n"
+        try store.updatePage(
+            id: fixture.page.id, title: "Proposal Target", body: chainBody,
+            lastEditedBy: "history-fault-test")
+        let inspectedHead = try #require(try store.pageHeadVersionID(pageID: fixture.page.id))
+        #expect(inspectedHead != fixture.inspectedHead,
+                "the second save appended a version (no amend coalescing)")
+
+        // Sabotage the PARENT version's blob: the history load reads the
+        // parent body through the page_versions→blobs join and reports
+        // `.readFailed` instead of throwing.
+        try Self.executeRaw("""
+        DELETE FROM blobs WHERE hash = (
+            SELECT blob_hash FROM page_versions
+            WHERE page_id = '\(fixture.page.id.rawValue)'
+            ORDER BY id ASC LIMIT 1)
+        """, fixture: fixture)
+
+        let preRead = try store.readPageCoherent(id: fixture.page.id)
+        let preScan = LintProposalApplyService.scan(store: store, read: preRead)
+        #expect(preScan.requiredChecksAvailable == false,
+                "the failed history read makes the required D27 check unavailable")
+
+        // The proposal is composed against the current body and head; the
+        // hunk replaces "old text" (its offsets are unchanged — the appended
+        // line trails it).
+        let start = "# Target\n\n".utf8.count
+        let end = start + "old text".utf8.count
+        let proposal = LintProposalApplyService.Proposal(
+            id: "prop-history", pageID: fixture.page.id, inspectedHead: inspectedHead,
+            bodyFingerprint: LintPageSnapshot.fingerprint(of: chainBody),
+            hunks: [PagePatchHunk(
+                startByte: start, endByte: end, oldText: "old text",
+                newText: "new text", reason: "repair")],
+            perHunkClasses: [.wholeBodyFenceWrap])
+
+        let outcome = LintProposalApplyService.apply(
+            proposal: proposal,
+            store: fixture.store, breaker: fixture.breaker, breakerKey: fixture.key)
+        guard case .appliedThenReverted(_, let revert, let reasons) = outcome else {
+            Issue.record("expected appliedThenReverted over the blocked history check, got \(outcome)")
+            return
+        }
+        #expect(reasons.contains { $0.contains("unavailable") },
+                "the unavailable history check is named: \(reasons)")
+        guard case .reverted = revert else {
+            Issue.record("the guarded recovery path reverts the write, got \(revert)")
+            return
+        }
+        #expect(try store.pageHeadVersionID(pageID: fixture.page.id)
+            == inspectedHead, "the bad write did not survive")
+        // Breaker accounting: the failed verification is evidence for this
+        // configuration.
+        #expect(fixture.breaker.windowStatus(for: fixture.key).verificationFailures == 1)
+    }
+
+    /// The PLAN derivation gates on the same read: a blocked D27 history
+    /// check marks the plan's required checks unavailable and the history
+    /// section stays visibly blocked — a staging run cannot even start
+    /// from a plan whose facts were degraded silently.
+    @Test func planDerivationMarksBlockedHistoryCheckUnavailable() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        try fixture.store.updatePage(
+            id: fixture.page.id, title: "Proposal Target", body: Fixture.body,
+            lastEditedBy: "history-fault-test")
+        try Self.executeRaw("""
+        DELETE FROM blobs WHERE hash = (
+            SELECT blob_hash FROM page_versions
+            WHERE page_id = '\(fixture.page.id.rawValue)'
+            ORDER BY id ASC LIMIT 1)
+        """, fixture: fixture)
+
+        let plan = try #require(await AgentOperationRunner.makeLintPagePlan(
+            store: fixture.store, pageID: fixture.page.id, stateMarkdown: "# state\n",
+            gateInputs: .init(
+                provider: "anthropic", model: "claude-opus",
+                modelRevision: "rev-1", effort: "high"),
+            selection: { _ in .stagedProposal(reason: "test") },
+            breaker: fixture.breaker))
+        #expect(plan.requiredChecksAvailable == false,
+                "the plan carries the blocked history check as unavailable")
+        let historySection = plan.preflight.sections.first {
+            $0.section == .integrityAndHistory
+        }
+        guard case .blocked = historySection?.status else {
+            Issue.record(
+                "expected a blocked history section, got \(String(describing: historySection?.status))")
+            return
+        }
+    }
+
     /// The post-write read failure path: when the written version cannot be
     /// read back (the immutable-history violation the written-version seam
     /// guards), verification throws instead of verifying — the caller keeps

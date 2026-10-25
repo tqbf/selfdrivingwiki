@@ -377,6 +377,14 @@ public enum LintProposalApplyService {
             requiredChecksAvailable = false
         }
         let history = LintHistoryFacts.load(from: store, snapshot: snapshot)
+        if case .readFailed(let reason) = history.availability {
+            DebugLog.agent("lint proposal apply: history facts unavailable: \(reason)")
+            // D27's read failure blocks its SECTION — never a finding, and
+            // the compare never evaluates section statuses — so the failed
+            // history read must gate the required checks instead of letting
+            // verification pass over a check that could not run.
+            requiredChecksAvailable = false
+        }
         return ScanOutcome(
             report: LintPagePreflight.scan(
                 snapshot: snapshot, resolution: resolution,
