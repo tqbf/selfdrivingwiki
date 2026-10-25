@@ -940,26 +940,34 @@ public enum AgentOperationRunner {
                     // records (`Lint proposal applied — <title>` with an
                     // exact `outcome=` label and proposal id), and the
                     // review UI renders from those — never from the child's
-                    // words. Any repair claim is fabricated success:
-                    // coverage FAILS and the claimed findings stay on the
-                    // unresolved list. Even a trusted applied record does
-                    // not launder a claim: an `applied-then-reverted`
-                    // outcome, ANOTHER proposal's application, or a same-
-                    // title page's record would otherwise read as success.
+                    // words. Any repair claim — through ANY row kind
+                    // (`finding` or `item`; `item D08-1 repaired` once
+                    // slipped past a finding-only check) — is fabricated
+                    // success: coverage FAILS and the claimed findings
+                    // stay on the unresolved list. Even a trusted applied
+                    // record does not launder a claim: an
+                    // `applied-then-reverted` outcome, ANOTHER proposal's
+                    // application, or a same-title page's record would
+                    // otherwise read as success.
                     // (If post-approval claim support is ever genuinely
                     // needed, it must join an EXACT successful outcome by
                     // proposal ID + page + run + written head and re-verify
                     // the claimed findings — deliberately not built now.)
-                    let claimedRepairIDs = parsed.entries.compactMap { entry -> String? in
-                        guard case .finding(let id) = entry.kind,
-                              case .repaired = entry.outcome else { return nil }
-                        return id
+                    let claimedRepairs = parsed.entries.filter { entry in
+                        if case .repaired = entry.outcome { return true }
+                        return false
+                    }
+                    let claimedRepairIDs = claimedRepairs.compactMap { entry -> String? in
+                        switch entry.kind {
+                        case .item(let id), .finding(let id): return id
+                        case .check: return nil
+                        }
                     }
                     let claimsWrittenHead = parsed.verification?.writtenHead != nil
-                    if claimedRepairIDs.isEmpty == false || claimsWrittenHead {
+                    if claimedRepairs.isEmpty == false || claimsWrittenHead {
                         status = .failed
                         detail += "; tier-2 report rejected: "
-                            + "\(claimedRepairIDs.count) repair claim(s)"
+                            + "\(claimedRepairs.count) repair claim(s)"
                             + (claimsWrittenHead
                                 ? " and a written-head verification claim"
                                 : "")

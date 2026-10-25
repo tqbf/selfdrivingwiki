@@ -442,5 +442,95 @@ struct LintEnforcementTests {
         #expect(outcome.detail.contains("unresolved:"),
                 "the claimed findings stay named on the unresolved list")
     }
+
+    /// Round-three R-B: the same fabricated success with every finding ID
+    /// RENAMED onto an `item` row (`item D08-1 repaired`). The parser
+    /// accepts those rows, and the old combined-set coverage counted the
+    /// findings covered while the finding-only rejection missed them —
+    /// so tier 2 rejects repair claims through ANY row kind and the
+    /// renamed rows no longer cover the findings either.
+    @Test func tier2RepairClaimsOnItemRowsStayRejected() async throws {
+        let fixture = try Fixture()
+        let runStart = Date()
+        try fixture.store.updatePage(
+            id: fixture.page.id, title: "Enforcement", body: Fixture.defectiveBody)
+        let plan = try await fixture.stagedProposalPlan()
+        #expect(plan.authority.tier == .stagedProposal)
+
+        // The rename: `finding <id> pending` becomes `item <id> repaired`.
+        let skeleton = LintRunReportText.render(
+            snapshot: plan.snapshot, preflight: plan.preflight)
+        let filled = skeleton.split(
+            separator: "\n", omittingEmptySubsequences: false
+        ).map { line -> String in
+            if line == "verification none pending" { return "verification none clean" }
+            if line.hasPrefix("finding ") && line.hasSuffix(" pending") {
+                let id = line.split(separator: " ")[1]
+                return "item \(id) repaired|repaired the defect"
+            }
+            if line.hasSuffix(" pending") {
+                return line.replacingOccurrences(of: " pending", with: " valid-as-written|recorded")
+            }
+            return String(line)
+        }.joined(separator: "\n")
+        try filled.write(
+            to: fixture.scratch.appendingPathComponent(AgentStaging.lintRunReportFileName),
+            atomically: true, encoding: .utf8)
+        _ = try fixture.store.appendLog(
+            kind: .lint, title: "Lint — \(plan.snapshot.title)", note: "agent record")
+
+        let outcome = fixture.account(plan, runStart: runStart)
+
+        #expect(outcome.status == .failed,
+                "a repair claim through an item row is still a fabricated success")
+        #expect(outcome.detail.contains("tier-2 report rejected"))
+        #expect(outcome.detail.contains("a staging run may not claim repairs"))
+        #expect(outcome.detail.contains("unresolved:"),
+                "the claimed findings stay named on the unresolved list")
+        // Nothing was written: the page is still at the head the plan
+        // inspected.
+        #expect(try fixture.store.pageHeadVersionID(pageID: fixture.page.id)
+            == plan.snapshot.headVersionID)
+    }
+
+    /// The honest tier-2 shape: findings stay `unresolved` (a staging run
+    /// repairs nothing), inventory rows are accounted in their own kind,
+    /// and nothing claims a repair or a written head. Coverage completes
+    /// and the tier-2 gate stays silent.
+    @Test func tier2HonestUnresolvedReportIsAccepted() async throws {
+        let fixture = try Fixture()
+        let runStart = Date()
+        try fixture.store.updatePage(
+            id: fixture.page.id, title: "Enforcement", body: Fixture.defectiveBody)
+        let plan = try await fixture.stagedProposalPlan()
+        let skeleton = LintRunReportText.render(
+            snapshot: plan.snapshot, preflight: plan.preflight)
+        let filled = skeleton.split(
+            separator: "\n", omittingEmptySubsequences: false
+        ).map { line -> String in
+            if line == "verification none pending" { return "verification none clean" }
+            if line.hasPrefix("check ") && line.hasSuffix(" pending") {
+                return line.replacingOccurrences(of: " pending", with: " valid-as-written|recorded")
+            }
+            if line.hasSuffix(" pending") {
+                return line.replacingOccurrences(of: " pending", with: " unresolved|staged for review")
+            }
+            return String(line)
+        }.joined(separator: "\n")
+        try filled.write(
+            to: fixture.scratch.appendingPathComponent(AgentStaging.lintRunReportFileName),
+            atomically: true, encoding: .utf8)
+        _ = try fixture.store.appendLog(
+            kind: .lint, title: "Lint — \(plan.snapshot.title)", note: "agent record")
+
+        let outcome = fixture.account(plan, runStart: runStart)
+
+        #expect(outcome.status == .dispatched,
+                "an honest staging report is not a failure")
+        #expect(outcome.detail.contains("run-report coverage complete"))
+        #expect(outcome.detail.contains("tier-2 report rejected") == false)
+        // §5.12: the unresolved findings stay named in the host record.
+        #expect(outcome.detail.contains("unresolved:"))
+    }
 }
 #endif

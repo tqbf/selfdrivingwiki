@@ -257,6 +257,41 @@ struct LintOutcomeCoverageTests {
         }
     }
 
+    /// Round-three R-B: row kinds cover only their own namespace. The
+    /// combined expected-set this replaced accepted `item D08-1 repaired`
+    /// (a finding ID renamed onto an inventory row) as coverage for the
+    /// finding — the exact move that let a tier-2 report dodge the
+    /// finding-only repair-claim rejection.
+    @Test func rejectsCrossKindRowsAndAcceptsKindAlignedOnes() {
+        // A finding ID riding an ITEM row: parses, but covers nothing.
+        if case .rejected(let reasons) = verdict(for: filledReport(overrides: [
+            "finding D08-1": "item D08-1 repaired",
+        ])) {
+            #expect(reasons.contains { $0.contains("unknown occurrence D08-1") })
+            #expect(reasons.contains { $0.contains("no outcome for D08-1") })
+        } else {
+            Issue.record("a finding ID on an item row must not cover the finding")
+        }
+        // The mirror image: an inventory ID riding a FINDING row.
+        if case .rejected(let reasons) = verdict(for: filledReport(overrides: [
+            "item sourceCitation-1": "finding sourceCitation-1 unresolved|pending review",
+        ])) {
+            #expect(reasons.contains { $0.contains("unknown occurrence sourceCitation-1") })
+            #expect(reasons.contains { $0.contains("no outcome for sourceCitation-1") })
+        } else {
+            Issue.record("an inventory ID on a finding row must not cover the item")
+        }
+        // The honest path still completes: every ID on its own row kind.
+        guard case .complete = verdict(for: filledReport(overrides: [
+            "finding D08-1": "finding D08-1 repaired",
+            "finding D18-1": "finding D18-1 unresolved|needs human judgment",
+            "item sourceCitation-1": "item sourceCitation-1 unresolved|pending review",
+        ])) else {
+            Issue.record("kind-aligned rows remain the accepted honest path")
+            return
+        }
+    }
+
     // MARK: - Verification gate (REQ-54)
 
     private func rescan(of body: String) -> LintPreflightReport {

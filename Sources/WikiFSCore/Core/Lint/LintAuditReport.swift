@@ -396,41 +396,63 @@ public enum LintCoverageValidator {
         }
 
         // Every inventory occurrence and every finding needs exactly one
-        // outcome; unknown IDs and duplicates are rejections.
-        var expectedIDs: Set<String> = Set(preflight.inventory.map(\.occurrenceID))
+        // outcome IN ITS OWN ROW KIND: inventory IDs are covered only by
+        // `item` rows, finding IDs only by `finding` rows. Accepting either
+        // kind against one combined set let `item D08-1 repaired` (a finding
+        // ID riding an inventory row) count the finding as covered and slip
+        // past tier-2's repair-claim rejection (round-three R-B).
+        let expectedInventoryIDs = Set(preflight.inventory.map(\.occurrenceID))
+        var expectedFindingIDs: Set<String> = []
         for finding in preflight.sections.flatMap(\.findings) {
-            expectedIDs.insert(finding.occurrenceID)
+            expectedFindingIDs.insert(finding.occurrenceID)
         }
-        var covered: Set<String> = []
+        var coveredInventoryIDs: Set<String> = []
+        var coveredFindingIDs: Set<String> = []
+
+        func accountOutcome(
+            _ id: String, outcome: LintFindingOutcome,
+            expected: Set<String>, covered: inout Set<String>
+        ) {
+            guard expected.contains(id) else {
+                reasons.append("outcome for unknown occurrence \(id)")
+                return
+            }
+            guard covered.insert(id).inserted else {
+                reasons.append("duplicate outcome for \(id)")
+                return
+            }
+            // Reason-bearing outcomes need their reason on items and
+            // findings too — `valid-as-written` with no reason is an
+            // unfilled line, not an accounted one.
+            if outcome.requiresReason {
+                switch outcome {
+                case .validAsWritten(let r), .unresolved(let r),
+                     .outsideLintScope(let r), .checkBlocked(let r):
+                    if r.trimmingCharacters(in: .whitespaces).isEmpty {
+                        reasons.append("outcome for \(id) requires a reason")
+                    }
+                case .repaired: break
+                }
+            }
+        }
         for entry in parsed.entries {
             switch entry.kind {
             case .check:
                 continue
-            case .item(let id), .finding(let id):
-                guard expectedIDs.contains(id) else {
-                    reasons.append("outcome for unknown occurrence \(id)")
-                    continue
-                }
-                guard covered.insert(id).inserted else {
-                    reasons.append("duplicate outcome for \(id)")
-                    continue
-                }
-                // Reason-bearing outcomes need their reason on items and
-                // findings too — `valid-as-written` with no reason is an
-                // unfilled line, not an accounted one.
-                if entry.outcome.requiresReason {
-                    switch entry.outcome {
-                    case .validAsWritten(let r), .unresolved(let r),
-                         .outsideLintScope(let r), .checkBlocked(let r):
-                        if r.trimmingCharacters(in: .whitespaces).isEmpty {
-                            reasons.append("outcome for \(id) requires a reason")
-                        }
-                    case .repaired: break
-                    }
-                }
+            case .item(let id):
+                accountOutcome(
+                    id, outcome: entry.outcome,
+                    expected: expectedInventoryIDs, covered: &coveredInventoryIDs)
+            case .finding(let id):
+                accountOutcome(
+                    id, outcome: entry.outcome,
+                    expected: expectedFindingIDs, covered: &coveredFindingIDs)
             }
         }
-        for missing in expectedIDs.subtracting(covered).sorted() {
+        for missing in expectedInventoryIDs.subtracting(coveredInventoryIDs).sorted() {
+            reasons.append("no outcome for \(missing)")
+        }
+        for missing in expectedFindingIDs.subtracting(coveredFindingIDs).sorted() {
             reasons.append("no outcome for \(missing)")
         }
 
