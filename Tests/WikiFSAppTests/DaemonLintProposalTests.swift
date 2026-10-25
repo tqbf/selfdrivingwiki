@@ -248,6 +248,71 @@ struct DaemonLintProposalTests {
         #expect(valid.error == nil, "the same receipt may stage after a validator refusal")
     }
 
+    // MARK: - Snapshot provenance (conflict on a moved page)
+
+    /// The staged record's provenance must be coherent: the body the hunks
+    /// validate against is the one the receipt's head names. An edit between
+    /// the receipt's minting read and the staging attempt is a conflict —
+    /// the receipt dies and nothing stages, so a proposal can never carry an
+    /// old inspected head with the new body's fingerprint.
+    @Test("staging against a moved page conflicts and kills the receipt")
+    func stagingAgainstMovedPageConflictsAndKillsReceipt() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.stop() }
+        let receipt = try await fixture.mintReceipt()
+
+        // A concurrent edit lands AFTER the receipt was minted.
+        try fixture.store.updatePage(
+            id: fixture.page.id, title: "Proposal Target",
+            body: "# Target\n\nedited by someone else\n")
+
+        do {
+            _ = try await fixture.propose(receipt: receipt, newText: "new text")
+            Issue.record("staging against a moved page must conflict")
+        } catch let error as DaemonDomainError {
+            #expect(error.code == .casConflict)
+            #expect(error.message.contains("the page changed since the receipt's read"))
+        }
+
+        // Nothing staged; the propose path left the page exactly as the
+        // concurrent edit left it.
+        #expect(await fixture.lintRunState.stagedProposal(runID: fixture.runID, pageID: fixture.page.id) == nil)
+        #expect(try fixture.store.readPageCoherent(id: fixture.page.id).body
+            == "# Target\n\nedited by someone else\n")
+
+        // The receipt is DEAD: the same receipt cannot stage again.
+        do {
+            _ = try await fixture.propose(receipt: receipt, newText: "new text")
+            Issue.record("a conflicted receipt must be dead")
+        } catch let error as DaemonDomainError {
+            #expect(error.code == .scopeDenied)
+        }
+
+        // A fresh read mints a fresh receipt; the conflict budget allows the
+        // one recomposition (the same discipline the patch path enforces).
+        // The recomposed hunks are composed against the EDITED body —
+        // "edited by someone else" starts at byte 10.
+        let fresh = try await fixture.mintReceipt()
+        let editedBody = "# Target\n\nedited by someone else\n"
+        let start = "# Target\n\n".utf8.count
+        let end = start + "edited by someone else".utf8.count
+        let currentHead = try #require(
+            try fixture.store.readPageCoherent(id: fixture.page.id).headVersionID)
+        let valid = try await fixture.propose(
+            receipt: fresh, expectHead: currentHead,
+            hunks: [DaemonPagePatchRequest.WireHunk(
+                defect: "D25", startByte: start, endByte: end,
+                oldText: "edited by someone else", newText: "repaired instead",
+                reason: "recomposed against the moved page")])
+        #expect(valid.error == nil, "a fresh receipt stages after the conflict")
+        #expect(try Fixture.stagedFields(valid)["inspected_head"] == currentHead.rawValue)
+        let staged = try #require(
+            await fixture.lintRunState.stagedProposal(runID: fixture.runID, pageID: fixture.page.id))
+        #expect(
+            staged.bodyFingerprint == LintPageSnapshot.fingerprint(of: editedBody),
+            "the staged record's fingerprint names the body its hunks were validated against")
+    }
+
     // MARK: - Extreme offsets (rejected before any arithmetic)
 
     /// The staging path reads the page BEFORE the budget arithmetic, so the

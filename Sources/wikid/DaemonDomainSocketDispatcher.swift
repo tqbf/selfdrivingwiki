@@ -405,6 +405,28 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             let store = try await daemon.domainCommandStore(wikiID: grant.scope.wikiID)
             let read = try store.readPageCoherent(id: selectedPage)
             let body = read.body
+            // The staged snapshot's provenance must be COHERENT: the body
+            // the hunks are validated (and fingerprinted) against is the one
+            // the receipt's head names, byte for byte. An edit between the
+            // receipt's minting read and this read is a CONFLICT — the
+            // receipt dies (re-staging needs a fresh read), the same
+            // discipline the patch path applies on a CAS conflict. Without
+            // this gate a proposal can carry an old inspected head with the
+            // NEW body's fingerprint.
+            guard let receipt = await self.lintRunState.currentReceipt(runID: grant.runID),
+                  read.headVersionID == expectHead,
+                  read.headVersionID == receipt.headVersionID,
+                  LintPageSnapshot.fingerprint(of: body) == receipt.bodyFingerprint else {
+                let stillOpen = await self.lintRunState.recordConflict(runID: grant.runID)
+                if !stillOpen {
+                    DebugLog.store(
+                        "wikid: lint run \(grant.runID) exhausted its CAS conflict budget")
+                }
+                await self.lintRunState.invalidateReceipt(runID: grant.runID)
+                throw DaemonDomainError(
+                    code: .casConflict,
+                    message: "page propose-patch conflict: the page changed since the receipt's read — re-read the page and recompose; the receipt is no longer valid")
+            }
             // W2a §3 mirrored: the budget is checked BEFORE anything is
             // staged, and AFTER the hunk numbers are validated against the
             // body's real size — a hostile offset is rejected outright
