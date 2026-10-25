@@ -127,6 +127,12 @@ struct ActivityWindowView: View {
     /// "Configure…" CTA buttons can open Settings on the relevant tab
     /// (#440). Set by `MenuBarItemController` when creating the window.
     var openWindowBridge: OpenWindowBridge?
+    /// The staged-proposal review section's data source (W5b): resolves a
+    /// page's staged proposals and the run's tier-2 breaker configuration.
+    /// Production passes nothing — this build ships no daemon→app transport
+    /// for staged records, so the section renders nothing rather than
+    /// guessing; hosted tests inject a source over a real daemon run state.
+    var stagedProposalSource: QueueStagedProposalSource?
     /// Where a closed wiki's database lives, for the read-only name
     /// fallback (closed-wiki name resolution). Production resolves the App
     /// Group container location; hosted tests inject a nil provider (or a
@@ -163,6 +169,30 @@ struct ActivityWindowView: View {
     @State private var lintBreakerContext: String?
     /// The breaker's trip message when this undo tripped it.
     @State private var lintBreakerNotice: String?
+
+    // MARK: Lint proposal review state (W5b) — reset on selection change,
+    // like the undo state above. Pending proposals ride in from the
+    // injected source; outcomes accumulate as proposals resolve.
+
+    /// The resolved-but-still-pending staged proposals for the selected
+    /// run's pages, joined by the durable records' ids.
+    @State private var lintResolvedProposals: [QueueLintStagedProposal] = []
+    /// Terminal outcomes per proposal id (durable re-reads plus
+    /// presentation-local rejections).
+    @State private var lintProposalOutcomes: [QueueLintProposalOutcome] = []
+    /// Per-proposal apply/reject in flight.
+    @State private var lintProposalInFlight: Set<String> = []
+    /// The Approve-all batch is running.
+    @State private var lintApproveAllInFlight = false
+    /// The tier-2 breaker's trip message for this configuration.
+    @State private var lintProposalBreakerNotice: String?
+    /// The tier-2 breaker's read-only window status line.
+    @State private var lintProposalBreakerContext: String?
+    /// Why the review actions are unavailable (unresolvable configuration).
+    @State private var lintProposalActionProblem: String?
+    /// The resolved tier-2 breaker key for the selected run, when the
+    /// source could name it.
+    @State private var lintProposalBreakerKey: LintRepairBreakerKey?
 
     /// The selected job's two workspace surfaces. Activity is the only
     /// transcript surface (plan §1); Overview is the complete inventory +
@@ -298,6 +328,9 @@ struct ActivityWindowView: View {
             lintUndoResult = nil
             lintBreakerContext = nil
             lintBreakerNotice = nil
+            // The proposal-review presentation belongs to the selected run
+            // only (W5b) — same rule as the undo state above.
+            resetProposalReviewState()
         }
         // Auto-select the most interesting item once, when the first snapshot
         // lands — a window opened from "1 running" should show that run.
@@ -1063,10 +1096,27 @@ struct ActivityWindowView: View {
                 QueueRunDetailsView(
                     selectedRunDetailsFacts,
                     lintRepair: selectedLintRepair,
+                    lintProposals: selectedProposalSection,
                     onUndo: selectedLintRepair?.showsUndoButton == true
                         ? { undoLintFixes() } : nil,
-                    versionBody: selectedLintRepair != nil
-                        ? { wikiStoreModel?.pageVersionBody(for: $0) } : nil)
+                    onApproveProposal: selectedProposalSection?.showsReviewControls == true
+                        ? { approveProposal($0) } : nil,
+                    onRejectProposal: selectedProposalSection?.showsReviewControls == true
+                        ? { rejectProposal($0) } : nil,
+                    onApproveAllProposals: selectedProposalSection?.showsApproveAll == true
+                        ? { approveAllProposals() } : nil,
+                    versionBody: selectedLintRepair != nil || selectedProposalSection != nil
+                        ? { wikiStoreModel?.pageVersionBody(for: $0) } : nil,
+                    currentHead: selectedProposalSection != nil
+                        ? { pageID in
+                            guard let store = wikiStoreModel?.internalStore else { return nil }
+                            do { return try store.pageHeadVersionID(pageID: pageID) }
+                            catch {
+                                DebugLog.store(
+                                    "proposal review: head read failed for \(pageID.rawValue): \(error)")
+                                return nil
+                            }
+                        } : nil)
                     .frame(width: QueueWorkspaceMetrics.Inspector.width)
             }
         }
@@ -1116,10 +1166,13 @@ struct ActivityWindowView: View {
 
     /// The disclosure's breaker context: how much of the local breaker's
     /// tolerance a configuration has used ("1 of 2 allowed user undos
-    /// used…"), or the trip state. Local and factual only.
+    /// used…"), or the trip state. Local and factual only. The tier-2
+    /// review section (W5b) renders the same line; its rejections count in
+    /// the same window and trip with the same threshold as undos.
     nonisolated static func breakerContextLine(_ status: LintRepairBreaker.WindowStatus) -> String {
         var line = "Breaker: \(status.userUndos) of \(LintRepairBreaker.userUndoTripCount) allowed user undos used; "
-            + "\(status.verificationFailures) of \(LintRepairBreaker.verificationFailureTripCount) allowed verification failures used."
+            + "\(status.verificationFailures) of \(LintRepairBreaker.verificationFailureTripCount) allowed verification failures used; "
+            + "\(status.userRejections) of \(LintRepairBreaker.userRejectedTripCount) allowed user rejections used."
         if let reason = status.tripReason {
             line += " Tripped — \(reason)."
         }
@@ -1183,6 +1236,238 @@ struct ActivityWindowView: View {
         return sessionManager?.sessions[item.wikiID]?.store
     }
 
+    // MARK: - Staged-proposal review (W5b)
+
+    private func resetProposalReviewState() {
+        lintResolvedProposals = []
+        lintProposalOutcomes = []
+        lintProposalInFlight = []
+        lintApproveAllInFlight = false
+        lintProposalBreakerNotice = nil
+        lintProposalBreakerContext = nil
+        lintProposalActionProblem = nil
+        lintProposalBreakerKey = nil
+    }
+
+    /// Task identity for the staged-proposal load: the same report key the
+    /// Overview load uses (attempt + lifecycle + summary revision), plus a
+    /// proposals marker so a tier-2 run re-resolves exactly when its report
+    /// re-loads. A resolved-but-unacted selection is NOT re-resolved on
+    /// unrelated churn — the caller's presentation state is the source of
+    /// truth between report revisions.
+    private func proposalLoadKey(for item: QueueItem) -> String {
+        "proposals|\(reportLoadKey(for: item))"
+    }
+
+    /// Resolve the selected run's pending proposals: read the durable
+    /// records' staged ids, fetch the staged values from the injected
+    /// source, and resolve the tier-2 breaker configuration. A nil source
+    /// (production until the daemon transport ships) resolves nothing —
+    /// the section renders nothing rather than guessing.
+    private func loadStagedProposals(for item: QueueItem) async {
+        guard let source = stagedProposalSource else { return }
+        guard case .loaded(let report) = viewModel.selectedReport,
+              Self.loadedReportMatches(report: report, item: item),
+              case .targets(let records) = report.scope else { return }
+
+        // The pages whose records name staged proposals, with their ids.
+        var pageIDsInOrder: [PageID] = []
+        var idsByPage: [PageID: [String]] = [:]
+        for record in records {
+            guard let facts = LintPageRecordFacts.parse(record: record) else { continue }
+            guard facts.stagedProposalIDs.isEmpty == false else { continue }
+            pageIDsInOrder.append(facts.pageID)
+            idsByPage[facts.pageID] = facts.stagedProposalIDs
+        }
+        guard idsByPage.isEmpty == false else { return }
+
+        let knownIDs = Set(idsByPage.values.flatMap { $0 })
+        var resolved: [QueueLintStagedProposal] = []
+        for pageID in pageIDsInOrder {
+            for proposal in await source.proposals(pageID)
+            where knownIDs.contains(proposal.id) {
+                resolved.append(proposal)
+            }
+        }
+        let key = await source.breakerKey()
+        // A stale selection raced the load: only the current item's states
+        // may be written (the same guard the report load uses).
+        guard selectedItemID == item.id else { return }
+        lintResolvedProposals = resolved
+        lintProposalBreakerKey = key
+        lintProposalActionProblem = key == nil ? QueueStagedProposalSource.unavailableReason : nil
+        if let key {
+            let status = LintRepairBreaker.production().windowStatus(for: key)
+            lintProposalBreakerContext = Self.breakerContextLine(status)
+        }
+        DebugLog.ingest(
+            "proposal review: resolved \(resolved.count) of \(knownIDs.count) staged records" +
+                (key != nil ? "; breaker resolved" : "; breaker unresolved"))
+    }
+
+    /// The selected run's proposal-review section, or nil for every other
+    /// job. The pending set is the durable records' staged ids minus the
+    /// resolved outcomes; the outcomes re-read the durable audit trail so a
+    /// section survives state loss honestly (the same rule as the undo's
+    /// durable-report mapping).
+    private var selectedLintProposals: QueueRunDetailsLintProposals? {
+        guard let itemID = selectedItemID, let item = item(for: itemID),
+              case .loaded(let report) = viewModel.selectedReport,
+              Self.loadedReportMatches(report: report, item: item) else {
+            return nil
+        }
+        return QueueRunDetailsLintProposals.make(
+            report: report, wikiID: item.wikiID,
+            resolved: lintResolvedProposals,
+            outcomes: lintProposalOutcomes)
+    }
+
+    /// The presentation state for the section, riding the window's @State
+    /// into the value model (the W2b pattern).
+    private var selectedProposalSection: QueueRunDetailsLintProposals? {
+        guard var section = selectedLintProposals else { return nil }
+        section.inFlightProposalIDs = lintProposalInFlight
+        section.approveAllInFlight = lintApproveAllInFlight
+        section.breakerContext = lintProposalBreakerContext
+        section.breakerNotice = lintProposalBreakerNotice
+        section.actionUnavailableReason = lintProposalActionProblem
+        return section
+    }
+
+    /// The tier-2 breaker for the selected run's configuration, or nil when
+    /// it could not be resolved (nothing is recorded rather than guessed).
+    private var proposalBreaker: LintRepairBreaker? {
+        lintProposalBreakerKey != nil ? LintRepairBreaker.production() : nil
+    }
+
+    /// Approve one proposal: the apply service writes the exact hunks
+    /// through the store's enforcement net, then the outcome is re-read
+    /// from the durable audit trail. Runs on the main actor; the store is
+    /// method-atomic per call.
+    private func approveProposal(_ proposal: QueueLintStagedProposal) {
+        guard lintProposalInFlight.contains(proposal.id) == false,
+              lintApproveAllInFlight == false,
+              lintProposalActionProblem == nil else { return }
+        applyProposals([proposal], isBatch: false)
+    }
+
+    private func rejectProposal(_ proposal: QueueLintStagedProposal) {
+        guard lintProposalInFlight.contains(proposal.id) == false,
+              lintApproveAllInFlight == false,
+              lintProposalActionProblem == nil else { return }
+        lintProposalInFlight.insert(proposal.id)
+        Task { @MainActor in
+            defer { lintProposalInFlight.remove(proposal.id) }
+            // A rejection writes nothing and appends no audit entry — the
+            // breaker evidence is the record.
+            let verdict = LintProposalApplyService.recordRejection(
+                breaker: proposalBreaker, breakerKey: lintProposalBreakerKey)
+            if verdict == nil {
+                DebugLog.ingest(
+                    "proposal reject: breaker unresolvable, nothing recorded for \(proposal.id)")
+            }
+            lintProposalOutcomes.append(QueueLintProposalOutcome(
+                proposalID: proposal.id, kind: .rejected, detail: nil))
+            noteBreakerTripIfAny()
+            DebugLog.ingest("proposal reject: recorded rejection for \(proposal.id)")
+        }
+    }
+
+    /// Approve all: iterate the pending proposals one at a time (the store
+    /// is method-atomic per apply) and let the outcome summary report the
+    /// honest aggregate ("2 applied, 1 stale").
+    private func approveAllProposals() {
+        guard lintApproveAllInFlight == false,
+              lintProposalActionProblem == nil,
+              let section = selectedProposalSection,
+              section.showsApproveAll else { return }
+        applyProposals(section.pendingProposals.map(\.proposal), isBatch: true)
+    }
+
+    /// Shared apply path: in-flight gating, one service call per proposal,
+    /// the durable outcome re-read, and the breaker consult afterwards.
+    private func applyProposals(
+        _ proposals: [QueueLintStagedProposal], isBatch: Bool
+    ) {
+        guard proposals.isEmpty == false else { return }
+        if isBatch {
+            lintApproveAllInFlight = true
+        } else {
+            for proposal in proposals { lintProposalInFlight.insert(proposal.id) }
+        }
+        Task { @MainActor in
+            defer {
+                if isBatch {
+                    lintApproveAllInFlight = false
+                } else {
+                    for proposal in proposals { lintProposalInFlight.remove(proposal.id) }
+                }
+            }
+            guard let store = wikiStoreModel?.internalStore else {
+                // The wiki's window is closed — no store to write through.
+                // Every proposal reports as failed rather than silently
+                // no-op'ing (the undo path's posture).
+                DebugLog.ingest(
+                    "proposal apply: no open store for wiki; \(proposals.count) proposal(s) refused")
+                for proposal in proposals {
+                    lintProposalOutcomes.append(QueueLintProposalOutcome(
+                        proposalID: proposal.id, kind: .failed,
+                        detail: "the wiki is not open — reopen it and approve again"))
+                }
+                return
+            }
+            for proposal in proposals {
+                let outcome = LintProposalApplyService.apply(
+                    proposal: LintProposalApplyService.Proposal(
+                        id: proposal.id, pageID: proposal.pageID,
+                        inspectedHead: proposal.inspectedHead,
+                        bodyFingerprint: proposal.bodyFingerprint,
+                        hunks: proposal.hunks,
+                        perHunkClasses: proposal.perHunkClasses),
+                    store: store,
+                    breaker: proposalBreaker,
+                    breakerKey: lintProposalBreakerKey)
+                // The durable record is the truth: re-read the outcome from
+                // the trusted audit trail; the service's answer is only the
+                // fallback when the re-read cannot answer.
+                let durable: QueueLintProposalOutcome?
+                do {
+                    let entries = try store.recentLogEntries(limit: 200)
+                    durable = QueueRunDetailsLintProposals.parseAppliedOutcome(
+                        entries: entries, proposalID: proposal.id)
+                } catch {
+                    DebugLog.ingest(
+                        "proposal apply: log read failed for \(proposal.id): \(error)")
+                    durable = nil
+                }
+                if durable == nil {
+                    DebugLog.ingest(
+                        "proposal apply: durable outcome re-read missed for \(proposal.id); using the in-flight answer")
+                }
+                lintProposalOutcomes.append(
+                    durable ?? QueueRunDetailsLintProposals.outcome(
+                        from: outcome, proposalID: proposal.id))
+                DebugLog.ingest(
+                    "proposal apply: \(proposal.id) → \(outcome.isTerminalWrite ? "written" : "not written")")
+            }
+            noteBreakerTripIfAny()
+        }
+    }
+
+    /// Render the breaker's plain trip message when the configuration is
+    /// now tripped (a rejection, or a post-apply verification failure,
+    /// crossed the threshold) — the same presentation as the W2b undo's.
+    private func noteBreakerTripIfAny() {
+        guard let key = lintProposalBreakerKey else { return }
+        let status = LintRepairBreaker.production().windowStatus(for: key)
+        lintProposalBreakerContext = Self.breakerContextLine(status)
+        if status.isTripped, lintProposalBreakerNotice == nil {
+            let reason = status.tripReason ?? "the breaker tripped"
+            lintProposalBreakerNotice =
+                "Auto-repair paused for this configuration: \(reason)."
+        }
+    }
+
     /// The selected job's workspace (plan §1 "Selected job workspace"): the
     /// responsive header, the Overview/Activity selector, then the two
     /// surfaces. Both surfaces stay mounted — the Overview keeps its local
@@ -1239,6 +1524,13 @@ struct ActivityWindowView: View {
                 activityTracker.noteRecordedOutputs(
                     itemID: item.id,
                     pageIDs: viewModel.recordedOutputPageIDs(for: item))
+            }
+            .task(id: proposalLoadKey(for: item)) {
+                // Resolve the selected run's staged proposals (W5b) after
+                // the report lands: the durable records' `staged_proposal`
+                // ids joined against the injected source's staged values,
+                // plus the run's tier-2 breaker configuration.
+                await loadStagedProposals(for: item)
             }
         } else if activeItems.isEmpty && recentItems.isEmpty {
             emptyState

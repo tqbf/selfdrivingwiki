@@ -33,26 +33,49 @@ struct QueueRunDetailsView: View {
     /// The selected lint run's repair section, when it has surviving written
     /// repairs or failure records. `nil` renders nothing extra.
     private let lintRepair: QueueRunDetailsLintRepair?
+    /// The selected lint run's staged-proposal review section (W5b), when
+    /// its records name proposals. `nil` renders nothing extra.
+    private let lintProposals: QueueRunDetailsLintProposals?
     /// The undo action, owned by the caller (the Activity window's store
     /// path). `nil` renders the section read-only.
     private let onUndo: (() -> Void)?
+    /// Approve / Reject / Approve-all actions for pending proposals, owned
+    /// by the caller. `nil` renders the section without controls.
+    private let onApproveProposal: ((QueueLintStagedProposal) -> Void)?
+    private let onRejectProposal: ((QueueLintStagedProposal) -> Void)?
+    private let onApproveAllProposals: (() -> Void)?
     /// Resolves a page version's body from the wiki store for the reverted
-    /// diffs. `nil` (or a nil answer) degrades the disclosure to findings
-    /// text without the diff.
+    /// diffs and the proposals' projected diffs. `nil` (or a nil answer)
+    /// degrades the disclosure to findings text without the diff, and a
+    /// proposal to the stale state.
     private let versionBody: (@MainActor (_ versionID: PageVersionID) -> String?)?
+    /// Resolves a page's CURRENT head for the proposals' stale gate (the
+    /// head moved → the stale state, no buttons). `nil` degrades to the
+    /// stale state — without a live head answer nothing can be applied.
+    private let currentHead: (@MainActor (_ pageID: PageID) -> PageVersionID?)?
 
     @Environment(\.openWindow) private var openWindow
 
     init(
         _ facts: QueueRunDetailsFacts?,
         lintRepair: QueueRunDetailsLintRepair? = nil,
+        lintProposals: QueueRunDetailsLintProposals? = nil,
         onUndo: (() -> Void)? = nil,
-        versionBody: (@MainActor (_ versionID: PageVersionID) -> String?)? = nil
+        onApproveProposal: ((QueueLintStagedProposal) -> Void)? = nil,
+        onRejectProposal: ((QueueLintStagedProposal) -> Void)? = nil,
+        onApproveAllProposals: (() -> Void)? = nil,
+        versionBody: (@MainActor (_ versionID: PageVersionID) -> String?)? = nil,
+        currentHead: (@MainActor (_ pageID: PageID) -> PageVersionID?)? = nil
     ) {
         self.facts = facts
         self.lintRepair = lintRepair
+        self.lintProposals = lintProposals
         self.onUndo = onUndo
+        self.onApproveProposal = onApproveProposal
+        self.onRejectProposal = onRejectProposal
+        self.onApproveAllProposals = onApproveAllProposals
         self.versionBody = versionBody
+        self.currentHead = currentHead
     }
 
     var body: some View {
@@ -123,6 +146,9 @@ struct QueueRunDetailsView: View {
             }
             if let lintRepair {
                 lintRepairRows(lintRepair)
+            }
+            if let lintProposals {
+                lintProposalRows(lintProposals)
             }
         }
         .listStyle(.plain)
@@ -361,6 +387,251 @@ struct QueueRunDetailsView: View {
             if writtenBody == nil {
                 writtenBody = versionBody(writtenHead)
             }
+        }
+    }
+
+    // MARK: - Staged-proposal review section (W5b)
+
+    /// The tier-2 review rows: one row per pending proposal (summary,
+    /// projected diff, Approve/Reject), an Approve-all row, the breaker
+    /// lines, and the collapsed outcome summary. After every proposal
+    /// resolves, only the summary (and the breaker lines) render — the
+    /// controls disappear rather than staying enabled.
+    @ViewBuilder
+    private func lintProposalRows(_ proposals: QueueRunDetailsLintProposals) -> some View {
+        if proposals.showsSection {
+            proposalsHeaderRow(proposals)
+            ForEach(proposals.pendingProposals) { pending in
+                ProposalReviewRow(
+                    pending: pending,
+                    section: proposals,
+                    versionBody: versionBody,
+                    currentHead: currentHead,
+                    onApprove: onApproveProposal.map { action in
+                        { action(pending.proposal) }
+                    },
+                    onReject: onRejectProposal.map { action in
+                        { action(pending.proposal) }
+                    })
+            }
+            if proposals.showsApproveAll {
+                approveAllRow(proposals)
+            }
+            if let notice = proposals.breakerNotice {
+                breakerNoticeRow(notice)
+            }
+            if let reason = proposals.actionUnavailableReason {
+                actionUnavailableRow(reason)
+            }
+            if let summary = proposals.outcomeSummary {
+                outcomeSummaryRow(summary)
+            }
+            if let context = proposals.breakerContext, proposals.showsReviewControls {
+                breakerContextRow(context)
+            }
+        }
+    }
+
+    /// The section's quiet header: the recorded proposal count ("N
+    /// proposed"), the same label vocabulary the per-page records use.
+    private func proposalsHeaderRow(_ proposals: QueueRunDetailsLintProposals) -> some View {
+        LabeledContent {
+            Text("\(proposals.recordedProposalCount) proposed")
+                .font(.callout.monospacedDigit())
+        } label: {
+            Text("Repair proposals")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Repair proposals")
+    }
+
+    /// The Approve-all batch: one click, every pending proposal, the honest
+    /// aggregate afterwards (the outcome summary row).
+    private func approveAllRow(_ proposals: QueueRunDetailsLintProposals) -> some View {
+        HStack {
+            Button {
+                onApproveAllProposals?()
+            } label: {
+                Label("Approve all", systemImage: "checkmark.circle")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(proposals.isDisabled(""))
+            .help("Apply every pending proposal. Each one is checked against the page's current state and reported individually.")
+            .accessibilityLabel("Approve all proposals")
+            Spacer()
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// The breaker's plain trip message after a rejection or verification
+    /// failure — the same presentation as the W2b undo section's.
+    private func breakerNoticeRow(_ notice: String) -> some View {
+        Text(verbatim: notice)
+            .font(.callout.weight(.medium))
+            .foregroundStyle(.orange)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(notice)
+    }
+
+    /// Why the review actions are unavailable — the tier-2 breaker
+    /// configuration could not be resolved, so nothing may be recorded.
+    private func actionUnavailableRow(_ reason: String) -> some View {
+        Text(verbatim: reason)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(reason)
+    }
+
+    /// The collapsed aggregate ("Proposals: 2 applied, 1 stale.") — the
+    /// section's shape after every proposal resolved.
+    private func outcomeSummaryRow(_ summary: String) -> some View {
+        Text(verbatim: summary)
+            .font(.callout)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(summary)
+    }
+
+    /// The breaker window's read-only status line while review controls
+    /// render ("1 of 2 allowed user rejections used…").
+    private func breakerContextRow(_ context: String) -> some View {
+        Text(verbatim: context)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(context)
+    }
+
+    /// One pending proposal's review row: the staging-time title, the hunk
+    /// count and classes, the projected before/after diff (or the stale
+    /// state with NO buttons), and the Approve/Reject controls. Buttons are
+    /// hidden once the page head moved (the apply would refuse as stale
+    /// anyway) and disabled while any apply is in flight or the breaker
+    /// configuration is unresolvable.
+    private struct ProposalReviewRow: View {
+        let pending: QueueRunDetailsLintProposals.PendingProposal
+        let section: QueueRunDetailsLintProposals
+        let versionBody: (@MainActor (_ versionID: PageVersionID) -> String?)?
+        let currentHead: (@MainActor (_ pageID: PageID) -> PageVersionID?)?
+        let onApprove: (() -> Void)?
+        let onReject: (() -> Void)?
+
+        @State private var isStale = false
+        @State private var beforeBody: String?
+        @State private var afterBody: String?
+
+        private var proposal: QueueLintStagedProposal { pending.proposal }
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(pending.title) — \(proposal.hunkCount) hunks proposed")
+                    .font(.callout.weight(.medium))
+                    .textSelection(.enabled)
+                if proposal.classLabels.isEmpty == false {
+                    Text(verbatim: "Defect classes: \(proposal.classLabels)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                diffRegion
+                if isStale == false {
+                    controls
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 3)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Proposed repairs for \(pending.title)")
+            .task(id: "\(proposal.id)\u{0}\(proposal.inspectedHead.rawValue)") {
+                load()
+            }
+        }
+
+        @ViewBuilder
+        private var diffRegion: some View {
+            if isStale {
+                Text(verbatim: QueueRunDetailsLintProposals.staleMessage)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            } else if let beforeBody, let afterBody {
+                SplitDiffView(
+                    leftLabel: "Inspected",
+                    rightLabel: "After approval",
+                    left: beforeBody,
+                    right: afterBody)
+                    .frame(height: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Color(nsColor: .separatorColor)))
+            } else {
+                Text("Loading the projected diff…")
+                    .font(.caption)
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+            }
+        }
+
+        private var controls: some View {
+            HStack(spacing: QueueWorkspaceMetrics.Spacing.sm) {
+                Button {
+                    onApprove?()
+                } label: {
+                    Label("Approve", systemImage: "checkmark")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(section.isDisabled(proposal.id))
+                .help("Write these hunks to the page. The write is verified and reverted automatically if it does not check out.")
+                .accessibilityLabel("Approve proposal for \(pending.title)")
+                Button {
+                    onReject?()
+                } label: {
+                    Label("Reject", systemImage: "xmark")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(section.isDisabled(proposal.id))
+                .help("Discard this proposal without writing anything. Repeated rejections pause auto-repair for this configuration.")
+                .accessibilityLabel("Reject proposal for \(pending.title)")
+                if section.isDisabled(proposal.id), section.actionUnavailableReason == nil {
+                    Text("Applying…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+        }
+
+        /// The stale gate + diff load. The page head must still be the head
+        /// the hunks were composed against, and the inspected body must be
+        /// readable — otherwise the stale state renders with no buttons.
+        private func load() {
+            let head = currentHead?(proposal.pageID)
+            guard head == proposal.inspectedHead else {
+                isStale = true
+                return
+            }
+            guard let before = versionBody?(proposal.inspectedHead) else {
+                isStale = true
+                return
+            }
+            guard case .success(let after) =
+                QueueRunDetailsLintProposals.projectedBody(
+                    proposal: proposal, before: before)
+            else {
+                isStale = true
+                return
+            }
+            beforeBody = before
+            afterBody = after
         }
     }
 

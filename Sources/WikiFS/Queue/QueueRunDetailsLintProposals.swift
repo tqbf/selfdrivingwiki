@@ -311,7 +311,27 @@ struct QueueRunDetailsLintProposals: Sendable, Equatable {
         }
     }
 
-    /// The stale state's fixed sentence — the same words the pane and the
-    /// tests pin ("page changed since this proposal — re-run lint").
-    static let staleMessage = "Page changed since this proposal — re-run lint."
+/// The stale state's fixed sentence — the same words the pane and the
+/// tests pin ("page changed since this proposal — re-run lint").
+static let staleMessage = "Page changed since this proposal — re-run lint."
+}
+
+/// The review section's data source (W5b): the caller-resolved staged
+/// records for a page plus the run's tier-2 breaker configuration.
+///
+/// The daemon owns the staged records (`DaemonLintRunState`, W5a's read
+/// seams), and this build ships NO daemon→app transport that can serve
+/// them — so production wiring passes `nil` and the section simply does
+/// not render rather than guessing. Hosted tests inject a source over a
+/// real `DaemonLintRunState`. `breakerKey` is the tier-2 key (live
+/// pipeline digest + provider/model/effort, no approval row); nil means
+/// the configuration cannot be named — the UI disables the buttons with
+/// an explanation instead of recording against a guessed key.
+struct QueueStagedProposalSource: Sendable {
+    var proposals: @Sendable (PageID) async -> [QueueLintStagedProposal]
+    var breakerKey: @Sendable () async -> LintRepairBreakerKey?
+
+    /// Why the actions are unavailable when the key cannot be resolved.
+    static let unavailableReason =
+        "Review actions are unavailable — the run's repair-breaker configuration could not be resolved."
 }
