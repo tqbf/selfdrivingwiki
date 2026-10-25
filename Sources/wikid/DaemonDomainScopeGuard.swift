@@ -349,6 +349,21 @@ struct DaemonScopedRequestGuard: Sendable {
         // substitute their own allowlist: reads pass (their lease carries
         // wikiRead), the lint-kind log append is the one payload-conditioned
         // write, and everything else denies generically (plan Phase 2).
+        //
+        // RESERVED HOST AUDIT TITLES — every SCOPED connection, ordinary
+        // managed children included (they carry wikiEdit and would
+        // otherwise pass the class gate straight into host record
+        // forgery). Host accounting trusts `--kind lint` records by their
+        // titles, so no child may append a title claiming a host record
+        // shape; the host writes its own outcome records through its own
+        // trusted path, which never flows through this guard, so the
+        // rejection cannot block a legitimate record.
+        if request.family == .log,
+           request.operation == Self.lintLogAppendOperation,
+           let title = Self.logAppendPayloadTitle(request.payload),
+           LintHostAudit.titleIsReserved(title) {
+            throw Self.scopeDenied()
+        }
         let decision = DaemonScopedOperationPolicy.decision(
             family: request.family, operation: request.operation)
         switch grant.operationPolicy {
@@ -449,19 +464,16 @@ struct DaemonScopedRequestGuard: Sendable {
         if case .allow(.wikiRead) = decision {
             return
         }
-        // The one write allowance: a lint log append, kind-checked, with the
-        // trusted host audit titles RESERVED. The child controls the
-        // payload's title, note, and author; host accounting trusts `--kind
-        // lint` records by these titles, so a title claiming a host record
-        // shape (a forged staged reference, apply outcome, or budget
-        // rejection) denies generically — the host writes its own outcome
-        // records through its own trusted path.
+        // The one write allowance: a lint log append, kind-checked. The
+        // child controls the payload's title, note, and author; host
+        // accounting trusts `--kind lint` records by their titles, so the
+        // reserved host record shapes (a forged staged reference, apply
+        // outcome, or budget rejection) are already rejected for EVERY
+        // scoped connection — ordinary managed children included — before
+        // policy dispatch (see ``evaluate``). The host writes its own
+        // outcome records through its own trusted path.
         if request.family == .log, request.operation == Self.lintLogAppendOperation,
            Self.logAppendPayloadKind(request.payload) == "lint" {
-            if let title = Self.logAppendPayloadTitle(request.payload),
-               LintHostAudit.titleIsReserved(title) {
-                throw scopeDenied()
-            }
             return
         }
         // The patch seam: REPAIR-policy only, and only against the selected

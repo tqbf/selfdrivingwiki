@@ -450,9 +450,13 @@ struct DaemonLintPolicyTests {
     /// staged reference, the apply outcome, the budget rejection). The child
     /// controls its log-append payload's title, so a title claiming one of
     /// those host record shapes denies generically — while a legitimate
-    /// child audit entry (any non-reserved title) still passes.
+    /// child audit entry (any non-reserved title) still passes. EVERY
+    /// managed child policy is covered: an ordinary managed child carries
+    /// wikiEdit (the class gate passes log append), so the reservation is
+    /// enforced for every scoped connection before policy dispatch — the
+    /// lint policies alone would leave the ordinary route open.
     @Test func logAppendRejectsReservedHostTitles() async throws {
-        for policy in Self.allPolicies.filter(\.isLint) {
+        for policy in Self.allPolicies {
             let fixture = try await Fixture(policy: policy)
 
             func logAllowed(title: String) async -> Bool {
