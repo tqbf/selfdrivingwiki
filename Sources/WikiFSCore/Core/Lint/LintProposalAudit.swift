@@ -16,6 +16,11 @@ public enum LintProposalAudit {
     /// it is never counted as the agent's log.
     public static let stagedAuditTitlePrefix = "Lint proposal staged — "
 
+    /// The title prefix of the trusted app's `--kind lint` entry for an
+    /// apply/reject outcome (`LintProposalApplyService`) — the run's durable
+    /// record the review UI reads.
+    public static let appliedAuditTitlePrefix = "Lint proposal applied — "
+
     /// The note's `label=value` labels, in order: the proposal id (the
     /// staged record reference), the head the hunks were composed against,
     /// the inspected body's fingerprint, and the hunk count.

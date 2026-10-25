@@ -744,7 +744,9 @@ public enum AgentOperationRunner {
     /// middle region). This is the verification gate's "applied hunks" input:
     /// findings inside these ranges were legitimately rewritten; a finding
     /// that vanishes OUTSIDE them changed in an unattributed way.
-    public static func observedChangeRanges(before: String, after: String) -> [PagePatchHunk] {
+    /// Nonisolated: pure over its inputs — the W5a apply service reuses it
+    /// off the main actor.
+    nonisolated static func observedChangeRanges(before: String, after: String) -> [PagePatchHunk] {
         let a = Array(before.utf8)
         let b = Array(after.utf8)
         var prefix = 0
@@ -1066,8 +1068,9 @@ public enum AgentOperationRunner {
     /// head — ONLY while the current head is still the head this run wrote
     /// (an expected-head CAS inside the store transaction). A concurrent
     /// writer's version is never clobbered: the revert is refused and the
-    /// page flagged.
-    static func revertFailedLintWrite(
+    /// page flagged. Nonisolated: store-atomic + logging only — the W5a
+    /// apply service reuses it off the main actor.
+    nonisolated static func revertFailedLintWrite(
         store: WikiStore,
         pageID: PageID,
         inspectedHead: PageVersionID?,
