@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 import WikiFSTypes
 import WikiFSCore
@@ -271,6 +272,124 @@ struct LintProposalApplyServiceTests {
             store: fixture.store,
             read: try fixture.store.readPageCoherent(id: fixture.page.id))
         #expect(scan.requiredChecksAvailable)
+    }
+
+    // MARK: - Fault-injected fact loads (R-E: availability tracking)
+
+    /// A citation to a canonical source with NO markdown chain (absent
+    /// from the store, or present without processed markdown) resolves to
+    /// a pin set of NONE — the fact load degrades to facts, never traps.
+    /// (`Set(1...max(count, 0))` built `1...0` for an empty chain and
+    /// crashed every lint plan and apply that scanned such a page.)
+    @Test func citationToAChainlessSourceResolvesToNoPinsInsteadOfTrapping() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let facts = try LintCitationFacts.load(
+            from: fixture.store, body: "[[source:01HZSRC0000000000000000001]]\n")
+        #expect(facts.sources["01HZSRC0000000000000000001"] != nil,
+                "the canonical literal lands in the facts (the pin path runs)")
+        #expect(facts.pinExists(sourceLiteral: "01HZSRC0000000000000000001", ordinal: 1) == false)
+        #expect(facts.normalizedText(sourceLiteral: "01HZSRC0000000000000000001", pin: nil) == nil,
+                "no chain resolves no authority text")
+        #expect(facts.fragmentAvailable(
+            sourceLiteral: "01HZSRC0000000000000000001", pin: 1, text: "anything") == false)
+    }
+
+
+    /// A fact-LOAD failure (D11 here: with a real source row whose origin
+    /// history table is gone, the load throws) marks the required checks
+    /// unavailable, and apply fails closed through the recovery path
+    /// instead of verifying over a facts-less scan. The resolution and
+    /// citation fact loads mark availability the same way in ``scan`` —
+    /// every load failure gates the verdict; a failed load must never read
+    /// as a clean scan.
+    @Test func originFactsLoadFailureFailsApplyClosedThroughTheRecoveryPath() throws {
+        // The body carries a raw URL, so the origin facts load resolves
+        // every source's origin history.
+        let body = "Fetch https://example.com/one here.\n"
+        let fixture = try Fixture(body: body)
+        defer { fixture.cleanUp() }
+        // A real source row: the origin load enumerates sources and reads
+        // each one's origin history (the source_versions join).
+        _ = try fixture.store.addSource(filename: "origin.txt", data: Data("x".utf8))
+        try Self.executeRaw("DROP TABLE source_versions", fixture: fixture)
+
+        let proposal = LintProposalApplyService.Proposal(
+            id: "prop-url", pageID: fixture.page.id, inspectedHead: fixture.inspectedHead,
+            bodyFingerprint: LintPageSnapshot.fingerprint(of: body),
+            hunks: [PagePatchHunk(
+                startByte: 0, endByte: 5, oldText: "Fetch", newText: "Read",
+                reason: "reword the lead")],
+            perHunkClasses: [.tableDamage])
+
+        let outcome = LintProposalApplyService.apply(
+            proposal: proposal,
+            store: fixture.store, breaker: fixture.breaker, breakerKey: fixture.key)
+        guard case .appliedThenReverted(_, let revert, let reasons) = outcome else {
+            Issue.record("expected appliedThenReverted over unavailable facts, got \(outcome)")
+            return
+        }
+        #expect(reasons.contains { $0.contains("unavailable") },
+                "the unavailable required check is named: \(reasons)")
+        guard case .reverted = revert else {
+            Issue.record("the promised recovery path reverts the write, got \(revert)")
+            return
+        }
+        #expect(try fixture.store.pageHeadVersionID(pageID: fixture.page.id)
+            == fixture.inspectedHead, "the bad write did not survive")
+    }
+
+    /// The post-write read failure path: when the written version cannot be
+    /// read back (the immutable-history violation the written-version seam
+    /// guards), verification throws instead of verifying — the caller keeps
+    /// the failed-write posture (guarded revert + breaker evidence).
+    @Test func unreadableWrittenVersionFailsVerificationInsteadOfVerifying() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let store = fixture.store
+        let preRead = try store.readPageCoherent(id: fixture.page.id)
+        let preScan = LintProposalApplyService.scan(store: store, read: preRead)
+        let proposal = fixture.proposal(newText: "new text")
+        let written = try store.patchPage(
+            PagePatch(
+                pageID: fixture.page.id, expectHead: fixture.inspectedHead,
+                hunks: proposal.hunks, defectClasses: proposal.perHunkClasses),
+            author: "lint-proposal:prop-ghost")
+
+        // A written head whose version row does not exist (26-char ULID
+        // shape, no row behind it).
+        let ghost = PageVersionID(rawValue: "01HZXXXXXXXXXXXXXXXXXXXX01")
+        #expect(try store.pageVersionBody(versionID: ghost) == nil,
+                "the fixture's ghost head reads as missing")
+        _ = written
+        #expect(throws: LintProposalApplyService.WrittenVersionUnavailable.self) {
+            _ = try LintProposalApplyService.verifyWrittenVersion(
+                proposal: proposal, preRead: preRead, preScan: preScan,
+                writtenHead: ghost, store: store)
+        }
+    }
+
+    /// Run one raw SQL statement through a second connection (the same
+    /// fault-injection shape the strategy read-failure fixture uses): the
+    /// store keeps serving everything the statement does not break.
+    private static func executeRaw(
+        _ sql: String, fixture: Fixture, expectChangedRows: Int? = nil
+    ) throws {
+        var db: OpaquePointer?
+        let path = fixture.root.appendingPathComponent("WikiFS.sqlite").path
+        guard sqlite3_open(path, &db) == SQLITE_OK else {
+            Issue.record("could not open the fixture database for fault injection")
+            return
+        }
+        defer { sqlite3_close(db) }
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            Issue.record("fault-injection statement failed: \(sql)")
+            return
+        }
+        if let expectChangedRows, sqlite3_changes(db) != expectChangedRows {
+            Issue.record(
+                "fault-injection statement changed \(sqlite3_changes(db)) row(s), expected \(expectChangedRows): \(sql)")
+        }
     }
 
     // MARK: - Budget at apply

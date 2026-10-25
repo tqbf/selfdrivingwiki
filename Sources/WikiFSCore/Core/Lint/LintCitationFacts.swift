@@ -90,7 +90,11 @@ public struct LintCitationFacts: Equatable, Sendable {
             let id = SourceID(rawValue: literal)
             citation.exists = knownSourceIDs.contains(id)
             let chain = chains[id] ?? []
-            citation.availablePinOrdinals = Set(1...max(chain.count, 0))
+            // An EMPTY chain (the source is absent, or has no processed
+            // markdown) means no pins — `1...0` would trap, and a page
+            // citing an unknown source must degrade to facts, never crash
+            // the fact load (every lint plan and apply scans through here).
+            citation.availablePinOrdinals = chain.isEmpty ? [] : Set(1...chain.count)
             if let head = try store.processedMarkdownHead(sourceID: id) {
                 citation.activeNormalizedText = SourceCitation.normalize(head.content)
             }

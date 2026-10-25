@@ -176,7 +176,8 @@ struct LintProposalSectionValueTests {
     /// Applied-then-reverted rows render their ACTUAL revert facet: a
     /// refused or not-attempted revert is a different fact from a clean
     /// revert — the bad write may still be in place. A legacy detail
-    /// without the revert label stays the honest generic phrase.
+    /// without the revert label never reads as a clean revert: it renders
+    /// the explicit unspecified phrase.
     @Test func revertOutcomesRenderDistinctly() {
         let outcomes = [
             QueueLintProposalOutcome(
@@ -203,7 +204,7 @@ struct LintProposalSectionValueTests {
                 == "Proposals: 1 applied then reverted, "
                 + "2 applied with revert refused (flagged), "
                 + "1 applied with revert not attempted, "
-                + "1 applied then reverted.")
+                + "1 applied with revert outcome unspecified.")
         #expect(QueueRunDetailsLintProposals.facet(ofDetail: nil) == nil)
         #expect(QueueRunDetailsLintProposals.facet(ofDetail: "no label here") == nil)
     }

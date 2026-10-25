@@ -227,8 +227,11 @@ struct QueueRunDetailsLintProposals: Sendable, Equatable {
                "applied with revert refused (flagged)")
         append(reverts.filter { Self.facet(ofDetail: $0.detail) == .notAttempted }.count,
                "applied with revert not attempted")
+        // An UNKNOWN facet (a legacy detail without a `revert=` label, or an
+        // unrecognized one) never reads as a clean revert — it is named as
+        // unspecified so the summary cannot overstate what happened.
         append(reverts.filter { Self.facet(ofDetail: $0.detail) == nil }.count,
-               "applied then reverted")
+               "applied with revert outcome unspecified")
         append(outcomeRows.filter { $0.kind == .rejected }.count, "rejected")
         append(outcomeRows.filter { $0.kind == .stale }.count, "stale")
         append(outcomeRows.filter { $0.kind == .failed }.count, "failed")
@@ -237,8 +240,8 @@ struct QueueRunDetailsLintProposals: Sendable, Equatable {
     }
 
     /// The revert facet an outcome row's `revert=` audit label names, or nil
-    /// for a legacy detail without the label (rendered as the generic
-    /// "applied then reverted").
+    /// for a legacy detail without the label (rendered as the explicit
+    /// "applied with revert outcome unspecified" — never as a clean revert).
     enum RevertFacet: Equatable, Sendable {
         case reverted
         case refused

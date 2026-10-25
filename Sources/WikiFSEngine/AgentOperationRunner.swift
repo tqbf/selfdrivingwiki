@@ -529,6 +529,13 @@ public enum AgentOperationRunner {
         /// The breaker the trusted host consulted, so the accounting records
         /// into the SAME state it read.
         public let breaker: LintRepairBreaker?
+        /// Whether every fact-dependent verification check (the identity,
+        /// citation, and origin facts) was available when this plan's
+        /// pre-run scan loaded. A `false` here propagates into the apply
+        /// verification's gate — missing required facts fail verification
+        /// (recovery + breaker accounting), never a verified verdict over
+        /// degraded facts.
+        public let requiredChecksAvailable: Bool
 
         /// A report-only plan instructs the agent not to patch.
         public var repairAuthorized: Bool { authority.isRepairCapable }
@@ -593,11 +600,15 @@ public enum AgentOperationRunner {
         guard let read else { return nil }
         let snapshot = LintPageSnapshot(read)
         let resolution: LintResolutionFacts
+        var requiredChecksAvailable = true
         do {
             resolution = try LintResolutionFacts.load(from: store)
         } catch {
             DebugLog.agent("lint plan: resolution facts unavailable, scanning without identity facts: \(error)")
             resolution = LintResolutionFacts()
+            // The identity facts are a required verification check: their
+            // failure must gate the run's verification, never read clean.
+            requiredChecksAvailable = false
         }
         let citations: LintCitationFacts?
         do {
@@ -605,6 +616,9 @@ public enum AgentOperationRunner {
         } catch {
             DebugLog.agent("lint plan: citation facts unavailable, D09 records its limit: \(error)")
             citations = nil
+            // D09's missing-facts limit is not a finding — the load failure
+            // gates availability instead.
+            requiredChecksAvailable = false
         }
         let origins: LintOriginURLFacts?
         do {
@@ -612,6 +626,8 @@ public enum AgentOperationRunner {
         } catch {
             DebugLog.agent("lint plan: origin facts unavailable, D11 records its limit: \(error)")
             origins = nil
+            // D11 is the same shape.
+            requiredChecksAvailable = false
         }
         let history = LintHistoryFacts.load(from: store, snapshot: snapshot)
         let parsed = ParsedMarkdownDocument(parsing: snapshot.body)
@@ -665,7 +681,8 @@ public enum AgentOperationRunner {
             stateMarkdown: stateMarkdown)
         return LintPagePlan(
             request: request, snapshot: snapshot, preflight: report,
-            authority: authority, breakerKey: breakerKey, breaker: breaker)
+            authority: authority, breakerKey: breakerKey, breaker: breaker,
+            requiredChecksAvailable: requiredChecksAvailable)
     }
 
     /// Package-validation facts for the body's rich fences, or `nil` when the
@@ -975,12 +992,17 @@ public enum AgentOperationRunner {
                         // fact set as the pre-run scan (M3(a) fix) so D09/D27/
                         // D28 findings persist or resolve consistently — never
                         // vanishing because the second scan was facts-less.
+                        // Every fact load failure marks a required check
+                        // unavailable — the compare fails closed over
+                        // degraded facts instead of verifying them.
+                        var writtenChecksAvailable = true
                         let resolution: LintResolutionFacts
                         do {
                             resolution = try LintResolutionFacts.load(from: store)
                         } catch {
                             DebugLog.agent("lint dispatch: resolution facts unavailable for verification: \(error)")
                             resolution = LintResolutionFacts()
+                            writtenChecksAvailable = false
                         }
                         let citations: LintCitationFacts?
                         do {
@@ -988,6 +1010,7 @@ public enum AgentOperationRunner {
                         } catch {
                             DebugLog.agent("lint dispatch: citation facts unavailable for written scan: \(error)")
                             citations = nil
+                            writtenChecksAvailable = false
                         }
                         let origins: LintOriginURLFacts?
                         do {
@@ -995,6 +1018,7 @@ public enum AgentOperationRunner {
                         } catch {
                             DebugLog.agent("lint dispatch: origin facts unavailable for written scan: \(error)")
                             origins = nil
+                            writtenChecksAvailable = false
                         }
                         let writtenSnapshot = LintPageSnapshot(writtenRead)
                         let history = LintHistoryFacts.load(
@@ -1022,7 +1046,8 @@ public enum AgentOperationRunner {
                             claimedRepairFindingIDs: claimedRepairs,
                             writtenHead: writtenHead,
                             currentHead: writtenRead.headVersionID,
-                            requiredChecksAvailable: true)
+                            requiredChecksAvailable: plan.requiredChecksAvailable
+                                && writtenChecksAvailable)
                         switch verdict.status {
                         case .verified:
                             detail += "; verification verified on the written head"

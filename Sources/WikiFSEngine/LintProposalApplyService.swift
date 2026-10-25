@@ -267,12 +267,13 @@ public enum LintProposalApplyService {
     }
 
     /// One scan's report plus whether every check the verification REQUIRES
-    /// was available. The identity facts are the required set: a load
-    /// failure makes the before/written comparisons unreliable, so
-    /// verification must FAIL (never pass silently with degraded facts).
-    /// The citation and origin fact loads degrade the scan honestly — their
-    /// detectors record their limit as visible findings — so they do not
-    /// gate availability.
+    /// was available. EVERY fact load failure marks the required checks
+    /// unavailable: the identity facts gate the before/written comparisons,
+    /// and the citation and origin facts' detectors record section LIMITS —
+    /// not failure findings — so a load failure must never read as a clean
+    /// scan (`LintVerification.compare` does not evaluate limits). Missing
+    /// required facts fail verification; recovery and breaker accounting
+    /// follow.
     struct ScanOutcome: Equatable, Sendable {
         let report: LintPreflightReport
         let requiredChecksAvailable: Bool
@@ -338,7 +339,7 @@ public enum LintProposalApplyService {
     /// The preflight scan with the same fact set the W2a written-head
     /// verification uses (M3(a)): resolution, citation, and origin facts
     /// load from the store; a facts failure records its limit instead of
-    /// crashing the scan — and the identity facts' failure is tracked as an
+    /// crashing the scan — and EVERY load failure is tracked as an
     /// unavailable required check (``ScanOutcome``).
     static func scan(store: WikiStore, read: PageCoherentRead) -> ScanOutcome {
         scan(store: store, snapshot: LintPageSnapshot(read))
@@ -362,6 +363,9 @@ public enum LintProposalApplyService {
         } catch {
             DebugLog.agent("lint proposal apply: citation facts unavailable: \(error)")
             citations = nil
+            // D09's detectors record a section LIMIT on missing facts, not
+            // a finding — a failed load must not read as a clean scan.
+            requiredChecksAvailable = false
         }
         let origins: LintOriginURLFacts?
         do {
@@ -369,6 +373,8 @@ public enum LintProposalApplyService {
         } catch {
             DebugLog.agent("lint proposal apply: origin facts unavailable: \(error)")
             origins = nil
+            // D11 is the same shape: a limit, not a finding.
+            requiredChecksAvailable = false
         }
         let history = LintHistoryFacts.load(from: store, snapshot: snapshot)
         return ScanOutcome(
