@@ -190,6 +190,9 @@ struct QueueRunDetailsLintProposals: Sendable, Equatable {
 
     /// The honest aggregate ("Proposals: 2 applied, 1 stale.") — non-zero
     /// parts only, in outcome order. Nil while nothing has resolved.
+    /// Applied-then-reverted rows split by their ACTUAL revert facet: a
+    /// refused or not-attempted revert is a different fact from a clean
+    /// revert — the bad write may still be in place.
     var outcomeSummary: String? {
         guard outcomeRows.isEmpty == false else { return nil }
         var parts: [String] = []
@@ -198,12 +201,41 @@ struct QueueRunDetailsLintProposals: Sendable, Equatable {
             parts.append("\(count) \(word)")
         }
         append(outcomeRows.filter { $0.kind == .applied }.count, "applied")
-        append(outcomeRows.filter { $0.kind == .appliedThenReverted }.count, "applied then reverted")
+        let reverts = outcomeRows.filter { $0.kind == .appliedThenReverted }
+        append(reverts.filter { Self.facet(ofDetail: $0.detail) == .reverted }.count,
+               "applied then reverted")
+        append(reverts.filter { Self.facet(ofDetail: $0.detail) == .refused }.count,
+               "applied with revert refused (flagged)")
+        append(reverts.filter { Self.facet(ofDetail: $0.detail) == .notAttempted }.count,
+               "applied with revert not attempted")
+        append(reverts.filter { Self.facet(ofDetail: $0.detail) == nil }.count,
+               "applied then reverted")
         append(outcomeRows.filter { $0.kind == .rejected }.count, "rejected")
         append(outcomeRows.filter { $0.kind == .stale }.count, "stale")
         append(outcomeRows.filter { $0.kind == .failed }.count, "failed")
         guard parts.isEmpty == false else { return nil }
         return "Proposals: " + parts.joined(separator: ", ") + "."
+    }
+
+    /// The revert facet an outcome row's `revert=` audit label names, or nil
+    /// for a legacy detail without the label (rendered as the generic
+    /// "applied then reverted").
+    enum RevertFacet: Equatable, Sendable {
+        case reverted
+        case refused
+        case notAttempted
+    }
+
+    static func facet(ofDetail detail: String?) -> RevertFacet? {
+        guard let detail else { return nil }
+        for segment in detail.components(separatedBy: "; ") {
+            if segment.hasPrefix("revert=reverted") { return .reverted }
+            if segment.hasPrefix("revert=refused") || segment.hasPrefix("revert=failed") {
+                return .refused
+            }
+            if segment.hasPrefix("revert=not attempted") { return .notAttempted }
+        }
+        return nil
     }
 
     /// The row title for a pending proposal: the staging-time name.
@@ -350,10 +382,13 @@ struct QueueRunDetailsLintProposals: Sendable, Equatable {
         switch serviceOutcome {
         case .applied:
             return QueueLintProposalOutcome(proposalID: proposalID, kind: .applied, detail: nil)
-        case .appliedThenReverted(_, _, let reasons):
+        case .appliedThenReverted(_, let revert, let reasons):
+            // The revert label LEADS the detail: the summary splits these
+            // rows by their actual revert facet, and a refused or not-
+            // attempted revert must never read as a clean revert.
             return QueueLintProposalOutcome(
                 proposalID: proposalID, kind: .appliedThenReverted,
-                detail: reasons.prefix(3).joined(separator: "; "))
+                detail: ([revert.auditLabel] + reasons).prefix(3).joined(separator: "; "))
         case .stale:
             return QueueLintProposalOutcome(proposalID: proposalID, kind: .stale, detail: nil)
         case .failed(let reason):

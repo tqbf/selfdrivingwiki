@@ -173,6 +173,41 @@ struct LintProposalSectionValueTests {
         #expect(section.showsApproveAll == false)
     }
 
+    /// Applied-then-reverted rows render their ACTUAL revert facet: a
+    /// refused or not-attempted revert is a different fact from a clean
+    /// revert — the bad write may still be in place. A legacy detail
+    /// without the revert label stays the honest generic phrase.
+    @Test func revertOutcomesRenderDistinctly() {
+        let outcomes = [
+            QueueLintProposalOutcome(
+                proposalID: "p1", kind: .appliedThenReverted,
+                detail: "revert=reverted to A from B; verification failed: x"),
+            QueueLintProposalOutcome(
+                proposalID: "p2", kind: .appliedThenReverted,
+                detail: "revert=refused (current head C diverged from written head B); "
+                    + "FLAGGED for review"),
+            QueueLintProposalOutcome(
+                proposalID: "p3", kind: .appliedThenReverted,
+                detail: "revert=failed (store refused); FLAGGED for review"),
+            QueueLintProposalOutcome(
+                proposalID: "p4", kind: .appliedThenReverted,
+                detail: "revert=not attempted (reason)"),
+            QueueLintProposalOutcome(
+                proposalID: "p5", kind: .appliedThenReverted, detail: nil),
+        ]
+        let section = QueueRunDetailsLintProposals(
+            pendingProposals: [], outcomeRows: outcomes,
+            recordedProposalCount: 5, wikiID: wikiID)
+        #expect(
+            section.outcomeSummary
+                == "Proposals: 1 applied then reverted, "
+                + "2 applied with revert refused (flagged), "
+                + "1 applied with revert not attempted, "
+                + "1 applied then reverted.")
+        #expect(QueueRunDetailsLintProposals.facet(ofDetail: nil) == nil)
+        #expect(QueueRunDetailsLintProposals.facet(ofDetail: "no label here") == nil)
+    }
+
     @Test func approveAllShowsForMultiplePendingOnly() throws {
         let one = try #require(QueueRunDetailsLintProposals.make(
             report: report(records: [

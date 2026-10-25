@@ -207,9 +207,9 @@ struct LintProposalApplyServiceTests {
             id: fixture.page.id, title: "Proposal Target", body: concurrentBody)
 
         // Verification with the same inputs `apply` assembles.
-        let preflight = LintProposalApplyService.scan(store: store, read: preRead)
+        let preScan = LintProposalApplyService.scan(store: store, read: preRead)
         let verification = try LintProposalApplyService.verifyWrittenVersion(
-            proposal: proposal, preRead: preRead, preflight: preflight,
+            proposal: proposal, preRead: preRead, preScan: preScan,
             writtenHead: outcome.writtenHead, store: store)
 
         // The scan read the WRITTEN version's bytes — never the saboteur's.
@@ -225,6 +225,52 @@ struct LintProposalApplyServiceTests {
         #expect(currentHead == liveHead)
         // The concurrent edit survives — verification never reverts it.
         #expect(try store.getPage(id: fixture.page.id).bodyMarkdown == concurrentBody)
+    }
+
+    // MARK: - Unavailable required checks
+
+    /// Unavailable REQUIRED verification checks are a verification FAILURE —
+    /// never a silent verified verdict over degraded facts. The caller's
+    /// failure path (one CAS-guarded revert + breaker evidence) then runs.
+    @Test func unavailableRequiredChecksFailVerification() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let store = fixture.store
+        let preRead = try store.readPageCoherent(id: fixture.page.id)
+        // The pre-apply scan ran without the identity facts (the required
+        // set): the caller passes that availability through unchanged.
+        let preScan = LintProposalApplyService.ScanOutcome(
+            report: LintProposalApplyService.scan(store: store, read: preRead).report,
+            requiredChecksAvailable: false)
+
+        // Commit the write the verification is about to check.
+        let proposal = fixture.proposal(newText: "new text")
+        let outcome = try store.patchPage(
+            PagePatch(
+                pageID: fixture.page.id, expectHead: fixture.inspectedHead,
+                hunks: proposal.hunks, defectClasses: proposal.perHunkClasses),
+            author: "lint-proposal:prop-avail")
+
+        let verification = try LintProposalApplyService.verifyWrittenVersion(
+            proposal: proposal, preRead: preRead, preScan: preScan,
+            writtenHead: outcome.writtenHead, store: store)
+        guard case .failed(let reasons) = verification.status else {
+            Issue.record("expected .failed, got \(verification.status)")
+            return
+        }
+        #expect(reasons.contains { $0.contains("unavailable") },
+                "the unavailable required check is named: \(reasons)")
+    }
+
+    /// A healthy scan reports every required check available — the gate
+    /// only ever narrows, never fails a healthy verification.
+    @Test func healthyScanReportsRequiredChecksAvailable() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let scan = LintProposalApplyService.scan(
+            store: fixture.store,
+            read: try fixture.store.readPageCoherent(id: fixture.page.id))
+        #expect(scan.requiredChecksAvailable)
     }
 
     // MARK: - Budget at apply

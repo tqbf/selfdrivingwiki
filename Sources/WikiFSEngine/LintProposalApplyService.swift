@@ -141,8 +141,8 @@ public enum LintProposalApplyService {
         // 2. Budget re-check at apply time, scaled the same way the daemon
         // scales it: the CURRENT page's confirmed repairable findings fix
         // the cap (the same computation the staging read used).
-        let preflight = Self.scan(store: store, read: preRead)
-        let budget = LintPatchBudget(preflight: preflight)
+        let preScan = Self.scan(store: store, read: preRead)
+        let budget = LintPatchBudget(preflight: preScan.report)
         let requested = LintPatchBudget.Usage(
             hunks: hunks.count,
             changedBytes: hunks.reduce(0) { total, hunk in
@@ -189,7 +189,7 @@ public enum LintProposalApplyService {
         // finding is reported, none accused.
         do {
             let verification = try Self.verifyWrittenVersion(
-                proposal: proposal, preRead: preRead, preflight: preflight,
+                proposal: proposal, preRead: preRead, preScan: preScan,
                 writtenHead: outcome.writtenHead, store: store)
             switch verification.status {
             case .verified, .verifiedWrittenHeadDiverged:
@@ -217,13 +217,23 @@ public enum LintProposalApplyService {
                     store: store)
             }
         } catch {
-            // The write committed but verification could not run — this is
-            // the W2a posture: the run stays a failure, flagged for review.
+            // The write committed but verification could not run — the run
+            // stays a failure, and the promised recovery path still runs:
+            // ONE CAS-guarded revert attempt and breaker evidence, with the
+            // ACTUAL revert outcome retained (never a `.notAttempted` stub
+            // that hides a bad write still in place).
+            let revert = AgentOperationRunner.revertFailedLintWrite(
+                store: store, pageID: proposal.pageID,
+                inspectedHead: proposal.inspectedHead,
+                writtenHead: outcome.writtenHead)
+            if let breaker, let breakerKey {
+                breaker.record(.verificationFailure, for: breakerKey)
+            }
             return finish(
                 proposal: proposal,
                 outcome: .appliedThenReverted(
                     writtenHead: outcome.writtenHead,
-                    revert: .notAttempted(reason: "verification could not run: \(error)"),
+                    revert: revert,
                     reasons: ["written-version verification could not run: \(error)"]),
                 store: store)
         }
@@ -256,6 +266,18 @@ public enum LintProposalApplyService {
         let scannedFingerprint: String
     }
 
+    /// One scan's report plus whether every check the verification REQUIRES
+    /// was available. The identity facts are the required set: a load
+    /// failure makes the before/written comparisons unreliable, so
+    /// verification must FAIL (never pass silently with degraded facts).
+    /// The citation and origin fact loads degrade the scan honestly — their
+    /// detectors record their limit as visible findings — so they do not
+    /// gate availability.
+    struct ScanOutcome: Equatable, Sendable {
+        let report: LintPreflightReport
+        let requiredChecksAvailable: Bool
+    }
+
     /// The written version's row is gone — the immutable history was
     /// violated. Verification cannot run.
     struct WrittenVersionUnavailable: Error, CustomStringConvertible {
@@ -270,7 +292,7 @@ public enum LintProposalApplyService {
     /// reporting only. Throws when the written version cannot be read (the
     /// caller keeps the W2a posture: failed write, flagged for review).
     static func verifyWrittenVersion(
-        proposal: Proposal, preRead: PageCoherentRead, preflight: LintPreflightReport,
+        proposal: Proposal, preRead: PageCoherentRead, preScan: ScanOutcome,
         writtenHead: PageVersionID, store: WikiStore
     ) throws -> WrittenVerificationOutcome {
         guard let writtenBody = try store.pageVersionBody(versionID: writtenHead) else {
@@ -287,14 +309,19 @@ public enum LintProposalApplyService {
         let writtenScan = Self.scan(store: store, snapshot: writtenSnapshot)
         let observed = AgentOperationRunner.observedChangeRanges(
             before: preRead.body, after: writtenSnapshot.body)
+        // Unavailable REQUIRED checks are a verification FAILURE — the
+        // compare records the reason and the caller runs the promised
+        // recovery path (guarded revert + breaker evidence), never a silent
+        // verified verdict over degraded facts.
         let verdict = LintVerification.compare(
-            before: preflight,
-            written: writtenScan,
+            before: preScan.report,
+            written: writtenScan.report,
             appliedHunks: observed,
             claimedRepairFindingIDs: [],
             writtenHead: writtenHead,
             currentHead: currentRead.headVersionID,
-            requiredChecksAvailable: true)
+            requiredChecksAvailable: preScan.requiredChecksAvailable
+                && writtenScan.requiredChecksAvailable)
         let status: WrittenVerificationOutcome.Status
         switch verdict.status {
         case .verified:
@@ -311,18 +338,23 @@ public enum LintProposalApplyService {
     /// The preflight scan with the same fact set the W2a written-head
     /// verification uses (M3(a)): resolution, citation, and origin facts
     /// load from the store; a facts failure records its limit instead of
-    /// crashing the scan.
-    static func scan(store: WikiStore, read: PageCoherentRead) -> LintPreflightReport {
+    /// crashing the scan — and the identity facts' failure is tracked as an
+    /// unavailable required check (``ScanOutcome``).
+    static func scan(store: WikiStore, read: PageCoherentRead) -> ScanOutcome {
         scan(store: store, snapshot: LintPageSnapshot(read))
     }
 
-    private static func scan(store: WikiStore, snapshot: LintPageSnapshot) -> LintPreflightReport {
+    static func scan(store: WikiStore, snapshot: LintPageSnapshot) -> ScanOutcome {
         let resolution: LintResolutionFacts
+        var requiredChecksAvailable = true
         do {
             resolution = try LintResolutionFacts.load(from: store)
         } catch {
             DebugLog.agent("lint proposal apply: resolution facts unavailable: \(error)")
             resolution = LintResolutionFacts()
+            // The identity facts are a REQUIRED verification check: without
+            // them the before/written comparisons cannot be trusted.
+            requiredChecksAvailable = false
         }
         let citations: LintCitationFacts?
         do {
@@ -339,9 +371,11 @@ public enum LintProposalApplyService {
             origins = nil
         }
         let history = LintHistoryFacts.load(from: store, snapshot: snapshot)
-        return LintPagePreflight.scan(
-            snapshot: snapshot, resolution: resolution,
-            citations: citations, originURLs: origins, history: history)
+        return ScanOutcome(
+            report: LintPagePreflight.scan(
+                snapshot: snapshot, resolution: resolution,
+                citations: citations, originURLs: origins, history: history),
+            requiredChecksAvailable: requiredChecksAvailable)
     }
 
     /// The durable audit record for a terminal outcome (the run's durable
