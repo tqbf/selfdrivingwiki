@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import WikiDaemonContract
 import WikiFSCore
 import WikiCtlCore
 import WikiFSEngine
@@ -215,6 +216,21 @@ final class XPCQueueEngineProxy: QueueEngineClient {
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.loadQueueReportSummaries unavailable for \(itemIDs.count) item(s): \(error.localizedDescription)")
             return .unavailable(reason: error.localizedDescription)
+        }
+    }
+
+    /// The staged-proposal read seam (W5b). Fails SOFT like the report
+    /// loads: a transport failure (including an older daemon without the
+    /// selector, which surfaces as the XPC timeout) yields an empty list —
+    /// the section then renders from the durable records alone and the
+    /// staged ids resolve to nothing, never a thrown error.
+    func loadLintStagedProposals(for pageID: PageID) async -> [LintStagedProposalRecord] {
+        do {
+            return try await workloadClient.loadLintStagedProposals(pageID: pageID)
+        } catch {
+            DebugLog.ingest(
+                "XPCQueueEngineProxy.loadLintStagedProposals unavailable for \(pageID.rawValue): \(error.localizedDescription)")
+            return []
         }
     }
 }

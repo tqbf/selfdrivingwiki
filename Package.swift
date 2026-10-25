@@ -411,6 +411,9 @@ let package = Package(
                 "Cordis",
                 "CordisLoader",
                 "WikiFSCore",
+                // The XPC contract's value types (the staged-proposal read
+                // seam's record crosses the QueueEngineClient surface).
+                "WikiDaemonContract",
                 // ACP client runtime (ACPBackend — plans/acp-backend-and-permissions.md).
                 // The `ACP` product is macOS-only: it uses ACPProcessManager and os.log.
                 // Guarded with #if os(macOS) in source so the portable logic in

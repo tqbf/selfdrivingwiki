@@ -314,6 +314,59 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         }
     }
 
+    func loadLintStagedProposals(pageID: String, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            // The staged records live in the shared lint run state, not the
+            // queue engine — a read-only state export, no queue operation.
+            let records = await Self.stagedProposalRecords(
+                pageID: PageID(rawValue: pageID), daemon: daemon)
+            let status = await daemon.queueHostStatus()
+            let payload: QueueDataPayload
+            do {
+                payload = QueueDataPayload(data: try JSONEncoder().encode(records))
+            } catch {
+                DebugLog.store("wikid: staged proposal export encoding failed: \(error)")
+                payload = QueueDataPayload(data: Data("[]".utf8))
+            }
+            sendableReply.reply(Self.encodeQueueEnvelope(
+                .success(payload, epoch: status.epoch, hostState: status.hostState)))
+        }
+    }
+
+    /// The staged proposals for one page, exported as wire records (the
+    /// review UI's read seam). An absent lint state exports none.
+    static func stagedProposalRecords(
+        pageID: PageID, daemon: WikiDaemon
+    ) async -> [LintStagedProposalRecord] {
+        guard let lintRunState = daemon.queueHostLintRunState else { return [] }
+        let staged = await lintRunState.stagedProposals(pageID: pageID)
+        return staged.map(Self.record(from:))
+    }
+
+    /// The daemon record → wire record mapping. The hunk and breaker-key
+    /// shapes mirror byte for byte; a drift is a compile error on the
+    /// field lists, and the tests pin a full round trip.
+    static func record(from proposal: DaemonLintStagedProposal) -> LintStagedProposalRecord {
+        LintStagedProposalRecord(
+            id: proposal.id, runID: proposal.runID.rawValue,
+            pageID: proposal.pageID.rawValue, stagedAt: proposal.stagedAt,
+            inspectedHead: proposal.inspectedHead.rawValue,
+            bodyFingerprint: proposal.bodyFingerprint,
+            hunks: proposal.hunks.map { hunk in
+                LintStagedProposalRecord.Hunk(
+                    startByte: hunk.startByte, endByte: hunk.endByte,
+                    oldText: hunk.oldText, newText: hunk.newText,
+                    reason: hunk.reason)
+            },
+            perHunkClasses: proposal.perHunkClasses.map(\.rawValue),
+            breakerKey: proposal.breakerKey.map { key in
+                LintStagedProposalRecord.BreakerKeyComponents(
+                    pipelineDigest: key.pipelineDigest, provider: key.provider,
+                    model: key.model, effort: key.effort)
+            })
+    }
+
     func queueOwnershipStatus(reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
@@ -553,6 +606,9 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         reply(unavailableQueueReply(QueueDataPayload.self))
     }
     func loadQueueReportSummaries(itemIDs: Data, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueDataPayload.self))
+    }
+    func loadLintStagedProposals(pageID: String, reply: @escaping (Data) -> Void) {
         reply(unavailableQueueReply(QueueDataPayload.self))
     }
 

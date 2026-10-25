@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import WikiDaemonContract
 import WikiFSCore
 import WikiFSEngine
 
@@ -208,6 +209,12 @@ actor QueueEngineHotSwap: QueueEngineClient {
         for itemIDs: [QueueItem.ID]
     ) async -> QueueReportSummariesResult {
         await activeClient.loadQueueReportSummaries(for: itemIDs)
+    }
+
+    /// The staged-proposal read seam forwards through the active client
+    /// (non-throwing; the inner client fails soft to empty).
+    func loadLintStagedProposals(for pageID: PageID) async -> [LintStagedProposalRecord] {
+        await activeClient.loadLintStagedProposals(for: pageID)
     }
 }
 #endif

@@ -1,12 +1,13 @@
 import Foundation
+import WikiDaemonContract
 import WikiFSCore
 import WikiFSEngine
 
 /// One staged repair proposal resolved for review (W5b): the app-side value
 /// mirror of the daemon's staged record — exactly the fields the review UI
 /// renders and `LintProposalApplyService` consumes. The daemon's own record
-/// type lives in the `wikid` target, which the app does not link; this value
-/// crosses the (still-missing, see the source seam) transport boundary.
+/// type lives in the `wikid` target, which the app does not link; the wire
+/// record (the daemon→app read seam) maps onto this value.
 struct QueueLintStagedProposal: Identifiable, Sendable, Equatable {
     let id: String
     let pageID: PageID
@@ -20,6 +21,9 @@ struct QueueLintStagedProposal: Identifiable, Sendable, Equatable {
     let hunks: [PagePatchHunk]
     /// One defect class per hunk, parallel to `hunks`.
     let perHunkClasses: [LintDefectClass]
+    /// The run's tier-2 breaker key, when the daemon recorded one for the
+    /// run that staged this proposal.
+    let breakerKey: LintRepairBreakerKey?
 
     /// The "N hunks proposed" count.
     var hunkCount: Int { hunks.count }
@@ -27,6 +31,50 @@ struct QueueLintStagedProposal: Identifiable, Sendable, Equatable {
     /// The per-hunk defect-class labels ("D03, D09") for the row's summary.
     var classLabels: String {
         perHunkClasses.map(\.rawValue).joined(separator: ", ")
+    }
+
+    /// Map the wire record onto the app value. A record whose defect class
+    /// is unknown to this build (an older/newer class vocabulary) maps to
+    /// nil — the review UI renders only classes it can apply.
+    init?(record: LintStagedProposalRecord) {
+        var classes: [LintDefectClass] = []
+        for raw in record.perHunkClasses {
+            guard let defectClass = LintDefectClass(rawValue: raw) else { return nil }
+            classes.append(defectClass)
+        }
+        guard classes.count == record.hunks.count else { return nil }
+        self.init(
+            id: record.id, pageID: PageID(rawValue: record.pageID),
+            stagedAt: record.stagedAt,
+            inspectedHead: PageVersionID(rawValue: record.inspectedHead),
+            bodyFingerprint: record.bodyFingerprint,
+            hunks: record.hunks.map { hunk in
+                PagePatchHunk(
+                    startByte: hunk.startByte, endByte: hunk.endByte,
+                    oldText: hunk.oldText, newText: hunk.newText,
+                    reason: hunk.reason)
+            },
+            perHunkClasses: classes,
+            breakerKey: record.breakerKey.map { key in
+                LintRepairBreakerKey(
+                    pipelineDigest: key.pipelineDigest, provider: key.provider,
+                    model: key.model, effort: key.effort)
+            })
+    }
+
+    init(
+        id: String, pageID: PageID, stagedAt: Date, inspectedHead: PageVersionID,
+        bodyFingerprint: String, hunks: [PagePatchHunk],
+        perHunkClasses: [LintDefectClass], breakerKey: LintRepairBreakerKey? = nil
+    ) {
+        self.id = id
+        self.pageID = pageID
+        self.stagedAt = stagedAt
+        self.inspectedHead = inspectedHead
+        self.bodyFingerprint = bodyFingerprint
+        self.hunks = hunks
+        self.perHunkClasses = perHunkClasses
+        self.breakerKey = breakerKey
     }
 }
 
@@ -337,4 +385,46 @@ struct QueueStagedProposalSource: Sendable {
     /// Why the actions are unavailable when the key cannot be resolved.
     static let unavailableReason =
         "Review actions are unavailable — the run's repair-breaker configuration could not be resolved."
+
+    /// The production source: proposals resolve through the queue engine's
+    /// daemon read seam (the staged records' live values), and the breaker
+    /// key is the run configuration identity the daemon recorded — carried
+    /// by the resolved records themselves, so the review actions account
+    /// against the SAME breaker window the run used. A run whose key was
+    /// never recorded resolves `breakerKey` to nil: the actions stay
+    /// disabled with ``unavailableReason`` rather than guessing a key.
+    static func production(engine: any QueueEngineClient) -> QueueStagedProposalSource {
+        let keyBox = ProductionBreakerKeyBox()
+        return QueueStagedProposalSource(
+            proposals: { pageID in
+                let records = await engine.loadLintStagedProposals(for: pageID)
+                let mapped = records.compactMap(QueueLintStagedProposal.init(record:))
+                keyBox.storeIfEmpty(mapped.compactMap(\.breakerKey).first)
+                return mapped
+            },
+            breakerKey: { keyBox.load() })
+    }
+
+    /// The production source's breaker-key carrier: the proposals closure
+    /// stores the first recorded key of a load; the breakerKey closure reads
+    /// it back. The single `key` field is covered by `lock` on every access,
+    /// which is the invariant that makes the unchecked Sendable safe.
+    // swiftlint:disable:next unchecked_sendable
+    private final class ProductionBreakerKeyBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var key: LintRepairBreakerKey?
+
+        func storeIfEmpty(_ newKey: LintRepairBreakerKey?) {
+            guard let newKey else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            if key == nil { key = newKey }
+        }
+
+        func load() -> LintRepairBreakerKey? {
+            lock.lock()
+            defer { lock.unlock() }
+            return key
+        }
+    }
 }

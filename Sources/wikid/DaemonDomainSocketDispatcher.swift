@@ -436,7 +436,8 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                 id: ULID.generate(), runID: grant.runID, pageID: selectedPage,
                 stagedAt: Date(), inspectedHead: expectHead,
                 bodyFingerprint: fingerprint,
-                hunks: hunks, perHunkClasses: defectClasses)
+                hunks: hunks, perHunkClasses: defectClasses,
+                breakerKey: await self.lintRunState.runBreakerKey(runID: grant.runID))
             do {
                 try await self.lintRunState.stageProposal(proposal)
             } catch let error as DaemonLintRunState.StagingError {

@@ -178,6 +178,17 @@ import Foundation
     /// without restarting it. `request` is JSON `ChatConfigOptionRequest`;
     /// reply is JSON `{"error": null}`.
     func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void)
+
+    // MARK: - Workload: staged lint proposals (W5b read seam)
+
+    /// Load the staged lint proposals for one page from the daemon's lint
+    /// run state. The app's proposal-review section resolves the durable
+    /// records' `staged_proposal=<id>` references against these values.
+    /// Reply is the versioned queue envelope wrapping `QueueDataPayload`,
+    /// whose data is JSON-encoded `[LintStagedProposalRecord]` (empty when
+    /// the daemon holds none for the page). Read-only state export — no
+    /// socket operation, no child surface.
+    func loadLintStagedProposals(pageID: String, reply: @escaping (Data) -> Void)
 }
 
 public struct SignedWikiDExtractorProbeRequest: Codable, Equatable, Sendable {
@@ -232,6 +243,91 @@ public struct SignedWikiDExtractorProbeReply: Codable, Equatable, Sendable {
             && processGroupTerminated
             && fixtureChildTerminated
             && diagnostics.isEmpty
+    }
+}
+
+/// One staged lint proposal crossing the daemon→app boundary: the app-side
+/// value mirror of the daemon's staged record — exactly the fields the
+/// review UI renders and `LintProposalApplyService` consumes. Primitive
+/// fields only (the contract target links no store types); ids arrive as
+/// their raw strings and each hunk as its own record.
+public struct LintStagedProposalRecord: Codable, Hashable, Sendable {
+    /// One ranged edit, mirroring the store's hunk shape byte for byte.
+    public struct Hunk: Codable, Hashable, Sendable {
+        public let startByte: Int
+        public let endByte: Int
+        public let oldText: String
+        public let newText: String
+        public let reason: String
+
+        public init(
+            startByte: Int, endByte: Int, oldText: String,
+            newText: String, reason: String
+        ) {
+            self.startByte = startByte
+            self.endByte = endByte
+            self.oldText = oldText
+            self.newText = newText
+            self.reason = reason
+        }
+    }
+
+    /// The run configuration identity for breaker accounting: the tier-2
+    /// key components the run recorded, so review actions land in the same
+    /// breaker window the run used. Absent when the daemon recorded none —
+    /// the review actions then stay disabled with their honest reason
+    /// rather than guessing a key.
+    public struct BreakerKeyComponents: Codable, Hashable, Sendable {
+        public let pipelineDigest: String
+        public let provider: String
+        public let model: String
+        public let effort: String
+
+        public init(
+            pipelineDigest: String, provider: String, model: String, effort: String
+        ) {
+            self.pipelineDigest = pipelineDigest
+            self.provider = provider
+            self.model = model
+            self.effort = effort
+        }
+    }
+
+    /// The proposal's stable reference (the durable records' proposal id).
+    public let id: String
+    /// The managed run that staged it.
+    public let runID: String
+    /// The page it targets (raw id).
+    public let pageID: String
+    /// When the daemon accepted it.
+    public let stagedAt: Date
+    /// The head the hunks were composed against (the apply-time CAS
+    /// expect-head).
+    public let inspectedHead: String
+    /// The inspected body's fingerprint (diff provenance).
+    public let bodyFingerprint: String
+    /// The exact ranged edits, in submission order.
+    public let hunks: [Hunk]
+    /// One defect class per hunk, parallel to `hunks`.
+    public let perHunkClasses: [String]
+    /// The run's breaker-key components, when recorded.
+    public let breakerKey: BreakerKeyComponents?
+
+    public init(
+        id: String, runID: String, pageID: String, stagedAt: Date,
+        inspectedHead: String, bodyFingerprint: String,
+        hunks: [Hunk], perHunkClasses: [String],
+        breakerKey: BreakerKeyComponents?
+    ) {
+        self.id = id
+        self.runID = runID
+        self.pageID = pageID
+        self.stagedAt = stagedAt
+        self.inspectedHead = inspectedHead
+        self.bodyFingerprint = bodyFingerprint
+        self.hunks = hunks
+        self.perHunkClasses = perHunkClasses
+        self.breakerKey = breakerKey
     }
 }
 

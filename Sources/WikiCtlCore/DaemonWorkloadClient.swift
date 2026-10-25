@@ -633,6 +633,26 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         }
     }
 
+    /// Load the staged lint proposals for one page from the daemon's lint
+    /// run state (the review UI's read seam). An older daemon without this
+    /// selector surfaces as the XPC timeout — the caller fails soft to an
+    /// empty list, never a thrown error.
+    public func loadLintStagedProposals(
+        pageID: PageID
+    ) async throws -> [LintStagedProposalRecord] {
+        try await withTimeout {
+            let replyData = try await self.xpcReply { reply in
+                try self.xpcProxy().loadLintStagedProposals(pageID: pageID.rawValue) { reply($0) }
+            }
+            let payload = try self.decodeQueuePayload(QueueDataPayload.self, from: replyData)
+            do {
+                return try JSONDecoder().decode([LintStagedProposalRecord].self, from: payload.data)
+            } catch {
+                throw DaemonXPCError.unexpectedReply
+            }
+        }
+    }
+
     /// Read the daemon queue ownership epoch without constructing queue resources.
     public func queueOwnershipStatus() async throws -> QueueOwnershipStatusPayload {
         try await withTimeout {

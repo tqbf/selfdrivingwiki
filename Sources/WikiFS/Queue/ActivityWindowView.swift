@@ -129,9 +129,9 @@ struct ActivityWindowView: View {
     var openWindowBridge: OpenWindowBridge?
     /// The staged-proposal review section's data source (W5b): resolves a
     /// page's staged proposals and the run's tier-2 breaker configuration.
-    /// Production passes nothing — this build ships no daemon→app transport
-    /// for staged records, so the section renders nothing rather than
-    /// guessing; hosted tests inject a source over a real daemon run state.
+    /// Production passes ``QueueStagedProposalSource/production(engine:)`` —
+    /// the daemon's exported read seam serves the staged records' live
+    /// values; hosted tests inject a source over a real daemon run state.
     var stagedProposalSource: QueueStagedProposalSource?
     /// Where a closed wiki's database lives, for the read-only name
     /// fallback (closed-wiki name resolution). Production resolves the App
@@ -1261,9 +1261,10 @@ struct ActivityWindowView: View {
 
     /// Resolve the selected run's pending proposals: read the durable
     /// records' staged ids, fetch the staged values from the injected
-    /// source, and resolve the tier-2 breaker configuration. A nil source
-    /// (production until the daemon transport ships) resolves nothing —
-    /// the section renders nothing rather than guessing.
+    /// source, and resolve the tier-2 breaker configuration. Production
+    /// resolves through the daemon's exported read seam; an unavailable
+    /// transport (or a missing production wiring in a hosted test) resolves
+    /// nothing — the section renders nothing rather than guessing.
     private func loadStagedProposals(for item: QueueItem) async {
         guard let source = stagedProposalSource else { return }
         guard case .loaded(let report) = viewModel.selectedReport,

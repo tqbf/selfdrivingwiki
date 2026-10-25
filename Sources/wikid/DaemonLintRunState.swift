@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import WikiFSCore
+import WikiFSEngine
 
 // Per-run CAS-conflict state for managed lint runs (plan Phase 2.8).
 //
@@ -73,12 +74,17 @@ public struct DaemonLintStagedProposal: Equatable, Sendable {
     public let hunks: [PagePatchHunk]
     public let perHunkClasses: [LintDefectClass]
     public let status: Status
+    /// The run's tier-2 breaker-key components (the run configuration
+    /// identity the review UI's actions record against), when the daemon
+    /// recorded one for the run. `nil` means unnamed — the review actions
+    /// stay disabled with their honest reason rather than guessing a key.
+    public let breakerKey: LintRepairBreakerKey?
 
     public init(
         id: String, runID: DaemonRunID, pageID: PageID, stagedAt: Date,
         inspectedHead: PageVersionID, bodyFingerprint: String,
         hunks: [PagePatchHunk], perHunkClasses: [LintDefectClass],
-        status: Status = .staged
+        status: Status = .staged, breakerKey: LintRepairBreakerKey? = nil
     ) {
         self.id = id
         self.runID = runID
@@ -89,6 +95,7 @@ public struct DaemonLintStagedProposal: Equatable, Sendable {
         self.hunks = hunks
         self.perHunkClasses = perHunkClasses
         self.status = status
+        self.breakerKey = breakerKey
     }
 }
 
@@ -138,6 +145,11 @@ public actor DaemonLintRunState {
     /// Staged proposals (W5a tier 2), per run then page — at most ONE per
     /// page per run.
     private var stagedProposals: [DaemonRunID: [PageID: DaemonLintStagedProposal]] = [:]
+    /// The tier-2 breaker key each run recorded (the run configuration
+    /// identity its staged proposals carry to the review UI). Survives
+    /// teardown like the staged records do — the review UI reads after the
+    /// lease is revoked.
+    private var runBreakerKeys: [DaemonRunID: LintRepairBreakerKey] = [:]
 
     public init() {}
 
@@ -322,6 +334,19 @@ public actor DaemonLintRunState {
         stagedProposals.values
             .compactMap { $0[pageID] }
             .sorted { $0.stagedAt > $1.stagedAt }
+    }
+
+    /// Record the run's tier-2 breaker key (the trusted host knows the run
+    /// configuration identity its plan resolved; the child never states
+    /// one). Staging stamps the recorded key onto the staged record so the
+    /// review UI's actions account against the SAME window the run used.
+    public func recordRunBreakerKey(runID: DaemonRunID, key: LintRepairBreakerKey) {
+        runBreakerKeys[runID] = key
+    }
+
+    /// The run's recorded tier-2 breaker key, if any.
+    public func runBreakerKey(runID: DaemonRunID) -> LintRepairBreakerKey? {
+        runBreakerKeys[runID]
     }
 
     // MARK: - Accounted outcomes (W2a §4)

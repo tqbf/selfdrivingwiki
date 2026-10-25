@@ -1037,7 +1037,8 @@ struct WikiFSApp: App {
                 activityTracker: activityTracker,
                 sessionManager: sessionManager,
                 wikiDescriptors: registry.wikis,
-                openWindowBridge: openWindowBridge
+                openWindowBridge: openWindowBridge,
+                stagedProposalSource: QueueStagedProposalSource.production(engine: queueEngine)
             )
             .appEnvironment(
                 tracker: activityTracker,

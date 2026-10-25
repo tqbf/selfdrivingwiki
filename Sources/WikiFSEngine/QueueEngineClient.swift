@@ -1,4 +1,5 @@
 import Foundation
+import WikiDaemonContract
 import WikiFSCore
 
 // MARK: - QueueEngineClient
@@ -98,6 +99,24 @@ public protocol QueueEngineClient: AnyObject, Sendable {
     /// progress and outcome search work without opening each job. Fails
     /// softly with `.unavailable`; consumers retain lifecycle-only rows.
     func loadQueueReportSummaries(for itemIDs: [QueueItem.ID]) async -> QueueReportSummariesResult
+
+    /// The staged lint proposals for one page, exported from the daemon's
+    /// lint run state (the review UI's read seam). A PROTOCOL REQUIREMENT
+    /// (not only an extension default) so the override dispatches through
+    /// `any QueueEngineClient`. The default is EMPTY: staged records exist
+    /// only where managed lint runs execute — the daemon. An in-process
+    /// engine (and the unavailable engine) has none, so the default is the
+    /// honest answer rather than a stub. The XPC proxy overrides with the
+    /// real transport and fails soft to empty on any transport failure.
+    func loadLintStagedProposals(for pageID: PageID) async -> [LintStagedProposalRecord]
+}
+
+// MARK: - Staged lint proposals (W5b read seam)
+
+public extension QueueEngineClient {
+    func loadLintStagedProposals(for pageID: PageID) async -> [LintStagedProposalRecord] {
+        []
+    }
 }
 
 // MARK: - QueueEngine conformance

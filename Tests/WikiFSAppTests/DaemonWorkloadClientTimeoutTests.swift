@@ -119,6 +119,7 @@ struct DaemonWorkloadClientTimeoutTests {
         func loadAllActivitySnapshots(reply: @escaping (Data) -> Void) { reply(Data()) }
         func loadQueueReport(itemID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
         func loadQueueReportSummaries(itemIDs: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
+        func loadLintStagedProposals(pageID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
         func relinquishQueue(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
         func startChat(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
         func submitChatTurn(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
