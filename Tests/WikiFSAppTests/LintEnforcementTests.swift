@@ -361,10 +361,10 @@ struct LintEnforcementTests {
 
     // MARK: - Tier-2 report semantics (fabricated success)
 
-    /// A tier-2 run's `.repaired` claims are the CHILD's words: without a
-    /// trusted staged proposal recorded as applied, the report is a
-    /// fabricated success — coverage FAILS and the claimed findings stay on
-    /// the unresolved list.
+    /// A tier-2 run's `.repaired` claims are the CHILD's words: a staging
+    /// run may not claim repairs AT ALL — the report is a fabricated
+    /// success, coverage FAILS, and the claimed findings stay on the
+    /// unresolved list.
     @Test func tier2RepairClaimsWithoutAppliedStagedProposalFailCoverage() async throws {
         let fixture = try Fixture()
         let runStart = Date()
@@ -380,7 +380,7 @@ struct LintEnforcementTests {
 
         #expect(outcome.status == .failed, "a fabricated success is a coverage failure")
         #expect(outcome.detail.contains("tier-2 report rejected"))
-        #expect(outcome.detail.contains("without a trusted staged proposal recorded as applied"))
+        #expect(outcome.detail.contains("a staging run may not claim repairs"))
         #expect(outcome.detail.contains("unresolved:"),
                 "the claimed findings stay named on the unresolved list")
         // Nothing was written: the page is still at the head the plan
@@ -389,18 +389,29 @@ struct LintEnforcementTests {
             == plan.snapshot.headVersionID)
     }
 
-    /// The positive gate: with trusted staged + applied records (both titles
-    /// reserved to the host), the same repair claims stand and the run
-    /// accounts.
-    @Test func tier2RepairClaimsStandWithAppliedStagedRecords() async throws {
+    /// R-B: even TRUSTED-looking applied records never validate a tier-2
+    /// repair claim. A reverted application (`outcome=applied-then-
+    /// reverted` — the substring the old predicate matched), ANOTHER
+    /// proposal's successful application, and a title-prefix collision
+    /// (a different page whose title extends the selected title) each
+    /// leave the claims rejected: the claims' truth is the apply path's
+    /// own exact records joined by proposal id, not a title-prefix
+    /// substring over the audit trail — so the gate rejects the claims
+    /// outright instead of consulting them.
+    @Test func tier2RepairClaimsStayRejectedWithAnyAppliedRecordPresent() async throws {
         let fixture = try Fixture()
         let runStart = Date()
         try fixture.store.updatePage(
             id: fixture.page.id, title: "Enforcement", body: Fixture.defectiveBody)
         let plan = try await fixture.stagedProposalPlan()
-        try fixture.stageFabricatedSuccessReport(for: plan)
-        // The trusted records: a staged proposal for this page since the run
-        // started, and the apply service's applied-outcome entry.
+
+        // The adversarial record set: (1) a REVERTED application of this
+        // page's proposal; (2) a SUCCESSFUL application of ANOTHER
+        // proposal (prop-other); (3) a successful application recorded
+        // under a TITLE-PREFIX-COLLIDING page ("Enforcement Two" — the
+        // prefix `Lint proposal applied — Enforcement` matches it too).
+        // All three titles are reserved to the host, so each looks as
+        // trusted as the old predicate required.
         _ = try fixture.store.appendLog(
             kind: .lint,
             title: LintProposalAudit.stagedAuditTitlePrefix + "Enforcement",
@@ -410,13 +421,26 @@ struct LintEnforcementTests {
         _ = try fixture.store.appendLog(
             kind: .lint,
             title: LintProposalAudit.appliedAuditTitlePrefix + "Enforcement",
-            note: "proposal_id=prop-1; outcome=applied; written_head=x")
+            note: "proposal_id=prop-1; outcome=applied-then-reverted; "
+                + "written_head=x; revert=reverted; verification failed")
+        _ = try fixture.store.appendLog(
+            kind: .lint,
+            title: LintProposalAudit.appliedAuditTitlePrefix + "Enforcement",
+            note: "proposal_id=prop-other; outcome=applied; written_head=y")
+        _ = try fixture.store.appendLog(
+            kind: .lint,
+            title: LintProposalAudit.appliedAuditTitlePrefix + "Enforcement Two",
+            note: "proposal_id=prop-1; outcome=applied; written_head=z")
 
+        try fixture.stageFabricatedSuccessReport(for: plan)
         let outcome = fixture.account(plan, runStart: runStart)
 
-        #expect(outcome.status == .dispatched,
-                "trusted staged+applied records validate the repair claims")
-        #expect(outcome.detail.contains("run-report coverage complete"))
+        #expect(outcome.status == .failed,
+                "no applied record — reverted, unrelated, or colliding — validates the claims")
+        #expect(outcome.detail.contains("tier-2 report rejected"))
+        #expect(outcome.detail.contains("a staging run may not claim repairs"))
+        #expect(outcome.detail.contains("unresolved:"),
+                "the claimed findings stay named on the unresolved list")
     }
 }
 #endif

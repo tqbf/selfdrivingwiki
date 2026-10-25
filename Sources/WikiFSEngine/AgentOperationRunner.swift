@@ -916,42 +916,42 @@ public enum AgentOperationRunner {
                 }
                 if authority.tier == .stagedProposal {
                     // W5a tier 2: the run STAGED proposals instead of
-                    // writing — there is no written head to verify.
-                    // Tier-specific report semantics: `.repaired` outcomes
-                    // and written-head verification claims are the CHILD's
-                    // words; they stand only when the trusted records show
-                    // a staged proposal for this page that the trusted
-                    // apply path recorded as APPLIED. Anything else is a
-                    // fabricated success — coverage FAILS and the claimed
-                    // findings stay on the unresolved list.
+                    // writing — there is no written head to verify, and a
+                    // staging run's report may not claim `.repaired` (or a
+                    // written-head verification) AT ALL. The applied/
+                    // unapplied truth is the trusted apply path's own audit
+                    // records (`Lint proposal applied — <title>` with an
+                    // exact `outcome=` label and proposal id), and the
+                    // review UI renders from those — never from the child's
+                    // words. Any repair claim is fabricated success:
+                    // coverage FAILS and the claimed findings stay on the
+                    // unresolved list. Even a trusted applied record does
+                    // not launder a claim: an `applied-then-reverted`
+                    // outcome, ANOTHER proposal's application, or a same-
+                    // title page's record would otherwise read as success.
+                    // (If post-approval claim support is ever genuinely
+                    // needed, it must join an EXACT successful outcome by
+                    // proposal ID + page + run + written head and re-verify
+                    // the claimed findings — deliberately not built now.)
                     let claimedRepairIDs = parsed.entries.compactMap { entry -> String? in
                         guard case .finding(let id) = entry.kind,
                               case .repaired = entry.outcome else { return nil }
                         return id
                     }
                     let claimsWrittenHead = parsed.verification?.writtenHead != nil
-                    let stagedNotes = Self.stagedProposalNotes(
-                        pageToken: pageTitleToken, runStart: runStart, store: store)
-                    let appliedExists = recentLintEntries?.contains { entry in
-                        entry.title.hasPrefix(
-                            LintProposalAudit.appliedAuditTitlePrefix + pageTitleToken)
-                            && (entry.note ?? "").contains("outcome=applied")
-                    } ?? false
                     if claimedRepairIDs.isEmpty == false || claimsWrittenHead {
-                        if stagedNotes.isEmpty || appliedExists == false {
-                            status = .failed
-                            detail += "; tier-2 report rejected: "
-                                + "\(claimedRepairIDs.count) repair claim(s)"
-                                + (claimsWrittenHead
-                                    ? " and a written-head verification claim"
-                                    : "")
-                                + " without a trusted staged proposal recorded as applied"
-                            // The claimed findings are NOT repaired — they
-                            // stay named on the unresolved list.
-                            if claimedRepairIDs.isEmpty == false {
-                                detail += "; unresolved: "
-                                    + claimedRepairIDs.joined(separator: ",")
-                            }
+                        status = .failed
+                        detail += "; tier-2 report rejected: "
+                            + "\(claimedRepairIDs.count) repair claim(s)"
+                            + (claimsWrittenHead
+                                ? " and a written-head verification claim"
+                                : "")
+                            + " — a staging run may not claim repairs; the trusted apply records are the truth"
+                        // The claimed findings are NOT repaired — they
+                        // stay named on the unresolved list.
+                        if claimedRepairIDs.isEmpty == false {
+                            detail += "; unresolved: "
+                                + claimedRepairIDs.joined(separator: ",")
                         }
                     }
                     // Fold the daemon's staged-proposal audit entries into
