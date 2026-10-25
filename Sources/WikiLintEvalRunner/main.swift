@@ -309,14 +309,38 @@ default:
 
 #if canImport(WikiFSEngine) && os(macOS)
 /// The wikid binary that hosts the eval driver: `LINT_EVAL_HOST_BIN` (a
-/// testing override), then siblings of THIS executable (the same SwiftPM
-/// products directory), then the common .build layouts.
+/// testing override), then the SIGNED app bundle's wikid XPC service (the
+/// build's own host — it carries the Keychain `keychain-access-groups`
+/// entitlement, so the Keychain credential reads inside the driver succeed;
+/// a bare SwiftPM wikid Mach-O has no entitlements and every credential read
+/// fails with errSecMissingEntitlement -34018), then siblings of THIS
+/// executable, then the common .build layouts.
 func wikidBinaryPath() -> String? {
     if let override = ProcessInfo.processInfo.environment["LINT_EVAL_HOST_BIN"],
        FileManager.default.isExecutableFile(atPath: override) {
         return override
     }
     var candidates: [URL] = []
+    // The `make build` bundle hosts: <app>.app/Contents/XPCServices/
+    // wikid.xpc/Contents/MacOS/wikid — built from the same sources and signed
+    // with the daemon entitlements. The app display name is build.sh's
+    // choice, so enumerate the build directory instead of hardcoding it.
+    if let buildEnumerator = FileManager.default.enumerator(
+        at: URL(fileURLWithPath: "build", relativeTo: URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true)),
+        includingPropertiesForKeys: nil) {
+        for case let url as URL in buildEnumerator where url.pathExtension == "app" {
+            candidates.append(url
+                .appendingPathComponent("Contents", isDirectory: true)
+                .appendingPathComponent("XPCServices", isDirectory: true)
+                .appendingPathComponent("wikid.xpc", isDirectory: true)
+                .appendingPathComponent("Contents", isDirectory: true)
+                .appendingPathComponent("MacOS", isDirectory: true)
+                .appendingPathComponent("wikid", isDirectory: false))
+            buildEnumerator.skipDescendants()
+        }
+    }
     if let selfURL = Bundle.main.executableURL {
         candidates.append(selfURL.deletingLastPathComponent()
             .appendingPathComponent("wikid", isDirectory: false))
