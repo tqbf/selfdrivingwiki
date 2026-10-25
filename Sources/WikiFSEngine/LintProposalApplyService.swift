@@ -178,26 +178,20 @@ public enum LintProposalApplyService {
                 proposal: proposal, outcome: .failed(reason: "\(error)"), store: store)
         }
 
-        // 4. Post-apply verification: the W2a written-head machinery. The
-        // pre-apply scan is the `before`; the written bytes re-scan with the
-        // SAME fact set; the applied hunks are the ones just written. The
-        // proposal carries no per-finding claims, so the claimed set is
-        // empty — every surviving finding is reported, none accused.
+        // 4. Post-apply verification: the W2a written-head machinery, run
+        // against the IMMUTABLE version at the written head. A concurrent
+        // writer that moves the head between the commit and the scan gets
+        // its content neither labeled as this write nor verified as
+        // repaired — the current head is read separately, for divergence
+        // reporting only. The pre-apply scan is the `before`; the applied
+        // hunks are the ones just written. The proposal carries no
+        // per-finding claims, so the claimed set is empty — every surviving
+        // finding is reported, none accused.
         do {
-            let writtenRead = try store.readPageCoherent(id: proposal.pageID)
-            let writtenSnapshot = LintPageSnapshot(writtenRead)
-            let writtenScan = Self.scan(store: store, read: writtenRead)
-            let observed = AgentOperationRunner.observedChangeRanges(
-                before: preRead.body, after: writtenSnapshot.body)
-            let verdict = LintVerification.compare(
-                before: preflight,
-                written: writtenScan,
-                appliedHunks: observed,
-                claimedRepairFindingIDs: [],
-                writtenHead: outcome.writtenHead,
-                currentHead: writtenRead.headVersionID,
-                requiredChecksAvailable: true)
-            switch verdict.status {
+            let verification = try Self.verifyWrittenVersion(
+                proposal: proposal, preRead: preRead, preflight: preflight,
+                writtenHead: outcome.writtenHead, store: store)
+            switch verification.status {
             case .verified, .verifiedWrittenHeadDiverged:
                 return finish(
                     proposal: proposal,
@@ -248,12 +242,81 @@ public enum LintProposalApplyService {
 
     // MARK: - Internals
 
+    /// The written-version verification result, including the fingerprint of
+    /// the bytes the scan actually read (tests pin that the scan ran on the
+    /// immutable written version, not the current head).
+    struct WrittenVerificationOutcome: Equatable, Sendable {
+        enum Status: Equatable, Sendable {
+            case verified
+            case verifiedWrittenHeadDiverged(currentHead: PageVersionID)
+            case failed(reasons: [String])
+        }
+
+        let status: Status
+        let scannedFingerprint: String
+    }
+
+    /// The written version's row is gone — the immutable history was
+    /// violated. Verification cannot run.
+    struct WrittenVersionUnavailable: Error, CustomStringConvertible {
+        let versionID: PageVersionID
+        var description: String { "the written version \(versionID.rawValue) is no longer readable" }
+    }
+
+    /// The W2a written-head verification, against the IMMUTABLE version at
+    /// `writtenHead`: a concurrent writer that moves the head after the
+    /// commit gets its content neither labeled as this write nor verified as
+    /// repaired. The current head is read separately, for divergence
+    /// reporting only. Throws when the written version cannot be read (the
+    /// caller keeps the W2a posture: failed write, flagged for review).
+    static func verifyWrittenVersion(
+        proposal: Proposal, preRead: PageCoherentRead, preflight: LintPreflightReport,
+        writtenHead: PageVersionID, store: WikiStore
+    ) throws -> WrittenVerificationOutcome {
+        guard let writtenBody = try store.pageVersionBody(versionID: writtenHead) else {
+            throw WrittenVersionUnavailable(versionID: writtenHead)
+        }
+        let currentRead = try store.readPageCoherent(id: proposal.pageID)
+        // The written version's own identity and bytes; the title and
+        // carried-forward provenance ride from the pre-apply read (the write
+        // preserved them).
+        let writtenSnapshot = LintPageSnapshot(
+            pageID: proposal.pageID, title: preRead.title,
+            headVersionID: writtenHead, body: writtenBody,
+            sourceInputs: preRead.headSourceInputs)
+        let writtenScan = Self.scan(store: store, snapshot: writtenSnapshot)
+        let observed = AgentOperationRunner.observedChangeRanges(
+            before: preRead.body, after: writtenSnapshot.body)
+        let verdict = LintVerification.compare(
+            before: preflight,
+            written: writtenScan,
+            appliedHunks: observed,
+            claimedRepairFindingIDs: [],
+            writtenHead: writtenHead,
+            currentHead: currentRead.headVersionID,
+            requiredChecksAvailable: true)
+        let status: WrittenVerificationOutcome.Status
+        switch verdict.status {
+        case .verified:
+            status = .verified
+        case .verifiedWrittenHeadDiverged(let currentHead):
+            status = .verifiedWrittenHeadDiverged(currentHead: currentHead)
+        case .failed(let reasons):
+            status = .failed(reasons: reasons)
+        }
+        return WrittenVerificationOutcome(
+            status: status, scannedFingerprint: writtenSnapshot.bodyFingerprint)
+    }
+
     /// The preflight scan with the same fact set the W2a written-head
     /// verification uses (M3(a)): resolution, citation, and origin facts
     /// load from the store; a facts failure records its limit instead of
     /// crashing the scan.
-    private static func scan(store: WikiStore, read: PageCoherentRead) -> LintPreflightReport {
-        let snapshot = LintPageSnapshot(read)
+    static func scan(store: WikiStore, read: PageCoherentRead) -> LintPreflightReport {
+        scan(store: store, snapshot: LintPageSnapshot(read))
+    }
+
+    private static func scan(store: WikiStore, snapshot: LintPageSnapshot) -> LintPreflightReport {
         let resolution: LintResolutionFacts
         do {
             resolution = try LintResolutionFacts.load(from: store)
@@ -263,14 +326,14 @@ public enum LintProposalApplyService {
         }
         let citations: LintCitationFacts?
         do {
-            citations = try LintCitationFacts.load(from: store, body: read.body)
+            citations = try LintCitationFacts.load(from: store, body: snapshot.body)
         } catch {
             DebugLog.agent("lint proposal apply: citation facts unavailable: \(error)")
             citations = nil
         }
         let origins: LintOriginURLFacts?
         do {
-            origins = try LintOriginURLFacts.load(from: store, body: read.body)
+            origins = try LintOriginURLFacts.load(from: store, body: snapshot.body)
         } catch {
             DebugLog.agent("lint proposal apply: origin facts unavailable: \(error)")
             origins = nil

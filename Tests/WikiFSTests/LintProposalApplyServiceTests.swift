@@ -163,6 +163,70 @@ struct LintProposalApplyServiceTests {
         #expect(fixture.breaker.consult(fixture.key) == .clean)
     }
 
+    // MARK: - Concurrent write between commit and verification
+
+    /// A concurrent writer that moves the head between the commit and the
+    /// verification scan gets its content neither labeled as this write nor
+    /// verified as repaired: the scan reads the IMMUTABLE written version
+    /// (pinned by fingerprint), and the diverged current head is reported
+    /// as its own fact. The pre-fix code scanned the current head here — a
+    /// saboteur's fresh defect was attributed to the proposal and failed
+    /// (and reverted) a write that was never scanned.
+    @Test func concurrentWriteBetweenCommitAndVerificationIsNotScanned() throws {
+        // The D25 defect body: the whole page wrapped in a code fence (no
+        // wiki links — a link would trip D07 on any body in this fixture
+        // store, which resolves none).
+        let body = "```markdown\n# Wrapped\nSome wrapped text\n```\n"
+        let fixture = try Fixture(body: body)
+        defer { fixture.cleanUp() }
+        let store = fixture.store
+        // Length-neutral repair: a much shorter body would trip the
+        // truncation detector (D27) on our own written version.
+        let repaired = "# Fine\n\nSome plain repaired text here\n"
+
+        let proposal = LintProposalApplyService.Proposal(
+            id: "prop-race", pageID: fixture.page.id, inspectedHead: fixture.inspectedHead,
+            bodyFingerprint: LintPageSnapshot.fingerprint(of: body),
+            hunks: [PagePatchHunk(
+                startByte: 0, endByte: body.utf8.count,
+                oldText: body, newText: repaired, reason: "unwrap the page")],
+            perHunkClasses: [.wholeBodyFenceWrap])
+
+        // The commit: the exact write `apply` performs.
+        let preRead = try store.readPageCoherent(id: fixture.page.id)
+        let outcome = try store.patchPage(
+            PagePatch(
+                pageID: fixture.page.id, expectHead: fixture.inspectedHead,
+                hunks: proposal.hunks, defectClasses: proposal.perHunkClasses),
+            author: "lint-proposal:prop-race")
+
+        // A concurrent writer replaces the head BEFORE verification runs,
+        // with a body carrying its own fresh defect (a ghost footnote).
+        let concurrentBody = "A ref.[^ghost]\n"
+        try store.updatePage(
+            id: fixture.page.id, title: "Proposal Target", body: concurrentBody)
+
+        // Verification with the same inputs `apply` assembles.
+        let preflight = LintProposalApplyService.scan(store: store, read: preRead)
+        let verification = try LintProposalApplyService.verifyWrittenVersion(
+            proposal: proposal, preRead: preRead, preflight: preflight,
+            writtenHead: outcome.writtenHead, store: store)
+
+        // The scan read the WRITTEN version's bytes — never the saboteur's.
+        #expect(verification.scannedFingerprint == LintPageSnapshot.fingerprint(of: repaired))
+        // Our write verified; the diverged head is reported separately and
+        // the saboteur's fresh defect is NOT attributed to the proposal.
+        guard case .verifiedWrittenHeadDiverged(let currentHead) = verification.status else {
+            Issue.record("expected verifiedWrittenHeadDiverged, got \(verification.status)")
+            return
+        }
+        #expect(currentHead != outcome.writtenHead)
+        let liveHead = try store.pageHeadVersionID(pageID: fixture.page.id)
+        #expect(currentHead == liveHead)
+        // The concurrent edit survives — verification never reverts it.
+        #expect(try store.getPage(id: fixture.page.id).bodyMarkdown == concurrentBody)
+    }
+
     // MARK: - Budget at apply
 
     @Test func overBudgetApplyIsRejected() throws {
