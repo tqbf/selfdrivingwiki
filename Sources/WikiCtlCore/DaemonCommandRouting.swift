@@ -152,6 +152,26 @@ public enum DaemonCommandRoute {
                     author: author,
                     lintReceipt: lintReceipt))
             }
+        case .proposePatch(let id, let expectHead, let hunks, let defectClasses, let author, let lintReceipt):
+            // W5a tier 2: same wire shape as patch, the STAGED operation.
+            return DaemonCommandCall(
+                family: .page, operation: DaemonDomainOperation.Page.proposePatch) { wikiID in
+                try JSONEncoder().encode(DaemonPageProposePatchRequest(
+                    wikiID: wikiID,
+                    id: id.rawValue,
+                    expectHead: expectHead.rawValue,
+                    hunks: zip(hunks, defectClasses).map { hunk, defect in
+                        DaemonPagePatchRequest.WireHunk(
+                            defect: defect.rawValue,
+                            startByte: hunk.startByte,
+                            endByte: hunk.endByte,
+                            oldText: hunk.oldText,
+                            newText: hunk.newText,
+                            reason: hunk.reason)
+                    },
+                    author: author,
+                    lintReceipt: lintReceipt))
+            }
         case .info(let selector):
             let wireSelector = DaemonCommandSelector(page: selector)
             return DaemonCommandCall(

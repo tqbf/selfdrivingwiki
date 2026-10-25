@@ -42,6 +42,56 @@ public struct DaemonLintBudgetRejection: Hashable, Sendable {
     public let recordedAt: Date
 }
 
+/// One STAGED repair proposal (W5a tier 2): hunks a proposal-policy lint run
+/// submitted via `page propose-patch`, validated by the daemon but NEVER
+/// written. The human reviews it; approval applies the exact hunks through
+/// `LintProposalApplyService` (the trusted app side).
+///
+/// THIS SHAPE IS THE REVIEW-UI ASSIGNMENT'S CONTRACT:
+/// - `id` — the proposal's stable reference (a ULID). Per-page durable
+///   records carry it (`staged_proposal=<id>`); the apply service takes it.
+/// - `runID`/`pageID` — the run that staged it, and the page it targets.
+/// - `stagedAt` — when the daemon accepted it.
+/// - `inspectedHead` — the page head the hunks were composed against (the
+///   CAS expect-head at apply time).
+/// - `bodyFingerprint` — the inspected body's fingerprint (diff provenance).
+/// - `hunks` + `perHunkClasses` — parallel arrays: the exact ranged edits
+///   and one defect class per hunk.
+/// - `status` — `staged`. (Later states — applied/rejected — live in the
+///   run's accounted record, not here; a staged record is immutable.)
+public struct DaemonLintStagedProposal: Equatable, Sendable {
+    public enum Status: String, Codable, Sendable {
+        case staged
+    }
+
+    public let id: String
+    public let runID: DaemonRunID
+    public let pageID: PageID
+    public let stagedAt: Date
+    public let inspectedHead: PageVersionID
+    public let bodyFingerprint: String
+    public let hunks: [PagePatchHunk]
+    public let perHunkClasses: [LintDefectClass]
+    public let status: Status
+
+    public init(
+        id: String, runID: DaemonRunID, pageID: PageID, stagedAt: Date,
+        inspectedHead: PageVersionID, bodyFingerprint: String,
+        hunks: [PagePatchHunk], perHunkClasses: [LintDefectClass],
+        status: Status = .staged
+    ) {
+        self.id = id
+        self.runID = runID
+        self.pageID = pageID
+        self.stagedAt = stagedAt
+        self.inspectedHead = inspectedHead
+        self.bodyFingerprint = bodyFingerprint
+        self.hunks = hunks
+        self.perHunkClasses = perHunkClasses
+        self.status = status
+    }
+}
+
 /// The host's accounted outcome for one selected-page lint run (W2a §4): the
 /// authority it ran under (tier + approval row + reason) and the auto-revert
 /// outcome, so the daemon's run state traces every outcome back to what
@@ -85,6 +135,9 @@ public actor DaemonLintRunState {
     private var patchSpend: [DaemonRunID: LintPatchBudget.Usage] = [:]
     private var budgetRejections: [DaemonRunID: DaemonLintBudgetRejection] = [:]
     private var accountedOutcomes: [PageID: DaemonLintAccountedOutcome] = [:]
+    /// Staged proposals (W5a tier 2), per run then page — at most ONE per
+    /// page per run.
+    private var stagedProposals: [DaemonRunID: [PageID: DaemonLintStagedProposal]] = [:]
 
     public init() {}
 
@@ -236,6 +289,41 @@ public actor DaemonLintRunState {
             .max { $0.recordedAt < $1.recordedAt }
     }
 
+    // MARK: - Staged proposals (W5a tier 2)
+
+    /// Why a `page propose-patch` staging attempt refused.
+    public enum StagingError: Error, Equatable {
+        /// This run already staged a proposal for the page — at most ONE
+        /// staged proposal per page per run.
+        case alreadyStaged(pageID: PageID)
+    }
+
+    /// Persist a staged proposal. Throws `alreadyStaged` when the run
+    /// already staged one for the page; nothing is overwritten.
+    public func stageProposal(_ proposal: DaemonLintStagedProposal) throws {
+        var byPage = stagedProposals[proposal.runID] ?? [:]
+        guard byPage[proposal.pageID] == nil else {
+            throw StagingError.alreadyStaged(pageID: proposal.pageID)
+        }
+        byPage[proposal.pageID] = proposal
+        stagedProposals[proposal.runID] = byPage
+    }
+
+    /// The run's staged proposal for one page, if any.
+    public func stagedProposal(
+        runID: DaemonRunID, pageID: PageID
+    ) -> DaemonLintStagedProposal? {
+        stagedProposals[runID]?[pageID]
+    }
+
+    /// Every staged proposal for one page across all runs this state
+    /// serves, newest first — the review UI's lookup (it knows the page).
+    public func stagedProposals(pageID: PageID) -> [DaemonLintStagedProposal] {
+        stagedProposals.values
+            .compactMap { $0[pageID] }
+            .sorted { $0.stagedAt > $1.stagedAt }
+    }
+
     // MARK: - Accounted outcomes (W2a §4)
 
     /// Publish the host's accounted outcome for a page (latest wins).
@@ -249,8 +337,9 @@ public actor DaemonLintRunState {
     }
 
     /// Tear down a run's state (the lease revocation path). Verification
-    /// records and budget rejections stay: the queue host reads them AFTER
-    /// the run's lease is revoked.
+    /// records, budget rejections, and STAGED PROPOSALS stay: the queue
+    /// host and the review UI read them AFTER the run's lease is revoked
+    /// (approval happens after the run ends).
     public func forget(runID: DaemonRunID) {
         receipts.removeValue(forKey: runID)
         conflictCounts.removeValue(forKey: runID)

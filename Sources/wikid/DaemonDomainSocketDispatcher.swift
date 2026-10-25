@@ -207,20 +207,36 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
 
     // MARK: - Lint receipt lifecycle (plan §5.8)
 
-    /// Mint/validate the snapshot receipts for a repair-policy lint run.
-    /// Returns `nil` when the request needs no interception (any operation
-    /// under other policies, and every non-get/patch page operation).
+    /// Mint/validate the snapshot receipts for a repair- OR proposal-policy
+    /// lint run. Returns `nil` when the request needs no interception (any
+    /// operation under other policies, and every non-get/patch/propose page
+    /// operation).
     private func applyLintReceiptLifecycle(
         _ request: DaemonDomainRequest,
         grant: DaemonRunGrant
     ) async throws -> Data? {
-        guard case .lintSelectedPageRepair(let selectedPage) = grant.operationPolicy else {
+        let selectedPage: PageID
+        let isProposal: Bool
+        switch grant.operationPolicy {
+        case .lintSelectedPageRepair(let page):
+            selectedPage = page
+            isProposal = false
+        case .lintSelectedPageProposal(let page):
+            selectedPage = page
+            isProposal = true
+        default:
             return nil
         }
-        // PATCH — the presented receipt must be the run's CURRENT one, and
-        // the run's conflict budget must be open. Both failures deny with
-        // the generic scope message (the budget stays opaque to the child).
+        // PATCH — the tier-1 write. The presented receipt must be the run's
+        // CURRENT one, and the run's conflict budget must be open. Both
+        // failures deny with the generic scope message (the budget stays
+        // opaque to the child).
         if request.family == .page, request.operation == DaemonDomainOperation.Page.patch {
+            if isProposal {
+                // The tier-2 policy never patches (the scope guard already
+                // denied; a second refusal here cannot hurt).
+                throw Self.scopeDeniedError()
+            }
             if await self.lintRunState.isClosed(runID: grant.runID) {
                 throw Self.scopeDeniedError()
             }
@@ -327,7 +343,136 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             }
             return reply
         }
+        // PROPOSE — the tier-2 staging seam (W5a §3). Same receipt and
+        // budget discipline as the patch, then VALIDATE and HOLD: the page
+        // is never written here. At most ONE staged proposal per page per
+        // run; a later proposal for the same page is refused.
+        if request.family == .page,
+           request.operation == DaemonDomainOperation.Page.proposePatch {
+            return try await interceptProposePatch(
+                request, grant: grant, selectedPage: selectedPage)
+        }
         return nil
+    }
+
+    /// The tier-2 staging interception: receipt + budget discipline (the
+    /// patch path's mirrors), `PagePatchValidator` parity, then the staged
+    /// record + its trusted audit entry. Nothing here writes the page.
+    private func interceptProposePatch(
+        _ request: DaemonDomainRequest,
+        grant: DaemonRunGrant,
+        selectedPage: PageID
+    ) async throws -> Data {
+        if await self.lintRunState.isClosed(runID: grant.runID) {
+            throw Self.scopeDeniedError()
+        }
+        let payload = try decodeProposePayload(request.payload)
+        let expectHead = PageVersionID(rawValue: payload?.expectHead ?? "")
+        do {
+            try await self.lintRunState.validateReceipt(
+                runID: grant.runID, token: payload?.lintReceipt ?? "",
+                expectedHead: expectHead)
+        } catch {
+            // The budget stays opaque: stale, forged, and absent tokens all
+            // deny with the generic scope message.
+            throw Self.scopeDeniedError()
+        }
+        // W2a §3 mirrored: the budget is checked BEFORE anything is staged.
+        // Above the cap the WHOLE proposal is rejected and the run's write
+        // (staging) phase closes — splitting cannot get around the cap.
+        let wireHunks = payload?.hunks ?? []
+        let usage = Self.hunkUsage(wireHunks)
+        if case .exceeded(let rejection) = await self.lintRunState.checkBudget(
+            runID: grant.runID, request: usage) {
+            await self.lintRunState.recordBudgetRejection(
+                runID: grant.runID, pageID: selectedPage, rejection: rejection)
+            await self.lintRunState.invalidateReceipt(runID: grant.runID)
+            await Self.appendBudgetRejectionAudit(
+                rejection: rejection, selectedPage: selectedPage,
+                wikiID: grant.scope.wikiID, daemon: self.daemon)
+            DebugLog.store("wikid: lint run \(grant.runID) proposal rejected whole: \(rejection.summary)")
+            throw DaemonDomainError(
+                code: .operationFailed,
+                message: "lint proposal rejected whole — \(rejection.summary). Nothing was staged; report the findings without repairs.")
+        }
+        // Validator parity: the SAME rules the store applies to a patch
+        // (ranges, boundaries, exact oldText, overlap, payload ceiling,
+        // no-op) run against the page's CURRENT body. A mismatch (the page
+        // changed since the receipt's read) is the conflict signal the
+        // child re-reads from.
+        let pageID = PageID(rawValue: payload?.id ?? selectedPage.rawValue)
+        let defectClasses: [LintDefectClass] = try wireHunks.map { wire in
+            guard let defect = LintDefectClass(rawValue: wire.defect) else {
+                throw DaemonDomainError(
+                    code: .invalidRequest,
+                    message: "page propose-patch carries an unknown defect class: \(wire.defect)")
+            }
+            return defect
+        }
+        let hunks: [PagePatchHunk] = wireHunks.map { wire in
+            PagePatchHunk(
+                startByte: wire.startByte, endByte: wire.endByte,
+                oldText: wire.oldText, newText: wire.newText, reason: wire.reason)
+        }
+        do {
+            let store = try await daemon.domainCommandStore(wikiID: grant.scope.wikiID)
+            let read = try store.readPageCoherent(id: selectedPage)
+            let body = read.body
+            _ = try PagePatchValidator.composedBody(
+                applying: PagePatch(
+                    pageID: pageID, expectHead: expectHead,
+                    hunks: hunks, defectClasses: defectClasses),
+                to: body)
+            let fingerprint = LintPageSnapshot.fingerprint(of: body)
+            let proposal = DaemonLintStagedProposal(
+                id: ULID.generate(), runID: grant.runID, pageID: selectedPage,
+                stagedAt: Date(), inspectedHead: expectHead,
+                bodyFingerprint: fingerprint,
+                hunks: hunks, perHunkClasses: defectClasses)
+            do {
+                try await self.lintRunState.stageProposal(proposal)
+            } catch let error as DaemonLintRunState.StagingError {
+                // Exactly one staged proposal per page per run.
+                if case .alreadyStaged = error {
+                    throw DaemonDomainError(
+                        code: .operationFailed,
+                        message: "already staged: this run staged a proposal for this page earlier — at most one staged proposal per page per run. Revise nothing; report remaining findings as unresolved.")
+                }
+                throw DaemonDomainError(code: .operationFailed, message: "\(error)")
+            }
+            await Self.appendStagedProposalAudit(
+                proposal: proposal, wikiID: grant.scope.wikiID, daemon: self.daemon)
+            DebugLog.store(
+                "wikid: lint run \(grant.runID) staged proposal \(proposal.id) for \(selectedPage.rawValue)")
+            let lines = [
+                "staged\t\(proposal.id)",
+                "page\t\(selectedPage.rawValue)",
+                "inspected_head\t\(proposal.inspectedHead.rawValue)",
+                "fingerprint\t\(proposal.bodyFingerprint)",
+                "hunks\t\(proposal.hunks.count)",
+                "note\tstaged for human review — nothing was written",
+            ]
+            let outcome = DaemonCommandOutcome(
+                text: lines.joined(separator: "\n") + "\n", didCommit: false,
+                stderr: "The proposal is STAGED, not applied. A human must approve it; until then the page is unchanged.")
+            return Self.encodedReply(.success(
+                requestID: request.requestID,
+                family: request.family,
+                operation: request.operation,
+                payload: try JSONEncoder().encode(outcome)))
+        } catch let error as DaemonDomainError {
+            throw error
+        } catch {
+            // Store read or validator refusal — the child can fix a
+            // validation failure by re-reading; a store failure is not
+            // theirs to retry blind.
+            let invalid = error is PagePatchValidationError
+            throw DaemonDomainError(
+                code: invalid ? .invalidRequest : .operationFailed,
+                message: invalid
+                    ? "page propose-patch rejected: \(error)"
+                    : "staging failed: \(error)")
+        }
     }
 
     /// Extract `head_version_id` + `body_markdown` from a successful
@@ -389,6 +534,17 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
         guard let payload else { return nil }
         do {
             return try JSONDecoder().decode(DaemonPagePatchRequest.self, from: payload)
+        } catch {
+            throw Self.scopeDeniedError()
+        }
+    }
+
+    /// The propose twin of `decodePatchPayload`: an unreadable payload is a
+    /// generic scope denial, never a decode-leak.
+    private func decodeProposePayload(_ payload: Data?) throws -> DaemonPageProposePatchRequest? {
+        guard let payload else { return nil }
+        do {
+            return try JSONDecoder().decode(DaemonPageProposePatchRequest.self, from: payload)
         } catch {
             throw Self.scopeDeniedError()
         }
@@ -456,9 +612,15 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
     /// payload asks for nothing (the patch command rejects it anyway).
     static func patchUsage(_ payload: DaemonPagePatchRequest?) -> LintPatchBudget.Usage {
         guard let payload else { return .zero }
-        return LintPatchBudget.Usage(
-            hunks: payload.hunks.count,
-            changedBytes: payload.hunks.reduce(0) { total, hunk in
+        return Self.hunkUsage(payload.hunks)
+    }
+
+    /// The usage of a wire hunk list — shared by the patch and the staged
+    /// proposal paths so the budget means the same thing on both.
+    static func hunkUsage(_ hunks: [DaemonPagePatchRequest.WireHunk]) -> LintPatchBudget.Usage {
+        LintPatchBudget.Usage(
+            hunks: hunks.count,
+            changedBytes: hunks.reduce(0) { total, hunk in
                 total + LintPatchBudget.changedBytes(
                     startByte: hunk.startByte, endByte: hunk.endByte, newText: hunk.newText)
             })
@@ -505,6 +667,31 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
                 note: rejection.summary)
         } catch {
             DebugLog.store("wikid: budget rejection audit append failed for \(selectedPage.rawValue): \(error)")
+        }
+    }
+
+    /// The trusted `--kind lint` audit entry for a STAGED proposal (W5a
+    /// tier 2). Host accounting reads it back by title to fold the run's
+    /// proposal count + record references into the page's durable record;
+    /// the review UI keys on the proposal id.
+    static func appendStagedProposalAudit(
+        proposal: DaemonLintStagedProposal,
+        wikiID: WikiID,
+        daemon: WikiDaemon
+    ) async {
+        do {
+            let store = try await daemon.domainCommandStore(wikiID: wikiID)
+            let title = try store.readPageCoherent(id: proposal.pageID).title
+            _ = try store.appendLog(
+                kind: .lint,
+                title: LintProposalAudit.stagedAuditTitlePrefix + title,
+                note: LintProposalAudit.stagedNote(
+                    proposalID: proposal.id,
+                    inspectedHead: proposal.inspectedHead,
+                    bodyFingerprint: proposal.bodyFingerprint,
+                    hunkCount: proposal.hunks.count))
+        } catch {
+            DebugLog.store("wikid: staged proposal audit append failed for \(proposal.pageID.rawValue): \(error)")
         }
     }
 

@@ -292,6 +292,29 @@ public enum CLIReference {
                         "wikictl page patch --id 01ABC --expect-head 01DEF --hunk-file ./hunks.json --author agent:lint",
                     ]),
                 CLILeaf(
+                    "propose-patch",
+                    summary: "STAGE hunk repairs for human review (tier-2 lint runs) — same shape as patch, but nothing is written",
+                    commandLine: "propose-patch --id <page-id> --expect-head <ver> (--hunk <json> --defect <class>)… [--hunk-file <path>] [--author <who>] [--lint-receipt <token>]",
+                    options: [
+                        CLIOption("--id <page-id>", required: true, summary: "the page to propose repairs for (stable identity, never a title)"),
+                        CLIOption("--expect-head <ver>", required: true, summary: "CAS: the head_version_id the hunks were composed against (must equal your receipt's head)"),
+                        CLIOption("--hunk <json>", repeated: true, summary: #"one hunk object: {"startByte":Int,"endByte":Int,"oldText":String,"newText":String,"reason":String} — bounds are authored UTF-8 bytes, half-open"#),
+                        CLIOption("--defect <class>", repeated: true, summary: "the hunk's defect class (D01–D28); must directly follow its --hunk"),
+                        CLIOption("--hunk-file <path>", summary: #"alternative to inline pairs: {"version":1,"hunks":[{"defect":"Dxx",…}]} — cannot combine with --hunk/--defect"#),
+                        CLIOption("--author <who>", summary: "provenance stamp (staged proposals use agent:lint)"),
+                        CLIOption("--lint-receipt <token>", required: true, summary: "managed lint runs ONLY: the lint_receipt from the latest `page get --json` — staging is refused without the run's CURRENT receipt"),
+                    ],
+                    details: [
+                        "Tier-2 runs (unevaluated configurations) STAGE repairs instead of writing them: the daemon validates the hunks with the same rules as patch and holds them for a human to review and approve.",
+                        "Nothing is written: the page is unchanged, no version is created, and no page event fires. The reply names the staged proposal id — cite it in your run report.",
+                        "At most ONE staged proposal per page per run: a second propose for the same page is refused.",
+                        "Validation is identical to patch: exact oldText, non-overlapping ranges, defect-class and payload rules. A mismatch means the page moved — re-read and recompose once.",
+                    ],
+                    examples: [
+                        #"wikictl page propose-patch --id 01ABC --expect-head 01DEF --hunk '{"startByte":0,"endByte":14,"oldText":"```markdown\n","newText":"","reason":"unwrap whole-body fence"}' --defect D25 --lint-receipt 01TOKEN"#,
+                        "wikictl page propose-patch --id 01ABC --expect-head 01DEF --hunk-file ./hunks.json --lint-receipt 01TOKEN",
+                    ]),
+                CLILeaf(
                     "delete", summary: "delete a page (removes bookmarks targeting it)",
                     commandLine: "delete --id Y [--unlink-incoming]",
                     options: [

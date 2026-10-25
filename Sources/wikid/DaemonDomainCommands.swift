@@ -273,6 +273,13 @@ final class DaemonDomainCommands: @unchecked Sendable {
                 hunks: pairs.map { $0.0 },
                 defectClasses: pairs.map { $0.1 },
                 author: payload.author)
+        case DaemonDomainOperation.Page.proposePatch:
+            // W5a tier 2: staging lives ONLY in the scoped managed-run
+            // interception (it needs the run's receipt, budget, and state).
+            // The trusted CLI path has no run to stage into — refused.
+            throw DaemonDomainError(
+                code: .invalidRequest,
+                message: "page propose-patch stages hunks only inside a managed lint run — this path has no run to stage into")
         case DaemonDomainOperation.Page.delete:
             let payload = try decode(DaemonPageDeleteRequest.self, request)
             store = try await storeForWikiID(payload.wikiID)

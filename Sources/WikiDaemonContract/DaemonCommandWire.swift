@@ -531,6 +531,39 @@ public struct DaemonPagePatchRequest: Codable, Equatable, Sendable {
     public var pageIDRawValue: String { id }
 }
 
+/// `page propose-patch` (W5a tier 2) — the STAGED form of `page patch`.
+/// Same request shape (hunks + per-hunk class + CAS `expectHead` + the
+/// managed run's `lintReceipt`), but the daemon validates and HOLDS the
+/// hunks; the page is never written.
+public struct DaemonPageProposePatchRequest: Codable, Equatable, Sendable {
+    public let wikiID: String
+    public let id: String
+    public let expectHead: String
+    public let hunks: [DaemonPagePatchRequest.WireHunk]
+    public let author: String?
+    /// The opaque snapshot receipt a MANAGED proposal run presents (same
+    /// lifecycle as the patch receipt — minted on a fresh selected-page
+    /// JSON read). `nil` for the standalone trusted CLI, which has no run
+    /// to stage into and is refused.
+    public let lintReceipt: String?
+
+    public init(
+        wikiID: String, id: String, expectHead: String, hunks: [DaemonPagePatchRequest.WireHunk],
+        author: String?, lintReceipt: String? = nil
+    ) {
+        self.wikiID = wikiID
+        self.id = id
+        self.expectHead = expectHead
+        self.hunks = hunks
+        self.author = author
+        self.lintReceipt = lintReceipt
+    }
+
+    /// The payload's page identity as the raw string — the scope guard's
+    /// selected-page equality check reads exactly this field.
+    public var pageIDRawValue: String { id }
+}
+
 /// `page delete`.
 public struct DaemonPageDeleteRequest: Codable, Equatable, Sendable {
     public let wikiID: String

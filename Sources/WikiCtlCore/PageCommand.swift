@@ -54,6 +54,13 @@ public enum PageCommand {
         /// is the managed-run snapshot receipt — the daemon validates it on
         /// the scoped path; the trusted CLI passes nil.
         case patch(id: PageID, expectHead: PageVersionID, hunks: [PagePatchHunk], defectClasses: [LintDefectClass], author: String? = nil, lintReceipt: String? = nil)
+        /// `propose-patch` (W5a tier 2) — the STAGED form of `patch`. Same
+        /// request shape; the daemon validates the hunks with the same
+        /// rules and HOLDS them as a proposal for human review. Nothing is
+        /// written; the action only exists so the CLI can parse, route, and
+        /// round-trip the request — running it against a bare store refuses
+        /// (staging needs a managed run's state).
+        case proposePatch(id: PageID, expectHead: PageVersionID, hunks: [PagePatchHunk], defectClasses: [LintDefectClass], author: String? = nil, lintReceipt: String? = nil)
         /// Delete the page through the store's protected contract (issue #219
         /// hardening): bookmarks targeting the page are ALWAYS removed, and
         /// `unlinkIncoming` picks whether incoming `[[link]]` spans become
@@ -149,6 +156,11 @@ public enum PageCommand {
             ]
             lines.append("revalidate\tre-run lint pre-flight on the written head before reporting success")
             return Result(output: lines.joined(separator: "\n") + "\n", didCommit: true)
+        case .proposePatch:
+            // Staging needs the MANAGED RUN's receipt, budget, and staged
+            // state — all daemon-owned. A bare-store run refuses.
+            throw Failure.message(
+                "page propose-patch stages hunks only inside a managed lint run — this path has no run to stage into")
         case .delete(let id, let unlinkIncoming):
             return try delete(id: id, unlinkIncoming: unlinkIncoming, in: store)
         case .search(let query, let limit):
