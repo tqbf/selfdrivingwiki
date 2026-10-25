@@ -137,9 +137,16 @@ struct ReviewFindingRegressionTests {
         resolution.knownPageTitles = ["T"]
         let preflight = LintPagePreflight.scan(snapshot: snapshot, resolution: resolution)
         let skeleton = LintRunReportText.render(snapshot: snapshot, preflight: preflight)
-        // The UNFILLED skeleton is a parse error, never a passing report.
-        #expect(throws: LintRunReportParseError.self) {
-            _ = try LintRunReportParser.parse(skeleton)
+        // The UNFILLED skeleton PARSES (pending is a first-class outcome),
+        // but every pending row is theater: the coverage validator rejects
+        // the whole report with named unfilled reasons — it can never pass.
+        let parsed = try LintRunReportParser.parse(skeleton)
+        #expect(parsed.entries.contains { $0.outcome == .pending })
+        guard case .rejected(let reasons) = LintCoverageValidator.validate(
+            parsed: parsed, snapshot: snapshot, preflight: preflight) else {
+            Issue.record("the unfilled skeleton must fail coverage validation")
+            return
         }
+        #expect(reasons.contains { $0.contains("unfilled") })
     }
 }
