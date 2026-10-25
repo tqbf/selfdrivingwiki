@@ -916,9 +916,46 @@ public enum AgentOperationRunner {
                 }
                 if authority.tier == .stagedProposal {
                     // W5a tier 2: the run STAGED proposals instead of
-                    // writing — there is no written head to verify. Fold
-                    // the daemon's staged-proposal audit entries into the
-                    // record so the durable per-page trace carries the
+                    // writing — there is no written head to verify.
+                    // Tier-specific report semantics: `.repaired` outcomes
+                    // and written-head verification claims are the CHILD's
+                    // words; they stand only when the trusted records show
+                    // a staged proposal for this page that the trusted
+                    // apply path recorded as APPLIED. Anything else is a
+                    // fabricated success — coverage FAILS and the claimed
+                    // findings stay on the unresolved list.
+                    let claimedRepairIDs = parsed.entries.compactMap { entry -> String? in
+                        guard case .finding(let id) = entry.kind,
+                              case .repaired = entry.outcome else { return nil }
+                        return id
+                    }
+                    let claimsWrittenHead = parsed.verification?.writtenHead != nil
+                    let stagedNotes = Self.stagedProposalNotes(
+                        pageToken: pageTitleToken, runStart: runStart, store: store)
+                    let appliedExists = recentLintEntries?.contains { entry in
+                        entry.title.hasPrefix(
+                            LintProposalAudit.appliedAuditTitlePrefix + pageTitleToken)
+                            && (entry.note ?? "").contains("outcome=applied")
+                    } ?? false
+                    if claimedRepairIDs.isEmpty == false || claimsWrittenHead {
+                        if stagedNotes.isEmpty || appliedExists == false {
+                            status = .failed
+                            detail += "; tier-2 report rejected: "
+                                + "\(claimedRepairIDs.count) repair claim(s)"
+                                + (claimsWrittenHead
+                                    ? " and a written-head verification claim"
+                                    : "")
+                                + " without a trusted staged proposal recorded as applied"
+                            // The claimed findings are NOT repaired — they
+                            // stay named on the unresolved list.
+                            if claimedRepairIDs.isEmpty == false {
+                                detail += "; unresolved: "
+                                    + claimedRepairIDs.joined(separator: ",")
+                            }
+                        }
+                    }
+                    // Fold the daemon's staged-proposal audit entries into
+                    // the record so the durable per-page trace carries the
                     // proposal count and record references ("N proposed").
                     detail += Self.stagedProposalDetail(
                         pageToken: pageTitleToken, runStart: runStart, store: store)
@@ -1121,19 +1158,30 @@ public enum AgentOperationRunner {
         runStart: Date,
         store: WikiStore
     ) -> String {
+        let labels = LintProposalAudit.recordLabels(
+            proposals: stagedProposalNotes(pageToken: pageToken, runStart: runStart, store: store))
+        return labels.isEmpty ? "" : "; \(labels)"
+    }
+
+    /// The daemon's staged-proposal audit notes for one page since the run
+    /// started — the TRUSTED staged records (the title prefix is reserved to
+    /// the host, so a child cannot forge one).
+    static func stagedProposalNotes(
+        pageToken: String,
+        runStart: Date,
+        store: WikiStore
+    ) -> [LintProposalAudit.StagedNote] {
         let entries: [LogEntry]
         do {
             entries = try store.recentLogEntries(limit: 200)
                 .filter { $0.kind == .lint && $0.timestamp >= runStart }
         } catch {
             DebugLog.agent("lint dispatch: log read failed; staged proposals not counted: \(error)")
-            return ""
+            return []
         }
-        let notes = entries
+        return entries
             .filter { $0.title == LintProposalAudit.stagedAuditTitlePrefix + pageToken }
             .compactMap { LintProposalAudit.parseStagedNote($0.note) }
-        let labels = LintProposalAudit.recordLabels(proposals: notes)
-        return labels.isEmpty ? "" : "; \(labels)"
     }
 
     /// Dispatch selected-page lint runs SEQUENTIALLY — one run, scope, and

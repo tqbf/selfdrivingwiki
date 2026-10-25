@@ -57,6 +57,16 @@ struct LintEnforcementTests {
                 breaker: breaker))
         }
 
+        /// A plan under the tier-2 staged-proposal selection (the default
+        /// repair path for an unevaluated configuration).
+        func stagedProposalPlan() async throws -> AgentOperationRunner.LintPagePlan {
+            try #require(await AgentOperationRunner.makeLintPagePlan(
+                store: store, pageID: page.id, stateMarkdown: "# state\n",
+                gateInputs: .init(provider: "anthropic", model: "claude-opus", modelRevision: "rev-1", effort: "high"),
+                selection: { _ in .stagedProposal(reason: "unevaluated configuration") },
+                breaker: breaker))
+        }
+
         /// Stage a fully filled run report (every pending line answered) and
         /// the agent's own `--kind lint` append.
         func stageAgentArtifacts(for plan: AgentOperationRunner.LintPagePlan) throws {
@@ -78,6 +88,27 @@ struct LintEnforcementTests {
         func agentWrite(_ body: String) throws -> PageVersionID {
             try store.updatePage(id: page.id, title: "Enforcement", body: body)
             return try #require(try store.pageHeadVersionID(pageID: page.id))
+        }
+
+        /// Stage a filled run report claiming `repaired` for every finding
+        /// (the fabricated-success shape: repair claims with nothing staged
+        /// and nothing written).
+        func stageFabricatedSuccessReport(for plan: AgentOperationRunner.LintPagePlan) throws {
+            let skeleton = LintRunReportText.render(snapshot: plan.snapshot, preflight: plan.preflight)
+            let filled = skeleton.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+                if line == "verification none pending" { return "verification none clean" }
+                if line.hasPrefix("finding ") && line.hasSuffix(" pending") {
+                    return line.replacingOccurrences(of: " pending", with: " repaired|repaired the defect")
+                }
+                if line.hasSuffix(" pending") {
+                    return line.replacingOccurrences(of: " pending", with: " valid-as-written|recorded")
+                }
+                return String(line)
+            }.joined(separator: "\n")
+            try filled.write(
+                to: scratch.appendingPathComponent(AgentStaging.lintRunReportFileName),
+                atomically: true, encoding: .utf8)
+            _ = try store.appendLog(kind: .lint, title: "Lint — \(plan.snapshot.title)", note: "agent record")
         }
 
         func account(
@@ -326,6 +357,66 @@ struct LintEnforcementTests {
             _ = try launcher.resolveSandboxInvocation(
                 scratch: scratch, pdf2mdScriptPath: nil, scopedRunLease: overlong)
         }
+    }
+
+    // MARK: - Tier-2 report semantics (fabricated success)
+
+    /// A tier-2 run's `.repaired` claims are the CHILD's words: without a
+    /// trusted staged proposal recorded as applied, the report is a
+    /// fabricated success — coverage FAILS and the claimed findings stay on
+    /// the unresolved list.
+    @Test func tier2RepairClaimsWithoutAppliedStagedProposalFailCoverage() async throws {
+        let fixture = try Fixture()
+        let runStart = Date()
+        // The page carries a confirmed finding so the report has a finding
+        // line the child can claim repaired.
+        try fixture.store.updatePage(
+            id: fixture.page.id, title: "Enforcement", body: Fixture.defectiveBody)
+        let plan = try await fixture.stagedProposalPlan()
+        #expect(plan.authority.tier == .stagedProposal)
+        try fixture.stageFabricatedSuccessReport(for: plan)
+
+        let outcome = fixture.account(plan, runStart: runStart)
+
+        #expect(outcome.status == .failed, "a fabricated success is a coverage failure")
+        #expect(outcome.detail.contains("tier-2 report rejected"))
+        #expect(outcome.detail.contains("without a trusted staged proposal recorded as applied"))
+        #expect(outcome.detail.contains("unresolved:"),
+                "the claimed findings stay named on the unresolved list")
+        // Nothing was written: the page is still at the head the plan
+        // inspected.
+        #expect(try fixture.store.pageHeadVersionID(pageID: fixture.page.id)
+            == plan.snapshot.headVersionID)
+    }
+
+    /// The positive gate: with trusted staged + applied records (both titles
+    /// reserved to the host), the same repair claims stand and the run
+    /// accounts.
+    @Test func tier2RepairClaimsStandWithAppliedStagedRecords() async throws {
+        let fixture = try Fixture()
+        let runStart = Date()
+        try fixture.store.updatePage(
+            id: fixture.page.id, title: "Enforcement", body: Fixture.defectiveBody)
+        let plan = try await fixture.stagedProposalPlan()
+        try fixture.stageFabricatedSuccessReport(for: plan)
+        // The trusted records: a staged proposal for this page since the run
+        // started, and the apply service's applied-outcome entry.
+        _ = try fixture.store.appendLog(
+            kind: .lint,
+            title: LintProposalAudit.stagedAuditTitlePrefix + "Enforcement",
+            note: LintProposalAudit.stagedNote(
+                proposalID: "prop-1", inspectedHead: fixture.inspectedHead,
+                bodyFingerprint: "fp", hunkCount: 1))
+        _ = try fixture.store.appendLog(
+            kind: .lint,
+            title: LintProposalAudit.appliedAuditTitlePrefix + "Enforcement",
+            note: "proposal_id=prop-1; outcome=applied; written_head=x")
+
+        let outcome = fixture.account(plan, runStart: runStart)
+
+        #expect(outcome.status == .dispatched,
+                "trusted staged+applied records validate the repair claims")
+        #expect(outcome.detail.contains("run-report coverage complete"))
     }
 }
 #endif
