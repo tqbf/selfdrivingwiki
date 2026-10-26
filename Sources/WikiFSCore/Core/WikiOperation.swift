@@ -1,8 +1,10 @@
 import Foundation
 
-/// The three discrete agent operations the app can run against the
-/// currently-selected wiki (`plans/llm-wiki.md` Phase C, decision #2): **Ingest**,
-/// **Query**, and **Lint**.
+/// The discrete agent operations the app can run against the
+/// currently-selected wiki (`plans/llm-wiki.md` Phase C, decision #2): **Ingest**
+/// and **Query**. (A third operation, queued **Lint**, was retired — the
+/// foreground page review replaced it; the `Kind` enum keeps its `.lint` raw
+/// value so historical run metadata still decodes.)
 ///
 /// This is a PURE value type — it carries only the per-run inputs (the ingest
 /// source, the query text, the staged scratch paths) and knows how to render the
@@ -54,22 +56,15 @@ public enum WikiOperation: Equatable, Sendable {
   /// path. The one-shot `.query` op remains read-only by construction.
   case queryChat(stateFilePath: String, allowWikiEdits: Bool = true)
 
-  /// Health-check the wiki and report findings. `stateFilePath` is the staged
-  /// `WIKI_STATE.md` snapshot.
-  case lint(stateFilePath: String)
-
-  /// Health-check a single page. `brokenLinks` is the pre-computed list of
-  /// `[[page titles]]` that do not resolve to existing pages (computed in-app
-  /// by `WikiStoreModel.preflightLint` before the LLM run so the agent has
-  /// concrete targets rather than having to discover issues itself).
-  case lintPage(pageTitle: String, brokenLinks: [String], stateFilePath: String)
-
   /// A short, stable identifier for the operation kind (logging / UI).
+  /// `.lint` survives as a decode-only value: historical run metadata rows
+  /// carry the raw string "lint", and `RemoteChatSession` decodes it through
+  /// `Kind.init(rawValue:)` so history stays readable. No live path
+  /// constructs it — the queued lint lane is retired.
   public var kind: Kind {
     switch self {
     case .ingest: .ingest
     case .query, .queryChat: .query
-    case .lint, .lintPage: .lint
     }
   }
 
@@ -81,8 +76,6 @@ public enum WikiOperation: Equatable, Sendable {
     case .ingest(_, _, let stateFilePath, _): return stateFilePath
     case .query(_, let stateFilePath): return stateFilePath
     case .queryChat(let stateFilePath, _): return stateFilePath
-    case .lint(let stateFilePath): return stateFilePath
-    case .lintPage(_, _, let stateFilePath): return stateFilePath
     }
   }
 
@@ -91,13 +84,16 @@ public enum WikiOperation: Equatable, Sendable {
   public var stagedSourcePaths: [String] {
     switch self {
     case .ingest(_, let stagedSourcePaths, _, _): return stagedSourcePaths
-    case .query, .queryChat, .lint, .lintPage: return []
+    case .query, .queryChat: return []
     }
   }
 
   public enum Kind: String, CaseIterable, Sendable {
     case ingest
     case query
+    /// Decode-only: historical run metadata carries the raw string "lint"
+    /// (`RemoteChatSession` decodes it via `Kind.init(rawValue:)`). The
+    /// queued lint lane is retired; no live path constructs or produces it.
     case lint
 
     /// User-facing title for the operation.
@@ -147,12 +143,6 @@ extension WikiOperation {
         wikiRoot: wikiRoot, question: question, stateFilePath: stateFilePath)
     case .queryChat(let stateFilePath, let allowWikiEdits):
       return Self.queryChatPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath, allowWikiEdits: allowWikiEdits)
-    case .lint(let stateFilePath):
-      return Self.lintPrompt(wikiRoot: wikiRoot, stateFilePath: stateFilePath)
-    case .lintPage(let pageTitle, let brokenLinks, let stateFilePath):
-      return Self.lintPagePrompt(
-        wikiRoot: wikiRoot, pageTitle: pageTitle,
-        brokenLinks: brokenLinks, stateFilePath: stateFilePath)
     }
   }
 
@@ -272,7 +262,7 @@ extension WikiOperation {
   /// the quoted passage in plain text.
   private static let answerCitationRule: String = GeneratedPrompts.answerCitationRule
 
-  // MARK: - Query / Lint prompts
+  // MARK: - Query prompts
 
   /// Query stays single-agent Opus, but still gets the write rule (it may file an
   /// answer page) + the staged-state / don't-rediscover directive.
@@ -312,53 +302,5 @@ extension WikiOperation {
 
     \(Self.wikiRootLine(wikiRoot))
     """
-  }
-
-  /// Lint stays single-agent Opus, with the write rule (it logs and may file a
-  /// report) + the staged-state / don't-rediscover directive.
-  private static func lintPrompt(wikiRoot: String, stateFilePath: String) -> String {
-    return """
-    \(IngestWriteRule.writes)
-
-    \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
-
-    \(GeneratedPrompts.lintTask)
-
-    \(Self.wikiRootLine(wikiRoot))
-    """
-  }
-
-  /// Single-page lint: pre-flight results (bracket fixes + broken links) are
-  /// passed in so the agent has concrete targets rather than discovering issues
-  /// itself. Runs Opus single-agent with full write permissions.
-  private static func lintPagePrompt(
-    wikiRoot: String,
-    pageTitle: String,
-    brokenLinks: [String],
-    stateFilePath: String
-  ) -> String {
-    let linksSection: String
-    if brokenLinks.isEmpty {
-      linksSection = "Broken wiki links: none detected."
-    } else {
-      let list = brokenLinks.map { "  - \($0)" }.joined(separator: "\n")
-      linksSection = """
-        Broken wiki links (targets not found in the wiki):
-        \(list)
-        """
-    }
-    let task = PromptTemplate.fill(GeneratedPrompts.lintPageTask, [
-      "pageTitle": pageTitle,
-      "linksSection": linksSection,
-    ])
-    return """
-      \(IngestWriteRule.writes)
-
-      \(IngestWriteRule.dontRediscover(stateFilePath: stateFilePath))
-
-      \(task)
-
-      \(Self.wikiRootLine(wikiRoot))
-      """
   }
 }

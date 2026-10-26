@@ -18,7 +18,9 @@ struct AgentOperationRunnerTests {
         return (WikiStoreModel(store: store), store)
     }
 
-    // MARK: - runLintPages combination logic
+    // MARK: - Lint preflight combination logic
+    // (the shared per-page combination patterns the foreground page review
+    // builds on; `preflightLint` itself is unchanged)
 
     @Test func singlePagePreflightReturnsEmptyBrokenLinks() throws {
         let (model, store) = try tempStore()
@@ -49,7 +51,7 @@ struct AgentOperationRunnerTests {
     }
 
     @Test func combinedTitlesJoinWithComma() throws {
-        // The runLintPages method joins titles with ", ".
+        // The combination pattern joins titles with ", ".
         // Verify the combination pattern used in the implementation.
         let pages: [(id: String, title: String)] = [
             ("a", "Alpha"), ("b", "Beta"), ("c", "Gamma"),
@@ -59,7 +61,7 @@ struct AgentOperationRunnerTests {
     }
 
     @Test func combinedBrokenLinksFlatMap() throws {
-        // The runLintPages method uses flatMap to combine broken links.
+        // The combination pattern uses flatMap to join broken links.
         let preflights: [(title: String, brokenLinks: [String])] = [
             ("A", ["One"]),
             ("B", ["Two", "Three"]),
@@ -70,7 +72,7 @@ struct AgentOperationRunnerTests {
     }
 
     @Test func brokenLinksPreserveNamespaceInPrompt() throws {
-        // runLintPages formats each broken link with its wiki-link namespace
+        // The combination pattern formats each broken link with its wiki-link namespace
         // prefix so the agent can distinguish page/source/chat links (was a
         // flat [String] that stripped the namespace, making broken source/chat
         // links look like broken page links).

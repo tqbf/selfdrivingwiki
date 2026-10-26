@@ -17,7 +17,7 @@ import WikiFSTypes
 /// Pure and dependency-free (the namespace arrives as a closure) so it is
 /// trivially unit-testable and shared by the store (`replaceLinks`), the
 /// renderer (`WikiLinkMarkdown.linkified`), and the editor lint
-/// (`WikiStoreModel.preflightLint`). Unresolvable targets fall back to the
+/// (the foreground lint analyzer's wiki-link resolution). Unresolvable targets fall back to the
 /// caller's heuristic split (`WikiLinkParser.splitFragment`) — there is no
 /// namespace to consult for a ghost link.
 public enum WikiLinkResolver {

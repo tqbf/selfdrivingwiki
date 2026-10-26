@@ -35,6 +35,32 @@ public enum PageWriteExpectation: Equatable, Sendable {
     case expectedAbsence
 }
 
+/// Thrown by a composed page write that pinned an expected canonical body
+/// (the foreground lint Apply path): the in-transaction canonicalization of
+/// the candidate produced DIFFERENT bytes than the preview showed, so
+/// persisting would save something the user never previewed. Nothing is
+/// written. The caller requests a new preview against the current title
+/// graph instead of writing.
+public struct PageCanonicalizationConflictError: Error, Equatable {
+    public let pageID: PageID
+    public let expectedHead: PageVersionID?
+    /// The previewed canonical body (what Apply was told it would save).
+    public let expectedBodyBytes: Int
+    /// The in-transaction canonicalization of the candidate (what the store
+    /// WOULD have written).
+    public let actualBodyBytes: Int
+
+    public init(
+        pageID: PageID, expectedHead: PageVersionID?,
+        expectedBodyBytes: Int, actualBodyBytes: Int
+    ) {
+        self.pageID = pageID
+        self.expectedHead = expectedHead
+        self.expectedBodyBytes = expectedBodyBytes
+        self.actualBodyBytes = actualBodyBytes
+    }
+}
+
 /// Thrown by an `.expectedHead` write when its target page does not exist at
 /// write time: the page was deleted since the caller read it, or the title
 /// the caller read no longer resolves to any page (renamed away). Distinct

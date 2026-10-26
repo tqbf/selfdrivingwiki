@@ -10,9 +10,9 @@ public struct AgentProviderDescriptor: Sendable, Equatable, Hashable, CustomStri
     public var description: String { "AgentProviderDescriptor(id: \(id.rawValue), label: \(label))" }
 }
 
-public enum AgentProviderOperationKind: Sendable, Equatable { case interactive, ingest, lint, transcriptCleanup, lintCheck, lintRepair }
+public enum AgentProviderOperationKind: Sendable, Equatable { case interactive, ingest, transcriptCleanup, lintCheck, lintRepair }
 public enum AgentProviderStage: Sendable, Equatable, Hashable, CaseIterable {
-    case chat, planner, executor, finalizer, summarizer, lint
+    case chat, planner, executor, finalizer, summarizer
     /// The source-transcript cleanup lane (issue #1379): a one-shot
     /// single-turn model call that rewrites a raw extracted transcript. Its
     /// own stage — never the chat summarizer's — so the cleanup model is
@@ -20,8 +20,8 @@ public enum AgentProviderStage: Sendable, Equatable, Hashable, CaseIterable {
     case transcriptCleanup
     /// The foreground page-lint check stage: isolated one-shot detection
     /// pass with its own scratch world, deny-all permission policy, and
-    /// non-cached backend. Distinct from the retired queued `.lint` stage —
-    /// never reused as the new check lane.
+    /// non-cached backend. Distinct from the retired queued lint stage
+    /// (removed with queued lint) — never reused as the new check lane.
     case lintCheck
     /// The foreground page-lint repair stage: one selected repair option,
     /// one bounded patch proposal. Same isolation shape as `.lintCheck`.
@@ -199,11 +199,16 @@ public protocol AgentProviderServices: Sendable {
     func prepareTranscriptCleanup() async throws -> AgentOperationPreparation
     /// The foreground page-lint check stage's preparation: deny-all
     /// permission policy, extraction-grade sandbox baseline, fresh backend
-    /// per step. Throws `.unavailable`/`.noProvider` when none is enabled.
-    func prepareLintCheck() async throws -> AgentOperationPreparation
+    /// per step. Explicit provider/model overrides ride the step's captured
+    /// configuration. Throws `.unavailable`/`.noProvider` when none enabled.
+    func prepareLintCheck(
+        providerOverride: ProviderID?, modelOverride: ModelID?
+    ) async throws -> AgentOperationPreparation
     /// The foreground page-lint repair stage's preparation. Same contract
     /// as `prepareLintCheck`.
-    func prepareLintRepair() async throws -> AgentOperationPreparation
+    func prepareLintRepair(
+        providerOverride: ProviderID?, modelOverride: ModelID?
+    ) async throws -> AgentOperationPreparation
     func discoverCatalog(for provider: AgentProvider) async throws -> ACPProviderCatalogObservation
     func modelSummary(text: String, preparation: AgentOperationPreparation) async throws -> String?
     /// One-shot single-pass model transform with a CALLER-SUPPLIED system
@@ -268,11 +273,15 @@ public extension AgentProviderServices {
     /// Defaults for conformers that carry no foreground lint lanes: the
     /// operation is unavailable — the lint session surfaces a failed step,
     /// never a skipped one disguised as a clean result.
-    func prepareLintCheck() async throws -> AgentOperationPreparation {
+    func prepareLintCheck(
+        providerOverride: ProviderID?, modelOverride: ModelID?
+    ) async throws -> AgentOperationPreparation {
         throw AgentProviderRuntimeError.unavailable
     }
 
-    func prepareLintRepair() async throws -> AgentOperationPreparation {
+    func prepareLintRepair(
+        providerOverride: ProviderID?, modelOverride: ModelID?
+    ) async throws -> AgentOperationPreparation {
         throw AgentProviderRuntimeError.unavailable
     }
 
@@ -406,12 +415,18 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
         try await installed.prepareTranscriptCleanup()
     }
 
-    public func prepareLintCheck() async throws -> AgentOperationPreparation {
-        try await installed.prepareLintCheck()
+    public func prepareLintCheck(
+        providerOverride: ProviderID?, modelOverride: ModelID?
+    ) async throws -> AgentOperationPreparation {
+        try await installed.prepareLintCheck(
+            providerOverride: providerOverride, modelOverride: modelOverride)
     }
 
-    public func prepareLintRepair() async throws -> AgentOperationPreparation {
-        try await installed.prepareLintRepair()
+    public func prepareLintRepair(
+        providerOverride: ProviderID?, modelOverride: ModelID?
+    ) async throws -> AgentOperationPreparation {
+        try await installed.prepareLintRepair(
+            providerOverride: providerOverride, modelOverride: modelOverride)
     }
 
     public func discoverCatalog(
@@ -992,17 +1007,25 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     /// Explicit provider/model overrides ride the step's configuration and
     /// are applied by the caller through `makeSnapshot`'s override tier.
     /// Throws before any scratch allocation when no provider is enabled.
-    public func prepareLintCheck() async throws -> AgentOperationPreparation {
-        try await prepareLintStage(.lintCheck)
+    public func prepareLintCheck(
+        providerOverride: ProviderID?, modelOverride: ModelID?
+    ) async throws -> AgentOperationPreparation {
+        try await prepareLintStage(.lintCheck, providerOverride: providerOverride, modelOverride: modelOverride)
     }
 
     /// The foreground page-lint repair stage's preparation. See
     /// `prepareLintCheck` for the isolation contract.
-    public func prepareLintRepair() async throws -> AgentOperationPreparation {
-        try await prepareLintStage(.lintRepair)
+    public func prepareLintRepair(
+        providerOverride: ProviderID?, modelOverride: ModelID?
+    ) async throws -> AgentOperationPreparation {
+        try await prepareLintStage(.lintRepair, providerOverride: providerOverride, modelOverride: modelOverride)
     }
 
-    private func prepareLintStage(_ stage: AgentProviderStage) async throws -> AgentOperationPreparation {
+    private func prepareLintStage(
+        _ stage: AgentProviderStage,
+        providerOverride: ProviderID?,
+        modelOverride: ModelID?
+    ) async throws -> AgentOperationPreparation {
         try requireAvailable()
         let configuration = try readConfiguration()
         guard configuration.enabledProviders.isEmpty == false else {
@@ -1030,8 +1053,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             snapshot = try await makeSnapshot(
                 configuration: configuration,
                 operation: operation,
-                providerOverride: nil,
-                modelOverride: nil,
+                providerOverride: providerOverride,
+                modelOverride: modelOverride,
                 thinkingOverride: nil,
                 stages: [stage],
                 policyOverride: policy,
@@ -1178,8 +1201,8 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     /// The foreground lint stages' one-shot turn: one document in, one
     /// structured envelope out. Shares `modelTransform`'s lease protocol and
     /// one-shot mechanics with TWO differences the plan mandates:
-    /// 1. The stage token must be `.lintCheck` or `.lintRepair` (never the
-    ///    retired `.lint`, never cleanup).
+    /// 1. The stage token must be `.lintCheck` or `.lintRepair` (never
+    ///    cleanup).
     /// 2. The backend is FRESH per call (`cache: false`) — a new ACP session
     ///    on a new subprocess per step, not the cleanup path's cached one.
     public func lintTurn(
@@ -1537,7 +1560,6 @@ private extension AgentProviderOperationKind {
         switch self {
         case .interactive: .chat
         case .ingest: .ingest
-        case .lint: .lint
         // No permission prompts: the cleanup pass writes nothing (its one
         // output lands through the extraction provider, not the agent), so
         // it shares the lint permission class.
@@ -1551,7 +1573,6 @@ private extension AgentProviderOperationKind {
         switch self {
         case .interactive: .chat
         case .ingest: .planner
-        case .lint: .lint
         case .transcriptCleanup: .transcriptCleanup
         case .lintCheck: .lintCheck
         case .lintRepair: .lintRepair
@@ -1561,7 +1582,6 @@ private extension AgentProviderOperationKind {
         switch self {
         case .interactive: [.chat]
         case .ingest: [.planner, .executor, .finalizer]
-        case .lint: [.lint]
         case .transcriptCleanup: [.transcriptCleanup]
         case .lintCheck: [.lintCheck]
         case .lintRepair: [.lintRepair]
@@ -1576,7 +1596,6 @@ private extension AgentProviderStage {
         case .executor: "executor"
         case .finalizer: "finalizer"
         case .summarizer: "summarizer"
-        case .lint: "lint"
         case .transcriptCleanup: "transcriptCleanup"
         case .lintCheck: "lintCheck"
         case .lintRepair: "lintRepair"

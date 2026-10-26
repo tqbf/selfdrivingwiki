@@ -57,6 +57,49 @@ public enum LintScriptProtocol {
     }
 }
 
+// MARK: - Request assembly
+
+public extension LintScriptProtocol.Request {
+    /// The request for one check step.
+    static func check(
+        runID: LintRunID, snapshot: LintPageSnapshot, availableRecipes: [String]
+    ) -> LintScriptProtocol.Request {
+        LintScriptProtocol.Request(
+            protocolVersion: LintScriptProtocol.version,
+            run: runID.rawValue,
+            page: snapshot.pageID.rawValue,
+            title: snapshot.title,
+            body: snapshot.body,
+            strategy: snapshot.strategyContext,
+            repair: nil,
+            availableRecipes: availableRecipes)
+    }
+
+    /// The request for one repair step (one selected option).
+    static func repair(
+        runID: LintRunID, snapshot: LintPageSnapshot,
+        finding: LintFinding, option: LintRepairOption, instruction: String
+    ) -> LintScriptProtocol.Request {
+        LintScriptProtocol.Request(
+            protocolVersion: LintScriptProtocol.version,
+            run: runID.rawValue,
+            page: snapshot.pageID.rawValue,
+            title: snapshot.title,
+            body: snapshot.body,
+            strategy: snapshot.strategyContext,
+            repair: LintScriptProtocol.Request.RepairTask(
+                findingID: finding.id.rawValue,
+                optionID: option.id.rawValue,
+                recipeID: option.recipeID.rawValue,
+                instruction: instruction,
+                findingMessage: finding.message,
+                findingRanges: finding.passageRanges.map {
+                    [$0.lowerBound, $0.upperBound]
+                }),
+            availableRecipes: nil)
+    }
+}
+
 // MARK: - Runner errors
 
 public enum LintScriptError: Error, Equatable, Sendable, LocalizedError {

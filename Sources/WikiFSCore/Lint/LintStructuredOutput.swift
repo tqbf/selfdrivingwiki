@@ -5,12 +5,12 @@ import Foundation
 /// The wire shape a model check step or script check returns: ONE JSON
 /// object. Coordinates are UTF-8 byte offsets (the external JSON boundary);
 /// every range is re-validated against the snapshot body on decode.
-public struct LintCheckEnvelope: Equatable, Sendable {
+public struct LintCheckEnvelope: Codable, Equatable, Sendable {
     public let run: String
     public let page: String
     public let findings: [WireFinding]
 
-    public struct WireFinding: Equatable, Sendable {
+    public struct WireFinding: Codable, Equatable, Sendable {
         public let id: String
         public let severity: String
         public let message: String
@@ -21,7 +21,7 @@ public struct LintCheckEnvelope: Equatable, Sendable {
         public let recipes: [String]
     }
 
-    public struct WireRange: Equatable, Sendable {
+    public struct WireRange: Codable, Equatable, Sendable {
         public let start: Int
         public let end: Int
         public let expected: String
@@ -29,7 +29,7 @@ public struct LintCheckEnvelope: Equatable, Sendable {
 }
 
 /// The wire shape a repair producer returns: ONE JSON object.
-public struct LintRepairEnvelope: Equatable, Sendable {
+public struct LintRepairEnvelope: Codable, Equatable, Sendable {
     public let run: String
     public let page: String
     public let finding: String
@@ -37,7 +37,7 @@ public struct LintRepairEnvelope: Equatable, Sendable {
     public let recipe: String
     public let replacements: [WireReplacement]
 
-    public struct WireReplacement: Equatable, Sendable {
+    public struct WireReplacement: Codable, Equatable, Sendable {
         public let start: Int
         public let end: Int
         public let expected: String
@@ -145,7 +145,12 @@ public enum LintEnvelopeDecoder {
             }
             // JSONSerialization.parse is the "is this ONE JSON object" probe;
             // a parse failure IS the typed notOneJSONObject outcome.
-            let parsed = try JSONSerialization.jsonObject(with: data)
+            let parsed: Any
+            do {
+                parsed = try JSONSerialization.jsonObject(with: data)
+            } catch {
+                throw LintEnvelopeError.notOneJSONObject
+            }
             guard let dict = parsed as? [String: Any] else {
                 throw LintEnvelopeError.notOneJSONObject
             }
@@ -231,7 +236,12 @@ public enum LintEnvelopeDecoder {
                 throw LintEnvelopeError.notOneJSONObject
             }
             // Same one-object probe as the check envelope.
-            let parsed = try JSONSerialization.jsonObject(with: data)
+            let parsed: Any
+            do {
+                parsed = try JSONSerialization.jsonObject(with: data)
+            } catch {
+                throw LintEnvelopeError.notOneJSONObject
+            }
             guard let dict = parsed as? [String: Any] else {
                 throw LintEnvelopeError.notOneJSONObject
             }
@@ -253,10 +263,10 @@ public enum LintEnvelopeDecoder {
                 expected: snapshot.pageID.rawValue, got: envelope.page)
         }
         guard envelope.finding == selectedFinding.id.rawValue else {
-            throw LintEnvelopeError.missingIdentityField("finding")
+            throw LintEnvelopeError.missingIdentityField(name: "finding")
         }
         guard envelope.option == selectedOption.id.rawValue else {
-            throw LintEnvelopeError.missingIdentityField("option")
+            throw LintEnvelopeError.missingIdentityField(name: "option")
         }
         guard envelope.recipe == selectedOption.recipeID.rawValue else {
             throw LintEnvelopeError.unknownRecipe(referenced: envelope.recipe)

@@ -269,8 +269,6 @@ struct WikiStrategyRunTests {
         let requests: [(label: String, request: OperationRequest)] = [
             ("ingest", .ingest(sources: [stagedSource], stateMarkdown: appStateMarkdown)),
             ("query", .query(question: "What is this wiki about?", stateMarkdown: appStateMarkdown)),
-            ("lint", .lint(stateMarkdown: appStateMarkdown)),
-            ("lintPage", .lintPage(pageTitle: "Existing Page", brokenLinks: [], stateMarkdown: appStateMarkdown)),
         ]
         for (label, request) in requests {
             let staged = try stagedStateFile(for: request, kindLabel: label)
@@ -280,8 +278,8 @@ struct WikiStrategyRunTests {
                 "app \(label): page inventory still present alongside the strategy")
         }
 
-        // The daemon queue host builds ingest / lint / page-lint state markdown
-        // from DaemonWikiState (DaemonQueueIngestionProvider :103/:241/:298);
+        // The daemon queue host builds ingest state markdown
+        // from DaemonWikiState (DaemonQueueIngestionProvider :103);
         // the chat session's first turn stages the same markdown
         // (LauncherChatAgentRuntime.submitTurn).
         let daemonMarkdown = try DaemonWikiState.stateMarkdown(from: store)

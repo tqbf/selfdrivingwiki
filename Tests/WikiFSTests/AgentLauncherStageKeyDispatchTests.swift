@@ -7,10 +7,10 @@ import Foundation
 /// `plans/agent-settings-tabs.md` §3 (HIGH #2 — the shared `run()` dispatch):
 /// verifies `AgentLauncher.stageKey(for:)` maps each `OperationRequest` kind to
 /// the correct per-stage key. The shared `run()` one-shot entry serves
-/// `.ingest` / `.query` / `.lint` / `.lintPage`; deriving the WRONG key would
-/// mis-route operations to the wrong stage's pinned provider (e.g. a query
-/// silently using the lint provider). These tests pin the mapping without a
-/// subprocess — `stageKey(for:)` is pure + static.
+/// `.ingest` / `.query` (the queued lint lane is retired); deriving the WRONG
+/// key would mis-route operations to the wrong stage's pinned provider. These
+/// tests pin the mapping without a subprocess — `stageKey(for:)` is pure +
+/// static.
 @Suite("AgentLauncher.stageKey dispatch (run() shared path)")
 struct AgentLauncherStageKeyDispatchTests {
 
@@ -60,17 +60,9 @@ struct AgentLauncherStageKeyDispatchTests {
         #expect(ingest[AgentLauncher.wikiAuthorEnvironmentKey]
                 == PageAuthor.agent("ingest").rawValue)
 
-        let lint = AgentLauncher.ingestProvenanceEnvironment(
-            for: .lint(stateMarkdown: ""))
-        #expect(lint.isEmpty, "non-ingest requests stamp neither source ids nor author here")
-    }
-
-    @Test func lintMapsToLint() {
-        #expect(AgentLauncher.stageKey(for: .lint(stateMarkdown: emptyState)) == "lint")
-    }
-
-    @Test func lintPageMapsToLint() {
-        #expect(AgentLauncher.stageKey(for: .lintPage(pageTitle: "P", brokenLinks: [], stateMarkdown: emptyState)) == "lint")
+        let query = AgentLauncher.ingestProvenanceEnvironment(
+            for: .query(question: "Q", stateMarkdown: ""))
+        #expect(query.isEmpty, "non-ingest requests stamp neither source ids nor author here")
     }
 
     @Test func queryMapsToChat() {
@@ -114,17 +106,17 @@ struct AgentLauncherStageKeyDispatchTests {
         #expect(config.provider(forStage: queryKey).id == ProviderID(rawValue: "def"))
     }
 
-    @Test func lintRoutesToLintStage() {
-        // Lint MUST use the lint stage's pinned provider when set.
+    @Test func legacyLintStagePinStillResolves() {
+        // The retired "lint" CONFIG key still resolves (legacy pins in
+        // existing agent-providers.json files must not break), even though no
+        // OperationRequest maps to it anymore.
         let config = AgentProvidersConfig(
             providers: [
                 AgentProvider(id: ProviderID(rawValue: "def"), label: "Def", command: ["d"], enabled: true, isDefault: true),
                 AgentProvider(id: ProviderID(rawValue: "linter"), label: "Linter", command: ["l"], enabled: true, isDefault: false),
             ],
             stageProviderIds: ["lint": ProviderID(rawValue: "linter")])
-        let lintKey = AgentLauncher.stageKey(for: .lint(stateMarkdown: emptyState))
-        #expect(lintKey == "lint")
-        #expect(config.provider(forStage: lintKey).id == ProviderID(rawValue: "linter"))
+        #expect(config.provider(forStage: "lint").id == ProviderID(rawValue: "linter"))
     }
 }
 #endif // os(macOS)

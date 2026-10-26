@@ -47,6 +47,32 @@ public struct LintResolutionFacts: Sendable, Equatable {
     public static let empty = LintResolutionFacts()
 }
 
+// MARK: - Coherent capture
+
+/// The raw store state one lint run captures in a single read transaction:
+/// page identity + body + head version + the resolution namespaces. The
+/// session turns this into a `LintPageSnapshot` (adding the strategy
+/// context) and into the analyzer's `LintResolutionFacts`.
+public struct LintCapture: Sendable, Equatable {
+    public let pageID: PageID
+    public let title: String
+    /// The committed body markdown (raw stored bytes).
+    public let body: String
+    public let headVersionID: PageVersionID
+    public let facts: LintResolutionFacts
+
+    public init(
+        pageID: PageID, title: String, body: String,
+        headVersionID: PageVersionID, facts: LintResolutionFacts
+    ) {
+        self.pageID = pageID
+        self.title = title
+        self.body = body
+        self.headVersionID = headVersionID
+        self.facts = facts
+    }
+}
+
 // MARK: - Analyzer
 
 /// The read-only detection pipeline. Produces findings with validated passage
@@ -116,8 +142,6 @@ public enum LintAnalyzer {
         let matches = WikiLinkSpan.matches(in: body)
         let knownTitles = facts.knownPageTitles
         let knownPageIDs = facts.knownPageIDs
-        let knownChatTitles = facts.knownChatTitles
-        let knownChatIDs = facts.knownChatIDs
 
         var findings: [LintFinding] = []
         var sequence = 0
@@ -225,7 +249,7 @@ public enum LintAnalyzer {
         return findings
     }
 
-    private enum LinkClassification {
+    private enum LinkClassification: Equatable {
         case resolved
         case lookupUnavailable(namespace: String)
         case broken(namespace: String, label: String)
@@ -347,19 +371,8 @@ public enum LintAnalyzer {
                 anchorRange = fix.range
             } else {
                 // Whole reported line, when it exists.
-                anchorRange = nil
-                if let lower = table.offset(line: result.lineNumber, column: 1) {
-                    let lineEnd: Int
-                    if result.lineNumber < table.lineCount {
-                        lineEnd = table.offset(line: result.lineNumber + 1, column: 1) ?? body.utf8.count
-                    } else {
-                        lineEnd = body.utf8.count
-                    }
-                    if let text = utf8Slice(lower..<lineEnd, in: body, ns: ns) {
-                        anchorRange = validatedByteRange(
-                            lower..<lineEnd, expected: text, in: body)
-                    }
-                }
+                anchorRange = Self.reportedLineRange(
+                    result.lineNumber, table: table, body: body, ns: ns)
             }
             // An unlocatable finding is an invalid result — drop it rather
             // than inventing a page-level anchor.
@@ -409,7 +422,7 @@ public enum LintAnalyzer {
             do {
                 let utf16Start = try LintLocationAdapter.utf16Offset(ofUTF8Offset: position, in: body)
                 let utf16End = utf16Start + fixInfo.deleteCount
-                guard utf16End <= ns.length, utf8End >= position else { return nil }
+                guard utf16End <= ns.length else { return nil }
                 end = try LintLocationAdapter.utf8Offset(ofUTF16Offset: utf16End, in: body)
                 guard end >= position else { return nil }
             } catch {
@@ -424,6 +437,22 @@ public enum LintAnalyzer {
             return nil
         }
         return LintIndividualFix(range: range, insertText: fixInfo.insertText)
+    }
+
+    /// The validated range covering a reported markdownlint line, or nil when
+    /// the line does not locate real text.
+    private static func reportedLineRange(
+        _ lineNumber: Int, table: ByteLineTable, body: String, ns: NSString
+    ) -> LintSourceRange? {
+        guard let lower = table.offset(line: lineNumber, column: 1) else { return nil }
+        let lineEnd: Int
+        if lineNumber < table.lineCount {
+            lineEnd = table.offset(line: lineNumber + 1, column: 1) ?? body.utf8.count
+        } else {
+            lineEnd = body.utf8.count
+        }
+        guard let text = utf8Slice(lower..<lineEnd, in: body, ns: ns) else { return nil }
+        return validatedByteRange(lower..<lineEnd, expected: text, in: body)
     }
 
     /// A validated range over raw byte bounds (the drop is logged).
@@ -484,9 +513,4 @@ public enum LintAnalyzer {
             return nil
         }
     }
-}
-
-extension ByteLineTable {
-    /// Number of addressable lines (including a final line without its newline).
-    var lineCount: Int { lineStarts.count }
 }

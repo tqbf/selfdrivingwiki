@@ -73,7 +73,6 @@ struct PagesListCallbacks {
     var onOpenBackground: ([PageID]) -> Void
     var onShare: ([PageID]) -> Void
     var onReveal: (PageID) -> Void
-    var onLint: ([PageID]) -> Void
     var onRename: (WikiPageSummary) -> Void
     var onDelete: ([PageID]) -> Void
     /// Set (or clear with nil) the active wiki's home page. Routes the registry's
@@ -371,14 +370,6 @@ extension PagesListViewController {
         }
 
         menu.addItem(.separator())
-
-        let lint = menuItem(
-            title: isBatch ? "Lint \(count) Pages" : "Lint Page",
-            systemImage: "checkmark.seal", action: #selector(lintAction(_:)), payload: payload)
-        // No edit-lock disable — CAS prevents data races; lint queues via the gate.
-        menu.addItem(lint)
-
-        menu.addItem(.separator())
         if !isBatch {
             menu.addItem(menuItem(
                 title: "Rename",
@@ -444,9 +435,6 @@ extension PagesListViewController {
     }
     @objc private func revealAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onReveal(p.clicked.id) }
-    }
-    @objc private func lintAction(_ sender: NSMenuItem) {
-        if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onLint(p.effectiveIDs) }
     }
     @objc private func renameAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onRename(p.clicked) }

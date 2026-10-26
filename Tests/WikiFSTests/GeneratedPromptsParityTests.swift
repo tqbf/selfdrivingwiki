@@ -105,14 +105,6 @@ struct GeneratedPromptsParityTests {
         #expect(GeneratedPrompts.chat == md("chat.md"))
     }
 
-    @Test func lintTaskMatchesFile() {
-        #expect(GeneratedPrompts.lintTask == md("lint-task.md"))
-    }
-
-    @Test func lintPageTaskMatchesFile() {
-        #expect(GeneratedPrompts.lintPageTask == md("lint-page-task.md"))
-    }
-
     // MARK: - AC1.5: prompt templates contain CAS discipline
 
     @Test func promptsContainCASDiscipline() {
@@ -123,7 +115,6 @@ struct GeneratedPromptsParityTests {
             ("ingest-single-task", GeneratedPrompts.ingestSingleTask),
             ("ingest-curator-task", GeneratedPrompts.ingestCuratorTask),
             ("query-task", GeneratedPrompts.queryTask),
-            ("lint-page-task", GeneratedPrompts.lintPageTask),
             ("chat", GeneratedPrompts.chat),
             ("ingest-write-rule", GeneratedPrompts.ingestWriteRule),
         ]

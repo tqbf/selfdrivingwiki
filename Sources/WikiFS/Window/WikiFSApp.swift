@@ -34,6 +34,9 @@ struct WikiFSApp: App {
     @State private var installedRendererHost: InstalledRendererHost
     /// Stable provider facade resolved by the app process profile.
     @State private var agentProviderServices: MutableAgentProviderServices
+    /// The one-active-run-per-wiki foreground lint coordinator. Built in
+    /// `init` after the services facade (it hands the model lanes over).
+    @State private var lintCoordinator: ForegroundLintCoordinator
     /// One app-scoped launcher for Settings-only use ("Test Connection" + backend
     /// config). Has its own `GenerationGate`, independent of any session's gate
     /// — a Settings connection test doesn't block an active wiki's ingest.
@@ -236,6 +239,8 @@ struct WikiFSApp: App {
             })
         let providerServices = processComposition.providerServices
         _agentProviderServices = State(initialValue: providerServices)
+        _lintCoordinator = State(initialValue: ForegroundLintCoordinator(
+            services: providerServices))
         let extractionServices = processComposition.extractionServices
         let coordinator = ExtractionCoordinator(services: extractionServices)
         _extractionCoordinator = State(initialValue: coordinator)
@@ -847,6 +852,7 @@ struct WikiFSApp: App {
             .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(
                 tracker: activityTracker,
+                lintCoordinator: lintCoordinator,
                 openActivityWindow: { queue in openWindowBridge.openActivityWindow?(queue) },
                 chatDaemon: chatDaemonHolder.coordinator,
                 healthMonitor: healthMonitor)
@@ -957,6 +963,7 @@ struct WikiFSApp: App {
             .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(
                 tracker: activityTracker,
+                lintCoordinator: lintCoordinator,
                 openActivityWindow: { queue in openWindowBridge.openActivityWindow?(queue) },
                 chatDaemon: chatDaemonHolder.coordinator,
                 healthMonitor: healthMonitor)
@@ -1041,6 +1048,7 @@ struct WikiFSApp: App {
             )
             .appEnvironment(
                 tracker: activityTracker,
+                lintCoordinator: lintCoordinator,
                 openActivityWindow: { queue in
                     openWindowBridge.openQueueWindow?(queue)
                 },
@@ -1085,7 +1093,9 @@ struct WikiFSApp: App {
                     .tag(SettingsTab.renderers)
                     .tabItem { Label("Renderers", systemImage: "square.stack.3d.up") }
             }
-            .appEnvironment(tracker: activityTracker)
+            .appEnvironment(
+                tracker: activityTracker,
+                lintCoordinator: lintCoordinator)
             .preferredColorScheme(appearanceColorScheme)
             .frame(minWidth: 560, minHeight: 520)
             .onChange(of: backgroundIngestEnabled) { _, newValue in
@@ -1520,6 +1530,7 @@ extension View {
     @MainActor
     func appEnvironment(
         tracker: QueueActivityTracker,
+        lintCoordinator: ForegroundLintCoordinator,
         openActivityWindow: ((QueueKind) -> Void)? = nil,
         chatDaemon: ChatDaemonCoordinator? = nil,
         healthMonitor: DaemonHealthMonitor? = nil
@@ -1527,6 +1538,7 @@ extension View {
         assert(tracker.isAttachedToEngine, "QueueActivityTracker must be attached to a QueueEngine before injecting into a scene")
         return self
             .environment(tracker)
+            .environment(lintCoordinator)
             .environment(\.openActivityWindow, openActivityWindow)
             .environment(\.chatDaemonCoordinator, chatDaemon)
             .environment(\.daemonHealthMonitor, healthMonitor)

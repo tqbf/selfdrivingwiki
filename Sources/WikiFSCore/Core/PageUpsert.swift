@@ -86,11 +86,13 @@ public enum PageUpsert {
         body: String,
         expectation: PageWriteExpectation,
         author: String? = nil,
-        provenance: [PageVersionSourceInput] = []
+        provenance: [PageVersionSourceInput] = [],
+        expectedCanonicalBody: String? = nil
     ) throws -> Outcome {
         let outcome = try store.upsertPage(
             id: id, title: title, rawBody: body, expectation: expectation,
-            author: author, provenance: provenance)
+            author: author, provenance: provenance,
+            expectedCanonicalBody: expectedCanonicalBody)
         // Compute + store chunk embeddings for the page body — AFTER the
         // composed write, never inside its transaction (plan phase 4 §9:
         // derived work stays outside). Non-fatal: a failure (or the model
@@ -117,7 +119,8 @@ public enum PageUpsert {
         rawBody: String,
         expectation: PageWriteExpectation,
         author: String?,
-        provenance: [PageVersionSourceInput]
+        provenance: [PageVersionSourceInput],
+        expectedCanonicalBody: String? = nil
     ) throws -> Outcome {
         // Sanitize BEFORE the title→id resolve, not just in the store's
         // create/update (which sanitizes again as a backstop): resolving the
@@ -136,6 +139,20 @@ public enum PageUpsert {
             resolveChat: { title in
                 try store.resolveChatByTitle(title)
             })) ?? rawBody
+        // The pinned-candidate assertion (foreground lint Apply): refuse
+        // without writing when canonicalization would persist different bytes
+        // than the preview showed.
+        if let expectedCanonicalBody,
+           canonicalBody != expectedCanonicalBody {
+            var expectedHead: PageVersionID?
+            if case .expectedHead(let head) = expectation { expectedHead = head }
+            let resolvedID = try id ?? store.resolveTitleToID(title)
+            throw PageCanonicalizationConflictError(
+                pageID: resolvedID ?? PageID(rawValue: ""),
+                expectedHead: expectedHead,
+                expectedBodyBytes: expectedCanonicalBody.utf8.count,
+                actualBodyBytes: canonicalBody.utf8.count)
+        }
         let outcome = try writePage(
             in: store, id: id, title: title, body: canonicalBody,
             expectation: expectation, author: author,

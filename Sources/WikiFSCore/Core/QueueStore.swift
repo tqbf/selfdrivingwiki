@@ -803,7 +803,13 @@ public final class QueueStore: @unchecked Sendable {
     /// converge on exactly one row.
     @discardableResult
     public func enqueue(_ request: QueueItemRequest) throws -> QueueItem {
-        try Self.wrap {
+        // Retired-lint guard (defense in depth with QueueEngine.enqueue):
+        // daemon/CLI paths write the store directly, so this boundary refuses
+        // legacy lint payloads too — no new lint row can enter the queue.
+        if request.payload.isLegacyLint {
+            throw QueueStoreError.invalidRequest(QueueItemPayload.retiredLintMessage)
+        }
+        return try Self.wrap {
             let queue = try self.queue()
             let dedupeKey = request.dedupeKey
             return try queue.write { db in
@@ -1137,6 +1143,27 @@ public final class QueueStore: @unchecked Sendable {
         try Self.wrap {
             let queue = try self.queue()
             try queue.write { db in
+                // Retired-lint guard: a legacy lint row must never re-enter
+                // the queue — the execution path is gone and the worker would
+                // only fail it again at the same guard. A payload that fails
+                // to DECODE is left alone (logged): corruption surfaces
+                // through the worker's own decode, not as a retry refusal.
+                if let payloadText = try String.fetchOne(
+                    db,
+                    sql: "SELECT payload FROM queue_items WHERE id = ?;",
+                    arguments: [id.rawValue]) {
+                    do {
+                        if try Self.decodePayload(payloadText).isLegacyLint {
+                            throw QueueStoreError.invalidRequest(
+                                QueueItemPayload.retiredLintMessage)
+                        }
+                    } catch let error as QueueStoreError {
+                        throw error
+                    } catch {
+                        DebugLog.store(
+                            "QueueStore.retryItem: payload decode failed — retry proceeds and the worker will surface the corruption: \(error)")
+                    }
+                }
                 try db.execute(
                     sql: """
                     UPDATE queue_items

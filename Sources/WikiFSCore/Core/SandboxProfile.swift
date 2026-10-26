@@ -771,7 +771,11 @@ public enum SandboxProfile {
     /// (`ExtractorSandboxProfile`) shares the exact same canonicalization —
     /// both profiles must resolve roots the way the seatbelt kernel matcher
     /// does, and they must not drift.
-    static func canonical(_ path: String) -> String {
+    /// Canonicalize a path with realpath(3) so seatbelt matchers and
+    /// existence checks agree on the real location (symlinked components
+    /// would otherwise make an allow rule silently fail). Non-existent paths
+    /// fall back to the input.
+    public static func canonical(_ path: String) -> String {
         var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
         guard let resolved = realpath(path, &buf) else { return path }
         return String(cString: resolved)

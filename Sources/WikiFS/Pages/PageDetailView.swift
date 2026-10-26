@@ -63,6 +63,30 @@ struct PageDetailView: View {
     /// Opens the value-driven Versions `WindowGroup` (#817). Captured from the
     /// environment (only available inside a `WindowGroup`'s view hierarchy).
     @Environment(\.openWindow) private var openWindow
+    /// The one-active-run-per-wiki foreground lint coordinator.
+    @Environment(ForegroundLintCoordinator.self) private var lintCoordinator
+
+    /// The presented lint sheet (nil = closed). Item-driven so dismissal and
+    /// reopen focus behave like any sheet.
+    @State private var lintPresentation: LintSheetPresentation?
+    @State private var showsLintRefusal = false
+    @State private var lintRefusalMessage = ""
+
+    /// The `.sheet(item:)` payload for the lint sheet. `id` snapshots the
+    /// run identity at creation (the session is main-actor; Identifiable
+    /// conformance is not).
+    struct LintSheetPresentation: Identifiable {
+        let session: ForegroundLintSession
+        let title: String
+        let id: String
+
+        @MainActor
+        init(session: ForegroundLintSession, title: String) {
+            self.session = session
+            self.title = title
+            self.id = session.runID.rawValue
+        }
+    }
 
     init(
         store: WikiStoreModel,
@@ -326,61 +350,124 @@ struct PageDetailView: View {
             }
             }
             .frame(maxWidth: .infinity)
+            .sheet(item: $lintPresentation) { presentation in
+                ForegroundLintSheet(
+                    session: presentation.session,
+                    pageTitle: presentation.title,
+                    onApply: { proposal, candidate in
+                        applyLintProposal(proposal, candidate, in: presentation)
+                    },
+                    onClose: {
+                        lintCoordinator.close(wikiID: session.wikiID)
+                        lintPresentation = nil
+                    })
+            }
+            .alert("Lint Unavailable", isPresented: $showsLintRefusal) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(lintRefusalMessage)
+            }
     }
 
     // MARK: - Lint button
 
-    /// The page-level "Lint" action button. Reflects an in-flight lint on this
-    /// page: when a lint (whole-wiki or page-level) is running, the button swaps
-    /// to a filled "View Lint" state and taps navigate to that specific lint job
-    /// in the Activity window (#837). When no lint is running, tapping enqueues
-    /// a new page-level lint.
+    /// The page-level "Lint" action: opens the foreground review sheet for
+    /// this page (one active run per wiki, via `ForegroundLintCoordinator`).
+    /// Blocked while the editor draft is dirty — lint inspects committed
+    /// content and never autosaves or discards a draft. No queue insertion.
     @ViewBuilder
     private var lintButton: some View {
         if case .page(let id) = store.selection {
-            let pageIsLinting = activityTracker.isLinting(
-                pageID: id, wikiID: session.wikiID)
-            Button(pageIsLinting ? "View Lint" : "Lint",
-                   systemImage: pageIsLinting
-                   ? "checkmark.seal.fill"
-                   : "checkmark.seal") {
-                if pageIsLinting {
-                    // A lint is already active for this page (whole-wiki or
-                    // page-level) — navigate to the job in the Activity window
-                    // instead of enqueuing a duplicate (#837).
-                    if let itemID = activityTracker.lintItemID(
-                        for: id, wikiID: session.wikiID) {
-                        activityTracker.pendingSelectionItemID = itemID
-                        openActivityWindow?(.ingestion)
-                        DebugLog.ingest("Lint button: navigating to lint job \(itemID) for page \(id) in wiki \(session.wikiID.rawValue.prefix(8))")
-                    } else {
-                        // isLinting returned true but we couldn't resolve the
-                        // specific item (race: item just finished). Fall back to
-                        // opening the Activity window without a selection.
-                        openActivityWindow?(.ingestion)
-                        DebugLog.ingest("Lint button: lint in flight for page \(id) but item not found; opening Activity window")
-                    }
-                } else {
-                    Task {
-                        // Closed-wiki name resolution: record the page title
-                        // already in hand so the Activity window keeps a
-                        // readable input row after this wiki's window closes.
-                        let title = store.summaries.first { $0.id == id }?.title
-                        let payload = QueueItemPayload(
-                            sourceIDs: [],
-                            lintPageIDs: [id],
-                            recordedNames: title.map { [id.rawValue: $0] })
-                        await DebugLog.trying("enqueue lint request", operation: { try await session.queueEngine.enqueue(QueueItemRequest(
-                            queue: .ingestion,
-                            wikiID: session.wikiID,
-                            payload: payload
-                        )) })
-                    }
-                }
+            let blockedReason = store.lintBlockedReason(pageID: id)
+            Button {
+                openLint(for: id)
+            } label: {
+                Label("Lint", systemImage: "checkmark.seal")
             }
-            .help(pageIsLinting
-                  ? "View the running lint job in the Activity window"
-                  : "Fix [[wiki-link]] syntax and run LLM lint on this page")
+            .disabled(blockedReason != nil)
+            .help(blockedReason ?? "Review this page — findings, repair choices, and a preview before anything saves")
+        }
+    }
+
+    /// Open (or focus) the foreground lint sheet for `pageID`. Reopening the
+    /// same page focuses the existing run; a different page's run is refused
+    /// while the first sheet is active (never invisible background work).
+    private func openLint(for pageID: PageID) {
+        if let blocked = store.lintBlockedReason(pageID: pageID) {
+            lintRefusalMessage = blocked
+            showsLintRefusal = true
+            return
+        }
+        // Reopen → focus the existing run.
+        if lintCoordinator.isActive(pageID: pageID, wikiID: session.wikiID),
+           let active = lintCoordinator.activeSession(for: session.wikiID) {
+            active.isSheetVisible = true
+            lintPresentation = LintSheetPresentation(
+                session: active,
+                title: store.summaries.first { $0.id == pageID }?.title ?? "Page")
+            return
+        }
+        guard let active = lintCoordinator.open(
+            pageID: pageID,
+            wikiID: session.wikiID,
+            store: store,
+            configDirectory: resolvedLintConfigDirectory()) else {
+            lintRefusalMessage = "A lint run is already active for this wiki. Close it before linting another page."
+            showsLintRefusal = true
+            return
+        }
+        active.isSheetVisible = true
+        let strategy = store.lintStrategyContext
+        active.start(
+            pageID: pageID,
+            strategyRevision: strategy.revision,
+            strategyContext: strategy.rendered)
+        lintPresentation = LintSheetPresentation(
+            session: active,
+            title: store.summaries.first { $0.id == pageID }?.title ?? "Page")
+    }
+
+    /// The App Group container directory the pipeline configuration loads
+    /// from (nil on resolution failure — the bundled defaults then apply).
+    private func resolvedLintConfigDirectory() -> URL? {
+        do {
+            return try DatabaseLocation.appGroupContainerDirectory()
+        } catch {
+            DebugLog.lint("Lint config directory unavailable, using bundled defaults: \(error)")
+            return nil
+        }
+    }
+
+    /// The exact Apply handoff: the composed write with the previewed
+    /// candidate pinned. Every refusal path writes nothing.
+    private func applyLintProposal(
+        _ proposal: LintRepairProposal, _ candidate: String,
+        in presentation: LintSheetPresentation
+    ) -> LintApplyOutcome {
+        guard let snapshot = presentation.session.snapshot else {
+            return .refused("The lint run has no captured snapshot — rerun lint.")
+        }
+        guard !store.hasDirtyDraft else {
+            return .stale("This page has unsaved edits. Save or Cancel editing, then rerun lint. Nothing was written.")
+        }
+        do {
+            let versionID = try store.lintApply(
+                pageID: proposal.pageID,
+                title: snapshot.title,
+                canonicalCandidate: candidate,
+                expectedHead: snapshot.headVersionID)
+            return .committed(versionID)
+        } catch WikiStoreModel.LintApplyRefused.dirtyDraft {
+            return .stale("This page has unsaved edits. Nothing was written.")
+        } catch is PageCanonicalizationConflictError {
+            return .refused("The page's links changed since the preview — rerun lint and preview again. Nothing was written.")
+        } catch is PageExpectedTargetMissingError {
+            return .stale("The page was deleted or renamed since the lint run. Nothing was written.")
+        } catch is PageConflictError {
+            return .stale("The page changed since the lint run. Rerun lint. Nothing was written.")
+        } catch {
+            DebugLog.lint("Lint Apply failed: \(error)")
+            return .refused("Apply failed: \(error)")
         }
     }
 

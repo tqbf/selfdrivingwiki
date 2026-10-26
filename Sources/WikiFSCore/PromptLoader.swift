@@ -53,8 +53,6 @@ enum GeneratedPrompts {
     static let ingestCuratorTask = load("ingest-curator-task")
     static let queryTask = load("query-task")
     static let chat = load("chat")
-    static let lintTask = load("lint-task")
-    static let lintPageTask = load("lint-page-task")
     static let lintCheck = load("lint-check")
     static let lintRepair = load("lint-repair")
     static let ingestPlanner = load("ingest-planner")

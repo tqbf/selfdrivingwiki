@@ -20,17 +20,34 @@ struct MarkdownRenderOptions: Sendable {
     let rendererEmbedProjection: RendererEmbedProjection?
     let documentIdentity: MarkdownDocumentIdentity?
     let rendererActivationAdmission: RendererEmbedActivationAdmission?
+    /// Inert lint block markers: authored UTF-8 source ranges whose
+    /// intersecting top-level blocks get `data-lint-mark` (the foreground
+    /// lint sheet's rendered highlight). Empty for every other caller — the
+    /// attribute never appears in reader/chat/output paths.
+    let lintHighlightRanges: [MarkdownSourceRange]
 
     init(
         codeHighlighting: MarkdownCodeHighlightingPolicy,
         rendererEmbedProjection: RendererEmbedProjection?,
         documentIdentity: MarkdownDocumentIdentity?,
-        rendererActivationAdmission: RendererEmbedActivationAdmission?
+        rendererActivationAdmission: RendererEmbedActivationAdmission?,
+        lintHighlightRanges: [MarkdownSourceRange] = []
     ) {
         self.codeHighlighting = codeHighlighting
         self.rendererEmbedProjection = rendererEmbedProjection
         self.documentIdentity = documentIdentity
         self.rendererActivationAdmission = rendererActivationAdmission
+        self.lintHighlightRanges = lintHighlightRanges
+    }
+
+    /// A copy of these options with lint block markers set (lint sheet only).
+    func withLintHighlights(_ ranges: [MarkdownSourceRange]) -> Self {
+        Self(
+            codeHighlighting: codeHighlighting,
+            rendererEmbedProjection: rendererEmbedProjection,
+            documentIdentity: documentIdentity,
+            rendererActivationAdmission: rendererActivationAdmission,
+            lintHighlightRanges: ranges)
     }
 
     static var reader: Self {
@@ -109,6 +126,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         renderer.preparedDocument = prepared
         renderer.resolvedDocumentProjection = projection
         renderer.isCancelled = isCancelled
+        renderer.lintHighlights = options.lintHighlightRanges
         return renderer.visit(prepared.document)
     }
 
@@ -125,6 +143,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     private var resolvedDocumentProjection: ResolvedDocumentProjection?
     private var emittedWikiRanges: Set<MarkdownSourceRange> = []
     private var isCancelled: @Sendable () -> Bool = { Task.isCancelled }
+    /// The lint sheet's highlight ranges (authored UTF-8 coordinates).
+    private var lintHighlights: [MarkdownSourceRange] = []
 
     private enum RendererCardActivationState {
         case admitted(actionURL: String)
@@ -148,6 +168,17 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     }
 
     private mutating func visitChildren(_ markup: Markup) -> String {
+        // Lint block markers: when the lint sheet supplied highlight ranges,
+        // top-level blocks intersecting them are wrapped in an inert marker
+        // div (no content semantics — a DOM attribute the sheet's CSS +
+        // tests key on).
+        if !lintHighlights.isEmpty,
+           markup is Document {
+            return markup.children.reduce(into: "") { result, child in
+                let html = visit(child)
+                result += Self.wrapsLintHighlight(child, html: html, highlights: lintHighlights, prepared: preparedDocument)
+            }
+        }
         guard let prepared = preparedDocument,
               prepared.wikiSyntax.isEmpty == false else {
             return markup.children.reduce(into: "") { result, child in result += visit(child) }
@@ -292,6 +323,29 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             startUTF8Column: range.lowerBound.column,
             endLine: range.upperBound.line,
             endUTF8Column: range.upperBound.column)
+    }
+
+    /// Wrap a top-level block's HTML in the inert lint marker when the
+    /// block's authored source range intersects any highlight range. A block
+    /// with no resolvable range is never marked (no fabricated highlight).
+    static func wrapsLintHighlight(
+        _ child: Markup, html: String,
+        highlights: [MarkdownSourceRange],
+        prepared: PreparedMarkdownDocument?
+    ) -> String {
+        guard !highlights.isEmpty, let prepared, let range = child.range else {
+            return html
+        }
+        guard let blockRange = prepared.lineTable.range(
+            startLine: range.lowerBound.line,
+            startUTF8Column: range.lowerBound.column,
+            endLine: range.upperBound.line,
+            endUTF8Column: range.upperBound.column) else {
+            return html
+        }
+        let intersects = highlights.contains { $0.intersects(blockRange) }
+        guard intersects else { return html }
+        return "<div class=\"wiki-lint-mark\" data-lint-mark=\"1\">\(html)</div>"
     }
 
     private func authoredSlice(_ range: MarkdownSourceRange, prepared: PreparedMarkdownDocument) -> String? {

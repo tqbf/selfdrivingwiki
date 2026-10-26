@@ -811,13 +811,34 @@ struct QueueEngineTests {
         store.close()
     }
 
-    // MARK: - Lint per-wiki serialization + cross-wiki concurrency
+    // MARK: - Retired lint payload boundary
 
-    private func lintPayload() -> QueueItemPayload {
-        QueueItemPayload(sourceIDs: [], lintPageIDs: [])
+    /// The retirement contract at the engine boundary: a legacy lint payload
+    /// is refused at enqueue with the user-facing message — it never enters
+    /// the queue, so no worker, pause, or dispatch semantics can ever see it.
+    @Test func legacyLintPayloadIsRefusedAtEnqueue() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let factory = FakeWorkerFactory(
+            providerID: { _ in ProviderID(rawValue: "p1") },
+            worker: { _ in })
+        let engine = QueueEngine(store: store, workerFactory: factory)
+        do {
+            _ = try await engine.enqueue(
+                QueueItemRequest(
+                    queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
+                    payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [])))
+            Issue.record("Legacy lint enqueue should have been refused")
+        } catch let error as QueueStoreError {
+            guard case .invalidRequest(let message) = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+            #expect(message.contains("Queued lint was removed"))
+        }
+        store.close()
     }
 
-    @Test func testLintAndIngestSerializePerWiki() async throws {
+    @Test func testIngestItemsSerializePerWiki() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let gate = CountDownLatch(count: 1)
@@ -833,9 +854,9 @@ struct QueueEngineTests {
         let config = QueueEngineConfig(ingestionLimits: ["p1": 2])
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
-        // Enqueue a lint item and an ingestion item for the SAME wiki.
+        // Enqueue two ingestion items for the SAME wiki.
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: lintPayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         _ = try await engine.enqueue(
             QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
@@ -851,7 +872,7 @@ struct QueueEngineTests {
         store.close()
     }
 
-    @Test func testCrossWikiLintConcurrency() async throws {
+    @Test func testCrossWikiIngestConcurrency() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let recorder = FakeWorkerRecorder()
@@ -868,9 +889,9 @@ struct QueueEngineTests {
         let engine = QueueEngine(store: store, config: config, workerFactory: factory)
 
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: lintPayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w2"), payload: lintPayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w2"), payload: makePayload()))
 
         await engine.start()
 
@@ -881,7 +902,7 @@ struct QueueEngineTests {
         store.close()
     }
 
-    @Test func testPauseStopsLintDispatch() async throws {
+    @Test func testPauseStopsIngestDispatch() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
         let gate = CountDownLatch(count: 1)
@@ -900,9 +921,9 @@ struct QueueEngineTests {
         // Both on the SAME wiki so the per-wiki invariant keeps the second queued
         // until the first finishes. Then pause stops the second from dispatching.
         let id1 = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: lintPayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
         _ = try await engine.enqueue(
-            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: lintPayload()))
+            QueueItemRequest(queue: .ingestion, wikiID: WikiID(rawValue: "w1"), payload: makePayload()))
 
         await engine.start()
         try await recorder.waitForCount(1, timeoutSeconds: 5)

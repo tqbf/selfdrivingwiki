@@ -124,11 +124,11 @@ public enum LintLocationAdapter {
 /// reader's `MarkdownSourceLineTable` performs, kept here so lint findings map
 /// markdownlint's line/column coordinates onto the authored byte offsets the
 /// rest of the app uses.
-struct ByteLineTable {
+public struct ByteLineTable {
     private let lineStarts: [Int]
     private let utf8Count: Int
 
-    init(source: String) {
+    public init(source: String) {
         let bytes = Array(source.utf8)
         var starts = [0]
         for index in bytes.indices where bytes[index] == 0x0A {
@@ -138,13 +138,19 @@ struct ByteLineTable {
         utf8Count = bytes.count
     }
 
+    /// Number of addressable lines (including a final line without its newline).
+    public var lineCount: Int { lineStarts.count }
+
     /// Byte offset of a 1-based line/column pair (column counted in UTF-8
-    /// bytes). Accepts exactly ONE past-end line (the phantom line after the
-    /// final line break, e.g. markdownlint's file-end rules) with column 1,
-    /// mapping it to end-of-file. Returns nil for out-of-range coordinates.
-    func offset(line: Int, column: Int) -> Int? {
+    /// bytes). Accepts exactly ONE past-end line — but ONLY when the text
+    /// does not end with a newline (a trailing newline already produces the
+    /// empty final line), e.g. markdownlint's file-end rules — mapping its
+    /// start to end-of-file. Returns nil for out-of-range coordinates.
+    public func offset(line: Int, column: Int) -> Int? {
         guard line > 0, column > 0 else { return nil }
-        if line == lineStarts.count + 1 {
+        let endsWithNewline = utf8Count > 0 && lineStarts.count > 1
+            && lineStarts[lineStarts.count - 1] == utf8Count
+        if !endsWithNewline, line == lineStarts.count + 1 {
             // The one past-end line: its "start" is EOF.
             return column == 1 ? utf8Count : nil
         }

@@ -4713,6 +4713,52 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    /// The one-transaction coherent read the foreground lint run captures
+    /// with: page row + head version + the resolution namespaces, all inside
+    /// ONE `dbWriter.read` block so the snapshot can never straddle a commit.
+    public func lintCapture(pageID: PageID) throws -> LintCapture? {
+        try dbWriter.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT id, title, body_markdown FROM pages WHERE id = ?;",
+                arguments: [pageID.rawValue]
+            ) else { return nil }
+            let title: String = row["title"]
+            let body: String = row["body_markdown"]
+            let head = try Self.pageHeadVersionIDLocked(pageID: pageID, on: db)
+            guard let head else { return nil }
+            // Resolution namespaces — titles only, same data the analyzer's
+            // facts carry (bounded by the Lint types' caps at construction).
+            // Source effective names mirror the store's own derivation:
+            // `COALESCE(display_name, filename)` (same expression the
+            // link-map projection uses).
+            let pageTitles = try String.fetchAll(
+                db, sql: "SELECT title FROM pages;")
+            let pageIDs = try String.fetchAll(db, sql: "SELECT id FROM pages;")
+            let sourceNames = try String.fetchAll(
+                db, sql: "SELECT COALESCE(display_name, filename) FROM sources;")
+            let sourceIDs = try String.fetchAll(db, sql: "SELECT id FROM sources;")
+            let chatTitles = try String.fetchAll(
+                db, sql: "SELECT title FROM chats;")
+            let chatIDs = try String.fetchAll(db, sql: "SELECT id FROM chats;")
+            return LintCapture(
+                pageID: pageID,
+                title: title,
+                body: body,
+                headVersionID: head,
+                facts: LintResolutionFacts(
+                    knownPageTitles: Set(pageTitles),
+                    knownPageIDs: Set(pageIDs.map { $0.uppercased() }),
+                    knownSourceIDs: Set(sourceIDs.map { $0.uppercased() }),
+                    sourceEffectiveNames: sourceNames,
+                    knownChatTitles: Set(chatTitles),
+                    knownChatIDs: Set(chatIDs.map { $0.uppercased() }),
+                    pagesAvailable: true,
+                    sourcesAvailable: true,
+                    chatsAvailable: true))
+        }
+    }
+
     public func getPage(id: PageID) throws -> WikiPage {
         try dbWriter.read { db in
             guard let row = try Row.fetchOne(
@@ -4946,7 +4992,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         id: PageID?, title: String, rawBody: String,
         expectation: PageWriteExpectation,
         author: String? = nil,
-        provenance: [PageVersionSourceInput] = []
+        provenance: [PageVersionSourceInput] = [],
+        expectedCanonicalBody: String? = nil
     ) throws -> PageUpsert.Outcome {
         let result = try mutate(event: { (result: ComposedUpsertResult) in
             guard result.didWrite else { return nil }
@@ -4956,7 +5003,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }) { db in
             try self.upsertPageLocked(
                 id: id, title: title, rawBody: rawBody, expectation: expectation,
-                author: author, provenance: provenance, on: db)
+                author: author, provenance: provenance,
+                expectedCanonicalBody: expectedCanonicalBody, on: db)
         }
         return result.outcome
     }
@@ -4968,6 +5016,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         id: PageID?, title: String, rawBody: String,
         expectation: PageWriteExpectation,
         author: String?, provenance: [PageVersionSourceInput],
+        expectedCanonicalBody: String? = nil,
         on db: Database
     ) throws -> ComposedUpsertResult {
         // 1. Sanitize BEFORE resolving (the same rule as the sequential seam):
@@ -4987,6 +5036,22 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             resolvePage: { try self.resolveTitleToIDLocked($0, in: db) },
             resolveSource: { try self.resolveSourceByNameLocked($0, in: db) },
             resolveChat: { try self.resolveChatByTitleLocked($0, in: db) })) ?? rawBody
+
+        // 2b. The pinned-candidate assertion (foreground lint Apply): the
+        //     preview showed `expectedCanonicalBody`; if the title graph
+        //     moved since the preview and canonicalization now produces
+        //     different bytes, refuse BEFORE any content write — the caller
+        //     re-previews instead of saving something unreviewed. The
+        //     savepoint rolls back with nothing content-bearing written.
+        if let expectedCanonicalBody, canonicalBody != expectedCanonicalBody {
+            var expectedHead: PageVersionID?
+            if case .expectedHead(let head) = expectation { expectedHead = head }
+            throw PageCanonicalizationConflictError(
+                pageID: id ?? PageID(rawValue: ""),
+                expectedHead: expectedHead,
+                expectedBodyBytes: expectedCanonicalBody.utf8.count,
+                actualBodyBytes: canonicalBody.utf8.count)
+        }
 
         // 3. Resolve the target INSIDE the transaction: an explicit id wins
         //    (existence-checked); otherwise the title resolves against

@@ -256,30 +256,6 @@ struct PagesContainerView: View {
             onReveal: { id in
                 Task { await fileProvider.revealPageInFinder(id: id) }
             },
-            onLint: { ids in
-                Task {
-                    do {
-                        // Closed-wiki name resolution: record the page
-                        // titles already in hand (the wiki is open here) so
-                        // the Activity window keeps readable input rows
-                        // after this wiki's window closes.
-                        let titles = Dictionary(uniqueKeysWithValues: ids.compactMap { id in
-                            store.summaries.first { $0.id == id }.map { (id.rawValue, $0.title) }
-                        })
-                        let payload = QueueItemPayload(
-                            sourceIDs: [],
-                            lintPageIDs: ids,
-                            recordedNames: titles.isEmpty ? nil : titles)
-                        _ = try await session.queueEngine.enqueue(QueueItemRequest(
-                            queue: .ingestion,
-                            wikiID: session.wikiID,
-                            payload: payload
-                        ))
-                    } catch {
-                        DebugLog.store("PagesContainerView.onLint enqueue failed: \(error)")
-                    }
-                }
-            },
             onRename: { summary in beginRename(summary) },
             onDelete: { ids in
                 requestPageDeletion(ids)
