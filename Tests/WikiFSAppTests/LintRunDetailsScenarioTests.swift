@@ -46,6 +46,11 @@ struct LintRunDetailsScenarioTests {
     /// controls row's SECOND control (Reject, right of the leading Approve
     /// control — both `.controlSize(.small)`, bordered).
     private static let rejectControlXOffset: CGFloat = 145
+    /// A finding controls row's leading control (Fix, or Edit Manually
+    /// once the fix settled), clicked on the row's TOP line — the row grows
+    /// a status line beneath the controls, so its center misses them.
+    private static let findingControlXOffset: CGFloat = 40
+    private static let findingControlYFromTop: CGFloat = 12
 
     // MARK: - Fixture
 
@@ -362,10 +367,13 @@ struct LintRunDetailsScenarioTests {
     /// not the control. `rejectControlXOffset` reaches past the leading
     /// Approve control to the second control in a proposal controls row.
     private func pressRow(
-        _ rowView: NSView, window: NSWindow, xOffset: CGFloat = 40
+        _ rowView: NSView, window: NSWindow, xOffset: CGFloat = 40,
+        yFromTop: CGFloat? = nil
     ) -> Bool {
         let bounds = frameInWindow(rowView, window: window)
-        let center = CGPoint(x: bounds.minX + xOffset, y: bounds.midY)
+        // Window coordinates grow upward: the row's top line is near maxY.
+        let y = yFromTop.map { bounds.maxY - $0 } ?? bounds.midY
+        let center = CGPoint(x: bounds.minX + xOffset, y: y)
         let uptime = ProcessInfo.processInfo.systemUptime
         guard
             let down = NSEvent.mouseEvent(
@@ -413,11 +421,12 @@ struct LintRunDetailsScenarioTests {
     /// before the button mounts. `effect` is the observable outcome.
     private func pressControlRowUntil(
         at index: Int, in mounted: Mounted, xOffset: CGFloat = 40,
+        yFromTop: CGFloat? = nil,
         effect: @MainActor () -> Bool
     ) async -> Bool {
         for _ in 0..<10 {
             if let row = rowView(at: index, in: mounted) {
-                _ = pressRow(row, window: mounted.window, xOffset: xOffset)
+                _ = pressRow(row, window: mounted.window, xOffset: xOffset, yFromTop: yFromTop)
             }
             if await waitUntil(effect, attempts: 10) { return true }
         }
@@ -638,6 +647,135 @@ struct LintRunDetailsScenarioTests {
         #expect(moreTexts, "the counts, reason, and finding rows mount selectable text")
         #expect(rowView(at: Self.baseRowCount + 4, in: findings) != nil,
                 "the last finding row materializes")
+    }
+
+    // MARK: - Per-finding repair (Fix / Edit Manually)
+
+    /// Records the Fix and Edit Manually clicks the panel routes to its
+    /// caller — the Activity window's seams (enqueue a per-finding item;
+    /// open the page editor).
+    @MainActor
+    private final class FindingActionSink {
+        var fixed: [QueueLintFindingKey] = []
+        var edited: [PageID] = []
+    }
+
+    /// The findings section with its per-finding controls wired exactly as
+    /// the Activity window wires them: Fix records the click and moves the
+    /// row in-flight (the click-local bridge before the queue snapshot shows
+    /// the fix run); Edit Manually routes the page.
+    private struct HostedFindingsPanel: View {
+        let facts: QueueRunDetailsFacts
+        @State var findings: QueueRunDetailsLintFindings
+        let sink: FindingActionSink
+
+        var body: some View {
+            QueueRunDetailsView(
+                facts,
+                lintFindings: findings,
+                onFixFinding: { page, finding in
+                    let key = QueueLintFindingKey(pageID: page.pageID, findingID: finding.occurrenceID)
+                    guard findings.fixStates[key]?.fixEnabled == true else { return }
+                    sink.fixed.append(key)
+                    // One fix run at a time per page: this row goes
+                    // in-flight, the page's other rows go busy.
+                    for other in findings.fixStates.keys where other.pageID == page.pageID {
+                        findings.fixStates[other] = other == key ? .inFlight(itemID: nil) : .pageBusy
+                    }
+                },
+                onEditFindingPage: { page in sink.edited.append(page.pageID) })
+                .frame(width: 380, height: 620)
+                .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+
+    private func mountFindings(
+        _ findings: QueueRunDetailsLintFindings, sink: FindingActionSink
+    ) -> Mounted {
+        _ = Self.app
+        let panel = HostedFindingsPanel(
+            facts: QueueRunDetailsFacts(
+                jobID: QueueItem.ID(rawValue: "lint-item"),
+                providerModel: .agent(provider: "anthropic", model: "claude-opus")),
+            findings: findings, sink: sink)
+        let host = NSHostingController(rootView: panel)
+        let window = NSWindow(contentViewController: host)
+        window.setContentSize(NSSize(width: 400, height: 640))
+        window.makeKeyAndOrderFront(nil)
+        return Mounted(window: window, fixture: sink)
+    }
+
+    /// A report-only run's findings with Fix available on each: every
+    /// finding row is followed by its OWN controls row; a synthesized click
+    /// on the first controls row's leading Fix reaches the caller's seam
+    /// for exactly that finding, and the page's rows move to in-flight /
+    /// busy (one fix per page). A second click is inert.
+    @Test func fixControlsRowRoutesTheClickForItsFinding() async throws {
+        let fixture = try Fixture()
+        var findings = try fixture.reportOnlyFindingsSection()
+        let page = try #require(findings.pages.first)
+        #expect(page.inspectedHead == fixture.inspectedHead,
+                "the Fix target names the head the findings were detected on")
+        for finding in page.findings {
+            findings.fixStates[QueueLintFindingKey(pageID: page.pageID, findingID: finding.occurrenceID)]
+                = QueueLintFindingFixState.derive(
+                    finding: finding, pageID: page.pageID, inspectedHead: page.inspectedHead,
+                    fixRuns: [], enqueueing: false, enqueueProblem: nil)
+        }
+        #expect(findings.fixStates.values.allSatisfy { $0 == .available })
+
+        let sink = FindingActionSink()
+        let mounted = mountFindings(findings, sink: sink)
+        // header + class counts + report-only line + 2 × (finding + controls).
+        let expectedRows = Self.baseRowCount + 7
+        let appeared = await waitUntil { [self] in rowCount(in: mounted) == expectedRows }
+        #expect(appeared, "every finding row has its own controls row")
+
+        let firstControlsRow = Self.baseRowCount + 4
+        let firstKey = QueueLintFindingKey(pageID: page.pageID, findingID: page.findings[0].occurrenceID)
+        let pressed = await pressControlRowUntil(
+            at: firstControlsRow, in: mounted, xOffset: Self.findingControlXOffset,
+            yFromTop: Self.findingControlYFromTop) {
+            sink.fixed == [firstKey]
+        }
+        #expect(pressed, "the Fix click reaches the caller for exactly that finding")
+        await settle()
+        _ = pressRow(try #require(rowView(at: firstControlsRow, in: mounted)),
+                     window: mounted.window, xOffset: Self.findingControlXOffset,
+                     yFromTop: Self.findingControlYFromTop)
+        await settle()
+        #expect(sink.fixed == [firstKey], "an in-flight Fix is disabled — no second enqueue")
+        #expect(rowCount(in: mounted) == expectedRows, "the rows stay; only their state changes")
+    }
+
+    /// Settled fix runs replace the Fix button with their honest status:
+    /// applied, reverted (with what verification caught), page changed.
+    /// The rows still mount (status text is selectable), and Edit Manually
+    /// stays reachable on every row.
+    @Test func settledFixRunsRenderTheirStatus() async throws {
+        let fixture = try Fixture()
+        var findings = try fixture.reportOnlyFindingsSection()
+        let page = try #require(findings.pages.first)
+        let keys = page.findings.map {
+            QueueLintFindingKey(pageID: page.pageID, findingID: $0.occurrenceID)
+        }
+        findings.fixStates[keys[0]] = .applied(itemID: QueueItem.ID(rawValue: "fix-1"))
+        findings.fixStates[keys[1]] = .pageChanged(itemID: QueueItem.ID(rawValue: "fix-2"))
+        #expect(findings.fixStates.values.allSatisfy { $0.showsFixButton == false })
+
+        let sink = FindingActionSink()
+        let mounted = mountFindings(findings, sink: sink)
+        let expectedRows = Self.baseRowCount + 7
+        let appeared = await waitUntil { [self] in rowCount(in: mounted) == expectedRows }
+        #expect(appeared)
+        // Without a Fix button the leading control is Edit Manually.
+        let pressed = await pressControlRowUntil(
+            at: Self.baseRowCount + 4, in: mounted, xOffset: Self.findingControlXOffset,
+            yFromTop: Self.findingControlYFromTop) {
+            sink.edited == [page.pageID]
+        }
+        #expect(pressed, "Edit Manually stays reachable after the fix settled")
+        #expect(sink.fixed.isEmpty)
     }
 
     // MARK: - W5b: staged-proposal review scenarios

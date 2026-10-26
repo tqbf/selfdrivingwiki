@@ -47,6 +47,12 @@ struct QueueRunDetailsView: View {
     private let onApproveProposal: ((QueueLintStagedProposal) -> Void)?
     private let onRejectProposal: ((QueueLintStagedProposal) -> Void)?
     private let onApproveAllProposals: (() -> Void)?
+    /// The per-finding repair actions (a person's Fix click on ONE finding,
+    /// the established page editor, and opening a fix run), owned by the
+    /// caller. `nil` renders the finding rows without those controls.
+    private let onFixFinding: ((QueueRunDetailsLintFindings.PageFindings, LintPageRecordFacts.RecordFinding) -> Void)?
+    private let onEditFindingPage: ((QueueRunDetailsLintFindings.PageFindings) -> Void)?
+    private let onShowFixRun: ((QueueItem.ID) -> Void)?
     /// Resolves a page version's body from the wiki store for the reverted
     /// diffs and the proposals' projected diffs. `nil` (or a nil answer)
     /// degrades the disclosure to findings text without the diff, and a
@@ -68,6 +74,9 @@ struct QueueRunDetailsView: View {
         onApproveProposal: ((QueueLintStagedProposal) -> Void)? = nil,
         onRejectProposal: ((QueueLintStagedProposal) -> Void)? = nil,
         onApproveAllProposals: (() -> Void)? = nil,
+        onFixFinding: ((QueueRunDetailsLintFindings.PageFindings, LintPageRecordFacts.RecordFinding) -> Void)? = nil,
+        onEditFindingPage: ((QueueRunDetailsLintFindings.PageFindings) -> Void)? = nil,
+        onShowFixRun: ((QueueItem.ID) -> Void)? = nil,
         versionBody: (@MainActor (_ versionID: PageVersionID) -> String?)? = nil,
         currentHead: (@MainActor (_ pageID: PageID) -> PageVersionID?)? = nil
     ) {
@@ -79,6 +88,9 @@ struct QueueRunDetailsView: View {
         self.onApproveProposal = onApproveProposal
         self.onRejectProposal = onRejectProposal
         self.onApproveAllProposals = onApproveAllProposals
+        self.onFixFinding = onFixFinding
+        self.onEditFindingPage = onEditFindingPage
+        self.onShowFixRun = onShowFixRun
         self.versionBody = versionBody
         self.currentHead = currentHead
     }
@@ -417,7 +429,7 @@ struct QueueRunDetailsView: View {
             reportOnlyReasonRow(line)
         }
         ForEach(findings.pages) { page in
-            pageFindingsRows(page, namesPages: findings.pages.count > 1)
+            pageFindingsRows(page, in: findings, namesPages: findings.pages.count > 1)
         }
     }
 
@@ -471,7 +483,9 @@ struct QueueRunDetailsView: View {
     /// then one row per finding.
     @ViewBuilder
     private func pageFindingsRows(
-        _ page: QueueRunDetailsLintFindings.PageFindings, namesPages: Bool
+        _ page: QueueRunDetailsLintFindings.PageFindings,
+        in findings: QueueRunDetailsLintFindings,
+        namesPages: Bool
     ) -> some View {
         if namesPages {
             Text(verbatim: page.title)
@@ -483,7 +497,69 @@ struct QueueRunDetailsView: View {
         }
         ForEach(Array(page.findings.enumerated()), id: \.offset) { _, finding in
             findingRow(finding, pageTitle: namesPages ? page.title : nil)
+            if let state = findings.fixState(pageID: page.pageID, finding: finding) {
+                findingFixRow(page: page, finding: finding, state: state)
+            }
         }
+    }
+
+    /// One finding's per-finding repair controls, in their OWN List row
+    /// (the W2b/W5b shape — a real row the bridged table, synthesized
+    /// clicks, and VoiceOver can address): **Fix** (hidden once a fix run
+    /// settled; disabled while one runs for this page), **Edit Manually**
+    /// (the established page editor), the honest status line, and the way
+    /// into the fix run, whose Run Details carry its undo or disclosure.
+    private func findingFixRow(
+        page: QueueRunDetailsLintFindings.PageFindings,
+        finding: LintPageRecordFacts.RecordFinding,
+        state: QueueLintFindingFixState
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: QueueWorkspaceMetrics.Spacing.sm) {
+                if state.showsFixButton {
+                    Button("Fix", systemImage: "wand.and.stars") {
+                        onFixFinding?(page, finding)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(state.fixEnabled == false || onFixFinding == nil)
+                    .help("Repair only this finding. The write is verified and reverted automatically if it does not check out.")
+                    .accessibilityLabel("Fix finding \(finding.occurrenceID)")
+                }
+                Button("Edit Manually", systemImage: "pencil") {
+                    onEditFindingPage?(page)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(onEditFindingPage == nil)
+                .help("Open \(page.title) in the page editor")
+                .accessibilityLabel("Edit \(page.title) manually")
+                if case .inFlight = state {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Fixing")
+                }
+                Spacer()
+            }
+            if let status = state.statusLine {
+                Text(verbatim: status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .accessibilityLabel(status)
+            }
+            if let itemID = state.fixRunItemID, onShowFixRun != nil {
+                Button("Show Fix Run", systemImage: "arrow.right.circle") {
+                    onShowFixRun?(itemID)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .help("Select the fix run to see its Run Details")
+                .accessibilityLabel("Show fix run for \(finding.occurrenceID)")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
     }
 
     /// One finding: the class label and assigned outcome on the summary

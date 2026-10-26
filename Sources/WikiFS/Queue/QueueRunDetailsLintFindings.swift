@@ -31,6 +31,10 @@ struct QueueRunDetailsLintFindings: Sendable, Equatable {
         /// records this build reads; kept separate so a future parse
         /// mismatch can never silently change the total.
         let reportedCount: Int
+        /// The head the findings were detected on (the record's audited
+        /// head) — the head a Fix names as its target. `nil` for records
+        /// without one.
+        var inspectedHead: PageVersionID?
 
         var id: PageID { pageID }
     }
@@ -41,6 +45,18 @@ struct QueueRunDetailsLintFindings: Sendable, Equatable {
     /// tier is `.reportOnly`). `nil` when no record names a report-only
     /// tier — the honest line renders only when the records state it.
     let reportOnlyReason: String?
+    /// Each finding row's per-finding repair state, supplied by the caller
+    /// (the Activity window derives them from the fix runs this run
+    /// spawned). Empty renders the rows without Fix / Edit controls.
+    var fixStates: [QueueLintFindingKey: QueueLintFindingFixState] = [:]
+
+    /// One finding row's fix state, or nil when the caller wired no
+    /// controls for it.
+    func fixState(
+        pageID: PageID, finding: LintPageRecordFacts.RecordFinding
+    ) -> QueueLintFindingFixState? {
+        fixStates[QueueLintFindingKey(pageID: pageID, findingID: finding.occurrenceID)]
+    }
 
     /// Every record's total detections.
     var totalCount: Int { pages.reduce(0) { $0 + $1.reportedCount } }
@@ -73,12 +89,13 @@ struct QueueRunDetailsLintFindings: Sendable, Equatable {
     var showsSection: Bool { pages.isEmpty == false }
 
     /// The honest report-only line, rendered as one row: the recorded
-    /// reason the run could not repair, and what a repair would need
-    /// instead. `nil` when no record names a report-only tier.
+    /// reason the run did not repair, and how a repair happens instead —
+    /// per finding, by the person reading this (the per-finding tier).
+    /// `nil` when no record names a report-only tier.
     var reportOnlyLine: String? {
         guard let reportOnlyReason else { return nil }
-        return "Report-only run — \(reportOnlyReason). Findings are reported, not repaired: "
-            + "repairs need an approved configuration or staged-proposal review."
+        return "Report-only run — \(reportOnlyReason). This run repaired nothing; "
+            + "repairs are user-triggered per finding: choose Fix on a finding, or Edit the page manually."
     }
 
     /// Map a lint attempt's durable report into the section, or nil when
@@ -95,7 +112,8 @@ struct QueueRunDetailsLintFindings: Sendable, Equatable {
                   let reportedCount = facts.findingCount else { continue }
             pages.append(PageFindings(
                 pageID: facts.pageID, title: facts.title,
-                findings: facts.findings, reportedCount: reportedCount))
+                findings: facts.findings, reportedCount: reportedCount,
+                inspectedHead: facts.inspectedHead))
             if reportOnlyReason == nil, facts.tier == .reportOnly {
                 reportOnlyReason = facts.authorityReason
             }

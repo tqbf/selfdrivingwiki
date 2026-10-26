@@ -81,10 +81,11 @@ struct LintFindingsSectionValueTests {
         #expect(section.pages[0].findings[0].outcomeToken == "unresolved")
         #expect(section.pages[0].findings[0].evidence == "<<<<<<< HEAD, note")
         #expect(section.reportOnlyReason == "gate components not fully resolved")
-        // The honest line names the reason and what a repair would need.
+        // The honest line names the reason and how a repair happens now:
+        // per finding, triggered by the person reading it.
         #expect(section.reportOnlyLine == "Report-only run — gate components not fully "
-            + "resolved. Findings are reported, not repaired: repairs need an approved "
-            + "configuration or staged-proposal review.")
+            + "resolved. This run repaired nothing; repairs are user-triggered per finding: "
+            + "choose Fix on a finding, or Edit the page manually.")
         // Per-class counts, class label ordered.
         #expect(section.countsByClass.map { $0.classLabel } == ["D07", "D15"])
         #expect(section.countsByClass.map { $0.count } == [1, 1])

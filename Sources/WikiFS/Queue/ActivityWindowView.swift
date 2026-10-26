@@ -192,6 +192,18 @@ struct ActivityWindowView: View {
     /// no breaker key).
     @State private var lintProposalActionProblem: String?
 
+    // MARK: Per-finding repair state — reset on selection change, like the
+    // undo and proposal state above. The fix runs themselves are durable
+    // queue items; only the click-local bridge lives here.
+
+    /// Fix clicks whose enqueue has not yet surfaced as a fix run in the
+    /// queue snapshot (the row shows in-flight meanwhile).
+    @State private var lintFixEnqueueing: Set<QueueLintFindingKey> = []
+    /// A Fix click whose enqueue failed — the honest reason.
+    @State private var lintFixEnqueueProblems: [QueueLintFindingKey: String] = [:]
+    /// The durable reports of the selected run's settled fix runs.
+    @State private var lintFixReports: [QueueItem.ID: QueueAttemptReport] = [:]
+
     /// The selected job's two workspace surfaces. Activity is the only
     /// transcript surface (plan §1); Overview is the complete inventory +
     /// Run Details.
@@ -329,6 +341,10 @@ struct ActivityWindowView: View {
             // The proposal-review presentation belongs to the selected run
             // only (W5b) — same rule as the undo state above.
             resetProposalReviewState()
+            // So does the per-finding repair bridge.
+            lintFixEnqueueing = []
+            lintFixEnqueueProblems = [:]
+            lintFixReports = [:]
         }
         // Auto-select the most interesting item once, when the first snapshot
         // lands — a window opened from "1 running" should show that run.
@@ -1104,6 +1120,9 @@ struct ActivityWindowView: View {
                         ? { rejectProposal($0) } : nil,
                     onApproveAllProposals: selectedProposalSection?.showsApproveAll == true
                         ? { approveAllProposals() } : nil,
+                    onFixFinding: { page, finding in fixFinding(page: page, finding: finding) },
+                    onEditFindingPage: { page in editFindingPage(page) },
+                    onShowFixRun: { itemID in selectedItemID = itemID },
                     versionBody: selectedLintRepair != nil || selectedProposalSection != nil
                         ? { wikiStoreModel?.pageVersionBody(for: $0) } : nil,
                     currentHead: selectedProposalSection != nil
@@ -1117,6 +1136,11 @@ struct ActivityWindowView: View {
                             }
                         } : nil)
                     .frame(width: QueueWorkspaceMetrics.Inspector.width)
+                    // Settled fix runs' durable reports load off the view
+                    // update (task results land as ordinary state writes).
+                    .task(id: settledFixRunIDsAwaitingReports) {
+                        await loadSettledFixRunReports()
+                    }
             }
         }
     }
@@ -1174,7 +1198,126 @@ struct ActivityWindowView: View {
               Self.loadedReportMatches(report: report, item: item) else {
             return nil
         }
-        return QueueRunDetailsLintFindings.make(report: report)
+        guard var findings = QueueRunDetailsLintFindings.make(report: report) else { return nil }
+        let runs = fixRuns(spawnedBy: item)
+        for page in findings.pages {
+            for finding in page.findings {
+                let key = QueueLintFindingKey(pageID: page.pageID, findingID: finding.occurrenceID)
+                findings.fixStates[key] = QueueLintFindingFixState.derive(
+                    finding: finding, pageID: page.pageID,
+                    inspectedHead: page.inspectedHead, fixRuns: runs,
+                    enqueueing: lintFixEnqueueing.contains(key),
+                    enqueueProblem: lintFixEnqueueProblems[key])
+            }
+        }
+        return findings
+    }
+
+    // MARK: - Per-finding repair (user-triggered)
+
+    /// The fix runs a lint run spawned (queue items whose repair target
+    /// names it as their origin), oldest first, each with its durable page
+    /// record once its report loaded.
+    private func fixRuns(spawnedBy origin: QueueItem) -> [QueueLintFindingFixState.FixRun] {
+        (activeItems + recentItems)
+            .filter { $0.payload.lintRepairTarget?.originItemID == origin.id }
+            .sorted { $0.createdAt < $1.createdAt }
+            .compactMap { item in
+                guard let target = item.payload.lintRepairTarget,
+                      let pageID = item.payload.lintPageIDs?.first else { return nil }
+                return QueueLintFindingFixState.FixRun(
+                    itemID: item.id, pageID: pageID, findingID: target.findingID,
+                    state: item.state, error: item.error,
+                    record: lintFixReports[item.id].flatMap { Self.pageRecordFacts(in: $0, pageID: pageID) })
+            }
+    }
+
+    /// One page's durable record facts inside a report.
+    nonisolated static func pageRecordFacts(
+        in report: QueueAttemptReport, pageID: PageID
+    ) -> LintPageRecordFacts? {
+        guard case .targets(let records) = report.scope else { return nil }
+        return records.lazy
+            .compactMap { LintPageRecordFacts.parse(record: $0) }
+            .first { $0.pageID == pageID }
+    }
+
+    /// The selected run's settled fix runs whose reports have not loaded —
+    /// the report task's identity, so it re-runs exactly when one settles.
+    private var settledFixRunIDsAwaitingReports: [QueueItem.ID] {
+        guard let itemID = selectedItemID, let origin = item(for: itemID) else { return [] }
+        return (activeItems + recentItems)
+            .filter { item in
+                item.payload.lintRepairTarget?.originItemID == origin.id
+                    && item.state != .queued && item.state != .running
+                    && lintFixReports[item.id] == nil
+            }
+            .map(\.id)
+    }
+
+    /// Load each settled fix run's durable report through the engine.
+    private func loadSettledFixRunReports() async {
+        for itemID in settledFixRunIDsAwaitingReports {
+            switch await queueEngine.loadQueueReport(for: itemID) {
+            case .loaded(let report):
+                lintFixReports[itemID] = report
+            case .notReported, .unavailable:
+                // The row stays in-flight-honest ("Fixing…" → the item's own
+                // failure text once its state says failed); nothing invented.
+                DebugLog.ingest("per-finding repair: no report yet for fix run \(itemID.rawValue)")
+            }
+        }
+    }
+
+    /// A person's Fix click on ONE finding: enqueue a per-finding repair item
+    /// for that finding's page through the normal queue (the daemon runs
+    /// it under the per-finding policy; no rollout gate). The target names
+    /// the head the finding was detected on, so a moved page refuses
+    /// honestly instead of repairing bytes nobody looked at.
+    private func fixFinding(
+        page: QueueRunDetailsLintFindings.PageFindings,
+        finding: LintPageRecordFacts.RecordFinding
+    ) {
+        guard let itemID = selectedItemID, let origin = item(for: itemID),
+              let inspectedHead = page.inspectedHead else { return }
+        let key = QueueLintFindingKey(pageID: page.pageID, findingID: finding.occurrenceID)
+        guard lintFixEnqueueing.contains(key) == false else { return }
+        lintFixEnqueueing.insert(key)
+        lintFixEnqueueProblems[key] = nil
+        let request = QueueItemRequest(
+            queue: .ingestion,
+            wikiID: origin.wikiID,
+            payload: QueueItemPayload(
+                sourceIDs: [],
+                lintPageIDs: [page.pageID],
+                recordedNames: [page.pageID.rawValue: page.title],
+                lintRepairTarget: LintRepairTarget(
+                    findingID: finding.occurrenceID,
+                    classLabel: finding.classLabel,
+                    expectedHead: inspectedHead,
+                    originItemID: origin.id)))
+        let engine = queueEngine
+        Task { @MainActor in
+            do {
+                let fixItemID = try await engine.enqueue(request)
+                DebugLog.ingest(
+                    "per-finding repair: enqueued fix run \(fixItemID.rawValue) for \(finding.occurrenceID) on \(page.pageID.rawValue)")
+            } catch {
+                DebugLog.ingest("per-finding repair: enqueue failed for \(finding.occurrenceID): \(error)")
+                lintFixEnqueueing.remove(key)
+                lintFixEnqueueProblems[key] = error.localizedDescription
+            }
+        }
+    }
+
+    /// Edit manually: open the page in its wiki window through the SAME
+    /// target routing the Overview's Open Page uses, then put the opened
+    /// tab in edit mode with the established per-tab editing flag (the
+    /// mechanism New Page uses to start in the editor). A closed wiki opens
+    /// through the deep-link seam in the reader; the person clicks Edit.
+    private func editFindingPage(_ page: QueueRunDetailsLintFindings.PageFindings) {
+        guard let itemID = selectedItemID, let origin = item(for: itemID) else { return }
+        routeTarget(.page(page.pageID), title: page.title, in: origin.wikiID, startEditing: true)
     }
 
     /// The breaker configuration a repair section's undo records under: the
@@ -2303,7 +2446,8 @@ struct ActivityWindowView: View {
     private func routeTarget(
         _ target: QueueWorkspaceTargetIdentity,
         title: String?,
-        in wikiID: WikiID
+        in wikiID: WikiID,
+        startEditing: Bool = false
     ) {
         let sessions = sessionManager
         let bridge = openWindowBridge
@@ -2311,6 +2455,9 @@ struct ActivityWindowView: View {
             liveStore: { wikiID in sessions?.sessions[wikiID]?.store },
             navigateInSession: { store, target in
                 Self.navigateTarget(target, title: title, in: store)
+                if startEditing, let tabID = store.activeTabID {
+                    store.setTabEditing(tabID: tabID, isEditing: true)
+                }
                 switch target {
                 case .page(let pageID):
                     DebugLog.tabs("Queue Open Page: opened page \(pageID.rawValue) in wiki \(wikiID.rawValue.prefix(8))")

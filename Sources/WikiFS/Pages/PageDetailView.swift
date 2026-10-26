@@ -165,6 +165,13 @@ struct PageDetailView: View {
             let tab = store.tabs.first(where: { $0.id == newID })
             isEditing = tab?.isEditing ?? false
         }
+        // An external request to edit the ALREADY-active tab (Run Details'
+        // "Edit Manually" sets the per-tab flag) changes neither the
+        // selection nor the active tab — follow the flag itself. Equal
+        // values are a no-op, so this never loops with the write-back below.
+        .onChange(of: activeTabIsEditing) { _, tabEditing in
+            followActiveTabEditing(tabEditing)
+        }
         .onChange(of: isEditing) { _, newValue in
             if let id = store.activeTabID {
                 store.setTabEditing(tabID: id, isEditing: newValue)
@@ -382,6 +389,14 @@ struct PageDetailView: View {
                   ? "View the running lint job in the Activity window"
                   : "Fix [[wiki-link]] syntax and run LLM lint on this page")
         }
+    }
+
+    /// The active tab's per-tab editing flag (false without an active tab).
+    private var activeTabIsEditing: Bool { store.activeTab?.isEditing ?? false }
+
+    /// Adopt an externally set per-tab editing flag; equal values no-op.
+    private func followActiveTabEditing(_ tabEditing: Bool) {
+        if tabEditing != isEditing { isEditing = tabEditing }
     }
 
     // MARK: - Content + Outline
