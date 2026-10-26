@@ -599,7 +599,9 @@ keychain:
 # `build` runs signing-preflight first. The healthy path is offline and costs
 # about 0.2s; it only talks to Apple when a profile is missing, expired, or
 # does not cover this Mac, and it never fails the build — a machine with no
-# Apple account falls back to ad-hoc signing exactly as before.
+# Apple account falls back to ad-hoc signing exactly as before. The one hard
+# gate: an APP_GROUP too long for the daemon's socket paths fails the build
+# (it would sign fine and break every agent spawn at runtime).
 #
 # Escape hatches: WIKI_SIGNING_PREFLIGHT=0 skips it entirely, and CI=1 (set by
 # every CI runner) does the same.
