@@ -317,6 +317,33 @@ struct ContentView: View {
                                onAddToBookmarks: { omniboxBookmarkContext = $0 })
             }
             ToolbarSpacer(.flexible)
+            // The welcome page's three "Get Started" entry points, so they stay
+            // reachable once a tab is open. Same handlers as the welcome buttons
+            // and the Cmd+Shift+P/U/F/D/C shortcuts below.
+            ToolbarItemGroup(placement: .automatic) {
+                Button("Add Page", systemImage: "doc.badge.plus") {
+                    store.newPageInNewTab()
+                }
+                .help("Add Page")
+
+                Menu {
+                    Button("Add from URL", systemImage: "link.badge.plus") {
+                        pendingAddURL = PendingAddURL(url: "")
+                    }
+                    Button("Add File", systemImage: "doc", action: addFile)
+                    Button("Add Folder", systemImage: "folder") {
+                        showingImportMarkdown = true
+                    }
+                } label: {
+                    Label("Add Source", systemImage: "tray.and.arrow.down")
+                }
+                .help("Add Source")
+
+                Button("Add Chat", systemImage: "plus.bubble") {
+                    store.beginNewChat()
+                }
+                .help("Add Chat")
+            }
             ToolbarItemGroup(placement: .automatic) {
                 Button {
                     rightInspector.toggle()
@@ -374,6 +401,14 @@ struct ContentView: View {
         }
     }
 
+    /// Pick a single file via the open panel and ingest it (the toolbar's
+    /// Add Source ▸ Add File and Cmd+Shift+F; mirrors WikiDetailView.addFile).
+    private func addFile() {
+        if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Add File") {
+            Task { await store.addFiles([url]) }
+        }
+    }
+
     private func handleSidebarRevealVersionChange() {
         if columnVisibility == .detailOnly {
             columnVisibility = .all
@@ -420,13 +455,9 @@ struct ContentView: View {
 
         // Cmd+Shift+F: Add File (open panel → store.addFiles; mirrors
         // WikiDetailView.addFile exactly).
-        Button("") {
-            if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Add File") {
-                Task { await store.addFiles([url]) }
-            }
-        }
-        .keyboardShortcut("f", modifiers: [.command, .shift])
-        .opacity(0).allowsHitTesting(false)
+        Button("", action: addFile)
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .opacity(0).allowsHitTesting(false)
 
         // Cmd+Shift+D: Add Folder (present ImportMarkdownSheet, same as the
         // sidebar / welcome showingImportMarkdown toggle).
