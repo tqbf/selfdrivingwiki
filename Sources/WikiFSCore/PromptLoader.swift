@@ -55,6 +55,8 @@ enum GeneratedPrompts {
     static let chat = load("chat")
     static let lintTask = load("lint-task")
     static let lintPageTask = load("lint-page-task")
+    static let lintCheck = load("lint-check")
+    static let lintRepair = load("lint-repair")
     static let ingestPlanner = load("ingest-planner")
     static let ingestExecutor = load("ingest-executor")
     static let ingestFinalizer = load("ingest-finalizer")
@@ -72,4 +74,11 @@ public enum PublicPrompts {
     /// (`prompts/transcript-cleanup.md`, issue #1379). Runs on the
     /// dedicated transcript-cleanup stage after a raw transcript lands.
     public static let transcriptCleanup = GeneratedPrompts.transcriptCleanup
+    /// System prompt for the foreground page-lint check step
+    /// (`prompts/lint-check.md`). Detection only — asks for one bounded
+    /// findings envelope, never changes.
+    public static let lintCheck = GeneratedPrompts.lintCheck
+    /// System prompt for the foreground page-lint repair step
+    /// (`prompts/lint-repair.md`). One selected option, one bounded patch.
+    public static let lintRepair = GeneratedPrompts.lintRepair
 }
