@@ -313,8 +313,8 @@ struct ContentView: View {
             // The welcome page's three "Get Started" entry points, so they stay
             // reachable once a tab is open. Same handlers as the welcome buttons
             // and the Cmd+Shift+P/U/F/D/C shortcuts below. One `ToolbarItem`
-            // (not a group) so macOS 26 wraps them in a single glass bubble; the
-            // fixed spacer keeps that bubble apart from Back/Forward/Home.
+            // (not a group) so all three sit in a single bubble, separate from
+            // Back/Forward/Home.
             ToolbarSpacer(.fixed, placement: .navigation)
             ToolbarItem(placement: .navigation) {
                 ToolbarAddButtons(
@@ -324,6 +324,10 @@ struct ContentView: View {
                     onAddFolder: { showingImportMarkdown = true },
                     onAddChat: { store.beginNewChat() })
             }
+            // Adjacent `.navigation` items share one glass bubble on macOS 26,
+            // even across a fixed spacer. Opt this item out of the shared
+            // background; `ToolbarAddButtons` draws its own capsule instead.
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .principal) {
                 AddressBarView(store: store, isFocused: $addressBarFocused,
                                detailWidth: detailWidth,
@@ -470,8 +474,9 @@ struct ContentView: View {
 }
 
 /// The Add Page / Add Source / Add Chat cluster shown after the Back / Forward /
-/// Home cluster. One view rather than a `ToolbarItemGroup`, so the toolbar
-/// renders it as a single bubble; styled to match `OmniboxNavButtons`.
+/// Home cluster. One view rather than a `ToolbarItemGroup`, so the three
+/// controls share one capsule; styled to match `OmniboxNavButtons`. The capsule
+/// is drawn here because the toolbar item hides its shared background.
 private struct ToolbarAddButtons: View {
     let onAddPage: () -> Void
     let onAddFromURL: () -> Void
@@ -506,6 +511,8 @@ private struct ToolbarAddButtons: View {
         }
         .foregroundStyle(Color.primary)
         .padding(.horizontal, AddressBarMetrics.navBubbleInset)
+        .padding(.vertical, 4)
+        .glassEffect(.regular.interactive(), in: .capsule)
     }
 
     private func icon(_ symbol: String) -> some View {
