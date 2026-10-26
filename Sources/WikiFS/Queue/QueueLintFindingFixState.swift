@@ -106,14 +106,18 @@ enum QueueLintFindingFixState: Equatable, Sendable {
     /// - `inspectedHead`: the head the finding was detected on (the origin
     ///   record's audited head) — `nil` means a Fix cannot name its target.
     /// - `fixRuns`: every fix run of the origin run, newest LAST.
-    /// - `enqueueing` / `enqueueProblem`: the click-local enqueue state.
+    /// - `enqueueing` / `enqueueProblem`: the click-local enqueue state of
+    ///   THIS finding; `pageEnqueueing`: whether any finding on the page has
+    ///   a Fix click still enqueueing (the page is busy before the queue
+    ///   snapshot shows the fix run — one fix per page holds from the click).
     static func derive(
         finding: LintPageRecordFacts.RecordFinding,
         pageID: PageID,
         inspectedHead: PageVersionID?,
         fixRuns: [FixRun],
         enqueueing: Bool,
-        enqueueProblem: String?
+        enqueueProblem: String?,
+        pageEnqueueing: Bool = false
     ) -> QueueLintFindingFixState {
         if let run = fixRuns.last(where: {
             $0.pageID == pageID && $0.findingID == finding.occurrenceID
@@ -132,7 +136,7 @@ enum QueueLintFindingFixState: Equatable, Sendable {
         guard inspectedHead != nil else {
             return .unavailable(reason: "The run recorded no inspected head — re-run lint to fix.")
         }
-        if fixRuns.contains(where: { $0.pageID == pageID && $0.isActive }) {
+        if pageEnqueueing || fixRuns.contains(where: { $0.pageID == pageID && $0.isActive }) {
             return .pageBusy
         }
         return .available

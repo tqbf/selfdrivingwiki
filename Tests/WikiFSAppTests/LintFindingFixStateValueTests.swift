@@ -79,6 +79,11 @@ struct LintFindingFixStateValueTests {
         #expect(state == .pageBusy)
         #expect(state.showsFixButton && state.fixEnabled == false)
         #expect(state.statusLine == "Another fix is running for this page.")
+        // Busy from the CLICK: another finding's Fix still enqueueing (not
+        // yet in the queue snapshot) already blocks this one.
+        #expect(QueueLintFindingFixState.derive(
+            finding: finding(), pageID: pageID, inspectedHead: inspected,
+            fixRuns: [], enqueueing: false, enqueueProblem: nil, pageEnqueueing: true) == .pageBusy)
         // A SETTLED fix of another finding does not block this one.
         #expect(derive(finding(), runs: [run(.completed, findingID: "D26-1")]) == .available)
     }

@@ -1201,13 +1201,15 @@ struct ActivityWindowView: View {
         guard var findings = QueueRunDetailsLintFindings.make(report: report) else { return nil }
         let runs = fixRuns(spawnedBy: item)
         for page in findings.pages {
+            let pageEnqueueing = lintFixEnqueueing.contains { $0.pageID == page.pageID }
             for finding in page.findings {
                 let key = QueueLintFindingKey(pageID: page.pageID, findingID: finding.occurrenceID)
                 findings.fixStates[key] = QueueLintFindingFixState.derive(
                     finding: finding, pageID: page.pageID,
                     inspectedHead: page.inspectedHead, fixRuns: runs,
                     enqueueing: lintFixEnqueueing.contains(key),
-                    enqueueProblem: lintFixEnqueueProblems[key])
+                    enqueueProblem: lintFixEnqueueProblems[key],
+                    pageEnqueueing: pageEnqueueing)
             }
         }
         return findings
@@ -1281,7 +1283,7 @@ struct ActivityWindowView: View {
         guard let itemID = selectedItemID, let origin = item(for: itemID),
               let inspectedHead = page.inspectedHead else { return }
         let key = QueueLintFindingKey(pageID: page.pageID, findingID: finding.occurrenceID)
-        guard lintFixEnqueueing.contains(key) == false else { return }
+        guard lintFixEnqueueing.contains(where: { $0.pageID == page.pageID }) == false else { return }
         lintFixEnqueueing.insert(key)
         lintFixEnqueueProblems[key] = nil
         let request = QueueItemRequest(
