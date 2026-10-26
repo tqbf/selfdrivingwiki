@@ -1155,8 +1155,8 @@ struct ActivityWindowView: View {
         // The disclosure's breaker context line resolves only when the run's
         // records name a shipped approval row this build can map back to a
         // configuration tuple — local file reads, no network, no mutation.
-        if repair != nil, lintBreakerContext == nil, let approvalID = repair?.approvalID,
-           let key = LintUndoService.breakerKey(forApprovalID: approvalID) {
+        if let current = repair, lintBreakerContext == nil,
+           let key = Self.undoBreakerKey(for: current) {
             let status = LintRepairBreaker.production().windowStatus(for: key)
             repair?.breakerContext = Self.breakerContextLine(status)
         }
@@ -1175,6 +1175,14 @@ struct ActivityWindowView: View {
             return nil
         }
         return QueueRunDetailsLintFindings.make(report: report)
+    }
+
+    /// The breaker configuration a repair section's undo records under: the
+    /// key the records name directly (a per-finding repair's launch-time
+    /// key), else the shipped approval row's configuration, else nil.
+    nonisolated static func undoBreakerKey(for repair: QueueRunDetailsLintRepair) -> LintRepairBreakerKey? {
+        if let recorded = repair.recordedBreakerKey { return recorded }
+        return repair.approvalID.flatMap { LintUndoService.breakerKey(forApprovalID: $0) }
     }
 
     /// The disclosure's breaker context: how much of the local breaker's
@@ -1208,9 +1216,10 @@ struct ActivityWindowView: View {
         }
         guard plans.isEmpty == false else { return }
         // The breaker records only when this build can name the run's
-        // configuration from its approval row — exactly the runs whose
+        // configuration — the record's own key (a per-finding repair's
+        // launch-time key) or its approval row — exactly the runs whose
         // outcomes the breaker counts.
-        let key = repair.approvalID.flatMap { LintUndoService.breakerKey(forApprovalID: $0) }
+        let key = Self.undoBreakerKey(for: repair)
         let breaker = key != nil ? LintRepairBreaker.production() : nil
         lintUndoInFlight = true
         Task { @MainActor in

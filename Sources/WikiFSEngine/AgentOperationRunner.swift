@@ -536,6 +536,11 @@ public enum AgentOperationRunner {
         /// (recovery + breaker accounting), never a verified verdict over
         /// degraded facts.
         public let requiredChecksAvailable: Bool
+        /// The ONE finding a user-triggered per-finding repair is scoped to
+        /// (`nil` for every autonomous plan). Its presence adds the
+        /// one-finding scope rule (`LintPerFindingScope`) to the written-head
+        /// verification and the per-finding labels to the durable record.
+        public internal(set) var repairFocus: LintRepairFocus?
 
         /// A report-only plan instructs the agent not to patch.
         public var repairAuthorized: Bool { authority.isRepairCapable }
@@ -588,6 +593,72 @@ public enum AgentOperationRunner {
         selection: (LintGateInputs) throws -> LintRolloutSelection,
         breaker: LintRepairBreaker
     ) async -> LintPagePlan? {
+        guard let scan = await scanLintPage(store: store, pageID: pageID) else { return nil }
+        let snapshot = scan.snapshot
+        let report = scan.report
+        let requiredChecksAvailable = scan.requiredChecksAvailable
+        // The rollout gate (§6.13): consult BEFORE authorizing repairs.
+        // Review M8: components that need a configured provider/model are
+        // NOT silently hashed as constants — an unknown component
+        // hard-fails to report-only BEFORE any manifest consultation, so a
+        // placeholder configuration is never matched against the shipped
+        // approval matrix. W2a: a matched approval then passes the local
+        // circuit breaker, which can only demote it. W5a: a staged-proposal
+        // selection passes the breaker too — tier 2 records under the SAME
+        // live-pipeline + provider/model/effort key (no approval row is
+        // involved), and a tripped breaker pauses proposals for that
+        // configuration.
+        let gateSelection: LintRolloutSelection
+        do {
+            gateSelection = try selection(gateInputs)
+        } catch {
+            gateSelection = .reportOnly(reason: "gate unavailable: \(error)")
+        }
+        var breakerKey: LintRepairBreakerKey?
+        switch gateSelection {
+        case .repairAuthorized, .stagedProposal:
+            do {
+                breakerKey = LintRepairBreakerKey(
+                    pipeline: try LintAcceptanceManifest.Pipeline.live(),
+                    provider: gateInputs.provider, model: gateInputs.model,
+                    effort: gateInputs.effort)
+            } catch {
+                // `authority(after:key:)` demotes a nil key.
+                DebugLog.agent("lint plan: breaker key unavailable, demoting: \(error)")
+                breakerKey = nil
+            }
+        case .reportOnly:
+            breakerKey = nil
+        }
+        let authority = breaker.authority(after: gateSelection, key: breakerKey)
+        let gateReason = authority.reason ?? "accepted configuration"
+        let request = OperationRequest.lintPage(
+            page: LintPageIdentity(snapshot),
+            mode: authority.runMode,
+            gateReason: gateReason,
+            preflightReportMarkdown: report.renderedMarkdown(),
+            runReportMarkdown: LintRunReportText.render(snapshot: snapshot, preflight: report),
+            stateMarkdown: stateMarkdown)
+        return LintPagePlan(
+            request: request, snapshot: snapshot, preflight: report,
+            authority: authority, breakerKey: breakerKey, breaker: breaker,
+            requiredChecksAvailable: requiredChecksAvailable)
+    }
+
+    /// The trusted pre-run scan of one page's CURRENT head: coherent
+    /// snapshot → injected facts → pure scan. Shared by every plan builder
+    /// (autonomous, evaluation, per-finding) so a plan's findings always
+    /// come from the same scan. Returns `nil` when the page does not exist
+    /// or cannot be read.
+    struct LintPageScan: Sendable {
+        let snapshot: LintPageSnapshot
+        let report: LintPreflightReport
+        /// Whether every fact-dependent verification check loaded (see
+        /// `LintPagePlan.requiredChecksAvailable`).
+        let requiredChecksAvailable: Bool
+    }
+
+    static func scanLintPage(store: WikiStore, pageID: PageID) async -> LintPageScan? {
         let read: PageCoherentRead?
         do {
             read = try store.readPageCoherent(id: pageID)
@@ -644,51 +715,8 @@ public enum AgentOperationRunner {
             snapshot: snapshot, resolution: resolution,
             citations: citations, originURLs: origins,
             history: history, fenceValidation: fenceValidation)
-        // The rollout gate (§6.13): consult BEFORE authorizing repairs.
-        // Review M8: components that need a configured provider/model are
-        // NOT silently hashed as constants — an unknown component
-        // hard-fails to report-only BEFORE any manifest consultation, so a
-        // placeholder configuration is never matched against the shipped
-        // approval matrix. W2a: a matched approval then passes the local
-        // circuit breaker, which can only demote it. W5a: a staged-proposal
-        // selection passes the breaker too — tier 2 records under the SAME
-        // live-pipeline + provider/model/effort key (no approval row is
-        // involved), and a tripped breaker pauses proposals for that
-        // configuration.
-        let gateSelection: LintRolloutSelection
-        do {
-            gateSelection = try selection(gateInputs)
-        } catch {
-            gateSelection = .reportOnly(reason: "gate unavailable: \(error)")
-        }
-        var breakerKey: LintRepairBreakerKey?
-        switch gateSelection {
-        case .repairAuthorized, .stagedProposal:
-            do {
-                breakerKey = LintRepairBreakerKey(
-                    pipeline: try LintAcceptanceManifest.Pipeline.live(),
-                    provider: gateInputs.provider, model: gateInputs.model,
-                    effort: gateInputs.effort)
-            } catch {
-                // `authority(after:key:)` demotes a nil key.
-                DebugLog.agent("lint plan: breaker key unavailable, demoting: \(error)")
-                breakerKey = nil
-            }
-        case .reportOnly:
-            breakerKey = nil
-        }
-        let authority = breaker.authority(after: gateSelection, key: breakerKey)
-        let gateReason = authority.reason ?? "accepted configuration"
-        let request = OperationRequest.lintPage(
-            page: LintPageIdentity(snapshot),
-            mode: authority.runMode,
-            gateReason: gateReason,
-            preflightReportMarkdown: report.renderedMarkdown(),
-            runReportMarkdown: LintRunReportText.render(snapshot: snapshot, preflight: report),
-            stateMarkdown: stateMarkdown)
-        return LintPagePlan(
-            request: request, snapshot: snapshot, preflight: report,
-            authority: authority, breakerKey: breakerKey, breaker: breaker,
+        return LintPageScan(
+            snapshot: snapshot, report: report,
             requiredChecksAvailable: requiredChecksAvailable)
     }
 
@@ -1075,7 +1103,24 @@ public enum AgentOperationRunner {
                             currentHead: writtenRead.headVersionID,
                             requiredChecksAvailable: plan.requiredChecksAvailable
                                 && writtenChecksAvailable)
-                        switch verdict.status {
+                        // A per-finding run adds its one-finding scope rule
+                        // ON TOP of the shared compare: a violation fails
+                        // verification and takes the same guarded-revert and
+                        // breaker path every other failure takes.
+                        var verdictStatus = verdict.status
+                        if let focus = plan.repairFocus {
+                            let scopeViolations = LintPerFindingScope.violations(
+                                focus: focus, before: plan.preflight, written: writtenScan,
+                                wroteChange: observed.isEmpty == false)
+                            if scopeViolations.isEmpty == false {
+                                if case .failed(let reasons) = verdictStatus {
+                                    verdictStatus = .failed(reasons: (reasons + scopeViolations).sorted())
+                                } else {
+                                    verdictStatus = .failed(reasons: scopeViolations)
+                                }
+                            }
+                        }
+                        switch verdictStatus {
                         case .verified:
                             detail += "; verification verified on the written head"
                             Self.recordBreakerOutcome(.clean, plan: plan, authority: authority)
@@ -1116,6 +1161,16 @@ public enum AgentOperationRunner {
         // Run Details rendering can read.
         detail += "; " + LintPageRecordFacts.findingsDetail(
             preflight: plan.preflight, report: parsed)
+        // The per-finding run names its target finding and the
+        // configuration its breaker outcome was recorded under (the
+        // launch-time key — no approval row names it), so the Run Details
+        // rows and the undo can find both again.
+        if let focus = plan.repairFocus {
+            detail += "; \(LintPageRecordFacts.perFindingLabel)=\(focus.occurrenceID)"
+            if let key = plan.breakerKey {
+                detail += "; \(key.recordLabel)"
+            }
+        }
 
         // §5.12: the HOST appends the required `--kind lint` entry for the
         // completed audit and detects whether the AGENT's own append
@@ -1196,14 +1251,17 @@ public enum AgentOperationRunner {
     }
 
     /// Record a repair run's outcome in the breaker — only for runs that ran
-    /// under a shipped approval (a report-only, demoted, or budget-rejected
-    /// run made no repair to judge).
+    /// under a shipped approval or a person's per-finding Fix click (a
+    /// report-only, demoted, or budget-rejected run made no repair to
+    /// judge). A per-finding run's key is the configuration the launcher
+    /// actually spawned, so its failures accumulate against the SAME key an
+    /// autonomous run of that configuration consults.
     private static func recordBreakerOutcome(
         _ kind: LintRepairOutcomeKind,
         plan: LintPagePlan,
         authority: LintRepairAuthority
     ) {
-        guard authority.tier == .shippedApproval,
+        guard authority.tier == .shippedApproval || authority.tier == .perFindingRepair,
               let breaker = plan.breaker, let key = plan.breakerKey else { return }
         breaker.record(kind, for: key)
     }

@@ -59,6 +59,10 @@ struct QueueRunDetailsLintRepair: Sendable, Equatable {
     /// The approval row that authorized the run, when its records name one —
     /// resolves the undo's breaker configuration.
     let approvalID: LintApprovalID?
+    /// The breaker configuration the run's records name directly
+    /// (`breaker_key=`) — a per-finding repair's launch-time key, which no
+    /// approval row names. Preferred over the approval row when present.
+    var recordedBreakerKey: LintRepairBreakerKey?
     /// The wiki whose pages the run repaired (drives page-history links).
     let wikiID: WikiID
 
@@ -130,9 +134,11 @@ struct QueueRunDetailsLintRepair: Sendable, Equatable {
         var repairPages: [RepairPage] = []
         var failurePages: [FailurePage] = []
         var approvalID: LintApprovalID?
+        var recordedBreakerKey: LintRepairBreakerKey?
         for record in records {
             guard let facts = LintPageRecordFacts.parse(record: record) else { continue }
             if approvalID == nil { approvalID = facts.approvalID }
+            if recordedBreakerKey == nil { recordedBreakerKey = facts.recordedBreakerKey }
             if facts.wroteSurvivingRepair, let inspected = facts.inspectedHead,
                let written = facts.writtenHead {
                 repairPages.append(RepairPage(
@@ -152,7 +158,7 @@ struct QueueRunDetailsLintRepair: Sendable, Equatable {
         guard repairPages.isEmpty == false || failurePages.isEmpty == false else { return nil }
         return QueueRunDetailsLintRepair(
             repairPages: repairPages, failurePages: failurePages,
-            approvalID: approvalID, wikiID: wikiID,
+            approvalID: approvalID, recordedBreakerKey: recordedBreakerKey, wikiID: wikiID,
             undoInFlight: undoInFlight, undoResult: undoResult,
             breakerContext: breakerContext, breakerNotice: breakerNotice)
     }

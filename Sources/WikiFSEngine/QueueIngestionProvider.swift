@@ -130,6 +130,28 @@ public protocol QueueIngestionProvider: Sendable {
         onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws
 
+    /// Run a USER-TRIGGERED per-finding repair: ONE finding on ONE page,
+    /// requested by a person's Fix click (the payload's
+    /// `lintRepairTarget`). Hosts that can run managed lint (the daemon)
+    /// implement it; the default refuses with a named error, so an item can
+    /// never silently degrade into an ordinary lint run.
+    ///
+    /// - Parameters mirror ``runLintPages``; `pageID` is the payload's single
+    ///   page and `target` the finding the person chose.
+    func runLintPerFindingRepair(
+        wikiID: WikiID,
+        pageID: PageID,
+        target: LintRepairTarget,
+        queueItemID: QueueItem.ID,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
+    ) async throws
+
     /// Quick readiness probe: checks whether the selected agent provider's
     /// command binary exists on PATH (including the mise-managed bun shim). Returns
     /// `nil` when ready, or a user-facing message explaining what to fix and
@@ -141,6 +163,26 @@ public protocol QueueIngestionProvider: Sendable {
     /// async for actor-hopping. Fast enough to run on every dispatch without
     /// blocking the queue engine.
     func readiness() async -> String?
+}
+
+public extension QueueIngestionProvider {
+    /// Hosts without managed lint refuse a per-finding repair by name.
+    func runLintPerFindingRepair(
+        wikiID: WikiID,
+        pageID: PageID,
+        target: LintRepairTarget,
+        queueItemID: QueueItem.ID,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
+    ) async throws {
+        throw QueueIngestionError.spawnFailed(
+            "per-finding lint repair runs only in the background service (wikid); this host cannot run it")
+    }
 }
 
 // MARK: - QueueIngestionError
@@ -377,7 +419,28 @@ struct QueueIngestionWorker: QueueWorker {
             emitReport?(mutation)
         }
 
-        if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
+        if let target = item.payload.lintRepairTarget {
+            // A person's Fix click on ONE finding. Exactly one page, or the
+            // item is malformed — never widened into a multi-page run.
+            guard let pageIDs = item.payload.lintPageIDs, pageIDs.count == 1,
+                  let pageID = pageIDs.first else {
+                throw QueueIngestionError.spawnFailed(
+                    "per-finding repair needs exactly one page; the item names \(item.payload.lintPageIDs?.count ?? 0)")
+            }
+            try await provider.runLintPerFindingRepair(
+                wikiID: item.wikiID,
+                pageID: pageID,
+                target: target,
+                queueItemID: item.id,
+                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
+                onTranscript: onTranscript,
+                onUsage: onUsage,
+                onLiveUsage: onLiveUsage,
+                onLogPaths: onLogPaths,
+                onPendingPermission: onPendingPermission,
+                onReport: onReport
+            )
+        } else if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
             // Page-level lint.
             try await provider.runLintPages(
                 wikiID: item.wikiID,

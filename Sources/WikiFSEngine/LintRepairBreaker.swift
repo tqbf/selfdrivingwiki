@@ -64,6 +64,49 @@ public struct LintRepairBreakerKey: Hashable, Sendable {
         let hash = RendererSHA256.digest(Data(identity.utf8)).hex.prefix(Self.fileNameHashLength)
         return "\(sanitized(provider))_\(sanitized(model))_\(sanitized(effort))-\(hash).json"
     }
+
+    // MARK: - Durable record label
+
+    /// The effort component recorded when a launched run pinned no thinking
+    /// effort (the provider resolved its own default). No tier is invented.
+    public static let agentDefaultEffort = "agent-default"
+
+    /// The record label's name: `breaker_key=<digest>,<provider>,<model>,<effort>`.
+    static let recordLabelName = "breaker_key"
+
+    /// The key as ONE `"; "`-joined record segment, so a durable per-page
+    /// record can name the configuration its outcome was recorded under —
+    /// the per-finding repair's launch-time key, which no approval row
+    /// names. Each component is percent-encoded (`,`, `;`, `=`, spaces, and
+    /// every other non-unreserved byte), so the segment is unambiguous for
+    /// any configured name and round-trips exactly.
+    public var recordLabel: String {
+        let components = [pipelineDigest, provider, model, effort].map(Self.encodeComponent)
+        return "\(Self.recordLabelName)=" + components.joined(separator: ",")
+    }
+
+    /// Parse a `breaker_key=` segment VALUE back into the key; `nil` for a
+    /// malformed value (four non-empty components required).
+    public init?(recordLabelValue value: String) {
+        let parts = value.split(separator: ",", omittingEmptySubsequences: false)
+            .map { $0.removingPercentEncoding }
+        guard parts.count == 4,
+              let digest = parts[0], let provider = parts[1],
+              let model = parts[2], let effort = parts[3],
+              [digest, provider, model, effort].allSatisfy({ $0.isEmpty == false }) else {
+            return nil
+        }
+        self.init(pipelineDigest: digest, provider: provider, model: model, effort: effort)
+    }
+
+    private static let unreserved = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+
+    private static func encodeComponent(_ component: String) -> String {
+        // Every Swift String is valid Unicode, so encoding cannot fail; the
+        // fallback keeps the function total without a force unwrap.
+        component.addingPercentEncoding(withAllowedCharacters: unreserved) ?? ""
+    }
 }
 
 /// One recorded repair-run outcome kind.

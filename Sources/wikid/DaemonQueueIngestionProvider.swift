@@ -393,6 +393,122 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             observedSummary: observed.isEmpty ? nil : observed.joined(separator: "; ")))
     }
 
+    /// The user-triggered per-finding repair (a person's Fix click): the
+    /// per-finding plan builder (NO rollout gate — the click is the
+    /// authorization), the SAME launcher dispatch, and the SAME host-agnostic
+    /// accounting as `runLintPages`, with the breaker key resolved from what
+    /// the launcher actually spawned. A pre-launch refusal (page changed,
+    /// class not repairable, page gone) records its honest outcome and
+    /// launches nothing; a model that could not start fails the item with a
+    /// named error pointing at Settings.
+    func runLintPerFindingRepair(
+        wikiID: WikiID,
+        pageID: PageID,
+        target: LintRepairTarget,
+        queueItemID: QueueItem.ID,
+        onProgress: @escaping @Sendable (String) -> Void,
+        onTranscript: (@Sendable (AgentEvent) -> Void)?,
+        onUsage: (@Sendable (SessionUsage?) -> Void)?,
+        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
+        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
+    ) async throws {
+        guard let store = storeResolver(wikiID) else {
+            throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID.rawValue)")
+        }
+        DebugLog.ingest(
+            "DaemonQueueIngestionProvider.runLintPerFindingRepair: begin wikiID=\(wikiID.rawValue) "
+                + "page=\(pageID.rawValue) finding=\(target.findingID)")
+        let title = (DebugLog.trying("listPages", operation: {
+            try store.listPages(sortBy: .lastUpdated)
+        }) ?? []).first { $0.id == pageID }?.title
+        onReport?(QueueIngestionReporting.lintPagesStagingMutation(
+            resolved: title.map { [(id: pageID, title: $0)] } ?? [],
+            requested: [pageID]))
+
+        let stateMarkdown = try daemonStateMarkdown(from: store)
+        let planResult = await AgentOperationRunner.makePerFindingRepairPlan(
+            store: store, pageID: pageID, target: target,
+            stateMarkdown: stateMarkdown, breaker: LintRepairBreaker.production())
+        let plan: AgentOperationRunner.LintPagePlan
+        switch planResult {
+        case .refused(let refusal, let refusedTitle, let reason):
+            // Nothing launched, nothing written: the honest outcome only.
+            let outcome = await MainActor.run {
+                AgentOperationRunner.perFindingRefusalOutcome(
+                    refusal, title: refusedTitle.isEmpty ? (title ?? "") : refusedTitle,
+                    detail: reason, pageID: pageID, target: target, store: store)
+            }
+            onReport?(QueueIngestionReporting.lintPageOutcomesMutation([outcome.queueReportOutcome]))
+            onReport?(QueueIngestionReporting.agentCompletionMutation(
+                operation: .lint, usage: nil,
+                observedSummary: "\(outcome.title): \(outcome.status) — \(outcome.detail)"))
+            DebugLog.ingest("per-finding repair refused before launch: \(refusal.rawValue) — \(reason)")
+            return
+        case .ready(let ready):
+            plan = ready
+        }
+
+        let launcher = try await makeLauncher(wikiID: wikiID)
+        let selectedProvider = resolveSelectedProvider()
+        onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
+        onReport?(QueueIngestionReporting.runningMutation())
+
+        let runStart = Date()
+        await runLintAgent(
+            request: plan.request,
+            launcher: launcher,
+            wikiID: wikiID,
+            queueItemID: queueItemID,
+            providerLabel: selectedProvider.label,
+            onTranscript: onTranscript,
+            onLiveUsage: onLiveUsage,
+            onPendingPermission: onPendingPermission)
+        let launched = await MainActor.run { launcher.lastLaunchedConfiguration }
+        let results = await launcherResults(launcher)
+        guard launched != nil else {
+            // The configured lint model never started — nothing ran, so the
+            // finding is untouched. Record it, then fail the item by name.
+            let reason = results.preflightError ?? "the agent did not start"
+            let outcome = await MainActor.run {
+                AgentOperationRunner.perFindingRefusalOutcome(
+                    .modelUnavailable, title: plan.snapshot.title, detail: reason,
+                    pageID: pageID, target: target, store: store)
+            }
+            onReport?(QueueIngestionReporting.lintPageOutcomesMutation([outcome.queueReportOutcome]))
+            throw QueueIngestionError.spawnFailed(
+                "\(LintPerFindingRefusal.modelUnavailable.message) (\(reason))")
+        }
+        let accountedPlan = AgentOperationRunner.perFindingPlanAfterLaunch(plan, launched: launched)
+        // The dispatcher's written-version record names the head THIS run's
+        // write produced — the auto-revert's CAS precondition.
+        var producedHead: PageVersionID?
+        if let lintRunState,
+           let record = await lintRunState.latestVerificationRecord(pageID: pageID),
+           record.recordedAt >= runStart {
+            producedHead = record.writtenHead
+        }
+        let outcome = await MainActor.run {
+            AgentOperationRunner.accountForLintRun(
+                plan: accountedPlan, pageID: pageID, launcher: launcher,
+                store: store, runStart: runStart, producedHead: producedHead)
+        }
+        if let lintRunState, let authority = outcome.authority {
+            await lintRunState.recordAccountedOutcome(DaemonLintAccountedOutcome(
+                pageID: pageID, authority: authority, revert: outcome.revert,
+                recordedAt: Date()))
+        }
+        onReport?(QueueIngestionReporting.lintPageOutcomesMutation([outcome.queueReportOutcome]))
+        onUsage?(results.usage)
+        onLogPaths?(results.logURL, results.debugURL)
+        try validateLauncherResults(results)
+        onReport?(QueueIngestionReporting.agentCompletionMutation(
+            operation: .lint,
+            usage: results.usage,
+            observedSummary: "\(outcome.title): \(outcome.status) — \(outcome.detail)"))
+    }
+
     // MARK: - Private
 
     private func makeLauncher(wikiID: WikiID) async throws -> AgentLauncher {

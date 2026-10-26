@@ -1081,6 +1081,14 @@ public final class AgentLauncher {
     /// verification step reads the staged run-report back from here (the
     /// agent edits the staged file in place). Nil before the first run.
     @ObservationIgnored public private(set) var lastScratchDirectory: URL?
+    /// What the MOST RECENT one-shot run actually spawned — the provider,
+    /// the resolved model, and the effective thinking effort — set at spawn
+    /// commit, after every preflight refusal. `nil` before the first run and
+    /// for a run that never spawned (a refused or unconfigured model leaves
+    /// it nil, which is how a caller tells "the model could not start" from
+    /// "the agent ran"). The per-finding lint repair keys its breaker
+    /// outcome on these values: the launcher knows what it launched.
+    @ObservationIgnored public private(set) var lastLaunchedConfiguration: LaunchedAgentConfiguration?
     /// The agent-run-lifecycle release closure for the current run (nil when no run is active).
     /// Stored so `finish()` — and thus the completion watchdog — can decrement
     /// the run counter even when the process's `terminationHandler` never fires.
@@ -1895,6 +1903,10 @@ public final class AgentLauncher {
         lastActivityAt = now
         runCommitedAt = now
         runProviderLabel = provider.id.rawValue
+        lastLaunchedConfiguration = LaunchedAgentConfiguration(
+            provider: provider.id,
+            model: resolvedStageModelId,
+            effort: servicePreparation?.0.effectiveThinking ?? oneShotThinkingOverride)
         openLogFiles(in: scratch)
         // Write the resolved provider/model/thinking snapshot to
         // `<scratch>/models.json` ONCE at ingestion start — a sibling of
@@ -4909,6 +4921,7 @@ public final class AgentLauncher {
         // Review m1: a stale scratch path from the PREVIOUS run would make
         // the lint accounting read the wrong run's report.
         lastScratchDirectory = nil
+        lastLaunchedConfiguration = nil
         releaseProviderOperation()
         // §5 hygiene: a new run revokes any lease a prior run left behind
         // (idempotent no-op after a normal finish()). This closes the last
@@ -5225,6 +5238,23 @@ public final class AgentLauncher {
     private func createSandboxTmpDir(in scratch: URL) {
         let tmp = scratch.appendingPathComponent(Self.tmpRelocationLeaf, isDirectory: true)
         DebugLog.trying("createSandboxTmpDir", operation: { try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true) })
+    }
+}
+
+// MARK: - Launched configuration
+
+/// The configuration one one-shot run actually spawned: the provider, the
+/// stage-resolved model, and the effective thinking effort (`nil` when the
+/// provider resolved its own default — no effort was pinned).
+public struct LaunchedAgentConfiguration: Equatable, Sendable {
+    public let provider: ProviderID
+    public let model: ModelID?
+    public let effort: String?
+
+    public init(provider: ProviderID, model: ModelID?, effort: String?) {
+        self.provider = provider
+        self.model = model
+        self.effort = effort
     }
 }
 

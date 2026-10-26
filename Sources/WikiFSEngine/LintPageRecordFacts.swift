@@ -94,6 +94,17 @@ public struct LintPageRecordFacts: Equatable, Sendable {
     /// The detected findings with their assigned outcomes, in recorded
     /// order (one `finding=` segment each).
     public let findings: [RecordFinding]
+    /// The finding a user-triggered per-finding repair run targeted
+    /// (`per_finding=<id>`); `nil` for every autonomous record.
+    public let perFindingID: String?
+    /// Why a per-finding run refused before launching anything
+    /// (`per_finding_outcome=`); `nil` when it launched (its verification
+    /// and revert labels tell the rest) and for autonomous records.
+    public let perFindingRefusal: LintPerFindingRefusal?
+    /// The breaker configuration the run's outcome was recorded under
+    /// (`breaker_key=`), when the record names one — the per-finding run's
+    /// launch-time key. The undo records its user undo under it.
+    public let recordedBreakerKey: LintRepairBreakerKey?
 
     init(
         pageID: PageID, title: String, tier: LintAuthorityTier?,
@@ -101,7 +112,9 @@ public struct LintPageRecordFacts: Equatable, Sendable {
         writtenHead: PageVersionID?, wasAutoReverted: Bool, isFlagged: Bool,
         verificationFailureReasons: [String], proposalCount: Int? = nil,
         stagedProposalIDs: [String] = [], authorityReason: String? = nil,
-        findingCount: Int? = nil, findings: [RecordFinding] = []
+        findingCount: Int? = nil, findings: [RecordFinding] = [],
+        perFindingID: String? = nil, perFindingRefusal: LintPerFindingRefusal? = nil,
+        recordedBreakerKey: LintRepairBreakerKey? = nil
     ) {
         self.pageID = pageID
         self.title = title
@@ -117,6 +130,9 @@ public struct LintPageRecordFacts: Equatable, Sendable {
         self.authorityReason = authorityReason
         self.findingCount = findingCount
         self.findings = findings
+        self.perFindingID = perFindingID
+        self.perFindingRefusal = perFindingRefusal
+        self.recordedBreakerKey = recordedBreakerKey
     }
 
     /// Parse one durable target record. Returns `nil` for records that are
@@ -140,9 +156,28 @@ public struct LintPageRecordFacts: Equatable, Sendable {
         var authorityReason: String?
         var findingCount: Int?
         var findings: [RecordFinding] = []
+        var perFindingID: String?
+        var perFindingRefusal: LintPerFindingRefusal?
+        var recordedBreakerKey: LintRepairBreakerKey?
         var failureSegmentOpen = false
 
         for segment in segments {
+            if let value = Self.labeledValue(Self.perFindingLabel, in: segment) {
+                perFindingID = perFindingID ?? value
+                failureSegmentOpen = false
+                continue
+            }
+            if let value = Self.labeledValue(Self.perFindingOutcomeLabel, in: segment) {
+                perFindingRefusal = perFindingRefusal ?? LintPerFindingRefusal(rawValue: value)
+                failureSegmentOpen = false
+                continue
+            }
+            if let value = Self.labeledValue(LintRepairBreakerKey.recordLabelName, in: segment) {
+                recordedBreakerKey = recordedBreakerKey
+                    ?? LintRepairBreakerKey(recordLabelValue: value)
+                failureSegmentOpen = false
+                continue
+            }
             if let value = Self.labeledValue("authority_tier", in: segment) {
                 tier = tier ?? LintAuthorityTier(rawValue: value)
                 failureSegmentOpen = false
@@ -227,7 +262,8 @@ public struct LintPageRecordFacts: Equatable, Sendable {
             isFlagged: isFlagged, verificationFailureReasons: reasons,
             proposalCount: proposalCount, stagedProposalIDs: stagedProposalIDs,
             authorityReason: authorityReason, findingCount: findingCount,
-            findings: findings)
+            findings: findings, perFindingID: perFindingID,
+            perFindingRefusal: perFindingRefusal, recordedBreakerKey: recordedBreakerKey)
     }
 
     /// Whether the run left a SURVIVING written repair an undo can revert:
@@ -244,6 +280,10 @@ public struct LintPageRecordFacts: Equatable, Sendable {
     // MARK: - Segment shapes (must stay in sync with the producers)
 
     static let inspectedHeadPrefix = "audited head "
+    /// The per-finding run's target label (`per_finding=<occurrence id>`).
+    public static let perFindingLabel = "per_finding"
+    /// The per-finding run's pre-launch refusal label.
+    public static let perFindingOutcomeLabel = "per_finding_outcome"
     static let revertLabelPrefix = "revert="
     static let failurePrefix = "verification failed: "
     /// The audit label's manual-review marker (`LintRevertOutcome.auditLabel`).
@@ -358,7 +398,8 @@ public struct LintPageRecordFacts: Equatable, Sendable {
             inspectedHeadPrefix, revertLabelPrefix, "verification ",
             "run-report ", "unresolved:", "written_head=", "authority_tier=",
             "authority_reason=", "approval_id=", "proposals=", "staged_proposal=",
-            "findings=", "finding=",
+            "findings=", "finding=", "per_finding=", "per_finding_outcome=",
+            "breaker_key=",
             "AGENT LOG", "HOST LOG", "write phase",
             "no run scratch",
         ]
