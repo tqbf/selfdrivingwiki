@@ -178,6 +178,112 @@ struct LintLiveGateDriverTests {
         }
     }
 
+    // MARK: - Label-declared effort tiers (codex-acp)
+
+    /// The real codex-acp catalog shape: every effort tier is its own
+    /// model variant, the tier lives in the label's trailing parenthesized
+    /// suffix, and no entry advertises a thinking-option catalog.
+    private func codexVariantModels() -> [[String: Any]] {
+        [
+            ["modelId": "gpt-6.1-sol[low]", "name": "6.1 Sol (low)"],
+            ["modelId": "gpt-6.1-sol[medium]", "name": "6.1 Sol (medium)"],
+            ["modelId": "gpt-6.1-sol[high]", "name": "6.1 Sol (high)"],
+            ["modelId": "gpt-6.1-sol[xhigh]", "name": "6.1 Sol (xhigh)"],
+            ["modelId": "gpt-6.1-sol[max]", "name": "6.1 Sol (max)"],
+            ["modelId": "gpt-6.1-sol[ultra]", "name": "6.1 Sol (ultra)"],
+            ["modelId": "gpt-6-astra[low]", "name": "6 Astra (low)"],
+            ["modelId": "gpt-6-astra[medium]", "name": "6 Astra (medium)"],
+        ]
+    }
+
+    @Test func resolutionRecordsEffortFromVariantLabelTier() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = try writeConfig(
+            directory: root, enabledProviderID: "codex-acp",
+            models: codexVariantModels())
+        let config = AgentProvidersConfig.loadOrSeed(from: dir, discover: { [] })
+        // "6.1 Sol" prefix-matches the lowest advertised variant, whose
+        // label declares the effort — resolution proceeds and records it.
+        let evaluated = try LintLiveGateResolution.resolve(
+            configuration: config, requestedProviderID: "codex-acp",
+            requestedModelID: "6.1 Sol", pipeline: try pipeline())
+        #expect(evaluated.modelID == "gpt-6.1-sol[low]")
+        #expect(evaluated.modelLabel == "6.1 Sol (low)")
+        #expect(evaluated.effort == "low", "the label declares the tier")
+        #expect(evaluated.components.effort == "low")
+        #expect(evaluated.components.model == "gpt-6.1-sol[low]")
+        // Matching is case-insensitive; the value records lowercased.
+        let mixedCase = try writeConfig(
+            directory: root.appendingPathComponent("case"),
+            enabledProviderID: "codex-acp",
+            models: [["modelId": "gpt-6.1-sol[ultra]", "name": "6.1 Sol (Ultra)"]])
+        let evaluated2 = try LintLiveGateResolution.resolve(
+            configuration: AgentProvidersConfig.loadOrSeed(
+                from: mixedCase, discover: { [] }),
+            requestedProviderID: "codex-acp",
+            requestedModelID: "6.1 Sol", pipeline: try pipeline())
+        #expect(evaluated2.effort == "ultra")
+    }
+
+    @Test func resolutionTierlessPiCatalogModelStillRecordsAgentDefault() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = try configWithoutModels(providerID: "pi-acp", root: root)
+        let catalog = try writePiCatalog(
+            directory: root.appendingPathComponent("catalog"),
+            providers: ["deepseek": [
+                ["id": "deepseek-v4.1", "name": "DeepSeek V4.1"],
+            ]])
+        // A label with no parenthesized suffix at all: the pi catalog
+        // advertises no tiers, so the effort still names the agent
+        // default — the label-tier parse never reaches this path.
+        let evaluated = try LintLiveGateResolution.resolve(
+            configuration: config, requestedProviderID: "pi-acp",
+            requestedModelID: "DeepSeek V4.1", pipeline: try pipeline(),
+            piCatalogURL: catalog)
+        #expect(evaluated.modelID == "deepseek-v4.1")
+        #expect(evaluated.effort == "agent-default")
+        #expect(evaluated.components.effort == "agent-default")
+    }
+
+    @Test func resolutionStaysImpossibleWithoutAnyTierAdvertisement() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lint-eval-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        // A static model with no tier in its label AND no advertised
+        // catalog has nowhere to source an effort — the named prerequisite
+        // fires, exactly as before the label-tier accommodation.
+        let tierless = try writeConfig(
+            directory: root.appendingPathComponent("tierless"),
+            enabledProviderID: "codex-acp",
+            models: [["modelId": "gpt-6.1-sol", "name": "6.1 Sol"]])
+        let tierlessConfig = AgentProvidersConfig.loadOrSeed(
+            from: tierless, discover: { [] })
+        #expect(throws: LintLiveGateError.effortUnadvertised(
+            provider: "codex-acp", model: "6.1 Sol")) {
+            _ = try LintLiveGateResolution.resolve(
+                configuration: tierlessConfig, requestedProviderID: "codex-acp",
+                requestedModelID: "6.1 Sol", pipeline: try pipeline())
+        }
+        // A parenthesized suffix that is NOT a recognized tier never
+        // masquerades as one.
+        let nonTier = try writeConfig(
+            directory: root.appendingPathComponent("non-tier"),
+            enabledProviderID: "codex-acp",
+            models: [["modelId": "glm-5.3-flash", "name": "GLM 5.3 Flash (Latest)"]])
+        let nonTierConfig = AgentProvidersConfig.loadOrSeed(
+            from: nonTier, discover: { [] })
+        #expect(throws: LintLiveGateError.effortUnadvertised(
+            provider: "codex-acp", model: "GLM 5.3 Flash (Latest)")) {
+            _ = try LintLiveGateResolution.resolve(
+                configuration: nonTierConfig, requestedProviderID: "codex-acp",
+                requestedModelID: "GLM 5.3 Flash", pipeline: try pipeline())
+        }
+    }
+
     // MARK: - Pi agent catalog fallback
 
     /// Write a pi-agent-shaped catalog file: `providers.<key>.models[]`

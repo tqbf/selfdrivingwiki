@@ -161,6 +161,34 @@ public enum LintLiveGateResolution {
         "minimal", "low", "medium", "high", "max", "highest",
     ]
 
+    /// The effort tiers a variant label can declare in its trailing
+    /// parenthesized suffix (`6.1 Sol (low)`): codex-acp advertises each
+    /// effort tier as its own model variant and carries no separate
+    /// thinking-option catalog, so the label is where the effort lives.
+    /// Matched case-insensitively against the documented codex vocabulary
+    /// only — an unrecognized suffix never matches and no value is
+    /// invented. Deliberately disjoint from the pi catalog's
+    /// `agent-default` accommodation: a label tier IS an advertised value,
+    /// not an absence of one.
+    static let labelDeclaredEffortTiers: Set<String> = [
+        "low", "medium", "high", "xhigh", "max", "ultra",
+    ]
+
+    /// The effort tier a variant label declares in its trailing
+    /// parenthesized suffix — `6.1 Sol (low)` declares `low` — or nil
+    /// when the label names no recognized tier. The suffix opens at the
+    /// LAST `(`, so a non-tier suffix (`GLM 5.3 Flash (Latest)`) never
+    /// masquerades as one.
+    static func labelDeclaredEffort(in label: String) -> String? {
+        guard label.hasSuffix(")"),
+              let open = label.lastIndex(of: "("),
+              open < label.index(before: label.endIndex)
+        else { return nil }
+        let tier = label[label.index(after: open)..<label.index(before: label.endIndex)]
+            .lowercased()
+        return labelDeclaredEffortTiers.contains(tier) ? tier : nil
+    }
+
     /// Resolve the evaluated configuration from an already-loaded provider
     /// configuration (WikiStrategyEval posture: the config directory is read
     /// with discovery disabled). Throws a NAMED prerequisite when the
@@ -205,22 +233,29 @@ public enum LintLiveGateResolution {
                 available: models.map(\.name))
         }
         // The LOWEST advertised effort tier: ranked lowest-first, then
-        // advertised order for unknown values.
-        guard let catalog = model.thinkingOptionCatalog, !catalog.choices.isEmpty else {
-            throw LintLiveGateError.effortUnadvertised(
-                provider: provider.id.rawValue, model: model.name)
+        // advertised order for unknown values. A model that advertises no
+        // tier catalog may still declare its effort IN the variant label —
+        // codex-acp exposes each tier as its own model ("6.1 Sol (low)") —
+        // so the label's tier records and resolution proceeds, exactly
+        // parallel to the pi catalog's `agent-default` accommodation.
+        let lowestAdvertised: String?
+        if let catalog = model.thinkingOptionCatalog, !catalog.choices.isEmpty {
+            lowestAdvertised = catalog.choices.min(by: { lhs, rhs in
+                let lhsRank = LintLiveGateResolution.effortRankLowestFirst.firstIndex {
+                    lhs.id.rawValue.caseInsensitiveCompare($0) == .orderedSame
+                } ?? LintLiveGateResolution.effortRankLowestFirst.count
+                let rhsRank = LintLiveGateResolution.effortRankLowestFirst.firstIndex {
+                    rhs.id.rawValue.caseInsensitiveCompare($0) == .orderedSame
+                } ?? LintLiveGateResolution.effortRankLowestFirst.count
+                return lhsRank == rhsRank
+                    ? lhs.id.rawValue < rhs.id.rawValue
+                    : lhsRank < rhsRank
+            })?.id.rawValue
+        } else {
+            lowestAdvertised = nil
         }
-        guard let lowest = catalog.choices.min(by: { lhs, rhs in
-            let lhsRank = LintLiveGateResolution.effortRankLowestFirst.firstIndex {
-                lhs.id.rawValue.caseInsensitiveCompare($0) == .orderedSame
-            } ?? LintLiveGateResolution.effortRankLowestFirst.count
-            let rhsRank = LintLiveGateResolution.effortRankLowestFirst.firstIndex {
-                rhs.id.rawValue.caseInsensitiveCompare($0) == .orderedSame
-            } ?? LintLiveGateResolution.effortRankLowestFirst.count
-            return lhsRank == rhsRank
-                ? lhs.id.rawValue < rhs.id.rawValue
-                : lhsRank < rhsRank
-        }) else {
+        guard let effort = lowestAdvertised
+            ?? LintLiveGateResolution.labelDeclaredEffort(in: model.name) else {
             throw LintLiveGateError.effortUnadvertised(
                 provider: provider.id.rawValue, model: model.name)
         }
@@ -228,7 +263,7 @@ public enum LintLiveGateResolution {
             provider: provider.id.rawValue,
             model: model.modelId.rawValue,
             modelRevision: nil,
-            effort: lowest.id.rawValue,
+            effort: effort,
             promptSHA256: pipeline.promptSHA256,
             detectorRevision: pipeline.detectorRevision,
             fixtureDigest: pipeline.fixtureDigest)
@@ -238,7 +273,7 @@ public enum LintLiveGateResolution {
             modelID: model.modelId.rawValue,
             modelLabel: model.name,
             modelRevision: nil,
-            effort: lowest.id.rawValue,
+            effort: effort,
             components: components)
     }
 
