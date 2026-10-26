@@ -117,6 +117,10 @@ struct GeneratedPromptsParityTests {
         #expect(GeneratedPrompts.lintPagePerFinding == md("lint-page-per-finding.md"))
     }
 
+    @Test func lintRepairPlaybookMatchesFile() {
+        #expect(GeneratedPrompts.lintRepairPlaybook == md("lint-repair-playbook.md"))
+    }
+
     // MARK: - AC1.5: prompt templates contain CAS discipline
 
     @Test func promptsContainCASDiscipline() {

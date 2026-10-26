@@ -11,6 +11,11 @@ repaired. This run repairs exactly that finding, and nothing else:
 
       {{findingEvidence}}
 
+Repair rules for class {{findingClass}} (follow them exactly; they override
+any general habit):
+
+{{playbookEntry}}
+
 Rules for this run (they narrow the task; every other rule still applies):
 
 - Produce hunks for THIS finding only. Touch no other bytes: do not repair,

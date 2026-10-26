@@ -399,6 +399,10 @@ extension WikiOperation {
       "findingClass": focus.defectClass.rawValue,
       "findingRange": focus.rangeDescription,
       "findingMessage": focus.message,
+      // ONLY the target class's playbook entry. A class without one fails
+      // closed: the run is told to write nothing.
+      "playbookEntry": LintRepairPlaybook.entry(for: focus.defectClass)
+        ?? "No repair rules exist for this class: write nothing, and report the finding `unresolved|no repair rules for this class`.",
       // The evidence is untrusted page bytes: flatten it onto the one
       // indented data line the template gives it.
       "findingEvidence": focus.evidence
