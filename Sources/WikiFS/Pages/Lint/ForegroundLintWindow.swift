@@ -65,6 +65,8 @@ struct ForegroundLintWindow: View {
     @State private var lintSession: ForegroundLintSession?
     @State private var refusal: String?
     @State private var started = false
+    /// The window's close confirmation delegate (real `NSWindowDelegate`).
+    @State private var closeDelegate = LintWindowCloseDelegate()
 
     var body: some View {
         Group {
@@ -76,12 +78,7 @@ struct ForegroundLintWindow: View {
                         applyLintProposal(proposal, candidate)
                     },
                     onClose: {
-                        // Plain window close, exactly like the queue Activity
-                        // windows: closing cancels the in-flight run and
-                        // frees the per-wiki slot (onDisappear does the same
-                        // when the window is closed any other way).
-                        lintCoordinator.close(wikiID: context.wikiID)
-                        dismiss()
+                        closeDelegate.requestClose()
                     })
             } else if let refusal {
                 ContentUnavailableView {
@@ -97,6 +94,16 @@ struct ForegroundLintWindow: View {
         }
         .frame(minWidth: 720, minHeight: 500)
         .background(WindowActivator())
+        .background(WindowCloseConfirmation(delegate: closeDelegate))
+        .onAppear {
+            // The delegate's closures read live state; set them once —
+            // @State reads inside the closures stay current.
+            closeDelegate.isBusy = { lintSession?.isBusy == true }
+            closeDelegate.onConfirmedClose = {
+                lintCoordinator.close(wikiID: context.wikiID)
+                dismiss()
+            }
+        }
         .task(id: context) {
             await openOnce()
         }
@@ -162,6 +169,137 @@ struct ForegroundLintWindow: View {
         } catch {
             DebugLog.lint("Lint Apply failed: \(error)")
             return .refused("Apply failed: \(error)")
+        }
+    }
+}
+
+// MARK: - Close confirmation
+
+/// The lint window's close confirmation, implemented as a real
+/// `NSWindowDelegate` (the standard AppKit confirm-close pattern).
+///
+/// While a run is busy, `windowShouldClose(_:)` vetoes the close and
+/// presents the confirmation as an ASYNC SHEET on the window
+/// (`beginSheetModal(for:)` — never `runModal`, whose nested loop inside
+/// `performClose:` hangs SwiftUI's close pipeline). Confirming tears down
+/// the run and closes via `onConfirmedClose`. When idle, close decisions
+/// forward to SwiftUI's original delegate unchanged. Every other delegate
+/// call forwards too, so scene behavior is otherwise untouched.
+@MainActor
+final class LintWindowCloseDelegate: NSObject, NSWindowDelegate {
+    var isBusy: () -> Bool = { false }
+    /// Runs after the user confirms the busy close: tears down the run and
+    /// dismisses the window (wired to the content's coordinator + dismiss).
+    var onConfirmedClose: () -> Void = {}
+    /// The window the delegate is attached to (set by `attach`/`reassert`),
+    /// so the Close button can present the confirmation sheet on it.
+    private weak var attachedWindow: NSWindow?
+    /// SwiftUI's own window delegate — idle close decisions and all
+    /// non-intercepted delegate calls forward here. `nonisolated(unsafe)`
+    /// because the NSObject forwarding overrides are nonisolated while the
+    /// state is MainActor; sound because the property and its readers only
+    /// ever run on the main thread (attach in `viewDidMoveToWindow`/
+    /// `reassert`, and AppKit dispatches window-delegate calls on main).
+    // swiftlint:disable:next nonisolated_unsafe
+    nonisolated(unsafe) weak var originalDelegate: (any NSWindowDelegate)?
+    /// Guards against stacking confirmation sheets on repeated close
+    /// attempts while one is already on screen.
+    private var isConfirming = false
+
+    /// Install as the window's delegate, saving whatever was there. A
+    /// second attach with ourselves installed is a no-op (re-saving would
+    /// make the forwarding chain recurse into the proxy).
+    func attach(to window: NSWindow) {
+        attachedWindow = window
+        guard window.delegate !== self else { return }
+        originalDelegate = window.delegate
+        window.delegate = self
+    }
+
+    /// Re-install if SwiftUI replaced the delegate after our attach.
+    func reassert(on window: NSWindow?) {
+        guard let window else { return }
+        attach(to: window)
+    }
+
+    /// The single close entry point, shared by the red close button
+    /// (via `windowShouldClose`), Cmd+W, and the in-window Close button:
+    /// busy → present the confirmation sheet on the window; idle → run the
+    /// confirmed-close path immediately.
+    func requestClose() {
+        if isBusy(), let attachedWindow {
+            requestConfirmation(window: attachedWindow)
+            return
+        }
+        onConfirmedClose()
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if isBusy() {
+            requestConfirmation(window: sender)
+            return false
+        }
+        if let originalDelegate,
+           originalDelegate.responds(to: #selector(NSWindowDelegate.windowShouldClose(_:))) {
+            return originalDelegate.windowShouldClose?(sender) ?? true
+        }
+        return true
+    }
+
+    private func requestConfirmation(window: NSWindow) {
+        guard !isConfirming else { return }
+        isConfirming = true
+        let alert = NSAlert()
+        alert.messageText = "Lint work in progress"
+        alert.informativeText = "A check or repair is still running. Close the window and cancel it?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close and Cancel")
+        alert.addButton(withTitle: "Keep Window")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            self?.isConfirming = false
+            if response == .alertFirstButtonReturn {
+                self?.onConfirmedClose()
+            }
+        }
+    }
+
+    override func responds(to aSelector: Selector) -> Bool {
+        super.responds(to: aSelector) || originalDelegate?.responds(to: aSelector) == true
+    }
+
+    override func forwardingTarget(for aSelector: Selector) -> Any? {
+        originalDelegate
+    }
+}
+
+/// Bridges the window content to its `LintWindowCloseDelegate`: installs
+/// the delegate when the view joins the window and refreshes the closures
+/// on every update. The delegate itself is owned by the content (`@State`)
+/// so the Close button routes through the same confirmation.
+struct WindowCloseConfirmation: NSViewRepresentable {
+    let delegate: LintWindowCloseDelegate
+
+    func makeNSView(context: Context) -> NSView {
+        let view = ConfirmationView()
+        view.closeDelegate = delegate
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        guard let view = view as? ConfirmationView else { return }
+        view.closeDelegate = delegate
+        delegate.reassert(on: view.window)
+    }
+
+    /// Grabs the hosting window the moment the view enters one.
+    @MainActor
+    final class ConfirmationView: NSView {
+        weak var closeDelegate: LintWindowCloseDelegate?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, let closeDelegate else { return }
+            closeDelegate.attach(to: window)
         }
     }
 }

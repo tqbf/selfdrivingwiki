@@ -477,6 +477,7 @@ private struct LintDocumentWebViewRep: NSViewRepresentable {
         config.defaultWebpagePreferences = prefs
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.underPageBackgroundColor = .textBackgroundColor
+        webView.navigationDelegate = context.coordinator
         context.coordinator.load(html, into: webView)
         return webView
     }
@@ -490,11 +491,31 @@ private struct LintDocumentWebViewRep: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     @MainActor
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, WKNavigationDelegate {
         var loadedHTML: String?
+        /// Set when the just-loaded document contains lint marks; on
+        /// navigation finish, the first marked block is scrolled into view
+        /// (centered) so a clicked passage is immediately visible.
+        var pendingScrollToMark = false
+
         func load(_ html: String, into webView: WKWebView) {
             loadedHTML = html
+            // `data-lint-mark` appears only on actually-marked blocks — the
+            // stylesheet mentions the class name unconditionally.
+            pendingScrollToMark = html.contains("data-lint-mark")
             webView.loadHTMLString(html, baseURL: nil)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation?) {
+            guard pendingScrollToMark else { return }
+            pendingScrollToMark = false
+            // Host-driven JS runs even though page scripts are disabled.
+            // Multiple ranges mark multiple blocks; the first is the
+            // finding's primary anchor.
+            webView.evaluateJavaScript(
+                "var m = document.querySelector('.wiki-lint-mark');"
+                    + "if (m) { m.scrollIntoView({block: 'center'}); }",
+                completionHandler: nil)
         }
     }
 }
