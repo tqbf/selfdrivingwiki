@@ -304,12 +304,30 @@ struct ContentView: View {
         // on purpose: a centered `.principal` item then centers within the detail
         // region rather than across the whole split-view window.
         .toolbar {
-            // Centered layout: Back/Forward/Home stays flush-left, the omnibox is
-            // a smaller `.principal` item, and the right controls stay together
-            // after a flexible spacer.
+            // Centered layout: Back/Forward/Home and the Add group stay flush-left,
+            // the omnibox is a smaller `.principal` item, and the right controls
+            // stay together after a flexible spacer.
             ToolbarItem(placement: .navigation) {
                 OmniboxNavButtons(store: store, homePageID: activeHomePageID)
             }
+            // The welcome page's three "Get Started" entry points, so they stay
+            // reachable once a tab is open. Same handlers as the welcome buttons
+            // and the Cmd+Shift+P/U/F/D/C shortcuts below. One `ToolbarItem`
+            // (not a group) so all three sit in a single bubble, separate from
+            // Back/Forward/Home.
+            ToolbarSpacer(.fixed, placement: .navigation)
+            ToolbarItem(placement: .navigation) {
+                ToolbarAddButtons(
+                    onAddPage: { store.newPageInNewTab() },
+                    onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
+                    onAddFile: addFile,
+                    onAddFolder: { showingImportMarkdown = true },
+                    onAddChat: { store.beginNewChat() })
+            }
+            // Adjacent `.navigation` items share one glass bubble on macOS 26,
+            // even across a fixed spacer. Opt this item out of the shared
+            // background; `ToolbarAddButtons` draws its own capsule instead.
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .principal) {
                 AddressBarView(store: store, isFocused: $addressBarFocused,
                                detailWidth: detailWidth,
@@ -374,6 +392,14 @@ struct ContentView: View {
         }
     }
 
+    /// Pick a single file via the open panel and ingest it (the toolbar's
+    /// Add Source ▸ Add File and Cmd+Shift+F; mirrors WikiDetailView.addFile).
+    private func addFile() {
+        if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Add File") {
+            Task { await store.addFiles([url]) }
+        }
+    }
+
     private func handleSidebarRevealVersionChange() {
         if columnVisibility == .detailOnly {
             columnVisibility = .all
@@ -420,13 +446,9 @@ struct ContentView: View {
 
         // Cmd+Shift+F: Add File (open panel → store.addFiles; mirrors
         // WikiDetailView.addFile exactly).
-        Button("") {
-            if let url = WikiFilePanels.chooseFile(title: "Add File", prompt: "Add File") {
-                Task { await store.addFiles([url]) }
-            }
-        }
-        .keyboardShortcut("f", modifiers: [.command, .shift])
-        .opacity(0).allowsHitTesting(false)
+        Button("", action: addFile)
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .opacity(0).allowsHitTesting(false)
 
         // Cmd+Shift+D: Add Folder (present ImportMarkdownSheet, same as the
         // sidebar / welcome showingImportMarkdown toggle).
@@ -449,6 +471,56 @@ struct ContentView: View {
         }
     }
 
+}
+
+/// The Add Page / Add Source / Add Chat cluster shown after the Back / Forward /
+/// Home cluster. One view rather than a `ToolbarItemGroup`, so the three
+/// controls share one capsule; styled to match `OmniboxNavButtons`. The capsule
+/// is drawn here because the toolbar item hides its shared background.
+private struct ToolbarAddButtons: View {
+    let onAddPage: () -> Void
+    let onAddFromURL: () -> Void
+    let onAddFile: () -> Void
+    let onAddFolder: () -> Void
+    let onAddChat: () -> Void
+
+    var body: some View {
+        HStack(spacing: AddressBarMetrics.navButtonSpacing) {
+            Button(action: onAddPage) { icon("doc.badge.plus") }
+                .buttonStyle(.borderless)
+                .help("Add Page")
+                .accessibilityLabel("Add Page")
+
+            Menu {
+                Button("Add from URL", systemImage: "link.badge.plus", action: onAddFromURL)
+                Button("Add File", systemImage: "doc", action: onAddFile)
+                Button("Add Folder", systemImage: "folder", action: onAddFolder)
+            } label: {
+                icon("tray.and.arrow.down")
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.borderless)
+            .help("Add Source")
+            .accessibilityLabel("Add Source")
+
+            Button(action: onAddChat) { icon("plus.bubble") }
+                .buttonStyle(.borderless)
+                .help("Add Chat")
+                .accessibilityLabel("Add Chat")
+        }
+        .foregroundStyle(Color.primary)
+        .padding(.horizontal, AddressBarMetrics.navBubbleInset)
+        .padding(.vertical, 4)
+        .glassEffect(.regular.interactive(), in: .capsule)
+    }
+
+    private func icon(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 15, weight: .medium))
+            .frame(width: AddressBarMetrics.navButtonWidth, height: 28)
+            .contentShape(Rectangle())
+    }
 }
 
 /// The window key for one activated renderer. `WindowGroup(for:)` dedups by
