@@ -36,6 +36,9 @@ struct QueueRunDetailsView: View {
     /// The selected lint run's staged-proposal review section (W5b), when
     /// its records name proposals. `nil` renders nothing extra.
     private let lintProposals: QueueRunDetailsLintProposals?
+    /// The selected lint run's detected-findings section, when its records
+    /// carry the accounting's findings labels. `nil` renders nothing extra.
+    private let lintFindings: QueueRunDetailsLintFindings?
     /// The undo action, owned by the caller (the Activity window's store
     /// path). `nil` renders the section read-only.
     private let onUndo: (() -> Void)?
@@ -60,6 +63,7 @@ struct QueueRunDetailsView: View {
         _ facts: QueueRunDetailsFacts?,
         lintRepair: QueueRunDetailsLintRepair? = nil,
         lintProposals: QueueRunDetailsLintProposals? = nil,
+        lintFindings: QueueRunDetailsLintFindings? = nil,
         onUndo: (() -> Void)? = nil,
         onApproveProposal: ((QueueLintStagedProposal) -> Void)? = nil,
         onRejectProposal: ((QueueLintStagedProposal) -> Void)? = nil,
@@ -70,6 +74,7 @@ struct QueueRunDetailsView: View {
         self.facts = facts
         self.lintRepair = lintRepair
         self.lintProposals = lintProposals
+        self.lintFindings = lintFindings
         self.onUndo = onUndo
         self.onApproveProposal = onApproveProposal
         self.onRejectProposal = onRejectProposal
@@ -149,6 +154,9 @@ struct QueueRunDetailsView: View {
             }
             if let lintProposals {
                 lintProposalRows(lintProposals)
+            }
+            if let lintFindings {
+                lintFindingsRows(lintFindings)
             }
         }
         .listStyle(.plain)
@@ -388,6 +396,122 @@ struct QueueRunDetailsView: View {
                 writtenBody = versionBody(writtenHead)
             }
         }
+    }
+
+    // MARK: - Detected findings section (report-only runs' surface)
+
+    /// The detected findings rows: the "N detected" (or "none detected")
+    /// header, the per-class counts, the honest report-only line, and one
+    /// row per finding (class label, assigned outcome, evidence excerpt).
+    /// The data is the durable record's accounting text re-parsed — facts
+    /// the run detected, never invented. For a report-only run this is the
+    /// findings report: the run may not repair, so detection is all it
+    /// produces, and the line below says so.
+    @ViewBuilder
+    private func lintFindingsRows(_ findings: QueueRunDetailsLintFindings) -> some View {
+        findingsHeaderRow(findings)
+        if let classCounts = findings.classCountsSummary {
+            classCountsRow(classCounts)
+        }
+        if let line = findings.reportOnlyLine {
+            reportOnlyReasonRow(line)
+        }
+        ForEach(findings.pages) { page in
+            pageFindingsRows(page, namesPages: findings.pages.count > 1)
+        }
+    }
+
+    /// The section's header: the recorded detection total, or the
+    /// established "none detected" statement for a clean run.
+    private func findingsHeaderRow(_ findings: QueueRunDetailsLintFindings) -> some View {
+        LabeledContent {
+            Text(findings.totalCount > 0
+                ? "\(findings.totalCount) detected"
+                : "none detected")
+                .font(.callout.monospacedDigit())
+        } label: {
+            Text("Lint findings")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Lint findings")
+    }
+
+    /// The per-class counts ("D03 ×2, D07 ×1") — the taxonomy at a glance.
+    private func classCountsRow(_ classCounts: String) -> some View {
+        LabeledContent {
+            Text(verbatim: classCounts)
+                .font(.callout.monospacedDigit())
+                .textSelection(.enabled)
+                .multilineTextAlignment(.trailing)
+        } label: {
+            Text("By class")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Findings by class")
+    }
+
+    /// The honest report-only line: the recorded reason the run could not
+    /// repair, and what a repair would need instead.
+    private func reportOnlyReasonRow(_ line: String) -> some View {
+        Text(verbatim: line)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Report-only run")
+    }
+
+    /// One page's finding rows: the page title (only when the run covered
+    /// several pages — a single-page run's rows need no repeating header),
+    /// then one row per finding.
+    @ViewBuilder
+    private func pageFindingsRows(
+        _ page: QueueRunDetailsLintFindings.PageFindings, namesPages: Bool
+    ) -> some View {
+        if namesPages {
+            Text(verbatim: page.title)
+                .font(.callout.weight(.medium))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(page.title)
+        }
+        ForEach(Array(page.findings.enumerated()), id: \.offset) { _, finding in
+            findingRow(finding, pageTitle: namesPages ? page.title : nil)
+        }
+    }
+
+    /// One finding: the class label and assigned outcome on the summary
+    /// line, the scan's evidence excerpt beneath it.
+    private func findingRow(
+        _ finding: LintPageRecordFacts.RecordFinding, pageTitle: String?
+    ) -> some View {
+        let summary: String
+        if let pageTitle {
+            summary = "\(pageTitle) — \(finding.classLabel) — \(finding.outcomeToken)"
+        } else {
+            summary = "\(finding.classLabel) — \(finding.outcomeToken)"
+        }
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: summary)
+                .font(.callout.monospacedDigit())
+                .textSelection(.enabled)
+            if finding.evidence.isEmpty == false {
+                Text(verbatim: finding.evidence)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Finding \(finding.classLabel) \(finding.outcomeToken)")
     }
 
     // MARK: - Staged-proposal review section (W5b)

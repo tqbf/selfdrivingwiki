@@ -175,25 +175,84 @@ struct LintRunDetailsScenarioTests {
                 wikiID: Self.wikiID))
         }
 
+        // MARK: Findings records (the report-only surface)
+
+        /// A report-only run's per-page record for a page with `count`
+        /// detections — the accounting's findings labels with the trace
+        /// labels the production gate writes.
+        func reportOnlyRecord(
+            _ pageID: PageID, title: String, findings: Int
+        ) -> QueueReportTargetRecord {
+            var detail = "authority_tier=reportOnly; "
+                + "authority_reason=gate components not fully resolved; "
+                + "audited head \(inspectedHead.rawValue); run-report coverage complete; "
+                + "verification verified on the written head; findings=\(findings)"
+            if findings > 0 {
+                detail += "; finding=D15|line-3#1 D15 unresolved evidence=<<<<<<< HEAD, note"
+                detail += "; finding=D07|line-9#1 D07 unresolved evidence=broken target"
+            }
+            detail += "; written_head=\(inspectedHead.rawValue); "
+            detail += "authority_tier=reportOnly; "
+            detail += "authority_reason=gate components not fully resolved"
+            return QueueReportTargetRecord(
+                target: .page(pageID), displayName: title, state: .succeeded, detail: detail)
+        }
+
+        /// The findings section for a report-only run over the damaged
+        /// page (two detections).
+        func reportOnlyFindingsSection() throws -> QueueRunDetailsLintFindings {
+            try #require(QueueRunDetailsLintFindings.make(
+                report: report(records: [
+                    reportOnlyRecord(page.id, title: "Gate page", findings: 2),
+                ])))
+        }
+
+        /// The findings section for a clean report-only run (the honest
+        /// zero).
+        func cleanFindingsSection() throws -> QueueRunDetailsLintFindings {
+            try #require(QueueRunDetailsLintFindings.make(
+                report: report(records: [
+                    reportOnlyRecord(page.id, title: "Gate page", findings: 0),
+                ])))
+        }
+
         deinit {
             try? FileManager.default.removeItem(at: root)
         }
     }
 
     /// The panel under test: the Run Details List plus the lint repair
-    /// section, with the undo flow wired exactly as the Activity window
-    /// wires it.
+    /// section and the detected-findings section, with the undo flow wired
+    /// exactly as the Activity window wires it.
     private struct HostedPanel: View {
         let facts: QueueRunDetailsFacts
         @State var repair: QueueRunDetailsLintRepair?
+        let findings: QueueRunDetailsLintFindings?
         let store: GRDBWikiStore
         let breaker: LintRepairBreaker
         let breakerKey: LintRepairBreakerKey
+
+        init(
+            facts: QueueRunDetailsFacts,
+            repair: QueueRunDetailsLintRepair? = nil,
+            findings: QueueRunDetailsLintFindings? = nil,
+            store: GRDBWikiStore,
+            breaker: LintRepairBreaker,
+            breakerKey: LintRepairBreakerKey
+        ) {
+            self.facts = facts
+            self.repair = repair
+            self.findings = findings
+            self.store = store
+            self.breaker = breaker
+            self.breakerKey = breakerKey
+        }
 
         var body: some View {
             QueueRunDetailsView(
                 facts,
                 lintRepair: repair,
+                lintFindings: findings,
                 onUndo: repair?.showsUndoButton == true ? { runUndo() } : nil,
                 versionBody: { versionID in
                     do { return try store.pageVersionBody(versionID: versionID) }
@@ -241,13 +300,18 @@ struct LintRunDetailsScenarioTests {
         var proposalPanel: Any? = nil
     }
 
-    private func mount(_ repair: QueueRunDetailsLintRepair?, fixture: Fixture) -> Mounted {
+    private func mount(
+        _ repair: QueueRunDetailsLintRepair?,
+        fixture: Fixture,
+        findings: QueueRunDetailsLintFindings? = nil
+    ) -> Mounted {
         _ = Self.app
         let panel = HostedPanel(
             facts: QueueRunDetailsFacts(
                 jobID: QueueItem.ID(rawValue: "lint-item"),
                 providerModel: .agent(provider: "anthropic", model: "claude-opus")),
             repair: repair,
+            findings: findings,
             store: fixture.store,
             breaker: fixture.breaker,
             breakerKey: fixture.breakerKey)
@@ -539,6 +603,41 @@ struct LintRunDetailsScenarioTests {
         let message = try #require(LintUndoService.breakerTripMessage(.tripped(reason: reason)))
         #expect(message.hasPrefix("Auto-repair paused for this configuration"))
         #expect(message.contains("2 user undos"), "the breaker's own reason rides in the message")
+    }
+
+    // MARK: - Detected findings (the report-only surface)
+
+    /// The report-only run's findings report renders in the Run Details
+    /// List: the "N detected" header, the per-class counts, the honest
+    /// report-only line, and one row per finding — the section the
+    /// operator reads when the run could not repair. A clean report-only
+    /// run renders the "none detected" header plus the reason row.
+    @Test func findingsSectionRendersForReportOnlyRuns() async throws {
+        let fixture = try Fixture()
+
+        // Clean run: the none-detected header plus the reason row.
+        let clean = mount(nil, fixture: fixture, findings: try fixture.cleanFindingsSection())
+        let cleanRows = await waitUntil { [self] in
+            rowCount(in: clean) == Self.baseRowCount + 2
+        }
+        #expect(cleanRows, "a clean report-only run renders none detected plus the reason")
+        #expect(rowCount(in: clean) == Self.baseRowCount + 2)
+        let cleanTexts = interactionTextCount(in: clean)
+
+        // Two detections: header + class counts + reason + two rows.
+        let findings = mount(
+            nil, fixture: fixture, findings: try fixture.reportOnlyFindingsSection())
+        let appeared = await waitUntil { [self] in
+            rowCount(in: findings) == Self.baseRowCount + 5
+        }
+        #expect(appeared, "header + class counts + report-only line + two finding rows")
+        #expect(rowCount(in: findings) == Self.baseRowCount + 5)
+        let moreTexts = await waitUntil { [self] in
+            interactionTextCount(in: findings) > cleanTexts
+        }
+        #expect(moreTexts, "the counts, reason, and finding rows mount selectable text")
+        #expect(rowView(at: Self.baseRowCount + 4, in: findings) != nil,
+                "the last finding row materializes")
     }
 
     // MARK: - W5b: staged-proposal review scenarios

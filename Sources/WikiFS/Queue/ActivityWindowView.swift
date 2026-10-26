@@ -1095,6 +1095,7 @@ struct ActivityWindowView: View {
                     selectedRunDetailsFacts,
                     lintRepair: selectedLintRepair,
                     lintProposals: selectedProposalSection,
+                    lintFindings: selectedLintFindings,
                     onUndo: selectedLintRepair?.showsUndoButton == true
                         ? { undoLintFixes() } : nil,
                     onApproveProposal: selectedProposalSection?.showsReviewControls == true
@@ -1160,6 +1161,20 @@ struct ActivityWindowView: View {
             repair?.breakerContext = Self.breakerContextLine(status)
         }
         return repair
+    }
+
+    /// The selected lint run's detected-findings section, or nil for every
+    /// other job: non-lint runs, whole-wiki scopes (no per-page records),
+    /// and records written before the accounting carried findings labels.
+    /// The report-only run's findings report — the section renders whatever
+    /// the records state, including an honest "none detected".
+    private var selectedLintFindings: QueueRunDetailsLintFindings? {
+        guard let itemID = selectedItemID, let item = item(for: itemID),
+              case .loaded(let report) = viewModel.selectedReport,
+              Self.loadedReportMatches(report: report, item: item) else {
+            return nil
+        }
+        return QueueRunDetailsLintFindings.make(report: report)
     }
 
     /// The disclosure's breaker context: how much of the local breaker's
