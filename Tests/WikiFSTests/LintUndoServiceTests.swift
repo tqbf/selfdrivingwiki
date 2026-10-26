@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import WikiFSCore
+@testable import WikiFSCore
 @testable import WikiFSEngine
 
 /// W2b's engine layer: the durable per-page lint record parser
@@ -192,6 +193,113 @@ struct LintUndoServiceTests {
             detail: "authority_tier=reportOnly; audited head v1")))
         #expect(facts.proposalCount == nil)
         #expect(facts.stagedProposalIDs.isEmpty)
+    }
+
+    // MARK: - Findings labels (producer + parser, plan §5.13/§5.14)
+
+    /// A real scan's findings render as record segments and parse back:
+    /// the total, each finding's class label, the assigned outcome, and
+    /// the evidence — with the evidence's segment separator sanitized so
+    /// the labels stay one `"; "`-joined grammar.
+    @Test func detectedFindingsProduceAndParseRecordLabels() throws {
+        // A merge-marker body the scanner detects (D15) — its evidence
+        // line carries a `;` to pin the sanitization.
+        let preflight = Self.scan("# Findings\n\n<<<<<<< HEAD; note\n")
+        let detected = preflight.sections.flatMap(\.findings)
+        try #require(detected.isEmpty == false, "the fixture body must produce a finding")
+        // One finding reported unresolved; a second detection (if any)
+        // stays unreported — the report named only the first.
+        let report = ParsedLintRunReport(
+            pageID: preflight.pageID, headVersionID: preflight.inspectedHead,
+            bodyFingerprint: preflight.bodyFingerprint,
+            inventoryCounts: preflight.inventoryTotals,
+            entries: [LintRunReportEntry(
+                kind: .finding(detected[0].occurrenceID), outcome: .unresolved(reason: "no safe repair"))],
+            verification: nil)
+
+        let detail = LintPageRecordFacts.findingsDetail(
+            preflight: preflight, report: report)
+        #expect(detail.hasPrefix("findings=\(detected.count)"))
+        #expect(detail.contains("finding=\(detected[0].occurrenceID) D15 unresolved"))
+        // The evidence's `;` was flattened — the segment value carries the
+        // comma form, so the grammar's `"; "` joins stay unambiguous.
+        #expect(detail.contains("HEAD, note"))
+        #expect(detail.contains("HEAD; note") == false)
+
+        let recordDetail = "authority_tier=reportOnly; "
+            + "authority_reason=gate components not fully resolved; "
+            + "audited head v1; " + detail
+        let facts = try #require(LintPageRecordFacts.parse(record: Self.record(
+            pageID: preflight.pageID, title: preflight.title,
+            state: .succeeded, detail: recordDetail)))
+        #expect(facts.tier == .reportOnly)
+        #expect(facts.authorityReason == "gate components not fully resolved")
+        #expect(facts.findingCount == detected.count)
+        #expect(facts.findings.count == detected.count)
+        #expect(facts.findings[0].classLabel == "D15")
+        #expect(facts.findings[0].outcomeToken == "unresolved")
+        #expect(facts.findings[0].evidence.isEmpty == false)
+        #expect(facts.findings[0].evidence.contains(";") == false)
+        if detected.count > 1 {
+            #expect(facts.findings[1].outcomeToken == "unreported",
+                    "a detection without a report outcome renders unreported")
+        }
+    }
+
+    /// A clean scan produces the honest zero, and it parses back as zero —
+    /// distinct from a legacy record that never carried the labels.
+    @Test func cleanScanProducesFindingsZeroAndLegacyRecordsStayAbsent() throws {
+        let cleanDetail = LintPageRecordFacts.findingsDetail(
+            preflight: Self.scan("# Clean\n\nPlain prose.\n"), report: nil)
+        #expect(cleanDetail == "findings=0")
+
+        let clean = try #require(LintPageRecordFacts.parse(record: Self.record(
+            pageID: PageID(rawValue: "p1"), title: "C", state: .succeeded,
+            detail: "authority_tier=reportOnly; audited head v1; findings=0")))
+        #expect(clean.findingCount == 0)
+        #expect(clean.findings.isEmpty)
+
+        let legacy = try #require(LintPageRecordFacts.parse(record: Self.record(
+            pageID: PageID(rawValue: "p1"), title: "L", state: .succeeded,
+            detail: "authority_tier=reportOnly; audited head v1")))
+        #expect(legacy.findingCount == nil, "absence stays distinguishable from zero")
+        #expect(legacy.findings.isEmpty)
+        #expect(legacy.authorityReason == nil)
+    }
+
+    /// A `finding=` segment closes an open verification-reason
+    /// continuation — reason prose never swallows the findings labels.
+    @Test func findingSegmentsCloseVerificationReasonContinuations() throws {
+        let detail = "authority_tier=shippedApproval; "
+            + "audited head v1; run-report coverage complete; "
+            + "verification failed: claimed repair for D03|line-3#1 but the finding persists; "
+            + "findings=1; finding=D03|line-3#1 D03 unresolved evidence=| old |; "
+            + "written_head=v2; authority_tier=shippedApproval"
+        let facts = try #require(LintPageRecordFacts.parse(record: Self.record(
+            pageID: PageID(rawValue: "p1"), title: "F", state: .failed(reason: "x"),
+            detail: detail)))
+        #expect(facts.findingCount == 1)
+        #expect(facts.findings.first?.occurrenceID == "D03|line-3#1")
+        #expect(facts.findings.first?.outcomeToken == "unresolved")
+        #expect(facts.findings.first?.evidence == "| old |",
+                "evidence with spaces survives as the segment tail")
+        #expect(facts.writtenHead == PageVersionID(rawValue: "v2"),
+                "the finding segment did not swallow the labels after it")
+        #expect(facts.verificationFailureReasons == [
+            "claimed repair for D03|line-3#1 but the finding persists",
+        ])
+    }
+
+    /// A minimal real scan for the findings-label fixtures.
+    private static func scan(_ body: String) -> LintPreflightReport {
+        let snapshot = LintPageSnapshot(
+            pageID: PageID(rawValue: "01HZPAGE00000000000000000A"),
+            title: "Findings",
+            headVersionID: PageVersionID(rawValue: "01HZHEAD00000000000000000001"),
+            body: body,
+            sourceInputs: [])
+        return LintPagePreflight.scan(
+            snapshot: snapshot, resolution: LintResolutionFacts())
     }
 
     /// The staged-note audit vocabulary round-trips (producer + parser).

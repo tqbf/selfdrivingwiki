@@ -255,6 +255,69 @@ struct LintEnforcementTests {
         let record = try #require(QueueIngestionReporting
             .lintPageOutcomesMutation([outcome.queueReportOutcome]).targetUpserts.first)
         #expect(record.detail?.contains("authority_tier=reportOnly; authority_reason=") == true)
+        // A clean page's report-only record carries the honest zero — the
+        // section it feeds renders "none detected", not absence.
+        #expect(record.detail?.contains("findings=0") == true)
+        let facts = try #require(LintPageRecordFacts.parse(record: record))
+        #expect(facts.findingCount == 0)
+        #expect(facts.findings.isEmpty)
+    }
+
+    /// The report-only run's findings data (plan §5.13/§5.14): a page with
+    /// defects, a run the gate refused to let write — the record carries
+    /// every detection with its class label, evidence, and the outcome the
+    /// validated report assigned. This is the data the Run Details findings
+    /// section renders for the operator.
+    @Test func reportOnlyRunCarriesDetectedFindings() async throws {
+        let fixture = try Fixture()
+        // The defect exists BEFORE the plan scans the page.
+        try fixture.store.updatePage(
+            id: fixture.page.id, title: "Enforcement", body: Fixture.defectiveBody)
+        let runStart = Date()
+        // The production gate: unconfigured components select report-only.
+        let plan = try #require(await AgentOperationRunner.makeLintPagePlan(
+            store: fixture.store, pageID: fixture.page.id, stateMarkdown: "# state\n"))
+        #expect(plan.authority.tier == .reportOnly)
+        let inspectedHead = try #require(
+            try fixture.store.pageHeadVersionID(pageID: fixture.page.id))
+        let detected = plan.preflight.sections.flatMap(\.findings)
+        try #require(detected.isEmpty == false, "the fixture body must produce a finding")
+        // Stage the agent's artifacts: findings honestly unresolved (the
+        // run may not repair), items and checks valid.
+        let skeleton = LintRunReportText.render(snapshot: plan.snapshot, preflight: plan.preflight)
+        let filled = skeleton.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            if line == "verification none pending" { return "verification none clean" }
+            if line.hasPrefix("finding ") && line.hasSuffix(" pending") {
+                return line.replacingOccurrences(of: " pending", with: " unresolved|the run may not repair")
+            }
+            if line.hasSuffix(" pending") {
+                return line.replacingOccurrences(of: " pending", with: " valid-as-written|recorded")
+            }
+            return String(line)
+        }.joined(separator: "\n")
+        try filled.write(
+            to: fixture.scratch.appendingPathComponent(AgentStaging.lintRunReportFileName),
+            atomically: true, encoding: .utf8)
+        _ = try fixture.store.appendLog(
+            kind: .lint, title: "Lint — \(plan.snapshot.title)", note: "agent record")
+
+        let outcome = fixture.account(plan, runStart: runStart)
+
+        #expect(outcome.detail.contains("findings=\(detected.count)"))
+        #expect(outcome.detail.contains(
+            "finding=\(detected[0].occurrenceID) \(detected[0].defectClass.rawValue) unresolved"))
+        // Nothing was written: the page stays at its inspected head.
+        #expect(try fixture.store.pageHeadVersionID(pageID: fixture.page.id) == inspectedHead,
+                "a report-only run writes nothing")
+        let record = try #require(QueueIngestionReporting
+            .lintPageOutcomesMutation([outcome.queueReportOutcome]).targetUpserts.first)
+        let facts = try #require(LintPageRecordFacts.parse(record: record))
+        #expect(facts.tier == .reportOnly)
+        #expect(facts.findingCount == detected.count)
+        #expect(facts.findings.count == detected.count)
+        #expect(facts.findings[0].classLabel == detected[0].defectClass.rawValue)
+        #expect(facts.findings[0].outcomeToken == "unresolved")
+        #expect(facts.findings[0].evidence.isEmpty == false)
     }
 
     // MARK: - Patch budget record (W2a §3)

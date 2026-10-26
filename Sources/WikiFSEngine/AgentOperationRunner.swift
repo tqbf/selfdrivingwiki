@@ -894,6 +894,10 @@ public enum AgentOperationRunner {
             detail += "; write phase not performed — patch rejected whole: \(numbers)"
         }
 
+        // The validated run report, if the run scratch carried a parseable
+        // one — hoisted so the findings labels below can name each
+        // detection's assigned outcome.
+        var parsed: ParsedLintRunReport?
         if let scratch = scratchDirectory {
             let reportURL = scratch.appendingPathComponent(AgentStaging.lintRunReportFileName)
             let reportText: String?
@@ -903,7 +907,6 @@ public enum AgentOperationRunner {
                 DebugLog.agent("lint dispatch: run report unreadable at \(reportURL.path): \(error)")
                 reportText = nil
             }
-            let parsed: ParsedLintRunReport?
             if let text = reportText {
                 do {
                     parsed = try LintRunReportParser.parse(text)
@@ -1105,6 +1108,14 @@ public enum AgentOperationRunner {
         } else {
             detail += "; no run scratch to read the run report from"
         }
+
+        // Plan §5.13/§5.14: the record carries what the trusted pre-flight
+        // scan DETECTED — class labels, counts, evidence — with the outcome
+        // the validated report assigned to each. A report-only run writes
+        // nothing, so these labels are the only durable findings data its
+        // Run Details rendering can read.
+        detail += "; " + LintPageRecordFacts.findingsDetail(
+            preflight: plan.preflight, report: parsed)
 
         // §5.12: the HOST appends the required `--kind lint` entry for the
         // completed audit and detects whether the AGENT's own append
