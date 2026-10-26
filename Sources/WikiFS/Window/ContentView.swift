@@ -312,32 +312,17 @@ struct ContentView: View {
             }
             // The welcome page's three "Get Started" entry points, so they stay
             // reachable once a tab is open. Same handlers as the welcome buttons
-            // and the Cmd+Shift+P/U/F/D/C shortcuts below. The fixed spacer keeps
-            // them a separate group from Back/Forward/Home.
+            // and the Cmd+Shift+P/U/F/D/C shortcuts below. One `ToolbarItem`
+            // (not a group) so macOS 26 wraps them in a single glass bubble; the
+            // fixed spacer keeps that bubble apart from Back/Forward/Home.
             ToolbarSpacer(.fixed, placement: .navigation)
-            ToolbarItemGroup(placement: .navigation) {
-                Button("Add Page", systemImage: "doc.badge.plus") {
-                    store.newPageInNewTab()
-                }
-                .help("Add Page")
-
-                Menu {
-                    Button("Add from URL", systemImage: "link.badge.plus") {
-                        pendingAddURL = PendingAddURL(url: "")
-                    }
-                    Button("Add File", systemImage: "doc", action: addFile)
-                    Button("Add Folder", systemImage: "folder") {
-                        showingImportMarkdown = true
-                    }
-                } label: {
-                    Label("Add Source", systemImage: "tray.and.arrow.down")
-                }
-                .help("Add Source")
-
-                Button("Add Chat", systemImage: "plus.bubble") {
-                    store.beginNewChat()
-                }
-                .help("Add Chat")
+            ToolbarItem(placement: .navigation) {
+                ToolbarAddButtons(
+                    onAddPage: { store.newPageInNewTab() },
+                    onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
+                    onAddFile: addFile,
+                    onAddFolder: { showingImportMarkdown = true },
+                    onAddChat: { store.beginNewChat() })
             }
             ToolbarItem(placement: .principal) {
                 AddressBarView(store: store, isFocused: $addressBarFocused,
@@ -482,6 +467,53 @@ struct ContentView: View {
         }
     }
 
+}
+
+/// The Add Page / Add Source / Add Chat cluster shown after the Back / Forward /
+/// Home cluster. One view rather than a `ToolbarItemGroup`, so the toolbar
+/// renders it as a single bubble; styled to match `OmniboxNavButtons`.
+private struct ToolbarAddButtons: View {
+    let onAddPage: () -> Void
+    let onAddFromURL: () -> Void
+    let onAddFile: () -> Void
+    let onAddFolder: () -> Void
+    let onAddChat: () -> Void
+
+    var body: some View {
+        HStack(spacing: AddressBarMetrics.navButtonSpacing) {
+            Button(action: onAddPage) { icon("doc.badge.plus") }
+                .buttonStyle(.borderless)
+                .help("Add Page")
+                .accessibilityLabel("Add Page")
+
+            Menu {
+                Button("Add from URL", systemImage: "link.badge.plus", action: onAddFromURL)
+                Button("Add File", systemImage: "doc", action: onAddFile)
+                Button("Add Folder", systemImage: "folder", action: onAddFolder)
+            } label: {
+                icon("tray.and.arrow.down")
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.borderless)
+            .help("Add Source")
+            .accessibilityLabel("Add Source")
+
+            Button(action: onAddChat) { icon("plus.bubble") }
+                .buttonStyle(.borderless)
+                .help("Add Chat")
+                .accessibilityLabel("Add Chat")
+        }
+        .foregroundStyle(Color.primary)
+        .padding(.horizontal, AddressBarMetrics.navBubbleInset)
+    }
+
+    private func icon(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 15, weight: .medium))
+            .frame(width: AddressBarMetrics.navButtonWidth, height: 28)
+            .contentShape(Rectangle())
+    }
 }
 
 /// The window key for one activated renderer. `WindowGroup(for:)` dedups by
