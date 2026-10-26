@@ -84,6 +84,35 @@ enum QueueLintFindingFixState: Equatable, Sendable {
         }
     }
 
+    // MARK: - The Fix request
+
+    /// The queue request a person's Fix click enqueues: a per-finding
+    /// repair item for that finding's page, run by the daemon under the
+    /// per-finding policy (no rollout gate). The target names the head the
+    /// finding was detected on, so a moved page refuses honestly instead of
+    /// repairing bytes nobody looked at. Shared by Run Details and the
+    /// interactive lint dialog so both surfaces enqueue the same item.
+    static func fixRequest(
+        wikiID: WikiID,
+        page: QueueRunDetailsLintFindings.PageFindings,
+        finding: LintPageRecordFacts.RecordFinding,
+        inspectedHead: PageVersionID,
+        originItemID: QueueItem.ID
+    ) -> QueueItemRequest {
+        QueueItemRequest(
+            queue: .ingestion,
+            wikiID: wikiID,
+            payload: QueueItemPayload(
+                sourceIDs: [],
+                lintPageIDs: [page.pageID],
+                recordedNames: [page.pageID.rawValue: page.title],
+                lintRepairTarget: LintRepairTarget(
+                    findingID: finding.occurrenceID,
+                    classLabel: finding.classLabel,
+                    expectedHead: inspectedHead,
+                    originItemID: originItemID)))
+    }
+
     // MARK: - Derivation
 
     /// One fix run this lint run spawned for one finding, as the Activity

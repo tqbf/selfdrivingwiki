@@ -1286,18 +1286,9 @@ struct ActivityWindowView: View {
         guard lintFixEnqueueing.contains(where: { $0.pageID == page.pageID }) == false else { return }
         lintFixEnqueueing.insert(key)
         lintFixEnqueueProblems[key] = nil
-        let request = QueueItemRequest(
-            queue: .ingestion,
-            wikiID: origin.wikiID,
-            payload: QueueItemPayload(
-                sourceIDs: [],
-                lintPageIDs: [page.pageID],
-                recordedNames: [page.pageID.rawValue: page.title],
-                lintRepairTarget: LintRepairTarget(
-                    findingID: finding.occurrenceID,
-                    classLabel: finding.classLabel,
-                    expectedHead: inspectedHead,
-                    originItemID: origin.id)))
+        let request = QueueLintFindingFixState.fixRequest(
+            wikiID: origin.wikiID, page: page, finding: finding,
+            inspectedHead: inspectedHead, originItemID: origin.id)
         let engine = queueEngine
         Task { @MainActor in
             do {
