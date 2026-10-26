@@ -65,10 +65,6 @@ struct ForegroundLintWindow: View {
     @State private var lintSession: ForegroundLintSession?
     @State private var refusal: String?
     @State private var started = false
-    /// Raised when a close attempt (red button, Cmd+W, Close button) was
-    /// vetoed because a run is busy — the confirmation alert presents from
-    /// here, never from inside `windowShouldClose`.
-    @State private var showCloseConfirmation = false
 
     var body: some View {
         Group {
@@ -80,7 +76,12 @@ struct ForegroundLintWindow: View {
                         applyLintProposal(proposal, candidate)
                     },
                     onClose: {
-                        requestClose()
+                        // Plain window close, exactly like the queue Activity
+                        // windows: closing cancels the in-flight run and
+                        // frees the per-wiki slot (onDisappear does the same
+                        // when the window is closed any other way).
+                        lintCoordinator.close(wikiID: context.wikiID)
+                        dismiss()
                     })
             } else if let refusal {
                 ContentUnavailableView {
@@ -96,23 +97,6 @@ struct ForegroundLintWindow: View {
         }
         .frame(minWidth: 720, minHeight: 500)
         .background(WindowActivator())
-        .background(
-            WindowCloseInterceptor(
-                isBusy: { lintSession?.isBusy == true },
-                onCloseAttempt: { showCloseConfirmation = true })
-        )
-        .alert(
-            "Lint work in progress",
-            isPresented: $showCloseConfirmation
-        ) {
-            Button("Close and Cancel", role: .destructive) {
-                lintCoordinator.close(wikiID: context.wikiID)
-                dismiss()
-            }
-            Button("Keep Window", role: .cancel) {}
-        } message: {
-            Text("A check or repair is still running. Close the window and cancel it?")
-        }
         .task(id: context) {
             await openOnce()
         }
@@ -121,18 +105,6 @@ struct ForegroundLintWindow: View {
             // proposals, and free the per-wiki run slot.
             lintCoordinator.close(wikiID: context.wikiID)
         }
-    }
-
-    /// The sheet's Close button takes the same veto path as the red button
-    /// and Cmd+W: while busy, raise the confirmation alert instead of
-    /// closing; while idle, close immediately.
-    private func requestClose() {
-        if lintSession?.isBusy == true {
-            showCloseConfirmation = true
-            return
-        }
-        lintCoordinator.close(wikiID: context.wikiID)
-        dismiss()
     }
 
     /// Idempotent open+start. Reopening the same page's window focuses
@@ -219,105 +191,3 @@ struct WindowActivator: NSViewRepresentable {
     }
 }
 
-// MARK: - Close confirmation
-
-/// Intercepts the lint window's close (red close button AND Cmd+W — both
-/// route through `performClose:`) while a run is busy, VETOES the close,
-/// and hands the decision to a SwiftUI confirmation alert owned by the
-/// window content.
-///
-/// Mechanism: installs a delegate proxy on the hosting NSWindow. While busy
-/// it answers `windowShouldClose(_:)` with `false` (refusing the close) and
-/// fires `onCloseAttempt`, which raises the alert; the alert's Confirm path
-/// tears down the run and dismisses the scene. When idle, the proxy
-/// forwards `windowShouldClose` to SwiftUI's original delegate so scene
-/// behavior is unchanged. No nested modal loop runs inside
-/// `windowShouldClose` — `NSAlert.runModal` there hangs or gets swallowed
-/// by SwiftUI's close pipeline.
-struct WindowCloseInterceptor: NSViewRepresentable {
-    /// `true` while a run is busy — closing is vetoed and the confirmation
-    /// alert is requested.
-    var isBusy: () -> Bool
-    /// Called on the main thread when a busy close attempt was vetoed.
-    var onCloseAttempt: () -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = InterceptorView()
-        view.coordinator = context.coordinator
-        return view
-    }
-
-    func updateNSView(_ view: NSView, context: Context) {
-        context.coordinator.isBusy = isBusy
-        context.coordinator.onCloseAttempt = onCloseAttempt
-        // SwiftUI may install/replace its own delegate after we attach; make
-        // sure ours stays the one answering close attempts.
-        context.coordinator.reassert(on: view.window)
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    /// MainActor: the delegate calls arrive on the main thread (AppKit
-    /// dispatches window-delegate calls there) and the callbacks read the
-    /// session's MainActor-isolated state.
-    @MainActor
-    final class Coordinator: NSObject, NSWindowDelegate {
-        var isBusy: () -> Bool = { false }
-        var onCloseAttempt: () -> Void = {}
-        /// SwiftUI's own window delegate — when idle, close decisions
-        /// forward here so scene behavior is unchanged. `nonisolated(unsafe)`
-        /// is required because the NSObject forwarding overrides are
-        /// nonisolated while the state is MainActor; it is sound because
-        /// the property is only ever touched on the main thread (attach in
-        /// `viewDidMoveToWindow`/`reassert`, and AppKit dispatches
-        /// window-delegate calls on the main thread).
-        // swiftlint:disable:next nonisolated_unsafe
-        nonisolated(unsafe) weak var originalDelegate: NSWindowDelegate?
-
-        /// Install the proxy once per window; never clobber the saved
-        /// original with ourselves (a second attach must be a no-op, or the
-        /// forwarding chain would recurse into the proxy).
-        func attach(to window: NSWindow) {
-            guard window.delegate !== self else { return }
-            originalDelegate = window.delegate
-            window.delegate = self
-        }
-
-        /// Re-install after SwiftUI may have replaced the delegate.
-        func reassert(on window: NSWindow?) {
-            guard let window, window.delegate !== self else { return }
-            attach(to: window)
-        }
-
-        func windowShouldClose(_ sender: NSWindow) -> Bool {
-            if isBusy() {
-                onCloseAttempt()
-                return false
-            }
-            if let originalDelegate,
-               originalDelegate.responds(to: #selector(NSWindowDelegate.windowShouldClose(_:))) {
-                return originalDelegate.windowShouldClose?(sender) ?? true
-            }
-            return true
-        }
-
-        override func responds(to aSelector: Selector) -> Bool {
-            super.responds(to: aSelector) || originalDelegate?.responds(to: aSelector) == true
-        }
-
-        override func forwardingTarget(for aSelector: Selector) -> Any? {
-            originalDelegate
-        }
-    }
-
-    /// Grabs the hosting window the moment the view enters one.
-    final class InterceptorView: NSView {
-        var coordinator: Coordinator?
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard let window, let coordinator else { return }
-            coordinator.attach(to: window)
-        }
-    }
-}
