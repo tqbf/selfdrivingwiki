@@ -96,6 +96,11 @@ struct PagesContainerView: View {
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Rename") { commitRename() }
         }
+        .alert("Lint Unavailable", isPresented: $showsLintRefusal) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(lintRefusalMessage)
+        }
         .alert(
             "Title Already Exists",
             isPresented: Binding(
@@ -276,7 +281,36 @@ struct PagesContainerView: View {
             },
             onNewChat: { ids in
                 store.beginNewChat(attachments: ChatAttachmentTarget.pages(ids))
+            },
+            onLint: { id in
+                openLintWindow(id)
             })
+    }
+
+    /// Open (or focus) the lint review window for one page. The two refusal
+    /// conditions surface HERE (before the window opens) so the user gets
+    /// the Save-or-Cancel / one-run-per-wiki instruction in the sidebar
+    /// context. The window itself performs the actual open+start idempotently.
+    @Environment(\.openWindow) private var openWindow
+    @Environment(ForegroundLintCoordinator.self) private var lintCoordinator
+    @State private var showsLintRefusal = false
+    @State private var lintRefusalMessage = ""
+
+    private func openLintWindow(_ pageID: PageID) {
+        if let blocked = store.lintBlockedReason(pageID: pageID) {
+            lintRefusalMessage = blocked
+            showsLintRefusal = true
+            return
+        }
+        if !lintCoordinator.isActive(pageID: pageID, wikiID: session.wikiID),
+           lintCoordinator.activeSession(for: session.wikiID) != nil {
+            lintRefusalMessage = "A lint run is already active for this wiki. Close it before linting another page."
+            showsLintRefusal = true
+            return
+        }
+        let title = store.summaries.first { $0.id == pageID }?.title ?? "Page"
+        openWindow(value: LintWindowContext(
+            pageID: pageID, title: title, wikiID: session.wikiID))
     }
 
     private func beginRename(_ summary: WikiPageSummary) {

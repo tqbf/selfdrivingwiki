@@ -52,7 +52,8 @@ struct PagesNewChatMenuHostedTests {
             onAddToBookmarks: { _ in },
             onNewChat: { ids in
                 model.beginNewChat(attachments: ChatAttachmentTarget.pages(ids))
-            })
+            },
+            onLint: { _ in })
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 400),

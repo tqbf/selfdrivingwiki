@@ -107,7 +107,6 @@ final class ForegroundLintCoordinator {
     func close(wikiID: WikiID) {
         guard let active = activeByWiki[wikiID] else { return }
         active.session.cancel()
-        active.session.isSheetVisible = false
         activeByWiki[wikiID] = nil
     }
 
@@ -119,6 +118,17 @@ final class ForegroundLintCoordinator {
     /// Wiki shutdown: reject all late results and release the run.
     func shutdown(wikiID: WikiID) {
         close(wikiID: wikiID)
+    }
+
+    /// The App Group container directory the pipeline configuration loads
+    /// from (nil on resolution failure — the bundled defaults then apply).
+    static func resolvedConfigDirectory() -> URL? {
+        do {
+            return try DatabaseLocation.appGroupContainerDirectory()
+        } catch {
+            DebugLog.lint("Lint config directory unavailable, using bundled defaults: \(error)")
+            return nil
+        }
     }
 
     // MARK: - Dependency wiring

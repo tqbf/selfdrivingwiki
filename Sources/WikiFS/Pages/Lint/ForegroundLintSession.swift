@@ -94,7 +94,6 @@ final class ForegroundLintSession {
     /// The run identity every step binds to.
     private(set) var runID = LintRunID()
 
-    var isSheetVisible: Bool = false
 
     init(wikiID: WikiID, pipeline: LintPipelineDocument, dependencies: Dependencies) {
         self.wikiID = wikiID

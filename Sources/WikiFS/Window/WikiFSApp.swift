@@ -1027,6 +1027,19 @@ struct WikiFSApp: App {
         .defaultSize(width: 900, height: 640)
         .windowResizability(.contentMinSize)
 
+        // Page lint: a real, resizable, NON-modal review window per page +
+        // wiki, opened via `openWindow(value:)` from the page toolbar or the
+        // sidebar context menu. Mirrors the compare groups above;
+        // `WindowGroup(for:)` deduplicates by `==`, so re-opening the same
+        // page focuses the existing window. Closing it cancels in-flight
+        // lint work and discards uncommitted proposals.
+        WindowGroup("Page Lint", for: LintWindowContext.self) { $context in
+            LintWindowRoot(sessionManager: sessionManager, context: context)
+                .preferredColorScheme(appearanceColorScheme)
+        }
+        .defaultSize(width: 920, height: 680)
+        .windowResizability(.contentMinSize)
+
         // Queue Activity windows: one per `QueueKind` (Ingestion + Extraction),
         // opened via `openWindow(value:)` / `openWindowBridge.openQueueWindow`.
         // `WindowGroup(for:)` deduplicates by `==`, so re-opening a queue's

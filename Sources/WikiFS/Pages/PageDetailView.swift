@@ -66,27 +66,8 @@ struct PageDetailView: View {
     /// The one-active-run-per-wiki foreground lint coordinator.
     @Environment(ForegroundLintCoordinator.self) private var lintCoordinator
 
-    /// The presented lint sheet (nil = closed). Item-driven so dismissal and
-    /// reopen focus behave like any sheet.
-    @State private var lintPresentation: LintSheetPresentation?
     @State private var showsLintRefusal = false
     @State private var lintRefusalMessage = ""
-
-    /// The `.sheet(item:)` payload for the lint sheet. `id` snapshots the
-    /// run identity at creation (the session is main-actor; Identifiable
-    /// conformance is not).
-    struct LintSheetPresentation: Identifiable {
-        let session: ForegroundLintSession
-        let title: String
-        let id: String
-
-        @MainActor
-        init(session: ForegroundLintSession, title: String) {
-            self.session = session
-            self.title = title
-            self.id = session.runID.rawValue
-        }
-    }
 
     init(
         store: WikiStoreModel,
@@ -350,18 +331,6 @@ struct PageDetailView: View {
             }
             }
             .frame(maxWidth: .infinity)
-            .sheet(item: $lintPresentation) { presentation in
-                ForegroundLintSheet(
-                    session: presentation.session,
-                    pageTitle: presentation.title,
-                    onApply: { proposal, candidate in
-                        applyLintProposal(proposal, candidate, in: presentation)
-                    },
-                    onClose: {
-                        lintCoordinator.close(wikiID: session.wikiID)
-                        lintPresentation = nil
-                    })
-            }
             .alert("Lint Unavailable", isPresented: $showsLintRefusal) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -389,90 +358,30 @@ struct PageDetailView: View {
         }
     }
 
-    /// Open (or focus) the foreground lint sheet for `pageID`. Reopening the
-    /// same page focuses the existing run; a different page's run is refused
-    /// while the first sheet is active (never invisible background work).
+    /// Refuse-before-open for the two conditions that would otherwise open a
+    /// useless window: a dirty draft (surface the Save-or-Cancel instruction
+    /// right here) and a different page's active run in this wiki.
     private func openLint(for pageID: PageID) {
         if let blocked = store.lintBlockedReason(pageID: pageID) {
             lintRefusalMessage = blocked
             showsLintRefusal = true
             return
         }
-        // Reopen → focus the existing run.
-        if lintCoordinator.isActive(pageID: pageID, wikiID: session.wikiID),
-           let active = lintCoordinator.activeSession(for: session.wikiID) {
-            active.isSheetVisible = true
-            lintPresentation = LintSheetPresentation(
-                session: active,
-                title: store.summaries.first { $0.id == pageID }?.title ?? "Page")
-            return
-        }
-        guard let active = lintCoordinator.open(
-            pageID: pageID,
-            wikiID: session.wikiID,
-            store: store,
-            configDirectory: resolvedLintConfigDirectory()) else {
+        if !lintCoordinator.isActive(pageID: pageID, wikiID: session.wikiID),
+           lintCoordinator.activeSession(for: session.wikiID) != nil {
             lintRefusalMessage = "A lint run is already active for this wiki. Close it before linting another page."
             showsLintRefusal = true
             return
         }
-        active.isSheetVisible = true
-        let strategy = store.lintStrategyContext
-        active.start(
-            pageID: pageID,
-            strategyRevision: strategy.revision,
-            strategyContext: strategy.rendered)
-        lintPresentation = LintSheetPresentation(
-            session: active,
-            title: store.summaries.first { $0.id == pageID }?.title ?? "Page")
+        let title = store.summaries.first { $0.id == pageID }?.title ?? "Page"
+        openWindow(value: LintWindowContext(
+            pageID: pageID, title: title, wikiID: session.wikiID))
     }
+}
 
-    /// The App Group container directory the pipeline configuration loads
-    /// from (nil on resolution failure — the bundled defaults then apply).
-    private func resolvedLintConfigDirectory() -> URL? {
-        do {
-            return try DatabaseLocation.appGroupContainerDirectory()
-        } catch {
-            DebugLog.lint("Lint config directory unavailable, using bundled defaults: \(error)")
-            return nil
-        }
-    }
+// MARK: - Content + Outline
 
-    /// The exact Apply handoff: the composed write with the previewed
-    /// candidate pinned. Every refusal path writes nothing.
-    private func applyLintProposal(
-        _ proposal: LintRepairProposal, _ candidate: String,
-        in presentation: LintSheetPresentation
-    ) -> LintApplyOutcome {
-        guard let snapshot = presentation.session.snapshot else {
-            return .refused("The lint run has no captured snapshot — rerun lint.")
-        }
-        guard !store.hasDirtyDraft else {
-            return .stale("This page has unsaved edits. Save or Cancel editing, then rerun lint. Nothing was written.")
-        }
-        do {
-            let versionID = try store.lintApply(
-                pageID: proposal.pageID,
-                title: snapshot.title,
-                canonicalCandidate: candidate,
-                expectedHead: snapshot.headVersionID)
-            return .committed(versionID)
-        } catch WikiStoreModel.LintApplyRefused.dirtyDraft {
-            return .stale("This page has unsaved edits. Nothing was written.")
-        } catch is PageCanonicalizationConflictError {
-            return .refused("The page's links changed since the preview — rerun lint and preview again. Nothing was written.")
-        } catch is PageExpectedTargetMissingError {
-            return .stale("The page was deleted or renamed since the lint run. Nothing was written.")
-        } catch is PageConflictError {
-            return .stale("The page changed since the lint run. Rerun lint. Nothing was written.")
-        } catch {
-            DebugLog.lint("Lint Apply failed: \(error)")
-            return .refused("Apply failed: \(error)")
-        }
-    }
-
-    // MARK: - Content + Outline
-
+extension PageDetailView {
     /// The main content area (reader or editor) plus the optional outline
     /// sidebar. Extracted from `body` so the type-checker can resolve each
     /// subtree independently.

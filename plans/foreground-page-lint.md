@@ -1,7 +1,9 @@
 # Foreground page lint
 
-Status: implemented (this branch). Queued wiki lint is retired; page review is
-a foreground, single-page dialog.
+Status: implemented (this branch). Queued wiki lint is retired; page
+review is a foreground, single-page **window** (non-modal, resizable — the
+same value-driven `WindowGroup` idiom as Compare Versions), opened from the
+page toolbar's Lint button or the sidebar page context menu's Lint item.
 
 ## Two pipelines, one rule
 
