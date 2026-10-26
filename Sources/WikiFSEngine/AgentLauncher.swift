@@ -432,7 +432,9 @@ public final class AgentLauncher {
     /// The managed-run policy for one operation request (plan §6.13): lint
     /// requests get LINT policies — selected-page repair only when the
     /// rollout gate authorized repairs, selected-page proposal for tier-2
-    /// staged-proposal runs, selected-page report-only otherwise,
+    /// staged-proposal runs, per-finding repair for a person's Fix click
+    /// (built only by the per-finding plan builder), selected-page
+    /// report-only otherwise,
     /// whole-wiki report-only for `.lint` — and everything else stays
     /// ordinary. The launcher derives this from the request alone; the child
     /// cannot influence it.
@@ -446,6 +448,8 @@ public final class AgentLauncher {
                 return .lintSelectedPageProposal(pageID: page.pageID)
             case .reportOnly:
                 return .lintSelectedPageReportOnly(pageID: page.pageID)
+            case .perFindingRepair:
+                return .lintPerFindingRepair(pageID: page.pageID)
             }
         case .lint:
             return .lintWholeWikiReportOnly

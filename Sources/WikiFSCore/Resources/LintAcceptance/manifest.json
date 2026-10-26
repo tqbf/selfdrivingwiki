@@ -7,6 +7,6 @@
   "pipeline" : {
     "detectorRevision" : "lint-preflight-v2",
     "fixtureDigest" : "25abd05ab1a65537e471fc47afa22fad62f1b53cbe381d39353d4140670eeda8",
-    "promptSHA256" : "317b43c6b1eb00372c76e2bab03b3446407917ab2c10a5225a23993240e5b232"
+    "promptSHA256" : "c37d04f38c389e78f18a80ebbcde29b14191009db7379ac456a1ed7702c1cfab"
   }
 }

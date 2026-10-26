@@ -218,7 +218,7 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
         let selectedPage: PageID
         let isProposal: Bool
         switch grant.operationPolicy {
-        case .lintSelectedPageRepair(let page):
+        case .lintSelectedPageRepair(let page), .lintPerFindingRepair(let page):
             selectedPage = page
             isProposal = false
         case .lintSelectedPageProposal(let page):
@@ -334,6 +334,7 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             // its confirmed repairable findings fix the run's patch budget.
             await Self.establishPatchBudget(
                 runID: grant.runID, selectedPage: selectedPage,
+                policy: grant.operationPolicy,
                 wikiID: grant.scope.wikiID, daemon: self.daemon,
                 lintRunState: self.lintRunState)
             if let minted = await Self.mintReceipt(
@@ -690,10 +691,18 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
     static func establishPatchBudget(
         runID: DaemonRunID,
         selectedPage: PageID,
+        policy: ManagedRunPolicy,
         wikiID: WikiID,
         daemon: WikiDaemon,
         lintRunState: DaemonLintRunState
     ) async {
+        // A per-finding repair run repairs ONE finding: its budget is one
+        // finding's worth, whatever else the page carries.
+        if case .lintPerFindingRepair = policy {
+            await lintRunState.setBudgetIfAbsent(
+                runID: runID, budget: LintPatchBudget.perFindingRepair)
+            return
+        }
         do {
             let store = try await daemon.domainCommandStore(wikiID: wikiID)
             let snapshot = LintPageSnapshot(try store.readPageCoherent(id: selectedPage))

@@ -353,10 +353,15 @@ extension WikiOperation {
   ) -> String {
     let repairAuthorization: String
     let tierSection: String
+    var findingSection = ""
     switch mode {
     case .directRepair:
       repairAuthorization = "Repairs ARE authorized for this configuration: patch hunks may be submitted as instructed below."
       tierSection = ""
+    case .perFindingRepair(let focus):
+      repairAuthorization = "A repair IS authorized for ONE finding only (\(focus.occurrenceID)): a person asked for it. Patch hunks for that finding may be submitted as instructed below; hunks for anything else may not."
+      tierSection = ""
+      findingSection = "\n" + Self.perFindingSection(focus)
     case .stagedProposal:
       repairAuthorization = "Repairs are STAGED, never written, for this configuration (gate: \(gateReason)). The hunks you submit are held for a human to review and approve; until approval the page stays unchanged."
       tierSection = Self.stagedProposalTierSection(pageID: page.pageID.rawValue)
@@ -371,6 +376,7 @@ extension WikiOperation {
       "runReportPath": runReportPath,
       "repairAuthorization": repairAuthorization,
       "tierSection": tierSection,
+      "findingSection": findingSection,
     ])
     return """
       \(IngestWriteRule.writes)
@@ -381,6 +387,24 @@ extension WikiOperation {
 
       \(Self.wikiRootLine(wikiRoot))
       """
+  }
+
+  /// The per-finding scope (a person's Fix click), rendered into the task
+  /// template's `{{findingSection}}` placeholder. Every other mode renders
+  /// an empty section. The prose lives in `prompts/lint-page-per-finding.md`;
+  /// the leaf values come from the trusted pre-run scan's finding.
+  private static func perFindingSection(_ focus: LintRepairFocus) -> String {
+    PromptTemplate.fill(GeneratedPrompts.lintPagePerFinding, [
+      "findingID": focus.occurrenceID,
+      "findingClass": focus.defectClass.rawValue,
+      "findingRange": focus.rangeDescription,
+      "findingMessage": focus.message,
+      // The evidence is untrusted page bytes: flatten it onto the one
+      // indented data line the template gives it.
+      "findingEvidence": focus.evidence
+        .replacingOccurrences(of: "\r", with: " ")
+        .replacingOccurrences(of: "\n", with: " "),
+    ])
   }
 
   /// The tier-2 (staged proposal) write discipline, rendered into the task

@@ -138,6 +138,15 @@ public struct QueueItemPayload: Codable, Sendable {
     /// action and has no import path.
     public var transcriptionIntent: TranscriptionIntent?
 
+    /// For page-level lint items: when non-nil, this item is a USER-TRIGGERED
+    /// per-finding repair of exactly one finding on the single page in
+    /// `lintPageIDs` (the person clicked **Fix** on that finding). The
+    /// coordinator never consults the rollout gate for it — the click is the
+    /// authorization — and the scoped-run guard refuses any child that tries
+    /// to enqueue one. `nil` (the decoded default for every older payload)
+    /// is an ordinary lint item.
+    public var lintRepairTarget: LintRepairTarget?
+
     public init(
         sourceIDs: [SourceID],
         stageRouting: [String: String]? = nil,
@@ -145,7 +154,8 @@ public struct QueueItemPayload: Codable, Sendable {
         lintPageIDs: [PageID]? = nil,
         acpSessionId: AcpSessionID? = nil,
         recordedNames: [String: String]? = nil,
-        transcriptionIntent: TranscriptionIntent? = nil
+        transcriptionIntent: TranscriptionIntent? = nil,
+        lintRepairTarget: LintRepairTarget? = nil
     ) {
         self.sourceIDs = sourceIDs
         self.stageRouting = stageRouting
@@ -154,6 +164,7 @@ public struct QueueItemPayload: Codable, Sendable {
         self.acpSessionId = acpSessionId
         self.recordedNames = recordedNames
         self.transcriptionIntent = transcriptionIntent
+        self.lintRepairTarget = lintRepairTarget
     }
 
     /// The transcription engine an extraction item must run. Pure value

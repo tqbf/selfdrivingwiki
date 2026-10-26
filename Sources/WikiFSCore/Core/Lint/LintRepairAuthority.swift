@@ -27,11 +27,15 @@ public enum LintAuthorityTier: String, CaseIterable, Sendable, Codable {
     /// The run's patch exceeded the per-run patch budget and was rejected
     /// whole; the write phase did not happen.
     case budgetExceeded
+    /// A person clicked **Fix** on one finding (the per-finding tier): the
+    /// run repairs exactly that finding under the full enforcement net. The
+    /// rollout gate is not consulted — the click is the authorization.
+    case perFindingRepair
 
     /// Whether this tier grants a repair-capable lease.
     public var isRepairCapable: Bool {
         switch self {
-        case .shippedApproval, .evaluationAdmission:
+        case .shippedApproval, .evaluationAdmission, .perFindingRepair:
             return true
         case .reportOnly, .breakerDemoted, .budgetExceeded, .stagedProposal:
             return false
@@ -44,11 +48,12 @@ public enum LintAuthorityTier: String, CaseIterable, Sendable, Codable {
     }
 }
 
-/// The three run shapes a selected-page lint request can carry (the W5a
+/// The run shapes a selected-page lint request can carry (the amended
 /// ladder, flattened for the request/prompt seam — the request cannot carry
 /// the full authority without dragging the approval row through prompt
-/// construction). Derived from `LintRepairAuthority`, never constructed
-/// independently, so impossible combinations are unrepresentable.
+/// construction). The autonomous shapes derive from `LintRepairAuthority`;
+/// the per-finding shape is built only by the per-finding plan builder,
+/// which owns the focus it carries.
 public enum LintRunMode: Equatable, Sendable {
     /// Tier 1: an accepted configuration — patches write directly.
     case directRepair
@@ -56,6 +61,9 @@ public enum LintRunMode: Equatable, Sendable {
     case stagedProposal
     /// Report-only: no mutation at all.
     case reportOnly
+    /// User-triggered per-finding repair: patches write directly, for the
+    /// ONE finding the focus names and nothing else.
+    case perFindingRepair(LintRepairFocus)
 }
 
 /// The authority a selected-page lint run ran under: its tier, the approval
@@ -92,7 +100,17 @@ public struct LintRepairAuthority: Equatable, Sendable {
     /// Whether this authority may stage repair proposals (tier 2).
     public var isProposalCapable: Bool { tier.isProposalCapable }
 
-    /// The run shape this authority drives the request/prompt seam with.
+    /// A person asked for one finding's repair (the per-finding tier).
+    public static func perFindingRepair(findingID: String) -> LintRepairAuthority {
+        LintRepairAuthority(
+            tier: .perFindingRepair, approvalID: nil,
+            reason: "user-triggered repair of finding \(findingID)")
+    }
+
+    /// The run shape this authority drives the request/prompt seam with
+    /// (the autonomous shapes). A per-finding authority maps to direct
+    /// repair here; the per-finding plan builder never reads this — it
+    /// builds `.perFindingRepair(focus)` with the focus it resolved.
     public var runMode: LintRunMode {
         if isRepairCapable { return .directRepair }
         if isProposalCapable { return .stagedProposal }

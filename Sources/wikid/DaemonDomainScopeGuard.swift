@@ -364,6 +364,19 @@ struct DaemonScopedRequestGuard: Sendable {
            LintHostAudit.titleIsReserved(title) {
             throw Self.scopeDenied()
         }
+        // USER-TRIGGERED REPAIR REQUESTS — every SCOPED connection. A queue
+        // item carrying a per-finding repair target earns a repair-capable
+        // lease WITHOUT the rollout gate, because a person's Fix click is
+        // its authorization. A child is never that person: an ordinary
+        // managed child carries wikiAcquire (the class gate passes enqueue),
+        // so the refusal is payload-conditioned here, before policy
+        // dispatch. Any payload naming the target field denies — present,
+        // null-valued, or unreadable — so no decode quirk can launder one.
+        if request.family == .queue,
+           request.operation == DaemonDomainOperation.Queue.enqueueItem,
+           Self.enqueuePayloadNamesRepairTarget(request.payload) {
+            throw Self.scopeDenied()
+        }
         let decision = DaemonScopedOperationPolicy.decision(
             family: request.family, operation: request.operation)
         switch grant.operationPolicy {
@@ -378,7 +391,7 @@ struct DaemonScopedRequestGuard: Sendable {
                     throw Self.scopeDenied()
                 }
             }
-        case .lintSelectedPageRepair(let selectedPage):
+        case .lintSelectedPageRepair(let selectedPage), .lintPerFindingRepair(let selectedPage):
             try Self.evaluateLintAllowances(request, selectedPageID: selectedPage, allowsPatch: true)
         case .lintSelectedPageReportOnly(let selectedPage):
             try Self.evaluateLintAllowances(request, selectedPageID: selectedPage, allowsPatch: false)
@@ -438,7 +451,8 @@ struct DaemonScopedRequestGuard: Sendable {
     /// - `log append`: allowed only when the minimally-decoded payload names
     ///   kind `lint`. Any other kind, or an unreadable payload, denies
     ///   generically.
-    /// - `page patch`: allowed ONLY for the selected-page REPAIR policy, and
+    /// - `page patch`: allowed ONLY for the selected-page REPAIR and
+    ///   PER-FINDING REPAIR policies, and
     ///   only when the payload's page id equals the lease's selected page
     ///   (identity resolved daemon-side from the typed payload). Report-only
     ///   policies and whole-wiki runs never patch.
@@ -501,6 +515,39 @@ struct DaemonScopedRequestGuard: Sendable {
         // bookmark/chat/workspace writes, queue controls, registry mutation
         // — denies generically. No alternative write path exists.
         throw scopeDenied()
+    }
+
+    /// Whether an enqueue payload names a per-finding repair target: the
+    /// field's key appears at ANY depth of the decoded JSON (the decode
+    /// resolves `\uXXXX` key escapes, so an escaped key cannot slip past),
+    /// whatever its value — null included. An unreadable payload counts as
+    /// naming it: the guard never authorizes what it cannot see (the
+    /// enqueue handler would refuse it anyway). An ordinary enqueue
+    /// (extraction, lint, ingestion) never carries the key.
+    static func enqueuePayloadNamesRepairTarget(_ payload: Data?) -> Bool {
+        guard let payload else { return false }
+        let object: Any
+        do {
+            object = try JSONSerialization.jsonObject(with: payload, options: [.fragmentsAllowed])
+        } catch {
+            // Not JSON — denial by design, not a swallowed error.
+            return true
+        }
+        return Self.flattenedKeys(of: object).contains(Self.repairTargetFieldName)
+    }
+
+    /// The `QueueItemPayload` field a per-finding repair request rides in.
+    static let repairTargetFieldName = "lintRepairTarget"
+
+    /// Every object key at any depth of a decoded JSON value.
+    private static func flattenedKeys(of value: Any) -> [String] {
+        if let object = value as? [String: Any] {
+            return object.keys.map { $0 } + object.values.flatMap { flattenedKeys(of: $0) }
+        }
+        if let array = value as? [Any] {
+            return array.flatMap { flattenedKeys(of: $0) }
+        }
+        return []
     }
 
     /// Minimally decode the patch payload's page id; nil when the payload is

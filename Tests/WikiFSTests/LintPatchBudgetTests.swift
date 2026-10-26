@@ -105,4 +105,14 @@ struct LintPatchBudgetTests {
         }.count
         #expect(LintPatchBudget.confirmedRepairableCount(in: clean) == expected)
     }
+
+    /// A user-triggered per-finding run gets ONE finding's budget — the
+    /// floors — however many findings its page carries.
+    @Test func perFindingRepairGetsOneFindingsBudget() {
+        let budget = LintPatchBudget.perFindingRepair
+        #expect(budget == LintPatchBudget(confirmedRepairableFindings: 1))
+        #expect(budget.maxHunks == LintPatchBudget.minimumHunks)
+        #expect(budget.maxChangedBytes == LintPatchBudget.minimumChangedBytes)
+        #expect(budget.maxHunks < LintPatchBudget(confirmedRepairableFindings: 16).maxHunks)
+    }
 }

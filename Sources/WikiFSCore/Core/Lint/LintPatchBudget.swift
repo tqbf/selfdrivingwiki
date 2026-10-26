@@ -58,6 +58,11 @@ public struct LintPatchBudget: Hashable, Sendable {
                 max(Self.minimumChangedBytes, count * Self.changedBytesPerFinding)))
     }
 
+    /// The budget for a user-triggered per-finding repair run: exactly one
+    /// confirmed finding's worth (the floors apply), however many findings
+    /// the page carries.
+    public static let perFindingRepair = LintPatchBudget(confirmedRepairableFindings: 1)
+
     /// The budget for an inspected page's pre-flight scan.
     public init(preflight: LintPreflightReport) {
         self.init(confirmedRepairableFindings: Self.confirmedRepairableCount(in: preflight))

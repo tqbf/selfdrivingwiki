@@ -5,7 +5,7 @@ import WikiDaemonContract
 import WikiFSCore
 @testable import wikid
 
-/// AC.5 narrow-authority policy tests: the four managed-run policies and
+/// AC.5 narrow-authority policy tests: the managed-run policies and
 /// their operation matrix. A lint run reads its wiki and appends lint logs;
 /// EVERY content mutation denies generically — including through raw frames
 /// with extra fields, missing kinds, and unreadable payloads. The `page
@@ -76,6 +76,7 @@ struct DaemonLintPolicyTests {
         .lintSelectedPageRepair(pageID: PageID(rawValue: "01HZLINTPAGE00000000000000001")),
         .lintSelectedPageReportOnly(pageID: PageID(rawValue: "01HZLINTPAGE00000000000000001")),
         .lintSelectedPageProposal(pageID: PageID(rawValue: "01HZLINTPAGE00000000000000001")),
+        .lintPerFindingRepair(pageID: PageID(rawValue: "01HZLINTPAGE00000000000000001")),
         .lintWholeWikiReportOnly,
     ]
 
@@ -96,9 +97,9 @@ struct DaemonLintPolicyTests {
     }
 
     /// The number of lint policy kinds — the log-kind test iterates all of
-    /// them, so adding a fifth lint shape updates this pin deliberately.
+    /// them, so adding a sixth lint shape updates this pin deliberately.
     @Test func lintPolicyKindsArePinned() {
-        #expect(Self.allPolicies.filter(\.isLint).count == 4)
+        #expect(Self.allPolicies.filter(\.isLint).count == 5)
     }
 
     // MARK: - Receipt lifecycle semantics (plan §5.8 wiring)
@@ -268,6 +269,22 @@ struct DaemonLintPolicyTests {
             payloadJSON: patchPayload(pageID: nil))),
             "an unreadable patch payload must deny")
 
+        // Per-finding repair policy: the same identity pinning — its one
+        // page passes; any other page, or an unreadable payload, denies.
+        let perFinding = try await Fixture(policy: .lintPerFindingRepair(pageID: selected))
+        #expect(await perFinding.allowed(perFinding.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: selected))),
+            "the per-finding run may patch exactly its assigned page")
+        #expect(await !perFinding.allowed(perFinding.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: other))),
+            "a per-finding run cannot patch a page it was not assigned")
+        #expect(await !perFinding.allowed(perFinding.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: nil))),
+            "an unreadable per-finding patch payload must deny")
+
         // Report-only policies: the same selected-page patch denies.
         for policy in [
             ManagedRunPolicy.lintSelectedPageReportOnly(pageID: selected),
@@ -342,6 +359,18 @@ struct DaemonLintPolicyTests {
             payloadJSON: proposePayload(pageID: selected))),
             "a tier-1 run cannot propose — the child cannot widen or swap its tier")
 
+        // Per-finding repair: patches its page, never proposes (it writes
+        // directly under the full enforcement net; staging is tier 2's).
+        let perFinding = try await Fixture(policy: .lintPerFindingRepair(pageID: selected))
+        #expect(await perFinding.allowed(perFinding.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: patchPayload(pageID: selected))),
+            "the per-finding run keeps its patch seam")
+        #expect(await !perFinding.allowed(perFinding.request(
+            family: .page, operation: DaemonDomainOperation.Page.proposePatch,
+            payloadJSON: proposePayload(pageID: selected))),
+            "a per-finding run cannot propose")
+
         // Report-only and whole-wiki: neither seam.
         for policy in [
             ManagedRunPolicy.lintSelectedPageReportOnly(pageID: selected),
@@ -404,6 +433,77 @@ struct DaemonLintPolicyTests {
             family: .page, operation: DaemonDomainOperation.Page.proposePatch,
             payloadJSON: proposeBody)),
             "the tier-2 run's propose seam is unchanged by payload markers")
+
+        // The per-finding policy is just as inert to payload markers: a
+        // report-only lease handed a payload naming the per-finding policy
+        // (or carrying a repair target) still never patches, and a
+        // per-finding lease handed a proposal-naming payload never stages.
+        let perFindingBody = """
+        {"wikiID":"\(Fixture.wikiIDValue.rawValue)","id":"\(selected.rawValue)","expectHead":"01HZHEAD00000000000000000001","hunks":[{"defect":"D25","startByte":0,"endByte":3,"oldText":"```","newText":"","reason":"unwrap"}],"policy":"lintPerFindingRepair","lintRepairTarget":{"findingID":"D25|body#1","classLabel":"D25","expectedHead":"01HZHEAD00000000000000000001"}}
+        """
+        let reportOnly = try await Fixture(policy: .lintSelectedPageReportOnly(pageID: selected))
+        #expect(await !reportOnly.allowed(reportOnly.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: perFindingBody)),
+            "a per-finding-naming payload cannot give a report-only run the patch seam")
+        let perFinding = try await Fixture(policy: .lintPerFindingRepair(pageID: selected))
+        #expect(await !perFinding.allowed(perFinding.request(
+            family: .page, operation: DaemonDomainOperation.Page.proposePatch,
+            payloadJSON: proposeBody)),
+            "a policy-naming payload cannot give a per-finding run the proposal seam")
+        #expect(await perFinding.allowed(perFinding.request(
+            family: .page, operation: DaemonDomainOperation.Page.patch,
+            payloadJSON: perFindingBody)),
+            "the per-finding run's patch seam is unchanged by payload markers")
+    }
+
+    // MARK: - Per-finding requests are human-only
+
+    /// A child can never mint the per-finding tier for itself: the only
+    /// route to a per-finding lease is a queue item carrying a repair
+    /// target, and EVERY scoped connection — ordinary managed children
+    /// included (they carry wikiAcquire, so the class gate passes enqueue)
+    /// — is refused an enqueue whose payload names that field, in every
+    /// raw-frame shape: a real encoded request, a null value, an escaped
+    /// key, a nested key, and an unreadable payload. An ordinary enqueue
+    /// without the field keeps the ordinary run's allowance.
+    @Test func scopedEnqueueCannotCarryRepairTarget() async throws {
+        let selected = PageID(rawValue: "01HZLINTPAGE00000000000000001")
+        let wikiID = Fixture.wikiIDValue.rawValue
+        let encoded = try JSONEncoder().encode(QueueItemRequest(
+            queue: .ingestion, wikiID: Fixture.wikiIDValue,
+            payload: QueueItemPayload(
+                sourceIDs: [], lintPageIDs: [selected],
+                lintRepairTarget: LintRepairTarget(
+                    findingID: "D06|line-4#1", classLabel: "D06",
+                    expectedHead: PageVersionID(rawValue: "01HZHEAD00000000000000000001"),
+                    originItemID: nil))))
+        let realFrame = try #require(String(data: encoded, encoding: .utf8))
+        let forgedFrames = [
+            realFrame,
+            #"{"wikiID":"\#(wikiID)","queue":"ingestion","payload":{"sourceIDs":[],"lintPageIDs":["\#(selected.rawValue)"],"lintRepairTarget":null}}"#,
+            #"{"wikiID":"\#(wikiID)","queue":"ingestion","payload":{"sourceIDs":[],"lintPageIDs":["\#(selected.rawValue)"],"lint\u0052epairTarget":{"findingID":"x","classLabel":"D06","expectedHead":"h"}}}"#,
+            #"{"wikiID":"\#(wikiID)","queue":"ingestion","payload":{"sourceIDs":[],"extra":{"lintRepairTarget":{}}}}"#,
+            #"{"wikiID":"\#(wikiID)", not json"#,
+        ]
+        let ordinaryFrame = try #require(String(data: try JSONEncoder().encode(QueueItemRequest(
+            queue: .extraction, wikiID: Fixture.wikiIDValue,
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "01HZSOURCE0000000000000000A")]))),
+            encoding: .utf8))
+
+        for policy in Self.allPolicies {
+            let fixture = try await Fixture(policy: policy)
+            for (index, frame) in forgedFrames.enumerated() {
+                #expect(await !fixture.allowed(fixture.request(
+                    family: .queue, operation: DaemonDomainOperation.Queue.enqueueItem,
+                    payloadJSON: frame)),
+                    "\(policy): forged repair-target enqueue frame #\(index) must deny")
+            }
+            #expect(await fixture.allowed(fixture.request(
+                family: .queue, operation: DaemonDomainOperation.Queue.enqueueItem,
+                payloadJSON: ordinaryFrame)) == !policy.isLint,
+                "\(policy): an ordinary enqueue keeps the policy's own allowance")
+        }
     }
 
     // MARK: - Log append kind conditioning
@@ -413,7 +513,7 @@ struct DaemonLintPolicyTests {
     /// get the generic denial. Raw-frame shapes included.
     @Test func logAppendRequiresLintKind() async throws {
         let lintPolicies = Self.allPolicies.filter(\.isLint)
-        #expect(lintPolicies.count == 4)
+        #expect(lintPolicies.count == 5)
         for policy in lintPolicies {
             let fixture = try await Fixture(policy: policy)
 
@@ -513,6 +613,9 @@ struct DaemonLintPolicyTests {
         #expect(DaemonScopedRunLeaseManager.operationClasses(
             for: .lintSelectedPageProposal(pageID: selectedPage)) == [.wikiRead],
             "the proposal lease is read-only too — staging is an allowance, never a class")
+        #expect(DaemonScopedRunLeaseManager.operationClasses(
+            for: .lintPerFindingRepair(pageID: selectedPage)) == [.wikiRead],
+            "the per-finding lease is read-only too — its patch is an allowance, never a class")
     }
 
     // MARK: - Per-run CAS budget (plan Phase 2.8)

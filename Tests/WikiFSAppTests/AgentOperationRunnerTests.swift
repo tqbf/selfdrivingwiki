@@ -106,6 +106,12 @@ struct AgentOperationRunnerTests {
             == .lintSelectedPageProposal(pageID: page.pageID))
         #expect(AgentLauncher.managedRunPolicy(for: request(.reportOnly))
             == .lintSelectedPageReportOnly(pageID: page.pageID))
+        let focus = LintRepairFocus(
+            occurrenceID: "D06|line-1#1", defectClass: .malformedWikiLink,
+            authoredRange: nil, evidence: "[[x", message: "m")
+        #expect(AgentLauncher.managedRunPolicy(for: request(.perFindingRepair(focus)))
+            == .lintPerFindingRepair(pageID: page.pageID),
+            "a per-finding request pins the per-finding policy to ITS page — derived from the request alone")
         #expect(AgentLauncher.managedRunPolicy(for: .lint(stateMarkdown: "# s\n"))
             == .lintWholeWikiReportOnly)
         #expect(AgentLauncher.managedRunPolicy(

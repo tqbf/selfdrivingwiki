@@ -55,6 +55,7 @@ enum GeneratedPrompts {
     static let chat = load("chat")
     static let lintTask = load("lint-task")
     static let lintPageTask = load("lint-page-task")
+    static let lintPagePerFinding = load("lint-page-per-finding")
     static let ingestPlanner = load("ingest-planner")
     static let ingestExecutor = load("ingest-executor")
     static let ingestFinalizer = load("ingest-finalizer")
