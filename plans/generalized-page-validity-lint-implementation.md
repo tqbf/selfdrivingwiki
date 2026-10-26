@@ -45,6 +45,10 @@ Branch: `feature/generalized-page-validity-lint`.
 | `8e1aff6a` | W5a | Progress note: the staged-proposal repair tier |
 | `b58e1ad0`/`40a23489` | W5b | Proposal review value model + the Run Details review section (projected diffs, per-fix approve, Approve all, reject) |
 | `68d7eeeb`/`945013cd` | W5b | Hosted review scenarios + progress note |
+| `8e7b6c7f` | W6 | Per-finding tier + `lintPerFindingRepair` policy, scoped-enqueue refusal of repair targets, one-finding budget, `{{findingSection}}` prompt; manifest pipeline regenerated (prompt hash `317b43…` → `c37d04…`, no rows) |
+| `991db95b` | W6 | Per-finding plan builder + daemon run path, `LintPerFindingScope`, launch-time breaker key, `breaker_key=` record label |
+| `667792c5` | W6 | Per-class repair playbook (`prompts/lint-repair-playbook.md`), target-entry injection, drift-guard test |
+| `b38b625d` | W6 | Fix / Edit Manually controls in Run Details (`QueueLintFindingFixState`) |
 
 ## The amended trust ladder (what ships)
 
@@ -74,6 +78,62 @@ The operator replaced "the eval gate authorizes repairs" with three tiers.
 
 Local state can only DEMOTE authority. The breaker (below) demotes a run to
 report-only. Nothing the child process reads or says can raise a tier.
+
+### Per-finding repair (user-triggered) — W6
+
+A fourth path sits beside the three gate tiers: **per-finding repair**. A
+person reads a finding in Run Details and clicks **Fix**. The run repairs
+that ONE finding. The person is in the loop by construction, so the rollout
+gate is NOT consulted: `LintCoordinatorGate.selection` applies to autonomous
+lint only. The click is the authorization. The enforcement net is the safety.
+This is why per-finding repair works while production gate inputs are
+`.unconfigured` and autonomous runs are report-only.
+
+- **Authority.** `LintAuthorityTier.perFindingRepair` (repair-capable, no
+  approval row). The policy is `ManagedRunPolicy.lintPerFindingRepair(pageID:)`:
+  reads, `page patch` on the assigned page only (CAS receipt lifecycle), and
+  `log append --kind lint`. `page propose-patch` and every other mutation
+  deny. The daemon sets one finding's patch budget
+  (`LintPatchBudget.perFindingRepair`).
+- **Only a person can ask.** The request rides the queue payload as
+  `LintRepairTarget` (finding id, class label, the head the person saw, the
+  origin run). The scoped-run guard refuses every scoped `queue enqueueItem`
+  whose payload names `lintRepairTarget` (any depth, null, escaped key, or an
+  unreadable payload). Ordinary managed children carry `wikiAcquire`, so
+  without this refusal a child could mint the tier for itself.
+- **Plan.** `AgentOperationRunner.makePerFindingRepairPlan`
+  (Sources/WikiFSEngine/LintPerFindingRepair.swift) runs the shared pre-run
+  scan (`scanLintPage`) on the current head. The focus (`LintRepairFocus`)
+  comes from that trusted scan, never from the payload's words. The plan
+  refuses before launch, with no write, when the head moved, the finding is
+  no longer detected (`page-changed`), the class is not repairable, or the
+  page is gone.
+- **Prompt.** `{{findingSection}}` in `lint-page-task.md` renders
+  `prompts/lint-page-per-finding.md` with the finding's id, class, range,
+  message, and flattened evidence, plus ONLY the target class's entry from
+  `prompts/lint-repair-playbook.md` (`LintRepairPlaybook`, one `### Dxx`
+  entry per class; report-only and out-of-scope classes say "Report, never
+  repair"). A drift-guard test requires an entry for every class.
+- **Enforcement (reused).** The shared `accountForLintRun` runs unchanged:
+  coverage, the written-head compare, ONE guarded CAS revert on failure,
+  the host audit line. One rule is layered on top (`LintPerFindingScope`): a
+  write must resolve its target, and no other finding outside the target's
+  bytes may change. A violation takes the normal failure path.
+- **Breaker key at launch.** The launcher records what it spawned
+  (`AgentLauncher.lastLaunchedConfiguration`). The key is the live pipeline
+  digest plus that provider/model/effort (`agent-default` when no effort was
+  pinned). Outcomes accumulate against the SAME key an autonomous run of
+  that configuration consults. The record carries the key as `breaker_key=`,
+  so the W2b Undo records its user undo under it. This flow does not consult
+  the breaker before launch: the person decides each attempt, and the
+  breaker evidence demotes the autonomous tiers.
+- **Model unavailable.** When the configured lint model cannot start, the
+  item fails with a named error that points at Settings. Nothing ran.
+- **UI.** Each finding row in Run Details gets a controls row: **Fix**,
+  **Edit Manually** (the existing target routing plus the per-tab editing
+  flag), the status line (`QueueLintFindingFixState`), and **Show Fix Run**.
+  The fix run is its own queue item. Its Run Details carry the W2b Undo
+  (surviving write) or the "What went wrong" disclosure (reverted write).
 
 ### The shipped approval manifest (schema 3)
 
