@@ -95,6 +95,7 @@ struct ForegroundLintWindow: View {
             }
         }
         .frame(minWidth: 720, minHeight: 500)
+        .background(WindowActivator())
         .background(
             WindowCloseInterceptor(
                 isBusy: { lintSession?.isBusy == true },
@@ -189,6 +190,31 @@ struct ForegroundLintWindow: View {
         } catch {
             DebugLog.lint("Lint Apply failed: \(error)")
             return .refused("Apply failed: \(error)")
+        }
+    }
+}
+
+// MARK: - Foreground on appear
+
+/// Raises and keys the hosting window the moment the lint content attaches.
+/// `openWindow(value:)` creates the window but does not reliably raise it —
+/// without this, the review opens behind the main window and the only trace
+/// is the Window menu entry. One activation per window attach.
+struct WindowActivator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { ActivatorView() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    /// MainActor: AppKit window ordering is main-thread only.
+    @MainActor
+    final class ActivatorView: NSView {
+        private var didActivate = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, !didActivate else { return }
+            didActivate = true
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 }
