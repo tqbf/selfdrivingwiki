@@ -1035,6 +1035,14 @@ struct WikiFSApp: App {
         // lint work and discards uncommitted proposals.
         WindowGroup("Page Lint", for: LintWindowContext.self) { $context in
             LintWindowRoot(sessionManager: sessionManager, context: context)
+                .appEnvironment(
+                    tracker: activityTracker,
+                    lintCoordinator: lintCoordinator,
+                    openActivityWindow: { queue in
+                        openWindowBridge.openActivityWindow?(queue)
+                    },
+                    chatDaemon: chatDaemonHolder.coordinator,
+                    healthMonitor: healthMonitor)
                 .preferredColorScheme(appearanceColorScheme)
         }
         .defaultSize(width: 920, height: 680)
