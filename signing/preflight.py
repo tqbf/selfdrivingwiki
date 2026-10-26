@@ -21,6 +21,10 @@ The repair rules that matter:
     old, working set intact.
   * **Never break the build.** Missing `asc`, no Apple account, no config: say
     what is degraded and exit 0. `build.sh` falls back to ad-hoc signing.
+  * **The one hard gate.** An `APP_GROUP` too long for the daemon's
+    Unix-socket paths fails with the remedy instead of degrading: it signs
+    fine and then breaks every agent spawn at bind time
+    (`SearchSocketError.pathTooLong`).
 
 The one thing this cannot do is create an App Group and bind it to a bundle
 id — App Store Connect has no API for it. That step is printed as exact
@@ -153,6 +157,49 @@ def write_config(updates: dict[str, str]) -> list[str]:
 
     CONFIG_PATH.write_text("\n".join(out) + "\n")
     return changed
+
+
+# --------------------------------------------------------------------------
+# Socket-path budget
+# --------------------------------------------------------------------------
+
+# The daemon's longest bound path is a per-run agent endpoint:
+# `<container>/r/<24 hex>.sock` (DaemonRunRegistrationBroker.endpointPath over
+# DaemonRunEndpointName's 96-bit hex token). A Unix-domain socket path carries
+# at most 103 UTF-8 bytes on macOS — sockaddr_un.sun_path is 104 bytes
+# including the NUL (SearchSocketWire.maxPathBytes). The container is
+# `$HOME/Library/Group Containers/<APP_GROUP>`, so an over-budget APP_GROUP
+# builds and signs fine and then fails every agent spawn at bind time. The
+# budget therefore lives HERE, at signing time, where the fix is cheap.
+SOCKET_MAX_PATH_BYTES = 103  # SearchSocketWire.maxPathBytes
+GROUP_CONTAINER_MIDDLE_BYTES = len("/Library/Group Containers/")  # between $HOME and the id
+RUN_ENDPOINT_OVERHEAD_BYTES = len("/r/") + 24 + len(".sock")  # 24-hex endpoint name
+
+
+def app_group_socket_problem(app_group: str, home: str | None = None) -> str | None:
+    """Why `app_group` cannot fit the daemon's socket paths on this Mac, or None.
+
+    The budget is machine-dependent (it spends `len($HOME)` bytes), so it is
+    computed per Mac, never hardcoded.
+    """
+    if not app_group:
+        return None
+    home_path = home if home is not None else os.path.expanduser("~")
+    budget = (SOCKET_MAX_PATH_BYTES - len(home_path.encode("utf-8"))
+              - GROUP_CONTAINER_MIDDLE_BYTES - RUN_ENDPOINT_OVERHEAD_BYTES)
+    used = len(app_group.encode("utf-8"))
+    if used <= budget:
+        return None
+    if budget <= 0:
+        return (f"home path {home_path!r} is too long for the daemon's socket paths even "
+                f"with a minimal App Group id — this container location cannot serve "
+                f"scoped agent runs")
+    return (f"APP_GROUP {app_group} is {used} bytes; this Mac's socket-path budget is "
+            f"{budget}. The daemon binds $HOME/Library/Group Containers/<APP_GROUP>/r/"
+            f"<24 hex>.sock and a Unix socket path carries at most {SOCKET_MAX_PATH_BYTES} "
+            f"bytes, so every agent spawn fails with SearchSocketError.pathTooLong. Create "
+            f"a shorter App Group in the portal, bind it to all three bundle ids, set it "
+            f"as APP_GROUP in signing/local.config, then run 'make signing-repair'.")
 
 
 # --------------------------------------------------------------------------
@@ -795,6 +842,16 @@ def portal_instructions(cfg: dict[str, str], bundle_ids: list[str]) -> None:
 
 def run(args: argparse.Namespace) -> int:
     cfg = read_config()
+
+    # The one hard gate (see the docstring): an APP_GROUP that cannot fit the
+    # daemon's socket paths would sign fine and break every agent spawn at
+    # runtime. Degrading to ad-hoc signing would launder a config error into a
+    # distant runtime failure, so this fails the build with the remedy instead.
+    group_problem = app_group_socket_problem(cfg.get("APP_GROUP", ""))
+    if group_problem:
+        bad(group_problem)
+        return 1
+
     udid = provisioning_udid()
     identities = keychain_identities()
     local_sha1s = {sha for sha, _ in identities}
@@ -850,6 +907,13 @@ def run(args: argparse.Namespace) -> int:
             return 0 if args.check else 1
         if not cfg.get("APP_GROUP"):
             return 0 if args.check else 1
+        # The group may have been inferred from an existing profile above; the
+        # same socket budget applies to whatever this run resolved. Hard fail,
+        # like the gate at the top of run().
+        group_problem = app_group_socket_problem(cfg["APP_GROUP"])
+        if group_problem:
+            bad(group_problem)
+            return 1
 
         slots = slots_for(cfg)
         repair = Repair(asc, cfg, udid, local_sha1s, keep_old=args.keep_old)

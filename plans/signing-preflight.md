@@ -42,6 +42,24 @@ reads the profile in `signing/` and tests:
 
 If all checks pass, the preflight exits. If a check fails, it repairs.
 
+## The one hard gate: the App Group socket-path budget
+
+The daemon binds a Unix-domain socket per agent run at
+`$HOME/Library/Group Containers/<APP_GROUP>/r/<24 hex>.sock`, and a socket
+path carries at most 103 bytes on macOS (`sockaddr_un.sun_path` is 104 bytes
+including the NUL — `SearchSocketWire.maxPathBytes`). An `APP_GROUP` past the
+budget signs fine and then fails every agent spawn with
+`SearchSocketError.pathTooLong`, far from the cause.
+
+The budget depends on the length of the home path, so the preflight computes
+it (`103 − len($HOME) − 26 − 32`) and **fails the build** with the remedy when
+the configured or inferred id does not fit. This is the single deliberate
+exception to the never-break-the-build rule below: degrading to ad-hoc signing
+would launder a config error into a distant runtime failure. `setup.sh` runs
+the same check when the id is first chosen, before the portal step registers
+it. The remedy: create a shorter App Group in the portal, bind it to all three
+bundle ids, set it in `signing/local.config`, run `make signing-repair`.
+
 ## What the repair does
 
 The repair calls the App Store Connect API through the `asc` CLI. It follows
@@ -61,7 +79,8 @@ so a profile you made by hand stays.
 
 **Never break the build.** No `asc`, no Apple account, or no config is not an
 error. The preflight reports what is degraded and exits 0. `build.sh` then falls
-back to ad-hoc signing, as before.
+back to ad-hoc signing, as before. The one exception is the App Group
+socket-path budget gate above.
 
 The repair also reuses work. If the account already holds an ACTIVE profile that
 covers this Mac and all the others, the repair downloads it and changes nothing.

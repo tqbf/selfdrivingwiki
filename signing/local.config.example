@@ -59,7 +59,10 @@ EXT_BUNDLE_ID="com.example.WikiFS.FileProvider"
 
 # App Group shared by the app and the extension. Must be created in the Apple
 # Developer portal (the App Store Connect API can't) and associated with BOTH
-# bundle ids above.
+# bundle ids above. Keep it SHORT: the daemon binds Unix-domain sockets at
+# <container>/r/<24 hex>.sock, and a socket path carries at most 103 bytes on
+# macOS. signing/preflight.py computes the exact budget from your home path and
+# fails the build with the remedy when an id does not fit.
 APP_GROUP="group.com.example.wiki"
 
 # Shared keychain access group (app + wikid daemon). Derived by default from

@@ -81,6 +81,19 @@ EXT_BUNDLE_ID="${PREFIX}.WikiFS.FileProvider"
 # service agree on the NSXPCConnection(serviceName:) string.
 DAEMON_BUNDLE_ID="${BUNDLE_ID}.wikid"
 APP_GROUP="${APP_GROUP:-group.${PREFIX}.wiki}"
+
+# The daemon binds per-run agent endpoints at <container>/r/<24 hex>.sock inside
+# the App Group container, and a Unix-domain socket path carries at most 103
+# UTF-8 bytes on macOS (sockaddr_un.sun_path, NUL included) — see
+# SearchSocketWire.maxPathBytes and the same budget check in preflight.py.
+# Reject an over-budget id HERE, before the portal step below blesses it.
+home_bytes=$(printf %s "${HOME}" | wc -c | tr -d '[:space:]')
+group_bytes=$(printf %s "${APP_GROUP}" | wc -c | tr -d '[:space:]')
+socket_budget=$(( 103 - home_bytes - 26 - 32 ))  # 26 = "/Library/Group Containers/", 32 = "/r/<24 hex>.sock"
+if [ "${group_bytes}" -gt "${socket_budget}" ]; then
+  die "APP_GROUP '${APP_GROUP}' is ${group_bytes} bytes; the socket-path budget on this Mac is ${socket_budget} — agent spawns would fail with SearchSocketError.pathTooLong. Re-run with a shorter --app-group."
+fi
+
 say "Using:"
 echo "    app bundle id : ${BUNDLE_ID}"
 echo "    ext bundle id : ${EXT_BUNDLE_ID}"
