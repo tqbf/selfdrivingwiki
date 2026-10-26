@@ -76,8 +76,7 @@ struct ForegroundLintWindow: View {
                         applyLintProposal(proposal, candidate)
                     },
                     onClose: {
-                        lintCoordinator.close(wikiID: context.wikiID)
-                        dismiss()
+                        closeIfConfirmed()
                     })
             } else if let refusal {
                 ContentUnavailableView {
@@ -92,6 +91,9 @@ struct ForegroundLintWindow: View {
             }
         }
         .frame(minWidth: 720, minHeight: 500)
+        .background(
+            WindowCloseInterceptor(shouldConfirm: { lintSession?.isBusy == true })
+        )
         .task(id: context) {
             await openOnce()
         }
@@ -100,6 +102,17 @@ struct ForegroundLintWindow: View {
             // proposals, and free the per-wiki run slot.
             lintCoordinator.close(wikiID: context.wikiID)
         }
+    }
+
+    /// The sheet's Close button: same confirmation as the window's red
+    /// close button and Cmd+W (which go through the interceptor's delegate).
+    private func closeIfConfirmed() {
+        if let lintSession, lintSession.isBusy,
+           !LintCloseConfirmation.present() {
+            return
+        }
+        lintCoordinator.close(wikiID: context.wikiID)
+        dismiss()
     }
 
     /// Idempotent open+start. Reopening the same page's window focuses
@@ -157,6 +170,97 @@ struct ForegroundLintWindow: View {
         } catch {
             DebugLog.lint("Lint Apply failed: \(error)")
             return .refused("Apply failed: \(error)")
+        }
+    }
+}
+
+// MARK: - Close confirmation
+
+/// The shared close-while-busy confirmation. `true` = proceed with the
+/// close (cancel the in-flight run); `false` = keep the window. Presented
+/// modally on the main thread — interactive user input, not pool blocking.
+@MainActor
+enum LintCloseConfirmation {
+    static func present() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Lint work in progress"
+        alert.informativeText = "A check or repair is still running. Close the window and cancel it?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close and Cancel")
+        alert.addButton(withTitle: "Keep Window")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+/// Intercepts the lint window's close (red close button AND Cmd+W — both
+/// route through `performClose:`) while a run is busy and asks for
+/// confirmation first.
+///
+/// Mechanism: installs a delegate proxy on the hosting NSWindow that answers
+/// `windowShouldClose(_:)` with the confirmation and forwards every other
+/// delegate call to SwiftUI's original delegate (`forwardingTarget`), so
+/// scene behavior is unchanged. Applied as an invisible background view; the
+/// proxy attaches once when the view joins the window.
+struct WindowCloseInterceptor: NSViewRepresentable {
+    /// `true` when closing should ask for confirmation (a run is busy).
+    var shouldConfirm: () -> Bool
+
+    func makeNSView(context: Context) -> NSView {
+        let view = InterceptorView()
+        view.coordinator = context.coordinator
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.shouldConfirm = shouldConfirm
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// MainActor: `windowShouldClose` and the confirmation alert run on the
+    /// main thread (AppKit invokes the delegate there), and `shouldConfirm`
+    /// reads the session's MainActor-isolated state.
+    @MainActor
+    final class Coordinator: NSObject, NSWindowDelegate {
+        var shouldConfirm: () -> Bool = { false }
+        /// SwiftUI's own window delegate — every non-intercepted delegate
+        /// call forwards here so scene behavior is unchanged. `nonisolated(unsafe)`
+        /// is required because the NSObject forwarding overrides are
+        /// nonisolated while the state is MainActor; it is sound because
+        /// both the property and its readers are only ever touched on the
+        /// main thread (attach happens in `viewDidMoveToWindow`, and AppKit
+        /// dispatches window-delegate calls on the main thread).
+        // swiftlint:disable:next nonisolated_unsafe
+        nonisolated(unsafe) weak var originalDelegate: NSWindowDelegate?
+
+        func attach(to window: NSWindow) {
+            if originalDelegate === self { return }
+            originalDelegate = window.delegate
+            window.delegate = self
+        }
+
+        func windowShouldClose(_ sender: NSWindow) -> Bool {
+            guard shouldConfirm() else { return true }
+            return LintCloseConfirmation.present()
+        }
+
+        override func responds(to aSelector: Selector) -> Bool {
+            super.responds(to: aSelector) || originalDelegate?.responds(to: aSelector) == true
+        }
+
+        override func forwardingTarget(for aSelector: Selector) -> Any? {
+            originalDelegate
+        }
+    }
+
+    /// Grabs the hosting window the moment the view enters one.
+    final class InterceptorView: NSView {
+        var coordinator: Coordinator?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, let coordinator else { return }
+            coordinator.attach(to: window)
         }
     }
 }
