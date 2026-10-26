@@ -62,4 +62,42 @@ run's own Run Details. A reverted write renders the disclosure instead.
 
 ## Verification
 
-GATE_RESULTS_PLACEHOLDER
+Gates, run on the final tree (`ba6ea0af`):
+
+- `make prompts` — in sync.
+- `make build` — pass (app built and signed).
+- `make test` — pass: 5,260 tests in 12 test runs, 0 failures.
+- `WIKIFS_APP_TESTS=1 swift test --filter 'Lint|PagePatch|DaemonLint|DaemonScope|QueueReport|AgentOperationRunner'`
+  — pass: 42 + 213 + 194 = 449 tests, 0 issues.
+- bare `swift build` — pass.
+- Opt-in interaction press: `WIKIFS_APP_TESTS=1 WIKIFS_INTERACTION_TESTS=1
+  swift test --filter fixControlsRowPressesTheRealControl` — pass
+  (standalone, the sanctioned harness for real presses).
+
+New and extended suites:
+
+- `DaemonLintPolicyTests`: the per-finding policy joins the exhaustive
+  matrix, patch identity pinning, never-proposes, payload-marker
+  inertness, read-only lease classes, and
+  `scopedEnqueueCannotCarryRepairTarget` (five forged raw-frame shapes ×
+  every policy).
+- `LintPerFindingRepairTests` (9, scripted agent): unconfigured gate →
+  report-only autonomous plan, but a repair-capable per-finding lease for
+  the assigned page only; breaker key from the launched configuration;
+  (a) a correct one-finding patch verifies, and the W2b undo reverts it
+  and records under the same key; (b) an over-reaching repair reverts and
+  records a breaker failure with its disclosure reasons; a wrong-finding
+  write fails; a careful no-op is valid; (c) a moved head refuses with no
+  write; (d) a vanished finding and unrepairable classes refuse.
+- `LintPromptContractTests`: the per-finding section renders, only the
+  target class's playbook entry is injected, and the drift guard requires
+  an entry for every class. AC.1 (system prompts stay lint-free) stays
+  green.
+- `LintFindingFixStateValueTests` (value) and
+  `LintRunDetailsScenarioTests` (hosted) cover the row states and the
+  controls rows. A mutation check (scope rule disabled) failed the
+  end-to-end suite as expected.
+
+The live evaluation was cancelled by the operator, so no live-model run
+backs this unit. Model obedience to the per-finding prompt is not proven
+here. The enforcement net is proven deterministically.
