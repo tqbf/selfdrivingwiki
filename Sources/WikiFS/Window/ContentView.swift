@@ -304,23 +304,18 @@ struct ContentView: View {
         // on purpose: a centered `.principal` item then centers within the detail
         // region rather than across the whole split-view window.
         .toolbar {
-            // Centered layout: Back/Forward/Home stays flush-left, the omnibox is
-            // a smaller `.principal` item, and the right controls stay together
-            // after a flexible spacer.
+            // Centered layout: Back/Forward/Home and the Add group stay flush-left,
+            // the omnibox is a smaller `.principal` item, and the right controls
+            // stay together after a flexible spacer.
             ToolbarItem(placement: .navigation) {
                 OmniboxNavButtons(store: store, homePageID: activeHomePageID)
             }
-            ToolbarItem(placement: .principal) {
-                AddressBarView(store: store, isFocused: $addressBarFocused,
-                               detailWidth: detailWidth,
-                               sidebarVisible: columnVisibility != .detailOnly,
-                               onAddToBookmarks: { omniboxBookmarkContext = $0 })
-            }
-            ToolbarSpacer(.flexible)
             // The welcome page's three "Get Started" entry points, so they stay
             // reachable once a tab is open. Same handlers as the welcome buttons
-            // and the Cmd+Shift+P/U/F/D/C shortcuts below.
-            ToolbarItemGroup(placement: .automatic) {
+            // and the Cmd+Shift+P/U/F/D/C shortcuts below. The fixed spacer keeps
+            // them a separate group from Back/Forward/Home.
+            ToolbarSpacer(.fixed, placement: .navigation)
+            ToolbarItemGroup(placement: .navigation) {
                 Button("Add Page", systemImage: "doc.badge.plus") {
                     store.newPageInNewTab()
                 }
@@ -344,6 +339,13 @@ struct ContentView: View {
                 }
                 .help("Add Chat")
             }
+            ToolbarItem(placement: .principal) {
+                AddressBarView(store: store, isFocused: $addressBarFocused,
+                               detailWidth: detailWidth,
+                               sidebarVisible: columnVisibility != .detailOnly,
+                               onAddToBookmarks: { omniboxBookmarkContext = $0 })
+            }
+            ToolbarSpacer(.flexible)
             ToolbarItemGroup(placement: .automatic) {
                 Button {
                     rightInspector.toggle()
