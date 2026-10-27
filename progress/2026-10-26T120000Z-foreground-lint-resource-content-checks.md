@@ -80,19 +80,29 @@ commit (its coverage lives on in `LintAnalyzerTests`/`LintApplyStoreTests`).
 - `swift test --filter "GeneratedPromptsParityTests|DocumentationContractTests"`
   — 35 passed.
 
-Open, recorded honestly: `make test-app` (the opt-in hosted tier) is NOT
-green on this branch. Five full-tier runs each failed a DIFFERENT
-timing-sensitive hosted test (XPC event-sink registration, chat submit
-suspension, wiki-change notification bridge, daemon exporter reply, PDF
-stderr capture); every one passes in isolation, none touches lint code, and
-several predate this change (two suites could not even compile because of a
-duplicate `onLint` argument and the removed `preflightLint` API — repaired
-here so the tier builds again). The lint-domain hosted suites pass
-consistently. The tier's parallel-load stability is pre-existing debt, not
-something this change regressed or can honestly claim.
+Open, recorded honestly: `make test-app` (the opt-in hosted tier) is green
+again after the repairs above, with ONE further limitation accepted by the
+operator: the lint HOSTED WORKFLOW suite (driver + repair/Discard/Apply
+drives) is excluded from compilation unless `WIKIFS_LINT_HOSTED=1`. Its
+in-process accessibility queries materialize a tree that poisons the
+process's exit — swiftpm-testing-helper segfaults AFTER all tests pass —
+and the crash-reporter dialog fired repeatedly during evaluation. Four
+approaches were tried (informal selector walk, AXUIElement app element,
+activation policy `.regular`, AXManualAccessibility +
+AXEnhancedUserInterface); the tree never exposed identifiers in the test
+process. The harness itself (bounded waits, timeout/cleanup, missing-control
+diagnostics) passes; the blocker is recorded to
+`tmp/lint-hosted-a11y/blockers.txt` on every capability probe. The sheet
+gained stable accessibility identifiers (`lint-status`, `lint-close`,
+`lint-repair-<recipe>`, `lint-discard`, `lint-apply`, `lint-notice-N`) —
+harmless in production and the entry point for a future out-of-process
+driver.
 
 Not done here, still open: the lint-specific hosted window driver (AC.8 of
-the follow-up plan), the live provider run of the evaluation driver with six
+the follow-up plan) exists as a harness plus gated suite
+(`WIKIFS_LINT_HOSTED=1`) but cannot drive real presses inside the test
+process — see the a11y blocker above; an out-of-process driver is future
+work. Also open: the live provider run of the evaluation driver with six
 seeded cases plus the manual semantic rubric review, and the original
 subprocess/ACP fixture suites (existing tasks 8 and 9). A provider-less
 environment cannot produce live-quality evidence; no model-quality claim is

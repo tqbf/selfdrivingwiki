@@ -226,6 +226,10 @@ Live model-quality evaluation needs a configured provider AND a human rubric
 review — the driver and its guard tests exist (`LintLiveEvaluationTests`,
 opt-in), but a provider-less run records the blocker, and no model-quality
 claim is made without the manual rubric pass. The lint-specific hosted
-window driver (driving the real `ForegroundLintSheet` controls through
-AppKit accessibility) is not built in this change; the earlier foreground-lint
-verification debt (subprocess/ACP fixture suites and hosted workflows) stands.
+window driver exists (`ForegroundLintHostedTestDriver` + gated suite, run
+with `WIKIFS_APP_TESTS=1 WIKIFS_LINT_HOSTED=1`), but in-process
+accessibility queries poison the test process's exit (swiftpm-testing-helper
+segfault after pass — operator-accepted limitation, recorded to
+`tmp/lint-hosted-a11y/`); an out-of-process driver is future work. The
+earlier foreground-lint verification debt (subprocess/ACP fixture suites)
+stands.
