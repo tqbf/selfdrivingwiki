@@ -65,11 +65,13 @@ struct ForegroundLintSheet: View {
                     .controlSize(.small)
                 Button("Cancel") { session.cancel() }
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("lint-cancel")
             } else {
                 Button("Close") {
                     onClose()
                 }
                 .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("lint-close")
             }
         }
         .padding(.horizontal, 12)
@@ -84,49 +86,60 @@ struct ForegroundLintSheet: View {
                 .foregroundStyle(.secondary)
                 .labelStyle(.titleAndIcon)
                 .font(.caption)
+                .accessibilityIdentifier("lint-status")
         case .checking:
             Label("Checking…", systemImage: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .font(.caption)
+                .accessibilityIdentifier("lint-status")
         case .reviewing:
             if session.isIncomplete {
                 Text("Incomplete — a check failed")
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .accessibilityIdentifier("lint-status")
             } else if session.findings.isEmpty {
                 Text("No findings")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("lint-status")
             } else {
                 Text("\(session.findings.count) finding\(session.findings.count == 1 ? "" : "s")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("lint-status")
             }
         case .proposing:
             Label("Preparing repair…", systemImage: "wand.and.stars")
                 .foregroundStyle(.secondary)
                 .font(.caption)
+                .accessibilityIdentifier("lint-status")
         case .previewing:
             Text("Preview — review the diff, then Apply")
                 .font(.caption)
                 .foregroundStyle(.indigo)
+                .accessibilityIdentifier("lint-status")
         case .applying:
             Text("Applying…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("lint-status")
         case .stale:
             Label("Stale — the page changed. Rerun lint.", systemImage: "exclamationmark.arrow.circlepath")
                 .foregroundStyle(.orange)
                 .font(.caption)
+                .accessibilityIdentifier("lint-status")
         case .cancelling:
             Text("Cancelling…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("lint-status")
         case .failed(let message):
             Label(message, systemImage: "xmark.octagon")
                 .foregroundStyle(.red)
                 .font(.caption)
                 .lineLimit(2)
+                .accessibilityIdentifier("lint-status")
         }
     }
 
@@ -141,6 +154,7 @@ struct ForegroundLintSheet: View {
                     Label(messages[index], systemImage: "info.circle")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("lint-notice-\(index)")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -243,6 +257,7 @@ struct ForegroundLintSheet: View {
                             Label(option.label, systemImage: "wand.and.rays")
                         }
                         .accessibilityLabel("Repair: \(option.label)")
+                        .accessibilityIdentifier("lint-repair-\(option.recipeID.rawValue)")
                     }
                 }
                 .padding(.top, 2)
@@ -331,6 +346,7 @@ struct ForegroundLintSheet: View {
                     session.discardProposal()
                 }
                 .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("lint-discard")
                 Button("Apply") {
                     applyError = nil
                     Task {
@@ -350,6 +366,7 @@ struct ForegroundLintSheet: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(session.phase != .previewing)
                 .accessibilityLabel("Apply proposed change")
+                .accessibilityIdentifier("lint-apply")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
