@@ -124,8 +124,108 @@ kind maps to ingestion at the persistence boundary with the typed
 `WikiStoreModel.preflightLint` (the old auto-saving preflight) is removed; the
 detection logic lives on read-only in `LintAnalyzer`.
 
+## Resource and content checks (2026-10)
+
+The deterministic pipeline now carries version-aware resource and content
+checks, all read-only over ONE captured snapshot.
+
+### Capture
+
+`lintCapture(pageID:)` reads, inside ONE `dbWriter.read` transaction: the page
+row and head version, the resolution namespaces, the CITATION evidence, and
+the head's declared PARENT version (from the head's `parent_id`, never "the
+second history row"). Citation evidence is typed, not a string map:
+
+- Occurrences parse through the shared span/syntax APIs: alias-free links,
+  aliases, source names, canonical ids, `@vN` pins, quote fragments, heading
+  fragments. Fenced and inline-code content is excluded. Embeds are not
+  citations.
+- Each distinct (source id, version request) pair gets one record with an
+  explicit status: present (complete or bounded prefix), missing target,
+  missing version, unavailable extraction, read failure, or budget omission.
+  A missing dictionary entry is never read as "broken".
+- Pins resolve through the store's `@vN` ordering; the unpinned form resolves
+  through the reader's head rules (ref first, newest-ULID fallback).
+- Source names resolve through a multiplicity-preserving index with the
+  store's precedence (exact → legacy projection → extension-stripped →
+  loose-key unique). A tier with several candidates is reported as AMBIGUOUS
+  with its candidate ids; nothing is picked silently.
+- Named budgets: 32 source-version targets, 512 KiB per source version,
+  4 MiB aggregate source text, 512 KiB parent text, 512 citation
+  occurrences. Clipping happens only on Unicode scalar boundaries; the
+  original byte count and a completeness flag stay with the record.
+- The read pool path (`WikiReadAccess.lintCapture`) and the model's
+  memory-fallback path (main-actor hop) implement the same contract. Read
+  failures THROW; nil is only a genuinely missing page or head.
+
+### Checks
+
+- Footnotes (`footnotes`): undefined references and conflicting duplicate
+  definitions are report-only. An unused definition is informational. The
+  single safe repair deletes a redundant definition ONLY when its normalized
+  label and complete authored bytes match the retained definition
+  (`redundant-footnote-deletion`).
+- Citations (`wiki-citations`): pins validate without quotes. Quote
+  correspondence uses `WikiQuoteProjection` (WikiFSMarkdown), a pure
+  visible-text projection mirroring the production reader: typography
+  normalization, entity decoding, HTML inline elements, paired-emphasis
+  stripping with flanking constraints (identifiers keep underscores), and
+  the reader's ≥4-word partial fallback. Full, partial, missing, and
+  unavailable are distinct verdicts. A quote absent from a PREFIX capture is
+  unverified, never absent; a quote present in a prefix verifies the prefix
+  only. Ambiguous source names are report-only with candidates. A uniquely
+  resolving name can canonicalize to its typed id
+  (`source-canonicalization`). The only quote repair is the encoding-only
+  edit (`citation-encoding-fix`), offered only when the whole quote has a
+  UNIQUE evidence-backed correspondence after projection and the candidate
+  still resolves through the reader's search — markdown emphasis in the
+  anchor versus HTML emphasis in the source is the required case.
+- Tables (`table-structure`): report-only. Declared-column mismatch and
+  wiki-link alias/quote pipes that sever cells are found from AUTHORED
+  unescaped pipes (the parser discards extra cells, so the AST cannot be the
+  detector). Escaped pipes and fenced examples are never flagged.
+- History (`history`): compares the captured parent. For a COMPLETE parent
+  it reports one page-scoped candidate with concrete counts: lost table
+  blocks, removed citation occurrences (identity = target + version request
+  + fragment, so alias edits never count), and a substantial reduction
+  (≥50 percent AND ≥256 non-whitespace scalars). Incomplete parents mark the
+  comparison incomplete. First versions stay silent. Nothing is ever
+  restored automatically.
+- Truncation candidates (kept from the earlier work) stay report-only.
+
+Recipe ids are stable; the new safe recipes are `redundant-footnote-deletion`,
+`source-canonicalization`, and `citation-encoding-fix`. Defaults are keyed
+by step id, never array index.
+
+### Model evidence disclosure
+
+Check and repair prompts embed a bounded JSON evidence object: source id,
+requested pin, resolved version id, digest, availability label, and labeled
+excerpts; the parent version and labeled history excerpt; omission counts.
+Budgets: 8 source records, 8 KiB per record, 16 KiB parent, 64 KiB total
+evidence; the complete page body is capped separately at 256 KiB and the
+complete serialized task at 384 KiB. Excerpts prefer a window around an
+exact quote match (1 KiB each side). Repair evidence leads with the
+selected finding's source targets. When a limit is exceeded the model step
+is SKIPPED with a visible notice — never a clipped page or clipped evidence
+identity. Evidence, strategy, and page content are untrusted data between
+explicit markers. A custom configured prompt is captured at run admission
+and used verbatim; a missing capture fails the step visibly. Source-text
+presence is not claim support; missing evidence cannot establish a false
+claim; the prompts permit uncertainty and empty results on valid historical
+prose. Version-1 script steps keep their exact request contract — these
+checks are built-in Swift code, and source-aware custom-script evidence is a
+future versioned protocol change.
+
 ## Deferred
 
 Decision-model execution (no typed decision surface in ACP today), wiki-wide
-foreground lint (intentionally not built), and live model-quality evaluation
-(needs a configured provider and human review — separate evidence).
+foreground lint (intentionally not built), raw-URL citation conversion,
+rich-fence validation, and a broad generated-debris detector (separate work).
+Live model-quality evaluation needs a configured provider AND a human rubric
+review — the driver and its guard tests exist (`LintLiveEvaluationTests`,
+opt-in), but a provider-less run records the blocker, and no model-quality
+claim is made without the manual rubric pass. The lint-specific hosted
+window driver (driving the real `ForegroundLintSheet` controls through
+AppKit accessibility) is not built in this change; the earlier foreground-lint
+verification debt (subprocess/ACP fixture suites and hosted workflows) stands.
