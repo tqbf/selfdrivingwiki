@@ -334,12 +334,23 @@ struct ForegroundLintSheet: View {
         case .rendered:
             LintDocumentWebView(
                 markdown: session.snapshot?.body ?? "",
-                highlightRanges: selectedPassageByteRanges)
+                highlightRanges: selectedPassageByteRanges,
+                expectedTexts: selectedPassageExpectedTexts)
         case .source:
             LintSourceTextView(
                 text: session.snapshot?.body ?? "",
                 highlightUTF16Ranges: selectedPassageNSRanges)
         }
+    }
+
+    /// The selected finding's exact authored texts — the inline-precision
+    /// payloads for the rendered pane.
+    private var selectedPassageExpectedTexts: [String] {
+        guard let id = session.selectedFindingID,
+              let finding = session.findings.first(where: { $0.id == id }) else {
+            return []
+        }
+        return finding.passageRanges.map(\.expectedText)
     }
 
     @ViewBuilder
@@ -448,9 +459,15 @@ enum LintApplyOutcome: Sendable {
 struct LintDocumentWebView: View {
     let markdown: String
     let highlightRanges: [Range<Int>]
+    /// The selected finding's exact authored texts (validated `expectedText`
+    /// from each passage range). The coordinator's host-driven JS wraps the
+    /// first occurrence of each inside the marked block with an inline
+    /// `<mark class="wiki-lint-hit">` — block-level outline alone cannot
+    /// show WHICH part of a long paragraph is wrong.
+    var expectedTexts: [String] = []
 
     var body: some View {
-        LintDocumentWebViewRep(html: renderedHTML)
+        LintDocumentWebViewRep(html: renderedHTML, expectedTexts: expectedTexts)
     }
 
     private var renderedHTML: String {
@@ -490,13 +507,79 @@ struct LintDocumentWebView: View {
           border-radius: 3px;
           background: rgba(255, 159, 10, 0.10);
         }
+        .wiki-lint-hit {
+          background: rgba(255, 159, 10, 0.40);
+          border-radius: 2px;
+          padding: 0 1px;
+        }
         </style></head><body>\(bodyHTML)</body></html>
         """
+    }
+
+    /// The host-driven inline-precision script: wraps the FIRST occurrence
+    /// of each expected text inside the `.wiki-lint-mark` blocks with
+    /// `<mark class="wiki-lint-hit">`. Whitespace-collapsed matching (the
+    /// same normalization the reader's quote highlight uses); a text that
+    /// does not appear gets NO wrap — the block outline stays the honest
+    /// fallback rather than a guessed highlight. Returns the number of
+    /// wraps (the completion handler can log it).
+    static func inlineMarkScript(texts: [String]) -> String {
+        // Encoding an array of plain strings cannot fail; the fallback is
+        // an empty payload (no inline marks).
+        // swiftlint:disable:next silent_try_optional
+        let data = (try? JSONEncoder().encode(texts)) ?? Data("[]".utf8)
+        var json = String(decoding: data, as: UTF8.self)
+        // U+2028/U+2029 are valid JSON but terminate JS string literals.
+        json = json
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        // swiftlint:disable:next line_length
+        return "(function(texts){"
+            + "var norm=function(s){return s.replace(/\\s+/g,' ').trim();};"
+            + "var blocks=Array.prototype.slice.call(document.querySelectorAll('.wiki-lint-mark'));"
+            + "var wrapped=0;"
+            + "texts.forEach(function(raw){"
+            + "var needle=norm(raw); if(!needle){return;}"
+            + "for(var b=0;b<blocks.length;b++){"
+            + "var segs=[],chars=[],map=[];"
+            + "var tw=document.createTreeWalker(blocks[b],NodeFilter.SHOW_TEXT,null);"
+            + "while(tw.nextNode()){var v=tw.currentNode.nodeValue;"
+            + "for(var i=0;i<v.length;i++){var c=v[i];"
+            + "if(/\\s/.test(c)){"
+            + "if(chars.length===0||chars[chars.length-1]!==' '){chars.push(' ');map.push({n:tw.currentNode,o:i});}"
+            + "}else{chars.push(c);map.push({n:tw.currentNode,o:i});}}}"
+            + "var lo=0,hi=chars.length;"
+            + "while(lo<hi&&chars[lo]===' '){lo++;}"
+            + "while(hi>lo&&chars[hi-1]===' '){hi--;}"
+            + "var hay=chars.slice(lo,hi).join('');"
+            + "var at=hay.indexOf(needle); if(at<0){continue;}"
+            + "var s=lo+at,e=lo+at+needle.length-1;"
+            + "var range=document.createRange();"
+            + "range.setStart(map[s].n,map[s].o);"
+            + "range.setEnd(map[e].n,map[e].o+1);"
+            + "var segs2=[];"
+            + "var root=range.commonAncestorContainer;"
+            + "var rw=document.createTreeWalker(root.nodeType===3?root.parentNode:root,NodeFilter.SHOW_TEXT,null);"
+            + "while(rw.nextNode()){var nd=rw.currentNode;"
+            + "if(range.intersectsNode(nd)){"
+            + "var ss=(nd===range.startContainer)?range.startOffset:0;"
+            + "var ee=(nd===range.endContainer)?range.endOffset:nd.nodeValue.length;"
+            + "if(ss<ee){segs2.push({n:nd,s:ss,e:ee});}}}"
+            + "for(var i2=segs2.length-1;i2>=0;i2--){var g=segs2[i2];"
+            + "var tail=g.n.splitText(g.s);"
+            + "if(g.e-g.s<tail.nodeValue.length){tail.splitText(g.e-g.s);}"
+            + "var mk=document.createElement('mark');mk.className='wiki-lint-hit';"
+            + "tail.parentNode.insertBefore(mk,tail);mk.appendChild(tail);}"
+            + "wrapped++; return;"
+            + "}});"
+            + "return wrapped;"
+            + "})(\(json))"
     }
 }
 
 private struct LintDocumentWebViewRep: NSViewRepresentable {
     let html: String
+    let expectedTexts: [String]
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -506,12 +589,14 @@ private struct LintDocumentWebViewRep: NSViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.underPageBackgroundColor = .textBackgroundColor
         webView.navigationDelegate = context.coordinator
+        context.coordinator.expectedTexts = expectedTexts
         context.coordinator.load(html, into: webView)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         // No synchronous state writes — the coordinator compares and loads.
+        context.coordinator.expectedTexts = expectedTexts
         guard context.coordinator.loadedHTML != html else { return }
         context.coordinator.load(html, into: webView)
     }
@@ -521,6 +606,7 @@ private struct LintDocumentWebViewRep: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
         var loadedHTML: String?
+        var expectedTexts: [String] = []
         /// Set when the just-loaded document contains lint marks; on
         /// navigation finish, the first marked block is scrolled into view
         /// (centered) so a clicked passage is immediately visible.
@@ -535,14 +621,23 @@ private struct LintDocumentWebViewRep: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation?) {
-            guard pendingScrollToMark else { return }
-            pendingScrollToMark = false
-            // Host-driven JS runs even though page scripts are disabled.
-            // Multiple ranges mark multiple blocks; the first is the
-            // finding's primary anchor.
+            if pendingScrollToMark {
+                pendingScrollToMark = false
+                // Host-driven JS runs even though page scripts are disabled.
+                // Multiple ranges mark multiple blocks; the first is the
+                // finding's primary anchor.
+                webView.evaluateJavaScript(
+                    "var m = document.querySelector('.wiki-lint-mark');"
+                        + "if (m) { m.scrollIntoView({block: 'center'}); }",
+                    completionHandler: nil)
+            }
+            // Inline precision: wrap the finding's EXACT authored texts
+            // inside the marked blocks so the operator sees which sentence —
+            // not just which paragraph — is wrong. Runs on every load (a
+            // selection change reloads the HTML with new ranges).
+            guard !expectedTexts.isEmpty else { return }
             webView.evaluateJavaScript(
-                "var m = document.querySelector('.wiki-lint-mark');"
-                    + "if (m) { m.scrollIntoView({block: 'center'}); }",
+                LintDocumentWebView.inlineMarkScript(texts: expectedTexts),
                 completionHandler: nil)
         }
     }
