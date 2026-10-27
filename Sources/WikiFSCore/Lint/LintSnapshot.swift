@@ -74,6 +74,12 @@ public struct LintPageSnapshot: Sendable, Equatable {
     /// model steps as evidence — never copied into a system prompt.
     public let strategyContext: String
     public let relatedResources: LintRelatedResourceFacts
+    /// Version-aware citation evidence captured with the run. Checks and
+    /// repair read this same evidence; retry/repair never reloads newer
+    /// sources silently.
+    public let citations: LintCitationEvidence
+    /// The captured parent version of the head (history facts).
+    public let parent: LintCapturedParentVersion?
 
     public init(
         wikiID: WikiID,
@@ -83,7 +89,9 @@ public struct LintPageSnapshot: Sendable, Equatable {
         headVersionID: PageVersionID,
         strategyRevision: Int?,
         strategyContext: String,
-        relatedResources: LintRelatedResourceFacts
+        relatedResources: LintRelatedResourceFacts,
+        citations: LintCitationEvidence = .empty,
+        parent: LintCapturedParentVersion? = nil
     ) {
         self.wikiID = wikiID
         self.pageID = pageID
@@ -94,6 +102,8 @@ public struct LintPageSnapshot: Sendable, Equatable {
         self.strategyRevision = strategyRevision
         self.strategyContext = strategyContext
         self.relatedResources = relatedResources
+        self.citations = citations
+        self.parent = parent
     }
 
     /// True when `other` captured the exact same body bytes this snapshot

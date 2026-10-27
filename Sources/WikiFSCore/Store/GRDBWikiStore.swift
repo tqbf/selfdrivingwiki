@@ -4714,8 +4714,12 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     }
 
     /// The one-transaction coherent read the foreground lint run captures
-    /// with: page row + head version + the resolution namespaces, all inside
-    /// ONE `dbWriter.read` block so the snapshot can never straddle a commit.
+    /// with: page row + head version + the resolution namespaces + the
+    /// version-aware citation evidence + the head's parent version, all
+    /// inside ONE `dbWriter.read` block so the snapshot can never straddle
+    /// a commit. No inference, rendering, network, or process launches run
+    /// here — parsing the captured body is a pure function of bytes read in
+    /// this transaction; all comparison happens outside.
     public func lintCapture(pageID: PageID) throws -> LintCapture? {
         try dbWriter.read { db in
             guard let row = try Row.fetchOne(
@@ -4741,6 +4745,13 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             let chatTitles = try String.fetchAll(
                 db, sql: "SELECT title FROM chats;")
             let chatIDs = try String.fetchAll(db, sql: "SELECT id FROM chats;")
+            // Citation capture: the requested versions of every source the
+            // page cites, resolved and read in this SAME transaction with
+            // the product's `@vN` ordering and the reader's head rules.
+            let citations = try lintCitationEvidence(pageBody: body, on: db)
+            // History capture: the head's declared parent (not "the second
+            // row of history") — the parent id comes from the head's row.
+            let parent = try lintParentCapture(pageID: pageID, headVersionID: head, on: db)
             return LintCapture(
                 pageID: pageID,
                 title: title,
@@ -4755,8 +4766,290 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                     knownChatIDs: Set(chatIDs.map { $0.uppercased() }),
                     pagesAvailable: true,
                     sourcesAvailable: true,
-                    chatsAvailable: true))
+                    chatsAvailable: true),
+                citations: citations,
+                parent: parent)
         }
+    }
+
+    /// The version-aware citation evidence for `pageBody`, read on `db`.
+    ///
+    /// Discipline:
+    /// - Occurrences parse from the captured body through the shared
+    ///   span/syntax APIs (alias-free, aliases, names, ULIDs, pins, quote
+    ///   and heading fragments; code-protected occurrences excluded).
+    /// - Source identities load once; names resolve through the pure
+    ///   `LintSourceNameIndex` with the resolver's precedence, preserving
+    ///   multiplicity (ambiguity recorded, never collapsed).
+    /// - Distinct (id, request) targets load deduplicated in first
+    ///   authored-occurrence order, bounded by `LintCaptureLimits`: pins
+    ///   resolve through `resolveVersionPin` (the `@vN` contract), the
+    ///   unpinned form through `processedMarkdownHead(sourceID:on:)`
+    ///   including its newest-ULID fallback when no ref exists.
+    /// - Text clamps only on Unicode scalar boundaries; the original byte
+    ///   count and completeness stay with the record. Over-budget targets
+    ///   are `budgetOmitted` records with typed notices — never silently
+    ///   missing entries.
+    private func lintCitationEvidence(
+        pageBody: String, on db: Database
+    ) throws -> LintCitationEvidence {
+        var notices: [LintCaptureNotice] = []
+        let allOccurrences = LintCitationOccurrence.parseAll(in: pageBody)
+        let occurrences: [LintCitationOccurrence]
+        if allOccurrences.count > LintCaptureLimits.maxCitationOccurrences {
+            occurrences = Array(allOccurrences.prefix(LintCaptureLimits.maxCitationOccurrences))
+            notices.append(LintCaptureNotice(
+                kind: .citationOccurrenceLimit,
+                message: "The page cites \(allOccurrences.count) sources; only the first "
+                    + "\(LintCaptureLimits.maxCitationOccurrences) were captured."))
+        } else {
+            occurrences = allOccurrences
+        }
+
+        // Source identities, newest-first (the resolver's precedence order).
+        let identityRows = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT id, COALESCE(display_name, filename) AS name, filename
+            FROM sources ORDER BY updated_at DESC;
+            """)
+        let identities = identityRows.map { row -> LintSourceIdentity in
+            LintSourceIdentity(
+                id: SourceID(rawValue: row["id"]),
+                effectiveName: row["name"],
+                filename: row["filename"])
+        }
+        let nameIndex = LintSourceNameIndex(identities: identities)
+
+        // Deduplicated load plan in first-authored order.
+        struct PlannedLoad {
+            let sourceID: SourceID
+            let request: LintSourceVersionRequest
+        }
+        var planned: [PlannedLoad] = []
+        var plannedKeys = Set<String>()
+        for occurrence in occurrences {
+            guard let idText = evidenceTargetID(occurrence, nameIndex: nameIndex) else { continue }
+            // An invalid pin names no loadable version.
+            if case .invalidPin = occurrence.request { continue }
+            let key = "\(idText)|\(occurrence.request)"
+            guard plannedKeys.insert(key).inserted else { continue }
+            planned.append(PlannedLoad(
+                sourceID: SourceID(rawValue: idText), request: occurrence.request))
+        }
+
+        var records: [LintCapturedSourceVersion] = []
+        var aggregateBytes = 0
+        var targetBudgetExhausted = false
+        var aggregateExhausted = false
+        for load in planned {
+            if records.count >= LintCaptureLimits.maxSourceVersionTargets {
+                targetBudgetExhausted = true
+                records.append(LintCapturedSourceVersion(
+                    sourceID: load.sourceID, request: load.request,
+                    resolvedVersionID: nil, status: .budgetOmitted,
+                    text: nil, completeness: nil, digest: nil, originalByteCount: nil))
+                continue
+            }
+            if aggregateExhausted {
+                records.append(LintCapturedSourceVersion(
+                    sourceID: load.sourceID, request: load.request,
+                    resolvedVersionID: nil, status: .budgetOmitted,
+                    text: nil, completeness: nil, digest: nil, originalByteCount: nil))
+                continue
+            }
+            let record = try loadSourceVersion(
+                sourceID: load.sourceID, request: load.request, on: db)
+            if var bounded = record {
+                if let text = bounded.text {
+                    let remaining = LintCaptureLimits.maxAggregateSourceBytes - aggregateBytes
+                    if remaining <= 0 {
+                        aggregateExhausted = true
+                        bounded = LintCapturedSourceVersion(
+                            sourceID: bounded.sourceID, request: bounded.request,
+                            resolvedVersionID: bounded.resolvedVersionID,
+                            status: .budgetOmitted, text: nil, completeness: nil,
+                            digest: nil, originalByteCount: nil)
+                    } else if text.utf8.count > remaining {
+                        let clipped = LintCaptureLimits.clipped(text, byteLimit: remaining)
+                        bounded = LintCapturedSourceVersion(
+                            sourceID: bounded.sourceID, request: bounded.request,
+                            resolvedVersionID: bounded.resolvedVersionID,
+                            status: .present,
+                            text: clipped.text,
+                            completeness: .prefix(originalByteCount: clipped.originalByteCount),
+                            digest: LintSnapshotDigest.digest(of: clipped.text),
+                            originalByteCount: clipped.originalByteCount)
+                        aggregateExhausted = true
+                    } else {
+                        aggregateBytes += text.utf8.count
+                    }
+                }
+                records.append(bounded)
+            }
+        }
+        if targetBudgetExhausted {
+            notices.append(LintCaptureNotice(
+                kind: .sourceVersionTargetLimit,
+                message: "Citation capture stopped at "
+                    + "\(LintCaptureLimits.maxSourceVersionTargets) source versions; later "
+                    + "citations were not captured."))
+        }
+        if aggregateExhausted {
+            notices.append(LintCaptureNotice(
+                kind: .aggregateSourceTextLimit,
+                message: "Captured source text reached the "
+                    + "\(LintCaptureLimits.maxAggregateSourceBytes)-byte budget; remaining "
+                    + "citations are uncaptured."))
+        }
+        return LintCitationEvidence(
+            occurrences: occurrences,
+            sourceVersions: records,
+            nameIndex: nameIndex,
+            notices: notices,
+            isAvailable: true)
+    }
+
+    /// The target id an occurrence denotes during capture (canonical id or
+    /// unique name resolution). Ambiguous and missing names plan no load —
+    /// the check reports them from the index.
+    private func evidenceTargetID(
+        _ occurrence: LintCitationOccurrence, nameIndex: LintSourceNameIndex
+    ) -> String? {
+        if let canonical = occurrence.canonicalSourceID {
+            return canonical.uppercased()
+        }
+        guard let name = occurrence.sourceName,
+              case .resolved(let id) = nameIndex.resolve(name: name) else {
+            return nil
+        }
+        return id.rawValue.uppercased()
+    }
+
+    /// Load one source-version record inside the transaction. Pins resolve
+    /// through `resolveVersionPin` (the product's `@vN` ordering); the
+    /// unpinned form resolves through the reader's head rules. A record is
+    /// always produced — missing rows become typed statuses, never nil.
+    private func loadSourceVersion(
+        sourceID: SourceID, request: LintSourceVersionRequest, on db: Database
+    ) throws -> LintCapturedSourceVersion? {
+        let exists = try String.fetchOne(
+            db, sql: "SELECT id FROM sources WHERE id = ? LIMIT 1;",
+            arguments: [sourceID.rawValue]) != nil
+        guard exists else {
+            return LintCapturedSourceVersion(
+                sourceID: sourceID, request: request, resolvedVersionID: nil,
+                status: .missingTarget, text: nil, completeness: nil,
+                digest: nil, originalByteCount: nil)
+        }
+
+        let versionID: SourceMarkdownVersionID?
+        switch request {
+        case .pinned(let pin):
+            versionID = try resolveVersionPin(pin.rawValue, sourceID: sourceID, in: db)
+        case .active:
+            versionID = try processedMarkdownHead(sourceID: sourceID, on: db)?.id
+        case .invalidPin:
+            versionID = nil
+        }
+        guard let versionID else {
+            // Distinguish "no derived markdown at all" from "pin out of
+            // range": a source with no head has no extraction to pin into.
+            let hasAnyVersion = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM source_markdown_versions WHERE file_id = ?;",
+                arguments: [sourceID.rawValue]) ?? 0
+            let status: LintSourceCaptureStatus = hasAnyVersion > 0
+                ? .missingVersion
+                : .unavailableExtraction
+            return LintCapturedSourceVersion(
+                sourceID: sourceID, request: request, resolvedVersionID: nil,
+                status: status, text: nil, completeness: nil,
+                digest: nil, originalByteCount: nil)
+        }
+
+        guard let row = try Row.fetchOne(
+            db,
+            sql: """
+            SELECT \(Self.smvSelectColumns)
+            FROM source_markdown_versions smv
+            \(Self.smvBlobJoin)
+            WHERE smv.id = ? LIMIT 1;
+            """,
+            arguments: [versionID.rawValue]
+        ) else {
+            return LintCapturedSourceVersion(
+                sourceID: sourceID, request: request, resolvedVersionID: versionID,
+                status: .readFailed, text: nil, completeness: nil,
+                digest: nil, originalByteCount: nil)
+        }
+        let version = Self.readMarkdownVersion(from: row)
+        let clipped = LintCaptureLimits.clipped(
+            version.content, byteLimit: LintCaptureLimits.maxBytesPerSourceVersion)
+        let completeness: LintEvidenceCompleteness = clipped.originalByteCount > clipped.text.utf8.count
+            ? .prefix(originalByteCount: clipped.originalByteCount)
+            : .complete
+        return LintCapturedSourceVersion(
+            sourceID: sourceID, request: request, resolvedVersionID: versionID,
+            status: .present, text: clipped.text, completeness: completeness,
+            digest: LintSnapshotDigest.digest(of: clipped.text),
+            originalByteCount: completeness.isComplete ? nil : clipped.originalByteCount)
+    }
+
+    /// Capture the head's declared parent version facts inside the same
+    /// transaction. The FIRST version (no parent id) is not applicable — a
+    /// status, never an error. A declared parent whose row or blob is gone
+    /// is unavailable history, never an empty parent.
+    private func lintParentCapture(
+        pageID: PageID, headVersionID: PageVersionID, on db: Database
+    ) throws -> LintCapturedParentVersion? {
+        guard let headRow = try Row.fetchOne(
+            db,
+            sql: "SELECT parent_id FROM page_versions WHERE id = ? AND page_id = ?;",
+            arguments: [headVersionID.rawValue, pageID.rawValue]
+        ) else {
+            return LintCapturedParentVersion(
+                status: .unavailable, parentVersionID: nil,
+                bodyDigest: nil, text: nil, completeness: nil)
+        }
+        let parentIDText: String? = headRow["parent_id"]
+        guard let parentIDText else {
+            return LintCapturedParentVersion(
+                status: .firstVersion, parentVersionID: nil,
+                bodyDigest: nil, text: nil, completeness: nil)
+        }
+        let parentID = PageVersionID(rawValue: parentIDText)
+        guard let parentRow = try Row.fetchOne(
+            db,
+            sql: """
+            SELECT pv.id, b.content FROM page_versions pv
+            LEFT JOIN blobs b ON b.hash = pv.blob_hash
+            WHERE pv.id = ? LIMIT 1;
+            """,
+            arguments: [parentID.rawValue]
+        ) else {
+            return LintCapturedParentVersion(
+                status: .unavailable, parentVersionID: parentID,
+                bodyDigest: nil, text: nil, completeness: nil)
+        }
+        let content: String? = parentRow["content"]
+        guard let content else {
+            return LintCapturedParentVersion(
+                status: .unavailable, parentVersionID: parentID,
+                bodyDigest: nil, text: nil, completeness: nil)
+        }
+        let digest = LintSnapshotDigest.digest(of: content)
+        let clipped = LintCaptureLimits.clipped(
+            content, byteLimit: LintCaptureLimits.maxParentBodyBytes)
+        if clipped.originalByteCount > clipped.text.utf8.count {
+            return LintCapturedParentVersion(
+                status: .captured, parentVersionID: parentID,
+                bodyDigest: digest, text: clipped.text,
+                completeness: .prefix(originalByteCount: clipped.originalByteCount))
+        }
+        return LintCapturedParentVersion(
+            status: .captured, parentVersionID: parentID,
+            bodyDigest: digest, text: clipped.text, completeness: .complete)
     }
 
     public func getPage(id: PageID) throws -> WikiPage {

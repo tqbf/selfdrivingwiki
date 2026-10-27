@@ -1845,14 +1845,25 @@ public final class WikiStoreModel {
     }
 
     /// The coherent one-transaction capture read for the lint session.
-    /// Nil (with a logged reason) when the page or its head version is gone.
-    public func lintCapture(pageID: PageID) -> LintCapture? {
-        do {
-            return try store.lintCapture(pageID: pageID)
-        } catch {
-            DebugLog.lint("WikiStoreModel.lintCapture failed for \(pageID.rawValue.prefix(8)): \(error)")
-            return nil
+    /// Throws on read failure; nil only for a genuinely missing page or
+    /// missing head version (that contract is consistent through the store,
+    /// this model, the coordinator closure, and the session).
+    public func lintCapture(pageID: PageID) throws -> LintCapture? {
+        try store.lintCapture(pageID: pageID)
+    }
+
+    /// The async capture path: file-backed sessions go through the
+    /// `WikiReadService` read pool off the main actor; in-memory stores
+    /// (a second connection cannot see their database) hop to the main
+    /// actor and read through the main store. Read failures throw — an
+    /// injected read error must not become an empty clean capture.
+    public func lintCaptureAsync(pageID: PageID) async throws -> LintCapture? {
+        if let readService {
+            return try await readService.asyncRead { access in
+                try access.lintCapture(pageID: pageID)
+            }
         }
+        return try await MainActor.run { try self.store.lintCapture(pageID: pageID) }
     }
 
     /// Public link resolvers for the lint session's preview canonicalization

@@ -60,16 +60,26 @@ public struct LintCapture: Sendable, Equatable {
     public let body: String
     public let headVersionID: PageVersionID
     public let facts: LintResolutionFacts
+    /// Version-aware citation evidence: occurrences, bounded source-version
+    /// records, the source-name index, and typed budget notices.
+    public let citations: LintCitationEvidence
+    /// The captured parent of the head version (history facts), when the
+    /// page has a head to compare against.
+    public let parent: LintCapturedParentVersion?
 
     public init(
         pageID: PageID, title: String, body: String,
-        headVersionID: PageVersionID, facts: LintResolutionFacts
+        headVersionID: PageVersionID, facts: LintResolutionFacts,
+        citations: LintCitationEvidence = .empty,
+        parent: LintCapturedParentVersion? = nil
     ) {
         self.pageID = pageID
         self.title = title
         self.body = body
         self.headVersionID = headVersionID
         self.facts = facts
+        self.citations = citations
+        self.parent = parent
     }
 }
 
@@ -84,6 +94,11 @@ public enum LintAnalyzer {
     public enum BuiltinCheck: String, CaseIterable, Sendable {
         case wikiLinks = "wiki-links"
         case markdownCosmetics = "markdown-cosmetics"
+        case truncatedOutput = "truncated-output"
+        case citations = "wiki-citations"
+        case footnotes = "footnotes"
+        case tableStructure = "table-structure"
+        case history = "history"
 
         public static func named(_ raw: String) -> BuiltinCheck? {
             BuiltinCheck(rawValue: raw)
@@ -122,7 +137,138 @@ public enum LintAnalyzer {
         case .markdownCosmetics:
             return markdownCosmeticFindings(
                 stepID: stepID, body: snapshot.body, recipes: recipes)
+        case .truncatedOutput:
+            return truncationCandidates(stepID: stepID, body: snapshot.body)
+        case .citations:
+            return LintCitationCheck.findings(
+                stepID: stepID, snapshot: snapshot, recipes: recipes)
+        case .footnotes:
+            return LintFootnoteCheck.findings(
+                stepID: stepID, body: snapshot.body, recipes: recipes)
+        case .tableStructure:
+            return LintTableCheck.findings(stepID: stepID, body: snapshot.body)
+        case .history:
+            return LintHistoryCheck.findings(stepID: stepID, snapshot: snapshot)
         }
+    }
+
+    // MARK: - Truncated-output candidates
+    /// Leading-fragment and trailing-truncation candidates (report-only):
+    /// the mirror of a truncated document's telltale ends. The FIRST
+    /// non-blank line closing more brackets than it opens means the page may
+    /// begin mid-construct — content before it appears lost (a real case:
+    /// a page whose stored body starts `terface][^ref]` with the title
+    /// heading and lead sentence gone). The LAST non-blank line opening an
+    /// unclosed inline-code run or bracket means the page may end
+    /// mid-construct. Candidates only — never a truth verdict about what
+    /// the author intended; no repair is offered.
+    public static func truncationCandidates(
+        stepID: LintStepID, body: String
+    ) -> [LintFinding] {
+        let ns = body as NSString
+        let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
+        let nonBlankLines = enumeratedNonBlankLines(body: body, codeRanges: codeRanges)
+        guard let first = nonBlankLines.first, let last = nonBlankLines.last else {
+            return []
+        }
+
+        var findings: [LintFinding] = []
+
+        // Leading fragment: the first line CLOSES more brackets than it opens.
+        let firstDelta = bracketDelta(first.text)
+        if firstDelta < 0 {
+            if let finding = makeTruncationFinding(
+                stepID: stepID, id: "leading-fragment", line: first, ns: ns, body: body,
+                message: "The page may open mid-construct — the first line closes "
+                    + "\(-firstDelta) bracket(s) it never opened, so content before "
+                    + "it appears lost.") {
+                findings.append(finding)
+            }
+        }
+
+        // Trailing truncation: unclosed inline-code run (odd backtick count).
+        let backticks = last.text.filter { $0 == "`" }.count
+        if backticks % 2 == 1 {
+            if let finding = makeTruncationFinding(
+                stepID: stepID, id: "trailing-code", line: last, ns: ns, body: body,
+                message: "The final line opens an inline-code run that never closes — "
+                    + "the page may end mid-construct.") {
+                findings.append(finding)
+            }
+        }
+
+        // Trailing truncation: brackets opened on the final line that never
+        // close (code spans masked so backtick content does not confuse the
+        // balance).
+        let trailingDelta = bracketDelta(last.text)
+        if trailingDelta > 0 {
+            if let finding = makeTruncationFinding(
+                stepID: stepID, id: "trailing-bracket", line: last, ns: ns, body: body,
+                message: "The final line opens \(trailingDelta) bracket(s) that never "
+                    + "close — the page may end mid-construct.") {
+                findings.append(finding)
+            }
+        }
+        return findings
+    }
+
+    /// Non-blank, non-code lines as (index, text, nsRange) triples.
+    private static func enumeratedNonBlankLines(
+        body: String, codeRanges: [NSRange]
+    ) -> [(index: Int, text: String, nsRange: NSRange)] {
+        var result: [(Int, String, NSRange)] = []
+        var cursor = 0
+        for (index, line) in body.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            let lineText = String(line)
+            let range = NSRange(location: cursor, length: lineText.utf16.count)
+            cursor += lineText.utf16.count + 1  // + the newline
+            if lineText.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+            if WikiLinkSpan.isProtected(range, by: codeRanges) { continue }
+            result.append((index, lineText, range))
+        }
+        return result
+    }
+
+    /// Bracket balance of one line: opens minus closes, with inline code
+    /// spans and backslash escapes masked so their contents don't count.
+    private static func bracketDelta(_ line: String) -> Int {
+        var delta = 0
+        var inCode = false
+        var previous: Character?
+        for character in line {
+            if character == "`" {
+                inCode.toggle()
+                previous = character
+                continue
+            }
+            guard !inCode else { continue }
+            switch character {
+            case "(", "[", "{":
+                if previous != "\\" { delta += 1 }
+            case ")", "]", "}":
+                if previous != "\\" { delta -= 1 }
+            default:
+                break
+            }
+            previous = character
+        }
+        return delta
+    }
+
+    private static func makeTruncationFinding(
+        stepID: LintStepID, id: String, line: (index: Int, text: String, nsRange: NSRange),
+        ns: NSString, body: String, message: String
+    ) -> LintFinding? {
+        guard let range = validatedRange(line.nsRange, in: body, ns: ns) else { return nil }
+        return LintFinding(
+            id: LintFindingID(rawValue: "trunc-\(id)-\(line.index + 1)"),
+            stepID: stepID,
+            ruleID: LintRuleID(rawValue: "truncated-output"),
+            severity: .warning,
+            message: message,
+            evidence: line.text.trimmingCharacters(in: .whitespaces).prefix(120).description,
+            scope: .passage([range]),
+            repairOptions: [])
     }
 
     // MARK: - Wiki-link check
