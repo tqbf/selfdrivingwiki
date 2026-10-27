@@ -97,6 +97,7 @@ final class ForegroundLintCoordinator {
             wikiID: wikiID, pipeline: pipeline,
             dependencies: Self.dependencies(
                 store: store, services: services,
+                configDirectory: configDirectory,
                 wikiDBPath: wikiDBPath, daemonSocketPath: daemonSocket))
         session.canonicalizationResolvers = Self.resolvers(store: store)
         activeByWiki[wikiID] = ActiveRun(session: session, pageID: pageID)
@@ -133,16 +134,28 @@ final class ForegroundLintCoordinator {
 
     // MARK: - Dependency wiring
 
-    /// The session's environment: capture through the store's coherent read,
-    /// model steps through the provider services' lint lanes, script sandbox
-    /// denies pointed at the wiki DB + daemon socket.
+    /// The session's environment: capture through the read pool's coherent
+    /// one-transaction read when a read service exists (file-backed), or a
+    /// main-actor hop through the model's store for in-memory wikis; model
+    /// steps through the provider services' lint lanes; script sandbox
+    /// denies pointed at the wiki DB + daemon socket. The capture closure
+    /// has no main-actor requirement — the file-backed path never touches
+    /// model state off-main (the read service is captured by value).
     static func dependencies(
         store: WikiStoreModel, services: any AgentProviderServices,
-        wikiDBPath: String?, daemonSocketPath: String?
+        configDirectory: URL?, wikiDBPath: String?, daemonSocketPath: String?
     ) -> ForegroundLintSession.Dependencies {
-        ForegroundLintSession.Dependencies(
+        let readService = store.readService
+        return ForegroundLintSession.Dependencies(
             capture: { pageID in
-                store.lintCapture(pageID: pageID)
+                if let readService {
+                    return try await readService.asyncRead { access in
+                        try access.lintCapture(pageID: pageID)
+                    }
+                }
+                // In-memory store: a second connection cannot see its
+                // database, so the read happens on the main actor.
+                return try await MainActor.run { try store.lintCapture(pageID: pageID) }
             },
             prepareCheck: { providerOverride, modelOverride in
                 try await services.prepareLintCheck(
@@ -158,6 +171,16 @@ final class ForegroundLintCoordinator {
             },
             releaseToken: { token in
                 await services.release(token)
+            },
+            resolvePrompt: { reference in
+                // Non-bundled references are configuration-directory
+                // relative files, read at run admission. A missing or
+                // unreadable file resolves to nil — the session then fails
+                // the model step VISIBLY with a missingPrompt problem, so
+                // the swallow here is the deliberate contract.
+                let url = LintPipelineStore.resolvePath(reference, from: configDirectory)
+                // swiftlint:disable:next silent_try_optional
+                return try? String(contentsOf: url, encoding: .utf8)
             },
             wikiDBPath: { wikiDBPath },
             daemonSocketPath: { daemonSocketPath })

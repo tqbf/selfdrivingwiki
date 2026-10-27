@@ -46,8 +46,10 @@ final class ForegroundLintSession {
     // MARK: - Dependencies (injected; test seams)
 
     struct Dependencies: Sendable {
-        /// The coherent capture read (off-main via WikiReadService in the app).
-        var capture: @MainActor @Sendable (PageID) async throws -> LintCapture?
+        /// The coherent capture read (off-main via WikiReadService in the
+        /// app; main-actor hop for in-memory stores). Throws on read failure;
+        /// nil only for a genuinely missing page.
+        var capture: @Sendable (PageID) async throws -> LintCapture?
         /// Model-check preparation. `nil` bridges = the model step is
         /// reported as not run (never as a clean result).
         var prepareCheck: (@Sendable (ProviderID?, ModelID?) async throws -> AgentOperationPreparation)?
@@ -55,6 +57,12 @@ final class ForegroundLintSession {
         /// One model turn. Bound to the lint stages' tokens internally.
         var lintTurn: (@Sendable (String, String, AgentOperationPreparation) async throws -> String?)?
         var releaseToken: (@Sendable (AgentProviderAttemptToken) async -> Void)?
+        /// Resolve a NON-bundled prompt reference (a path relative to the
+        /// pipeline configuration directory) to its bytes. Bundled
+        /// `bundled:<name>` references resolve without it. Nil reference or
+        /// unreadable file → nil (the step then fails visibly; the session
+        /// never silently falls back to a different prompt).
+        var resolvePrompt: (@Sendable (String) -> String?)?
         /// The wiki database path + daemon socket path for script sandbox
         /// denies (nil when unknown — the denies are simply not emitted).
         var wikiDBPath: @Sendable () -> String?
@@ -63,6 +71,7 @@ final class ForegroundLintSession {
         static let none = Dependencies(
             capture: { _ in nil },
             prepareCheck: nil, prepareRepair: nil, lintTurn: nil, releaseToken: nil,
+            resolvePrompt: nil,
             wikiDBPath: { nil }, daemonSocketPath: { nil })
     }
 
@@ -72,8 +81,13 @@ final class ForegroundLintSession {
     private(set) var findings: [LintFinding] = []
     private(set) var stepFailures: [StepFailure] = []
     private(set) var disabledStepIDs: [LintStepID] = []
-    /// False when a model step could not run (no provider / no bridge) — the
-    /// sheet shows the notice instead of a fake clean result.
+    /// Typed check-limit notices: capture-budget omissions, model-evidence
+    /// gates, and other "this run is not a complete verification" facts.
+    /// Displayed in the window; distinct from step failures and findings.
+    private(set) var limitNotices: [String] = []
+    /// False when a model step could not run (no provider / no bridge /
+    /// over-budget evidence) — the sheet shows the notice instead of a fake
+    /// clean result.
     private(set) var didRunModelStep = true
     private(set) var modelNotice: String = ""
     private(set) var selectedFindingID: LintFindingID?
@@ -90,6 +104,12 @@ final class ForegroundLintSession {
     private let dependencies: Dependencies
     private let pipeline: LintPipelineDocument
     private let wikiID: WikiID
+    /// Prompt-reference bytes captured at RUN ADMISSION: step id / recipe id
+    /// → the exact system-prompt text the actual call must use. A custom
+    /// configured prompt is honored; a missing capture fails the step
+    /// visibly rather than falling back to a bundled default.
+    private var checkPromptBytes: [String: String] = [:]
+    private var repairPromptBytes: [String: String] = [:]
 
     /// The run identity every step binds to.
     private(set) var runID = LintRunID()
@@ -146,11 +166,44 @@ final class ForegroundLintSession {
         }
     }
 
-    /// The result is present but one or more steps failed — never presented
-    /// as clean.
-    var isIncomplete: Bool { !stepFailures.isEmpty }
+    /// The result is present but one or more steps failed, capture evidence
+    /// was incomplete, or a configured model step did not run — never
+    /// presented as clean.
+    var isIncomplete: Bool {
+        !stepFailures.isEmpty || !limitNotices.isEmpty || !didRunModelStep
+    }
 
     // MARK: - Run
+
+    /// Resolve a prompt reference to its system-prompt bytes. Bundled
+    /// references come from the shipped prompts; other references go
+    /// through the injected resolver (configuration-directory relative).
+    private func promptBytes(for reference: String?) -> String? {
+        guard let reference, !reference.isEmpty else { return nil }
+        if reference.hasPrefix(LintBundledPrompt.prefix) {
+            return LintBundledPrompt.text(
+                named: String(reference.dropFirst(LintBundledPrompt.prefix.count)))
+        }
+        return dependencies.resolvePrompt?(reference)
+    }
+
+    /// Capture prompt-reference bytes at RUN ADMISSION (before any step
+    /// runs) so the actual model calls use exactly the configured prompts,
+    /// even if configuration changes mid-run.
+    private func capturePromptBytes() {
+        checkPromptBytes = [:]
+        repairPromptBytes = [:]
+        for step in pipeline.checkSteps where step.execution.kind == .acp {
+            if let bytes = promptBytes(for: step.execution.prompt) {
+                checkPromptBytes[step.id] = bytes
+            }
+        }
+        for recipe in pipeline.repairRecipes where recipe.execution.kind == .acp {
+            if let bytes = promptBytes(for: recipe.execution.prompt) {
+                repairPromptBytes[recipe.id] = bytes
+            }
+        }
+    }
 
     /// Start (or restart) the run. Bumps the generation, invalidating every
     /// late result from earlier runs.
@@ -160,6 +213,7 @@ final class ForegroundLintSession {
         findings = []
         stepFailures = []
         disabledStepIDs = []
+        limitNotices = []
         selectedFindingID = nil
         validatorFailures = []
         proposal = nil
@@ -168,6 +222,7 @@ final class ForegroundLintSession {
         lastError = nil
         didRunModelStep = true
         modelNotice = ""
+        capturePromptBytes()
         phase = .preparing
         let currentGeneration = generation
         Task {
@@ -223,7 +278,9 @@ final class ForegroundLintSession {
                 pageTitleMap: capture.facts.knownPageTitles
                     .reduce(into: [:]) { $0[$1] = $1 },
                 sourceNames: Set(capture.facts.sourceEffectiveNames),
-                chatTitles: capture.facts.knownChatTitles))
+                chatTitles: capture.facts.knownChatTitles),
+            citations: capture.citations,
+            parent: capture.parent)
         guard currentGeneration == generation else { return }
         self.snapshot = snapshot
         phase = .checking
@@ -236,8 +293,27 @@ final class ForegroundLintSession {
         var collected: [LintFinding] = []
         var failures: [StepFailure] = []
         var disabled: [LintStepID] = []
+        var notices: [String] = []
+        // Typed capture notices surface even when every step passes.
+        notices.append(contentsOf: snapshot.citations.notices.map(\.message))
         var modelRan = true
         var modelNoticeText = ""
+
+        // Model-evidence gates: the page body and the evidence must fit
+        // their budgets, or the model step is skipped with a visible notice
+        // (never a clipped page or clipped evidence identity).
+        let modelEvidence = LintEvidence.selection(
+            snapshot: snapshot,
+            quoteHints: snapshot.citations.occurrences.compactMap(\.quote))
+        var modelSkipReasons = modelEvidence.skipReasons
+        if let bodyReason = LintEvidence.pageBodySkipReason(snapshot.body) {
+            modelSkipReasons.append(bodyReason)
+        }
+        if !modelSkipReasons.isEmpty {
+            notices.append(contentsOf: modelSkipReasons)
+            modelRan = false
+            modelNoticeText = modelSkipReasons.joined(separator: " ")
+        }
 
         for step in pipeline.checkSteps {
             guard currentGeneration == generation else { return }
@@ -267,10 +343,20 @@ final class ForegroundLintSession {
                     let availability = modelAvailability()
                     guard availability == .available,
                           let prepare = dependencies.prepareCheck,
-                          let turn = dependencies.lintTurn else {
+                          let turn = dependencies.lintTurn,
+                          modelSkipReasons.isEmpty else {
                         modelRan = false
-                        modelNoticeText = availability.notice
+                        if modelNoticeText.isEmpty {
+                            modelNoticeText = availability.notice
+                        }
                         continue
+                    }
+                    // The captured prompt bytes: a custom configured prompt
+                    // is honored; a missing capture fails this step visibly
+                    // (never a silent bundled fallback).
+                    guard let systemPrompt = checkPromptBytes[step.id] else {
+                        throw LintConfigProblem.missingPrompt(
+                            reference: step.execution.prompt ?? "(empty)")
                     }
                     let preparation = try await prepare(
                         step.execution.providerId, step.execution.modelId)
@@ -282,9 +368,9 @@ final class ForegroundLintSession {
                     defer { activeToken = nil }
                     let prompt = LintTaskPrompt.check(
                         runID: runID, snapshot: snapshot,
-                        availableRecipes: enabledRecipes)
-                    let raw = try await turn(
-                        prompt, PublicPrompts.lintCheck, preparation)
+                        availableRecipes: enabledRecipes,
+                        evidenceJSON: modelEvidence.json)
+                    let raw = try await turn(prompt, systemPrompt, preparation)
                     await dependencies.releaseToken?(preparation.selection.token)
                     guard currentGeneration == generation else { return }
                     guard let raw else {
@@ -307,6 +393,7 @@ final class ForegroundLintSession {
         findings = collected
         stepFailures = failures
         disabledStepIDs = disabled
+        limitNotices = notices
         didRunModelStep = modelRan
         modelNotice = modelNoticeText
         phase = .reviewing
@@ -434,6 +521,35 @@ final class ForegroundLintSession {
                       let turn = dependencies.lintTurn else {
                     throw AgentProviderRuntimeError.unavailable
                 }
+                guard let systemPrompt = repairPromptBytes[recipe.id] else {
+                    throw LintConfigProblem.missingPrompt(
+                        reference: recipe.execution.prompt ?? "(empty)")
+                }
+                // Repair evidence: source targets referenced in the selected
+                // finding's passage ranges lead; the bounded parent/history
+                // evidence supports page-scoped proposals.
+                let priorityIDs = Self.findingSourceTargets(finding, snapshot: snapshot)
+                let hints = snapshot.citations.occurrences
+                    .filter { occurrence in
+                        guard let id = snapshot.citations.occurrenceTargetID(occurrence) else {
+                            return false
+                        }
+                        return priorityIDs.contains(id)
+                    }
+                    .compactMap(\.quote)
+                let evidence = LintEvidence.selection(
+                    snapshot: snapshot, quoteHints: hints,
+                    prioritySourceIDs: priorityIDs)
+                if let reason = evidence.skipReasons.first {
+                    throw LintEvidenceBudgetError(reason)
+                }
+                let prompt = LintTaskPrompt.repair(
+                    runID: runID, snapshot: snapshot, finding: finding,
+                    option: option, instruction: recipe.instruction,
+                    evidenceJSON: evidence.json)
+                if let reason = LintEvidence.taskSkipReason(task: prompt) {
+                    throw LintEvidenceBudgetError(reason)
+                }
                 let preparation = try await prepare(
                     recipe.execution.providerId, recipe.execution.modelId)
                 guard currentGeneration == generation else {
@@ -442,10 +558,7 @@ final class ForegroundLintSession {
                 }
                 activeToken = preparation.selection.token
                 defer { activeToken = nil }
-                let prompt = LintTaskPrompt.repair(
-                    runID: runID, snapshot: snapshot, finding: finding,
-                    option: option, instruction: recipe.instruction)
-                let raw = try await turn(prompt, PublicPrompts.lintRepair, preparation)
+                let raw = try await turn(prompt, systemPrompt, preparation)
                 await dependencies.releaseToken?(preparation.selection.token)
                 guard currentGeneration == generation else { return }
                 guard let raw else { throw LintEnvelopeError.notOneJSONObject }
@@ -531,6 +644,34 @@ final class ForegroundLintSession {
 
     // MARK: - Builtin producers
 
+    /// The source-version targets a finding's passage ranges reference
+    /// (citation occurrences overlapping those ranges) — the repair
+    /// evidence's priority records.
+    nonisolated static func findingSourceTargets(
+        _ finding: LintFinding, snapshot: LintPageSnapshot
+    ) -> Set<String> {
+        let ranges = finding.passageRanges
+        guard !ranges.isEmpty else { return [] }
+        var ids = Set<String>()
+        for occurrence in snapshot.citations.occurrences {
+            let overlaps = ranges.contains { range in
+                range.lowerBound < occurrence.range.upperBound
+                    && occurrence.range.lowerBound < range.upperBound
+            }
+            guard overlaps,
+                  let id = snapshot.citations.occurrenceTargetID(occurrence) else { continue }
+            ids.insert(id)
+        }
+        return ids
+    }
+
+    /// The repair could not run within the evidence budgets — surfaced as a
+    /// step failure with the typed reason (never silently skipped).
+    struct LintEvidenceBudgetError: Error, Equatable {
+        let reason: String
+        init(_ reason: String) { self.reason = reason }
+    }
+
     private func builtinReplacements(
         recipe: LintRecipeConfig, finding: LintFinding, snapshot: LintPageSnapshot
     ) throws -> [LintSourceReplacement] {
@@ -539,7 +680,11 @@ final class ForegroundLintSession {
         }
         switch recipe.execution.builtin {
         case LintBuiltinProducer.bracketCorrection.rawValue,
-             LintBuiltinProducer.removeBrokenLink.rawValue:
+             LintBuiltinProducer.removeBrokenLink.rawValue,
+             LintBuiltinProducer.redundantFootnoteDeletion.rawValue,
+             LintBuiltinProducer.sourceCanonicalization.rawValue,
+             LintBuiltinProducer.citationEncodingFix.rawValue:
+            // Every exact-edit producer carries the finding's validated edit.
             return [fix.replacement]
         case LintBuiltinProducer.cosmeticIndividualFix.rawValue:
             return [fix.replacement]
