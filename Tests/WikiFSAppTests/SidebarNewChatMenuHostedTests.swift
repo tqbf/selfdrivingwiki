@@ -45,7 +45,6 @@ struct PagesNewChatMenuHostedTests {
             onOpenBackground: { _ in },
             onShare: { _ in },
             onReveal: { _ in },
-            onLint: { _ in },
             onRename: { _ in },
             onDelete: { _ in },
             onSetHomePage: { _ in },
@@ -90,7 +89,11 @@ struct PagesNewChatMenuHostedTests {
 
         let bookmarksIndex = try #require(menu.items.firstIndex { $0.title == "Add to Bookmarks…" })
         let chatIndex = try #require(menu.items.firstIndex { $0 === item })
-        #expect(chatIndex == bookmarksIndex - 1, "the item joins the open cluster")
+        // The open cluster: New Chat, then the single-page Lint review, then
+        // Bookmarks (Lint is offered for one row only, so batch menus skip it).
+        let lintIndex = try #require(menu.items.firstIndex { $0.title == "Lint" })
+        #expect(chatIndex == bookmarksIndex - 2, "the item joins the open cluster")
+        #expect(lintIndex == bookmarksIndex - 1, "lint review follows in the same cluster")
         _ = model
     }
 

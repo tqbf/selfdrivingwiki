@@ -89,7 +89,7 @@ public protocol QueueIngestionProvider: Sendable {
 
 // MARK: - QueueIngestionError
 
-public enum QueueIngestionError: Error, LocalizedError {
+public enum QueueIngestionError: Error, LocalizedError, Equatable {
     case noSources
     case spawnFailed(String)
     /// The agent provider's binary was not found on PATH (or the provider has

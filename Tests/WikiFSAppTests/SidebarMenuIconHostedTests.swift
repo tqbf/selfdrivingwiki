@@ -79,7 +79,6 @@ struct SidebarMenuIconHostedTests {
             onOpenBackground: { _ in },
             onShare: { _ in },
             onReveal: { _ in },
-            onLint: { _ in },
             onRename: { _ in },
             onDelete: { _ in },
             onSetHomePage: { _ in },

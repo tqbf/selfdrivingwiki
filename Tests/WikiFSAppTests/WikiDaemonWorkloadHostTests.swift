@@ -704,10 +704,12 @@ struct WikiDaemonWorkloadHostTests {
         let sink = XPCTestEventSink()
         proxy.registerEventSink(sink)
 
-        // Poll for up to 2 seconds — registerEventSink is fire-and-forget
+        // Poll for up to 10 seconds — registerEventSink is fire-and-forget
         // (no reply), so we can't know exactly when the daemon processes it.
+        // The budget is generous because the full app tier runs many XPC
+        // suites concurrently; a broken registration still fails, just later.
         var registered = false
-        for _ in 0..<20 {
+        for _ in 0..<100 {
             if daemon.registeredEventSinks.count >= 1 {
                 registered = true
                 break
