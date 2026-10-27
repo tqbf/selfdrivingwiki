@@ -64,6 +64,16 @@ public struct AgentProviderAttemptToken: Sendable, Equatable, Hashable, CustomSt
     fileprivate let value: UUID
     fileprivate init(_ value: UUID) { self.value = value }
     public var description: String { "AgentProviderAttemptToken()" }
+
+    /// A throwaway token for test fakes that must hand a preparation
+    /// through seams like the lint session's provider-turn boundary. The
+    /// token is inert — it authorizes nothing and is compiled out of
+    /// release builds.
+    #if DEBUG
+    public static func makeTestingToken() -> AgentProviderAttemptToken {
+        AgentProviderAttemptToken(UUID())
+    }
+    #endif
 }
 
 /// Per-snapshot summarizer lease state (issue #1276). Tracks the ACTIVE

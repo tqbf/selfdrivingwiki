@@ -155,7 +155,9 @@ struct LintPipelineConfigTests {
 
     @Test func missingPromptFileIsRejected() throws {
         var document = LintPipelineDocument.bundledDefaults()
-        document.checkSteps[2].execution.prompt = "does-not-exist.md"
+        let modelStep = document.checkSteps.first { $0.id == "model-page-review" }!
+        document.checkSteps[document.checkSteps.firstIndex { $0.id == "model-page-review" }!].execution.prompt = "does-not-exist.md"
+        _ = modelStep
         let problems = LintPipelineStore.validate(
             document, configurationDirectory: try tempDir())
         #expect(problems.contains { problem in
@@ -178,8 +180,9 @@ struct LintPipelineConfigTests {
 
     @Test func invalidLimitsAreRejected() {
         var document = LintPipelineDocument.bundledDefaults()
-        document.checkSteps[2].execution.timeoutSeconds = 0
-        document.checkSteps[2].execution.maxOutputBytes = 1_000_000_000
+        let modelIndex = document.checkSteps.firstIndex { $0.id == "model-page-review" }!
+        document.checkSteps[modelIndex].execution.timeoutSeconds = 0
+        document.checkSteps[modelIndex].execution.maxOutputBytes = 1_000_000_000
         let problems = LintPipelineStore.validate(document, configurationDirectory: nil)
         #expect(problems.contains { problem in
             if case .invalidLimit(let name, _, _) = problem { return name == "timeoutSeconds" }
