@@ -60,6 +60,10 @@ struct ForegroundLintSheet: View {
                 .font(.headline)
             statusBadge
             Spacer()
+            if session.canRerun {
+                Button("Rerun") { session.rerun() }
+                    .accessibilityIdentifier("lint-rerun")
+            }
             if session.canCancel {
                 ProgressView()
                     .controlSize(.small)
@@ -93,7 +97,12 @@ struct ForegroundLintSheet: View {
                 .font(.caption)
                 .accessibilityIdentifier("lint-status")
         case .reviewing:
-            if session.isIncomplete {
+            if session.canRerun {
+                Label("Repair applied — Rerun to re-check the page", systemImage: "checkmark.seal")
+                    .foregroundStyle(.indigo)
+                    .font(.caption)
+                    .accessibilityIdentifier("lint-status")
+            } else if session.isIncomplete {
                 Text("Incomplete — a check failed")
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -198,9 +207,11 @@ struct ForegroundLintSheet: View {
                     "No findings",
                     systemImage: "checkmark.seal",
                     description: Text(
-                        session.isIncomplete
-                            ? "The checks that ran reported nothing. A failed check is listed above."
-                            : "The page passed every check."))
+                        session.canRerun
+                            ? "The repair was applied. Rerun lint to check the updated page."
+                            : session.isIncomplete
+                                ? "The checks that ran reported nothing. A failed check is listed above."
+                                : "The page passed every check."))
             }
             if !session.pageFindings.isEmpty {
                 Section("Page") {

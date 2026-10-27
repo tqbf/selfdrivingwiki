@@ -114,6 +114,10 @@ final class ForegroundLintSession {
     /// The run identity every step binds to.
     private(set) var runID = LintRunID()
 
+    /// The inputs `start` last ran with, kept so `rerun()` can restart the
+    /// identical run after an Apply invalidates the snapshot.
+    private var lastStart: (pageID: PageID, strategyRevision: Int?, strategyContext: String)?
+
 
     init(wikiID: WikiID, pipeline: LintPipelineDocument, dependencies: Dependencies) {
         self.wikiID = wikiID
@@ -142,6 +146,26 @@ final class ForegroundLintSession {
     var canApply: Bool {
         if case .previewing = phase { return proposal != nil && candidate != nil }
         return false
+    }
+
+    /// True after an Apply committed (or the page went stale on THIS run):
+    /// the snapshot-bound findings are gone or invalid by design, and the
+    /// honest next step is a Rerun — never "the page passed every check".
+    var canRerun: Bool {
+        let postApply = appliedVersionID != nil
+        if case .stale = phase { return lastStart != nil }
+        return postApply && !isBusy && lastStart != nil
+    }
+
+    /// Restart the identical run (same page, same strategy capture). A no-op
+    /// unless `canRerun`.
+    func rerun() {
+        guard canRerun, !isBusy, let lastStart else { return }
+        appliedVersionID = nil
+        start(
+            pageID: lastStart.pageID,
+            strategyRevision: lastStart.strategyRevision,
+            strategyContext: lastStart.strategyContext)
     }
 
     var isBusy: Bool {
@@ -223,6 +247,7 @@ final class ForegroundLintSession {
         didRunModelStep = true
         modelNotice = ""
         capturePromptBytes()
+        lastStart = (pageID, strategyRevision, strategyContext)
         phase = .preparing
         let currentGeneration = generation
         Task {

@@ -295,4 +295,61 @@ struct LintEvidenceSessionTests {
         #expect(prompt.components(separatedBy: "<evidence>").count == 2)
         #expect(prompt.components(separatedBy: "<page-body>").count == 2)
     }
+
+    @Test func lintApplyOffersRerunAndReruns() async throws {
+        // After Apply commits, the snapshot-bound findings are cleared BY
+        // DESIGN — but the contract says "Repair applied — Rerun", never
+        // "the page passed every check". Rerun restarts the identical run.
+        let body = "Claim one.[^a]\n\n[^a]: [[source:\(sourceID.rawValue)#\"alpha quote\"|a]]\n"
+        let spy = TurnSpy()
+        spy.nextResponse = checkEnvelope(findings: """
+        [{"id":"u1","severity":"info","message":"unverified citation",
+          "evidence":"x","scope":"passage","ranges":[{"start":0,"end":5,"expected":"Claim"}],
+          "rule":null,"recipes":["model-repair"]}]
+        """)
+        let session = makeSession(
+            capture: { _ in self.capture(
+                body: body, records: [self.presentRecord("alpha source text")]) },
+            spy: spy)
+        session.start(pageID: PageID(rawValue: "p"), strategyRevision: nil, strategyContext: "")
+        try await waitForReviewing(session)
+        guard let finding = session.findings.first(where: {
+            $0.repairOptions.contains { $0.recipeID.rawValue == "model-repair" }
+        }) else {
+            Issue.record("expected the model-repair finding")
+            return
+        }
+        let firstRunID = session.runID
+        guard let option = finding.repairOptions.first(where: {
+            $0.recipeID.rawValue == "model-repair"
+        }) else {
+            Issue.record("expected the model-repair option")
+            return
+        }
+        spy.nextResponse = """
+        {"run":"\(session.runID.rawValue)","page":"p","finding":"\(finding.id.rawValue)",
+         "option":"\(option.id.rawValue)","recipe":"\(option.recipeID.rawValue)",
+         "replacements":[{"start":0,"end":5,"expected":"Claim","text":"Claimed"}]}
+        """
+        session.select(findingID: finding.id)
+        session.choose(option: option, for: finding)
+        for _ in 0..<400 {
+            if session.phase == .previewing { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        // The commitApplied handoff (what the sheet's Apply calls) clears the
+        // snapshot-bound findings; canRerun must be the honest state.
+        session.commitApplied(versionID: PageVersionID(rawValue: "applied-1"))
+        #expect(session.findings.isEmpty)
+        #expect(session.proposal == nil)
+        #expect(session.canRerun)
+
+        // Rerun restarts the identical run: new run id, findings re-checked.
+        session.rerun()
+        try await waitForReviewing(session)
+        #expect(session.phase == .reviewing)
+        #expect(session.runID != firstRunID)
+        #expect(!session.findings.isEmpty)
+        #expect(!session.canRerun)
+    }
 }
