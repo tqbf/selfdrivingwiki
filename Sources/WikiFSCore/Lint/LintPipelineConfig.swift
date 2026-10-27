@@ -60,6 +60,14 @@ public enum LintBuiltinProducer: String, Codable, Sendable {
     case removeBrokenLink = "remove-broken-link"
     /// Replace a broken link with a verified existing target.
     case verifiedReplacement = "verified-replacement"
+    /// Delete a redundant footnote definition (identical label + bytes to
+    /// the retained definition) for the selected footnote finding.
+    case redundantFootnoteDeletion = "redundant-footnote-deletion"
+    /// Canonicalize a uniquely-resolving source name to its typed id,
+    /// preserving pin, fragment, alias, and visible text.
+    case sourceCanonicalization = "source-canonicalization"
+    /// The encoding-only quote edit for a verified citation correspondence.
+    case citationEncodingFix = "citation-encoding-fix"
 }
 
 /// A built-in validator implementation name.
@@ -358,6 +366,21 @@ public extension LintPipelineDocument {
                     id: "builtin-markdown-cosmetics",
                     execution: LintStepExecution(kind: .builtin, builtin: "markdown-cosmetics")),
                 LintCheckStepConfig(
+                    id: "builtin-truncation",
+                    execution: LintStepExecution(kind: .builtin, builtin: "truncated-output")),
+                LintCheckStepConfig(
+                    id: "builtin-citations",
+                    execution: LintStepExecution(kind: .builtin, builtin: "wiki-citations")),
+                LintCheckStepConfig(
+                    id: "builtin-footnotes",
+                    execution: LintStepExecution(kind: .builtin, builtin: "footnotes")),
+                LintCheckStepConfig(
+                    id: "builtin-table-structure",
+                    execution: LintStepExecution(kind: .builtin, builtin: "table-structure")),
+                LintCheckStepConfig(
+                    id: "builtin-history",
+                    execution: LintStepExecution(kind: .builtin, builtin: "history")),
+                LintCheckStepConfig(
                     id: "model-page-review",
                     enabled: true,
                     execution: LintStepExecution(
@@ -401,6 +424,40 @@ public extension LintPipelineDocument {
                     execution: LintStepExecution(kind: .builtin, builtin: "verified-replacement"),
                     validators: [
                         LintValidatorConfig(id: "bounds", execution: LintStepExecution(kind: .builtin, builtin: "replacement-bounds")),
+                        LintValidatorConfig(id: "fences", execution: LintStepExecution(kind: .builtin, builtin: "fence-integrity")),
+                    ]),
+                LintRecipeConfig(
+                    id: "redundant-footnote-deletion",
+                    label: "Remove redundant footnote",
+                    instruction: "Delete the redundant footnote definition exactly as the "
+                        + "selected finding's validated range names it. Its content is "
+                        + "byte-identical to the retained definition.",
+                    execution: LintStepExecution(kind: .builtin, builtin: "redundant-footnote-deletion"),
+                    validators: [
+                        LintValidatorConfig(id: "bounds", execution: LintStepExecution(kind: .builtin, builtin: "replacement-bounds")),
+                        LintValidatorConfig(id: "fences", execution: LintStepExecution(kind: .builtin, builtin: "fence-integrity")),
+                    ]),
+                LintRecipeConfig(
+                    id: "source-canonicalization",
+                    label: "Canonicalize to source id",
+                    instruction: "Replace the citation's name target with the source's typed "
+                        + "id exactly as the selected finding's validated range names it. "
+                        + "Preserve the pin, fragment, alias, and visible text.",
+                    execution: LintStepExecution(kind: .builtin, builtin: "source-canonicalization"),
+                    validators: [
+                        LintValidatorConfig(id: "bounds", execution: LintStepExecution(kind: .builtin, builtin: "replacement-bounds")),
+                        LintValidatorConfig(id: "fences", execution: LintStepExecution(kind: .builtin, builtin: "fence-integrity")),
+                    ]),
+                LintRecipeConfig(
+                    id: "citation-encoding-fix",
+                    label: "Fix quote encoding",
+                    instruction: "Apply the encoding-only quote edit for the selected finding: "
+                        + "replace the quote text with its verified resolvable form. Change no "
+                        + "wording, source identity, or pin.",
+                    execution: LintStepExecution(kind: .builtin, builtin: "citation-encoding-fix"),
+                    validators: [
+                        LintValidatorConfig(id: "bounds", execution: LintStepExecution(kind: .builtin, builtin: "replacement-bounds")),
+                        LintValidatorConfig(id: "scope", execution: LintStepExecution(kind: .builtin, builtin: "passage-scope")),
                         LintValidatorConfig(id: "fences", execution: LintStepExecution(kind: .builtin, builtin: "fence-integrity")),
                     ]),
                 LintRecipeConfig(

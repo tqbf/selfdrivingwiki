@@ -35,9 +35,28 @@ public enum WikiFootnoteMarkdown {
     public static let scheme = "wiki-footnote"
 
     private static let referencePattern = #"\[\^([^\]\s]+)\]"#
-    private static let referenceRegex = try! NSRegularExpression(pattern: referencePattern)
     private static let definitionPattern = #"^\s{0,3}\[\^([^\]\s]+)\]:\s?(.*)$"#
-    private static let definitionRegex = try! NSRegularExpression(pattern: definitionPattern)
+
+    // Shared with the lint footnote analysis (same module): the parsing
+    // rules `rendered` applies are the contract the analysis reports on.
+    static let referenceRegex = try! NSRegularExpression(pattern: referencePattern)
+    static let definitionRegex = try! NSRegularExpression(pattern: definitionPattern)
+
+    /// Parse one `[^id]: markdown` definition line. Internal so the lint
+    /// analysis shares the exact same line grammar.
+    static func parseDefinitionLine(_ line: String) -> (id: String, markdown: String)? {
+        let ns = line as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        guard let match = definitionRegex.firstMatch(in: line, range: range) else { return nil }
+        let id = ns.substring(with: match.range(at: 1))
+        let markdown = ns.substring(with: match.range(at: 2))
+        return (id, markdown)
+    }
+
+    /// A definition continuation line (indented under the definition).
+    static func isContinuationLine(_ line: String) -> Bool {
+        line.hasPrefix("    ") || line.hasPrefix("\t")
+    }
 
     public static func rendered(_ markdown: String) -> Rendered {
         let extraction = extractDefinitions(from: markdown)
@@ -77,7 +96,9 @@ public enum WikiFootnoteMarkdown {
         var definitions: [String: String]
     }
 
-    private struct Line {
+    /// One source line + its fence-protection status (internal: shared with
+    /// the lint footnote analysis).
+    struct Line {
         var text: String
         var isProtected: Bool
     }
@@ -113,19 +134,6 @@ public enum WikiFootnoteMarkdown {
         }
 
         return Extraction(bodyMarkdown: bodyLines.joined(separator: "\n"), definitions: definitions)
-    }
-
-    private static func parseDefinitionLine(_ line: String) -> (id: String, markdown: String)? {
-        let ns = line as NSString
-        let range = NSRange(location: 0, length: ns.length)
-        guard let match = definitionRegex.firstMatch(in: line, range: range) else { return nil }
-        let id = ns.substring(with: match.range(at: 1))
-        let markdown = ns.substring(with: match.range(at: 2))
-        return (id, markdown)
-    }
-
-    private static func isContinuationLine(_ line: String) -> Bool {
-        line.hasPrefix("    ") || line.hasPrefix("\t")
     }
 
     private static func trimContinuationPrefix(_ line: String) -> String {
@@ -216,7 +224,9 @@ public enum WikiFootnoteMarkdown {
 
     // MARK: - Protected code ranges
 
-    private static func protectedLines(in body: String) -> [Line] {
+    /// Lines annotated with their fence-protection status. Internal so the
+    /// lint footnote analysis shares the exact same protection rules.
+    static func protectedLines(in body: String) -> [Line] {
         let rawLines = body.components(separatedBy: "\n")
         var lines: [Line] = []
         var isInFence = false
