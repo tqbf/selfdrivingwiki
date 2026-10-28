@@ -189,6 +189,28 @@ struct LintExpandedChecksTests {
         #expect(tableFindings(fenced).isEmpty)
     }
 
+    @Test func nonAsciiLinesBeforeTableDoNotDriftRowAnchors() {
+        // Regression: line offsets were computed in UTF-16 units but finding
+        // ranges address UTF-8 bytes — every curly quote / non-ASCII line
+        // before the table shifted the anchors EARLIER, anchoring a real
+        // table finding onto an unrelated earlier paragraph (operator report:
+        // a "table row has 4 cells" finding rendered on a prose paragraph
+        // full of ’ characters).
+        let prose = "The Director’s invitation and the Playwright’s response are "
+            + "presented encounters — ’“”-shaped punctuation throughout.¹²¹⁴\n"
+        let table = """
+        | A | B |
+        |---|---|
+        | one | two | three | four |
+        """
+        let body = prose + table
+        let findings = tableFindings(body)
+        #expect(findings.count == 1)
+        // The anchor must address the ACTUAL mismatched row line.
+        let anchor = findings[0].passageRanges.first
+        #expect(anchor?.expectedText == "| one | two | three | four |")
+    }
+
     // MARK: - History loss (AC.6)
 
     private func historySnapshot(body: String, parent: LintCapturedParentVersion?) -> LintPageSnapshot {

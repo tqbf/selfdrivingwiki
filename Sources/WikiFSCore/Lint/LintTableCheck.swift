@@ -42,13 +42,15 @@ public enum LintTableCheck {
 
     public static func findings(stepID: LintStepID, body: String) -> [LintFinding] {
         let lines = body.components(separatedBy: "\n")
-        // Fence tracking shares the reader's protection rules.
+        // Fence tracking shares the reader's protection rules. Line ranges
+        // are UTF-8 BYTE offsets (finding ranges address bytes — UTF-16
+        // lengths silently drift the anchors across every non-ASCII line).
         var fencedPrefix: [Bool] = [] // line i is inside a fence (or is a fence line)
         var inFence = false
         var cursor = 0
         var lineRanges: [Range<Int>] = []
         for line in lines {
-            let length = (line as NSString).length
+            let length = line.utf8.count
             lineRanges.append(cursor..<(cursor + length))
             let isFenceLine = line.trimmingCharacters(in: .whitespaces).hasPrefix("```")
                 || line.trimmingCharacters(in: .whitespaces).hasPrefix("~~~")
@@ -134,9 +136,20 @@ public enum LintTableCheck {
                         continue
                     }
                     // Anchor at the span's position within the document.
+                    // The span location is UTF-16 WITHIN the row line; the
+                    // finding range is UTF-8 in the document — convert.
                     guard let rowBounds = byteRange(rowIndex) else { continue }
-                    let spanStart = rowBounds.lowerBound + span.range.location
-                    let spanBounds = spanStart..<(spanStart + span.range.length)
+                    let spanUTF8InRow: Int
+                    do {
+                        spanUTF8InRow = try LintLocationAdapter.utf8Offset(
+                            ofUTF16Offset: span.range.location, in: rowText)
+                    } catch {
+                        DebugLog.lint("LintTableCheck: alias span unlocatable in row: \(error)")
+                        continue
+                    }
+                    let spanStart = rowBounds.lowerBound + spanUTF8InRow
+                    let spanLength = spanText.utf8.count
+                    let spanBounds = spanStart..<(spanStart + spanLength)
                     guard let expected = slice(spanBounds, in: body),
                           let anchor = passage(spanBounds, expected: expected) else { continue }
                     findings.append(LintFinding(
