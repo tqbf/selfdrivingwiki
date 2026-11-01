@@ -603,6 +603,130 @@ struct DaemonChatControllerTests {
         #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
     }
 
+    /// The composer's agent switch writes the new selection to the chat row
+    /// while the daemon keeps the old runtime warm. The drain must notice the
+    /// drift and run the next turn on a freshly started runtime instead of the
+    /// one pinned to the old provider and model.
+    @Test func agentSwitchOnWarmSessionRunsNextTurnOnNewProviderAndModel() async throws {
+        let harness = try ControllerHarness()
+        let oldProvider = ProviderID(rawValue: "provider-old")
+        let oldModel = ModelID(rawValue: "model-old")
+        let newProvider = ProviderID(rawValue: "provider-new")
+        let newModel = ModelID(rawValue: "model-new")
+        try harness.store.updateChatModelAndThinkingSelection(
+            chatID: harness.chat.id,
+            providerID: oldProvider,
+            modelID: oldModel,
+            configuredThinkingID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingID: ChatConfigurationValueID(rawValue: "low"))
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-switch-first", turnID: "turn-switch-first")
+        let second = harness.makeSubmission(commandID: "command-switch-second", turnID: "turn-switch-second", text: "after switch")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected the first turn to finish while the session stays warm"
+        )
+        try harness.store.updateChatModelAndThinkingSelection(
+            chatID: harness.chat.id,
+            providerID: newProvider,
+            modelID: newModel,
+            configuredThinkingID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingID: ChatConfigurationValueID(rawValue: "low"))
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+
+        let runtime = await harness.runtime.snapshot()
+        #expect(runtime.closeCallCount == 1, "the drifted warm runtime must be closed exactly once")
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.startRequests[0].providerID == oldProvider)
+        #expect(runtime.startRequests[0].modelID == oldModel)
+        #expect(runtime.startRequests[1].providerID == newProvider)
+        #expect(runtime.startRequests[1].modelID == newModel)
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+    }
+
+    /// A resumed ACP session cannot honor a changed provider, and the resume
+    /// path never applies a changed model, so a mismatched restart must clear
+    /// the stored resume id and start clean rather than silently resume the
+    /// old agent's session.
+    @Test func agentSwitchOnWarmSessionClearsPersistedResumeSessionId() async throws {
+        let harness = try ControllerHarness()
+        try harness.store.updateChatAcpSessionId(
+            chatID: harness.chat.id,
+            acpSessionId: AcpSessionID(rawValue: "session-stored"))
+        try harness.store.updateChatModelAndThinkingSelection(
+            chatID: harness.chat.id,
+            providerID: ProviderID(rawValue: "provider-old"),
+            modelID: ModelID(rawValue: "model-old"),
+            configuredThinkingID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingID: ChatConfigurationValueID(rawValue: "low"))
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-resume-switch-first", turnID: "turn-resume-switch-first")
+        let second = harness.makeSubmission(commandID: "command-resume-switch-second", turnID: "turn-resume-switch-second", text: "after provider switch")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected the first turn to finish while the session stays warm"
+        )
+        // A provider-only mismatch is enough to poison the resume id.
+        try harness.store.updateChatModelAndThinkingSelection(
+            chatID: harness.chat.id,
+            providerID: ProviderID(rawValue: "provider-new"),
+            modelID: ModelID(rawValue: "model-old"),
+            configuredThinkingID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingID: ChatConfigurationValueID(rawValue: "low"))
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+
+        let runtime = await harness.runtime.snapshot()
+        let chat = try harness.store.getChat(id: harness.chat.id)
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.startRequests[0].existingProviderSessionID == AcpSessionID(rawValue: "session-stored"))
+        #expect(runtime.startRequests[1].existingProviderSessionID == nil, "the restarted runtime must not resume the old provider's session")
+        #expect(chat.acpSessionId == nil)
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+    }
+
+    /// With the row still matching the warm runtime, the drain must be
+    /// byte-for-byte the pre-fix behavior: no close and no store write.
+    @Test func unchangedAgentSelectionKeepsWarmRuntimeAndResumeIdUntouched() async throws {
+        let harness = try ControllerHarness()
+        try harness.store.updateChatAcpSessionId(
+            chatID: harness.chat.id,
+            acpSessionId: AcpSessionID(rawValue: "session-stored"))
+        try harness.store.updateChatModelAndThinkingSelection(
+            chatID: harness.chat.id,
+            providerID: ProviderID(rawValue: "provider-old"),
+            modelID: ModelID(rawValue: "model-old"),
+            configuredThinkingID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingID: ChatConfigurationValueID(rawValue: "low"))
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-unchanged-first", turnID: "turn-unchanged-first")
+        let second = harness.makeSubmission(commandID: "command-unchanged-second", turnID: "turn-unchanged-second", text: "warm follow-up")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected the first turn to finish while the session stays warm"
+        )
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+
+        let runtime = await harness.runtime.snapshot()
+        let chat = try harness.store.getChat(id: harness.chat.id)
+        #expect(runtime.closeCallCount == 0)
+        #expect(runtime.startRequests.count == 1)
+        #expect(runtime.startRequests[0].existingProviderSessionID == AcpSessionID(rawValue: "session-stored"))
+        #expect(chat.acpSessionId == AcpSessionID(rawValue: "session-stored"))
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+    }
+
     @Test func idleEvictionCloseDefersInterleavedSubmitAndKeepsControllerNonEvictable() async throws {
         let harness = try ControllerHarness()
         let controller = try harness.makeController()

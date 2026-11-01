@@ -21,6 +21,15 @@ actor DaemonChatController {
         let operationID: UUID
     }
 
+    /// The chat row's provider/model pin, captured when the cold preparation
+    /// read the row. Comparing the row against the resolved request instead
+    /// would misread the runtime's own selection (stage defaults, thinking
+    /// model variants) as a user's agent switch.
+    private struct RuntimeStartRowSelection: Sendable {
+        let providerID: ProviderID?
+        let modelID: ModelID?
+    }
+
     private struct ActiveContext {
         let claimID: ChatTurnClaimID
         let turnID: ChatTurnID
@@ -94,6 +103,13 @@ actor DaemonChatController {
     private var committedCursor: ChatTranscriptCursor
     private var runtimeHandle: ChatRuntimeHandle?
     private var runtimeStartRequest: ChatRuntimeStartRequest?
+    /// The chat row's provider/model pin at the moment the cold preparation
+    /// read the row. The resolved start request is the runtime's own
+    /// authoritative selection — a nil row pin resolves to the stage default
+    /// and thinking model variants remap the model — so the pin, not the
+    /// request, is what a later drain compares the row against to spot a
+    /// user's agent switch.
+    private var runtimeStartRowSelection: RuntimeStartRowSelection?
     private var eventTask: Task<Void, Never>?
     private var ownership: DispatchOwnership = .idle
     private var deferredDrain: DeferredDrain = .none
@@ -480,6 +496,7 @@ actor DaemonChatController {
         }
         runtimeHandle = nil
         runtimeStartRequest = nil
+        runtimeStartRowSelection = nil
         eventTask?.cancel()
         eventTask = nil
         turnUsageAccumulator = nil
@@ -641,6 +658,41 @@ actor DaemonChatController {
             return
         case .none, .permissionRequired:
             break
+        }
+
+        // A warm runtime keeps running on the selection the chat row pinned
+        // when it started, while the row is the user's live choice. The row
+        // must win, so a pin drift restarts the session before this turn
+        // claims; the captured request would otherwise pin the old agent for
+        // as long as the runtime stays warm.
+        if runtimeStartRequest != nil,
+           let startSelection = runtimeStartRowSelection {
+            let chat = try store.getChat(id: chatID)
+            let providerChanged = startSelection.providerID != chat.modelProviderId
+            let modelChanged = startSelection.modelID != chat.modelId
+            if providerChanged || modelChanged {
+                DebugLog.agent("DaemonChatController restarting warm session after agent switch (providerChanged: \(providerChanged), modelChanged: \(modelChanged))")
+                if runtimeHandle != nil {
+                    // Ownership is .idle with no turn in flight here — the same
+                    // preconditions stopSession's idle close relies on — and
+                    // finishRuntimeClose restores .idle, so the drain below can
+                    // prepare the fresh start without a new ownership state. No
+                    // queue recovery is needed: this drain continues in place
+                    // past the close.
+                    if snapshot.lifecycle != .closed {
+                        record(.sessionClosed)
+                    }
+                    activePermission = nil
+                    _ = await closeRuntimeAndRotateGeneration()
+                }
+                // A resumed ACP session cannot honor a changed provider, and
+                // the resume path never applies a changed model, so resuming
+                // would silently keep the old agent. Dropping the resume id
+                // costs conversation context, which the continuation preamble
+                // re-establishes — the same posture as a failed or collected
+                // resume. Both mismatch kinds clear it.
+                try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: nil)
+            }
         }
 
         let preparingGeneration = generation
@@ -1333,6 +1385,15 @@ actor DaemonChatController {
             return ChatRuntimePreparedStart(request: runtimeStartRequest)
         }
         let chat = try store.getChat(id: chatID)
+        // This read is the start of a runtime about to be captured: remember
+        // the row's pin so a later drain can tell a user's agent switch apart
+        // from the runtime's own resolved selection. A discarded preparation
+        // leaves a stale pin behind, but the staleness check only reads it
+        // while `runtimeStartRequest` is set, and every start overwrites it
+        // from the same row read that built the request.
+        runtimeStartRowSelection = RuntimeStartRowSelection(
+            providerID: chat.modelProviderId,
+            modelID: chat.modelId)
         let request = ChatRuntimeStartRequest(
             chatID: chatID,
             generation: generation,
@@ -1396,6 +1457,7 @@ actor DaemonChatController {
         // Only clear the handle once the runtime is actually gone.
         runtimeHandle = nil
         runtimeStartRequest = nil
+        runtimeStartRowSelection = nil
         eventTask?.cancel()
         eventTask = nil
         liveEvents.removeAll(keepingCapacity: true)
@@ -1428,6 +1490,7 @@ actor DaemonChatController {
     private func finishRuntimeClose() -> Bool {
         runtimeHandle = nil
         runtimeStartRequest = nil
+        runtimeStartRowSelection = nil
         eventTask?.cancel()
         eventTask = nil
         liveEvents.removeAll(keepingCapacity: true)
