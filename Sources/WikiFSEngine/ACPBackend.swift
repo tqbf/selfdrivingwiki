@@ -1165,6 +1165,47 @@ public actor ACPBackend: AgentBackend {
         }
     }
 
+    /// Round-5 confirm-or-fall-back: whether a RESUMED session can be trusted
+    /// to run on the chat's pinned model after `applyModelIfNeeded`. Pure —
+    /// no actor state, no subprocess — so the decision table is unit-tested
+    /// directly (`ACPResumeModelConfirmationTests`).
+    ///
+    /// - `requestedModelId` nil or empty → confirmed: agent-default IS the
+    ///   chat's selection (mirrors the resolvers' no-selection posture),
+    ///   nothing to verify.
+    /// - Otherwise confirmed only when an apply OUTCOME records the requested
+    ///   id: the `setModel` path refreshes `modelsInfo.currentModelId` to the
+    ///   applied id (#834 HIGH-#1), and the #834 config-option path patches
+    ///   the `"model"` select's `currentValue` instead. An agent reporting
+    ///   neither signal performed NO mutation (no advertised seam, or
+    ///   `.useAgentDefault`) — trusting it would resurrect the stale-model
+    ///   bug on model-only switches, which now keep the resume id.
+    static func resumedSessionModelConfirmed(
+        requestedModelId: String?,
+        currentModelId: String?,
+        appliedConfigOptionValue: String?
+    ) -> Bool {
+        guard let requestedModelId, !requestedModelId.isEmpty else { return true }
+        return currentModelId == requestedModelId
+            || appliedConfigOptionValue == requestedModelId
+    }
+
+    /// The `"model"` config select's `currentValue` — the config-option
+    /// apply path's outcome record (its `setModel`-path equivalent is
+    /// `modelsInfo.currentModelId`, which this option-bearing agents may not
+    /// advertise). Pure; mirrors `resolveConfigOptionModel`'s id-OR-category
+    /// match. nil when the agent advertises no `"model"` select.
+    static func modelConfigOptionCurrentValue(
+        in configOptions: [SessionConfigOption]
+    ) -> String? {
+        guard let option = configOptions.first(where: {
+            $0.id.value == "model" || $0.category == "model"
+        }), case .select(let select) = option.kind else {
+            return nil
+        }
+        return select.currentValue.value
+    }
+
     public func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
         guard var session = sessions[handle.id] else {
             // Session gone (cancelled/finished) — return an empty, finished stream.
