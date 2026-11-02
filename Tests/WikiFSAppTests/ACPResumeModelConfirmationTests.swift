@@ -93,12 +93,25 @@ import WikiFSCore
     }
 
     /// Already-current-base: the agent already runs the base of the pin, so
-    /// the apply was a legitimate no-op — the modelsInfo record confirms.
+    /// the apply was a legitimate no-op — but that normalization belongs to
+    /// the CONFIG-OPTION resolver, so only the patched config-option value
+    /// confirms it.
     @Test func alreadyCurrentBaseOutcomeIsConfirmed() {
         #expect(ACPBackend.resumedSessionModelConfirmed(
             requestedModelId: "gpt-5.6-luna[high]",
+            currentModelId: nil,
+            appliedConfigOptionValue: "gpt-5.6-luna"))
+    }
+
+    /// The setModel resolver is EXACT-ONLY: an effort variant it cannot apply
+    /// reports the old base via modelsInfo and performs NO mutation. That
+    /// outcome must NOT confirm — retaining the session would keep the old
+    /// effort level while the chip shows the variant.
+    @Test func setModelPathBaseOutcomeIsNotConfirmed() {
+        #expect(ACPBackend.resumedSessionModelConfirmed(
+            requestedModelId: "gpt-5.6-luna[high]",
             currentModelId: "gpt-5.6-luna",
-            appliedConfigOptionValue: nil))
+            appliedConfigOptionValue: nil) == false)
     }
 
     /// An exactly-advertised variant still confirms by exact id.
