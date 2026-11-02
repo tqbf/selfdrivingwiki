@@ -842,6 +842,49 @@ struct DaemonChatControllerTests {
         #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
     }
 
+    /// Shutdown that interleaves an idle eviction's close await must win. The
+    /// fenced close reports the loss, closeIfIdle returns false without
+    /// touching ownership, and the host keeps the controller — later submits
+    /// still throw shutdownStarted.
+    @Test func shutdownInterleavingIdleEvictionCloseKeepsShutdownOwnership() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-evict-shutdown-first", turnID: "turn-evict-shutdown-first")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected an idle runtime before the eviction"
+        )
+
+        await harness.runtime.pauseNextClose()
+        let eviction = Task { await controller.closeIfIdle() }
+        await harness.runtime.waitForCloseToStart()
+        await controller.terminateSessionForShutdown()
+        await harness.runtime.resumeClose()
+
+        #expect(await eviction.value == false, "a stolen close must not evict mid-shutdown")
+        let runtime = await harness.runtime.snapshot()
+        #expect(runtime.closeCallCount == 2, "the eviction close and shutdown's own teardown close")
+        #expect(runtime.startRequests.count == 1, "no fresh runtime may start after shutdown began")
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID])
+
+        do {
+            _ = try await controller.submit(harness.makeSubmitRequest(
+                submission: harness.makeSubmission(
+                    commandID: "command-evict-shutdown-second",
+                    turnID: "turn-evict-shutdown-second")))
+            Issue.record("expected submit after shutdown to throw")
+        } catch let error as DaemonChatError {
+            guard case .shutdownStarted = error else {
+                Issue.record("expected DaemonChatError.shutdownStarted, got \(error)")
+                return
+            }
+        }
+    }
+
     @Test func idleEvictionCloseDefersInterleavedSubmitAndKeepsControllerNonEvictable() async throws {
         let harness = try ControllerHarness()
         let controller = try harness.makeController()

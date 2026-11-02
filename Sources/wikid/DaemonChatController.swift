@@ -535,7 +535,14 @@ actor DaemonChatController {
             record(.sessionClosed)
         }
         activePermission = nil
-        _ = await closeRuntimeAndRotateGeneration()
+        let didCloseRuntime = await closeRuntimeAndRotateGeneration()
+        // A false close means the owner role was stolen mid-await — shutdown
+        // replaced .closing and owns the teardown — so this eviction must not
+        // write ownership or recover the queue; the stolen close leaves
+        // ownership, and the thief's own teardown, untouched. Returning false
+        // also keeps the host from evicting a controller mid-shutdown, so
+        // later submits keep throwing shutdownStarted.
+        guard didCloseRuntime else { return false }
 
         let remainsQuiescent = currentClaimID == nil
             && snapshot.queuedTurns.isEmpty
