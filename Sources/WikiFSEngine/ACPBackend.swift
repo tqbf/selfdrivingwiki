@@ -1180,14 +1180,30 @@ public actor ACPBackend: AgentBackend {
     ///   neither signal performed NO mutation (no advertised seam, or
     ///   `.useAgentDefault`) — trusting it would resurrect the stale-model
     ///   bug on model-only switches, which now keep the resume id.
+    /// - Picker effort variants (`gpt-5.6-luna[high]`) are compared per the
+    ///   config-option resolver's normalization contract: the outcome may
+    ///   validly be the requested id exactly OR its base form (the resolver
+    ///   prefers the exact advertised value and falls back to the base;
+    ///   an already-current base is a legitimate no-op). The base form is
+    ///   computed by the resolver's own `baseModelId(fromEffortVariant:)`
+    ///   so the rule cannot drift.
     static func resumedSessionModelConfirmed(
         requestedModelId: String?,
         currentModelId: String?,
         appliedConfigOptionValue: String?
     ) -> Bool {
         guard let requestedModelId, !requestedModelId.isEmpty else { return true }
-        return currentModelId == requestedModelId
-            || appliedConfigOptionValue == requestedModelId
+        let requestedBaseId = ACPModelSelectionResolver.baseModelId(
+            fromEffortVariant: requestedModelId)
+        func outcomeRecordsRequested(_ outcome: String?) -> Bool {
+            // A nil outcome records nothing, even when the requested id has no
+            // base form (baseModelId returns nil — a nil==nil comparison here
+            // would confirm an agent that reported no state at all).
+            guard let outcome else { return false }
+            return outcome == requestedModelId || outcome == requestedBaseId
+        }
+        return outcomeRecordsRequested(currentModelId)
+            || outcomeRecordsRequested(appliedConfigOptionValue)
     }
 
     /// The `"model"` config select's `currentValue` — the config-option

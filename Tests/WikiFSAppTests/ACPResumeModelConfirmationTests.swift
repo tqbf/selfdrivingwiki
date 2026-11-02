@@ -79,6 +79,53 @@ import WikiFSCore
             appliedConfigOptionValue: "other-value") == false)
     }
 
+    // MARK: - Effort-variant normalization (round 6)
+
+    /// The config-option resolver normalizes effort variants: a picker pin
+    /// like `gpt-5.6-luna[high]` may validly apply as the base
+    /// `gpt-5.6-luna` when the agent advertises only the base. The outcome
+    /// must confirm so the resumed session (and its context) is kept.
+    @Test func normalizedConfigOptionApplyIsConfirmed() {
+        #expect(ACPBackend.resumedSessionModelConfirmed(
+            requestedModelId: "gpt-5.6-luna[high]",
+            currentModelId: nil,
+            appliedConfigOptionValue: "gpt-5.6-luna"))
+    }
+
+    /// Already-current-base: the agent already runs the base of the pin, so
+    /// the apply was a legitimate no-op — the modelsInfo record confirms.
+    @Test func alreadyCurrentBaseOutcomeIsConfirmed() {
+        #expect(ACPBackend.resumedSessionModelConfirmed(
+            requestedModelId: "gpt-5.6-luna[high]",
+            currentModelId: "gpt-5.6-luna",
+            appliedConfigOptionValue: nil))
+    }
+
+    /// An exactly-advertised variant still confirms by exact id.
+    @Test func exactVariantOutcomeIsConfirmed() {
+        #expect(ACPBackend.resumedSessionModelConfirmed(
+            requestedModelId: "gpt-5.6-luna[high]",
+            currentModelId: "gpt-5.6-luna[high]",
+            appliedConfigOptionValue: nil))
+        #expect(ACPBackend.resumedSessionModelConfirmed(
+            requestedModelId: "gpt-5.6-luna[high]",
+            currentModelId: nil,
+            appliedConfigOptionValue: "gpt-5.6-luna[high]"))
+    }
+
+    /// A DIFFERENT base id never confirms — normalization must not accept an
+    /// unrelated model as the pin's outcome.
+    @Test func differentBaseStaysNotConfirmed() {
+        #expect(ACPBackend.resumedSessionModelConfirmed(
+            requestedModelId: "gpt-5.6-luna[high]",
+            currentModelId: "gpt-5.6-codex",
+            appliedConfigOptionValue: nil) == false)
+        #expect(ACPBackend.resumedSessionModelConfirmed(
+            requestedModelId: "gpt-5.6-luna[high]",
+            currentModelId: nil,
+            appliedConfigOptionValue: "gpt-5.6-codex") == false)
+    }
+
     // MARK: - modelConfigOptionCurrentValue (the config-option evidence read)
 
     /// The `"model"` select's patched currentValue is surfaced for the
