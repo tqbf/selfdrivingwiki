@@ -672,10 +672,20 @@ actor DaemonChatController {
             let modelChanged = startSelection.modelID != chat.modelId
             if providerChanged || modelChanged {
                 DebugLog.agent("DaemonChatController restarting warm session after agent switch (providerChanged: \(providerChanged), modelChanged: \(modelChanged))")
+                // Clear the resume id BEFORE teardown. A resumed ACP session
+                // cannot honor a changed provider, and the resume path never
+                // applies a changed model, so resuming would silently keep
+                // the old agent; this write is what durably records that the
+                // next start must be cold. If it throws, rethrow without
+                // closing: the pin and the captured request survive, so the
+                // next drain retries the mismatch — the queued turn stays
+                // durable and the submission fails visibly instead of
+                // silently running the old agent. Both mismatch kinds clear.
+                try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: nil)
                 if runtimeHandle != nil {
                     // Ownership is .idle with no turn in flight here — the same
-                    // preconditions stopSession's idle close relies on — and
-                    // finishRuntimeClose restores .idle, so the drain below can
+                    // preconditions stopSession's idle close relies on — and a
+                    // completed close restores .idle, so the drain below can
                     // prepare the fresh start without a new ownership state. No
                     // queue recovery is needed: this drain continues in place
                     // past the close.
@@ -683,15 +693,13 @@ actor DaemonChatController {
                         record(.sessionClosed)
                     }
                     activePermission = nil
-                    _ = await closeRuntimeAndRotateGeneration()
+                    // A fenced-out close means shutdown stole the owner role
+                    // mid-await; continue only when this drain still owns the
+                    // controller. Shutdown's settlement retains the durable
+                    // queue without promoting it.
+                    guard await closeRuntimeAndRotateGeneration(),
+                          isShutdown == false else { return }
                 }
-                // A resumed ACP session cannot honor a changed provider, and
-                // the resume path never applies a changed model, so resuming
-                // would silently keep the old agent. Dropping the resume id
-                // costs conversation context, which the continuation preamble
-                // re-establishes — the same posture as a failed or collected
-                // resume. Both mismatch kinds clear it.
-                try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: nil)
             }
         }
 
@@ -1426,10 +1434,20 @@ actor DaemonChatController {
     @discardableResult
     private func closeRuntimeAndRotateGeneration() async -> Bool {
         guard case .closing = ownership else {
-            ownership = .closing(ClosingContext(operationID: UUID()))
+            let closeOperationID = UUID()
+            ownership = .closing(ClosingContext(operationID: closeOperationID))
             if let handle = runtimeHandle {
                 do { try await runtime.closeForSettlement(handle) }
                 catch { DebugLog.agent("DaemonChatController runtime close failed: \(error)") }
+            }
+            // Shutdown can interleave the close await and replace .closing
+            // with .shutdown. finishRuntimeClose would then erase shutdown
+            // ownership and let this caller keep draining a controller whose
+            // teardown already began, so a stolen close reports the loss and
+            // leaves ownership — and the thief's own teardown — untouched.
+            guard case .closing(let current) = ownership,
+                  current.operationID == closeOperationID else {
+                return false
             }
             return finishRuntimeClose()
         }
