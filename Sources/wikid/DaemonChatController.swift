@@ -21,6 +21,15 @@ actor DaemonChatController {
         let operationID: UUID
     }
 
+    /// The chat row's provider/model pin, captured when the cold preparation
+    /// read the row. Comparing the row against the resolved request instead
+    /// would misread the runtime's own selection (stage defaults, thinking
+    /// model variants) as a user's agent switch.
+    private struct RuntimeStartRowSelection: Sendable {
+        let providerID: ProviderID?
+        let modelID: ModelID?
+    }
+
     private struct ActiveContext {
         let claimID: ChatTurnClaimID
         let turnID: ChatTurnID
@@ -94,6 +103,13 @@ actor DaemonChatController {
     private var committedCursor: ChatTranscriptCursor
     private var runtimeHandle: ChatRuntimeHandle?
     private var runtimeStartRequest: ChatRuntimeStartRequest?
+    /// The chat row's provider/model pin at the moment the cold preparation
+    /// read the row. The resolved start request is the runtime's own
+    /// authoritative selection — a nil row pin resolves to the stage default
+    /// and thinking model variants remap the model — so the pin, not the
+    /// request, is what a later drain compares the row against to spot a
+    /// user's agent switch.
+    private var runtimeStartRowSelection: RuntimeStartRowSelection?
     private var eventTask: Task<Void, Never>?
     private var ownership: DispatchOwnership = .idle
     private var deferredDrain: DeferredDrain = .none
@@ -480,6 +496,7 @@ actor DaemonChatController {
         }
         runtimeHandle = nil
         runtimeStartRequest = nil
+        runtimeStartRowSelection = nil
         eventTask?.cancel()
         eventTask = nil
         turnUsageAccumulator = nil
@@ -518,7 +535,14 @@ actor DaemonChatController {
             record(.sessionClosed)
         }
         activePermission = nil
-        _ = await closeRuntimeAndRotateGeneration()
+        let didCloseRuntime = await closeRuntimeAndRotateGeneration()
+        // A false close means the owner role was stolen mid-await — shutdown
+        // replaced .closing and owns the teardown — so this eviction must not
+        // write ownership or recover the queue; the stolen close leaves
+        // ownership, and the thief's own teardown, untouched. Returning false
+        // also keeps the host from evicting a controller mid-shutdown, so
+        // later submits keep throwing shutdownStarted.
+        guard didCloseRuntime else { return false }
 
         let remainsQuiescent = currentClaimID == nil
             && snapshot.queuedTurns.isEmpty
@@ -641,6 +665,56 @@ actor DaemonChatController {
             return
         case .none, .permissionRequired:
             break
+        }
+
+        // A warm runtime keeps running on the selection the chat row pinned
+        // when it started, while the row is the user's live choice. The row
+        // must win, so a pin drift restarts the session before this turn
+        // claims; the captured request would otherwise pin the old agent for
+        // as long as the runtime stays warm.
+        if runtimeStartRequest != nil,
+           let startSelection = runtimeStartRowSelection {
+            let chat = try store.getChat(id: chatID)
+            let providerChanged = startSelection.providerID != chat.modelProviderId
+            let modelChanged = startSelection.modelID != chat.modelId
+            if providerChanged || modelChanged {
+                DebugLog.agent("DaemonChatController restarting warm session after agent switch (providerChanged: \(providerChanged), modelChanged: \(modelChanged))")
+                if providerChanged {
+                    // Clear the resume id BEFORE teardown, and only on a
+                    // PROVIDER change: a resumed ACP session cannot cross
+                    // binaries, so resuming would fail and fall back to a
+                    // fresh start anyway; this write durably records that the
+                    // next start must be cold. If it throws, rethrow without
+                    // closing: the pin and the captured request survive, so
+                    // the next drain retries the mismatch — the queued turn
+                    // stays durable and the submission fails visibly instead
+                    // of silently resuming the wrong provider's session.
+                    // A MODEL-only mismatch keeps the resume id: the restarted
+                    // runtime resumes the old conversation session and the
+                    // launcher's apply-on-resume (startInteractiveQuery) then
+                    // applies the new model to it — context preserved, new
+                    // model honored.
+                    try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: nil)
+                }
+                if runtimeHandle != nil {
+                    // Ownership is .idle with no turn in flight here — the same
+                    // preconditions stopSession's idle close relies on — and a
+                    // completed close restores .idle, so the drain below can
+                    // prepare the fresh start without a new ownership state. No
+                    // queue recovery is needed: this drain continues in place
+                    // past the close.
+                    if snapshot.lifecycle != .closed {
+                        record(.sessionClosed)
+                    }
+                    activePermission = nil
+                    // A fenced-out close means shutdown stole the owner role
+                    // mid-await; continue only when this drain still owns the
+                    // controller. Shutdown's settlement retains the durable
+                    // queue without promoting it.
+                    guard await closeRuntimeAndRotateGeneration(),
+                          isShutdown == false else { return }
+                }
+            }
         }
 
         let preparingGeneration = generation
@@ -1333,6 +1407,15 @@ actor DaemonChatController {
             return ChatRuntimePreparedStart(request: runtimeStartRequest)
         }
         let chat = try store.getChat(id: chatID)
+        // This read is the start of a runtime about to be captured: remember
+        // the row's pin so a later drain can tell a user's agent switch apart
+        // from the runtime's own resolved selection. A discarded preparation
+        // leaves a stale pin behind, but the staleness check only reads it
+        // while `runtimeStartRequest` is set, and every start overwrites it
+        // from the same row read that built the request.
+        runtimeStartRowSelection = RuntimeStartRowSelection(
+            providerID: chat.modelProviderId,
+            modelID: chat.modelId)
         let request = ChatRuntimeStartRequest(
             chatID: chatID,
             generation: generation,
@@ -1365,10 +1448,20 @@ actor DaemonChatController {
     @discardableResult
     private func closeRuntimeAndRotateGeneration() async -> Bool {
         guard case .closing = ownership else {
-            ownership = .closing(ClosingContext(operationID: UUID()))
+            let closeOperationID = UUID()
+            ownership = .closing(ClosingContext(operationID: closeOperationID))
             if let handle = runtimeHandle {
                 do { try await runtime.closeForSettlement(handle) }
                 catch { DebugLog.agent("DaemonChatController runtime close failed: \(error)") }
+            }
+            // Shutdown can interleave the close await and replace .closing
+            // with .shutdown. finishRuntimeClose would then erase shutdown
+            // ownership and let this caller keep draining a controller whose
+            // teardown already began, so a stolen close reports the loss and
+            // leaves ownership — and the thief's own teardown — untouched.
+            guard case .closing(let current) = ownership,
+                  current.operationID == closeOperationID else {
+                return false
             }
             return finishRuntimeClose()
         }
@@ -1396,6 +1489,7 @@ actor DaemonChatController {
         // Only clear the handle once the runtime is actually gone.
         runtimeHandle = nil
         runtimeStartRequest = nil
+        runtimeStartRowSelection = nil
         eventTask?.cancel()
         eventTask = nil
         liveEvents.removeAll(keepingCapacity: true)
@@ -1428,6 +1522,7 @@ actor DaemonChatController {
     private func finishRuntimeClose() -> Bool {
         runtimeHandle = nil
         runtimeStartRequest = nil
+        runtimeStartRowSelection = nil
         eventTask?.cancel()
         eventTask = nil
         liveEvents.removeAll(keepingCapacity: true)

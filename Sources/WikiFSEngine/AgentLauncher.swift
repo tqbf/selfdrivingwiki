@@ -4035,6 +4035,58 @@ public final class AgentLauncher {
                 ) {
                     resumedSession = handle
                     DebugLog.agent("startInteractiveQuery: resumed ACP session \(priorAcpSessionId.rawValue)")
+                    // Per-stage-model-selection §4.5 + #834: a resumed session kept
+                    // the PREVIOUS run's model, so apply THIS run's resolved
+                    // selection — the same planner output the fresh path threads
+                    // via providerHints — to the resumed session before thinking
+                    // configuration, mirroring createSession's apply-then-think
+                    // order. The baseline is the resumed session's FRESH
+                    // `modelsInfo.currentModelId` from the resume/load response
+                    // (registered by `registerResumedSession`): the accurate
+                    // post-resume current model the resolver's "already current →
+                    // no-op" guard requires (#834 — a stale baseline here would
+                    // skip an apply that is in fact needed). A nil selection
+                    // routes through the resolver's useAgentDefault path, so
+                    // behavior matches a fresh session with the same selection.
+                    // Non-fatal on failure: the agent may still work on its
+                    // default; a clearer error surfaces from the prompt if not.
+                    //
+                    // Confirm-or-fall-back: the apply can be a silent no-op —
+                    // an agent that advertises no model seam lands on
+                    // .useAgentDefault and mutates nothing — while the daemon
+                    // now KEEPS the resume id on model-only switches. Re-read
+                    // the post-apply state and verify the pinned id: setModel
+                    // applies refresh modelsInfo (#834 HIGH-#1), config-option
+                    // applies patch the "model" select, and a nil/empty
+                    // selection (agent-default) needs no confirmation.
+                    // Unconfirmed → this session cannot honor the pin: close it
+                    // (removes the resume target; the subprocess stays alive
+                    // for the cold start) and let the fresh path below run —
+                    // it spawns with the pinned model via the launch profile,
+                    // the same context-loss posture as a failed resume.
+                    if let acp = backend as? ACPBackend {
+                        let resumedModelsInfo = await acp.modelsInfo(for: handle)
+                        let resumedConfigOptions = await acp.sessionConfigOptions(for: handle)
+                        await acp.applyModelIfNeeded(
+                            session: handle,
+                            selectedModelId: resolvedSelectedModel?.rawValue,
+                            stage: nil,
+                            baselineCurrentModelId: resumedModelsInfo?.currentModelId,
+                            advertisedModelIds: resumedModelsInfo?.availableModels.map(\.modelId) ?? [],
+                            configOptions: resumedConfigOptions)
+                        let confirmedModelsInfo = await acp.modelsInfo(for: handle)
+                        let confirmedConfigOptions = await acp.sessionConfigOptions(for: handle)
+                        let confirmed = ACPBackend.resumedSessionModelConfirmed(
+                            requestedModelId: resolvedSelectedModel?.rawValue,
+                            currentModelId: confirmedModelsInfo?.currentModelId,
+                            appliedConfigOptionValue: ACPBackend.modelConfigOptionCurrentValue(
+                                in: confirmedConfigOptions))
+                        if confirmed == false {
+                            await acp.closeSession(handle)
+                            resumedSession = nil
+                            DebugLog.agent("startInteractiveQuery: resumed session \(priorAcpSessionId.rawValue) did not confirm pinned model \(resolvedSelectedModel?.rawValue ?? "nil") (reported current: \(confirmedModelsInfo?.currentModelId ?? ACPBackend.modelConfigOptionCurrentValue(in: confirmedConfigOptions) ?? "none")) — falling back to a cold start")
+                        }
+                    }
                 } else {
                     DebugLog.agent("startInteractiveQuery: resume returned nil for session \(priorAcpSessionId.rawValue), will start fresh")
                 }
@@ -4054,7 +4106,7 @@ public final class AgentLauncher {
             let session: SessionHandle
             if let resumed = resumedSession {
                 session = resumed
-                DebugLog.agent("startInteractiveQuery: using resumed ACP session \(session.id)")
+                DebugLog.agent("startInteractiveQuery: using resumed ACP session \(session.id) (pinned model applied + confirmed at resume time)")
             } else {
                 DebugLog.agent("startInteractiveQuery: backend.start provider=\(provider.id) exe=\(resolvedPath) args=\(provider.command ?? [])")
                 session = try await backend.start(

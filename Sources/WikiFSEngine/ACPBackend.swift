@@ -1165,6 +1165,78 @@ public actor ACPBackend: AgentBackend {
         }
     }
 
+    /// Round-5 confirm-or-fall-back: whether a RESUMED session can be trusted
+    /// to run on the chat's pinned model after `applyModelIfNeeded`. Pure —
+    /// no actor state, no subprocess — so the decision table is unit-tested
+    /// directly (`ACPResumeModelConfirmationTests`).
+    ///
+    /// - `requestedModelId` nil or empty → confirmed: agent-default IS the
+    ///   chat's selection (mirrors the resolvers' no-selection posture),
+    ///   nothing to verify.
+    /// - Otherwise confirmed only when an apply OUTCOME records the requested
+    ///   id: the `setModel` path refreshes `modelsInfo.currentModelId` to the
+    ///   applied id (#834 HIGH-#1), and the #834 config-option path patches
+    ///   the `"model"` select's `currentValue` instead. An agent reporting
+    ///   neither signal performed NO mutation (no advertised seam, or
+    ///   `.useAgentDefault`) — trusting it would resurrect the stale-model
+    ///   bug on model-only switches, which now keep the resume id.
+    /// - Picker effort variants (`gpt-5.6-luna[high]`) are compared per the
+    ///   RESOLVER PATH that produced each outcome record: the `setModel`
+    ///   resolver is exact-only (it requires exact advertised membership, so
+    ///   an effort variant it cannot apply reports the old base and must NOT
+    ///   confirm), while the config-option resolver prefers the exact
+    ///   advertised value and falls back to the base — so only the patched
+    ///   config-option value may match the requested id's base form. The base
+    ///   form is computed by the resolver's own `baseModelId(fromEffortVariant:)`
+    ///   so the rule cannot drift.
+    static func resumedSessionModelConfirmed(
+        requestedModelId: String?,
+        currentModelId: String?,
+        appliedConfigOptionValue: String?
+    ) -> Bool {
+        guard let requestedModelId, !requestedModelId.isEmpty else { return true }
+        let requestedBaseId = ACPModelSelectionResolver.baseModelId(
+            fromEffortVariant: requestedModelId)
+        // A nil outcome records nothing, even when the requested id has no
+        // base form (baseModelId returns nil — a nil==nil comparison here
+        // would confirm an agent that reported no state at all).
+        // `currentModelId` is the setModel path's outcome record and that
+        // resolver is EXACT-ONLY: effort-variant normalization applies only
+        // to the config-option path's patched value.
+        let setModelOutcomeRecordsRequested: Bool
+        if let currentModelId {
+            setModelOutcomeRecordsRequested = currentModelId == requestedModelId
+        } else {
+            setModelOutcomeRecordsRequested = false
+        }
+        let configOptionOutcomeRecordsRequested: Bool
+        if let appliedConfigOptionValue {
+            configOptionOutcomeRecordsRequested =
+                appliedConfigOptionValue == requestedModelId
+                || appliedConfigOptionValue == requestedBaseId
+        } else {
+            configOptionOutcomeRecordsRequested = false
+        }
+        return setModelOutcomeRecordsRequested
+            || configOptionOutcomeRecordsRequested
+    }
+
+    /// The `"model"` config select's `currentValue` — the config-option
+    /// apply path's outcome record (its `setModel`-path equivalent is
+    /// `modelsInfo.currentModelId`, which this option-bearing agents may not
+    /// advertise). Pure; mirrors `resolveConfigOptionModel`'s id-OR-category
+    /// match. nil when the agent advertises no `"model"` select.
+    static func modelConfigOptionCurrentValue(
+        in configOptions: [SessionConfigOption]
+    ) -> String? {
+        guard let option = configOptions.first(where: {
+            $0.id.value == "model" || $0.category == "model"
+        }), case .select(let select) = option.kind else {
+            return nil
+        }
+        return select.currentValue.value
+    }
+
     public func send(_ turn: TurnInput, into handle: SessionHandle) async -> AsyncStream<AgentEvent> {
         guard var session = sessions[handle.id] else {
             // Session gone (cancelled/finished) — return an empty, finished stream.
