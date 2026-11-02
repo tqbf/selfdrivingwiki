@@ -679,16 +679,23 @@ actor DaemonChatController {
             let modelChanged = startSelection.modelID != chat.modelId
             if providerChanged || modelChanged {
                 DebugLog.agent("DaemonChatController restarting warm session after agent switch (providerChanged: \(providerChanged), modelChanged: \(modelChanged))")
-                // Clear the resume id BEFORE teardown. A resumed ACP session
-                // cannot honor a changed provider, and the resume path never
-                // applies a changed model, so resuming would silently keep
-                // the old agent; this write is what durably records that the
-                // next start must be cold. If it throws, rethrow without
-                // closing: the pin and the captured request survive, so the
-                // next drain retries the mismatch — the queued turn stays
-                // durable and the submission fails visibly instead of
-                // silently running the old agent. Both mismatch kinds clear.
-                try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: nil)
+                if providerChanged {
+                    // Clear the resume id BEFORE teardown, and only on a
+                    // PROVIDER change: a resumed ACP session cannot cross
+                    // binaries, so resuming would fail and fall back to a
+                    // fresh start anyway; this write durably records that the
+                    // next start must be cold. If it throws, rethrow without
+                    // closing: the pin and the captured request survive, so
+                    // the next drain retries the mismatch — the queued turn
+                    // stays durable and the submission fails visibly instead
+                    // of silently resuming the wrong provider's session.
+                    // A MODEL-only mismatch keeps the resume id: the restarted
+                    // runtime resumes the old conversation session and the
+                    // launcher's apply-on-resume (startInteractiveQuery) then
+                    // applies the new model to it — context preserved, new
+                    // model honored.
+                    try store.updateChatAcpSessionId(chatID: chatID, acpSessionId: nil)
+                }
                 if runtimeHandle != nil {
                     // Ownership is .idle with no turn in flight here — the same
                     // preconditions stopSession's idle close relies on — and a

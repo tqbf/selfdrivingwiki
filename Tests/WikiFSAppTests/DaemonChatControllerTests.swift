@@ -648,10 +648,11 @@ struct DaemonChatControllerTests {
         #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
     }
 
-    /// A resumed ACP session cannot honor a changed provider, and the resume
-    /// path never applies a changed model, so a mismatched restart must clear
-    /// the stored resume id and start clean rather than silently resume the
-    /// old agent's session.
+    /// A resumed ACP session cannot cross binaries, so a PROVIDER change must
+    /// clear the stored resume id: the restarted runtime starts clean instead
+    /// of attempting (and failing) a cross-provider resume. A model-only
+    /// change keeps the id — the restarted runtime resumes the old session and
+    /// the launcher's apply-on-resume applies the new model.
     @Test func agentSwitchOnWarmSessionClearsPersistedResumeSessionId() async throws {
         let harness = try ControllerHarness()
         try harness.store.updateChatAcpSessionId(
@@ -689,6 +690,53 @@ struct DaemonChatControllerTests {
         #expect(runtime.startRequests[0].existingProviderSessionID == AcpSessionID(rawValue: "session-stored"))
         #expect(runtime.startRequests[1].existingProviderSessionID == nil, "the restarted runtime must not resume the old provider's session")
         #expect(chat.acpSessionId == nil)
+        #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
+    }
+
+    /// A MODEL-only switch keeps the stored resume id: the restarted runtime
+    /// resumes the old conversation session (full context preserved) and the
+    /// launcher's apply-on-resume applies the new model to it. The daemon side
+    /// of that contract is that the restarted start request carries the old id
+    /// and the row still holds it.
+    @Test func modelOnlySwitchOnWarmSessionKeepsResumeIdForApplyOnResume() async throws {
+        let harness = try ControllerHarness()
+        try harness.store.updateChatAcpSessionId(
+            chatID: harness.chat.id,
+            acpSessionId: AcpSessionID(rawValue: "session-stored"))
+        try harness.store.updateChatModelAndThinkingSelection(
+            chatID: harness.chat.id,
+            providerID: ProviderID(rawValue: "provider-old"),
+            modelID: ModelID(rawValue: "model-old"),
+            configuredThinkingID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingID: ChatConfigurationValueID(rawValue: "low"))
+        let controller = try harness.makeController()
+        let first = harness.makeSubmission(commandID: "command-model-switch-first", turnID: "turn-model-switch-first")
+        let second = harness.makeSubmission(commandID: "command-model-switch-second", turnID: "turn-model-switch-second", text: "after model switch")
+
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: first))
+        await harness.runtime.emit(.turnCompleted(first.turnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected the first turn to finish while the session stays warm"
+        )
+        // Provider stays pinned; only the model moves.
+        try harness.store.updateChatModelAndThinkingSelection(
+            chatID: harness.chat.id,
+            providerID: ProviderID(rawValue: "provider-old"),
+            modelID: ModelID(rawValue: "model-new"),
+            configuredThinkingID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingID: ChatConfigurationValueID(rawValue: "low"))
+        _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+
+        let runtime = await harness.runtime.snapshot()
+        let chat = try harness.store.getChat(id: harness.chat.id)
+        #expect(runtime.closeCallCount == 1, "a model-only switch still restarts the warm runtime")
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.startRequests[1].providerID == ProviderID(rawValue: "provider-old"))
+        #expect(runtime.startRequests[1].modelID == ModelID(rawValue: "model-new"))
+        #expect(runtime.startRequests[1].existingProviderSessionID == AcpSessionID(rawValue: "session-stored"), "the restarted runtime must carry the old id so the launcher resumes and applies the new model")
+        #expect(chat.acpSessionId == AcpSessionID(rawValue: "session-stored"), "a model-only mismatch must not clear the resume id")
         #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
     }
 

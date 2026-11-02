@@ -4055,6 +4055,32 @@ public final class AgentLauncher {
             if let resumed = resumedSession {
                 session = resumed
                 DebugLog.agent("startInteractiveQuery: using resumed ACP session \(session.id)")
+                // per-stage-model-selection §4.5 + #834: a resumed session kept
+                // the PREVIOUS run's model, so apply THIS run's resolved
+                // selection — the same planner output the fresh path threads
+                // via providerHints — to the resumed session before thinking
+                // configuration, mirroring createSession's apply-then-think
+                // order. The baseline is the resumed session's FRESH
+                // `modelsInfo.currentModelId` from the resume/load response
+                // (registered by `registerResumedSession`): the accurate
+                // post-resume current model the resolver's "already current →
+                // no-op" guard requires (#834 — a stale baseline here would
+                // skip an apply that is in fact needed). A nil selection
+                // routes through the resolver's useAgentDefault path, so
+                // behavior matches a fresh session with the same selection.
+                // Non-fatal on failure: the agent may still work on its
+                // default; a clearer error surfaces from the prompt if not.
+                if let acp = backend as? ACPBackend {
+                    let resumedModelsInfo = await acp.modelsInfo(for: session)
+                    let resumedConfigOptions = await acp.sessionConfigOptions(for: session)
+                    await acp.applyModelIfNeeded(
+                        session: session,
+                        selectedModelId: resolvedSelectedModel?.rawValue,
+                        stage: nil,
+                        baselineCurrentModelId: resumedModelsInfo?.currentModelId,
+                        advertisedModelIds: resumedModelsInfo?.availableModels.map(\.modelId) ?? [],
+                        configOptions: resumedConfigOptions)
+                }
             } else {
                 DebugLog.agent("startInteractiveQuery: backend.start provider=\(provider.id) exe=\(resolvedPath) args=\(provider.command ?? [])")
                 session = try await backend.start(
