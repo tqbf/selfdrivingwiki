@@ -85,18 +85,22 @@ struct ThinkingEffortSelector: View {
         if state.shouldRender {
             Menu {
                 ForEach(state.choices) { choice in
-                    Button {
-                        select(choice.id, state: state)
-                    } label: {
-                        if choice.id == state.effectiveValueID {
-                            Label(choice.label, systemImage: "checkmark")
-                        } else {
-                            Text(choice.label)
-                        }
-                    }
+                    // Toggle (not Button + Label(systemImage:)): macOS menus only
+                    // render the system checkmark through Toggle's on state.
+                    // Clicking the already-selected item fires set(false); guard
+                    // keeps that a no-op.
+                    Toggle(choice.label, isOn: Binding(
+                        get: { choice.id == state.effectiveValueID },
+                        set: { isOn in
+                            guard isOn else { return }
+                            select(choice.id, state: state)
+                        }))
                 }
             } label: {
-                trigger(label: state.effectiveLabel, isUsingFallback: state.isUsingFallback)
+                trigger(
+                    label: state.effectiveLabel,
+                    widthAnchorLabel: widthAnchorLabel(in: state),
+                    isUsingFallback: state.isUsingFallback)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
@@ -138,12 +142,26 @@ struct ThinkingEffortSelector: View {
         }
     }
 
-    private func trigger(label: String, isUsingFallback: Bool) -> some View {
+    /// Widest catalog label. Reserved as hidden layout space in the trigger so
+    /// the box keeps a constant width as the selected effort changes.
+    private func widthAnchorLabel(in state: ThinkingEffortPresentation) -> String {
+        state.choices.map(\.label).max { $0.count < $1.count } ?? ""
+    }
+
+    private func trigger(
+        label: String,
+        widthAnchorLabel: String,
+        isUsingFallback: Bool
+    ) -> some View {
         HStack(spacing: 4) {
             Image(systemName: "brain.head.profile")
                 .foregroundStyle(Color.purple)
-            Text(label)
-                .foregroundStyle(.secondary)
+            ZStack(alignment: .leading) {
+                Text(widthAnchorLabel)
+                    .hidden()
+                Text(label)
+                    .foregroundStyle(.secondary)
+            }
             if isUsingFallback {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .imageScale(.small)
