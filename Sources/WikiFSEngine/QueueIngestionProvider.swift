@@ -74,66 +74,10 @@ public protocol QueueIngestionProvider: Sendable {
         onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws
 
-    /// Run a whole-wiki lint health-check. Returns when the agent finishes.
-    ///
-    /// - Parameters:
-    ///   - wikiID: The wiki to lint.
-    ///   - queueItemID: See ``runIngestion``'s parameter (stable namespace
-    ///     for the run's scratch dir + downstream "Reveal Debug Folder").
-    ///   - onProgress: Called with progress lines to emit as `.progress` events.
-    ///   - onTranscript: Called with each typed agent event for this item.
-    ///   - onUsage: Called after the run with cumulative usage, if captured.
-    ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
-    ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
-    ///   - onReport: See ``runIngestion``'s parameter. Whole-wiki lint reports
-    ///     phases only — it never enumerates pages, and agent completion is
-    ///     reported with availability `.notReported` (no typed findings).
-    func runLint(
-        wikiID: WikiID,
-        queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
-        onReport: (@Sendable (QueueReportMutation) -> Void)?
-    ) async throws
-
-    /// Run a page-level lint health-check for the given pages. Returns when
-    /// the agent finishes.
-    ///
-    /// - Parameters:
-    ///   - wikiID: The wiki to lint.
-    ///   - pageIDs: The page IDs to lint.
-    ///   - queueItemID: See ``runIngestion``'s parameter (stable namespace
-    ///     for the run's scratch dir + downstream "Reveal Debug Folder").
-    ///   - onProgress: Called with progress lines to emit as `.progress` events.
-    ///   - onTranscript: Called with each typed agent event for this item.
-    ///   - onUsage: Called after the run with cumulative usage, if captured.
-    ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
-    ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
-    ///   - onReport: See ``runIngestion``'s parameter. Requested page IDs
-    ///     that could not be resolved are reported `.skipped`; the agent
-    ///     supplies no typed page findings, so completion reports
-    ///     availability `.notReported`.
-    func runLintPages(
-        wikiID: WikiID,
-        pageIDs: [PageID],
-        queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
-        onReport: (@Sendable (QueueReportMutation) -> Void)?
-    ) async throws
-
     /// Quick readiness probe: checks whether the selected agent provider's
     /// command binary exists on PATH (including the mise-managed bun shim). Returns
     /// `nil` when ready, or a user-facing message explaining what to fix and
-    /// how. Called before `runIngestion`/`runLint`/`runLintPages` so the user
+    /// how. Called before `runIngestion` so the user
     /// gets actionable guidance instead of a cryptic spawn error like
     /// `"bun: not found"`.
     ///
@@ -145,18 +89,23 @@ public protocol QueueIngestionProvider: Sendable {
 
 // MARK: - QueueIngestionError
 
-public enum QueueIngestionError: Error, LocalizedError {
+public enum QueueIngestionError: Error, LocalizedError, Equatable {
     case noSources
     case spawnFailed(String)
     /// The agent provider's binary was not found on PATH (or the provider has
     /// no command configured). Carries the readiness message for the user.
     case notReady(String)
+    /// A pending, crash-recovered, or retried legacy lint item reached the
+    /// worker after queued lint was retired. Terminates visibly without
+    /// invoking a provider; history rows stay readable.
+    case retiredLint
 
     public var errorDescription: String? {
         switch self {
         case .noSources: return "Ingestion item has no valid sources"
         case .spawnFailed(let msg): return "Agent spawn failed: \(msg)"
         case .notReady(let msg): return msg
+        case .retiredLint: return QueueItemPayload.retiredLintMessage
         }
     }
 }
@@ -335,6 +284,14 @@ struct QueueIngestionWorker: QueueWorker {
     }
 
     func execute(_ item: QueueItem) async throws {
+        // Retired-lint guard (foreground lint replaced queued lint): pending,
+        // crash-recovered, or retried legacy lint terminates visibly WITHOUT
+        // invoking a provider. History rows stay readable; retry is refused at
+        // the store boundary (see QueueStore.retryItem).
+        if item.payload.isLegacyLint {
+            throw QueueIngestionError.retiredLint
+        }
+
         // Pre-dispatch readiness gate (#440): check the agent provider's binary
         // is on PATH BEFORE running the full pipeline. If the binary is missing,
         // fail the item with a clear, user-facing message instead of a cryptic
@@ -377,51 +334,24 @@ struct QueueIngestionWorker: QueueWorker {
             emitReport?(mutation)
         }
 
-        if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
-            // Page-level lint.
-            try await provider.runLintPages(
-                wikiID: item.wikiID,
-                pageIDs: pageIDs,
-                queueItemID: item.id,
-                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
-                onTranscript: onTranscript,
-                onUsage: onUsage,
-                onLiveUsage: onLiveUsage,
-                onLogPaths: onLogPaths,
-                onPendingPermission: onPendingPermission,
-                onReport: onReport
-            )
-        } else if item.payload.lintPageIDs != nil {
-            // lintPageIDs is non-nil but empty → whole-wiki lint.
-            try await provider.runLint(
-                wikiID: item.wikiID,
-                queueItemID: item.id,
-                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
-                onTranscript: onTranscript,
-                onUsage: onUsage,
-                onLiveUsage: onLiveUsage,
-                onLogPaths: onLogPaths,
-                onPendingPermission: onPendingPermission,
-                onReport: onReport
-            )
-        } else {
-            // Normal ingestion.
-            let sourceIDs = item.payload.sourceIDs
-            guard !sourceIDs.isEmpty else {
-                throw QueueIngestionError.noSources
-            }
-            try await provider.runIngestion(
-                wikiID: item.wikiID,
-                sourceIDs: sourceIDs,
-                queueItemID: item.id,
-                onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
-                onTranscript: onTranscript,
-                onUsage: onUsage,
-                onLiveUsage: onLiveUsage,
-                onLogPaths: onLogPaths,
-                onPendingPermission: onPendingPermission,
-                onReport: onReport
-            )
+        // Normal ingestion only — the lint dispatch lanes are retired. Legacy
+        // lint payloads never reach here (the guard at the top throws
+        // `.retiredLint` first).
+        let sourceIDs = item.payload.sourceIDs
+        guard !sourceIDs.isEmpty else {
+            throw QueueIngestionError.noSources
         }
+        try await provider.runIngestion(
+            wikiID: item.wikiID,
+            sourceIDs: sourceIDs,
+            queueItemID: item.id,
+            onProgress: { [itemID = item.id] line in emitProgress(itemID, line) },
+            onTranscript: onTranscript,
+            onUsage: onUsage,
+            onLiveUsage: onLiveUsage,
+            onLogPaths: onLogPaths,
+            onPendingPermission: onPendingPermission,
+            onReport: onReport
+        )
     }
 }

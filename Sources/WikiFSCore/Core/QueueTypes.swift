@@ -108,7 +108,23 @@ public struct QueueItemPayload: Codable, Sendable {
     /// operation (not a regular ingestion). An empty array means whole-wiki
     /// lint; a non-empty array means page-level lint for those pages.
     /// `nil` means normal ingestion. Ignored for extraction items.
+    ///
+    /// Queued lint is RETIRED (the foreground page review replaced it), but
+    /// the field stays a compatibility contract: historical rows still carry
+    /// it and the Activity window still classifies them as Lint.
     public var lintPageIDs: [PageID]?
+
+    /// The user-facing rejection message for legacy lint queue writes. One
+    /// constant so the enqueue guards (engine + store), the retry refusal,
+    /// and the worker's retirement error all surface the exact same sentence.
+    public static let retiredLintMessage =
+        "Queued lint was removed. Open a page and choose Lint for the foreground page review."
+
+    /// Typed legacy-lint classification, evaluated at the persistence boundary
+    /// BEFORE the queue-kind mapping hides the origin. `lintPageIDs != nil`
+    /// (including an empty array meaning wiki-wide) classifies as lint. An
+    /// ordinary ingestion item with an empty source list is NOT lint.
+    public var isLegacyLint: Bool { lintPageIDs != nil }
 
     /// Display names captured at enqueue time for the payload's targets,
     /// keyed by the target ID's raw string. Lint payloads record page titles

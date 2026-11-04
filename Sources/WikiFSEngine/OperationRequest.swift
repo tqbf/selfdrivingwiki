@@ -40,19 +40,12 @@ public enum OperationRequest: Sendable {
   /// Answer a question. `stateMarkdown` is the rendered `WIKI_STATE.md`.
   case query(question: String, stateMarkdown: String)
 
-  /// Lint the wiki. `stateMarkdown` is the rendered `WIKI_STATE.md`.
-  case lint(stateMarkdown: String)
-
-  /// Lint a single page. `brokenLinks` comes from `WikiStoreModel.preflightLint`
-  /// (pre-computed before the LLM run so the agent has concrete targets).
-  case lintPage(pageTitle: String, brokenLinks: [String], stateMarkdown: String)
-
   /// Which generation lane this request runs on (Phase 2: lane-aware gate).
-  /// Ingest-class operations (ingest, lint, lintPage) serialize on `.ingest`;
+  /// Ingest-class operations serialize on `.ingest`;
   /// query/chat runs on `.interactive` so they don't block on a long ingest.
   var generationLane: GenerationGate.GenerationLane {
     switch self {
-    case .ingest, .lint, .lintPage: return .ingest
+    case .ingest: return .ingest
     case .query: return .interactive
     }
   }
@@ -81,14 +74,6 @@ public enum OperationRequest: Sendable {
     case .query(let question, let stateMarkdown):
       let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
       return .query(question: question, stateFilePath: stateFilePath)
-
-    case .lint(let stateMarkdown):
-      let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
-      return .lint(stateFilePath: stateFilePath)
-
-    case .lintPage(let pageTitle, let brokenLinks, let stateMarkdown):
-      let stateFilePath = try AgentStaging.stageStateFile(stateMarkdown, in: scratch)
-      return .lintPage(pageTitle: pageTitle, brokenLinks: brokenLinks, stateFilePath: stateFilePath)
     }
   }
 }

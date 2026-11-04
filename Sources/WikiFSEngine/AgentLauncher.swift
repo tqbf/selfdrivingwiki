@@ -1614,29 +1614,27 @@ public final class AgentLauncher {
 
         // #607: per-operation permission policy. The kind is known from the
         // `request` parameter (the staged `WikiOperation` isn't built yet, but
-        // the enum cases map 1:1 — `.ingest` → `.ingest`, `.lint`/`.lintPage`
-        // → `.lint`, else `.chat`). Pre-#607 a single shared key fed all
+        // the enum cases map 1:1 — `.ingest` → `.ingest`, else `.chat`).
+        // Pre-#607 a single shared key fed all
         // three, so a user who chose `alwaysAsk` for chat got the same gating
-        // on an unattended ingest/lint — guaranteeing a stall (#606).
+        // on an unattended ingest — guaranteeing a stall (#606).
         let permissionKind: PermissionOperationKind = {
             switch request {
             case .ingest: return .ingest
-            case .lint, .lintPage: return .lint
             case .query: return .chat
             }
         }()
         // agent-settings-tabs §3: derive the per-stage key from the operation
-        // kind. `run()` is the SHARED one-shot entry for `.ingest` / `.query` /
-        // `.lint`/`.lintPage`. The stageKey drives BOTH the provider
+        // kind. `run()` is the SHARED one-shot entry for `.ingest` / `.query`.
+        // The stageKey drives BOTH the provider
         // (`provider(forStage:)`) and the model (`modelId(forStage:)`) below —
-        // do NOT hardcode `"lint"` here: that mis-routes small-source ingest
-        // and one-shot query to the lint stage's pinned provider. Large-source
-        // ingest returns early at the `isLargeSource` branch below and gets its
-        // own per-phase resolution in `runACPIngestPlannerExecutors`.
+        // do NOT hardcode a single key here: that mis-routes small-source
+        // ingest and one-shot query to one stage's pinned provider.
+        // Large-source ingest returns early at the `isLargeSource` branch below
+        // and gets its own per-phase resolution in `runACPIngestPlannerExecutors`.
         let stageKey = Self.stageKey(for: request)
         let operationKind: AgentProviderOperationKind = switch request {
         case .ingest: .ingest
-        case .lint, .lintPage: .lint
         case .query: .interactive
         }
         // Batch-aware queued ceiling (2026-10-04, job 01M44Q63RG…): a
@@ -3612,15 +3610,14 @@ public final class AgentLauncher {
     /// path uses to resolve the provider + model (`agent-settings-tabs.md` §3).
     /// PURE + static + `nonisolated` so the dispatch is unit-tested without a
     /// subprocess or the main actor. The mapping is:
-    /// `.ingest → "planner"`, `.lint`/`.lintPage → "lint"`, `.query → "chat"`.
+    /// `.ingest → "planner"`, `.query → "chat"`.
     /// Do NOT hardcode a single key in `run()` — that would mis-route small-
-    /// source ingest and one-shot query to the lint stage's pinned provider.
+    /// source ingest and one-shot query.
     /// Large-source ingest branches to its own orchestrator and resolves
     /// per-phase.
     nonisolated static func stageKey(for request: OperationRequest) -> String {
         switch request {
         case .ingest:          return ACPIngestStage.planner.rawValue
-        case .lint, .lintPage: return "lint"
         case .query:           return "chat"
         }
     }

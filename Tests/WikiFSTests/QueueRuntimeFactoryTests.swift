@@ -222,31 +222,6 @@ private struct QueueRuntimeIngestionProvider: QueueIngestionProvider {
         onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {}
 
-    func runLint(
-        wikiID: WikiID,
-        queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
-        onReport: (@Sendable (QueueReportMutation) -> Void)?
-    ) async throws {}
-
-    func runLintPages(
-        wikiID: WikiID,
-        pageIDs: [PageID],
-        queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
-        onReport: (@Sendable (QueueReportMutation) -> Void)?
-    ) async throws {}
-
     func readiness() async -> String? { nil }
 }
 

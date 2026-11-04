@@ -73,7 +73,6 @@ struct PagesListCallbacks {
     var onOpenBackground: ([PageID]) -> Void
     var onShare: ([PageID]) -> Void
     var onReveal: (PageID) -> Void
-    var onLint: ([PageID]) -> Void
     var onRename: (WikiPageSummary) -> Void
     var onDelete: ([PageID]) -> Void
     /// Set (or clear with nil) the active wiki's home page. Routes the registry's
@@ -86,6 +85,11 @@ struct PagesListCallbacks {
     /// Create a durable new chat with the selection attached as composer
     /// chips, opening it focused. The ids arrive in row order.
     var onNewChat: ([PageID]) -> Void
+    /// Open the foreground lint review window for ONE page (single-page
+    /// action; the context menu offers it only for a single row). The
+    /// handler performs the dirty-draft / one-run-per-wiki refusals before
+    /// opening the window.
+    var onLint: (PageID) -> Void
 }
 
 /// Carries the right-clicked row + the effective selection (selected ∪ clicked)
@@ -350,6 +354,14 @@ extension PagesListViewController {
             title: isBatch ? "New Chat with \(count) Pages" : "New Chat with Page",
             systemImage: "plus.bubble", action: #selector(newChatAction(_:)), payload: payload))
 
+        // Foreground lint is a single-page review — offered for one row only
+        // (no batch, no wiki-wide lint).
+        if !isBatch {
+            menu.addItem(menuItem(
+                title: "Lint",
+                systemImage: "checkmark.seal", action: #selector(lintAction(_:)), payload: payload))
+        }
+
         menu.addItem(menuItem(
             title: isBatch ? "Add \(count) Pages to Bookmarks…" : "Add to Bookmarks…",
             systemImage: ResourceKind.bookmark.systemImageName, action: #selector(addToBookmarksAction(_:)), payload: payload))
@@ -369,14 +381,6 @@ extension PagesListViewController {
                 title: "Reveal in Finder",
                 systemImage: "folder", action: #selector(revealAction(_:)), payload: payload))
         }
-
-        menu.addItem(.separator())
-
-        let lint = menuItem(
-            title: isBatch ? "Lint \(count) Pages" : "Lint Page",
-            systemImage: "checkmark.seal", action: #selector(lintAction(_:)), payload: payload)
-        // No edit-lock disable — CAS prevents data races; lint queues via the gate.
-        menu.addItem(lint)
 
         menu.addItem(.separator())
         if !isBatch {
@@ -445,9 +449,6 @@ extension PagesListViewController {
     @objc private func revealAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onReveal(p.clicked.id) }
     }
-    @objc private func lintAction(_ sender: NSMenuItem) {
-        if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onLint(p.effectiveIDs) }
-    }
     @objc private func renameAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload { callbacks?.onRename(p.clicked) }
     }
@@ -469,6 +470,11 @@ extension PagesListViewController {
     @objc private func newChatAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? PagesMenuPayload {
             callbacks?.onNewChat(p.effectiveIDs)
+        }
+    }
+    @objc private func lintAction(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? PagesMenuPayload {
+            callbacks?.onLint(p.clicked.id)
         }
     }
 }

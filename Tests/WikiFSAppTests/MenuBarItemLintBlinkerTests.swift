@@ -35,50 +35,11 @@ struct MenuBarItemLintBlinkerTests {
 
     // MARK: - Real-engine end-to-end transitions
 
-    @Test("A newly enqueued page-level lint starts the blinker; cancelling stops it")
-    func enqueuedPageLintStartsBlinkerAndCancelStopsIt() async throws {
-        let harness = try makeRealEngineHarness()
-        let controller = harness.controller
-        controller.start()
-        defer { controller.stop() }
-
-        let settledIdle = await waitUntil { controller.lastDerivedIconState == .idle }
-        #expect(settledIdle, "fresh controller over an empty queue should settle idle")
-
-        let itemID = try await harness.engine.enqueue(QueueItemRequest(
-            queue: .ingestion,
-            wikiID: wikiID,
-            payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [PageID(rawValue: "lint-page-1")])))
-        _ = itemID
-
-        // The engine never started (no dispatch in this fixture), so the item
-        // stays `.queued` — the blinker must still start (#1222: "remains
-        // active for queued and running lint jobs").
-        let started = await waitUntil { controller.lastDerivedIconState == .working }
-        #expect(started, "lint enqueue must start the menu-bar blinker (#1222)")
-
-        await harness.engine.cancelItem(itemID)
-        let stopped = await waitUntil { controller.lastDerivedIconState == .idle }
-        #expect(stopped, "lint cancellation must stop the blinker (#1222)")
-    }
-
-    @Test("A whole-wiki lint (empty lintPageIDs) starts the blinker too")
-    func enqueuedWholeWikiLintStartsBlinker() async throws {
-        let harness = try makeRealEngineHarness()
-        let controller = harness.controller
-        controller.start()
-        defer { controller.stop() }
-
-        _ = await waitUntil { controller.lastDerivedIconState == .idle }
-
-        _ = try await harness.engine.enqueue(QueueItemRequest(
-            queue: .ingestion,
-            wikiID: wikiID,
-            payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [])))
-
-        let started = await waitUntil { controller.lastDerivedIconState == .working }
-        #expect(started, "whole-wiki lint enqueue must start the blinker (#1222)")
-    }
+    // NOTE: the lint-enqueue blinker tests (page-level and whole-wiki lint
+    // payloads driving the menu bar) were removed with QUEUED LINT
+    // RETIREMENT: lint payloads are refused at enqueue, so there is no
+    // queued-lint job left to blink. The foreground lint window indicates
+    // its own progress; extraction blinker coverage below is unchanged.
 
     @Test("Extraction enqueue still drives the blinker (queue-agnostic membership)")
     func extractionEnqueueStillStartsBlinker() async throws {

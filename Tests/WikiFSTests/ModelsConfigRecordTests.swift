@@ -238,18 +238,11 @@ struct ModelsConfigRecordTests {
     }
 
     @Test func sourceFilesAndIDsForNonIngestAreEmpty() {
-        // `.query`, `.lint`, `.lintPage`, and `.queryChat` all carry no sources —
+        // `.query` and `.queryChat` carry no sources —
         // `models.json` records `[]` for both arrays.
         let query = WikiOperation.query(question: "what?", stateFilePath: "/x/WIKI_STATE.md")
         #expect(AgentLauncher.sourceFilesAndIDs(for: query).sourceFiles.isEmpty)
         #expect(AgentLauncher.sourceFilesAndIDs(for: query).sourceIDs.isEmpty)
-
-        let lint = WikiOperation.lint(stateFilePath: "/x/WIKI_STATE.md")
-        #expect(AgentLauncher.sourceFilesAndIDs(for: lint).sourceFiles.isEmpty)
-
-        let lintPage = WikiOperation.lintPage(
-            pageTitle: "X", brokenLinks: [], stateFilePath: "/x/WIKI_STATE.md")
-        #expect(AgentLauncher.sourceFilesAndIDs(for: lintPage).sourceIDs.isEmpty)
 
         let chat = WikiOperation.queryChat(stateFilePath: "/x/WIKI_STATE.md")
         #expect(AgentLauncher.sourceFilesAndIDs(for: chat).sourceFiles.isEmpty)

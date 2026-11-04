@@ -49,6 +49,12 @@ public struct WikiReadAccess: ~Copyable {
         try store.pageVersionHistory(pageID: pageID)
     }
 
+    /// The foreground lint run's coherent one-transaction capture, on this
+    /// borrowed read-only connection. Returns only owned `Sendable` values.
+    public func lintCapture(pageID: PageID) throws -> LintCapture? {
+        try store.lintCapture(pageID: pageID)
+    }
+
     public func pageHeadVersionID(pageID: PageID) throws -> PageVersionID? {
         try store.pageHeadVersionID(pageID: pageID)
     }

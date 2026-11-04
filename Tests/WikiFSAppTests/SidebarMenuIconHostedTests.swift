@@ -79,12 +79,12 @@ struct SidebarMenuIconHostedTests {
             onOpenBackground: { _ in },
             onShare: { _ in },
             onReveal: { _ in },
-            onLint: { _ in },
             onRename: { _ in },
             onDelete: { _ in },
             onSetHomePage: { _ in },
             onAddToBookmarks: { _ in },
-            onNewChat: { _ in })
+            onNewChat: { _ in },
+            onLint: { _ in })
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 400),

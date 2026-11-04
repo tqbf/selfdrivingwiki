@@ -355,8 +355,17 @@ public protocol WikiStore: AnyObject, Sendable {
         rawBody: String,
         expectation: PageWriteExpectation,
         author: String?,
-        provenance: [PageVersionSourceInput]
+        provenance: [PageVersionSourceInput],
+        expectedCanonicalBody: String?
     ) throws -> PageUpsert.Outcome
+
+    /// The foreground lint run's coherent capture: page row + head version +
+    /// resolution namespaces in ONE read transaction. `nil` when the page or
+    /// its head version does not exist. Conformers with a transactional read
+    /// path override this; the default (in the extension below) composes
+    /// per-call reads (fine for the in-memory test stores — coherence is only
+    /// promised on the GRDB store).
+    func lintCapture(pageID: PageID) throws -> LintCapture?
 
     /// Pages whose bodies link TO `pageID` via `[[wiki-link]]` — the incoming
     /// edge set (issue #219). Used to warn before deleting a page that other
@@ -1500,11 +1509,56 @@ extension WikiStore {
         id: PageID?, title: String, rawBody: String,
         expectation: PageWriteExpectation,
         author: String? = nil,
-        provenance: [PageVersionSourceInput] = []
+        provenance: [PageVersionSourceInput] = [],
+        expectedCanonicalBody: String? = nil
     ) throws -> PageUpsert.Outcome {
         try PageUpsert.upsertSequential(
             in: self, id: id, title: title, rawBody: rawBody,
-            expectation: expectation, author: author, provenance: provenance)
+            expectation: expectation, author: author, provenance: provenance,
+            expectedCanonicalBody: expectedCanonicalBody)
+    }
+
+    /// Protocol default: no canonical-candidate assertion (every existing
+    /// caller). The foreground lint Apply passes the previewed canonical body
+    /// so the store refuses transactionally when in-transaction
+    /// canonicalization would produce different bytes.
+    @discardableResult
+    func upsertPage(
+        id: PageID?,
+        title: String,
+        rawBody: String,
+        expectation: PageWriteExpectation,
+        author: String?,
+        provenance: [PageVersionSourceInput]
+    ) throws -> PageUpsert.Outcome {
+        try upsertPage(
+            id: id, title: title, rawBody: rawBody, expectation: expectation,
+            author: author, provenance: provenance, expectedCanonicalBody: nil)
+    }
+
+    func lintCapture(pageID: PageID) throws -> LintCapture? {
+        let page: WikiPage
+        do {
+            page = try getPage(id: pageID)
+        } catch WikiStoreError.notFound {
+            return nil
+        }
+        guard let head = try pageHeadVersionID(pageID: pageID) else { return nil }
+        // The default (non-GRDB) path composes per-call reads, so page/source
+        // namespace enumeration is NOT available here — the facts carry
+        // availability=false, which the analyzer reports as
+        // lookup-unavailable rather than falsely broken links. Coherence and
+        // real resolution facts are only promised on the GRDB store's
+        // one-transaction override.
+        return LintCapture(
+            pageID: pageID,
+            title: page.title,
+            body: page.bodyMarkdown,
+            headVersionID: head,
+            facts: LintResolutionFacts(
+                pagesAvailable: false,
+                sourcesAvailable: false,
+                chatsAvailable: false))
     }
     /// Legacy 2-arg entry point — `nil` bm25Leg means NO BM25 leg post-#634.
     /// See `searchSimilar(query:limit:bm25Leg:)`.

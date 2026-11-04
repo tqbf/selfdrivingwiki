@@ -57,9 +57,53 @@ public final class MarkdownLinter: @unchecked Sendable {
         /// `true` when markdownlint provided a `fixInfo` (this finding is
         /// auto-fixable via `applyFixes`).
         public let isFixable: Bool
+        /// The typed per-finding fix detail markdownlint supplied (nil when
+        /// the finding is not fixable). Coordinates are 1-based line/column
+        /// pairs over UTF-8 columns; the lint analyzer converts them to
+        /// validated byte-range edits — never `applyFixes`.
+        public let fixInfo: LintFixInfo?
 
         /// Short rule id, e.g. "MD009".
         public var ruleID: String { ruleNames.first ?? "?" }
+
+        public init(
+            ruleNames: [String],
+            lineNumber: Int,
+            ruleDescription: String,
+            errorDetail: String?,
+            errorContext: String?,
+            isFixable: Bool,
+            fixInfo: LintFixInfo? = nil
+        ) {
+            self.ruleNames = ruleNames
+            self.lineNumber = lineNumber
+            self.ruleDescription = ruleDescription
+            self.errorDetail = errorDetail
+            self.errorContext = errorContext
+            self.isFixable = isFixable
+            self.fixInfo = fixInfo
+        }
+    }
+
+    /// The typed markdownlint `fixInfo`: where and what one individual fix
+    /// applies. One finding, one fix — the analyzer never calls the
+    /// all-fixes API for user-selected repairs.
+    public struct LintFixInfo: Equatable, Sendable {
+        /// 1-based line the fix applies to (defaults to the finding's line).
+        public let lineNumber: Int
+        /// 1-based UTF-8 column within `lineNumber` (optional).
+        public let editColumn: Int?
+        /// Number of characters to delete at the edit position (0 = insert).
+        public let deleteCount: Int
+        /// Text to insert at the edit position ("" = delete only).
+        public let insertText: String
+
+        public init(lineNumber: Int, editColumn: Int?, deleteCount: Int, insertText: String) {
+            self.lineNumber = lineNumber
+            self.editColumn = editColumn
+            self.deleteCount = deleteCount
+            self.insertText = insertText
+        }
     }
 
     /// The outcome of `fix(markdown:)`: the normalized text + any findings that
@@ -279,15 +323,34 @@ public final class MarkdownLinter: @unchecked Sendable {
         let ruleDescription = (d["ruleDescription"] as? String) ?? ""
         let errorDetail = d["errorDetail"] as? String
         let errorContext = d["errorContext"] as? String
-        let isFixable = d["fixInfo"] != nil
+        let fixInfo = Self.fixInfo(from: d["fixInfo"])
+        let isFixable = fixInfo != nil || d["fixInfo"] != nil
         return LintResult(
             ruleNames: ruleNames,
             lineNumber: lineNumber,
             ruleDescription: ruleDescription,
             errorDetail: errorDetail,
             errorContext: errorContext,
-            isFixable: isFixable
+            isFixable: isFixable,
+            fixInfo: fixInfo
         )
+    }
+
+    /// Decode markdownlint's `fixInfo` object into typed detail. JSC returns
+    /// numbers as `Double`, so both numeric shapes are handled. Returns nil
+    /// when `fixInfo` is absent or not a dictionary (not fixable).
+    private static func fixInfo(from raw: Any?) -> LintFixInfo? {
+        guard let d = raw as? [String: Any] else { return nil }
+        func int(_ key: String) -> Int? {
+            (d[key] as? Int) ?? (d[key] as? Double).map(Int.init)
+        }
+        let line = int("lineNumber") ?? int("line") ?? 0
+        let editColumn = int("editColumn")
+        let deleteCount = int("deleteCount") ?? 0
+        let insertText = d["insertText"] as? String ?? ""
+        return LintFixInfo(
+            lineNumber: line, editColumn: editColumn,
+            deleteCount: deleteCount, insertText: insertText)
     }
     #endif
 }

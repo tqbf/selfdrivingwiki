@@ -28,6 +28,11 @@ public enum DebugLog {
     /// edit-guard events). Distinct from `tabs` (sidebar/tab/open) so editor
     /// events surface cleanly in Console.app.
     public static func editor(_ message: @autoclosure () -> String) { emit("editor", message()) }
+    /// The foreground page-lint pipeline: config load/validation, detection
+    /// drops (invalid finding locations), step failures, and Apply gates.
+    /// Its own category so lint evidence stays separable from `reader` and
+    /// `store` in Console.app.
+    public static func lint(_ message: @autoclosure () -> String) { emit("lint", message()) }
     /// The chat run-state → sidebar "responding…" badge pipeline, end to end:
     /// a typed `ChatSyncUpdate`, `ChatDaemonCoordinator` state derivation,
     /// `generatingChatIDs` membership + `runningStateToken` bump, and the sidebar

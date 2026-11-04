@@ -474,6 +474,39 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         return [first] + others
     }
 
+    /// The foreground lint stages' chain: the stage's own pin first, then the
+    /// LEGACY `"lint"` pin (the queued-lint provider/model pin, kept purely as
+    /// a backward-compatible fallback for lint steps without overrides), then
+    /// the global default. PURE.
+    public func providerChain(forLintStage stage: String) -> [AgentProvider] {
+        let resolved: AgentProvider
+        if let pinnedId = stageProviderIds[stage], !pinnedId.rawValue.isEmpty,
+           let p = provider(id: pinnedId), p.enabled {
+            resolved = p
+        } else if let legacyLintId = stageProviderIds["lint"], !legacyLintId.rawValue.isEmpty,
+                  let p = provider(id: legacyLintId), p.enabled {
+            resolved = p
+        } else {
+            resolved = selectedProvider()
+        }
+        let others = enabledProviders.filter { $0.id != resolved.id }
+        return [resolved] + others
+    }
+
+    /// The foreground lint stages' model id: the stage's pinned model when
+    /// set, else the legacy `"lint"` model pin, else the resolved provider's
+    /// selected model. PURE.
+    public func modelId(forLintStage stage: String) -> ModelID? {
+        if let own = ingestStageModelIds[stage], own.rawValue.isEmpty == false {
+            return own
+        }
+        if let legacy = ingestStageModelIds["lint"], legacy.rawValue.isEmpty == false {
+            return legacy
+        }
+        let providerID = providerChain(forLintStage: stage).first?.id
+        return providerID.flatMap { selectedModelId(forProvider: $0) }
+    }
+
     /// Resolve the concrete model id for a stage using the stage-resolved
     /// provider (`provider(forStage:)`). Returns the stage's pinned model id
     /// when set + non-empty; otherwise falls back to that provider's

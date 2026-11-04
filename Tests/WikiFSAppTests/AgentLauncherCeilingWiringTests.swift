@@ -126,7 +126,15 @@ struct AgentLauncherCeilingWiringTests {
         launcher.containerDirectory = tempDir
 
         await launcher.run(
-            request: .lint(stateMarkdown: "# State"),
+            request: .ingest(
+                sources: [OperationRequest.StagedSource(
+                    bytes: Data("# Small\n".utf8),
+                    ext: "md",
+                    displayPath: "sources/by-id/small.md",
+                    name: "Small Source",
+                    sourceID: SourceID(rawValue: "01SMALLSOURCE00000000000000000")
+                )],
+                stateMarkdown: "# State"),
             wikiID: WikiID(rawValue: "test-wiki"),
             wikiRoot: tempDir.path,
             systemPrompt: "sys",
@@ -188,34 +196,17 @@ struct AgentLauncherCeilingWiringTests {
         #expect(captured.idle == 300)
     }
 
-    /// The lint path is the other unattended pipeline kind — it shares the
-    /// same `.ingest` permission-kind routing for the budget, and the ceiling
-    /// splits identically: `.lint` → 600s, NOT 1800s. Pinned so a future
-    /// refactor can't accidentally widen the lint ceiling back to interactive.
-    @Test func lintPathPassesQueuedCeiling() async throws {
-        let captured = CapturedCeiling()
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ceiling-lint-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        let launcher = makeLauncher(captured: captured, tempDir: tempDir)
-
-        await launcher.run(
-            request: .lint(stateMarkdown: "# State"),
-            wikiID: WikiID(rawValue: "test-wiki"),
-            wikiRoot: "/tmp",
-            systemPrompt: "sys",
-            wikictlDirectory: "/tmp",
-            ingestingSourceIDs: [],
-            onLock: {},
-            onUnlock: {}
-        )
-
-        #expect(captured.callCount == 1)
-        #expect(captured.value == TurnLivenessPolicy.queuedIngestCeiling)
-        #expect(captured.value == 600)
-        // #1364: the lint lane carries the queued idle-stall bound too.
-        #expect(captured.idle == TurnLivenessPolicy.queuedIdleStallTimeout)
+    /// The queued `.lint` PERMISSION-KIND mapping stays live after the queued
+    /// lint lane retired: the foreground lint stages resolve their policy
+    /// through `TurnLivenessPolicy.ceiling(for: .lint)` /
+    /// `idleStallTimeout(for: .lint)` (`AgentProviderRuntime.prepareLintStage`),
+    /// and the mapping pins them to the unattended 600s/300s pair — NOT the
+    /// interactive 1800s default.
+    @Test func lintPermissionKindKeepsQueuedCeiling() {
+        #expect(TurnLivenessPolicy.ceiling(for: .lint) == TurnLivenessPolicy.queuedIngestCeiling)
+        #expect(TurnLivenessPolicy.ceiling(for: .lint) == 600)
+        #expect(TurnLivenessPolicy.idleStallTimeout(for: .lint) == TurnLivenessPolicy.queuedIdleStallTimeout)
+        #expect(TurnLivenessPolicy.idleStallTimeout(for: .lint) == 300)
     }
 
     /// The interactive chat path (`startInteractiveQuery`) routes the 1800s

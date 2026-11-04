@@ -107,8 +107,6 @@ actor FakeIngestionProvider: QueueIngestionProvider {
     var calledSourceIDs: [SourceID] = []
     var progressLines: [String] = []
     var shouldThrow = false
-    var calledLintWikiID: String?
-    var calledLintPageIDs: [PageID] = []
     var transcriptEvents: [AgentEvent] = []
     /// When non-nil, `readiness()` returns this message (simulating a
     /// not-ready provider). When nil, `readiness()` returns nil (ready).
@@ -139,47 +137,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onProgress("ingest done")
     }
 
-    func runLint(
-        wikiID: WikiID,
-        queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
-        onReport: (@Sendable (QueueReportMutation) -> Void)?
-    ) async throws {
-        calledLintWikiID = wikiID.rawValue
-        calledLintPageIDs = []
-        if shouldThrow { throw QueueIngestionError.spawnFailed("test lint error") }
-        onProgress("starting whole-wiki lint")
-        onProgress("lint done")
-    }
-
-    func runLintPages(
-        wikiID: WikiID,
-        pageIDs: [PageID],
-        queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
-        onReport: (@Sendable (QueueReportMutation) -> Void)?
-    ) async throws {
-        calledLintWikiID = wikiID.rawValue
-        calledLintPageIDs = pageIDs
-        if shouldThrow { throw QueueIngestionError.spawnFailed("test lint error") }
-        onProgress("starting page lint")
-        onProgress("lint done")
-    }
-
     func getCalledWikiID() -> String? { calledWikiID }
     func getCalledSourceIDs() -> [SourceID] { calledSourceIDs }
-    func getCalledLintWikiID() -> String? { calledLintWikiID }
-    func getCalledLintPageIDs() -> [PageID] { calledLintPageIDs }
 }
 
 @Suite("QueueIngestionWorker")
@@ -627,15 +586,17 @@ extension QueueActivityTracker {
     }
 }
 
-// MARK: - Lint-as-ingestion dispatch tests
+// MARK: - Retired lint guard tests (queued lint is retired)
 
-@Suite("Lint dispatch via .ingestion queue")
+@Suite("Retired lint guard via .ingestion queue")
 struct LintIngestionDispatchTests {
 
-    // AC.1: lintPageIDs in payload → runLintPages called (not runIngestion)
+    // Retirement contract: a legacy page-level lint payload terminates
+    // visibly with `.retiredLint` BEFORE the readiness gate — no provider
+    // method is ever invoked.
     @MainActor
-    @Test("Page-level lint dispatches runLintPages")
-    func pageLintDispatchesRunLintPages() async throws {
+    @Test("Page-level lint payload throws retiredLint without invoking the provider")
+    func pageLintPayloadThrowsRetiredLint() async throws {
         let provider = FakeIngestionProvider()
         let factory = QueueIngestionWorkerFactory(
             provider: provider,
@@ -647,21 +608,25 @@ struct LintIngestionDispatchTests {
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [PageID(rawValue: "p1")]),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
 
-        try await worker.execute(QueueItem(
-            id: QueueItemID(rawValue: "lint1"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
-            payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [PageID(rawValue: "p1")]),
-            state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
-
-        let lintWikiID = await provider.getCalledLintWikiID()
-        let lintPageIDs = await provider.getCalledLintPageIDs()
-        #expect(lintWikiID == "w1")
-        #expect(lintPageIDs == [PageID(rawValue: "p1")])
+        await #expect(throws: QueueIngestionError.retiredLint) {
+            try await worker.execute(QueueItem(
+                id: QueueItemID(rawValue: "lint1"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
+                payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [PageID(rawValue: "p1")]),
+                state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
+        }
+        // The provider never saw the item.
+        let wikiID = await provider.getCalledWikiID()
+        #expect(wikiID == nil)
+        // The retirement message is the user-facing contract.
+        #expect(QueueIngestionError.retiredLint.errorDescription
+            == QueueItemPayload.retiredLintMessage)
     }
 
-    // AC.1: lintPageIDs empty → runLint called (whole-wiki)
+    // Retirement contract: a legacy whole-wiki lint payload (empty page-ID
+    // array) throws `.retiredLint` the same way.
     @MainActor
-    @Test("Whole-wiki lint dispatches runLint")
-    func wholeWikiLintDispatchesRunLint() async throws {
+    @Test("Whole-wiki lint payload throws retiredLint")
+    func wholeWikiLintPayloadThrowsRetiredLint() async throws {
         let provider = FakeIngestionProvider()
         let factory = QueueIngestionWorkerFactory(
             provider: provider,
@@ -673,16 +638,18 @@ struct LintIngestionDispatchTests {
             payload: QueueItemPayload(sourceIDs: [], lintPageIDs: []),
             state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
 
-        try await worker.execute(QueueItem(
-            id: QueueItemID(rawValue: "lint2"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
-            payload: QueueItemPayload(sourceIDs: [], lintPageIDs: []),
-            state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
-
-        let lintWikiID = await provider.getCalledLintWikiID()
-        #expect(lintWikiID == "w1")
+        await #expect(throws: QueueIngestionError.retiredLint) {
+            try await worker.execute(QueueItem(
+                id: QueueItemID(rawValue: "lint2"), queue: .ingestion, wikiID: WikiID(rawValue: "w1"),
+                payload: QueueItemPayload(sourceIDs: [], lintPageIDs: []),
+                state: .queued, orderingKey: 1000, attempt: 0, createdAt: 0))
+        }
+        let wikiID = await provider.getCalledWikiID()
+        #expect(wikiID == nil)
     }
 
-    // AC.1: nil lintPageIDs → runIngestion called (not lint)
+    // Ordinary ingestion is untouched: nil lintPageIDs still dispatches
+    // `runIngestion`.
     @MainActor
     @Test("Nil lintPageIDs dispatches runIngestion")
     func nilLintPageIDsDispatchesIngestion() async throws {

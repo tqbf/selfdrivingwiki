@@ -1816,137 +1816,110 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Pre-flight checks run before an LLM page-lint: apply `WikiLinkFixer` fixes and
-    /// detect broken `[[wiki links]]`. Reads fresh from the store so it works for any
-    /// page, not just the loaded draft. If the current page is loaded, also syncs the
-    /// draft (without marking it dirty). Returns `nil` when the page cannot be read.
-    public struct LintPreflight: Sendable {
-        /// `true` when `WikiLinkFixer.applyFixes` rewrote one or more `\]]` brackets.
-        public let didFixLinks: Bool
-        /// Page titles referenced by `[[wiki links]]` in the page that do not resolve
-        /// to an existing page.
-        public let brokenPageLinks: [String]
-        /// Source display names referenced by `[[source:…]]` in the page that do not
-        /// resolve to an existing source.
-        public let brokenSourceLinks: [String]
-        /// Chat titles referenced by `[[chat:…]]` in the page that do not resolve
-        /// to an existing chat.
-        public let brokenChatLinks: [String]
+    // MARK: - Foreground lint surface
+
+    /// Why lint cannot start for `pageID` right now, or nil when it can.
+    /// A dirty editor draft for the loaded page blocks lint: the draft is
+    /// NEVER autosaved or discarded as a lint side effect — the user saves
+    /// or cancels editing first. Lint inspects committed content only.
+    public func lintBlockedReason(pageID: PageID) -> String? {
+        if loadedPage == pageID, isDraftDirty {
+            return "This page has unsaved edits. Save or Cancel editing before running Lint."
+        }
+        return nil
     }
 
-    public func preflightLint(pageID: PageID) -> LintPreflight? {
-        guard let page = DebugLog.trying("getPage", operation: { try store.getPage(id: pageID) }) else { return nil }
+    /// Pre-Apply guard: ANY dirty draft (the loaded page's) blocks Apply —
+    /// a proposal is validated against the committed head, and a later
+    /// editor save of stale draft bytes would silently revert it.
+    public var hasDirtyDraft: Bool { isDraftDirty }
 
-        // Apply WikiLinkFixer and persist if anything changed.
-        let original = page.bodyMarkdown
-        let fixedBody = WikiLinkFixer.applyFixes(to: original)
-        let didFix = fixedBody != original
-        if didFix {
-            do {
-                // #797: pre-fix this passed no `author:`, defaulting to nil,
-                // which mapped to the shared `legacy-import` agent and erased
-                // the prior `chat:<id>` / `agent:<kind>` provenance on the
-                // HEAD row. The lint auto-fix is an explicit action by the
-                // "lint" one-shot executor, NOT an unknown editor — stamp
-                // `agent:lint` so the activity carries the real identity.
-                try PageUpsert.upsert(in: store, id: pageID, title: page.title, body: fixedBody,
-                                      author: PageAuthor.agent("lint").rawValue)
-                // No manual reload — the bus fires reloadFromStore() async after the upsert.
-                if loadedPage == pageID {
-                    draftBody = fixedBody
-                    isDraftDirty = false
-                }
-            } catch {
-                DebugLog.store("WikiStoreModel.preflightLint fix failed: \(error)")
+    /// The captured strategy context for a lint run: revision + rendered
+    /// markdown (via `WikiStrategyRenderer`, the same capture orchestrated
+    /// runs use). Rendered context — never copied into a system prompt.
+    public var lintStrategyContext: (revision: Int?, rendered: String) {
+        guard let strategy = committedStrategy else {
+            return (nil, WikiStrategyRenderer.render(nil))
+        }
+        return (Int(strategy.revision.rawValue), WikiStrategyRenderer.render(strategy))
+    }
+
+    /// The coherent one-transaction capture read for the lint session.
+    /// Throws on read failure; nil only for a genuinely missing page or
+    /// missing head version (that contract is consistent through the store,
+    /// this model, the coordinator closure, and the session).
+    public func lintCapture(pageID: PageID) throws -> LintCapture? {
+        try store.lintCapture(pageID: pageID)
+    }
+
+    /// The async capture path: file-backed sessions go through the
+    /// `WikiReadService` read pool off the main actor; in-memory stores
+    /// (a second connection cannot see their database) hop to the main
+    /// actor and read through the main store. Read failures throw — an
+    /// injected read error must not become an empty clean capture.
+    public func lintCaptureAsync(pageID: PageID) async throws -> LintCapture? {
+        if let readService {
+            return try await readService.asyncRead { access in
+                try access.lintCapture(pageID: pageID)
             }
         }
+        return try await MainActor.run { try self.store.lintCapture(pageID: pageID) }
+    }
 
-        // Detect broken wiki links across all three namespaces.
-        let body = didFix ? fixedBody : original
-        let ns = body as NSString
-        let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
-        let matches = WikiLinkSpan.matches(in: body)
-        let knownTitles = Set(summaries.map { $0.title })
-        let knownPageIDs = Set(summaries.map { $0.id.rawValue.uppercased() })
-        let allChats = DebugLog.trying("listAllChatsOrderedByID", operation: { try store.listAllChatsOrderedByID() }) ?? []
-        let knownChatTitles = Set(allChats.map { $0.title })
-        let knownChatIDs = Set(allChats.map { $0.id.rawValue.uppercased() })
-        // Mirror replaceLinks: a link is broken only when NO candidate reading
-        // of its raw target (per WikiLinkResolver — handles `#` in titles)
-        // names an existing resource. Unique the output — two parsed links can
-        // share a base since parse() de-dupes by raw target.
-        var seenBroken = Set<String>()
-        var brokenPages: [String] = []
-        var brokenSources: [String] = []
-        var brokenChats: [String] = []
-        for match in matches {
-            let fullRange = match.range
-            // Skip links inside code spans / fenced blocks — `[[Like This]]`
-            // in backticks is example text, not a real link.
-            guard !WikiLinkSpan.isProtected(fullRange, by: codeRanges) else { continue }
+    /// Public link resolvers for the lint session's preview canonicalization
+    /// (the same resolution rules the composed upsert applies).
+    public func lintResolveTitleToID(_ title: String) -> PageID? {
+        do { return try store.resolveTitleToID(title) }
+        catch { DebugLog.lint("lintResolveTitleToID failed: \(error)"); return nil }
+    }
 
-            let rawTarget = ns.substring(with: match.range(at: 1))
-            let aliasRange = match.range(at: 2)
-            let rawAlias = aliasRange.location != NSNotFound ? ns.substring(with: aliasRange) : nil
-            let fixed = WikiLinkFixer.fix(target: rawTarget, alias: rawAlias)
-            let collapsed = WikiText.normalized(fixed.target)
-            guard !collapsed.isEmpty else { continue }
+    public func lintResolveSourceByName(_ name: String) -> SourceID? {
+        do { return try store.resolveSourceByName(name) }
+        catch { DebugLog.lint("lintResolveSourceByName failed: \(error)"); return nil }
+    }
 
-            let (base, fragment) = WikiLinkParser.splitFragment(collapsed)
-            guard !base.isEmpty else { continue }
-            let (bareBase, _) = WikiLinkParser.splitVersionPin(base)
-            let (kind, bareTarget) = WikiLinkParser.classify(bareBase)
-            guard !bareTarget.isEmpty, !WikiLinkParser.isEmptyPrefix(bareBase) else { continue }
+    public func lintResolveChatByTitle(_ title: String) -> ChatID? {
+        do { return try store.resolveChatByTitle(title) }
+        catch { DebugLog.lint("lintResolveChatByTitle failed: \(error)"); return nil }
+    }
 
-            let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
-
-            let known: (String) -> Bool
-            let knownIDs: Set<String>
-            switch kind {
-            case .page:
-                known = { knownTitles.contains($0) }
-                knownIDs = knownPageIDs
-            case .source:
-                // For source links, also check looseMatchKey so a name with a
-                // dash variant still counts as resolved (mirrors the store's
-                // resolveSourceByName pass 3 and the projection's LinkMaps).
-                let sourceIDs = Set(sources.map { $0.id.rawValue.uppercased() })
-                known = { [self, sourceIDs] name in
-                    if let sourceID = WikiLinkResolver.legacySourceProjectionID(from: name),
-                       sourceIDs.contains(sourceID.rawValue.uppercased()) {
-                        return true
-                    }
-                    return self.sources.contains { $0.effectiveName == name }
-                        || self.sources.contains { WikiNameRules.looseMatchKey($0.effectiveName) == WikiNameRules.looseMatchKey(name) }
-                }
-                knownIDs = sourceIDs
-            case .chat:
-                known = { knownChatTitles.contains($0) }
-                knownIDs = knownChatIDs
-            }
-
-            // Canonical ULID links (resolved at save time) are never broken —
-            // the ULID is a stable id, not a title to look up by name.
-            if WikiLinkParser.isCanonicalULID(bareTarget) {
-                guard !knownIDs.contains(bareTarget.uppercased()) else { continue }
-            } else {
-                guard WikiLinkResolver.resolvedSplit(of: raw, isKnown: known) == nil else { continue }
-            }
-
-            let label = fixed.alias.map { WikiText.normalized($0) } ?? bareTarget
-            let dedupLabel = label.isEmpty ? bareTarget : label
-            guard seenBroken.insert("\(kind.rawValue):\(dedupLabel)").inserted else { continue }
-            switch kind {
-            case .page:   brokenPages.append(dedupLabel)
-            case .source: brokenSources.append(dedupLabel)
-            case .chat:   brokenChats.append(dedupLabel)
-            }
+    /// The foreground lint Apply — the ONLY way a lint proposal saves.
+    ///
+    /// One composed store transaction: expected-head CAS plus the pinned
+    /// canonical candidate. If the title graph moved since the preview and
+    /// in-transaction canonicalization would produce different bytes than
+    /// the preview showed, the store throws
+    /// `PageCanonicalizationConflictError` and NOTHING is written. A deleted
+    /// page throws `PageExpectedTargetMissingError` — zero writes, zero
+    /// events either way. Dirty-draft refusal happens before any store call.
+    /// The returned version id is the new head (append-only history).
+    @discardableResult
+    public func lintApply(
+        pageID: PageID, title: String, canonicalCandidate: String,
+        expectedHead: PageVersionID
+    ) throws -> PageVersionID {
+        if loadedPage == pageID, isDraftDirty {
+            throw LintApplyRefused.dirtyDraft
         }
+        _ = try PageUpsert.upsert(
+            in: store, id: pageID, title: title, body: canonicalCandidate,
+            expectation: .expectedHead(expectedHead),
+            author: PageAuthor.agent("lint-repair").rawValue,
+            provenance: [],
+            expectedCanonicalBody: canonicalCandidate)
+        guard let newHead = try store.pageHeadVersionID(pageID: pageID) else {
+            throw LintApplyRefused.missingNewHead
+        }
+        return newHead
+    }
 
-        return LintPreflight(didFixLinks: didFix,
-                             brokenPageLinks: brokenPages,
-                             brokenSourceLinks: brokenSources,
-                             brokenChatLinks: brokenChats)
+    /// Why the Apply handoff refused (surfaced without a write).
+    public enum LintApplyRefused: Error, Equatable, Sendable {
+        /// The loaded page's editor draft is dirty — save or cancel first.
+        case dirtyDraft
+        /// The commit landed but the head read failed (cannot happen on a
+        /// sane store; refused loudly rather than guessed).
+        case missingNewHead
     }
 
     /// Cancel any pending debounce and save synchronously. Called on page

@@ -339,6 +339,13 @@ public actor QueueEngine {
         guard !request.wikiID.rawValue.trimmingCharacters(in: .whitespaces).isEmpty else {
             throw QueueStoreError.invalidRequest("wikiID must not be empty")
         }
+        // Retired-lint guard: queued lint is retired (the foreground page
+        // review replaced it). Reject BEFORE the store write so no new lint
+        // row enters the queue; historical rows keep decoding as ingestion
+        // for display.
+        if request.payload.isLegacyLint {
+            throw QueueStoreError.invalidRequest(QueueItemPayload.retiredLintMessage)
+        }
         let item = try store.enqueue(request)
         emit(.enqueued(item))
         await dispatchScan()

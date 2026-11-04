@@ -91,20 +91,6 @@ struct OperationsSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        case .lint:
-            Section {
-                StageProviderModelPicker(
-                    stageKey: "lint",
-                    config: $config,
-                    containerDirectory: containerDirectory,
-                    label: "Lint")
-            } header: {
-                Text("Lint Model")
-            } footer: {
-                Text("Provider and model for wiki lint runs. “Default” uses the global default provider; “Same as provider” uses that provider's selected model.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         case .summary:
             Section {
                 StageProviderModelPicker(

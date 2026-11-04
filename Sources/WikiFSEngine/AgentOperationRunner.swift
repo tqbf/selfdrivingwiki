@@ -491,59 +491,6 @@ public enum AgentOperationRunner {
             })
     }
 
-    public static func runLint(
-        launcher: AgentLauncher,
-        store: WikiStoreModel,
-        wikiID: WikiID,
-        changeSignaler: any ChangeSignaler,
-        wikictlDirectory: String
-    ) async {
-        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
-        await run(
-            request: .lint(stateMarkdown: stateMarkdown),
-            launcher: launcher,
-            store: store,
-            wikiID: wikiID,
-            changeSignaler: changeSignaler,
-            wikictlDirectory: wikictlDirectory)
-    }
-
-    /// Pre-flight one or more pages (fix `\]]` brackets + detect broken links),
-    /// then run a single LLM lint with all the findings.  A single page gets
-    /// its own run; multiple pages are combined into one agent pass.
-    public static func runLintPages(
-        pages: [(id: PageID, title: String)],
-        launcher: AgentLauncher,
-        store: WikiStoreModel,
-        wikiID: WikiID,
-        changeSignaler: any ChangeSignaler,
-        wikictlDirectory: String
-    ) async {
-        let preflights = pages.map { page in
-            let preflight = store.preflightLint(pageID: page.id)
-            // Combine all three namespaces, preserving each link's namespace
-            // prefix so the agent can tell page links from source/chat links.
-            let pageLinks = (preflight?.brokenPageLinks ?? []).map { "[[\($0)]]" }
-            let sourceLinks = (preflight?.brokenSourceLinks ?? []).map { "[[source:\($0)]]" }
-            let chatLinks = (preflight?.brokenChatLinks ?? []).map { "[[chat:\($0)]]" }
-            let allBroken = pageLinks + sourceLinks + chatLinks
-            return (title: page.title, brokenLinks: allBroken)
-        }
-        let combinedTitle = pages.map(\.title).joined(separator: ", ")
-        let combinedBroken = preflights.flatMap(\.brokenLinks)
-        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
-        await run(
-            request: .lintPage(
-                pageTitle: combinedTitle,
-                brokenLinks: combinedBroken,
-                stateMarkdown: stateMarkdown),
-            launcher: launcher,
-            store: store,
-            wikiID: wikiID,
-            changeSignaler: changeSignaler,
-            wikictlDirectory: wikictlDirectory)
-    }
-
     /// Render the `WIKI_STATE.md` for one operation request, or surface the
     /// failure as the launcher's preflight error and return nil so NO request
     /// is built. A strategy read failure must never degrade to the Default
@@ -577,7 +524,7 @@ public enum AgentOperationRunner {
         switch request {
         case .ingest:
             break
-        case .query, .lint, .lintPage:
+        case .query:
             await changeSignaler.signalChange()
         }
         // The mount path is reference-only in the prompts (the agent reads pages and
