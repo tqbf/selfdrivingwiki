@@ -544,7 +544,7 @@ struct SourceDetailView: View {
             shouldRestoreEditing = false
         }
         .task(id: file.id) {
-            rendererSessionPreparation.cancel()
+            await rendererSessionPreparation.cancel()
             await refreshSourceBytesSnapshot()
             headVersion = await store.processedMarkdownHead(for: file)
             origin = await store.sourceOrigin(for: file.id)
@@ -1355,20 +1355,20 @@ struct SourceDetailView: View {
         guard rendererPresentationLifecycle.state.selection == .rendered,
               let reference = rendererPresentationLifecycle.state.pinnedRenderer else {
             // No rendered pane is selected, so there is no session to prepare.
-            rendererSessionPreparation.cancel()
+            await rendererSessionPreparation.cancel()
             return
         }
         guard let descriptor = rendererDescriptors.first(where: { $0.reference == reference }),
               case .webPackage = descriptor.implementation,
               let configuration = routedInstalledRendererFactoryInputs.configuration(for: descriptor),
-              let currentReader = rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id),
+              let currentReader = await rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id),
               case .source(let versionID) = currentReader.authorizedInput
         else {
             // The renderer tab is selected but its session can never be
             // prepared (no package configuration, no authorized input). Mark
             // the definitive failure so the host falls back to Source instead
             // of holding the pane forever.
-            rendererSessionPreparation.markUnavailable()
+            await rendererSessionPreparation.markUnavailable()
             return
         }
         let input = currentReader.authorizedInput
@@ -1383,7 +1383,7 @@ struct SourceDetailView: View {
                 mimeType: .init(validating: mime), fileExtension: file.ext, bytes: bytes)
         } else { admittedSource = nil }
         let extensions = Dictionary(uniqueKeysWithValues: store.sources.map { ($0.id, $0.ext.lowercased()) })
-        rendererSessionPreparation.prepare(.init(
+        await rendererSessionPreparation.prepare(.init(
             descriptor: descriptor, configuration: configuration, input: input,
             admittedSource: admittedSource, store: store.internalStore,
             siblingSources: store.siblingImageResolvers()[file.id] ?? [:],
@@ -1401,7 +1401,7 @@ struct SourceDetailView: View {
                   authority.descriptor.reference == descriptor.reference else { return nil }
             return installedRendererFactory.makeView(authority: authority) { _ in
                 Task { @MainActor in
-                    rendererSessionPreparation.cancel()
+                    await rendererSessionPreparation.cancel()
                     failedInstalledRendererReference = descriptor.reference
                 }
             }
@@ -1482,7 +1482,7 @@ struct SourceDetailView: View {
             if lifecycle.state.sourceID != file.id {
                 lifecycle.beginLoading(sourceID: file.id)
             }
-            lifecycle.resolveLoadedSource(
+            await lifecycle.resolveLoadedSource(
                 source: file,
                 matchingRenderer: descriptor?.reference,
                 boundedBytes: sourceBytesSnapshot,
