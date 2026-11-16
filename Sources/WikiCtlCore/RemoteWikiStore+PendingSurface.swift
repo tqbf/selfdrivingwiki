@@ -37,23 +37,6 @@ extension RemoteWikiStore {
         throw Self.unsupportedRemote("deletePage")
     }
 
-    // SLICE-2 LEDGER: pending [deferred: needs-public-init] — the wire
-    // round trip is fully implemented daemon-side; the CLIENT cannot
-    // rebuild `PageOKFTrustMetadata` across the module boundary because its
-    // memberwise init is internal to WikiFSCore and this slice's edit
-    // surface excludes WikiFSCore (a two-line public init unblocks it —
-    // reported for human review).
-    public func pageOKFMetadata(versionID: PageVersionID, includeCorrected: Bool) async throws -> PageOKFTrustMetadata? {
-        throw Self.unsupportedRemote("pageOKFMetadata")
-    }
-
-    // SLICE-2 LEDGER: pending [deferred: needs-public-init] — same reason
-    // as ``pageOKFMetadata``: `SourceMarkdownOKFTrustMetadata`'s memberwise
-    // init is internal to WikiFSCore.
-    public func sourceMarkdownOKFMetadata( versionID: SourceMarkdownVersionID, includeCorrected: Bool ) async throws -> SourceMarkdownOKFTrustMetadata? {
-        throw Self.unsupportedRemote("sourceMarkdownOKFMetadata")
-    }
-
     // SLICE-2 LEDGER: pending [manifest: removed]
     public func pageLinkingPages(to pageID: PageID) async throws -> [PageID] {
         throw Self.unsupportedRemote("pageLinkingPages")

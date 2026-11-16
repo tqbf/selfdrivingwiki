@@ -44,6 +44,39 @@ extension RemoteWikiStore {
             RemoteStoreMirrorMapping.coreExtractionProvenance)
     }
 
+    public func pageOKFMetadata(
+        versionID: PageVersionID, includeCorrected: Bool
+    ) async throws -> PageOKFTrustMetadata? {
+        _ = try await ensureSession()
+        let result = try await sendStore(
+            .pageOKFMetadata,
+            payload: JSONEncoder().encode(
+                DaemonPageOKFMetadataRequest(
+                    versionID: versionID.rawValue,
+                    includeCorrected: includeCorrected)))
+        let reply = try Self.decodeResult(
+            DaemonPageOKFMetadataReply.self, result, "pageOKFMetadata")
+        return try reply.metadata.map(
+            RemoteStoreMirrorMapping.corePageOKFTrustMetadata)
+    }
+
+    public func sourceMarkdownOKFMetadata(
+        versionID: SourceMarkdownVersionID, includeCorrected: Bool
+    ) async throws -> SourceMarkdownOKFTrustMetadata? {
+        _ = try await ensureSession()
+        let result = try await sendStore(
+            .sourceMarkdownOKFMetadata,
+            payload: JSONEncoder().encode(
+                DaemonSourceMarkdownOKFMetadataRequest(
+                    versionID: versionID.rawValue,
+                    includeCorrected: includeCorrected)))
+        let reply = try Self.decodeResult(
+            DaemonSourceMarkdownOKFMetadataReply.self, result,
+            "sourceMarkdownOKFMetadata")
+        return try reply.metadata.map(
+            RemoteStoreMirrorMapping.coreSourceMarkdownOKFTrustMetadata)
+    }
+
     public func chatAttachments(chatID: ChatID) async throws -> [ChatAttachmentTarget] {
         _ = try await ensureSession()
         let result = try await sendStore(

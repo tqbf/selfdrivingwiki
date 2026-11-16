@@ -856,6 +856,24 @@ enum RemoteStoreMirrorMapping {
             projectionRevision: value.projectionRevision)
     }
 
+    static func corePageOKFTrustMetadata(
+        _ value: DaemonPageOKFTrustMetadata
+    ) throws -> PageOKFTrustMetadata {
+        PageOKFTrustMetadata(
+            pageID: PageID(rawValue: value.pageID),
+            versionID: PageVersionID(rawValue: value.versionID),
+            metadata: try coreOKFConceptMetadata(value.metadata))
+    }
+
+    static func coreSourceMarkdownOKFTrustMetadata(
+        _ value: DaemonSourceMarkdownOKFTrustMetadata
+    ) throws -> SourceMarkdownOKFTrustMetadata {
+        SourceMarkdownOKFTrustMetadata(
+            sourceID: SourceID(rawValue: value.sourceID),
+            versionID: SourceMarkdownVersionID(rawValue: value.versionID),
+            metadata: try coreOKFConceptMetadata(value.metadata))
+    }
+
     // MARK: OKF trust (core → wire, the request direction)
 
     static func wireVerifier(

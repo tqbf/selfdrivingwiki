@@ -398,34 +398,19 @@ struct RemoteWikiStoreTests {
         // (their core wrappers' memberwise inits are internal to WikiFSCore
         // — see the pending-surface file), and the 15 removed requirements
         // stay typed-rejection witnesses.
-        #expect(RemoteWikiStore.wiredOperations.count == 149)
+        #expect(RemoteWikiStore.wiredOperations.count == 151)
         #expect(RemoteWikiStore.removedOperations.count == 15)
         #expect(RemoteWikiStore.wiredOperations.isDisjoint(
             with: RemoteWikiStore.removedOperations))
-        // The manifest's rpc partition is fully wired except the deferred
-        // pair; listSources (slice 1's exemplar pending witness) is wired.
+        // The manifest's rpc partition is fully wired (151/151 — the
+        // deferred OKF pair landed once the core wrappers gained public
+        // inits). listSources (slice 1's exemplar pending witness) is
+        // wired; deletePage stays a removed-classification witness.
         #expect(RemoteWikiStore.wiredOperations.contains("listSources"))
+        #expect(RemoteWikiStore.wiredOperations.contains("pageOKFMetadata"))
+        #expect(
+            RemoteWikiStore.wiredOperations.contains("sourceMarkdownOKFMetadata"))
         #expect(RemoteWikiStore.wiredOperations.contains("deletePage") == false)
-        for operation in ["pageOKFMetadata", "sourceMarkdownOKFMetadata"] {
-            #expect(
-                RemoteWikiStore.wiredOperations.contains(operation) == false)
-            do {
-                if operation == "pageOKFMetadata" {
-                    _ = try await remote.pageOKFMetadata(
-                        versionID: PageVersionID(
-                            rawValue: "01V0000000000000000000000ZZ"),
-                        includeCorrected: false)
-                } else {
-                    _ = try await remote.sourceMarkdownOKFMetadata(
-                        versionID: SourceMarkdownVersionID(
-                            rawValue: "01V0000000000000000000000ZZ"),
-                        includeCorrected: false)
-                }
-                Issue.record("expected \(operation) to reject typed")
-            } catch let error as RemoteStoreClientError {
-                #expect(error == .unsupportedRemote(operation: operation))
-            }
-        }
     }
 
     // MARK: - Error reconstruction (the exhaustive inverse of wireError)
