@@ -146,7 +146,7 @@ struct SourcesContainerView: View {
                     let sourceIDs = pending.sourceIDs
                     reingestConfirmation = nil
                     Task {
-                        store.flushPendingSaves()
+                        await store.flushPendingSaves()
                         await enqueueIngestion(
                             sourceIDs: sourceIDs,
                             store: store,
@@ -163,7 +163,7 @@ struct SourcesContainerView: View {
                 onConfirm: { parentID in
                     guard case .sources(let ids) = ctx.targets else { return }
                     for id in ids {
-                        store.addSourceRef(parentID: parentID, sourceID: id)
+                        Task { await store.addSourceRef(parentID: parentID, sourceID: id) }
                     }
                 }
             )
@@ -320,7 +320,7 @@ struct SourcesContainerView: View {
             },
             onIngest: { ids in
                 Task {
-                    store.flushPendingSaves()
+                    await store.flushPendingSaves()
                     await enqueueIngestion(
                         sourceIDs: ids,
                         store: store,
@@ -365,7 +365,7 @@ struct SourcesContainerView: View {
                 addToBookmarksContext = BookmarkTargetPickerContext(targets: .sources(ids))
             },
             onNewChat: { ids in
-                store.beginNewChat(attachments: ChatAttachmentTarget.sources(ids))
+                Task { await store.beginNewChat(attachments: ChatAttachmentTarget.sources(ids)) }
             })
     }
 
@@ -377,7 +377,7 @@ struct SourcesContainerView: View {
     private func commitRename() {
         if let target = renameTarget {
             let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { store.renameSource(id: target.id, to: trimmed) }
+            if !trimmed.isEmpty { Task { await store.renameSource(id: target.id, to: trimmed) } }
         }
         renameTarget = nil
     }
@@ -399,7 +399,10 @@ struct SourcesContainerView: View {
         let coordinator = DeletionConfirmationCoordinator(
             kind: .source,
             loadImpacts: {
-                try ids.map { try store.deletionImpact(forSource: $0) }
+                var impacts: [DeletionImpact] = []
+                for id in ids {
+                    impacts.append(try await store.deletionImpact(forSource: id))
+                }
             },
             onDelete: { decision in
                 performSourceDeletion(ids: ids, decision: decision)
@@ -420,7 +423,7 @@ struct SourcesContainerView: View {
     private func performSourceDeletion(ids: [SourceID], decision: DeletionDecision) {
         // ONE protected transaction for the whole selection; on failure the
         // model surfaces the store error and returns nil (nothing changed).
-        _ = store.performSourceDeletion(ids, unlinkIncomingLinks: decision == .unlink)
+        Task { await store.performSourceDeletion(ids, unlinkIncomingLinks: decision == .unlink) }
     }
 
     private func handleDeletionAction(_ action: DeletionDialogAction) {

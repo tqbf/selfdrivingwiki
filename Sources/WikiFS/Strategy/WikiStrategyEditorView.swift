@@ -37,7 +37,7 @@ struct WikiStrategyEditorView: View {
         .frame(minWidth: 480, minHeight: 420)
         .navigationTitle("Strategy")
         .task {
-            store.loadWikiStrategy()
+            await store.loadWikiStrategy()
             // A remounted editor (the draft persists on the model after the
             // tab was closed and reopened) sees no dirtiness TRANSITION, so
             // the marker below would never sync. Sync once at mount; the
