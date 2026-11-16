@@ -298,7 +298,11 @@ public final class WikiStoreModel {
     /// tabs' titles HERE. Otherwise the sidebar recovers after a reload while
     /// the tab bar keeps a stale "New Chat".
     public func reloadChats() {
-        chats = DebugLog.trying("listChats", operation: { try store.listChats() }) ?? []
+        enqueueCoalescedReload()
+    }
+
+    private func reloadChatsAsync() async {
+        chats = DebugLog.trying("listChats", operation: { try await store.listChats() }) ?? []
         messageVersion &+= 1
         for index in tabs.indices {
             guard case .chat = tabs[index].selection else { continue }
@@ -619,11 +623,20 @@ public final class WikiStoreModel {
 
     public init(store: WikiStore) {
         self.store = store
-        reloadSummaries()
-        reloadSources()
-        reloadBookmarkNodes()
-        reloadChats()
         subscribeToChanges()
+    }
+
+    /// Plan P1.3 — async bootstrap. Session construction performs NO store
+    /// work; the session loader (`AppProcessProfileOwner.bootWikiSession` /
+    /// `SessionManager`) awaits this once before handing the session to the
+    /// UI, so views never observe a half-booted model. Idempotent: the
+    /// coalesced-reload queue serializes it against later event-driven
+    /// reloads.
+    public func bootstrapFromStore() async {
+        await reloadSummariesAsync()
+        await reloadSourcesAsync()
+        await reloadBookmarkNodesAsync()
+        await reloadChatsAsync()
     }
 
     /// The per-wiki resource-change bus of the backing store (exposed so the app
@@ -640,38 +653,81 @@ public final class WikiStoreModel {
     /// (sidebar, sources, chats, bookmarks) — it never touches the editor
     /// draft or selection, so there is no focus/flicker risk.
     @ObservationIgnored private var changeToken: SubscriptionToken?
+
+    /// Plan P1.3 — generation-checked loads. Bumped at every selection
+    /// transition; an async load whose captured generation is stale is
+    /// discarded, so rapid A→B→C navigation lands only C's data.
+    @ObservationIgnored private var loadGeneration = 0
+
+    /// Plan P1.3 — coalesced, serialized event reloads. Bus callbacks enqueue
+    /// instead of reloading inline: while a reload is in flight further events
+    /// set `reloadPending`, and the in-flight task drains the coalesced flag
+    /// in a loop — overlapping events produce ONE reload, never interleaved
+    /// half-reloads. (Serialization is by MainActor isolation; the loop below
+    /// owns the flag.)
+    @ObservationIgnored private var reloadTask: Task<Void, Never>?
+    @ObservationIgnored private var reloadPending = false
+
     private func subscribeToChanges() {
         changeToken = store.eventBus?.subscribe(nil) { [weak self] _ in
-            self?.reloadFromStore()
+            self?.enqueueCoalescedReload()
         }
+    }
+
+    /// Bus-driven entry point: coalesces overlapping events into one reload.
+    private func enqueueCoalescedReload() {
+        if reloadTask != nil {
+            reloadPending = true
+            return
+        }
+        reloadTask = Task { [weak self] in
+            await self?.drainCoalescedReloads()
+        }
+    }
+
+    private func drainCoalescedReloads() async {
+        await reloadFromStoreAsync()
+        while reloadPending {
+            reloadPending = false
+            await reloadFromStoreAsync()
+        }
+        reloadTask = nil
     }
 
     // MARK: - Selection / loading
 
-    /// Switch the selection programmatically. Flushes any pending save
-    /// SYNCHRONOUSLY first (§3.5 immediate-on-switch) so the outgoing document
-    /// can't lose buffered edits, then loads the new selection's text.
-    /// Updates the active tab's metadata to stay in sync.
+    /// Plan P1.3 — one captured outgoing document state, taken synchronously
+    /// at the START of a selection transition so the switch-away cannot lose
+    /// or mix drafts when the flush runs inside the serialized task.
+    private struct PendingDraftSnapshot {
+        let selection: WikiSelection?
+        let title: String
+        let body: String
+        let dirty: Bool
+    }
+
+    /// Switch the selection programmatically. Plan P1.3 — the transition is
+    /// SERIALIZED and generation-checked: the outgoing draft state is
+    /// captured synchronously (before any suspension), the editor clears
+    /// eagerly so the outgoing draft never flashes onto the incoming
+    /// selection, and one task performs flush→load in order. A rapid
+    /// A→B→C navigation bumps the generation three times; only C's load
+    /// lands (stale completions are discarded).
     public func select(_ newValue: WikiSelection?) {
         guard newValue != selection else { return }
-        flushPendingSaves()
-        recordHistoryTransition(from: loadedSelection, to: newValue)
-        selection = newValue
-        loadDrafts(for: newValue)
-        syncActiveTabMetadata(to: newValue)
+        beginSelectionTransition(to: newValue)
     }
 
     /// Bridge for SwiftUI's `List(selection:)`, which writes `selection`
     /// DIRECTLY (bypassing `select(_:)`). The view observes the property with
-    /// `.onChange(of:)` and calls this. Flushing reads the drafts, which still
-    /// belong to `loadedSelection`, so the outgoing document's edits are
-    /// persisted before we load the incoming one (§3.5).
+    /// `.onChange(of:)` and calls this. Plan P1.3 — same serialized,
+    /// generation-checked transition as `select(_:)`: the outgoing document's
+    /// edits are persisted before the incoming one loads (§3.5), with the
+    /// outgoing state captured before any suspension.
     public func handleSelectionChange(to newValue: WikiSelection?) {
         // Skip if triggered programmatically by a tab switch.
         guard !isApplyingTabSelection, newValue != loadedSelection else { return }
-        flushPendingSaves()     // persists drafts to loadedSelection
-        recordHistoryTransition(from: loadedSelection, to: newValue)
-        loadDrafts(for: newValue)
+        beginSelectionTransition(to: newValue)
 
         // Keep the active tab's metadata in sync after a sidebar-driven change
         // (in-tab navigation). If no tabs exist yet, create the initial tab.
@@ -681,6 +737,77 @@ public final class WikiStoreModel {
             activeTabID = tab.id
         } else {
             syncActiveTabMetadata(to: newValue)
+        }
+    }
+
+    /// Plan P1.3 — the synchronous entry of every selection transition:
+    /// capture outgoing state, bump the generation, clear the editor, and
+    /// spawn the serialized flush→load task. In-memory bookkeeping only; the
+    /// store work happens inside the transition task.
+    private func beginSelectionTransition(to newValue: WikiSelection?) {
+        let outgoing = PendingDraftSnapshot(
+            selection: loadedSelection,
+            title: draftTitle,
+            body: draftBody,
+            dirty: isDraftDirty)
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        recordHistoryTransition(from: outgoing.selection, to: newValue)
+        selection = newValue
+        // Eager clear: while the incoming load is in flight the editor shows
+        // an empty draft, never the outgoing page's text (the old synchronous
+        // path never had this window; the generation check keeps a rapid
+        // switch sequence from mixing pages).
+        draftTitle = ""
+        draftBody = ""
+        isDraftDirty = false
+        loadedPage = nil
+        loadedPageHeadVersionID = nil
+        fenceSaveWarning = nil
+        markdownSaveWarning = nil
+        markdownWarningTask?.cancel()
+        markdownWarningTask = nil
+        Task { [weak self] in
+            await self?.performSelectionTransition(
+                outgoing: outgoing,
+                to: newValue,
+                generation: generation)
+        }
+    }
+
+    /// The serialized transition body: flush the OUTGOING draft (captured
+    /// values — not the live properties, which now belong to the incoming
+    /// selection), then load the incoming selection. A stale generation
+    /// aborts between the two halves so a rapid switch never commits a save
+    /// derived from mixed state.
+    private func performSelectionTransition(
+        outgoing: PendingDraftSnapshot,
+        to newValue: WikiSelection?,
+        generation: Int
+    ) async {
+        await flushCapturedDraft(outgoing)
+        guard generation == loadGeneration else { return }
+        await loadDraftsAsync(for: newValue, generation: generation)
+    }
+
+    /// Persist one captured draft snapshot to its selection. Extracted from
+    /// the save path so the transition task can flush the OUTGOING document
+    /// with the values captured before the switch (plan P1.3 — replaces the
+    /// synchronous flush-before-switch ordering). Same seam as `save()`:
+    /// the shared `PageUpsert.upsert` write with the CAS head expectation.
+    private func flushCapturedDraft(_ snapshot: PendingDraftSnapshot) async {
+        guard snapshot.dirty, let selection = snapshot.selection else { return }
+        switch selection {
+        case .page(let id):
+            do {
+                try await PageUpsert.upsert(
+                    in: store, id: id, title: snapshot.title, body: snapshot.body,
+                    expectedHeadVersionID: nil, author: PageAuthor.user.rawValue)
+            } catch {
+                DebugLog.store("WikiStoreModel.flushCapturedDraft failed (page \(id.rawValue)): \(error)")
+            }
+        case .chat, .newChat, .bookmark, .strategy, .source, .changeLog, nil:
+            break // non-page selections carry no editable page draft
         }
     }
 
@@ -1555,7 +1682,28 @@ public final class WikiStoreModel {
         }
     }
 
+    /// SYNC fire-and-forget entry for callers outside a selection transition
+    /// (history navigation, agent-run end, tab retarget): bumps the generation
+    /// (invalidating any in-flight stale load) and spawns the generation-
+    /// checked async load. Plan P1.3.
     private func loadDrafts(for newValue: WikiSelection?) {
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        Task { [weak self] in
+            await self?.loadDraftsAsync(for: newValue, generation: generation)
+        }
+    }
+
+    /// Plan P1.3 — the async draft load with a generation check. The
+    /// transition task calls this after flushing the outgoing draft; a load
+    /// whose generation has been superseded by a newer selection transition
+    /// discards its results (rapid A→B→C navigation lands only C).
+    /// Same body as the pre-P1 synchronous `loadDrafts(for:)`; the tab
+    /// pending-draft stashes are read here, on the main actor, as before.
+    private func loadDraftsAsync(for newValue: WikiSelection?, generation: Int) async {
+        // Generation gate BEFORE the reads: a newer transition owns the
+        // editor state now.
+        guard generation == loadGeneration else { return }
         loadedSelection = newValue
         // A page switch invalidates the prior page's lint warnings so a stale
         // banner doesn't bleed onto an unrelated page (they're recomputed on
@@ -1574,7 +1722,9 @@ public final class WikiStoreModel {
             loadedPage = nil
             loadedPageHeadVersionID = nil
         case .page(let id):
-            guard let page = DebugLog.trying("getPage", operation: { try store.getPage(id: id) }) else {
+            guard let page = DebugLog.trying("getPage", operation: { try await store.getPage(id: id) }) else {
+                // Stale completion: a newer transition owns the editor state.
+                guard generation == loadGeneration else { return }
                 draftTitle = ""
                 draftBody = ""
                 loadedPage = nil
@@ -1582,11 +1732,15 @@ public final class WikiStoreModel {
                 loadedSelection = nil
                 return
             }
+            let headVersionID = DebugLog.trying("pageHeadVersionID", operation: { try await store.pageHeadVersionID(pageID: id) })
+            // Stale completion check AFTER the awaits: a newer transition
+            // (A→B→C) must not have C's load overwritten by B's completion.
+            guard generation == loadGeneration else { return }
             draftTitle = page.title
             draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             loadedPage = id
             // Capture the current head version id for CAS on save (W0, PR #312).
-            loadedPageHeadVersionID = DebugLog.trying("pageHeadVersionID", operation: { try store.pageHeadVersionID(pageID: id) })
+            loadedPageHeadVersionID = headVersionID
             // Restore stashed draft when returning to an editing tab.
             if let tabID = activeTabID,
                let i = tabs.firstIndex(where: { $0.id == tabID }),
@@ -4024,13 +4178,23 @@ public final class WikiStoreModel {
     /// goes through the store directly, bypassing the model's draft system —
     /// appears in the reader/editor immediately (issue: stale UI after agent
     /// page write). When the draft IS dirty, the user's in-flight edits win.
+    /// Plan P1.3 — sync fire-and-forget entry for existing sync callers
+    /// (views, the change bridge): enqueues a coalesced reload. The async
+    /// variant carries the real store reads; overlapping calls coalesce.
     public func reloadFromStore() {
-        reloadSummaries()
-        reloadSources()
-        reloadChats()
-        reloadBookmarkNodes()
+        enqueueCoalescedReload()
+    }
+
+    /// Plan P1.3 — the async reload body. Runs on the main actor (SQLite is
+    /// never touched off-main); awaited only from the coalesced-reload drain
+    /// and `bootstrapFromStore()`.
+    private func reloadFromStoreAsync() async {
+        await reloadSummariesAsync()
+        await reloadSourcesAsync()
+        await reloadChatsAsync()
+        await reloadBookmarkNodesAsync()
         pruneHistoryToCurrentStore()
-        reloadCurrentDraftIfClean()
+        await reloadCurrentDraftIfCleanAsync()
     }
 
     /// Incorporate the authoritative machine renderer index after a durable
@@ -4045,10 +4209,10 @@ public final class WikiStoreModel {
     /// draft is clean (`!isDraftDirty`). This lets external writes (agent runs,
     /// `wikictl`) refresh the on-screen content. When the user has unsaved
     /// edits, those are preserved — the guard skips the reload entirely.
-    private func reloadCurrentDraftIfClean() {
+    private func reloadCurrentDraftIfCleanAsync() async {
         guard !isDraftDirty else { return }
         if case .page(let id) = selection, loadedPage == id,
-           let page = DebugLog.trying("getPage", operation: { try store.getPage(id: id) }) {
+           let page = DebugLog.trying("getPage", operation: { try await store.getPage(id: id) }) {
             draftTitle = page.title
             draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             // The didSets on draftTitle/draftBody set isDraftDirty = true when
@@ -4058,12 +4222,17 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Rebuild the sidebar page list from the store using the current sort order.
-    /// Public so `SidebarView` can trigger a reload when the sort picker changes
-    /// (via the `pageSortOrder` didSet), and so the Phase A change bridge can
-    /// refresh after an external write.
+    /// Rebuild the sidebar page list from the store using the current sort
+    /// order. SYNC fire-and-forget wrapper — enqueues the coalesced reload so
+    /// `SidebarView`'s sort-picker changes and the Phase A change bridge keep
+    /// their sync call shape; the store read happens on the serialized reload
+    /// path (plan P1.3).
     public func reloadSummaries() {
-        summaries = DebugLog.trying("listPages", operation: { try store.listPages(sortBy: pageSortOrder) }) ?? []
+        enqueueCoalescedReload()
+    }
+
+    private func reloadSummariesAsync() async {
+        summaries = DebugLog.trying("listPages", operation: { try await store.listPages(sortBy: pageSortOrder) }) ?? []
         // Phase A.1: any page mutation invalidates the memoized render context.
         renderContextGeneration &+= 1
     }
@@ -4341,16 +4510,16 @@ public final class WikiStoreModel {
         }
     }
 
-    private func reloadSources() {
+    private func reloadSourcesAsync() async {
         // Bump FIRST and unconditionally: extraction/transcript writes leave the
         // `sources` array `==`, and views key their derived-state refresh on this
         // counter (#1179), so the bump must not depend on the array changing.
         sourcesVersion &+= 1
-        sources = DebugLog.trying("listSources", operation: { try store.listSources() }) ?? []
+        sources = DebugLog.trying("listSources", operation: { try await store.listSources() }) ?? []
         // The explicit completion marker is written only after a validated
         // successful pipeline run. Log text is not completion evidence: an
         // agent can append a log before its run is canceled or fails.
-        let markedIDs = DebugLog.trying("markedSourceIDs", operation: { try store.markedSourceIDs() }) ?? []
+        let markedIDs = DebugLog.trying("markedSourceIDs", operation: { try await store.markedSourceIDs() }) ?? []
 
         sourceIngestedStatus = Dictionary(uniqueKeysWithValues: sources.map { file in
             (file.id, markedIDs.contains(file.id.rawValue))
@@ -4361,10 +4530,15 @@ public final class WikiStoreModel {
 
     // MARK: - Bookmark nodes (v16)
 
-    /// Reload all bookmark nodes from the store.
-    /// Called on init and after every bookmark-node mutation (§3.1 rebuild-from-source).
+    /// Reload all bookmark nodes from the store. SYNC fire-and-forget wrapper
+    /// (plan P1.3): enqueues the coalesced reload; the store read happens on
+    /// the serialized reload path. Called by bookmark mutations via the bus.
     public func reloadBookmarkNodes() {
-        bookmarkNodes = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }) ?? []
+        enqueueCoalescedReload()
+    }
+
+    private func reloadBookmarkNodesAsync() async {
+        bookmarkNodes = DebugLog.trying("listBookmarkNodes", operation: { try await store.listBookmarkNodes() }) ?? []
     }
 
     // MARK: - Bookmark node mutations
