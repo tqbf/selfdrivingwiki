@@ -664,9 +664,9 @@ struct RendererActivationView: View {
             mediaTarget: nil)
     }
 
-    private func authorizedPayload() -> RendererBridgeInputPayload? {
+    private func authorizedPayload() async -> RendererBridgeInputPayload? {
         do {
-            return try Self.authorizedPayload(
+            return try await Self.authorizedPayload(
                 store: store.internalStore,
                 input: request.input)
         } catch {
@@ -691,7 +691,7 @@ struct RendererActivationView: View {
               let configuration = installedRendererHost.inputs.configuration(for: descriptor)
         else { rendererSessionPreparation.cancel(); return }
         Task {
-            rendererSessionPreparation.prepare(.init(
+            await rendererSessionPreparation.prepare(.init(
                 descriptor: descriptor, configuration: configuration, input: request.input,
                 admittedSource: request.sourceContext?.source, store: store.internalStore,
                 siblingSources: request.sourceContext?.siblingSources ?? [:],
