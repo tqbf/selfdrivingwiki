@@ -615,6 +615,11 @@ struct RendererActivationView: View {
     let installedRendererHost: InstalledRendererHost
     let request: RendererActivationPresentation
     @State private var rendererSessionPreparation = RendererSessionPreparationOwner()
+    /// Plan P1: the exact authorized input bytes load asynchronously now
+    /// (WikiStore flip). The payload is cached in state; `rendererContent`
+    /// renders with `nil` sourceBytes until it lands, then re-renders.
+    @State private var authorizedPayloadBytes: Data?
+
 
     var body: some View {
         rendererContent
@@ -628,6 +633,10 @@ struct RendererActivationView: View {
     @ViewBuilder
     private var rendererContent: some View {
         if let descriptor = rendererDescriptor {
+            builtInInputsView
+                .task(id: request.input) {
+                    authorizedPayloadBytes = await authorizedPayload()?.bytes
+                }
             if let builtInView = BuiltInRendererFactoryMap.makeView(
                 for: descriptor,
                 inputs: builtInInputs) {
@@ -655,10 +664,17 @@ struct RendererActivationView: View {
         ?? installedRendererHost.inputs.availableDescriptors.first(where: { $0.reference == request.reference })
     }
 
+    /// Loads the authorized input bytes off the main render pass (plan P1:
+    /// the store read suspends now). During the load window the built-in
+    /// renderers see nil sourceBytes and use their fallback presentation.
+    @ViewBuilder
+    private var builtInInputsView: some View {
+        Color.clear.frame(width: 0, height: 0)
+    }
+
     private var builtInInputs: BuiltInRendererFactoryInputs {
-        let payload = authorizedPayload()
-        return BuiltInRendererFactoryInputs(
-            sourceBytes: payload?.bytes,
+        BuiltInRendererFactoryInputs(
+            sourceBytes: authorizedPayloadBytes,
             pdfQuote: nil,
             htmlSource: nil,
             mediaTarget: nil)
@@ -689,7 +705,10 @@ struct RendererActivationView: View {
         guard let descriptor = rendererDescriptor,
               case .webPackage = descriptor.implementation,
               let configuration = installedRendererHost.inputs.configuration(for: descriptor)
-        else { rendererSessionPreparation.cancel(); return }
+        else {
+            Task { await rendererSessionPreparation.cancel() }
+            return
+        }
         Task {
             await rendererSessionPreparation.prepare(.init(
                 descriptor: descriptor, configuration: configuration, input: request.input,

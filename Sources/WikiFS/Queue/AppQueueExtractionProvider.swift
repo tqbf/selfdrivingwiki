@@ -149,7 +149,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
 
         // Transcript sources have no local bytes; the markdown comes from a
         // URL-backed fetch resolved through the extraction services.
-        if let origin = store.sourceOrigin(for: sourceID),
+        if let origin = await store.sourceOrigin(for: sourceID),
            let providerKind = origin.provider {
             switch providerKind {
             case .youtube:
@@ -234,14 +234,14 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         // URL whose MIME an active fetcher registration claims resolves as
         // a fetch; a source with acquired bytes falls through to the
         // standard format route below.
-        if let origin = store.sourceOrigin(for: sourceID) {
+        if let origin = await store.sourceOrigin(for: sourceID) {
             let source = store.sources.first(where: { $0.id == sourceID })
             let claimedMIMEs = await activeFetcherClaimedMIMETypes()
             // Parity with the daemon: a FAILED byte read (nil here) must not
             // read as "not yet acquired", which would re-fetch a source
             // whose bytes are already stored. The model read is non-throwing
             // and logs its own failure; resolution fails for this item.
-            let probeBytes = store.sourceBytes(id: sourceID)
+            let probeBytes = await store.sourceBytes(id: sourceID)
             guard let readBytes = probeBytes else {
                 DebugLog.extraction("AppQueueExtractionProvider: source bytes unreadable for \(sourceID.rawValue)")
                 return nil
@@ -293,7 +293,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
 
         // Regular bytes-based extraction (PDF, HTML, DOCX).
         guard let source = store.sources.first(where: { $0.id == sourceID }),
-              let bytes = store.sourceBytes(id: sourceID)
+              let bytes = await store.sourceBytes(id: sourceID)
         else {
             DebugLog.extraction("AppQueueExtractionProvider: no source/bytes for \(sourceID.rawValue)")
             return nil
@@ -322,7 +322,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
     ) async throws -> ExtractionResolution {
         // v1 scope: the source must be a YouTube source with a validated
         // operation URL.
-        guard let origin = store.sourceOrigin(for: sourceID),
+        guard let origin = await store.sourceOrigin(for: sourceID),
               origin.provider == .youtube else {
             throw SpeechResolutionError.sourceOutsideSpeechScope
         }
@@ -376,7 +376,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         // The source's immutable initial version is REQUIRED (same lineage
         // rule as a package transcript): the write fails before persisting
         // when absent.
-        guard let initialVersion = store.initialContentVersion(for: sourceID) else {
+        guard let initialVersion = await store.initialContentVersion(for: sourceID) else {
             DebugLog.store("AppQueueExtractionProvider: speech transcript has no initial source version (source=\(sourceID.rawValue))")
             throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
         }
@@ -385,7 +385,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
             localeID: outcome.transcription.localeID,
             acquisitionFetcher: outcome.acquisitionFetcher)
         do {
-            let version = try store.internalStore.appendHostSpeechTranscript(
+            let version = try await store.internalStore.appendHostSpeechTranscript(
                 sourceID: sourceID,
                 content: outcome.transcription.text,
                 producer: producer,
@@ -410,7 +410,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         }
         if let packageProducer = resolution.packageProducer {
             do {
-                let version = try store.internalStore.appendInstalledPackageMarkdown(
+                let version = try await store.internalStore.appendInstalledPackageMarkdown(
                     sourceID: sourceID, content: markdown, package: packageProducer,
                     origin: .extraction, toolVersion: resolution.modelVersion,
                     sourceVersionID: nil, note: nil)
@@ -418,8 +418,8 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                 // route: settle the marker now so fetch_state never goes
                 // stale beside a finished product (recovery is the backstop).
                 do {
-                    if try store.internalStore.fetchState(sourceID: sourceID) == .formatJobPending {
-                        try store.internalStore.markFetchComplete(sourceID: sourceID)
+                    if try await store.internalStore.fetchState(sourceID: sourceID) == .formatJobPending {
+                        try await store.internalStore.markFetchComplete(sourceID: sourceID)
                     }
                 } catch {
                     // Deliberately non-fatal: the startup recovery scan is the
@@ -432,7 +432,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                 throw error
             }
         } else {
-            let version = store.seedPdfMarkdown(
+            let version = await store.seedPdfMarkdown(
                 for: sourceID,
                 content: markdown,
                 backend: resolution.backend,
@@ -457,14 +457,14 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         case .builtInTool(let tool):
             // Built-in tool: keep the existing log-only discipline (the fetch
             // succeeded; a store-write failure leaves a Console.app trace).
-            let version = store.appendTranscriptMarkdown(
+            let version = await store.appendTranscriptMarkdown(
                 for: sourceID, content: outcome.markdown, tool: tool)
             return version.map { QueueExtractionOutputReference(versionID: $0.id.rawValue) }
 
         case .installedPackage(let baseProducer):
             // Package transcript: resolve the source's immutable initial
             // version FIRST and fail before writing when absent (issue #251).
-            guard let initialVersion = store.initialContentVersion(for: sourceID) else {
+            guard let initialVersion = await store.initialContentVersion(for: sourceID) else {
                 DebugLog.store("AppQueueExtractionProvider: package transcript has no initial source version (source=\(sourceID.rawValue))")
                 throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
             }
@@ -476,7 +476,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                 protocolRevision: baseProducer.protocolRevision,
                 reportedMetadata: outcome.reportedMetadata)
             do {
-                let version = try store.internalStore.appendInstalledPackageMarkdown(
+                let version = try await store.internalStore.appendInstalledPackageMarkdown(
                     sourceID: sourceID, content: outcome.markdown, package: producer,
                     origin: .transcript, toolVersion: nil,
                     sourceVersionID: initialVersion.id, note: nil)
@@ -515,7 +515,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         // canonical bytes.
         let rawHead: SourceMarkdownVersion?
         do {
-            rawHead = try store.internalStore.processedMarkdownHead(sourceID: sourceID)
+            rawHead = try await store.internalStore.processedMarkdownHead(sourceID: sourceID)
         } catch {
             DebugLog.extraction("Transcript cleanup skipped: raw head unreadable (source=\(sourceID.rawValue)): \(error)")
             return
@@ -541,7 +541,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
             // (the raw transcript), which stays in history. The technique
             // marker is how the alternatives UI surfaces the producer; the
             // note names the pass.
-            _ = try store.internalStore.appendProcessedMarkdown(
+            _ = try await store.internalStore.appendProcessedMarkdown(
                 sourceID: sourceID, content: cleaned,
                 origin: .transcript,
                 note: "auto transcript cleanup",
@@ -585,7 +585,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         case .markdown(let markdown):
             // Markdown result: package-provenance write, then the source is
             // complete — no format job exists to wait for.
-            guard let initialVersion = store.initialContentVersion(for: sourceID) else {
+            guard let initialVersion = await store.initialContentVersion(for: sourceID) else {
                 DebugLog.store("AppQueueExtractionProvider: fetch markdown has no initial source version (source=\(sourceID.rawValue))")
                 throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
             }
@@ -598,7 +598,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
             // external provenance, and the fetch-state advance to `complete`.
             // A crash can never leave the source `pending` beside a finished
             // product (which would make a retry append a second version).
-            let version = try store.internalStore.appendFetchMarkdown(
+            let version = try await store.internalStore.appendFetchMarkdown(
                 sourceID: sourceID, content: markdown.markdown, package: producer,
                 externalItemKey: itemKey, externalItemTitle: itemTitle,
                 sourceVersionID: initialVersion.id)
@@ -612,7 +612,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
             // transaction. The follow-on enqueue happens OUTSIDE this
             // wiki-store transaction (different database), and the queue
             // startup recovery scan closes the crash gap between the two.
-            let version = try store.internalStore.attachAcquiredBytes(
+            let version = try await store.internalStore.attachAcquiredBytes(
                 sourceID: sourceID,
                 bytes: bytes.bytes,
                 mimeType: bytes.mimeType.rawValue,

@@ -3095,7 +3095,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     admission: (webView as? WikiReaderWebView)?.rendererActivationAdmission,
                     isMainFrame: navigationAction.targetFrame?.isMainFrame ?? false
                 ) {
-                    (webView as? WikiReaderWebView)?.onRendererActivation?(activation.reference, activation.input)
+                    Task { @MainActor in
+                        (webView as? WikiReaderWebView)?.onRendererActivation?(activation.reference, activation.input)
+                    }
                     decisionHandler(.cancel)
                     return
                 }

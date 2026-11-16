@@ -64,7 +64,7 @@ struct RootScene: View {
                             Button("Retry") {
                                 sessionManager.clearOpenError(for: wikiID)
                                 session = nil
-                                resolveSession(for: wikiID)
+                                Task { await resolveSession(for: wikiID) }
                             }
                             Button("Reveal Database") {
                                 let dbURL = sessionManager.containerDirectory
@@ -77,7 +77,7 @@ struct RootScene: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ProgressView("Opening wiki…")
-                        .onAppear { resolveSession(for: wikiID) }
+                        .onAppear { Task { await resolveSession(for: wikiID) } }
                         .onAppear {
                             DebugLog.tabs("RootScene [Opening wiki…]: wikiID=\(wikiID.rawValue)")
                         }
@@ -150,7 +150,7 @@ struct RootScene: View {
                     // and let the confirmation banner drive the swap.
                     return
                 }
-                performInPlaceWikiSwitch(to: newID)
+                Task { await performInPlaceWikiSwitch(to: newID) }
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -204,7 +204,7 @@ struct RootScene: View {
                             .first(where: { $0.id == target })?.displayName ?? "another wiki",
                         onPerformSwitch: {
                             if let target = session.store.applyPendingStrategyWikiSwitch() {
-                                performInPlaceWikiSwitch(to: target)
+                                Task { await performInPlaceWikiSwitch(to: target) }
                             }
                         })
                 }
@@ -221,7 +221,7 @@ struct RootScene: View {
                     Button("OK", role: .cancel) {}
                 } else {
                     Button("Cancel", role: .cancel) {}
-                    Button("Vacuum", role: .destructive) { session.applyVacuumAll() }
+                    Button("Vacuum", role: .destructive) { Task { await session.applyVacuumAll() } }
                 }
             } message: { report in
                 Text(report.alertMessage)
@@ -232,7 +232,7 @@ struct RootScene: View {
     /// type-checker timeouts (multiple conditional branches + optional
     /// unwrap in one closure body).
     private func handleScenePhaseChange(_ phase: ScenePhase) {
-        if phase != .active { session?.store.flushPendingSaves() }
+        if phase != .active { Task { await session?.store.flushPendingSaves() } }
         isSceneActive = (phase == .active)
         // Track frontmost window for VacuumCommands (scene-level .commands).
         if phase == .active, let wikiID {
@@ -247,14 +247,14 @@ struct RootScene: View {
     /// observation directly, or by the strategy-switch confirmation banner
     /// after the user discards a dirty draft (the registry id already
     /// changed when the guard deferred, so the confirmation drives the swap).
-    private func performInPlaceWikiSwitch(to newID: WikiID) {
+    private func performInPlaceWikiSwitch(to newID: WikiID) async {
         if let oldID = wikiID {
-            sessionManager.releaseSession(for: oldID)
+            await sessionManager.releaseSession(for: oldID)
             fileProvider.unsubscribeBus(for: oldID)
         }
         wikiID = newID
         session = nil
-        resolveSession(for: newID)
+        Task { await resolveSession(for: newID) }
         // Keep frontmost tracking accurate — scenePhase won't re-emit
         // `.active` on an in-window content swap, so we must update it here.
         // Without this, VacuumCommands resolves the released session and
@@ -271,7 +271,7 @@ struct RootScene: View {
     /// spinner can animate while the synchronous store init + model reloads
     /// execute. The `Task.yield()` between reload phases lets the main run
     /// loop paint between batches of SQLite work.
-    private func resolveSession(for wikiID: WikiID) {
+    private func resolveSession(for wikiID: WikiID) async {
         guard session == nil else { return }
         guard let descriptor = registry.wikis.first(where: { $0.id == wikiID }) else { return }
         Task { @MainActor in
@@ -295,7 +295,11 @@ struct RootScene: View {
             fileProvider.subscribeBus(for: wikiID, bus: resolved.store.eventBus)
             Task { await fileProvider.activate(id: descriptor.id, displayName: descriptor.displayName) }
             // Reap stale workspaces for this wiki.
-            DebugLog.trying("reap stale workspaces", operation: { try resolved.store.reapStaleWorkspaces(ttl: 86_400) })
+            do {
+                _ = try await resolved.store.reapStaleWorkspaces(ttl: 86_400)
+            } catch {
+                DebugLog.store("reap stale workspaces failed: \(error)")
+            }
         }
     }
 }

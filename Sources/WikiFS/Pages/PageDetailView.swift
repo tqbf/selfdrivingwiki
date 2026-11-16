@@ -210,8 +210,8 @@ struct PageDetailView: View {
                 provenanceHistory = []
                 return
             }
-            provenanceOrigin = store.pageOrigin(for: pageID)
-            provenanceHistory = store.pageEditHistory(for: pageID)
+            provenanceOrigin = await store.pageOrigin(for: pageID)
+            provenanceHistory = await store.pageEditHistory(for: pageID)
             updateRightSidebarRegistration()
         }
         .task(id: currentPageID.map { MetadataHydrationKey.page($0, store.messageVersion) }) {

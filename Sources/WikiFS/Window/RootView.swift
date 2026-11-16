@@ -37,7 +37,7 @@ struct RootView: View {
             queueEngine: session.queueEngine,
             extractionProvider: session.extractionProvider,
             installedRendererHost: installedRendererHost,
-            onRendererActivation: presentRendererActivation
+            onRendererActivation: { reference, input in Task { await presentRendererActivation(reference: reference, input: input) } }
         )
         .id(session.wikiID)
         // Consume a deferred cross-window `wiki://` navigation (set on the
@@ -56,20 +56,27 @@ struct RootView: View {
     /// `WindowGroup(for:)` dedups by `==`, so activating the same content again
     /// focuses the window already showing it.
     @MainActor
-    private func presentRendererActivation(reference: RendererReference, input: RendererBridgeInput) {
+    private func presentRendererActivation(reference: RendererReference, input: RendererBridgeInput) async {
         let sourceContext: RendererActivationPresentation.SourceContext?
         // A version that is no longer the active content version, unreadable
         // bytes, or an invalid MIME simply omits the source context: the
         // activation window then prepares from the exact pinned input alone.
-        if case .source(let versionID) = input,
-           let summary = session.store.sources.first(where: { source in
-               // swiftlint:disable:next silent_try_optional
-               (try? session.store.internalStore.activeContentVersion(sourceID: source.id)?.id) == versionID
-           }),
+        if case .source(let versionID) = input {
+        var matchedSummary: SourceSummary?
+        for source in session.store.sources {
+            guard
+                // swiftlint:disable:next silent_try_optional
+                let activeID = try? await session.store.internalStore.activeContentVersion(sourceID: source.id)?.id,
+                activeID == versionID
+            else { continue }
+            matchedSummary = source
+            break
+        }
+        if let summary = matchedSummary,
            // swiftlint:disable:next silent_try_optional
-           let version = try? session.store.internalStore.activeContentVersion(sourceID: summary.id),
+           let version = try? await session.store.internalStore.activeContentVersion(sourceID: summary.id),
            version.id == versionID,
-           let bytes = session.store.sourceBytes(id: summary.id),
+           let bytes = await session.store.sourceBytes(id: summary.id),
            let mime = summary.mimeType {
             // swiftlint:disable:next silent_try_optional
             let source = try? RendererEmbeddedContent.Source(
@@ -84,6 +91,7 @@ struct RootView: View {
             } else {
                 sourceContext = nil
             }
+        }
         } else {
             sourceContext = nil
         }

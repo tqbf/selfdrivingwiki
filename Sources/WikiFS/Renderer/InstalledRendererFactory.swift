@@ -17,7 +17,7 @@ struct RendererHostNavigationRouting {
 
     static let unavailable = Self(route: { _ in })
 
-    static func store(_ store: WikiStoreModel) async -> Self {
+    static func store(_ store: WikiStoreModel) -> Self {
         Self { target in
             Task { @MainActor in
                 switch target {

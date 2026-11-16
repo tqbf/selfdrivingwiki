@@ -122,7 +122,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         wikiID: WikiID,
         sourceIDs: [SourceID],
         queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
+        onProgress: @escaping @Sendable (String) async -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
@@ -166,7 +166,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // with `endIngest` before rethrowing so the edit lock is not left held.
         let stateMarkdown: String
         do {
-            stateMarkdown = try store.currentStateSnapshot().renderStateFile()
+            stateMarkdown = try await store.currentStateSnapshot().renderStateFile()
         } catch {
             store.endIngest()
             throw error
@@ -242,7 +242,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // to the launcher, and auto-merge on completion.
         if store.workspacesEnabled {
             do {
-                let wsID = try store.createWorkspace(
+                let wsID = try await store.createWorkspace(
                     name: "ingest-\(sourceIDs.count)", activityID: nil)
                 DebugLog.ingest("AppQueueIngestionProvider: workspace isolated, wsID=\(wsID)")
 
@@ -334,7 +334,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // `runAgent` returns, so this records only pages visible afterward.
         let outputs: [QueueRecordedOutputPage]?
         do {
-            outputs = try store.pagesCitingSources(
+            outputs = try await store.pagesCitingSources(
                 sourceIDs: sourceIDs,
                 limit: QueueRecordedOutputLimits.maxRows
             ).map { QueueRecordedOutputPage(pageID: $0.pageID, title: $0.title) }
@@ -380,7 +380,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
 
         // Capture the state before the running reports: a strategy read
         // failure fails the item without ever reporting a launch.
-        let stateMarkdown = try store.currentStateSnapshot().renderStateFile()
+        let stateMarkdown = try await store.currentStateSnapshot().renderStateFile()
 
         // The ACTUAL selected provider at launch — never the scheduler's
         // capacity bucket (`default-ingest`).
@@ -417,7 +417,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         wikiID: WikiID,
         pageIDs: [PageID],
         queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
+        onProgress: @escaping @Sendable (String) async -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
@@ -454,7 +454,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
 
         // Capture the state before the running reports: a strategy read
         // failure fails the item without ever reporting a launch.
-        let stateMarkdown = try store.currentStateSnapshot().renderStateFile()
+        let stateMarkdown = try await store.currentStateSnapshot().renderStateFile()
 
         // The ACTUAL selected provider at launch — never the scheduler's
         // capacity bucket (`default-ingest`).
@@ -531,7 +531,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         requested: [(id: SourceID, outcome: QueueIngestionReporting.StagingOutcome)],
         store: WikiStoreModel,
         attemptSucceeded: Bool
-    ) {
+    ) async {
         for id in QueueIngestionReporting.stampableSourceIDs(
             requested: requested,
             attemptSucceeded: attemptSucceeded) {
