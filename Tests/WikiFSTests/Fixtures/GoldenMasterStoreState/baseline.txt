@@ -1,0 +1,84 @@
+# state
+deletion-impact linkingPages=0 bookmarks=0 incomingLinks=0
+deletion targets=1 rewritten=0 removedBookmarks=0 unlinked=0
+workspace-merged pages=1
+vacuum blobs=3/64 activities=1 versions=0
+# pages
+page id=u6 title=Alpha body-bytes=27
+  version id=u1 title=Alpha saved=t*
+  version id=u2 title=Alpha saved=t*
+  version id=u7 title=Alpha saved=t*
+  edit agent=agent:ingest kind=agent activity=edit saved=t*
+  edit agent=coauthor kind=model activity=edit saved=t*
+  edit agent=user kind=human activity=import saved=t*
+page id=u3 title=Gamma body-bytes=36
+  version id=u8 title=Gamma saved=t*
+  edit agent=agent:ingest kind=agent activity=import saved=t*
+page id=u9 title=Home body-bytes=0
+  version id=u10 title=Home saved=t*
+  edit agent=user kind=human activity=import saved=t*
+# sources
+source id=u4 file=notes.txt display=renamed-notes bytes=17 role=primary
+  markdown id=u11 origin=revert
+  markdown id=u5 origin=extraction
+  markdown id=u12 origin=extraction
+  edit agent=legacy-import kind=software fetched=t*
+# bookmarks
+bookmark id=u13 parent=- position=0 content=folder:Read later
+# workspaces
+workspace id=u14 name=speculative status=merged refs=1
+workspace id=u15 name=abandoned status=abandoned refs=0
+# strategy
+strategy name=- revision=2
+# chats
+chat id=u16 title=Golden chat messages=2
+  message seq=0 role=user draft=false
+  message seq=1 role=assistant draft=false
+# wiki-index
+index version=2 body-bytes=16
+# log
+log kind=ingest title=Workspace merge completed
+log kind=ingest title=golden-master ingest
+# queue
+queue-item id=u17 queue=extraction state=failed sources=1 attempts=0
+queue-item id=u18 queue=ingestion state=completed sources=1 attempts=0
+# script notes
+note append-amended returned=u1
+note append-coauthored returned=u2
+note cas-conflict error=PageConflictError
+note resolved gamma=u3
+note duplicate-content existing=u4
+note markdown-head=u5
+note strategy-revision=1
+note strategy-unchanged-save-emits-nothing
+note strategy-reset-tombstone
+# events
+event kind=page id=u9 change=created seq=1
+event kind=page id=u6 change=created seq=2
+event kind=page id=u19 change=created seq=3
+event kind=page id=u6 change=updated seq=4
+event kind=page id=u6 change=updated seq=5
+event kind=page id=u6 change=updated seq=6
+event kind=page id=u3 change=created seq=7
+event kind=source id=u4 change=created seq=8
+event kind=source id=u4 change=updated seq=9
+event kind=source id=u4 change=updated seq=10
+event kind=source id=u4 change=updated seq=11
+event kind=source id=u4 change=updated seq=12
+event kind=source id=u4 change=updated seq=13
+event kind=page id=u19 change=deleted seq=14
+event kind=bookmark id=u13 change=created seq=15
+event kind=bookmark id=u20 change=created seq=16
+event kind=bookmark id=u13 change=updated seq=17
+event kind=bookmark id=u20 change=deleted seq=18
+event kind=log id=u21 change=created seq=19
+event kind=strategy id=wiki_strategy change=created seq=20
+event kind=strategy id=wiki_strategy change=deleted seq=21
+event kind=chat id=u16 change=created seq=22
+event kind=chat id=u16 change=updated seq=23
+event kind=chat id=u16 change=updated seq=24
+event kind=chat id=u22 change=created seq=25
+event kind=chat id=u22 change=deleted seq=26
+event kind=wikiIndex id=wiki-index change=updated seq=27
+event kind=log id=u23 change=created seq=28
+# end

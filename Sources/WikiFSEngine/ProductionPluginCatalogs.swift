@@ -178,15 +178,21 @@ public struct AppPluginCatalogFactories: Sendable {
     public let base: BasePluginCatalogFactories
     public let makeDaemonTransport: RegisteredTransportProvider.Factory
     public let makeTantivyRuntime: SearchRuntimeFactory.Factory
+    /// Open-seam harness injection (plans/daemon-only-access.md Phase 0):
+    /// when non-nil, the app wiki profile mounts a recording `StorePlugin`
+    /// instead of the production one. nil keeps `StorePlugin.definition`.
+    public let storeOpenFactories: StorePlugin.StoreOpenFactories?
 
     public init(
         base: BasePluginCatalogFactories,
         makeDaemonTransport: @escaping RegisteredTransportProvider.Factory,
-        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
+        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.defaultRuntimeFactory,
+        storeOpenFactories: StorePlugin.StoreOpenFactories? = nil
     ) {
         self.base = base
         self.makeDaemonTransport = makeDaemonTransport
         self.makeTantivyRuntime = makeTantivyRuntime
+        self.storeOpenFactories = storeOpenFactories
     }
 }
 
@@ -1000,7 +1006,13 @@ public enum AppPluginCatalog {
         factories: AppPluginCatalogFactories,
         additionalDefinitions: [PluginDefinition] = []
     ) throws -> PluginCatalog {
-        var definitions = baseDefinitions(factories.base)
+        let storeDefinition: PluginDefinition
+        if let openFactories = factories.storeOpenFactories {
+            storeDefinition = StorePlugin.definition(openFactories: openFactories)
+        } else {
+            storeDefinition = StorePlugin.definition
+        }
+        var definitions = baseDefinitions(factories.base, storeDefinition: storeDefinition)
         definitions.append(contentsOf: [
             RendererServicesPlugin.definition,
             DaemonTransportPlugin.definition(makeServices: factories.makeDaemonTransport),
@@ -1023,7 +1035,7 @@ public enum DaemonPluginCatalog {
 
 public enum CLIPluginCatalog {
     public static func definitions(
-        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
+        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.defaultRuntimeFactory
     ) -> [PluginDefinition] {
         [
             StorePlugin.definition,
@@ -1033,15 +1045,18 @@ public enum CLIPluginCatalog {
     }
 
     public static func build(
-        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
+        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.defaultRuntimeFactory
     ) throws -> PluginCatalog {
         try PluginCatalog(definitions(makeTantivyRuntime: makeTantivyRuntime))
     }
 }
 
-private func baseDefinitions(_ factories: BasePluginCatalogFactories) -> [PluginDefinition] {
+private func baseDefinitions(
+    _ factories: BasePluginCatalogFactories,
+    storeDefinition: PluginDefinition = StorePlugin.definition
+) -> [PluginDefinition] {
     [
-        StorePlugin.definition,
+        storeDefinition,
         SessionsPlugin.definition,
         PerWikiRuntimePlugin.definition,
         ChatsPersistencePlugin.definition,

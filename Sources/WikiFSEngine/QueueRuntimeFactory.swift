@@ -45,15 +45,21 @@ public struct QueueRuntimeFactory: Sendable {
     public let databaseURL: URL
     public let extractionProvider: any QueueExtractionProvider
     public let makeIngestionProvider: IngestionProviderFactory
+    /// Open-seam harness injection (plans/daemon-only-access.md Phase 0):
+    /// when non-nil, replaces the direct queue-database open in the store
+    /// component.
+    public let makeQueueStore: (@Sendable (URL) throws -> QueueStore)?
 
     public init(
         databaseURL: URL,
         extractionProvider: any QueueExtractionProvider,
-        makeIngestionProvider: @escaping IngestionProviderFactory
+        makeIngestionProvider: @escaping IngestionProviderFactory,
+        makeQueueStore: (@Sendable (URL) throws -> QueueStore)? = nil
     ) {
         self.databaseURL = databaseURL
         self.extractionProvider = extractionProvider
         self.makeIngestionProvider = makeIngestionProvider
+        self.makeQueueStore = makeQueueStore
     }
 
     public func assemble() async throws -> QueueRuntimeHandle {
@@ -123,7 +129,8 @@ public struct QueueRuntimeFactory: Sendable {
             return try ComponentDefinition(
                 label: component.rawValue,
                 provisions: [ServiceDependency(Keys.store)]) { activation in
-                    let store = try QueueStore(databaseURL: databaseURL)
+                    let store = try self.makeQueueStore.map({ try $0(databaseURL) })
+                        ?? QueueStore(databaseURL: databaseURL)
                     _ = try await activation.supply(Keys.store, value: store)
                     _ = try await activation.effect { _ in
                         store.close()
