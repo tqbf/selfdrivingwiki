@@ -193,6 +193,16 @@ final class DaemonStoreEventCoordinator: @unchecked Sendable {
         return delivered
     }
 
+    /// Test-support: the ingested stamp counter for one wiki (0 when the
+    /// wiki has no delivery state yet). Ingest rides the bus's async
+    /// handler tasks, so a commit returning does NOT mean its stamp landed;
+    /// tests asserting exact ring contents wait on this counter.
+    func ingestedSequenceCount(wikiID: String) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return wikis[wikiID]?.stampCounter ?? 0
+    }
+
     // MARK: - Handshake (executor path)
 
     /// Complete one sink's handshake: snapshot every prepared wiki's

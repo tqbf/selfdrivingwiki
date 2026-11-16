@@ -244,6 +244,23 @@ struct DaemonStoreEventTests {
             try await commitPage(
                 daemon, wikiID: wikiID, title: "Ring Fill \(index)")
         }
+        // Ingest rides the bus's async handler tasks — a commit returning
+        // does not mean its stamp landed in the ring. Wait for the full
+        // count (261 = seeded Home + 260 commits) before handshaking, or
+        // the handshake races trailing ingests and stragglers arrive as
+        // live deliveries with post-handshake sequences.
+        let ingestDeadline = ContinuousClock.now + .seconds(10)
+        while daemon.storeEvents.ingestedSequenceCount(
+            wikiID: wikiID.rawValue) < 261 {
+            if ContinuousClock.now >= ingestDeadline {
+                let have = daemon.storeEvents.ingestedSequenceCount(
+                    wikiID: wikiID.rawValue)
+                Issue.record(
+                    "timed out waiting for event ingest; have \(have) of 261")
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
         #expect(sink.snapshot().isEmpty)
 
         let payload = try JSONEncoder().encode(DaemonSinkHandshakeRequest())
