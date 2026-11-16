@@ -2790,7 +2790,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                             await authority.close()
                             return
                         }
-                        self.finishPackageEmbedMount(
+                        await self.finishPackageEmbedMount(
                             authority: authority,
                             plan: plan,
                             placeholderID: placeholderID,
@@ -2967,26 +2967,26 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 await authority.close()
                 return
             }
-            webView.evaluateJavaScript(script) { [weak self] result, error in
-                guard let self else { return }
-                if let error {
-                    DebugLog.reader("embed[\(placeholderID.rawValue)]: injection JS error \(error.localizedDescription)")
-                    self.teardownDOMEmbed(placeholderID)
-                    return
-                }
-                let acknowledgement = result as? String
+            // The registry load timeout stays armed: only the frame's real
+            // load event (frameDidLoad through the subframe bridge) releases
+            // the timeout slot. This detached task is async, so the injected
+            // script uses the suspending WKWebView overload directly.
+            do {
+                let acknowledgement = try await webView.evaluateJavaScript(script)
                 guard acknowledgement == RendererDOMEmbedInjection.injectionAcknowledgement else {
                     DebugLog.reader("embed[\(placeholderID.rawValue)]: injection not acknowledged; rolling back")
                     self.teardownDOMEmbed(placeholderID)
                     return
                 }
-                // The registry load timeout stays armed: only the frame's
-                // real load event (frameDidLoad through the subframe bridge)
-                // releases the timeout slot.
+            } catch {
+                DebugLog.reader("embed[\(placeholderID.rawValue)]: injection JS error \(error.localizedDescription)")
+                self.teardownDOMEmbed(placeholderID)
+                return
             }
         }
+    }
 
-        private func inlineSessionFailureHandler(
+private func inlineSessionFailureHandler(
             for placeholderID: RendererAttachmentPlaceholderID,
             generation: Int
         ) -> @MainActor (RendererSessionFailure) -> Void {
@@ -3013,6 +3013,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 self.setRowExpansion(false, for: placeholderID)
             }
         }
+
 
         func applyReaderZoom(
             _ readerZoom: Double,

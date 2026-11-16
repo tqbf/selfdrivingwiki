@@ -19,23 +19,25 @@ struct RendererHostNavigationRouting {
 
     static func store(_ store: WikiStoreModel) async -> Self {
         Self { target in
-            switch target {
-            case let .page(pageID):
-                _ = store.selectPage(byID: pageID)
-            case let .source(sourceID):
-                _ = store.selectSource(byID: sourceID)
-            case let .namedContent(reference):
-                let filename = reference.path.split(separator: "/").last.map(String.init) ?? reference.path
-                let title = (filename as NSString).deletingPathExtension
-                let anchor = reference.subpath.map { String($0.dropFirst()) }
-                if store.selectPage(byTitle: title, anchor: anchor) == false {
-                    _ = store.selectSource(byDisplayName: title, anchor: anchor)
+            Task { @MainActor in
+                switch target {
+                case let .page(pageID):
+                    _ = store.selectPage(byID: pageID)
+                case let .source(sourceID):
+                    _ = await store.selectSource(byID: sourceID)
+                case let .namedContent(reference):
+                    let filename = reference.path.split(separator: "/").last.map(String.init) ?? reference.path
+                    let title = (filename as NSString).deletingPathExtension
+                    let anchor = reference.subpath.map { String($0.dropFirst()) }
+                    if store.selectPage(byTitle: title, anchor: anchor) == false {
+                        _ = await store.selectSource(byDisplayName: title, anchor: anchor)
+                    }
                 }
             }
         }
     }
 
-    func route(_ target: RendererNavigationTarget) async { routeTarget(target) }
+    func route(_ target: RendererNavigationTarget) { routeTarget(target) }
 }
 
 /// Machine-scoped, validated package facts. It deliberately contains no
@@ -139,7 +141,7 @@ enum RendererSessionPreparer {
                     version: request.configuration.reservation.version,
                     path: declaration.extractorAsset)
                 let extractor = try request.configuration.resourceProvider.resource(for: extractorURL).data
-                let primary = try exactPrimaryPayload(for: request)
+                let primary = try await exactPrimaryPayload(for: request)
                 let helperResult = try await executeHelper(.init(
                     helperURL: RendererAssetExtractorHelperLocation.locate(),
                     extractorBytes: extractor,
@@ -152,7 +154,7 @@ enum RendererSessionPreparer {
                     stdoutLimit: RendererSessionHostPolicy.extractorStandardOutputLimit,
                     stderrLimit: RendererSessionHostPolicy.extractorStandardErrorLimit))
                 try Task.checkCancellation()
-                assetReader = RendererAssetSessionPreparer.makeAssetReader(
+                assetReader = await RendererAssetSessionPreparer.makeAssetReader(
                     from: helperResult,
                     siblingSources: request.siblingSources,
                     store: request.store,
@@ -183,12 +185,12 @@ enum RendererSessionPreparer {
         case .inlineArtifact(let artifact):
             return .init(mimeType: artifact.mimeType.rawValue, bytes: artifact.bytes)
         case .source(let versionID):
-            let bytes = try request.store.sourceContent(versionID: versionID)
+            let bytes = try await request.store.sourceContent(versionID: versionID)
             return .init(mimeType: "application/octet-stream", bytes: bytes)
         case .markdown:
             let reader = RendererAuthorizedInputReader(store: request.store, authorizedInput: request.input)
             defer { reader.close() }
-            return try reader.read(request.input)
+            return try await reader.read(request.input)
         }
     }
 }
@@ -238,15 +240,19 @@ final class RendererSessionPreparationOwner {
         let requestedGeneration = generation
         let requestedIdentity = request.identity
         task?.cancel()
-        prepared?.close()
+        await prepared?.close()
         prepared = nil
         identity = requestedIdentity
         phase = .preparing
         task = Task {
             do {
                 let result = try await preparation(request)
-                guard Task.isCancelled == false, generation == requestedGeneration,
-                      identity == requestedIdentity else { result.close(); return }
+                let isCurrent = Task.isCancelled == false && generation == requestedGeneration
+                    && identity == requestedIdentity
+                guard isCurrent else {
+                    await result.close()
+                    return
+                }
                 prepared = result
                 phase = .prepared
             } catch {
@@ -261,7 +267,7 @@ final class RendererSessionPreparationOwner {
         generation &+= 1
         task?.cancel()
         task = nil
-        prepared?.close()
+        await prepared?.close()
         prepared = nil
         identity = nil
         phase = .idle
@@ -274,7 +280,7 @@ final class RendererSessionPreparationOwner {
         generation &+= 1
         task?.cancel()
         task = nil
-        prepared?.close()
+        await prepared?.close()
         prepared = nil
         identity = nil
         phase = .failed
