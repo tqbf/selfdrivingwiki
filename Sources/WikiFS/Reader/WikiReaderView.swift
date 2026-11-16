@@ -1666,7 +1666,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         context.coordinator.currentSelection = currentSelection
         if context.coordinator.loadedMarkdown != markdown ||
             context.coordinator.loadedDocumentIdentity != documentIdentity {
-            Task {             await context.coordinator.startLoad(
+            Task { await context.coordinator.startLoad(
                 markdown: markdown,
                 documentIdentity: documentIdentity,
                 isLoading: $isLoading,
@@ -1829,7 +1829,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             return fresh
         }
 
-        func startLoad(
+        @MainActor func startLoad(
             markdown: String,
             documentIdentity: MarkdownDocumentIdentity?,
             isLoading: Binding<Bool>,
@@ -2967,26 +2967,24 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 await authority.close()
                 return
             }
-            // The registry load timeout stays armed: only the frame's real
-            // load event (frameDidLoad through the subframe bridge) releases
-            // the timeout slot. This detached task is async, so the injected
-            // script uses the suspending WKWebView overload directly.
             do {
-                let acknowledgement = try await webView.evaluateJavaScript(script)
+                let acknowledgement = try await webView.evaluateJavaScript(script) as? String
                 guard acknowledgement == RendererDOMEmbedInjection.injectionAcknowledgement else {
                     DebugLog.reader("embed[\(placeholderID.rawValue)]: injection not acknowledged; rolling back")
                     self.teardownDOMEmbed(placeholderID)
                     return
                 }
+                // The registry load timeout stays armed: only the frame's real
+                // load event (frameDidLoad through the subframe bridge) releases
+                // the timeout slot.
             } catch {
                 DebugLog.reader("embed[\(placeholderID.rawValue)]: injection JS error \(error.localizedDescription)")
                 self.teardownDOMEmbed(placeholderID)
                 return
             }
         }
-    }
 
-private func inlineSessionFailureHandler(
+        private func inlineSessionFailureHandler(
             for placeholderID: RendererAttachmentPlaceholderID,
             generation: Int
         ) -> @MainActor (RendererSessionFailure) -> Void {
@@ -3013,7 +3011,6 @@ private func inlineSessionFailureHandler(
                 self.setRowExpansion(false, for: placeholderID)
             }
         }
-
 
         func applyReaderZoom(
             _ readerZoom: Double,
@@ -3089,7 +3086,7 @@ private func inlineSessionFailureHandler(
                     // macOS browser convention: plain click navigates the current
                     // tab in place; ⌘-click opens the target in a new tab.
                     let openInNewTab = navigationAction.modifierFlags.contains(.command)
-                    Task { await route(url, openInNewTab: openInNewTab) }
+                    route(url, openInNewTab: openInNewTab)
                     decisionHandler(.cancel)
                     return
                 }
@@ -3148,23 +3145,23 @@ private func inlineSessionFailureHandler(
         /// `selectPage`/`selectSource` stash the `#fragment` as a pending anchor
         /// that the *destination* reader's Coordinator later consumes + applies.
         /// `openInNewTab` mirrors the click's modifier (⌘-click → new tab).
-        private func route(_ url: URL, openInNewTab: Bool = false) async {
+        private func route(_ url: URL, openInNewTab: Bool = false) {
             switch WikiReaderView.linkRoute(for: url) {
             case .samePageAnchor(let frag):
                 if let webView, let frag {
                     let s = WikiReaderRep.jsString(frag)
-                    // Completion-handler overload: the async WKWebView
-                    // overload throws + suspends, and this route arm is sync.
                     webView.evaluateJavaScript(
-                        #"var e=document.getElementById("\#(s)"); if(e){e.scrollIntoView({block:"start"});}""#,
-                        completionHandler: { _, _ in })
+                        #"var e=document.getElementById("\#(s)"); if(e){e.scrollIntoView({block:"start"});}""#)
                 }
             case .page(let title, let id, let frag):
                 if let id, store?.selectPage(byID: id, anchor: frag, openInNewTab: openInNewTab) == true { }
                 else { store?.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
             case .source(let title, let id, let frag, let pin):
-                if let id, await store?.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) == true { }
-                else { await store?.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
+                if let id {
+                    Task { _ = await store?.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) }
+                } else {
+                    Task { _ = await store?.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
+                }
             case .chat(let title, let id, let frag):
                 if let id, store?.selectChat(byID: id, anchor: frag, openInNewTab: openInNewTab) == true { }
                 else { store?.selectChat(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }

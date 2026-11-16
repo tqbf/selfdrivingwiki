@@ -188,7 +188,7 @@ struct ChatDetailView: View {
             let turnEnded = sessionWasAnswering && !runState.isAnswering
             sessionWasAnswering = runState.isAnswering
             if turnEnded, let chatID {
-                chatResolution = store.resolveChat(id: chatID)
+                Task { chatResolution = await store.resolveChat(id: chatID) }
                 store.reloadChats()
             }
         }
@@ -217,7 +217,7 @@ struct ChatDetailView: View {
                 chatResolution = nil
                 return
             }
-            chatResolution = store.resolveChat(id: chatID)
+            chatResolution = await store.resolveChat(id: chatID)
         }
         .task(id: ChatHydrationTaskKey(chatID: chatID, sessionID: remoteSession.instanceID)) {
             if let chatID {
@@ -668,8 +668,8 @@ struct ChatDetailView: View {
         .init(chat: try store.getChat(id: chatID), usageSummary: try store.chatUsageSummary(chatID: chatID))
     }
 
-    nonisolated private static func chatMetadataInput(chatID: ChatID, store: WikiStore) throws -> ChatMetadataInput {
-        .init(chat: try store.getChat(id: chatID), usageSummary: try store.chatUsageSummary(chatID: chatID))
+    nonisolated private static func chatMetadataInput(chatID: ChatID, store: WikiStore) async throws -> ChatMetadataInput {
+        .init(chat: try await store.getChat(id: chatID), usageSummary: try await store.chatUsageSummary(chatID: chatID))
     }
 
 
@@ -819,7 +819,7 @@ struct ChatDetailView: View {
             // The wire message (attachment refs included) is what the daemon
             // derives its title from — pass the same text so both writers
             // converge byte-for-byte instead of by inverse-strip coincidence.
-            store.applyProvisionalChatTitle(chatID: chatID, userText: payload.wireMessage)
+            Task { await store.applyProvisionalChatTitle(chatID: chatID, userText: payload.wireMessage) }
         }
         outgoing.send(chatID: chatID, payload: payload, makeRequest: makeSubmitRequest)
     }
@@ -901,7 +901,7 @@ struct ChatDetailView: View {
         guard isChatOperationConfigured, queuedMessages.indices.contains(index) else { return }
         let pending = queuedMessages.remove(at: index)
         if let chatID {
-            store.applyProvisionalChatTitle(chatID: chatID, userText: pending.wireMessage)
+            Task { await store.applyProvisionalChatTitle(chatID: chatID, userText: pending.wireMessage) }
         }
         var cleared = pending
         cleared.dispatchFailure = nil
@@ -1044,11 +1044,11 @@ struct ChatDetailView: View {
         )
     }
 
-    private func loadPersistedTranscript(chatID: ChatID) {
+    private func loadPersistedTranscript(chatID: ChatID) async {
         var items: [PersistedChatTranscriptItem] = []
         var cursor: ChatTranscriptCursor?
         while true {
-            let page = store.readChatTranscriptPage(
+            let page = await store.readChatTranscriptPage(
                 chatID: chatID,
                 after: cursor,
                 limit: RemoteChatSession.committedHistoryPageSize
