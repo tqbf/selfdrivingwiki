@@ -177,7 +177,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
 
         for sourceID in sourceIDs {
             guard let source = store.sources.first(where: { $0.id == sourceID }),
-                  let bytes = store.sourceBytes(id: sourceID)
+                  let bytes = await store.sourceBytes(id: sourceID)
             else {
                 DebugLog.ingest("AppQueueIngestionProvider: skipping \(sourceID.rawValue) — source or bytes missing")
                 stagingOutcomes.append((id: sourceID, outcome: .bytesUnavailable))
@@ -198,7 +198,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             // can pin the registry-driven widening (PDF + HTML) without
             // standing up the full staging path (which needs a real session,
             // launcher, fileProvider, etc.).
-            let head = store.processedMarkdownHead(for: source)
+            let head = await store.processedMarkdownHead(for: source)
             let staged = Self._stagedBytesAndExt(
                 for: source,
                 originalBytes: bytes,
@@ -535,7 +535,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         for id in QueueIngestionReporting.stampableSourceIDs(
             requested: requested,
             attemptSucceeded: attemptSucceeded) {
-            store.markSourceIngested(id: id)
+            await store.markSourceIngested(id: id)
         }
     }
 
@@ -584,7 +584,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             onLiveUsage: onLiveUsage,
             onPendingPermission: onPendingPermission,
             providerLabel: resolveSelectedProvider().label,
-            onLock: { store.agentRunStarted() },
+            onLock: { await store.agentRunStarted() },
             onUnlock: {
                 store.agentRunEnded()
                 if !ingestingSourceIDs.isEmpty { store.endIngest() }
@@ -626,7 +626,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             onLiveUsage: onLiveUsage,
             onPendingPermission: onPendingPermission,
             providerLabel: resolveSelectedProvider().label,
-            onLock: { store.agentRunStarted() },
+            onLock: { await store.agentRunStarted() },
             onUnlock: { store.agentRunEnded() }
         )
         await launcher.awaitProviderRelease()
