@@ -545,7 +545,7 @@ struct SourceDetailView: View {
         }
         .task(id: file.id) {
             rendererSessionPreparation.cancel()
-            refreshSourceBytesSnapshot()
+            await refreshSourceBytesSnapshot()
             headVersion = await store.processedMarkdownHead(for: file)
             origin = await store.sourceOrigin(for: file.id)
             editHistory = await store.sourceEditHistory(for: file.id)
@@ -1287,9 +1287,12 @@ struct SourceDetailView: View {
         }
         let history = try await store.processedMarkdownHistory(sourceID: sourceID)
         let markdown = try await store.processedMarkdownHead(sourceID: sourceID)
-        let okfMetadata = try await store.sourceMarkdownOKFMetadata(
-            versionID: markdown?.id, includeCorrected: false)?.metadata
-            ?? OKFConceptMetadata()
+        var okfMetadata = OKFConceptMetadata()
+        if let unwrappedMarkdown = markdown {
+            okfMetadata = (try await store.sourceMarkdownOKFMetadata(
+                versionID: unwrappedMarkdown.id, includeCorrected: false))?.metadata
+                ?? OKFConceptMetadata()
+        }
         return SourceMetadataProjection.make(input: .init(
             source: source,
             markdown: markdown,
@@ -1309,11 +1312,11 @@ struct SourceDetailView: View {
             showsControls: !isEditing,
             source: { sourcePresentationContent },
             rendered: { descriptor in renderedContent(for: descriptor) },
-            onRendererSelected: persistRendererPreference,
-            onPresentationSelected: persistRendererPresentationSelection,
+            onRendererSelected: { await persistRendererPreference($0) },
+            onPresentationSelected: { await persistRendererPresentationSelection($0) },
             onFallback: handleRendererFallback)
         .task(id: rendererPreparationKey) {
-            prepareSelectedRendererSession()
+            await prepareSelectedRendererSession()
         }
     }
 
@@ -1429,7 +1432,7 @@ struct SourceDetailView: View {
         // The exact typed input is carried by the markdown card and routed to
         // the current source's renderer pane. The renderer state itself only
         // needs the exact renderer reference to open the pane.
-        persistRendererPreference(reference)
+        await persistRendererPreference(reference)
         var lifecycle = rendererPresentationLifecycle
         lifecycle.selectRendered(reference)
         rendererPresentationLifecycle = lifecycle

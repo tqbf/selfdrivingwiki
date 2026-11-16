@@ -1326,9 +1326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillResignActive(_ notification: Notification) {
-        MainActor.assumeIsolated {
-            Task { await sessionManager?.flushAllSessions() }
-        }
+        Task { await sessionManager?.flushAllSessions() }
     }
 
     /// Keep the app alive after the last window closes — it drops to

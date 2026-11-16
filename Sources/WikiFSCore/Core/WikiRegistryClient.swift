@@ -71,7 +71,7 @@ public final class WikiRegistryClient {
     /// exported/deleted — the registry client itself never holds a store, so
     /// it cannot flush directly. Safe to leave `nil` in tests that never
     /// invoke those paths against an active wiki.
-    @ObservationIgnored public var flushActiveStore: ((_ wikiID: WikiID) -> Void)?
+    @ObservationIgnored public var flushActiveStore: ((_ wikiID: WikiID) async -> Void)?
 
     // MARK: - Init
 
@@ -274,7 +274,7 @@ public final class WikiRegistryClient {
     /// ``flushActiveStore`` closure (this client does not own the store).
     public func exportWiki(id: WikiID, to destinationURL: URL) throws {
         guard descriptorExists(id) else { throw WikiRegistryError.unknownWiki(id) }
-        flushActiveStore?(id)
+        Task { await flushActiveStore?(id) }
         let sourceURL = databaseURL(forWikiID: id)
         guard sourceURL.standardizedFileURL != destinationURL.standardizedFileURL else {
             throw WikiRegistryError.exportWouldOverwriteSource
@@ -326,7 +326,7 @@ public final class WikiRegistryClient {
         // Flush any pending edits in the wiki being deleted, so we don't
         // strand writes in a DB we're about to delete. The closure resolves
         // to the live session's store at the app layer; nil-safe.
-        flushActiveStore?(id)
+        Task { await flushActiveStore?(id) }
 
         await removeDomain?(id)
 
