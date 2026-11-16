@@ -622,7 +622,7 @@ struct RendererActivationView: View {
             .navigationTitle(title)
             .onExitCommand { dismiss() }
             .task(id: request.id) { preparePackageSession() }
-            .onDisappear { rendererSessionPreparation.cancel() }
+            .onDisappear { Task { await rendererSessionPreparation.cancel() } }
     }
 
     @ViewBuilder
@@ -678,11 +678,11 @@ struct RendererActivationView: View {
     static func authorizedPayload(
         store: any WikiStore,
         input: RendererBridgeInput
-    ) throws -> RendererBridgeInputPayload {
+    ) async throws -> RendererBridgeInputPayload {
         let reader = RendererAuthorizedInputReader(
             store: store,
             authorizedInput: input)
-        return try reader.read(input)
+        return try await reader.read(input)
     }
 
     private func preparePackageSession() {
@@ -690,12 +690,14 @@ struct RendererActivationView: View {
               case .webPackage = descriptor.implementation,
               let configuration = installedRendererHost.inputs.configuration(for: descriptor)
         else { rendererSessionPreparation.cancel(); return }
-        rendererSessionPreparation.prepare(.init(
-            descriptor: descriptor, configuration: configuration, input: request.input,
-            admittedSource: request.sourceContext?.source, store: store.internalStore,
-            siblingSources: request.sourceContext?.siblingSources ?? [:],
-            sourceExtensions: request.sourceContext?.sourceExtensions ?? [:],
-            hostNavigationRouting: .store(store)))
+        Task {
+            rendererSessionPreparation.prepare(.init(
+                descriptor: descriptor, configuration: configuration, input: request.input,
+                admittedSource: request.sourceContext?.source, store: store.internalStore,
+                siblingSources: request.sourceContext?.siblingSources ?? [:],
+                sourceExtensions: request.sourceContext?.sourceExtensions ?? [:],
+                hostNavigationRouting: .store(store)))
+        }
     }
 
     private func packageRendererView(for descriptor: RendererDescriptor) -> AnyView? {

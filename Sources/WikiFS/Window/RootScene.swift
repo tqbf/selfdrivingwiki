@@ -172,7 +172,7 @@ struct RootScene: View {
                     do {
                         let hasWork = try await queueEngine.hasActiveWork(for: wikiID)
                         if !hasWork {
-                            sessionManager.releaseSession(for: wikiID)
+                            await sessionManager.releaseSession(for: wikiID)
                             fileProvider.unsubscribeBus(for: wikiID)
                         }
                     } catch {
