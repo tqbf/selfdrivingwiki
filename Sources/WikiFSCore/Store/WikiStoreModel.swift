@@ -879,7 +879,7 @@ public final class WikiStoreModel {
     /// fetch). Returns `false` when the id names no loaded page (a deleted
     /// target), so the caller can fall back to title-based selection.
     @discardableResult
-    public func selectPage(byID id: PageID, anchor: String? = nil, openInNewTab: Bool = false) async -> Bool {
+    public func selectPage(byID id: PageID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
         guard summaries.contains(where: { $0.id == id }) else { return false }
         let target = WikiSelection.page(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
@@ -1231,7 +1231,7 @@ public final class WikiStoreModel {
     ///   passage — the chat analogue of `selectSource(anchor:)`. Mirrors the
     ///   page/source anchor seam: tagged with `.chat(id)` + versioned.
     @discardableResult
-    public func selectChat(byID id: ChatID, anchor: String? = nil, openInNewTab: Bool = false) async -> Bool {
+    public func selectChat(byID id: ChatID, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
         guard chats.contains(where: { $0.id == id }) else { return false }
         let target = WikiSelection.chat(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
@@ -1399,7 +1399,7 @@ public final class WikiStoreModel {
     ///    swap the tab's selection, mirror it into `selection`, and reload drafts.
     ///    The `isApplyingTabSelection` guard mirrors `setActiveTab` so the view's
     ///    `onChange(of: selection)` bridge no-ops mid-swap.
-    private func navigateCurrentTab(to target: WikiSelection) async {
+    private func navigateCurrentTab(to target: WikiSelection) {
         if let existing = tabs.first(where: { $0.selection == target }) {
             setActiveTab(existing.id)
             return
@@ -1413,13 +1413,31 @@ public final class WikiStoreModel {
             openTab(target)
             return
         }
-        flushPendingSaves()
+        // Plan P1.3: capture the outgoing draft synchronously, clear the
+        // editor, then flush the CAPTURED state from a task — the same
+        // serialized pattern as beginSelectionTransition (§3.5: the
+        // switch-away cannot lose buffered edits).
+        let outgoing = PendingDraftSnapshot(
+            selection: loadedSelection,
+            title: draftTitle,
+            body: draftBody,
+            dirty: isDraftDirty)
+        autosaveTask?.cancel()
+        autosaveTask = nil
         isApplyingTabSelection = true
         tabs[i].selection = target
         tabs[i].title = tabTitle(for: target)
         selection = target
+        draftTitle = ""
+        draftBody = ""
+        isDraftDirty = false
+        loadedPage = nil
+        loadedPageHeadVersionID = nil
         loadDrafts(for: target)
         isApplyingTabSelection = false
+        Task { [weak self] in
+            await self?.flushCapturedDraft(outgoing)
+        }
         DebugLog.store("[tabs] navigateCurrentTab: in-place to \(target) (id=\(activeID)), \(tabs.count) tabs total")
     }
 
@@ -1677,7 +1695,7 @@ public final class WikiStoreModel {
 
     /// Create a new page and open it in a new tab.
     public func newPageInNewTab(title: String = WikiStoreModel.defaultUntitledTitle()) async {
-        flushPendingSaves()
+        await flushPendingSaves()
         do {
             let page = try await store.createPage(title: title, createdBy: "user")
             try await store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
@@ -1803,12 +1821,13 @@ public final class WikiStoreModel {
         forwardStack.removeAll()
     }
 
-    private func applyHistorySelection(_ newValue: WikiSelection) async {
+    private func applyHistorySelection(_ newValue: WikiSelection) {
         guard newValue != selection else { return }
-        flushPendingSaves()
+        // Plan P1.3: history navigation rides the SAME serialized,
+        // generation-checked transition as every other selection change
+        // (recordHistoryTransition is suppressed by the guard flag below).
         isApplyingHistorySelection = true
-        selection = newValue
-        loadDrafts(for: newValue)
+        beginSelectionTransition(to: newValue)
         isApplyingHistorySelection = false
         // Update the active tab's metadata so the tab bar stays in sync.
         syncActiveTabMetadata(to: newValue)
@@ -1843,7 +1862,7 @@ public final class WikiStoreModel {
             // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled else { return }
-            self?.save()
+            await self?.save()
         }
     }
 
@@ -1945,7 +1964,7 @@ public final class WikiStoreModel {
         let outcome = linter.fix(markdown: draftBody)
         guard outcome.fixed != draftBody else { return }
         draftBody = outcome.fixed
-        save()
+        Task { await self.save() }
     }
 
     /// The in-flight markdown warning Task (if any). Cancelled before starting a
@@ -2004,7 +2023,7 @@ public final class WikiStoreModel {
     }
 
     public func preflightLint(pageID: PageID) async -> LintPreflight? {
-        guard let page = DebugLog.trying("getPage", operation: { try store.getPage(id: pageID) }) else { return nil }
+        guard let page = await DebugLog.trying("getPage", operation: { try await store.getPage(id: pageID) }) else { return nil }
 
         // Apply WikiLinkFixer and persist if anything changed.
         let original = page.bodyMarkdown
@@ -2037,7 +2056,7 @@ public final class WikiStoreModel {
         let matches = WikiLinkSpan.matches(in: body)
         let knownTitles = Set(summaries.map { $0.title })
         let knownPageIDs = Set(summaries.map { $0.id.rawValue.uppercased() })
-        let allChats = DebugLog.trying("listAllChatsOrderedByID", operation: { try store.listAllChatsOrderedByID() }) ?? []
+        let allChats = await DebugLog.trying("listAllChatsOrderedByID", operation: { try await store.listAllChatsOrderedByID() }) ?? []
         let knownChatTitles = Set(allChats.map { $0.title })
         let knownChatIDs = Set(allChats.map { $0.id.rawValue.uppercased() })
         // Mirror replaceLinks: a link is broken only when NO candidate reading
@@ -2149,7 +2168,7 @@ public final class WikiStoreModel {
     /// Returns nil only if the store call throws.
     @discardableResult
     public func performBlobVacuum(dryRun: Bool) async -> BlobVacuumReport? {
-        DebugLog.trying("vacuumBlobs", operation: { try store.vacuumBlobs(dryRun: dryRun) })
+        await DebugLog.trying("vacuumBlobs", operation: { try await store.vacuumBlobs(dryRun: dryRun) })
     }
 
     /// Run the activity-GC sweep against the active store (issue #257).
@@ -3414,9 +3433,9 @@ public final class WikiStoreModel {
     /// The reader retains that version ID, so a mounted renderer never follows
     /// later edits through the live source reference.
     public func rendererAuthorizedInputReader(for sourceID: SourceID) async -> RendererAuthorizedInputReader? {
-        guard let version = DebugLog.trying(
+        guard let version = await DebugLog.trying(
             "activeContentVersion",
-            operation: { try store.activeContentVersion(sourceID: sourceID) }
+            operation: { try await store.activeContentVersion(sourceID: sourceID) }
         ) else { return nil }
         return RendererAuthorizedInputReader(store: store, authorizedInput: .source(versionID: version.id))
     }
@@ -4434,7 +4453,7 @@ public final class WikiStoreModel {
         DebugLog.store("search[\(kind)]: query=\"\(query)\" Tantivy-BM25=\(leg?.count ?? 0) fused=\(fused.count) overlap=\(overlap) ms=\(String(format: "%.1f", ms))")
     }
 
-    private func scheduleSearch() async {
+    private func scheduleSearch() {
         searchTask?.cancel()
         guard !searchQuery.isEmpty else {
             searchResults = []
@@ -4468,7 +4487,7 @@ public final class WikiStoreModel {
         }
     }
 
-    private func scheduleSourceSearch() async {
+    private func scheduleSourceSearch() {
         sourceSearchTask?.cancel()
         guard !sourceSearchQuery.isEmpty else {
             sourceSearchResults = []
@@ -4499,7 +4518,7 @@ public final class WikiStoreModel {
         }
     }
 
-    private func scheduleChatSearch() async {
+    private func scheduleChatSearch() {
         chatSearchTask?.cancel()
         guard !chatSearchQuery.isEmpty else {
             chatSearchResults = []
