@@ -103,6 +103,14 @@ public enum DaemonDomainFamily: String, Codable, Sendable, CaseIterable {
     /// old direct-write path is gone — fixture runs use the build-only
     /// `wikictl-fixture` binary).
     case extractor
+    /// Structured store operations executed daemon-side against the daemon's
+    /// prepared `WikiStore` (Phase 2 of plans/daemon-only-access.md). Payload
+    /// is the JSON `DaemonStoreRequest` / `DaemonStoreReply` pair; operation
+    /// strings come from ``DaemonStoreOperation``. Replaces every direct
+    /// client database open — a daemon that cannot serve the family answers
+    /// typed errors (`daemonUnavailable` / `outcomeUnknown`), never a silent
+    /// local fallback.
+    case store
 }
 
 public struct DaemonDomainRequest: Codable, Equatable, Sendable {

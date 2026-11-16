@@ -22,10 +22,16 @@ client — never a silent local revival of a second writer.
 | File Provider (P6) | App Group domain socket, read-only `projection` family | container listing, node lookup, content fetch, tokens, manifests |
 
 Frame budget: the 4 MiB cap (`SearchSocketWire.maxFrameSize`) applies to the
-FINAL OUTER encoded envelope. Chunk payloads cross two base64 layers (chunk
-`Data` inside DTO JSON, DTO JSON inside the envelope): a 1 MiB raw chunk is
-≈ 1.37 MiB after the first layer and ≈ 1.83 MiB after the second — inside the
-cap with envelope overhead. Tests assert the outer size.
+FINAL OUTER encoded envelope. The store family wraps its payloads in a nested
+envelope (chunk `Data` inside the per-op DTO JSON, DTO JSON inside the store
+reply's `result` Data for the structured typed-error contract, store reply
+JSON inside the domain envelope's `payload` Data) — THREE base64 layers, not
+the two this section originally estimated. Measured: a 1 MiB raw chunk is
+≈ 1.33 MiB after the first layer, ≈ 1.83 MiB after the second, and 2.37 MiB
+FINAL OUTER — inside the cap with ≈ 1.65 MiB headroom
+(`DaemonStoreFrameSizing.outerEncodedBound` is the shared conservative
+pre-flight bound). Tests assert the final outer size, never an inner DTO
+size.
 
 ## Degradation model
 
@@ -321,7 +327,10 @@ Staged payload handles: `payloadBegin` (size + SHA-256) → `payloadChunk`
 TTL/disconnect; partial handles never execute; the real op executes through
 its own method-atomic store entry point. Byte-budgeted replies bound
 ACCUMULATED ENCODED BYTES with cursor pagination; an oversized single item is
-served by a handle read.
+served by a handle read. Ratified limits (`DaemonStoreLimits`, one place):
+1 MiB raw chunk, 256 MiB staged-upload cap, 900 s upload TTL, 600 s
+committed-handle TTL, 1 MiB encoded list-reply budget, 64-entry per-wiki
+outcome cache, 1 MiB direct XPC payload.
 
 ## Baseline artifacts (Phase 0)
 
