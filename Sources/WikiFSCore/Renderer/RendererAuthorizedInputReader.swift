@@ -6,6 +6,7 @@ import Synchronization
 /// Reads only the immutable input version pinned when a renderer session began.
 /// This intentionally has no SourceID-based API, which prevents an accidental
 /// call to the live-ref `WikiStore.sourceContent(id:)` path.
+@MainActor
 public final class RendererAuthorizedInputReader {
     public enum ReaderError: Error, Equatable, Sendable {
         case closed

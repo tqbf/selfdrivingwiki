@@ -1253,7 +1253,7 @@ struct SourceDetailView: View {
                     try Self.sourceMetadataModel(sourceID: sourceID, store: database)
                 }
             } else {
-                return try Self.sourceMetadataModel(sourceID: sourceID, store: store.internalStore)
+                return try await Self.sourceMetadataModel(sourceID: sourceID, store: store.internalStore)
             }
         }, publish: { state in
             metadataState = state
@@ -1281,19 +1281,19 @@ struct SourceDetailView: View {
             okfMetadata: okfMetadata))
     }
 
-    nonisolated private static func sourceMetadataModel(sourceID: SourceID, store: WikiStore) throws -> MetadataPanelModel {
-        guard let source = try store.listSources().first(where: { $0.id == sourceID }) else {
+    nonisolated private static func sourceMetadataModel(sourceID: SourceID, store: WikiStore) async throws -> MetadataPanelModel {
+        guard let source = try await store.listSources().first(where: { $0.id == sourceID }) else {
             throw MetadataProjectionError.missingSource(sourceID)
         }
-        let history = try store.processedMarkdownHistory(sourceID: sourceID)
-        let markdown = try store.processedMarkdownHead(sourceID: sourceID)
-        let okfMetadata = try markdown.flatMap {
-            try store.sourceMarkdownOKFMetadata(versionID: $0.id, includeCorrected: false)?.metadata
-        } ?? OKFConceptMetadata()
+        let history = try await store.processedMarkdownHistory(sourceID: sourceID)
+        let markdown = try await store.processedMarkdownHead(sourceID: sourceID)
+        let okfMetadata = try await store.sourceMarkdownOKFMetadata(
+            versionID: markdown?.id, includeCorrected: false)?.metadata
+            ?? OKFConceptMetadata()
         return SourceMetadataProjection.make(input: .init(
             source: source,
             markdown: markdown,
-            extraction: try store.activeExtractionProvenance(sourceID: sourceID),
+            extraction: try await store.activeExtractionProvenance(sourceID: sourceID),
             alternativeCount: history.count,
             okfMetadata: okfMetadata))
     }

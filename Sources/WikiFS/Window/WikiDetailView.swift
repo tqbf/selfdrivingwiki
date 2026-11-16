@@ -325,14 +325,14 @@ struct WikiDetailView: View {
     /// Create an untitled page and open it in a new tab (mirrors the Pages
     /// sidebar `+` and the window toolbar's New Page).
     private func addPage() {
-        store.newPageInNewTab()
+        Task { await store.newPageInNewTab() }
     }
 
     /// Start a new chat (mirrors the Chats sidebar `+`). The chat row is
     /// persisted first, so the tab opens straight to `.chat(id)` with the
     /// stored identity.
     private func addChat() {
-        store.beginNewChat()
+        Task { await store.beginNewChat() }
     }
 
     /// Pick a single file via the open panel and ingest it.

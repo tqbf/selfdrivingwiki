@@ -18,6 +18,7 @@ import WikiFSTypes
 /// missing, invalid, unauthorized, changed, oversized, exhausted, or closed
 /// assets all look identical to the caller. Typed internal errors exist for
 /// tests and `DebugLog` without paths, titles, IDs, or existence details.
+@MainActor
 public final class RendererAuthorizedAssetReader {
     public enum ReaderError: Error, Equatable, Sendable {
         case closed

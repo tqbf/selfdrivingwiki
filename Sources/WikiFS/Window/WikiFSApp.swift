@@ -440,7 +440,7 @@ struct WikiFSApp: App {
         fileProviderBox.provider = fileProvider
         fileProvider.wire(into: registry)
         registry.flushActiveStore = { [sessionManager] wikiID in
-            sessionManager.flushSession(for: wikiID)
+            await sessionManager.flushSession(for: wikiID)
         }
     }
 
@@ -535,7 +535,7 @@ struct WikiFSApp: App {
         // quit dialog message is tailored and the app won't silently quit
         // mid-work even with the setting off.
         appDelegate.flushPendingSaves = { [weak sessionManager] in
-            sessionManager?.flushAllSessions()
+            Task { await sessionManager?.flushAllSessions() }
         }
         appDelegate.activeOperationDescription = { [weak activityTracker, weak sessionManager] in
             if activityTracker?.isExtracting == true {
@@ -1327,7 +1327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillResignActive(_ notification: Notification) {
         MainActor.assumeIsolated {
-            sessionManager?.flushAllSessions()
+            Task { await sessionManager?.flushAllSessions() }
         }
     }
 
