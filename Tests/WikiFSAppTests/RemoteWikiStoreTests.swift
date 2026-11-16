@@ -1,4 +1,5 @@
 #if os(macOS)
+import CryptoKit
 import Foundation
 import Testing
 @testable import WikiCtlCore
@@ -376,13 +377,13 @@ struct RemoteWikiStoreTests {
         let remote = RemoteWikiStore(
             transport: try socketTransport(container), wikiID: wikiID)
 
-        // A pending rpc op: typed rejection carrying the operation name —
-        // no session, no round trip.
+        // The slice-1 exemplars are all wired now — a former pending
+        // witness (listSources) round-trips; use a REMOVED requirement for
+        // the typed-rejection witness.
         do {
             _ = try await remote.listSources()
-            Issue.record("expected listSources to reject typed")
-        } catch let error as RemoteStoreClientError {
-            #expect(error == .unsupportedRemote(operation: "listSources"))
+        } catch {
+            Issue.record("listSources is wired and must not reject: \(error)")
         }
         // A deliberately removed requirement: the same typed witness.
         do {
@@ -392,18 +393,39 @@ struct RemoteWikiStoreTests {
             #expect(error == .unsupportedRemote(operation: "deletePage"))
         }
 
-        // The SLICE-2 LEDGER partitions, pinned exactly.
-        #expect(RemoteWikiStore.wiredOperations.count == 13)
+        // The SLICE-2 LEDGER partitions, pinned exactly: every manifest-rpc
+        // operation is wired EXCEPT the two deferred OKF-metadata reads
+        // (their core wrappers' memberwise inits are internal to WikiFSCore
+        // — see the pending-surface file), and the 15 removed requirements
+        // stay typed-rejection witnesses.
+        #expect(RemoteWikiStore.wiredOperations.count == 149)
         #expect(RemoteWikiStore.removedOperations.count == 15)
         #expect(RemoteWikiStore.wiredOperations.isDisjoint(
             with: RemoteWikiStore.removedOperations))
-        #expect(RemoteWikiStore.wiredOperations == [
-            "resolveTitleToID", "hasProcessedMarkdown", "getMetadata",
-            "pageHeadVersionID", "setMetadata",
-            "listPages", "listChats", "deletionImpact",
-            "getPage", "upsertPage", "addSource",
-            "createChat", "deleteResources",
-        ])
+        // The manifest's rpc partition is fully wired except the deferred
+        // pair; listSources (slice 1's exemplar pending witness) is wired.
+        #expect(RemoteWikiStore.wiredOperations.contains("listSources"))
+        #expect(RemoteWikiStore.wiredOperations.contains("deletePage") == false)
+        for operation in ["pageOKFMetadata", "sourceMarkdownOKFMetadata"] {
+            #expect(
+                RemoteWikiStore.wiredOperations.contains(operation) == false)
+            do {
+                if operation == "pageOKFMetadata" {
+                    _ = try await remote.pageOKFMetadata(
+                        versionID: PageVersionID(
+                            rawValue: "01V0000000000000000000000ZZ"),
+                        includeCorrected: false)
+                } else {
+                    _ = try await remote.sourceMarkdownOKFMetadata(
+                        versionID: SourceMarkdownVersionID(
+                            rawValue: "01V0000000000000000000000ZZ"),
+                        includeCorrected: false)
+                }
+                Issue.record("expected \(operation) to reject typed")
+            } catch let error as RemoteStoreClientError {
+                #expect(error == .unsupportedRemote(operation: operation))
+            }
+        }
     }
 
     // MARK: - Error reconstruction (the exhaustive inverse of wireError)
@@ -534,19 +556,35 @@ struct RemoteWikiStoreTests {
             == SourceMarkdownVersionID(rawValue: "01MH"))
         #expect(markdownConflict?.currentHead == nil)
 
-        // The epoch-mismatch text the executor spells inside `.unexpected`
-        // parses into the typed restart detection with BOTH epochs intact.
-        guard case .epochMismatch(let expected, let actual, _) =
-            reconstruct(.unexpected(
-                "daemon epoch mismatch: the submission expects 7 but this "
-                    + "daemon is at 9; a restarted daemon never replays a "
-                    + "stamped mutation — re-read state and resubmit with a "
-                    + "new requestID")) as? RemoteStoreClientError else {
+        // The typed CONTRACT CASE (slice 2): both epochs arrive as
+        // associated values — there is no message parse (both ends ship
+        // together, so no legacy-text fallback exists either).
+        guard case .epochMismatch(let expected, let actual, let mismatchMessage) =
+            reconstruct(.epochMismatch(expectedEpoch: 7, actualEpoch: 9))
+            as? RemoteStoreClientError else {
             Issue.record("expected the epoch mismatch to reconstruct typed")
             return
         }
         #expect(expected == 7)
         #expect(actual == 9)
+        #expect(mismatchMessage.contains("7"))
+        #expect(mismatchMessage.contains("9"))
+
+        // A `.unexpected` message is NEVER probed for epoch text anymore —
+        // the legacy rejection text stays an honest `.unexpected`.
+        expectStoreError(
+            .unexpected(
+                "daemon epoch mismatch: the submission expects 7 but this "
+                    + "daemon is at 9; a restarted daemon never replays a "
+                    + "stamped mutation — re-read state and resubmit with a "
+                    + "new requestID"),
+            matches: { message in
+                if case .unexpected(let text) = message {
+                    return text.contains("daemon epoch mismatch")
+                }
+                return false
+            },
+            "legacy epoch text stays unexpected")
 
         // A plain `.unexpected` stays an `.unexpected` (no false-positive
         // epoch detection).
@@ -726,6 +764,376 @@ struct RemoteWikiStoreTests {
         try await remote.setMetadata("restart-key", value: "after")
         #expect(remote.sessionEpoch() == daemonB.daemonEpoch)
         #expect(try await remote.getMetadata("restart-key") == "after")
+    }
+
+    // MARK: - Slice 2: small family round trips
+
+    @Test func strategyStateReadsAndTheCASSaveRoundTrip() async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+        let server = try makeSocketServer(container, daemon)
+        defer { server.stop() }
+
+        let remote = RemoteWikiStore(
+            transport: try socketTransport(container), wikiID: wikiID)
+        // Default state: no committed row yet (absence is the representation).
+        let initial = try await remote.getWikiStrategyState()
+        #expect(initial.strategy == nil)
+        #expect(initial.revision == nil)
+        #expect(try await remote.wikiStrategyRevision() == nil)
+        #expect(try await remote.getWikiStrategy() == nil)
+
+        // The CAS save commits revision 1; the bounded-inline read echoes it.
+        let outcome = try await remote.saveWikiStrategy(
+            name: "Slice Two", instructions: "Answer tersely.",
+            expectedRevision: nil)
+        guard case .saved(let revision, let strategy) = outcome else {
+            Issue.record("expected a saved outcome, got \(outcome)")
+            return
+        }
+        #expect(revision == WikiStrategyRevision(rawValue: 1))
+        #expect(strategy?.name == "Slice Two")
+
+        let state = try await remote.getWikiStrategyState()
+        #expect(state.strategy?.instructions == "Answer tersely.")
+        #expect(state.revision == revision)
+        #expect(try await remote.wikiStrategyRevision() == revision)
+        #expect(try await remote.getWikiStrategy()?.name == "Slice Two")
+
+        // The CAS expectation conflict reconstructs typed with values.
+        do {
+            _ = try await remote.saveWikiStrategy(
+                name: "Slice Two", instructions: "Answer tersely again.",
+                expectedRevision: WikiStrategyRevision(rawValue: 99))
+            Issue.record("expected the stale-revision save to throw")
+        } catch let error as WikiStrategyConflictError {
+            #expect(error.expectedRevision == WikiStrategyRevision(rawValue: 99))
+        }
+    }
+
+    @Test func chatReadsAndAttachmentsRoundTrip() async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+        let server = try makeSocketServer(container, daemon)
+        defer { server.stop() }
+
+        let remote = RemoteWikiStore(
+            transport: try socketTransport(container), wikiID: wikiID)
+        let seeded = try await commitPage(daemon, wikiID: wikiID, title: "Chip Page")
+        let chat = try await remote.createChat(
+            kind: .edit, title: "Small Family Chat")
+        let fetched = try await remote.getChat(id: chat.id)
+        #expect(fetched.id == chat.id)
+        #expect(fetched.title == "Small Family Chat")
+
+        // Attachments compose the ordered chip set.
+        try await remote.setChatAttachments(
+            chatID: chat.id, targets: [.page(seeded.id)])
+        let targets = try await remote.chatAttachments(chatID: chat.id)
+        #expect(targets == [.page(seeded.id)])
+
+        // Title CAS: the rename lands only under the expected title.
+        #expect(
+            try await remote.setChatTitleIfEmpty(
+                chatID: chat.id, title: "Unused") == false)
+        #expect(
+            try await remote.setChatTitleIf(
+                chatID: chat.id, expectedTitle: "Small Family Chat",
+                title: "Renamed") == true)
+        #expect(try await remote.getChat(id: chat.id).title == "Renamed")
+    }
+
+    // MARK: - Slice 2: list family round trips
+
+    @Test func transcriptPageReadAndCheckpointRoundTrip() async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+        let server = try makeSocketServer(container, daemon)
+        defer { server.stop() }
+
+        let remote = RemoteWikiStore(
+            transport: try socketTransport(container), wikiID: wikiID)
+        let chat = try await remote.createChat(kind: .edit, title: "Transcript")
+        let first = ChatTranscriptMessageItem(
+            messageID: ChatMessageID(rawValue: ULID.generate()),
+            turnID: ChatTurnID(rawValue: ULID.generate()),
+            role: .user, text: "typed transcript one",
+            createdAt: Date())
+        let second = ChatTranscriptMessageItem(
+            messageID: ChatMessageID(rawValue: ULID.generate()),
+            turnID: ChatTurnID(rawValue: ULID.generate()),
+            role: .assistant, text: "typed transcript two",
+            createdAt: Date())
+        let persisted = try await remote.appendChatTranscriptItems(
+            chatID: chat.id, items: [.message(first), .message(second)])
+        #expect(persisted.count == 2)
+        #expect(persisted[0].item == .message(first))
+
+        // The typed page read walks the wire cursor and reconstructs the
+        // full persisted items. `checkpoint` is the high-water cursor; the
+        // reply's `nextCursor` is the LAST-DELIVERED cursor (page 2's
+        // `after`).
+        let page = try await remote.readChatTranscriptPage(
+            chatID: chat.id, after: nil, limit: 1)
+        #expect(page.items.count == 1)
+        #expect(page.items.first?.item == .message(first))
+        #expect(page.checkpoint == persisted[1].cursor)
+        #expect(page.nextCursor == persisted[0].cursor)
+
+        let secondPage = try await remote.readChatTranscriptPage(
+            chatID: chat.id, after: page.nextCursor, limit: 10)
+        #expect(secondPage.items.count == 1)
+        #expect(secondPage.items.first?.item == .message(second))
+
+        let flat = try await remote.chatMessages(chatID: chat.id)
+        #expect(flat.count == 2)
+    }
+
+    @Test func bookmarkTreeAndLogEntriesRoundTrip() async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+        let server = try makeSocketServer(container, daemon)
+        defer { server.stop() }
+
+        let remote = RemoteWikiStore(
+            transport: try socketTransport(container), wikiID: wikiID)
+        // Folder → page bookmark tree.
+        let folder = try await remote.createBookmarkNode(
+            parentID: nil, position: 0, content: .folder(label: "Slice Two"))
+        let seeded = try await commitPage(daemon, wikiID: wikiID, title: "Marked")
+        let leaf = try await remote.createBookmarkNode(
+            parentID: folder.id, position: 0, content: .page(seeded.id))
+
+        let nodes = try await remote.listBookmarkNodes()
+        #expect(nodes.contains { $0.id == folder.id })
+        #expect(nodes.contains { $0.id == leaf.id && $0.parentID == folder.id })
+
+        try await remote.renameBookmarkFolder(id: folder.id, to: "Renamed")
+        try await remote.moveBookmarkNode(
+            id: leaf.id, toParentID: nil, position: 1)
+        let after = try await remote.listBookmarkNodes()
+        #expect(after.first { $0.id == folder.id }?.content == .folder(label: "Renamed"))
+        #expect(after.first { $0.id == leaf.id }?.parentID == nil)
+
+        try await remote.deleteBookmarkNode(id: leaf.id)
+        try await remote.deleteBookmarkNode(id: folder.id)
+        #expect(
+            try await remote.listBookmarkNodes().contains { $0.id == folder.id }
+                == false)
+
+        // Log entries: append → recent.
+        let entry = try await remote.appendLog(
+            kind: .query, title: "slice two entry", note: "via remote store")
+        let recent = try await remote.recentLogEntries(limit: 5)
+        #expect(recent.contains { $0.id == entry.id && $0.kind == .query })
+    }
+
+    // MARK: - Slice 2: blob family round trips
+
+    @Test func createPageAndVersionReadsRoundTrip() async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+        let server = try makeSocketServer(container, daemon)
+        defer { server.stop() }
+
+        let remote = RemoteWikiStore(
+            transport: try socketTransport(container), wikiID: wikiID)
+        let body = "created via the blob family"
+        let page = try await remote.createPage(
+            title: "Blob Create", body: body, createdBy: "slice-two",
+            provenance: [])
+        #expect(page.bodyMarkdown == body)
+        #expect(page.createdBy == "slice-two")
+
+        let head = try await remote.pageVersionHistory(pageID: page.id)
+        #expect(head.count == 1)
+        let versionBody = try await remote.pageVersionBody(
+            versionID: head[0].id)
+        #expect(versionBody == body)
+        let sources = try await remote.pageVersionSources(
+            versionID: head[0].id)
+        #expect(sources.isEmpty)
+        let origin = try await remote.pageOrigin(pageID: page.id)
+        #expect(origin?.title == "Blob Create")
+    }
+
+    @Test func workspaceLifecycleRoundTrip() async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+        let server = try makeSocketServer(container, daemon)
+        defer { server.stop() }
+
+        let remote = RemoteWikiStore(
+            transport: try socketTransport(container), wikiID: wikiID)
+        let workspace = try await remote.createWorkspace(
+            name: "Slice Two WS", activityID: nil)
+        #expect(try await remote.workspaceSummary(id: workspace)?.name
+            == "Slice Two WS")
+
+        let stagedBody = "staged in a workspace"
+        let versionID = try await remote.workspaceWritePage(
+            workspaceID: workspace, pageID: PageID(rawValue: ULID.generate()),
+            title: "WS Page", body: stagedBody, author: nil, provenance: [])
+        let refs = try await remote.workspaceRefs(workspaceID: workspace)
+        #expect(refs.count == 1)
+        #expect(refs[0].versionID == versionID)
+        #expect(
+            try await remote.workspacePageVersion(
+                workspaceID: workspace, pageID: refs[0].ownerID) == versionID)
+        #expect(
+            try await remote.workspacePageBody(
+                workspaceID: workspace, pageID: refs[0].ownerID) == stagedBody)
+
+        // A stale-index write outside the workspace lineage is a typed
+        // conflict; the happy merge path commits the staged page.
+        try await remote.setWorkspaceIndexBody(
+            workspaceID: workspace, indexBody: "## Slice Two\n",
+            indexBaseVersion: "0")
+        try await remote.abandonWorkspace(id: workspace)
+        #expect(
+            try await remote.workspaceSummary(id: workspace)?.status
+                == .abandoned)
+    }
+
+    @Test func vacuumReportsRoundTrip() async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+        let server = try makeSocketServer(container, daemon)
+        defer { server.stop() }
+
+        let remote = RemoteWikiStore(
+            transport: try socketTransport(container), wikiID: wikiID)
+        let blobReport = try await remote.vacuumBlobs(dryRun: true)
+        #expect(blobReport.applied == false)
+        let activityReport = try await remote.vacuumActivities(dryRun: true)
+        #expect(activityReport.applied == false)
+        let versionReport = try await remote.vacuumPageVersions(dryRun: true)
+        #expect(versionReport.applied == false)
+        let mimeReport = try await remote.repairMIME(dryRun: true)
+        #expect(mimeReport.applied == false)
+        #expect(mimeReport.scannedCount >= 0)
+    }
+
+    // MARK: - Slice 2: XPC transport (fixture exporter selector path)
+
+    @Test func xpcTransportRoundTripsThroughTheExporterSelector() async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+
+        // The REAL exporter (the same object an XPC connection vends) drives
+        // the storeOperation selector in-process: the fixture XPC path.
+        let exporter = WikiDaemonExporter(daemon: daemon)
+        let transport = XPCStoreTransport(
+            invoker: { wikiID, request, reply in
+                exporter.storeOperation(
+                    wikiID, request: request, reply: reply)
+            },
+            timeout: 20)
+        let store = RemoteWikiStore(transport: transport, wikiID: wikiID)
+        let resolved = try await store.resolveTitleToID("Home")
+        #expect(resolved != nil)
+        #expect(store.sessionEpoch() == daemon.daemonEpoch)
+
+        // A staged mutator crosses the same selector path.
+        try await store.setMetadata("xpc-flag", value: "on")
+        #expect(try await store.getMetadata("xpc-flag") == "on")
+    }
+
+    @Test func xpcTransportDeadlineAnswersTypedWhenTheSelectorNeverReplies()
+        async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+
+        // A wedged selector: neither reply nor error handler ever fires —
+        // the transport's timeout backstop must answer typed (the #884
+        // lesson), never stall the caller.
+        let transport = XPCStoreTransport(
+            invoker: { _, _, _ in /* never replies */ },
+            timeout: 0.2)
+        let store = RemoteWikiStore(
+            transport: transport, wikiID: wikiID,
+            callDeadline: RemoteWikiStore.defaultCallDeadline)
+        do {
+            _ = try await store.resolveTitleToID("Home")
+            Issue.record("expected the wedged selector to time out")
+        } catch let error as RemoteStoreClientError {
+            guard case .deadlineExceeded = error else {
+                Issue.record("expected .deadlineExceeded, got \(error)")
+                return
+            }
+            #expect(store.sessionEpoch() == nil)
+        }
+        _ = daemon  // the daemon instance keeps the fixture alive
+    }
+
+    // MARK: - Slice 2: connection sweep through the socket path
+
+    @Test func disconnectSweepDropsTheConnectionStagedUploads() async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+        let server = try makeSocketServer(container, daemon)
+        defer { server.stop() }
+
+        // Stage one upload keyed to a connection id (the exporter's path),
+        // then simulate the exporter's invalidation handler: the keyed
+        // upload is swept, and chunking it answers a typed rejection —
+        // never a partial commit.
+        let bytes = Data("sweep".utf8)
+        let begin = DaemonStoreRequest(
+            wikiID: wikiID.rawValue,
+            operation: DaemonStoreOperation.payloadBegin.rawValue,
+            payload: try JSONEncoder().encode(DaemonPayloadBeginRequest(
+                declaredByteCount: bytes.count,
+                sha256Hex: Self.fixtureSHA256Hex(bytes))))
+        let beginReplyData = await daemon.storeOperationData(
+            wikiID: wikiID.rawValue, request: try DaemonStoreWire.encode(begin),
+            connectionID: "remote-sweep-conn")
+        // storeOperationData returns the DOMAIN envelope; the store reply
+        // rides its payload.
+        let beginDomain = try JSONDecoder().decode(
+            DaemonDomainReply.self, from: beginReplyData)
+        let beginReply = try DaemonStoreWire.decodeReply(
+            try #require(beginDomain.payload))
+        let staged = try JSONDecoder().decode(
+            DaemonPayloadBeginReply.self,
+            from: try #require(beginReply.result))
+
+        daemon.dropStoreUploads(connectionID: "remote-sweep-conn")
+
+        let store = RemoteWikiStore(
+            transport: try socketTransport(container), wikiID: wikiID)
+        // Chunking the swept upload id over the REAL socket: the executor's
+        // typed rejection reconstructs client-side.
+        do {
+            _ = try await store.sendStore(
+                .payloadChunk,
+                payload: JSONEncoder().encode(DaemonPayloadChunkRequest(
+                    uploadID: staged.uploadID, orderIndex: 0, bytes: bytes,
+                    runningSHA256Hex: Self.fixtureSHA256Hex(bytes))))
+            Issue.record("expected the swept upload's chunk to throw")
+        } catch let error as WikiStoreError {
+            guard case .unexpected(let message) = error else {
+                Issue.record("expected .unexpected, got \(error)")
+                return
+            }
+            #expect(message.contains("staging upload not found"))
+        }
+    }
+
+    /// Test-only SHA-256 hex (mirrors the store's staging declarations).
+    private static func fixtureSHA256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }.joined()
     }
 }
 #endif

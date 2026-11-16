@@ -318,10 +318,11 @@ struct DaemonStoreCommandExecutorTests {
         let reply = try storeReply(await executeDomain(
             daemon, .setMetadata, wikiID: wikiID, payload: payload,
             stamp: staleStamp))
-        #expect(reply.error != nil)
+        // The typed contract case (slice 2): BOTH epochs cross intact —
+        // restart detection is a value comparison, never a message parse.
         #expect(
-            reply.error?.errorDescription?.contains(
-                "daemon epoch mismatch") == true)
+            reply.error == .epochMismatch(
+                expectedEpoch: 0, actualEpoch: daemon.daemonEpoch))
     }
 
     @Test func distinctDaemonsPresentDistinctEpochs() async throws {
@@ -343,9 +344,14 @@ struct DaemonStoreCommandExecutorTests {
         // resolve wikiA (created on daemon A only), and the resolution failure
         // preempting the epoch check yields a different error description.
         // Assertion kept as authored; semantic adjudication is upstream's.
+        // Slice 2: the door check answers the TYPED case with both epochs —
+        // resolution cannot preempt it (the gate runs before store
+        // resolution), so the description-based expectation is now the
+        // value-based pin below.
         #expect(
-            reply.error?.errorDescription?.contains(
-                "daemon epoch mismatch") == true)
+            reply.error == .epochMismatch(
+                expectedEpoch: first.daemonEpoch,
+                actualEpoch: second.daemonEpoch))
     }
 
     @Test func resolveOutcomeReturnsTheCachedCommitAndUnknownOtherwise() async throws {
@@ -744,6 +750,50 @@ struct DaemonStoreCommandExecutorTests {
             try staging.read(DaemonPayloadReadRequest(
                 handleID: handle.id, chunkIndex: 0))
         }
+    }
+
+    /// The slice-2 WIRING: `storeOperationData(connectionID:)` keys the
+    /// staged upload to the calling connection at begin, and
+    /// ``WikiDaemon/dropStoreUploads(connectionID:)`` — the exporter's
+    /// invalidation-handler seam — sweeps exactly that connection (a second
+    /// connection's upload survives; covered unit-side by
+    /// `dropUploadsSeamDropsOneConnectionsState`).
+    @Test func storeOperationDataKeysUploadsForTheDisconnectSweep()
+        async throws {
+        let daemon = try makeDaemon()
+        let bytes = Data("sweep-me".utf8)
+        let begin = DaemonStoreRequest(
+            wikiID: "unused",
+            operation: DaemonStoreOperation.payloadBegin.rawValue,
+            payload: try JSONEncoder().encode(DaemonPayloadBeginRequest(
+                declaredByteCount: bytes.count, sha256Hex: sha256hex(bytes))))
+        // Keyed at begin through the XPC seam (the exporter's path).
+        let beginReplyData = await daemon.storeOperationData(
+            wikiID: "unused", request: try DaemonStoreWire.encode(begin),
+            connectionID: "conn-A")
+        // The DOMAIN envelope wraps the store reply (the test helper
+        // `storeReply` unwraps the same layer for executeDomain results).
+        let beginDomain = try JSONDecoder().decode(
+            DaemonDomainReply.self, from: beginReplyData)
+        let beginReply = try DaemonStoreWire.decodeReply(
+            try #require(beginDomain.payload))
+        let beginResult = try #require(beginReply.result)
+        let staged = try JSONDecoder().decode(
+            DaemonPayloadBeginReply.self, from: beginResult)
+
+        daemon.dropStoreUploads(connectionID: "conn-A")
+        // The swept connection's upload is gone: its chunk is a typed
+        // rejection, not a silent accept.
+        let chunk = DaemonStoreRequest(
+            wikiID: "unused",
+            operation: DaemonStoreOperation.payloadChunk.rawValue,
+            payload: try JSONEncoder().encode(DaemonPayloadChunkRequest(
+                uploadID: staged.uploadID, orderIndex: 0, bytes: bytes,
+                runningSHA256Hex: sha256hex(bytes))))
+        let chunkReply = try storeReply(await executeDomain(
+            daemon, .payloadChunk, wikiID: WikiID(rawValue: "unused"),
+            payload: chunk.payload))
+        #expect(chunkReply.error != nil)
     }
 
     // MARK: - Error mapping (exhaustive representatives)

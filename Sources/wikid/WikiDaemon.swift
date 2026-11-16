@@ -210,8 +210,14 @@ final class WikiDaemon: @unchecked Sendable {
     /// registration id so the daemon-scoped `sinkHandshake` can correlate
     /// with the sink that connection exported (Phase 2c); the domain-socket
     /// path passes nil.
+    ///
+    /// `connectionID` (slice 2) keys the staged-payload table to the calling
+    /// XPC connection so its invalidation handler can sweep that
+    /// connection's uploads
+    /// (``dropStoreUploads(connectionID:)``); nil = unkeyed (domain socket).
     func storeOperationData(
-        wikiID: String, request: Data, sinkRegistrationID: UUID? = nil
+        wikiID: String, request: Data, sinkRegistrationID: UUID? = nil,
+        connectionID: String? = nil
     ) async -> Data {
         let domainRequest = DaemonDomainRequest(
             requestID: "xpc-\(ULID.generate())", family: .store,
@@ -219,7 +225,8 @@ final class WikiDaemon: @unchecked Sendable {
         let domainReply = await storeCommandExecutor()
             .handleStoreOperation(
                 domainRequest, expectedWikiID: wikiID,
-                sinkRegistrationID: sinkRegistrationID)
+                sinkRegistrationID: sinkRegistrationID,
+                connectionID: connectionID)
         do {
             return try DaemonStoreFrameSizing.encodeValidatedReply(domainReply)
         } catch {
@@ -242,6 +249,18 @@ final class WikiDaemon: @unchecked Sendable {
             }
             return fallback
         }
+    }
+
+    /// The disconnect sweep for one XPC connection's staged store uploads
+    /// (slice 2): drops every staged upload AND committed handle the
+    /// connection keyed at `payloadBegin`, exactly as
+    /// ``DaemonPayloadStagingStore/dropUploads(connectionID:)`` defines.
+    /// The exporter's invalidation handler calls this beside its sink
+    /// unregister so a dead client's partial uploads never ride out the
+    /// TTL.
+    func dropStoreUploads(connectionID: String) {
+        storeCommandExecutor().payloadStaging.dropUploads(
+            connectionID: connectionID)
     }
 
     #if canImport(WikiFSEngine)

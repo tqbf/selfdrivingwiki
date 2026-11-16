@@ -1016,6 +1016,12 @@ public enum DaemonStoreError: Error, Codable, Equatable, Sendable,
     /// CAS: the processed-markdown head moved
     /// (`SourceMarkdownConflictError`).
     case sourceMarkdownConflict(DaemonSourceMarkdownConflictDetail)
+    /// The daemon's epoch moved under a stamped mutation — a restarted
+    /// daemon never replays one (plan 2a mutation outcome semantics).
+    /// `expectedEpoch` is the submission stamp's value; `actualEpoch` is the
+    /// answering daemon's epoch. Both cross INTACT so restart detection is a
+    /// typed comparison on both ends — never a message parse.
+    case epochMismatch(expectedEpoch: UInt64, actualEpoch: UInt64)
     /// Transport-level: the daemon is unreachable / the connection died
     /// before an answer. Nothing queues locally and no local fallback exists.
     case daemonUnavailable(String)
@@ -1078,6 +1084,11 @@ public enum DaemonStoreError: Error, Codable, Equatable, Sendable,
             return "Source markdown conflict on \(detail.sourceID): expected "
                 + "\(detail.expectedHead), current "
                 + "\(detail.currentHead ?? "none")"
+        case .epochMismatch(let expected, let actual):
+            return "daemon epoch mismatch: the submission expects "
+                + "\(expected) but this daemon is at \(actual); a restarted "
+                + "daemon never replays a stamped mutation — re-read state "
+                + "and resubmit with a new requestID"
         case .daemonUnavailable(let message):
             return "The wiki daemon is unavailable: \(message)"
         case .outcomeUnknown(let message):

@@ -31,9 +31,13 @@ import WikiFSTypes
 //   per store). No bare continuation ever waits unbounded (repo rule #1051).
 // - The composed atomic operations (`upsertPage`, `deleteResources`,
 //   `addSource`) are direct implementations here — never the protocol
-//   extension's sequential defaults (plan 2b requirement). The remaining
-//   pending surface rejects typed from
-//   `RemoteWikiStore+PendingSurface.swift` (the SLICE-2 LEDGER file).
+//   extension's sequential defaults (plan 2b requirement). Slice 2 wired
+//   the ENTIRE remaining manifest-rpc surface (138 operations) across the
+//   four family files beside this core (`+SmallSurface`, `+ListSurface`,
+//   `+BlobSurface`, `+EventProducerSurface`, with the shared inverse
+//   mappings in `+MirrorMapping`); only the 15 deliberately removed
+//   requirements still reject typed from
+//   `RemoteWikiStore+PendingSurface.swift`.
 //
 // Event feed (plan 2c client side): the store conforms to
 // `WikiDaemonEventSink`, so session wiring (or a test) registers it with the
@@ -70,9 +74,8 @@ public enum RemoteStoreClientError: Error, Sendable, Equatable,
     /// `actualEpoch` the daemon's answer. The caller re-reads state,
     /// re-handshakes, and resubmits with a NEW requestID.
     case epochMismatch(expectedEpoch: UInt64, actualEpoch: UInt64?, message: String)
-    /// A `WikiStore` requirement this client build does not wire yet
-    /// (the SLICE-2 LEDGER surface + the 15 deliberately removed
-    /// requirements). Carries the operation name.
+    /// A `WikiStore` requirement this build deliberately does not serve
+    /// (the 15 manifest-removed requirements). Carries the operation name.
     case unsupportedRemote(operation: String)
     /// The reply envelope could not be decoded into the store family's
     /// shapes — a contract violation, surfaced typed.
@@ -270,16 +273,78 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
 
     // MARK: - Surface ledger (the SLICE-2 LEDGER contract)
 
-    /// The operation names wired end-to-end in THIS slice (direct RPC
-    /// implementations in this file). The ledger test pins the exact set;
-    /// everything else in the manifest rejects typed from
-    /// `RemoteWikiStore+PendingSurface.swift`.
+    /// The operation names wired end-to-end across the store family: every
+    /// manifest-rpc operation minus two deferred reads (small 35 / list 25 /
+    /// blob 39 / event-producer 50; the deferred pair needs a public init
+    /// in WikiFSCore - see the pending-surface file) — tmp/store-ops-manifest.md). The implementations live in the
+    /// family surface files beside this core (small/list/blob/eventProducer)
+    /// plus the slice-1 exemplars here; the ledger test pins the exact set.
+    /// The only `WikiStore` requirements that still reject typed are the
+    /// 15 ``removedOperations`` in the pending-surface file.
     public static let wiredOperations: Set<String> = [
+        // small (37)
         "resolveTitleToID", "hasProcessedMarkdown", "getMetadata",
         "pageHeadVersionID", "setMetadata",
+        "activeContentVersion", "activeExtractionProvenance",
+        "chatAttachments", "chatTranscriptCheckpoint", "chatUsageSummary",
+        "fetchState", "getChat", "getWikiStrategyState", "hasImageSiblings",
+        "initialContentVersion", "pageHeadSources",
+        "pageOrigin", "pageVersionSources", "rendererInputByteCount",
+        "rendererSourcePreference", "rendererSourcePresentation",
+        "resolveChatByTitle", "resolveSourceByName", "searchSimilar",
+        "searchSimilarChats", "searchSimilarSources",
+        "sourceMatchingURLIdentity",
+        "sourceOrigin", "sourceVersion", "vacuumActivities", "vacuumBlobs",
+        "vacuumPageVersions", "wikiStrategyRevision", "workspacePageVersion",
+        "workspaceSummary",
+        // list (25)
         "listPages", "listChats", "deletionImpact",
+        "chatMessages", "embedDescriptors", "listAllChatsOrderedByID",
+        "listBookmarkNodes", "listPersistedChatTurns", "listSources",
+        "markedSourceIDs", "pageEditHistory", "pagesCitingSources",
+        "pageVersionHistory", "processedMarkdownAgentNames",
+        "processedMarkdownAlternatives", "processedMarkdownHistory",
+        "readChatTranscriptPage", "recentLogEntries", "siblingImageResolvers",
+        "sourceDerivedChains", "sourceEditHistory", "sourceOriginsBySource",
+        "sourcesWithPendingFormatJobs", "workspaceConflicts", "workspaceRefs",
+        // blob (39)
         "getPage", "upsertPage", "addSource",
+        "addSnapshotImage", "appendChatMessages", "appendChatTranscriptItems",
+        "appendContentVersion", "appendDerivedMarkdown", "appendFetchMarkdown",
+        "appendHostSpeechTranscript", "appendInstalledPackageMarkdown",
+        "appendPageVersion", "appendProcessedMarkdown",
+        "appendUserProcessedMarkdown", "attachAcquiredBytes",
+        "checkpointStreamingMessage", "claimNextPersistedChatTurn",
+        "createPage", "enqueuePersistedChatTurn", "finishPersistedChatTurn",
+        "getWikiIndex", "getWikiStrategy", "missingChatEmbeddingWork",
+        "missingPageEmbeddingWork", "missingSourceEmbeddingWork",
+        "pageVersionBody", "processedMarkdownHead", "processedMarkdownVersion",
+        "recordMarkdownExtraction", "saveWikiStrategy", "setWorkspaceIndexBody",
+        "sourceContent", "storeChatChunks", "storePageChunks",
+        "storeSourceChunks", "updatePage", "updateWikiIndex",
+        "workspacePageBody", "workspaceWritePage",
+        // event producer (50)
         "createChat", "deleteResources",
+        "abandonWorkspace", "addBytelessSource", "appendLog",
+        "cancelUnclaimedPersistedChatTurn", "correctPageOKFVerification",
+        "correctSourceMarkdownOKFVerification", "createBookmarkNode",
+        "createWorkspace", "deleteBookmarkNode", "deleteChat",
+        "ensureFetchActivity", "finalizeStaleDrafts", "markFetchComplete",
+        "markPersistedChatTurnProviderSubmitted", "markSourceIngested",
+        "moveBookmarkNode", "reapStaleWorkspaces", "recordPageOKFVerification",
+        "recordSourceMarkdownOKFVerification",
+        "removeRendererSourcePresentation", "renameBookmarkFolder",
+        "renameChat", "renameSource", "repairMIME", "replaceLinks",
+        "restorePage", "retargetBookmarkNode", "revertPage",
+        "setActiveMarkdown", "setChatAttachments", "setChatTitleIf",
+        "setChatTitleIfEmpty", "setPageOKFFreshness", "setPageOKFStatus",
+        "setRendererSourcePreference", "setRendererSourcePresentation",
+        "setSourceDisplayName", "setSourceMarkdownOKFFreshness",
+        "setSourceMarkdownOKFStatus", "updateChatAcpSessionId",
+        "updateChatModelAndThinkingSelection", "updateChatModelOverride",
+        "updateMessageSummary", "updatePersistedChatTurnUsage",
+        "workspaceMerge", "workspaceRefresh", "workspaceResolveConflict",
+        "workspaceRetryMerge",
     ]
 
     /// The 15 `WikiStore` requirements deliberately absent from the remote
@@ -339,7 +404,9 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
     /// Encode one store request, race the send against the deadline, decode
     /// the store reply, and unwrap the result bytes — or reconstruct the
     /// typed error. `operation` names the `DaemonStoreOperation` raw value.
-    private func sendStore(
+    /// Internal: the slice-2 family extension files share the same send
+    /// path (never a second transport seam).
+    func sendStore(
         _ operation: DaemonStoreOperation,
         payload: Data? = nil,
         stamp: DaemonMutationStamp? = nil
@@ -396,8 +463,8 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         return result
     }
 
-    /// Decode one reply DTO's bytes.
-    private static func decodeResult<T: Decodable>(
+    /// Decode one reply DTO's bytes. Internal for the slice-2 family files.
+    static func decodeResult<T: Decodable>(
         _ type: T.Type, _ data: Data, _ operation: String
     ) throws -> T {
         do {
@@ -413,12 +480,11 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
 
     /// Reconstruct the typed error the in-process store would have thrown,
     /// with every associated value intact. The CAS family rebuilds the core
-    /// error structs; the transport-level pair becomes
-    /// ``RemoteStoreClientError``; the epoch-mismatch text the executor
-    /// spells inside `.unexpected` is detected and surfaced as
-    /// ``RemoteStoreClientError/epochMismatch`` so restart detection is a
-    /// typed `catch`, not a substring hunt. Internal (not static-private)
-    /// so the reconstruction tests pin every case's associated values.
+    /// error structs; the transport-level pair and the epoch-mismatch
+    /// contract case become ``RemoteStoreClientError`` (typed on the wire —
+    /// both ends ship together, so there is no message-parse fallback).
+    /// Internal (not static-private) so the reconstruction tests pin every
+    /// case's associated values.
     func reconstructStoreError(_ wire: DaemonStoreError) -> Error {
         switch wire {
         case .open(let message):
@@ -460,10 +526,16 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         case .invalidRendererEventID(let raw):
             return WikiStoreError.invalidRendererEventID(raw)
         case .unexpected(let message):
-            if let mismatch = Self.parseEpochMismatch(message) {
-                return mismatch
-            }
             return WikiStoreError.unexpected(message)
+        case .epochMismatch(let expected, let actual):
+            // The typed contract case (slice 2): both epochs arrive as
+            // associated values — the message parse is gone. The
+            // description travels as the message for diagnostics only.
+            return RemoteStoreClientError.epochMismatch(
+                expectedEpoch: expected, actualEpoch: actual,
+                message: wire.errorDescription
+                    ?? "daemon epoch mismatch (expected \(expected), "
+                        + "actual \(actual))")
         case .duplicateContent(let existing):
             return WikiStoreError.duplicateContent(
                 existing: Self.coreSourceSummary(existing))
@@ -517,37 +589,12 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         }
     }
 
-    /// Detect the executor's epoch-mismatch rejection text
-    /// ("daemon epoch mismatch: the submission expects N but this daemon is
-    /// at M; …") and rebuild it typed. Unparseable text degrades to a nil
-    /// actual epoch — the MESSAGE still travels intact.
-    private static func parseEpochMismatch(
-        _ message: String
-    ) -> RemoteStoreClientError? {
-        guard message.hasPrefix("daemon epoch mismatch") else { return nil }
-        var expected: UInt64?
-        var actual: UInt64?
-        if let range = message.range(
-            of: #"(?:expects|expect)\s+(\d+)"#, options: .regularExpression) {
-            let digits = message[range].components(separatedBy: " ").last ?? ""
-            expected = UInt64(digits)
-        }
-        if let range = message.range(
-            of: #"daemon is at\s+(\d+)"#, options: .regularExpression) {
-            let digits = message[range].components(separatedBy: " ").last ?? ""
-            actual = UInt64(digits)
-        }
-        return .epochMismatch(
-            expectedEpoch: expected ?? 0,
-            actualEpoch: actual,
-            message: message)
-    }
-
     // MARK: - Mutation stamps
 
     /// The stamp every INITIAL mutation submission carries: a fresh request
-    /// ULID + the cached handshake epoch. Reads NEVER call this.
-    private func mutationStamp() async throws -> DaemonMutationStamp {
+    /// ULID + the cached handshake epoch. Reads NEVER call this. Internal
+    /// for the slice-2 family files' stamped mutators.
+    func mutationStamp() async throws -> DaemonMutationStamp {
         let epoch = try await ensureSession()
         return DaemonMutationStamp(
             requestID: ULID.generate(),
@@ -570,7 +617,8 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
     /// helpers (`beginSessionAttempt`, `abortSessionAttempt`,
     /// `lockedApplyHandshake`) — `NSLock`'s lock/unlock are unavailable from
     /// async contexts, so no async method touches the lock directly.
-    private func ensureSession() async throws -> UInt64 {
+    /// Internal: every slice-2 family operation awaits this barrier first.
+    func ensureSession() async throws -> UInt64 {
         switch beginSessionAttempt() {
         case .have(let epoch):
             return epoch
@@ -909,8 +957,9 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
     /// hash-checked chunks → commit) and return the committed handle the
     /// consuming operation references. Chunking honors
     /// ``DaemonStoreLimits/maxChunkBytes``; the executor verifies every
-    /// running hash, so a partial upload can never commit.
-    private func stageUpload(_ bytes: Data) async throws -> DaemonPayloadHandle {
+    /// running hash, so a partial upload can never commit. Internal for the
+    /// slice-2 blob family.
+    func stageUpload(_ bytes: Data) async throws -> DaemonPayloadHandle {
         let sha = Self.sha256Hex(bytes)
         let begin = try await sendStore(
             .payloadBegin,
@@ -951,8 +1000,9 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
 
     /// Download a committed handle's bytes one ordered chunk at a time and
     /// verify the reassembly against the handle's SHA-256 + declared size
-    /// (the integrity contract). Used by `getPage`'s body download.
-    private func readHandle(_ handle: DaemonPayloadHandle) async throws -> Data {
+    /// (the integrity contract). Used by `getPage`'s body download and every
+    /// slice-2 blob read. Internal for the slice-2 family files.
+    func readHandle(_ handle: DaemonPayloadHandle) async throws -> Data {
         var assembled = Data()
         var chunkIndex = 0
         while true {
@@ -976,13 +1026,30 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         return assembled
     }
 
-    private static func sha256Hex(_ data: Data) -> String {
+    static func sha256Hex(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - Stamped-mutator outcome guard (slice-2 family files)
+
+    /// Every stamped mutator's reply echoes the mutation outcome. Only a
+    /// committed or joined echo resolves the call; anything else means the
+    /// outcome is UNKNOWN — reconcile through change tokens, never
+    /// blind-retry. Shared by the slice-2 family files so the guard is one
+    /// function.
+    static func requireCommittedOutcome(
+        _ outcome: DaemonMutationOutcome, _ operation: String
+    ) throws {
+        guard outcome.status == .committed || outcome.status == .joined else {
+            throw RemoteStoreClientError.outcomeUnknown(
+                "\(operation) echoed \(outcome.status.rawValue)")
+        }
     }
 
     // MARK: - Value mapping (client-side inverse of the daemon's mirrors)
 
-    private static func coreSourceSummary(
+    /// Internal: the slice-2 family files share the small-family mappers.
+    static func coreSourceSummary(
         _ value: DaemonSourceSummary
     ) -> SourceSummary {
         SourceSummary(
@@ -1000,7 +1067,8 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
             role: SourceRole(rawValue: value.role) ?? .primary)
     }
 
-    private static func corePageSummary(
+    /// Internal: the slice-2 family files share the small-family mappers.
+    static func corePageSummary(
         _ value: DaemonPageSummary
     ) -> WikiPageSummary {
         WikiPageSummary(
@@ -1010,7 +1078,8 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
             createdAt: value.createdAt)
     }
 
-    private static func coreChatSummary(
+    /// Internal: the slice-2 family files share the small-family mappers.
+    static func coreChatSummary(
         _ value: DaemonChatSummary
     ) -> ChatSummary {
         ChatSummary(
@@ -1081,7 +1150,8 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
             utiMIME: value.utiMIME)
     }
 
-    private static func wireHints(
+    /// Internal: the slice-2 blob family shares the detection-hints mapper.
+    static func wireHints(
         _ value: ContentTypeDetectionHints
     ) -> DaemonContentTypeDetectionHints {
         DaemonContentTypeDetectionHints(
@@ -1125,7 +1195,8 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
             externalIdentity: value.externalIdentity)
     }
 
-    private static func wireProvenance(
+    /// Internal: the slice-2 family files share the provenance mapper.
+    static func wireProvenance(
         _ value: SourceProvenance?
     ) -> DaemonSourceProvenance? {
         guard let value else { return nil }
@@ -1144,8 +1215,8 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
     /// Merge the cursor's opaque `pageToken` into the op DTO as an extra
     /// `pageToken` JSON key inside the SAME payload object (the executor
     /// probes the key without touching any DTO shape — see its
-    /// `ListContinuationKey`).
-    private static func payloadWithPageToken(
+    /// `ListContinuationKey`). Internal for the slice-2 list family.
+    static func payloadWithPageToken(
         _ dto: Data, pageToken: String?
     ) throws -> Data {
         guard let pageToken else { return dto }
@@ -1567,7 +1638,9 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         return Self.coreChatSummary(reply.chat)
     }
 
-    private static func wireAttachmentTarget(
+    /// Internal: the slice-2 event-producer family shares the attachment
+    /// mapper (the core file's createChat overloads use it too).
+    static func wireAttachmentTarget(
         _ value: ChatAttachmentTarget
     ) -> DaemonChatAttachmentTarget {
         switch value {

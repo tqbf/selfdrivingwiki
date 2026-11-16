@@ -75,7 +75,8 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
     func handleStoreOperation(
         _ domainRequest: DaemonDomainRequest,
         expectedWikiID: String? = nil,
-        sinkRegistrationID: UUID? = nil
+        sinkRegistrationID: UUID? = nil,
+        connectionID: String? = nil
     ) async -> DaemonDomainReply {
         guard let payload = domainRequest.payload else {
             return Self.invalidRequest(
@@ -127,14 +128,14 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
             }
             let currentEpoch = daemon.daemonEpoch
             if stamp.expectedEpoch != currentEpoch {
+                // Typed contract case (slice 2): both epochs cross INTACT so
+                // the client's restart detection is a typed comparison, never
+                // a message parse.
                 return Self.storeErrorReply(
                     domainRequest, storeRequest,
-                    .unexpected(
-                        "daemon epoch mismatch: the submission expects "
-                            + "\(stamp.expectedEpoch) but this daemon is at "
-                            + "\(currentEpoch); a restarted daemon never replays a "
-                            + "stamped mutation — re-read state and resubmit with a "
-                            + "new requestID"))
+                    .epochMismatch(
+                        expectedEpoch: stamp.expectedEpoch,
+                        actualEpoch: currentEpoch))
             }
         }
 
@@ -146,9 +147,14 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
 
         // Staged-payload infra is daemon-scoped in-memory state; the wiki
         // admission gate applies when the committed handle is CONSUMED by a
-        // real operation, not while chunks stream.
+        // real operation, not while chunks stream. `connectionID` keys the
+        // staging table to the calling connection so a disconnect sweep
+        // (``DaemonPayloadStagingStore/dropUploads(connectionID:)``) reaps
+        // exactly that connection's uploads (slice 2).
         if operation.family == .stagedPayload {
-            return await stagedPayloadReply(domainRequest, storeRequest, operation)
+            return await stagedPayloadReply(
+                domainRequest, storeRequest, operation,
+                connectionID: connectionID)
         }
 
         // EVENTS family: the acknowledged `sinkHandshake` — daemon-scoped,
@@ -215,12 +221,10 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
     ) async throws -> Data {
         let currentEpoch = daemon.daemonEpoch
         guard stamp.expectedEpoch == currentEpoch else {
-            throw DaemonStoreError.unexpected(
-                "daemon epoch mismatch: the submission expects "
-                    + "\(stamp.expectedEpoch) but this daemon is at "
-                    + "\(currentEpoch); a restarted daemon never replays a "
-                    + "stamped mutation — re-read state and resubmit with a "
-                    + "new requestID")
+            // The ledger path's epoch gate: same typed contract case as the
+            // door check above — both epochs cross INTACT.
+            throw DaemonStoreError.epochMismatch(
+                expectedEpoch: stamp.expectedEpoch, actualEpoch: currentEpoch)
         }
         let fingerprint = Self.payloadFingerprint(
             operation: operation, payload: storeRequest.payload)
@@ -290,14 +294,19 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
     private func stagedPayloadReply(
         _ domainRequest: DaemonDomainRequest,
         _ storeRequest: DaemonStoreRequest,
-        _ operation: DaemonStoreOperation
+        _ operation: DaemonStoreOperation,
+        connectionID: String? = nil
     ) async -> DaemonDomainReply {
         do {
             switch operation {
             case .payloadBegin:
                 let request = try Self.decodePayload(
                     DaemonPayloadBeginRequest.self, storeRequest)
-                let reply = try staging.begin(request)
+                // The staging table keys THIS connection's id at begin; the
+                // commit inherits it (``DaemonPayloadStagingStore/commit``),
+                // so the disconnect sweep drops both stages (slice 2).
+                let reply = try staging.begin(
+                    request, connectionID: connectionID)
                 return Self.storeSuccessReply(
                     domainRequest, try Self.encodeResult(reply))
             case .payloadChunk:

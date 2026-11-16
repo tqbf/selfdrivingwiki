@@ -54,6 +54,10 @@ final class WikiDaemonListenerDelegate: NSObject, NSXPCListenerDelegate {
         // approach and ensures the strong sink proxy is cleaned up.
         newConnection.invalidationHandler = { [weak exporter] in
             exporter?.unregisterSink()
+            // Slice 2 disconnect sweep: drop the staged store uploads this
+            // connection keyed at payloadBegin (same cleanup site, same
+            // lifecycle as the sink unregister).
+            exporter?.dropStagedUploads()
         }
 
         newConnection.resume()
@@ -67,6 +71,11 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     private let daemon: WikiDaemon
     private let lock = NSLock()
     private var sinkID: UUID?
+    /// The stable per-connection id the staged store uploads key to (slice
+    /// 2, the sinkRegistrationID-style lock-guarded state): `storeOperation`
+    /// threads it into the staging table's begin, and the connection's
+    /// invalidation handler sweeps exactly this id.
+    private let connectionID = UUID().uuidString
 
     init(daemon: WikiDaemon) {
         self.daemon = daemon
@@ -79,6 +88,13 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         if let id {
             daemon.unregisterEventSink(id: id)
         }
+    }
+
+    /// Drop every staged store upload this connection keyed at
+    /// `payloadBegin` (the slice-2 disconnect sweep). Called by the
+    /// invalidation handler beside ``unregisterSink()``.
+    func dropStagedUploads() {
+        daemon.dropStoreUploads(connectionID: connectionID)
     }
 
     func listWikis(reply: @escaping (Data) -> Void) {
@@ -155,10 +171,14 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         // live (and whose pre-handshake ring to replay). Any other
         // connection's registration id never matches.
         let registrationID = lock.withLock { sinkID }
+        // Slice 2: THIS connection's stable id keys the staged store
+        // uploads, so the invalidation handler's sweep drops exactly them.
+        let connectionID = lock.withLock { self.connectionID }
         Task { [daemon] in
             sendableReply.reply(await daemon.storeOperationData(
                 wikiID: wikiID, request: request,
-                sinkRegistrationID: registrationID))
+                sinkRegistrationID: registrationID,
+                connectionID: connectionID))
         }
     }
 
