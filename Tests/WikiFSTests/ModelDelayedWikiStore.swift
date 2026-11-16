@@ -57,9 +57,17 @@ final class DelayedStoreGate: @unchecked Sendable {
         self.name = name
     }
 
-    /// Suspend until `open()`. Raced against `timeout`; the losing side
-    /// detaches the waiter and resumes its parked continuation, so nothing
-    /// leaks and the cooperative pool is never blocked.
+    /// Suspend until `open()`. Raced against `timeout`; BOTH racing paths
+    /// abort the waiter (lock-protected remove + resume) so nothing leaks
+    /// and the cooperative pool is never blocked:
+    /// - the timeout child aborts the waiter BEFORE the group scope waits on
+    ///   its children (H7: cancelling a parked continuation child does NOT
+    ///   resume a `CheckedContinuation` — without the explicit abort the
+    ///   group scope deadlocks on the parked child forever),
+    /// - external cancellation of `wait()` aborts+resumes via the
+    ///   cancellation handler,
+    /// - `open()` resumes through its own removal path; the lock guarantees
+    ///   each waiter's continuation resumes at most once.
     func wait(timeout: Duration = .seconds(5)) async throws {
         let waiterID: Int? = {
             lock.lock()
@@ -71,7 +79,7 @@ final class DelayedStoreGate: @unchecked Sendable {
             return nextWaiterID
         }()
         guard let waiterID else { return } // already open: latch passes through
-        do {
+        try await withTaskCancellationHandler {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
                     try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, any Error>) in
@@ -80,14 +88,22 @@ final class DelayedStoreGate: @unchecked Sendable {
                 }
                 group.addTask {
                     try await Task.sleep(for: timeout)
+                    // Timeout wins: abort the parked waiter FIRST (remove +
+                    // resume with the timeout error) so the group scope can
+                    // never wait on a still-parked child, then surface the
+                    // timeout through the group.
+                    self.abortWaiter(
+                        waiterID,
+                        error: GateTimeoutError(gate: self.name, timeout: timeout))
                     throw GateTimeoutError(gate: self.name, timeout: timeout)
                 }
                 _ = try await group.next()
                 group.cancelAll()
             }
-        } catch {
-            abandon(waiterID: waiterID)
-            throw error
+        } onCancel: {
+            // External cancellation of wait() must also abort+resume the
+            // parked waiter, or the parked child would leak its continuation.
+            self.abortWaiter(waiterID, error: CancellationError())
         }
     }
 
@@ -128,17 +144,21 @@ final class DelayedStoreGate: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Detach a timed-out waiter and resume its continuation (if already
-    /// attached) so the parked child task can finish.
-    private func abandon(waiterID: Int) {
+    /// Remove waiter `id` (if still registered) and resume its continuation —
+    /// at most once per waiter — throwing `error`. Called by the timeout
+    /// child BEFORE the group scope waits on children, and by external
+    /// cancellation of `wait()`, so a parked continuation can never outlive
+    /// both racing paths (H7). Concurrent with `open()`: only the side that
+    /// removes the waiter entry under the lock resumes it.
+    private func abortWaiter(_ id: Int, error: any Error) {
         lock.lock()
-        guard let index = waiters.firstIndex(where: { $0.id == waiterID }) else {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else {
             lock.unlock()
             return
         }
         let waiter = waiters.remove(at: index)
         lock.unlock()
-        waiter.continuation?.resume(throwing: CancellationError())
+        waiter.continuation?.resume(throwing: error)
     }
 }
 

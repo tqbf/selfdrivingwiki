@@ -762,6 +762,68 @@ public final class WikiStoreModel {
         let title: String
         let body: String
         let dirty: Bool
+        /// The outgoing page's head-version id at capture time — the flush's
+        /// CAS expectation (H5, same seam as `save()`). `nil` when the
+        /// outgoing selection wasn't a loaded page (no expectation to match).
+        let headVersionID: PageVersionID?
+    }
+
+    /// Bounded retry count for the consistent head+page pair read in
+    /// `loadDraftsAsync` (H8: head → page → head; a moved head retries the
+    /// whole pair).
+    @ObservationIgnored private static let maxConsistentPageReadAttempts = 3
+
+    /// H6 — snapshots of failed transition flushes, keyed by page. A flush
+    /// that could not persist the outgoing draft (store error or page
+    /// conflict) retains its captured text here so the next load of that page
+    /// can restore it into the editor (dirty, ready to re-save) instead of
+    /// silently dropping the user's unsaved work. Cleared when the page's
+    /// draft is restored on load or a save for the page succeeds.
+    ///
+    /// F5: bounded at ``maxFailedFlushSnapshots`` entries. Insertion order is
+    /// tracked in ``failedFlushSnapshotOrder``; inserting into a full
+    /// dictionary evicts the oldest-inserted entry (a re-retain of an
+    /// existing key counts as a fresh insertion). All mutation goes through
+    /// ``retainFailedFlushSnapshot`` / ``takeFailedFlushSnapshot`` /
+    /// ``retireFailedFlushSnapshot`` so the dict and the order array cannot
+    /// drift apart.
+    @ObservationIgnored private var failedFlushSnapshots: [PageID: PendingDraftSnapshot] = [:]
+
+    /// F5: insertion order of `failedFlushSnapshots` keys, oldest first.
+    @ObservationIgnored private var failedFlushSnapshotOrder: [PageID] = []
+
+    /// F5: the failed-flush retention bound (entries across ALL pages).
+    @ObservationIgnored private static let maxFailedFlushSnapshots = 32
+
+    /// H6/F5: retain a failed-flush snapshot for `id`, evicting the
+    /// oldest-inserted entry when at the bound.
+    private func retainFailedFlushSnapshot(_ snapshot: PendingDraftSnapshot, for id: PageID) {
+        if let existing = failedFlushSnapshotOrder.firstIndex(of: id) {
+            // Re-retain of an existing key counts as a fresh insertion: move
+            // it to the newest slot.
+            failedFlushSnapshotOrder.remove(at: existing)
+        }
+        failedFlushSnapshotOrder.append(id)
+        failedFlushSnapshots[id] = snapshot
+        if failedFlushSnapshotOrder.count > Self.maxFailedFlushSnapshots {
+            let evictedID = failedFlushSnapshotOrder.removeFirst()
+            failedFlushSnapshots.removeValue(forKey: evictedID)
+            DebugLog.store("WikiStoreModel: failed-flush retention full (\(Self.maxFailedFlushSnapshots)) — evicted the oldest snapshot (page \(evictedID.rawValue))")
+        }
+    }
+
+    /// H6: consume the page's retained snapshot for restore, or `nil`.
+    private func takeFailedFlushSnapshot(for id: PageID) -> PendingDraftSnapshot? {
+        guard let snapshot = failedFlushSnapshots.removeValue(forKey: id) else { return nil }
+        failedFlushSnapshotOrder.removeAll { $0 == id }
+        return snapshot
+    }
+
+    /// H6: retire the page's snapshot without consuming it (its draft is
+    /// durably written now).
+    private func retireFailedFlushSnapshot(for id: PageID) {
+        guard failedFlushSnapshots.removeValue(forKey: id) != nil else { return }
+        failedFlushSnapshotOrder.removeAll { $0 == id }
     }
 
     /// Switch the selection programmatically. Plan P1.3 — the transition is
@@ -811,7 +873,8 @@ public final class WikiStoreModel {
             selection: loadedSelection,
             title: draftTitle,
             body: draftBody,
-            dirty: isDraftDirty)
+            dirty: isDraftDirty,
+            headVersionID: loadedPageHeadVersionID)
         loadGeneration &+= 1
         let generation = loadGeneration
         // Plan P1.3: history keys off the REQUESTED selection — the selection
@@ -835,7 +898,15 @@ public final class WikiStoreModel {
         markdownSaveWarning = nil
         markdownWarningTask?.cancel()
         markdownWarningTask = nil
+        // H4 — transitions are SERIALIZED, not merely newest-tracked: capture
+        // the predecessor slot before spawning and chain the new task onto
+        // it. Predecessor completion implies its flush finished AND its stale
+        // load aborted (the generation check), so two transitions can never
+        // flush or load interleaved. The newest slot still tracks only the
+        // latest task; quiesce awaits it, which transitively awaits the chain.
+        let predecessor = selectionTransitionTask
         let task = Task { [weak self] in
+            await predecessor?.value
             await self?.performSelectionTransition(
                 outgoing: outgoing,
                 to: newValue,
@@ -904,14 +975,27 @@ public final class WikiStoreModel {
             do {
                 try await PageUpsert.upsert(
                     in: store, id: id, title: snapshot.title, body: snapshot.body,
-                    expectedHeadVersionID: nil, author: PageAuthor.user.rawValue)
+                    expectedHeadVersionID: snapshot.headVersionID, author: PageAuthor.user.rawValue)
+                // H6: the outgoing draft is durable now — retire any
+                // failed-flush retention for this page.
+                retireFailedFlushSnapshot(for: id)
+                // M9: write-acknowledgment — the transition continues into the
+                // incoming page's load right after this flush, so the list
+                // projections must reflect the flush's write before it runs.
+                await refreshProjectionsAfterOwnWrite()
             } catch {
                 DebugLog.store("WikiStoreModel.flushCapturedDraft failed (page \(id.rawValue)): \(error)")
+                // H6: retain the captured draft so the next load of this page
+                // restores the user's unsaved text into the editor (dirty,
+                // ready to re-save) instead of dropping it.
+                retainFailedFlushSnapshot(snapshot, for: id)
                 // P1.4: surface the failure through the same non-fatal alert
                 // as `save()`. The editor was already cleared at transition
                 // start, so a swallowed flush silently lost the outgoing
                 // draft with no UI signal; `storeError` is the model's
-                // failure projection.
+                // failure projection. A `PageConflictError` (H5: the flush
+                // now CAS-expects the captured head) surfaces here too —
+                // never retried unrestricted.
                 storeError = StoreError(
                     title: "Page Not Saved",
                     message: "The edit to “\(snapshot.title)” could not be saved before leaving the page: \(error.localizedDescription)")
@@ -1542,7 +1626,8 @@ public final class WikiStoreModel {
             selection: loadedSelection,
             title: draftTitle,
             body: draftBody,
-            dirty: isDraftDirty)
+            dirty: isDraftDirty,
+            headVersionID: loadedPageHeadVersionID)
         autosaveTask?.cancel()
         autosaveTask = nil
         isApplyingTabSelection = true
@@ -1558,7 +1643,12 @@ public final class WikiStoreModel {
         loadDrafts(for: target)
         isApplyingTabSelection = false
         // Plan P1.3: the in-place flush rides the tracked pending-save slot
-        // (same seam as fixMarkdownInDraft) so quiesce settles it too.
+        // (same seam as fixMarkdownInDraft) so quiesce settles it too. Slot
+        // split is deliberate (review F8): this flush rides `pendingSaveTask`
+        // while the incoming load chains on `selectionTransitionTask` —
+        // cross-slot, different pages, no editor contamination. Residual:
+        // the two slots are not ordered against each other, so a summary
+        // read can be momentarily stale until the bus-driven reload lands.
         pendingSaveTaskSequence += 1
         let flushSequence = pendingSaveTaskSequence
         let flushTask = Task { [weak self] in
@@ -1855,7 +1945,12 @@ public final class WikiStoreModel {
         // Plan P1.3: this spawned load feeds the same tracking slot as a
         // full transition (tab switches ride setActiveTab → loadDrafts), so
         // `quiesceSelectionTransitions()` settles openTab/selectTab too.
+        // H4: it rides the SAME serialization — chained onto the predecessor
+        // slot — so a tab switch's load can never interleave with an
+        // in-flight transition's flush/load.
+        let predecessor = selectionTransitionTask
         let task = Task { [weak self] in
+            await predecessor?.value
             await self?.loadDraftsAsync(for: newValue, generation: generation)
             self?.clearSelectionTransitionTask(generation: generation)
         }
@@ -1884,6 +1979,7 @@ public final class WikiStoreModel {
         markdownWarningTask?.cancel()
         markdownWarningTask = nil
         var restoredFromPendingDraft = false
+        var restoredFromFailedFlush = false
         switch newValue {
         case .newChat, .bookmark, .chat, .strategy:
             draftTitle = ""
@@ -1892,7 +1988,41 @@ public final class WikiStoreModel {
             loadedPageHeadVersionID = nil
         case .page(let id):
             let stampBeforeRead = draftContentStamp
-            guard let page = await DebugLog.trying("getPage", operation: { try await store.getPage(id: id) }) else {
+            // H8 — the body and its head-version id must be read as a
+            // CONSISTENT PAIR: reading them across separate awaits lets an
+            // intervening writer pair a stale body with a newer head, and a
+            // later edit would then pass CAS against that head and clobber
+            // the writer's version. Read head → page → head; a changed head
+            // means a writer landed mid-read, so retry the pair (bounded).
+            // F2/H8: after the bound, the expectation falls back to the head
+            // read BEFORE the body (`readPreBodyHeadVersionID`) — the
+            // expectation the loaded content was actually read against. The
+            // final `headAfter` may postdate the body (writer committed
+            // between the last getPage and the last head read), and saving a
+            // pre-commit body against that post-commit head passes CAS and
+            // silently clobbers the writer. The pre-body head is stale
+            // whenever a writer landed, so the next save surfaces a visible
+            // `PageConflictError` instead.
+            var readPage: WikiPage?
+            var readHeadVersionID: PageVersionID?
+            var readPreBodyHeadVersionID: PageVersionID?
+            var attempts = 0
+            var pairStable = false
+            while attempts < Self.maxConsistentPageReadAttempts {
+                attempts += 1
+                let headBefore = await DebugLog.trying("pageHeadVersionID", operation: { try await store.pageHeadVersionID(pageID: id) })
+                let candidate = await DebugLog.trying("getPage", operation: { try await store.getPage(id: id) })
+                guard let candidate else { break }
+                let headAfter = await DebugLog.trying("pageHeadVersionID", operation: { try await store.pageHeadVersionID(pageID: id) })
+                readPage = candidate
+                readHeadVersionID = headAfter
+                readPreBodyHeadVersionID = headBefore
+                if headBefore == headAfter {
+                    pairStable = true
+                    break
+                }
+            }
+            guard let page = readPage else {
                 // Stale completion: a newer transition owns the editor state.
                 guard generation == loadGeneration else { return }
                 draftTitle = ""
@@ -1902,7 +2032,9 @@ public final class WikiStoreModel {
                 loadedSelection = nil
                 return
             }
-            let headVersionID = await DebugLog.trying("pageHeadVersionID", operation: { try await store.pageHeadVersionID(pageID: id) })
+            if !pairStable {
+                DebugLog.store("WikiStoreModel.loadDraftsAsync: head/page pair unstable for page \(id.rawValue) after \(attempts) attempt(s) — CAS expectation falls back to the pre-body head so the next save surfaces PageConflictError instead of clobbering a concurrent writer")
+            }
             // Stale completion check AFTER the awaits: a newer transition
             // (A→B→C) must not have C's load overwritten by B's completion.
             guard generation == loadGeneration else { return }
@@ -1918,16 +2050,49 @@ public final class WikiStoreModel {
                 draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             }
             loadedPage = id
-            // Capture the current head version id for CAS on save (W0, PR #312).
-            loadedPageHeadVersionID = headVersionID
-            // Restore stashed draft when returning to an editing tab.
-            if let tabID = activeTabID,
-               let i = tabs.firstIndex(where: { $0.id == tabID }),
-               let pendingTitle = tabs[i].pendingDraftTitle,
-                let pendingBody = tabs[i].pendingDraftBody {
-                draftTitle = pendingTitle
-                draftBody = pendingBody
-                restoredFromPendingDraft = true
+            // Capture the head version id for CAS on save (W0, PR #312): the
+            // re-read head on the stable path, the pre-body head on the F2
+            // unstable path (never `headAfter`, which can postdate the body).
+            loadedPageHeadVersionID = pairStable ? readHeadVersionID : readPreBodyHeadVersionID
+            // H6 — a flush for this page failed earlier (store error or page
+            // conflict): restore its retained draft into the editor instead
+            // of the store's last-committed text, so the user's unsaved work
+            // reappears dirty and the next save persists it. F4b: the CAS
+            // expectation stays the freshly-read head (assigned above) — the
+            // snapshot's own headVersionID predates the current head, and
+            // re-arming it would conflict immediately and lose anyway.
+            var retainedFailedFlush: PendingDraftSnapshot?
+            if let retained = takeFailedFlushSnapshot(for: id) {
+                draftTitle = retained.title
+                draftBody = retained.body
+                restoredFromFailedFlush = true
+                retainedFailedFlush = retained
+            }
+            // F4a: single owner. When a failed-flush snapshot was restored it
+            // IS the user's text — the tab stash must not overwrite it after
+            // the snapshot was consumed (the old order let the stash win and
+            // silently drop the snapshot's text).
+            if !restoredFromFailedFlush {
+                // Restore stashed draft when returning to an editing tab.
+                if let tabID = activeTabID,
+                   let i = tabs.firstIndex(where: { $0.id == tabID }),
+                   let pendingTitle = tabs[i].pendingDraftTitle,
+                    let pendingBody = tabs[i].pendingDraftBody {
+                    draftTitle = pendingTitle
+                    draftBody = pendingBody
+                    restoredFromPendingDraft = true
+                }
+            } else if let retained = retainedFailedFlush {
+                // F4b: surface the failed flush on the restore path. The
+                // snapshot also exists when the flush failed with a
+                // PageConflictError — the restored body predates the current
+                // head, so the next save dead-ends in a conflict alert unless
+                // the user knows WHY the text came back dirty. Distinct,
+                // actionable copy: the edit is preserved in the editor, the
+                // page changed since, review and re-save.
+                storeError = StoreError(
+                    title: "Edit Not Saved",
+                    message: "Your edit to “\(retained.title)” was preserved in the editor, but the page changed since the edit was written. Review the text, then save to keep it.")
             }
         case .changeLog:
             draftTitle = ""
@@ -1955,7 +2120,9 @@ public final class WikiStoreModel {
         } else {
             draftChatMessage = ""
         }
-        isDraftDirty = restoredFromPendingDraft
+        // A failed-flush restore (H6) must stay dirty even when no tab stash
+        // was restored — the restored text is unsaved work awaiting re-save.
+        isDraftDirty = restoredFromPendingDraft || restoredFromFailedFlush
     }
 
     private func recordHistoryTransition(from oldValue: WikiSelection?, to newValue: WikiSelection?) {
@@ -2020,6 +2187,12 @@ public final class WikiStoreModel {
     /// Always rebuilds `summaries` from source on success.
     public func save() async {
         guard let id = loadedPage else { return }
+        // H3: the post-write editor bookkeeping must land on the page this
+        // save was made FOR. Capture the load generation now; a navigation
+        // that lands during the write bumps both `loadedPage` and the
+        // generation, and the stale save must then leave the new page's
+        // editor state alone.
+        let capturedGeneration = loadGeneration
         do {
             // The shared upsert+reparse seam (Phase A): persist the body AND
             // re-resolve this page's `[[wiki-links]]` in one operation. `wikictl`
@@ -2038,25 +2211,46 @@ public final class WikiStoreModel {
             try await PageUpsert.upsert(in: store, id: id, title: savedTitle, body: savedBody,
                                   expectedHeadVersionID: loadedPageHeadVersionID,
                                   author: "user")
-            // P1.4: clear the dirty flag only when the draft still matches
-            // what this save wrote — a keystroke landing while the write is
-            // in flight must keep the draft dirty (and its text), so a
-            // follow-up save persists the newer content instead of the
-            // reload treating the editor as clean and reverting it.
-            if draftTitle == savedTitle, draftBody == savedBody {
-                isDraftDirty = false
+            // H3: apply the write's editor bookkeeping ONLY while the editor
+            // still holds this page and no newer transition has begun — a
+            // mid-write A→B switch must not stamp B's editor with A's dirty
+            // clear or head-version expectation.
+            if loadedPage == id, loadGeneration == capturedGeneration {
+                // P1.4: clear the dirty flag only when the draft still matches
+                // what this save wrote — a keystroke landing while the write is
+                // in flight must keep the draft dirty (and its text), so a
+                // follow-up save persists the newer content instead of the
+                // reload treating the editor as clean and reverting it.
+                if draftTitle == savedTitle, draftBody == savedBody {
+                    isDraftDirty = false
+                }
+                // F3: the head re-read below AWAITS — the entry guard above is
+                // stale by the time it returns if a navigation landed mid-read
+                // (a new generation owns `loadedPage`/`loadedPageHeadVersionID`
+                // then). Re-capture immediately after the await and gate the
+                // head assignment plus the warning/retention mutations on it.
+                let freshHead = await DebugLog.trying("pageHeadVersionID", operation: { try await store.pageHeadVersionID(pageID: id) })
+                let generationStillCurrent = loadGeneration == capturedGeneration && loadedPage == id
+                if generationStillCurrent {
+                    // After a successful versioned save, refresh the head version
+                    // id so the next save CAS-expects the version we just wrote.
+                    loadedPageHeadVersionID = freshHead
+                    // No manual reload — the bus fires reloadFromStore() async after the upsert.
+                    // Non-blocking fence lint: the in-app save still succeeds (the
+                    // editor is the human escape from wikictl's hard block), but a
+                    // broken claimed fence is flagged so the author can fix it.
+                    updateFenceWarning(for: draftBody)
+                    // Non-blocking markdown lint: same pattern — save succeeds with the
+                    // original text, cosmetic issues are flagged as informational.
+                    updateMarkdownWarning(for: draftBody)
+                    // H6: this page's draft is durable now — retire any
+                    // failed-flush retention for it.
+                    retireFailedFlushSnapshot(for: id)
+                }
             }
-            // After a successful versioned save, refresh the head version id so
-            // the next save CAS-expects the version we just wrote.
-            await loadedPageHeadVersionID = DebugLog.trying("pageHeadVersionID", operation: { try await store.pageHeadVersionID(pageID: id) })
-            // No manual reload — the bus fires reloadFromStore() async after the upsert.
-            // Non-blocking fence lint: the in-app save still succeeds (the
-            // editor is the human escape from wikictl's hard block), but a
-            // broken claimed fence is flagged so the author can fix it.
-            updateFenceWarning(for: draftBody)
-            // Non-blocking markdown lint: same pattern — save succeeds with the
-            // original text, cosmetic issues are flagged as informational.
-            updateMarkdownWarning(for: draftBody)
+            // M9: write-acknowledgment invariant — every model method that
+            // performs a store write returns with the list projections current.
+            await refreshProjectionsAfterOwnWrite()
         } catch let error as PageConflictError {
             // W0 (PR #312): a concurrent writer committed a new version. Surface
             // it so the user knows to re-load and merge their changes.
@@ -2203,6 +2397,10 @@ public final class WikiStoreModel {
                 // `agent:lint` so the activity carries the real identity.
                 try await PageUpsert.upsert(in: store, id: pageID, title: page.title, body: fixedBody,
                                       author: PageAuthor.agent("lint").rawValue)
+                // M9: write-acknowledgment — this method reads fresh store
+                // state on entry, so its own fix write must leave the list
+                // projections current before it returns.
+                await refreshProjectionsAfterOwnWrite()
                 // No manual reload — the bus fires reloadFromStore() async after the upsert.
                 if loadedPage == pageID {
                     draftBody = fixedBody
@@ -2309,12 +2507,18 @@ public final class WikiStoreModel {
         autosaveTask?.cancel()
         autosaveTask = nil
         guard isDraftDirty else { return }
+        // H3: capture the saved page BEFORE the await — a concurrent switch
+        // can move `loadedPage` while `save()` is in flight.
+        let savedPage = loadedPage
         await save()
-        // Clear the per-tab stash — content is now committed to the database.
-        if let tabID = activeTabID, let i = tabs.firstIndex(where: { $0.id == tabID }) {
-            tabs[i].pendingDraftTitle = nil
-            tabs[i].pendingDraftBody = nil
-        }
+        // Clear the SAVED tab's stash — the tab whose selection matches the
+        // page this flush persisted — not whatever tab is active by the time
+        // the await resumes (H3: the active tab may have changed mid-write,
+        // and clearing its stash would drop an unrelated tab's unsaved text).
+        guard let savedPage,
+              let i = tabs.firstIndex(where: { $0.selection == .page(savedPage) }) else { return }
+        tabs[i].pendingDraftTitle = nil
+        tabs[i].pendingDraftBody = nil
     }
 
     /// Flush pending page edits. Used on app backgrounding and before
@@ -4011,6 +4215,15 @@ public final class WikiStoreModel {
     /// output, recording full provenance (backend agent + extract activity). The
     /// `source_version_id` is resolved from the source's active content version.
     /// Double-seed guard: if a head already exists, returns it instead.
+    ///
+    /// M9 exemption (applies to this method and its siblings
+    /// `appendTranscriptMarkdown` overloads, `reExtractMarkdown`, `extractHtml`,
+    /// `extractDocx`): these append DERIVED markdown versions to a source's
+    /// version chain and do NOT mutate the page/source list projections, so
+    /// they skip `refreshProjectionsAfterOwnWrite()`. Views refresh their
+    /// per-source derived state via the `WikiEventBus` drain these writes'
+    /// own `ResourceChangeEvent`s trigger (`sourcesVersion` bumps on the
+    /// resulting `reloadSources()`).
     @discardableResult
     public func seedPdfMarkdown(
         for sourceID: SourceID, content: String,
@@ -4489,6 +4702,11 @@ public final class WikiStoreModel {
         guard !isDraftDirty else { return }
         guard case .page(let id) = selection, loadedPage == nil || loadedPage == id else { return }
         guard let page = await DebugLog.trying("getPage", operation: { try await store.getPage(id: id) }) else { return }
+        // H2: the read may have outlived its selection — a navigation A→B
+        // while it was in flight would publish A's page into B's editor.
+        // Re-validate the same guards the pre-await check enforced.
+        guard case .page(let currentID) = selection, currentID == id,
+              loadedPage == nil || loadedPage == id else { return }
         // The user may have started typing while the read was in flight; their
         // in-flight edit wins (P1.4: typing during a pending reload).
         guard !isDraftDirty else { return }

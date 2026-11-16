@@ -17,6 +17,19 @@ import WikiFSSearch
 enum GoldenMasterStoreState {
     static let wikiID = WikiID(rawValue: "golden-master")
 
+    // MARK: - Settle pump tuning (M10)
+
+    /// Consecutive no-event yields required before the event stream counts as
+    /// settled — wide enough that a mid-stream scheduling stall under
+    /// `--parallel` contention cannot be mistaken for the end of the stream.
+    /// Counted per single yield: any new event resets the counter.
+    fileprivate static let settleStableYieldWindow = 25
+    /// Total single-yield budget for the settle loop — 200 full stable
+    /// windows of headroom (25 stable yields each, worst case 25×25 = 625
+    /// yields to settle a quiet stream); exhausting it leaves the stream
+    /// unsettled and surfaces the WARNING line in the dump.
+    fileprivate static let settleYieldBudget = 5000
+
     // MARK: - Normalization
 
     /// Maps ULID-shaped tokens and ISO-8601 timestamps to encounter-order
@@ -114,19 +127,27 @@ enum GoldenMasterStoreState {
 
         // The bus dispatches handlers via main-actor tasks; pump the main
         // actor until the event stream settles. Yields, not sleeps: the exit
-        // condition is count stability across consecutive yields, so the wait
-        // is scheduler-driven and has no wall-clock budget to overrun under
-        // `--parallel` MainActor contention (a truncated settle made two
-        // otherwise-identical fixture runs capture different event lists).
-        var yieldBudget = 1000
+        // condition is count stability across 25 CONSECUTIVE single yields —
+        // each yield with no new event advances the counter, any new event
+        // resets it — so the wait is scheduler-driven and has no wall-clock
+        // budget to overrun under `--parallel` MainActor contention (a
+        // truncated settle made two otherwise-identical fixture runs capture
+        // different event lists; M10: a 3-yield window still settled early
+        // under contention — 25 consecutive stable yields make a mid-stream
+        // stall indistinguishable from settled by a wide margin).
+        var yieldBudget = Self.settleYieldBudget
+        var stableYields = 0
         var settled = false
         while !settled, yieldBudget > 0 {
             let before = events.count
-            for _ in 0..<3 {
-                await Task.yield()
-                yieldBudget -= 1
+            await Task.yield()
+            yieldBudget -= 1
+            if events.count == before {
+                stableYields += 1
+                settled = stableYields >= Self.settleStableYieldWindow
+            } else {
+                stableYields = 0
             }
-            settled = events.count == before
         }
         if !settled {
             DebugLog.store("GoldenMaster: event stream never settled within the yield budget")

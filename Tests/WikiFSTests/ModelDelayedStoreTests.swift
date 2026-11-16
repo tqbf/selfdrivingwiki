@@ -65,9 +65,15 @@ struct ModelDelayedStoreTests {
     // MARK: 1 — Rapid A→B→C navigation lands only C
 
     /// `beginSelectionTransition` bumps the load generation synchronously, so
-    /// when A's and B's store reads complete after C already landed, the
-    /// post-await generation check discards them: the editor keeps exactly
-    /// C's content.
+    /// when A's and B's store reads complete after C's transition already
+    /// bumped the generation, the post-await generation check discards them:
+    /// the editor keeps exactly C's content.
+    ///
+    /// H4: transitions are CHAINED — each new transition awaits its
+    /// predecessor, so a parked gated read blocks the whole chain. Each gate
+    /// therefore opens immediately after the next navigation is requested;
+    /// A's and B's completions still land after the generation moved past
+    /// them and are still discarded.
     @Test func rapidABCNavigationLandsOnlyCContent() async throws {
         let (model, store, controller, _) = try makeModel()
         let a = try await seedPage(store, title: "Alpha", body: "alpha-body-marker")
@@ -81,8 +87,15 @@ struct ModelDelayedStoreTests {
         model.select(.page(a))
         try await controller.waitForEntry(pageKey(a))
         model.select(.page(b))
+        // H4: B's transition is chained behind A's parked read — open A now
+        // so the chain reaches B. A's completion is discarded (stale
+        // generation) before B's load starts.
+        controller.gate(forKey: pageKey(a))?.open()
         try await controller.waitForEntry(pageKey(b))
         model.select(.page(c))
+        // H4: C's transition is chained behind B's parked read — open B so
+        // the chain reaches C. B's completion is discarded the same way.
+        controller.gate(forKey: pageKey(b))?.open()
         try await controller.waitForEntry("\(pageKey(c)):returned")
         await pump()
         await model.quiesceSelectionTransitions()
@@ -98,9 +111,9 @@ struct ModelDelayedStoreTests {
             return
         }
 
-        // Release the parked A/B reads: their completions are stale now.
-        controller.gate(forKey: pageKey(a))?.open()
-        controller.gate(forKey: pageKey(b))?.open()
+        // H4: A's and B's reads were released above (the chain required it);
+        // settle their discarded completions explicitly before the final
+        // assertions.
         try await controller.waitForEntry("\(pageKey(a)):returned")
         try await controller.waitForEntry("\(pageKey(b)):returned")
         await pump()
@@ -114,9 +127,14 @@ struct ModelDelayedStoreTests {
 
     // MARK: 2 — Stale completion released LAST is discarded
 
-    /// Same mechanism as scenario 1 with the releases reordered: C lands
-    /// while A's read is still parked, then A completes LAST — its result
-    /// must never touch the current page projection.
+    /// Same mechanism as scenario 1: A's read parks, C's transition bumps the
+    /// generation, and A's completion — whatever its position in the schedule
+    /// — must never touch the current page projection.
+    ///
+    /// H4: transitions are CHAINED, so C's transition cannot reach the store
+    /// while A's read is parked. The gate therefore opens right after the C
+    /// navigation is requested; A's completion is then discarded as stale
+    /// (generation already bumped) BEFORE C's load starts.
     @Test func staleALoadCompletionReleasedLastIsDiscarded() async throws {
         let (model, store, controller, _) = try makeModel()
         let a = try await seedPage(store, title: "Alpha", body: "alpha-late-marker")
@@ -127,13 +145,15 @@ struct ModelDelayedStoreTests {
         model.select(.page(a))
         try await controller.waitForEntry(pageKey(a))
         model.select(.page(c))
+        // H4: C's transition is chained behind A's parked read — open A now
+        // so the chain can advance. A's completion is discarded as stale.
+        controller.gate(forKey: pageKey(a))?.open()
         try await controller.waitForEntry("\(pageKey(c)):returned")
         await pump()
         await model.quiesceSelectionTransitions()
-        #expect(model.draftTitle == "Gamma", "C must land while A is parked, got '\(model.draftTitle)'")
+        #expect(model.draftTitle == "Gamma", "C must land past A's stale completion, got '\(model.draftTitle)'")
 
-        // A's completion arrives LAST — after C is already on screen.
-        controller.gate(forKey: pageKey(a))?.open()
+        // A's store read completed without touching the editor.
         try await controller.waitForEntry("\(pageKey(a)):returned")
         await pump()
         await model.quiesceSelectionTransitions()
@@ -296,4 +316,200 @@ struct ModelDelayedStoreTests {
         #expect(model.selectPage(byTitle: "Alpha") == true, "post-bootstrap byTitle selection resolves")
     }
 }
+// MARK: - H7 — DelayedStoreGate contract
+
+/// Direct contract tests for `DelayedStoreGate.wait()`'s racing paths (H7).
+/// Every path that can end a wait — open, timeout, external cancellation —
+/// must abort+resume the parked waiter, or the group scope deadlocks on a
+/// continuation cancellation cannot release. A resumed-twice continuation is
+/// a fatal process crash, so these tests passing at all also pins resume-once.
+///
+/// Repo concurrency rule: every wait here is bounded by an external watchdog
+/// (`withThrowingTaskGroup` + sleep race), so a regression surfaces as a fast
+/// diagnosed failure instead of a hung `swift test`.
+@Suite(.serialized, .timeLimit(.minutes(2)))
+struct DelayedStoreGateContractTests {
+
+    /// Run `body` inside a task group next to a watchdog child that throws
+    /// well after any legitimate completion, so a hung/deadlocked wait fails
+    /// fast with a diagnosed error instead of hanging `swift test`.
+    private func withWatchdog<T: Sendable>(
+        watchdogFor: Duration = .seconds(5),
+        _ body: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await body() }
+            group.addTask {
+                try await Task.sleep(for: watchdogFor)
+                throw GateTimeoutError(gate: "watchdog", timeout: watchdogFor)
+            }
+            guard let first = try await group.next() else {
+                throw GateTimeoutError(gate: "watchdog", timeout: watchdogFor)
+            }
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// A gate that is never opened must surface its timeout promptly (not
+    /// hang the group scope on the parked continuation child — the H7
+    /// deadlock shape).
+    @Test func neverOpenedGateTimesOutInsteadOfHanging() async throws {
+        let gate = DelayedStoreGate(name: "never-open-h7")
+        let started = ContinuousClock.now
+        try await withWatchdog {
+            do {
+                try await gate.wait(timeout: .milliseconds(150))
+                Issue.record("a never-opened gate must time out, not pass through")
+            } catch is GateTimeoutError {
+                // Expected: the gate's own timeout surfaced.
+            }
+            // Any other error propagates and fails the test.
+        }
+        let elapsed = ContinuousClock.now - started
+        #expect(elapsed < .seconds(4), "the gate timeout must surface promptly, took \(elapsed)")
+    }
+
+    /// External cancellation of a parked `wait()` must abort+resume the
+    /// waiter and surface `CancellationError` — not strand the parked child.
+    @Test func externalCancellationSurfacesInsteadOfHanging() async throws {
+        let gate = DelayedStoreGate(name: "cancel-h7")
+        let waiter = Task {
+            try await gate.wait(timeout: .seconds(60))
+        }
+        // Let the waiter park, then cancel it out from under the latch.
+        try await Task.sleep(for: .milliseconds(100))
+        waiter.cancel()
+        let outcome = try await withWatchdog { () -> String in
+            do {
+                try await waiter.value
+                return "wait returned without throwing"
+            } catch is CancellationError {
+                return "ok"
+            } catch {
+                return "unexpected error: \(error)"
+            }
+        }
+        #expect(outcome == "ok", "external cancellation must surface CancellationError promptly, got '\(outcome)'")
+    }
+
+    /// An already-open latch passes `wait()` straight through, and an `open()`
+    /// racing a fresh `wait()` (before or after its continuation attaches)
+    /// resolves the wait without hanging.
+    @Test func openBeforeAttachResumesTheWaiter() async throws {
+        let preOpened = DelayedStoreGate(name: "open-early-h7")
+        preOpened.open()
+        try await withWatchdog {
+            try await preOpened.wait(timeout: .seconds(2))
+        }
+
+        // The mid-race shape: open() and wait() start together, so the open
+        // may land before the waiter's continuation attaches. Either order
+        // must resolve the wait inside the watchdog budget.
+        let raced = DelayedStoreGate(name: "open-race-h7")
+        try await withWatchdog {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { raced.open() }
+                group.addTask {
+                    do {
+                        try await raced.wait(timeout: .seconds(2))
+                    } catch is GateTimeoutError {
+                        // Unreachable here — only the watchdog (a different
+                        // task) races this gate, and it never opens it.
+                    }
+                }
+                for try await _ in group {}
+            }
+        }
+    }
+
+    /// `open()` racing the timeout at the same instant must resolve the
+    /// waiter exactly once — pass-through or timeout, never a double resume
+    /// (which would crash the process) and never a hang. Several offsets
+    /// around the timeout deadline exercise both race orders.
+    @Test func openVersusTimeoutRaceResumesExactlyOnce() async throws {
+        let timeout = Duration.milliseconds(100)
+        for delayMs in [10, 30, 50, 70, 90, 99] {
+            let gate = DelayedStoreGate(name: "race-h7-\(delayMs)")
+            do {
+                try await withWatchdog(watchdogFor: .seconds(3)) {
+                    try await withThrowingTaskGroup(of: Void.self) { group in
+                        group.addTask {
+                            do {
+                                try await gate.wait(timeout: timeout)
+                            } catch is GateTimeoutError {
+                                // Timeout won the race — a legal outcome.
+                            }
+                            // Any other error propagates.
+                        }
+                        group.addTask {
+                            try await Task.sleep(for: .milliseconds(delayMs))
+                            gate.open()
+                        }
+                        for try await _ in group {}
+                    }
+                }
+            } catch {
+                Issue.record("open-vs-timeout race at \(delayMs)ms hung or errored unexpectedly: \(error)")
+            }
+        }
+    }
+
+    /// An `open()` landing AFTER the timeout already won (open delay > gate
+    /// timeout) must surface the gate's timeout error from `wait()`, and the
+    /// late `open()` must be a harmless no-op: the timed-out waiter was
+    /// already removed from the registry, so the open releases nothing —
+    /// no crash, no double resume.
+    ///
+    /// Deliberate coverage gaps (review F7), documented rather than forced:
+    /// - Watchdog SHAPE: the existing suites exercise the watchdog race, but
+    ///   not every interleaving of watchdog-vs-timeout-vs-open. Structural
+    ///   resume-once needs no further test — both racing paths (timeout
+    ///   abort, external cancellation) and `open()` remove the waiter under
+    ///   the lock, so a continuation can only ever be resumed by the side
+    ///   that removed it.
+    /// - Forced scheduler ordering (e.g. timeout firing strictly before the
+    ///   continuation attaches) needs an injection hook into `wait()`'s
+    ///   continuation attach — out of scope for this harness.
+    @Test func openAfterTimeoutSurfacesTimeoutAndLateOpenIsHarmlessNoOp() async throws {
+        let timeout = Duration.milliseconds(100)
+        // 50 ms margin over the timeout: the open must land clearly AFTER the
+        // timeout fired, so the "timeout surfaces" assertion stays
+        // deterministic under parallel-suite load.
+        let openDelay = Duration.milliseconds(150)
+        let gate = DelayedStoreGate(name: "open-after-timeout-h7")
+        let timedOut = try await withWatchdog(watchdogFor: .seconds(3)) {
+            () -> Bool in
+            try await withThrowingTaskGroup(of: Bool?.self) { group in
+                group.addTask {
+                    do {
+                        try await gate.wait(timeout: timeout)
+                        return false // pass-through would mean the late open won
+                    } catch is GateTimeoutError {
+                        return true // expected: the timeout surfaced
+                    }
+                }
+                group.addTask {
+                    try await Task.sleep(for: openDelay)
+                    gate.open()
+                    return nil // the opener contributes no assertion
+                }
+                var timeoutSurfaced = false
+                for try await outcome in group {
+                    if let outcome { timeoutSurfaced = outcome }
+                }
+                return timeoutSurfaced
+            }
+        }
+        #expect(timedOut, "wait() must surface GateTimeoutError when open() lands after the timeout")
+        // The subsequent open() is a harmless no-op on the emptied registry
+        // (no crash, no double resume); a fresh wait() then passes straight
+        // through the opened latch, proving the gate still works.
+        gate.open()
+        try await withWatchdog(watchdogFor: .seconds(2)) {
+            try await gate.wait(timeout: .seconds(1))
+        }
+    }
+}
+
 #endif // os(macOS)

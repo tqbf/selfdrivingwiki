@@ -100,6 +100,13 @@ struct SourceDetailView: View {
     /// Tracks the active tab ID as of the last resolved update cycle — used to
     /// distinguish tab switches from in-tab file navigation.
     @State private var lastKnownActiveTabID: UUID? = nil
+    /// The source whose editor state (`editBuffer` / `headVersion`) currently
+    /// belongs to. The flush handlers run AFTER `file.id` / `store.selection`
+    /// already changed, so `file.id` there is the INCOMING source; the flush
+    /// must target the OUTGOING one carried here. Maintained by `onAppear`,
+    /// the tail of `onChange(of: file.id)`, and the tail of `.task(id:)`
+    /// (guarded against a cancelled tail from a superseded navigation).
+    @State private var lastKnownSourceID: SourceID? = nil
     /// Set when a tab switch targets a tab that was in edit mode but whose
     /// headVersion has not yet loaded. Cleared once headVersion arrives or
     /// the user navigates to a different file.
@@ -526,6 +533,7 @@ struct SourceDetailView: View {
             // Per-file loads run in `.task(id: file.id)` (the store reads are
             // async now); onAppear keeps only the synchronous registrations.
             lastKnownActiveTabID = store.activeTabID
+            lastKnownSourceID = file.id
             updateRightSidebarRegistration()
         }
         .onChange(of: file.id) {
@@ -535,7 +543,23 @@ struct SourceDetailView: View {
             // otherwise leaks A's "Extracting…" flag onto B's header. The header
             // spinner is additionally driven off the per-file `isThisFileExtracting`
             // launcher flag below, so it can never survive a navigation.
-            Task { await flushEditIfDirty() }
+            // H1: flush the OUTGOING edit against the OUTGOING source. This
+            // handler runs AFTER `file.id` changed, so `file.id` here is the
+            // source the user navigated TO — `lastKnownSourceID` carries the
+            // source the editor state belonged to. Capture synchronously,
+            // before any state reset.
+            let outgoing = lastKnownSourceID
+            let buffer = editBuffer
+            let head = headVersion
+            if let outgoing, !buffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Task { await flushEditIfDirty(sourceID: outgoing, buffer: buffer, head: head) }
+                // Single-flush guard: source→source navigation fires BOTH this
+                // handler and `onChange(of: store.selection)`; clearing the
+                // buffer makes the second capture empty so `flushEditIfDirty`
+                // skips it (the role the old synchronous `isEditing = false`
+                // guard played).
+                editBuffer = ""
+            }
             isEditing = false
             isExtracting = false
             htmlExtractionError = nil
@@ -554,6 +578,10 @@ struct SourceDetailView: View {
             // Cancel any pending edit-mode restoration so it doesn't apply to
             // the new file when its headVersion loads.
             shouldRestoreEditing = false
+            // H1: the editor state now belongs to the incoming source — update
+            // the tracker at the END of the handler, after the flush above
+            // captured the outgoing id.
+            lastKnownSourceID = file.id
         }
         .task(id: file.id) {
             await rendererSessionPreparation.cancel()
@@ -569,6 +597,12 @@ struct SourceDetailView: View {
             await consumePinnedExtraction()
             await resolveRendererPresentation()
             updateRightSidebarRegistration()
+            // H1: maintain the outgoing-identity tracker. Only the CURRENT run
+            // of this task owns it — a tail from a superseded (cancelled)
+            // navigation must not clobber the newer run's id.
+            if !Task.isCancelled {
+                lastKnownSourceID = file.id
+            }
         }
         .task(id: MetadataHydrationKey.source(file.id, store.messageVersion)) {
             await hydrateMetadata(sourceID: file.id)
@@ -600,9 +634,36 @@ struct SourceDetailView: View {
             }
         }
         .onChange(of: store.selection) {
-            Task { await flushEditIfDirty() }
+            // H1: flush against the OUTGOING source (`lastKnownSourceID`) —
+            // this handler also runs after the state change committed, and
+            // for a source→source switch `file.id` is already the incoming
+            // source. See the file.id handler above; the buffer clear in the
+            // flush branch is the single-flush guard for a navigation that
+            // fires BOTH handlers.
+            let outgoing = lastKnownSourceID
+            let buffer = editBuffer
+            let head = headVersion
+            if let outgoing, !buffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Task { await flushEditIfDirty(sourceID: outgoing, buffer: buffer, head: head) }
+                editBuffer = ""
+            }
             isEditing = false
             updateRightSidebarRegistration()
+        }
+        .onDisappear {
+            // H1: dismount case — a selection change to a NON-source
+            // dismantles this view without `file.id` changing, so the
+            // onChange handlers above may not both fire. Same capture-and-
+            // Task pattern; the buffer clear keeps this a single flush even
+            // when an onChange handler already consumed the buffer (handler
+            // order within the dismantling update is not guaranteed).
+            let outgoing = lastKnownSourceID
+            let buffer = editBuffer
+            let head = headVersion
+            if let outgoing, !buffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Task { await flushEditIfDirty(sourceID: outgoing, buffer: buffer, head: head) }
+                editBuffer = ""
+            }
         }
         // Tab availability and outline applicability both feed `outlinePayload`
         // (its empty-content gate is the same `showsSourceOutlineTab`
@@ -2188,15 +2249,23 @@ struct SourceDetailView: View {
         isEditing = false
     }
 
-    private func flushEditIfDirty() async {
-        guard isEditing else { return }
-        let trimmed = editBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let current = headVersion, !trimmed.isEmpty, trimmed != current.content {
-            if let version = await store.saveProcessedMarkdown(for: file.id, content: trimmed) {
+    /// H1: flush the OUTGOING edit using explicitly captured values. Callers
+    /// capture `(lastKnownSourceID, editBuffer, headVersion)` synchronously
+    /// BEFORE any state reset and pass them in from a Task — the handler that
+    /// runs after a navigation sees the INCOMING `file.id`, so the outgoing
+    /// source id must come from the tracker, not from `file.id` (flushing
+    /// against the incoming id appended the draft to the wrong source). Same
+    /// save behavior as before: skip empty/unchanged content; assign the
+    /// returned version only while the loaded file still matches the captured
+    /// outgoing id.
+    private func flushEditIfDirty(sourceID: SourceID, buffer: String, head: SourceMarkdownVersion?) async {
+        let trimmed = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let current = head, !trimmed.isEmpty, trimmed != current.content {
+            if let version = await store.saveProcessedMarkdown(for: sourceID, content: trimmed),
+               file.id == sourceID {
                 headVersion = version
             }
         }
-        isEditing = false
     }
 
     // MARK: - Shared sub-views
