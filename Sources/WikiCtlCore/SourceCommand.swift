@@ -87,31 +87,31 @@ public enum SourceCommand {
         in store: WikiStore,
         cwd: String,
         bm25Leg: [SourceSummary]? = nil
-    ) throws -> Result {
+    ) async throws -> Result {
         switch action {
         case .addURL:
             throw Failure.message("source add --url requires async execution")
         case .addFile(let path, let name):
-            return try addFile(path: path, name: name, in: store)
+            return try await addFile(path: path, name: name, in: store)
         case .list(let json):
-            return try list(in: store, json: json)
+            return try await list(in: store, json: json)
         case .cat(let selector, let markdown):
-            return try cat(selector, markdown: markdown, in: store)
+            return try await cat(selector, markdown: markdown, in: store)
         case .export(let selector, let out, let markdown):
-            return try export(selector, out: out, markdown: markdown, in: store, cwd: cwd)
+            return try await export(selector, out: out, markdown: markdown, in: store, cwd: cwd)
         case .editMarkdown(let selector, let contentSource, let expectedHead):
             let content = try resolveBodySource(contentSource)
-            return try editMarkdown(selector, content: content, expectedHead: expectedHead, in: store)
+            return try await editMarkdown(selector, content: content, expectedHead: expectedHead, in: store)
         case .rename(let selector, let to):
-            return try rename(selector, to: to, in: store)
+            return try await rename(selector, to: to, in: store)
         case .search(let query, let limit):
-            return try search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
+            return try await search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
         case .setActive(let selector, let versionID):
-            return try setActive(selector, versionID: versionID, in: store)
+            return try await setActive(selector, versionID: versionID, in: store)
         case .info(let selector):
-            return try info(selector, in: store)
+            return try await info(selector, in: store)
         case .okfInspect(let versionID, let json):
-            guard let projection = try store.sourceMarkdownOKFMetadata(
+            guard let projection = try await store.sourceMarkdownOKFMetadata(
                 versionID: versionID, includeCorrected: true) else {
                 throw Failure.message("source Markdown version not found: \(versionID.rawValue)")
             }
@@ -122,19 +122,19 @@ public enum SourceCommand {
                     metadata: projection.metadata, json: json)),
                 didCommit: false)
         case .okfStatus(let versionID, let status):
-            try store.setSourceMarkdownOKFStatus(versionID: versionID, status: status)
+            try await store.setSourceMarkdownOKFStatus(versionID: versionID, status: status)
             return Result(payload: .text(status.map { "status\t\($0.rawValue)" } ?? "status\tunset"), didCommit: true)
         case .okfFreshness(let versionID, let input):
-            try store.setSourceMarkdownOKFFreshness(versionID: versionID, policy: try input.policy)
+            try await store.setSourceMarkdownOKFFreshness(versionID: versionID, policy: try input.policy)
             return Result(payload: .text("freshness\tupdated"), didCommit: true)
         case .okfVerify(let versionID, let input):
-            let id = try store.recordSourceMarkdownOKFVerification(
+            let id = try await store.recordSourceMarkdownOKFVerification(
                 versionID: versionID, verifier: input.verifier,
                 verifiedAt: input.verifiedAt, basis: input.basis,
                 freshnessPolicy: try input.freshness?.policy)
             return Result(payload: .text("verification_id\t\(id.rawValue)"), didCommit: true)
         case .okfCorrect(let versionID, let input):
-            try store.correctSourceMarkdownOKFVerification(
+            try await store.correctSourceMarkdownOKFVerification(
                 versionID: versionID, verificationID: input.verificationID,
                 correctingVerifier: input.verifier, correctedAt: input.correctedAt,
                 reason: input.reason)
@@ -158,13 +158,13 @@ public enum SourceCommand {
         guard let identity = URLFetchService.urlIdentity(rawInput) else {
             throw Failure.message("invalid URL: \(rawInput)")
         }
-        if !allowDuplicateURL, let existing = try store.sourceMatchingURLIdentity(identity) {
+        if !allowDuplicateURL, let existing = try await store.sourceMatchingURLIdentity(identity) {
             throw Failure.message(
                 "URL already added as \(existing.effectiveName) (\(existing.id.rawValue)); use --allow-duplicate to add another source")
         }
         let (material, _) = try await WebsiteMaterializer(rawInput: rawInput, fetcher: fetcher)
             .materializeWithPlan()
-        let summary = try store.addSource(
+        let summary = try await store.addSource(
             filename: material.filename,
             data: material.data,
             detectionHints: material.detectionHints,
@@ -181,16 +181,16 @@ public enum SourceCommand {
     /// anything else is a file path. Internal (not private) so the Phase 4
     /// daemon-routing seam can resolve the bytes CLI-side — the daemon has no
     /// caller stdin.
-    static func readSourceData(_ path: String) throws -> Data {
+    static func readSourceData(_ path: String) async throws -> Data {
         if path == "-" {
             return FileHandle.standardInput.readDataToEndOfFile()
         }
         return try Data(contentsOf: URL(fileURLWithPath: path))
     }
 
-    private static func addFile(path: String, name: String?, in store: WikiStore) throws -> Result {
-        let data = try readSourceData(path)
-        return try addFile(path: path, name: name, data: data, in: store)
+    private static func addFile(path: String, name: String?, in store: WikiStore) async throws -> Result {
+        let data = try await readSourceData(path)
+        return try await addFile(path: path, name: name, data: data, in: store)
     }
 
     /// Public (not internal) because the Phase 4 daemon path executes this
@@ -201,7 +201,7 @@ public enum SourceCommand {
         name: String?,
         data: Data,
         in store: WikiStore
-    ) throws -> Result {
+    ) async throws -> Result {
         let filename: String
         if let name {
             filename = name
@@ -212,7 +212,7 @@ public enum SourceCommand {
             throw Failure.message("source add: --name must not be empty")
         }
 
-        let summary = try store.addSource(
+        let summary = try await store.addSource(
             filename: filename,
             data: data,
             detectionHints: ContentTypeDetectionHints(filename: filename),
@@ -229,8 +229,8 @@ public enum SourceCommand {
 
     // MARK: - list
 
-    private static func list(in store: WikiStore, json: Bool) throws -> Result {
-        let summaries = try store.listSources()
+    private static func list(in store: WikiStore, json: Bool) async throws -> Result {
+        let summaries = try await store.listSources()
         // #1230 (axi.md principle 5): a zero-row run says so on stderr while
         // stdout keeps its exact bytes (empty TSV, empty JSON-lines stream).
         let emptyNote = summaries.isEmpty ? ZeroResults.note("source list") : nil
@@ -280,16 +280,16 @@ public enum SourceCommand {
 
     private static func cat(
         _ selector: Selector, markdown: Bool, in store: WikiStore
-    ) throws -> Result {
-        let id = try resolve(selector, in: store)
-        if markdown, let head = try store.processedMarkdownHead(sourceID: id) {
+    ) async throws -> Result {
+        let id = try await resolve(selector, in: store)
+        if markdown, let head = try await store.processedMarkdownHead(sourceID: id) {
             // --markdown: print the extracted markdown HEAD instead of raw bytes.
             // Falls through to the raw-bytes path below when no markdown chain exists. (#553)
             return Result(payload: .text(head.content), didCommit: false)
         }
         let data: Data
         do {
-            data = try store.sourceContent(id: id)
+            data = try await store.sourceContent(id: id)
         } catch {
             throw Failure.message("file not found: \(id.rawValue)")
         }
@@ -304,19 +304,19 @@ public enum SourceCommand {
         markdown: Bool,
         in store: WikiStore,
         cwd: String
-    ) throws -> Result {
-        let id = try resolve(selector, in: store)
+    ) async throws -> Result {
+        let id = try await resolve(selector, in: store)
 
         // --markdown: export the extracted markdown HEAD as a .md sibling
         // instead of the raw blob. Falls back to raw bytes when no markdown
         // chain exists. (#553)
-        if markdown, let head = try store.processedMarkdownHead(sourceID: id) {
+        if markdown, let head = try await store.processedMarkdownHead(sourceID: id) {
             let path: String
             if let out {
                 path = out
             } else {
                 // Default to .md so the exported file is immediately usable.
-                let summaries = try store.listSources()
+                let summaries = try await store.listSources()
                 let baseName = summaries.first(where: { $0.id == id })?.ext ?? ""
                 let leaf = baseName.isEmpty
                     ? "file-\(id.rawValue).md"
@@ -329,7 +329,7 @@ public enum SourceCommand {
 
         let data: Data
         do {
-            data = try store.sourceContent(id: id)
+            data = try await store.sourceContent(id: id)
         } catch {
             throw Failure.message("file not found: \(id.rawValue)")
         }
@@ -339,7 +339,7 @@ public enum SourceCommand {
             path = out
         } else {
             // Derive ext from the file's stored metadata to build the default name.
-            let summaries = try store.listSources()
+            let summaries = try await store.listSources()
             let ext = summaries.first(where: { $0.id == id })?.ext ?? ""
             let leaf = ext.isEmpty
                 ? "file-\(id.rawValue)"
@@ -353,12 +353,12 @@ public enum SourceCommand {
 
     // MARK: - Selector resolution
 
-    private static func resolve(_ selector: Selector, in store: WikiStore) throws -> SourceID {
+    private static func resolve(_ selector: Selector, in store: WikiStore) async throws -> SourceID {
         switch selector {
         case .id(let id):
             return id
         case .name(let name):
-            let summaries = try store.listSources()
+            let summaries = try await store.listSources()
             // Match by display name first (display_name ?? filename), then
             // fall back to filename — mirrors `WikiStore.resolveSourceByName` and
             // how `source list` labels sources, so the agent can use the name it
@@ -393,15 +393,15 @@ public enum SourceCommand {
     private static func editMarkdown(
         _ selector: Selector, content: String, expectedHead: SourceMarkdownVersionID,
         in store: WikiStore
-    ) throws -> Result {
-        let id = try resolve(selector, in: store)
-        guard try store.hasProcessedMarkdown(sourceID: id) else {
+    ) async throws -> Result {
+        let id = try await resolve(selector, in: store)
+        guard try await store.hasProcessedMarkdown(sourceID: id) else {
             throw Failure.message("no processed markdown for this source — extract it first, then edit")
         }
-        try store.appendUserProcessedMarkdown(sourceID: id, content: content, expectedHead: expectedHead)
+        try await store.appendUserProcessedMarkdown(sourceID: id, content: content, expectedHead: expectedHead)
         // #1228: report the new head (the same `head_version_id: ` stderr
         // convention as `page get`/`page add`) so the next edit needs no read.
-        let head = try store.processedMarkdownHead(sourceID: id)
+        let head = try await store.processedMarkdownHead(sourceID: id)
         return Result(payload: .text(""), didCommit: true, stderrOutput: markdownHeadDiagnostic(head))
     }
 
@@ -410,9 +410,9 @@ public enum SourceCommand {
     /// Rename a source's display name and rewrite `[[source:<old>…]]` links in
     /// every page that references it. Commits — the caller posts the Darwin
     /// notification on `didCommit`.
-    private static func rename(_ selector: Selector, to newName: String, in store: WikiStore) throws -> Result {
-        let id = try resolve(selector, in: store)
-        try store.renameSource(id: id, to: newName)
+    private static func rename(_ selector: Selector, to newName: String, in store: WikiStore) async throws -> Result {
+        let id = try await resolve(selector, in: store)
+        try await store.renameSource(id: id, to: newName)
         return Result(payload: .text("Renamed source to \"\(newName)\"."), didCommit: true)
     }
 
@@ -424,8 +424,8 @@ public enum SourceCommand {
     /// filename (mirrors how sources are surfaced elsewhere). Read-only.
     private static func search(
         query: String, limit: Int, bm25Leg: [SourceSummary]?, in store: WikiStore
-    ) throws -> Result {
-        let results = try store.searchSimilarSources(query: query, limit: limit, bm25Leg: bm25Leg)
+    ) async throws -> Result {
+        let results = try await store.searchSimilarSources(query: query, limit: limit, bm25Leg: bm25Leg)
         let output: String = results.map { summary in
             // `effectiveName` falls back to filename on nil OR empty display_name,
             // matching how sources are labeled app-wide (sidebar/file-provider).
@@ -449,15 +449,15 @@ public enum SourceCommand {
     /// posts the Darwin notification on `didCommit`.
     private static func setActive(
         _ selector: Selector, versionID: SourceMarkdownVersionID, in store: WikiStore
-    ) throws -> Result {
-        let id = try resolve(selector, in: store)
-        guard try store.hasProcessedMarkdown(sourceID: id) else {
+    ) async throws -> Result {
+        let id = try await resolve(selector, in: store)
+        guard try await store.hasProcessedMarkdown(sourceID: id) else {
             throw Failure.message("no processed markdown for this source")
         }
-        try store.setActiveMarkdown(sourceID: id, to: versionID)
+        try await store.setActiveMarkdown(sourceID: id, to: versionID)
         // #1228: report the nominated head (the actual active version after
         // the ref upsert), not just the requested id.
-        let head = try store.processedMarkdownHead(sourceID: id)
+        let head = try await store.processedMarkdownHead(sourceID: id)
         return Result(
             payload: .text("Set active markdown to \(versionID.rawValue)."),
             didCommit: true,
@@ -480,9 +480,9 @@ public enum SourceCommand {
     /// the documented read an agent performs before a CAS
     /// `source edit-markdown --expect-head <id>` write (mirrors how `page get`
     /// exposes the page head). Read-only.
-    private static func info(_ selector: Selector, in store: WikiStore) throws -> Result {
-        let id = try resolve(selector, in: store)
-        let summaries = try store.listSources()
+    private static func info(_ selector: Selector, in store: WikiStore) async throws -> Result {
+        let id = try await resolve(selector, in: store)
+        let summaries = try await store.listSources()
         guard let summary = summaries.first(where: { $0.id == id }) else {
             throw Failure.message("source not found: \(id.rawValue)")
         }
@@ -495,10 +495,10 @@ public enum SourceCommand {
         lines.append("size\t\(summary.byteSize)")
         // The active processed-markdown head, when a chain exists — the id an
         // agent passes to `source edit-markdown --expect-head`.
-        if let head = try store.processedMarkdownHead(sourceID: id) {
+        if let head = try await store.processedMarkdownHead(sourceID: id) {
             lines.append("head_version_id\t\(head.id.rawValue)")
         }
-        if let origin = try store.sourceOrigin(sourceID: id) {
+        if let origin = try await store.sourceOrigin(sourceID: id) {
             lines.append("provider\t\(origin.agentName)")
             lines.append("activity\t\(origin.activityKind)")
             if let plan = origin.plan { lines.append("plan\t\(plan)") }
@@ -533,13 +533,13 @@ public enum SourceCommand {
         in store: WikiStore,
         fetcher: any URLFetchService.URLResourceFetcher
     ) async throws -> Result {
-        let id = try resolve(selector, in: store)
-        guard let origin = try store.sourceOrigin(sourceID: id) else {
+        let id = try await resolve(selector, in: store)
+        guard let origin = try await store.sourceOrigin(sourceID: id) else {
             throw Failure.message("source has no origin provenance: \(id.rawValue)")
         }
         let service = SourceRefreshService(fetcher: fetcher)
         let material = try await service.materialize(origin: origin)
-        try persistRefreshMaterial(material, sourceID: id, in: store)
+        try await persistRefreshMaterial(material, sourceID: id, in: store)
         return Result(
             payload: .text("Refreshed \(origin.displayLabel) source."),
             didCommit: true)
@@ -552,16 +552,16 @@ public enum SourceCommand {
         _ material: SourceRefreshService.RefreshMaterial,
         sourceID: SourceID,
         in store: WikiStore
-    ) throws {
+    ) async throws {
         switch material {
         case .contentVersion(let data, let detectionHints, let prov):
-            _ = try store.appendContentVersion(
+            _ = try await store.appendContentVersion(
                 sourceID: sourceID,
                 data: data,
                 detectionHints: detectionHints,
                 provenance: prov)
         case .derivedMarkdown(let content):
-            try store.appendDerivedMarkdown(
+            try await store.appendDerivedMarkdown(
                 sourceID: sourceID, content: content, origin: .transcript,
                 producer: .tool(.transcript), providerID: nil, modelID: nil,
                 toolVersion: nil, sourceVersionID: nil, note: nil)

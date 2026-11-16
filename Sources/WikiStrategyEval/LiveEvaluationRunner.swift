@@ -516,11 +516,11 @@ public struct LiveEvaluationHarness: Sendable {
         // the CAS expectation is nil.
         let store = booted.store
         do {
-            try store.saveWikiStrategy(
+            try await store.saveWikiStrategy(
                 name: strategy.name,
                 instructions: strategy.instructions,
                 expectedRevision: nil)
-            guard try store.getWikiStrategy() != nil else {
+            guard try await store.getWikiStrategy() != nil else {
                 throw LiveEvaluationError.ingestionRunFailed(
                     "strategy save did not commit on leg \(label)")
             }
@@ -546,7 +546,7 @@ public struct LiveEvaluationHarness: Sendable {
             for (batchIndex, batch) in batches.enumerated() {
                 var sourceIDs: [SourceID] = []
                 for fixture in batch {
-                    let summary = try store.addSource(
+                    let summary = try await store.addSource(
                         filename: fixture.filename,
                         data: Data(fixture.markdown.utf8))
                     sourceIDs.append(summary.id)
@@ -585,7 +585,7 @@ public struct LiveEvaluationHarness: Sendable {
                     logFileURL: artifacts.log?.path,
                     debugFolderURL: artifacts.debug?.path,
                     agentLoopTurns: Array(batchTurns)))
-                observations.append(try recorder.capture(
+                observations.append(try await recorder.capture(
                     from: store,
                     fixtureKeysBySourceID: fixtureKeysBySourceID))
             }
@@ -644,11 +644,11 @@ public struct LiveEvaluationHarness: Sendable {
         agentBox: CurrentAgentBox
     ) async throws -> IngestArtifacts {
         let startedAt = Date()
-        let stateMarkdown = try Self.renderStateMarkdown(from: store)
+        let stateMarkdown = try await Self.renderStateMarkdown(from: store)
 
         // Stage exactly like the daemon provider: the store's own bytes, the
         // by-id display path, the effective name as the citation stem.
-        let allSources = try store.listSources()
+        let allSources = try await store.listSources()
         var staged: [OperationRequest.StagedSource] = []
         for sourceID in sourceIDs {
             guard let summary = allSources.first(where: { $0.id == sourceID }) else {
@@ -657,7 +657,7 @@ public struct LiveEvaluationHarness: Sendable {
             }
             let bytes: Data
             do {
-                bytes = try store.sourceContent(id: sourceID)
+                bytes = try await store.sourceContent(id: sourceID)
             } catch {
                 throw LiveEvaluationError.ingestionRunFailed(
                     "source bytes unavailable for \(sourceID.rawValue): \(error.localizedDescription)")
@@ -734,7 +734,7 @@ public struct LiveEvaluationHarness: Sendable {
         // #1344 parity: the validated-successful run is the completion fact.
         for sourceID in sourceIDs {
             do {
-                try store.markSourceIngested(id: sourceID)
+                try await store.markSourceIngested(id: sourceID)
             } catch {
                 DebugLog.store("eval harness markSourceIngested[\(sourceID.rawValue)] failed: \(error)")
             }
@@ -770,15 +770,15 @@ public struct LiveEvaluationHarness: Sendable {
 
     // MARK: - State markdown (mirrors the daemon provider's snapshot)
 
-    static func renderStateMarkdown(from store: any WikiStore) throws -> String {
-        let titles = (DebugLog.trying("eval listPages", operation: { try store.listPages(sortBy: .lastUpdated) })) ?? []
-        let indexBody = (DebugLog.trying("eval getWikiIndex", operation: { try store.getWikiIndex() }))?.body ?? WikiIndex.defaultBody
-        let logEntries = (DebugLog.trying("eval recentLogEntries", operation: { try store.recentLogEntries(limit: WikiStateSnapshot.maxLogEntries) })) ?? []
+    static func renderStateMarkdown(from store: any WikiStore) async throws -> String {
+        let titles = (await DebugLog.trying("eval listPages", operation: { try await store.listPages(sortBy: .lastUpdated) })) ?? []
+        let indexBody = (await DebugLog.trying("eval getWikiIndex", operation: { try await store.getWikiIndex() }))?.body ?? WikiIndex.defaultBody
+        let logEntries = (await DebugLog.trying("eval recentLogEntries", operation: { try await store.recentLogEntries(limit: WikiStateSnapshot.maxLogEntries) })) ?? []
         let logLines = logEntries.map { LogRenderer.line(for: $0) }
-        let bookmarks = (DebugLog.trying("eval listBookmarkNodes", operation: { try store.listBookmarkNodes() })) ?? []
+        let bookmarks = (await DebugLog.trying("eval listBookmarkNodes", operation: { try await store.listBookmarkNodes() })) ?? []
         // Strategy is authority for this evaluation. Unlike optional inventory
         // context, a failed read must stop rather than silently deliver Default.
-        let strategy = try store.getWikiStrategy()
+        let strategy = try await store.getWikiStrategy()
         let snapshot = WikiStateSnapshot.make(
             allTitles: titles.map(\.title),
             indexBody: indexBody,

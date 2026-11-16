@@ -208,7 +208,7 @@ struct BackgroundIngestCoordinatorTests {
         let pdf = addPDF(to: model)
         let md = addMarkdown(to: model)
 
-        let enqueued = BackgroundIngestCoordinator.filterIngestibleSources(
+        let enqueued = await BackgroundIngestCoordinator.filterIngestibleSources(
             model.sources, store: model)
 
         #expect(!enqueued.contains(png.id), "PNG must not be enqueued")
@@ -226,7 +226,7 @@ struct BackgroundIngestCoordinatorTests {
         let model = WikiStoreModel(store: store)
         model.reloadFromStore()
 
-        let enqueued = BackgroundIngestCoordinator.filterIngestibleSources(
+        let enqueued = await BackgroundIngestCoordinator.filterIngestibleSources(
             model.sources, store: model)
 
         #expect(enqueued.contains(ytWith.id),
@@ -237,7 +237,7 @@ struct BackgroundIngestCoordinatorTests {
 
     @Test("Empty store filters to empty list") func emptyStore() throws {
         let model = WikiStoreModel(store: try tempStore())
-        let enqueued = BackgroundIngestCoordinator.filterIngestibleSources(
+        let enqueued = await BackgroundIngestCoordinator.filterIngestibleSources(
             model.sources, store: model)
         #expect(enqueued.isEmpty)
     }

@@ -114,7 +114,7 @@ case "run":
     }
     await runLive(options: options, providerDirectory: providerDirectory)
 case "recheck":
-    runRecheck(options: options)
+    await runRecheck(options: options)
 default:
     failUsage("usage: WikiStrategyEvalRunner (inspect | run --live --provider-config-dir <dir> [options] | recheck --run <dir> --scenario <id> [--output <dir>])")
 }
@@ -188,7 +188,7 @@ func runLive(options: Options, providerDirectory: String) async -> Never {
 /// checks carry their recorded outcomes forward with provenance. Outputs go
 /// to a directory DISTINCT from the recorded run's: the artifact is never
 /// modified.
-func runRecheck(options: Options) -> Never {
+func runRecheck(options: Options) async -> Never {
     guard let runDirectory = options.runDirectory else {
         failUsage("--run is required for a recheck (the recorded live run's directory holding results.json)")
     }
@@ -241,7 +241,7 @@ func runRecheck(options: Options) -> Never {
     let databaseURL = URL(fileURLWithPath: existing, isDirectory: false)
 
     do {
-        let recheck = try OfflineRecheckRunner().recheck(
+        let recheck = try await OfflineRecheckRunner().recheck(
             scenario: scenario,
             recordedResults: recordedResults,
             recordedResultsPath: resultsURL.path,

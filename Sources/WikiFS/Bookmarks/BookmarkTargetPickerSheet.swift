@@ -295,10 +295,12 @@ struct BookmarkTargetPickerSheet: View {
         let name = trimmedFolderName
         guard !name.isEmpty else { return }
         DebugLog.tabs("BookmarkTargetPickerSheet: createFolder — name=\(name)")
-        if let newID = store.createFolder(parentID: nil, name: name) {
-            selection = .folder(newID)
-            newFolderName = ""
-            searchText = ""
+        Task {
+            if let newID = await store.createFolder(parentID: nil, name: name) {
+                selection = .folder(newID)
+                newFolderName = ""
+                searchText = ""
+            }
         }
     }
 }

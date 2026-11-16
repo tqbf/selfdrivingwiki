@@ -132,9 +132,12 @@ public final class WikiRegistryClient {
         }
         if registry.isEmpty {
             // Brand-new install with no legacy DB: seed one wiki so the app
-            // always has something to show.
+            // always has something to show. Plan P1.3: the store open + Home
+            // seed is async now — spawn it; the DB is created lazily on first
+            // open regardless, and the registry row lands synchronously.
             let descriptor = WikiDescriptor.make(displayName: "My Wiki")
-            createDatabaseIfNeeded(for: descriptor)
+            let client = self
+            Task { await client.createDatabaseIfNeeded(for: descriptor) }
             registry.add(descriptor)
             DebugLog.trying("migrateSingleWiki", operation: { try registry.save(to: containerDirectory) })
         }
@@ -217,7 +220,7 @@ public final class WikiRegistryClient {
         // is non-empty, mirroring the app's launch behavior. The seeded page
         // becomes the wiki's home page so the home button works without a
         // manual "Set as Home Page" step (#315).
-        descriptor.homePageID = createDatabaseIfNeeded(for: descriptor, seedHome: true)
+        descriptor.homePageID = await createDatabaseIfNeeded(for: descriptor, seedHome: true)
 
         var registry = WikiRegistry.load(from: containerDirectory)
         registry.add(descriptor)
@@ -353,12 +356,12 @@ public final class WikiRegistryClient {
     /// Returns the seeded Home page's ID (when `seedHome` seeds one), so the
     /// caller can wire it into `WikiDescriptor.homePageID`.
     @discardableResult
-    private func createDatabaseIfNeeded(for descriptor: WikiDescriptor, seedHome: Bool = false) -> PageID? {
+    private func createDatabaseIfNeeded(for descriptor: WikiDescriptor, seedHome: Bool = false) async -> PageID? {
         let url = databaseURL(forWikiID: descriptor.id)
         do {
             let store = try makeStore(url)
-            if seedHome, let model = makeModelIfEmpty(store) {
-                return model.newPage(title: "Home")
+            if seedHome, let model = await makeModelIfEmpty(store) {
+                return await model.newPage(title: "Home")
             }
         } catch {
             DebugLog.store("WikiRegistryClient: createDatabase failed for \(descriptor.id.rawValue): \(error)")
@@ -369,8 +372,11 @@ public final class WikiRegistryClient {
     /// Wrap a freshly-opened store in a model only when it has no pages, so
     /// the caller seeds a Home exactly once. Returns nil if pages already
     /// exist.
-    private func makeModelIfEmpty(_ store: WikiStore) -> WikiStoreModel? {
+    private func makeModelIfEmpty(_ store: WikiStore) async -> WikiStoreModel? {
         let model = WikiStoreModel(store: store)
+        // Plan P1.3: construction performs no store work — bootstrap the
+        // projections before the emptiness check means anything.
+        await model.bootstrapFromStore()
         return model.summaries.isEmpty ? model : nil
     }
 

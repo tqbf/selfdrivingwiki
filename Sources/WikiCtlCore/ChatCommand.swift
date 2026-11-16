@@ -62,23 +62,23 @@ public enum ChatCommand {
         _ action: Action,
         in store: WikiStore,
         bm25Leg: [ChatSummary]? = nil
-    ) throws -> Result {
+    ) async throws -> Result {
         switch action {
         case .list(let json):
-            return try list(in: store, json: json)
+            return try await list(in: store, json: json)
         case .get(let selector):
-            return try get(selector, in: store)
+            return try await get(selector, in: store)
         case .search(let query, let limit):
-            return try search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
+            return try await search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
         case .rename(let selector, let newTitle):
-            return try rename(selector, to: newTitle, in: store)
+            return try await rename(selector, to: newTitle, in: store)
         }
     }
 
     // MARK: - list
 
-    private static func list(in store: WikiStore, json: Bool) throws -> Result {
-        let chats = try store.listAllChatsOrderedByID()
+    private static func list(in store: WikiStore, json: Bool) async throws -> Result {
+        let chats = try await store.listAllChatsOrderedByID()
         // #1230 (axi.md principle 5): a zero-row run says so on stderr while
         // stdout keeps its exact bytes (empty TSV, empty JSON-lines stream).
         let emptyNote = chats.isEmpty ? ZeroResults.note("chat list") : nil
@@ -106,13 +106,13 @@ public enum ChatCommand {
     /// Print one chat's transcript as rendered markdown (via
     /// `ChatTranscriptRenderer`). The same bytes the File Provider projects at
     /// `chats/by-id/<ULID>.md`.
-    private static func get(_ selector: Selector, in store: WikiStore) throws -> Result {
-        let id = try resolve(selector, in: store)
-        let chats = try store.listAllChatsOrderedByID()
+    private static func get(_ selector: Selector, in store: WikiStore) async throws -> Result {
+        let id = try await resolve(selector, in: store)
+        let chats = try await store.listAllChatsOrderedByID()
         guard let summary = chats.first(where: { $0.id == id }) else {
             throw Failure.message("chat not found: \(id.rawValue)")
         }
-        let messages = try store.chatMessages(chatID: id)
+        let messages = try await store.chatMessages(chatID: id)
         let transcript = ChatTranscriptRenderer.render(summary: summary, messages: messages)
         return Result(output: transcript, didCommit: false)
     }
@@ -125,8 +125,8 @@ public enum ChatCommand {
     /// (id <tab> title <tab> kind <tab> messages), best match first.
     private static func search(
         query: String, limit: Int, bm25Leg: [ChatSummary]?, in store: WikiStore
-    ) throws -> Result {
-        let results = try store.searchSimilarChats(query: query, limit: limit, bm25Leg: bm25Leg)
+    ) async throws -> Result {
+        let results = try await store.searchSimilarChats(query: query, limit: limit, bm25Leg: bm25Leg)
         let output: String = results.map { chat in
             let title = chat.title.replacingOccurrences(of: "\t", with: " ")
             return "\(chat.id.rawValue)\t\(title)\t\(chat.kind.rawValue)\t\(chat.messageCount)"
@@ -145,20 +145,20 @@ public enum ChatCommand {
     /// Rename a chat's title and rebuild the `chat_search` FTS sidecar.
     /// Commits — the caller posts the Darwin notification on `didCommit`.
     /// Mirrors `SourceCommand.rename`.
-    private static func rename(_ selector: Selector, to newTitle: String, in store: WikiStore) throws -> Result {
-        let id = try resolve(selector, in: store)
-        try store.renameChat(id: id, to: newTitle)
+    private static func rename(_ selector: Selector, to newTitle: String, in store: WikiStore) async throws -> Result {
+        let id = try await resolve(selector, in: store)
+        try await store.renameChat(id: id, to: newTitle)
         return Result(output: "Renamed chat to \"\(newTitle)\".", didCommit: true)
     }
 
     // MARK: - Selector resolution
 
-    private static func resolve(_ selector: Selector, in store: WikiStore) throws -> ChatID {
+    private static func resolve(_ selector: Selector, in store: WikiStore) async throws -> ChatID {
         switch selector {
         case .id(let id):
             return id
         case .title(let title):
-            guard let id = try store.resolveChatByTitle(title) else {
+            guard let id = try await store.resolveChatByTitle(title) else {
                 throw Failure.message("no chat titled \(title.debugDescription)")
             }
             return id

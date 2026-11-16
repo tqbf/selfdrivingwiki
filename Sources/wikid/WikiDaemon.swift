@@ -1299,7 +1299,7 @@ final class WikiDaemon: @unchecked Sendable {
         if !selected.isEmpty {
             let store = try await domainCommandStore(wikiID: wikiID)
             for sourceID in Set(selected.flatMap(\.payload.sourceIDs)) {
-                if try store.processedMarkdownHead(sourceID: sourceID) != nil {
+                if try await store.processedMarkdownHead(sourceID: sourceID) != nil {
                     completedSourceIDs.insert(sourceID)
                 }
             }

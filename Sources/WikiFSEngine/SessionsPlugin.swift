@@ -199,7 +199,11 @@ extension AppProcessProfileOwner {
             await recovering.recoverStrandedFormatJobs(
                 wikiID: wikiID, store: childServices.store)
         }
-        return ProfileWikiSession(
+        // Plan P1.3 readiness barrier: bootstrap the model's projections and
+        // seed a Home page for an empty wiki BEFORE the session reaches the
+        // UI, so views never observe a half-booted model.
+        await model.bootstrapFromStore()
+        let session = ProfileWikiSession(
             wikiID: wikiID,
             descriptor: descriptor,
             store: model,
@@ -211,6 +215,8 @@ extension AppProcessProfileOwner {
             extractionProvider: extractionProvider,
             htmlBackend: htmlBackendResolver(),
             profileLifetime: childServices.lifetime)
+        await session.seedHomeIfNeeded()
+        return session
     }
 }
 
@@ -303,7 +309,11 @@ public enum PerWikiRuntimePlugin {
                     // failure inside `ACPIngestPlanValidation` — never a
                     // silent degrade to new-title folding.
                     launcher.planValidationResolveTitle = { title in
-                        try store.resolveTitleToID(title)
+                        // The daemon-side composition holds the RAW store
+                        // (no model), so validation resolves through the
+                        // store's async resolveTitleToID — same lowest-ULID
+                        // rule the link graph uses.
+                        try await store.resolveTitleToID(title)
                     }
                     // No pdf2md script-path resolver here: production launches
                     // no legacy pdf2md subprocess for the agent seatbelt to
@@ -532,7 +542,7 @@ public enum ChatsPersistencePlugin {
             _ = try await activation.on(SessionEventKeys.appended) { batch in
                 let persistable = batch.events.filter(\.isPersistable)
                 guard !persistable.isEmpty else { return }
-                try store.appendChatMessages(chatID: batch.chatID, events: persistable)
+                try await store.appendChatMessages(chatID: batch.chatID, events: persistable)
             }
         }
     }

@@ -637,6 +637,7 @@ public final class WikiStoreModel {
         await reloadSourcesAsync()
         await reloadBookmarkNodesAsync()
         await reloadChatsAsync()
+        await preloadRenderContextInputs()
     }
 
     /// The per-wiki resource-change bus of the backing store (exposed so the app
@@ -811,7 +812,7 @@ public final class WikiStoreModel {
         }
     }
 
-    public func navigateBack() async {
+    public func navigateBack() {
         guard let destination = backStack.popLast() else { return }
         if let current = loadedSelection {
             forwardStack.append(current)
@@ -819,7 +820,7 @@ public final class WikiStoreModel {
         applyHistorySelection(destination)
     }
 
-    public func navigateForward() async {
+    public func navigateForward() {
         guard let destination = forwardStack.popLast() else { return }
         if let current = loadedSelection {
             backStack.append(current)
@@ -853,7 +854,7 @@ public final class WikiStoreModel {
     /// - Parameter anchor: optional `#fragment` from a `[[Page#Section]]` link;
     ///   the destination `WikiReaderView` scrolls to it after load.
     @discardableResult
-    public func selectPage(byTitle title: String, anchor: String? = nil, openInNewTab: Bool = false) async -> Bool {
+    public func selectPage(byTitle title: String, anchor: String? = nil, openInNewTab: Bool = false) -> Bool {
         guard let id = pageID(forTitle: title) else { return false }
         let target = WikiSelection.page(id)
         // Stash the anchor so the destination WikiReaderView can scroll to it
@@ -2175,23 +2176,23 @@ public final class WikiStoreModel {
     /// Returns nil only if the store call throws.
     @discardableResult
     public func performActivityVacuum(dryRun: Bool) async -> ActivityVacuumReport? {
-        DebugLog.trying("vacuumActivities", operation: { try store.vacuumActivities(dryRun: dryRun) })
+        await DebugLog.trying("vacuumActivities", operation: { try await store.vacuumActivities(dryRun: dryRun) })
     }
 
     /// Run the page-version-GC sweep against the active store (Phase 4).
     /// Returns nil only if the store call throws.
     @discardableResult
     public func performPageVersionVacuum(dryRun: Bool) async -> PageVersionVacuumReport? {
-        DebugLog.trying("vacuumPageVersions", operation: { try store.vacuumPageVersions(dryRun: dryRun) })
+        await DebugLog.trying("vacuumPageVersions", operation: { try await store.vacuumPageVersions(dryRun: dryRun) })
     }
 
     /// Run all GC sweeps (blobs + activities + page versions) in one call. Each
     /// runs in its own transaction — they are independent and idempotent, so a
     /// partial failure is safe to retry. Returns nil only if all throw.
     public func performVacuumAll(dryRun: Bool) async -> VacuumReport? {
-        let blobs = performBlobVacuum(dryRun: dryRun)
-        let activities = performActivityVacuum(dryRun: dryRun)
-        let pageVersions = performPageVersionVacuum(dryRun: dryRun)
+        let blobs = await performBlobVacuum(dryRun: dryRun)
+        let activities = await performActivityVacuum(dryRun: dryRun)
+        let pageVersions = await performPageVersionVacuum(dryRun: dryRun)
         guard let blobs, let activities, let pageVersions else { return nil }
         return VacuumReport(blobs: blobs, activities: activities, pageVersions: pageVersions)
     }
@@ -2242,7 +2243,7 @@ public final class WikiStoreModel {
 
     @discardableResult
     public func newPage(title: String = WikiStoreModel.defaultUntitledTitle()) async -> PageID? {
-        flushPendingSaves()
+        await flushPendingSaves()
         do {
             let page = try await store.createPage(title: title, createdBy: "user")
             // A fresh page has an empty body, so this resolves to no links — but
@@ -2273,7 +2274,7 @@ public final class WikiStoreModel {
 
     public func rename(_ id: PageID, to newTitle: String) async {
         // Persist any pending edits to whatever's open first, then rename.
-        flushPendingSave()
+        await flushPendingSave()
         renameConflictingTitle = nil
         let sanitizedTitle = WikiNameRules.sanitized(newTitle)
         do {
@@ -2367,7 +2368,7 @@ public final class WikiStoreModel {
     public func delete(
         _ id: PageID, unlinkIncomingLinks: Bool
     ) async throws -> ResourceDeletionResult {
-        try delete([id], unlinkIncomingLinks: unlinkIncomingLinks)
+        try await delete([id], unlinkIncomingLinks: unlinkIncomingLinks)
     }
 
     /// UI entry point for the pages containers: deletes the selection in ONE
@@ -2378,7 +2379,7 @@ public final class WikiStoreModel {
         _ ids: [PageID], unlinkIncomingLinks: Bool
     ) async -> ResourceDeletionResult? {
         do {
-            return try delete(ids, unlinkIncomingLinks: unlinkIncomingLinks)
+            return try await delete(ids, unlinkIncomingLinks: unlinkIncomingLinks)
         } catch {
             DebugLog.store("WikiStoreModel.delete failed: \(error)")
             storeError = StoreError(
@@ -2495,7 +2496,7 @@ public final class WikiStoreModel {
         _ m: MaterializedSource,
         resolvedDisplayName: String?? = nil
     ) async throws -> SourceSummary {
-        let summary = try store.addSource(
+        let summary = try await store.addSource(
             filename: m.filename,
             data: m.data,
             detectionHints: m.detectionHints,
@@ -2505,7 +2506,7 @@ public final class WikiStoreModel {
             originalPath: nil,
             activityID: nil,
             resolvedDisplayName: resolvedDisplayName)
-        appendExtractedMarkdown(to: summary, from: m)
+        await appendExtractedMarkdown(to: summary, from: m)
         return summary
     }
 
@@ -2640,7 +2641,7 @@ public final class WikiStoreModel {
                 externalItemTitle: materialized.ingestMetadata?.externalItemTitle)
 
             do {
-                let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
+                let summary = try await storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
                 lastSourceID = summary.id
                 lastSourceName = summary.effectiveName
                 // A registered DOCX extraction converts on import (the
@@ -2917,7 +2918,7 @@ public final class WikiStoreModel {
         // metadata so the reader, File Provider `.md` sibling, and Tantivy all
         // see real content for this byteless source. Best-effort: a write
         // failure is logged, not thrown (the embed itself already landed).
-        writeSyntheticBytelessMarkdown(
+        await writeSyntheticBytelessMarkdown(
             sourceID: summary.id,
             url: match.planURL,
             metadata: metadata,
@@ -3003,7 +3004,7 @@ public final class WikiStoreModel {
             url: url, metadata: metadata,
             fallbackTitle: fallbackTitle, transcript: transcript)
         do {
-            try store.appendDerivedMarkdown(
+            try await store.appendDerivedMarkdown(
                 sourceID: sourceID, content: markdown, origin: .transcript,
                 producer: .tool(Self.syntheticMarkdownTool(for: technique)), providerID: nil,
                 modelID: nil, toolVersion: nil, sourceVersionID: nil, note: nil)
@@ -3055,9 +3056,9 @@ public final class WikiStoreModel {
             externalItemTitle: page.ingestMetadata?.externalItemTitle)
         var summary: SourceSummary
         if snapshot.plan.format == .html && !snapshot.images.isEmpty {
-            summary = try storeSnapshot(snapshot)
+            summary = try await storeSnapshot(snapshot)
         } else {
-            summary = try storeMaterialized(page, resolvedDisplayName: resolvedDisplayName)
+            summary = try await storeMaterialized(page, resolvedDisplayName: resolvedDisplayName)
         }
         // HTML sources have ".html" appended to the storage filename (issue #599:
         // the original HTML bytes are now the source blob, not the converted
@@ -3096,7 +3097,7 @@ public final class WikiStoreModel {
     /// own `.duplicateContent` (a re-paste of the same page) propagates as today.
     private func storeSnapshot(_ snapshot: WebsiteSnapshot) async throws -> SourceSummary {
         guard let prov = snapshot.page.provenance else {
-            return try storeMaterialized(snapshot.page)
+            return try await storeMaterialized(snapshot.page)
         }
         // 1. Commit the shared activity FIRST so source_versions.activity_id FK
         //    is satisfied before any version is written.
@@ -3114,8 +3115,8 @@ public final class WikiStoreModel {
             resolvedDisplayName: nil)
         // 3. Store each image as a per-snapshot .media source.
         for image in snapshot.images {
-            DebugLog.trying("addSnapshotImage", operation: {
-                try store.addSnapshotImage(
+            await DebugLog.trying("addSnapshotImage", operation: {
+                try await store.addSnapshotImage(
                     filename: image.filename,
                     data: image.data,
                     detectionHints: image.detectionHints,
@@ -3127,7 +3128,7 @@ public final class WikiStoreModel {
         //    stored siblings) as a `.extraction`-origin processed-markdown
         //    version, so the reader tab shows rendered content with inlined
         //    images alongside the original-HTML HTML tab.
-        appendExtractedMarkdown(to: pageSummary, from: snapshot.page)
+        await appendExtractedMarkdown(to: pageSummary, from: snapshot.page)
         // 5. Issue #1380: the snapshot sidecar is the ingest-time FALLBACK
         //    (image-rewritten tag-based text). The gated import extraction
         //    still runs for snapshot sources, so the route-selected package
@@ -3257,7 +3258,7 @@ public final class WikiStoreModel {
                 directoryURL: directory)
             do {
                 let materialized = try await provider.materialize()
-                let summary = try storeMaterialized(materialized)
+                let summary = try await storeMaterialized(materialized)
                 if firstSourceID == nil { firstSourceID = summary.id; firstSourceName = summary.effectiveName }
                 imported += 1
             } catch WikiStoreError.duplicateContent(let existing) {
@@ -3300,7 +3301,7 @@ public final class WikiStoreModel {
     public func deleteSources(
         _ ids: [SourceID], unlinkIncomingLinks: Bool
     ) async throws -> ResourceDeletionResult {
-        let result = try store.deleteResources(ResourceDeletionRequest(
+        let result = try await store.deleteResources(ResourceDeletionRequest(
             targets: ids.map { .source($0) },
             linkPolicy: unlinkIncomingLinks ? .unlink : .preserve))
         for target in result.deletedTargets {
@@ -3320,8 +3321,8 @@ public final class WikiStoreModel {
     /// A provenance blocker stops the store before ANY write and surfaces in
     /// the typed catch; use the throwing batch spelling for full control.
     @discardableResult
-    public func deleteSource(_ id: SourceID, unlinkIncomingLinks: Bool) throws -> ResourceDeletionResult {
-        try deleteSources([id], unlinkIncomingLinks: unlinkIncomingLinks)
+    public func deleteSource(_ id: SourceID, unlinkIncomingLinks: Bool) async throws -> ResourceDeletionResult {
+        try await deleteSources([id], unlinkIncomingLinks: unlinkIncomingLinks)
     }
 
     /// UI entry point for the sources containers: deletes the selection in
@@ -3331,9 +3332,9 @@ public final class WikiStoreModel {
     /// deletion did not happen (nothing was changed in that case).
     public func performSourceDeletion(
         _ ids: [SourceID], unlinkIncomingLinks: Bool
-    ) -> ResourceDeletionResult? {
+    ) async -> ResourceDeletionResult? {
         do {
-            return try deleteSources(ids, unlinkIncomingLinks: unlinkIncomingLinks)
+            return try await deleteSources(ids, unlinkIncomingLinks: unlinkIncomingLinks)
         } catch WikiStoreError.deletionRestricted(.provenance(let blockers)) {
             // The store stopped before the first mutation — nothing was
             // unlinked and no bookmark was removed.
@@ -3385,15 +3386,15 @@ public final class WikiStoreModel {
     /// visibly and build no request, never launch a run that silently invented
     /// the Default instructions.
     public func currentStateSnapshot() async throws -> WikiStateSnapshot {
-        let titles = (DebugLog.trying("listPages", operation: { try store.listPages(sortBy: .lastUpdated) }) ?? []).map(\.title)
-        let indexBody = DebugLog.trying("getWikiIndex", operation: { try store.getWikiIndex() })?.body ?? WikiIndex.defaultBody
-        let logEntries = DebugLog.trying("recentLogEntries", operation: { try store.recentLogEntries(limit: WikiStateSnapshot.maxLogEntries) }) ?? []
+        let titles = (await DebugLog.trying("listPages", operation: { try await store.listPages(sortBy: .lastUpdated) }) ?? []).map(\.title)
+        let indexBody = await DebugLog.trying("getWikiIndex", operation: { try await store.getWikiIndex() })?.body ?? WikiIndex.defaultBody
+        let logEntries = await DebugLog.trying("recentLogEntries", operation: { try await store.recentLogEntries(limit: WikiStateSnapshot.maxLogEntries) }) ?? []
         // Render each tail entry with the SAME formatter the `log.md` projection
         // uses, so the snapshot lines are byte-identical to what `tail log.md`
         // shows (no second, drifting log format).
         let logLines = logEntries.map { LogRenderer.line(for: $0) }
         // Include the bookmark tree so the agent can see the user's organization (#239).
-        let bookmarks = DebugLog.trying("listBookmarkNodes", operation: { try store.listBookmarkNodes() }) ?? []
+        let bookmarks = await DebugLog.trying("listBookmarkNodes", operation: { try await store.listBookmarkNodes() }) ?? []
         // Capture the committed strategy with the rest of the state. Unlike the
         // inventory reads above, a failure here THROWS: authoritative editorial
         // instructions cannot be invented from a store error, so a failed read
@@ -3416,7 +3417,7 @@ public final class WikiStoreModel {
     /// lint history. Bounded generously for UI responsiveness; entries remain in
     /// chronological order so newest activity sits at the bottom.
     public func currentLogMarkdown(limit: Int = 10_000) async -> String {
-        let entries = DebugLog.trying("recentLogEntries", operation: { try store.recentLogEntries(limit: limit) }) ?? []
+        let entries = await DebugLog.trying("recentLogEntries", operation: { try await store.recentLogEntries(limit: limit) }) ?? []
         return LogRenderer.render(entries)
     }
 
@@ -3426,7 +3427,7 @@ public final class WikiStoreModel {
     /// the caller surfaces that as a preflight error instead of launching a run that
     /// would fall back to probing the mount.
     public func sourceBytes(id: SourceID) async -> Data? {
-        DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: id) })
+        await DebugLog.trying("sourceContent", operation: { try await store.sourceContent(id: id) })
     }
 
     /// Creates a renderer reader for the current immutable source version.
@@ -3451,8 +3452,8 @@ public final class WikiStoreModel {
     }
 
     public func rendererSourcePreference(for sourceID: SourceID) async -> RendererPreferenceReference? {
-        DebugLog.trying("rendererSourcePreference", operation: {
-            try store.rendererSourcePreference(sourceID: sourceID)?.preference
+        await DebugLog.trying("rendererSourcePreference", operation: {
+            try await store.rendererSourcePreference(sourceID: sourceID)?.preference
         })
     }
 
@@ -3473,8 +3474,8 @@ public final class WikiStoreModel {
     }
 
     public func rendererSourcePresentation(for sourceID: SourceID) async -> RendererSourcePresentationMode? {
-        DebugLog.trying("rendererSourcePresentation", operation: {
-            try store.rendererSourcePresentation(sourceID: sourceID)?.presentation
+        await DebugLog.trying("rendererSourcePresentation", operation: {
+            try await store.rendererSourcePresentation(sourceID: sourceID)?.presentation
         })
     }
 
@@ -3501,7 +3502,7 @@ public final class WikiStoreModel {
     /// fetched/imported it). `nil` when the read fails or no version exists.
     /// Drives the "Origin" row in `SourceDetailView`.
     public func sourceOrigin(for id: SourceID) async -> SourceOrigin? {
-        DebugLog.trying("sourceOrigin", operation: { try store.sourceOrigin(sourceID: id) })
+        await DebugLog.trying("sourceOrigin", operation: { try await store.sourceOrigin(sourceID: id) })
     }
 
     /// The full edit history for a source — every `source_versions` row joined
@@ -3510,7 +3511,7 @@ public final class WikiStoreModel {
     /// `SourceDetailView`'s inspector (the source-side mirror of
     /// `pageEditHistory`).
     public func sourceEditHistory(for id: SourceID) async -> [SourceOrigin] {
-        DebugLog.trying("sourceEditHistory", operation: { try store.sourceEditHistory(sourceID: id) }) ?? []
+        await DebugLog.trying("sourceEditHistory", operation: { try await store.sourceEditHistory(sourceID: id) }) ?? []
     }
 
     /// The origin provenance of a page's HEAD — the agent + activity that last
@@ -3522,7 +3523,7 @@ public final class WikiStoreModel {
     /// `WikiStore` protocol so the model's `store: WikiStore` indirection
     /// doesn't need a downcast.
     public func pageOrigin(for id: PageID) async -> PageOrigin? {
-        DebugLog.trying("pageOrigin", operation: { try store.pageOrigin(pageID: id) })
+        await DebugLog.trying("pageOrigin", operation: { try await store.pageOrigin(pageID: id) })
     }
 
     /// The distinct pages whose recorded provenance cites any of `sourceIDs`
@@ -3548,7 +3549,7 @@ public final class WikiStoreModel {
     /// the page has no versions. Drives the expandable "Edit history" list in
     /// `PageDetailView`.
     public func pageEditHistory(for id: PageID) async -> [PageOrigin] {
-        DebugLog.trying("pageEditHistory", operation: { try store.pageEditHistory(pageID: id) }) ?? []
+        await DebugLog.trying("pageEditHistory", operation: { try await store.pageEditHistory(pageID: id) }) ?? []
     }
 
     /// The full blob-decoded body of an arbitrary page version by id, or `nil`
@@ -3556,7 +3557,7 @@ public final class WikiStoreModel {
     /// Used by the Versions window to view/diff a historical version without
     /// restoring it (the read-side counterpart of the `revertPage` body join).
     public func pageVersionBody(for versionID: PageVersionID) async -> String? {
-        DebugLog.trying("pageVersionBody", operation: { try store.pageVersionBody(versionID: versionID) })
+        await DebugLog.trying("pageVersionBody", operation: { try await store.pageVersionBody(versionID: versionID) })
     }
 
     /// Restore a page to a previous version (append-only, #817). Wraps
@@ -3570,7 +3571,7 @@ public final class WikiStoreModel {
     /// wrapper posture. Returns the new version id, or `nil` on failure.
     @discardableResult
     public func restorePage(for id: PageID, to versionID: PageVersionID) async -> PageVersionID? {
-        DebugLog.trying("restorePage", operation: { try store.restorePage(pageID: id, to: versionID) })
+        await DebugLog.trying("restorePage", operation: { try await store.restorePage(pageID: id, to: versionID) })
     }
 
     /// `true` iff `refreshSource(_:)` would actually succeed for this source —
@@ -3589,7 +3590,7 @@ public final class WikiStoreModel {
     /// - Everything else (local-file, Zotero, folder, unknown, missing origin)
     ///   is import-only and not refreshable.
     public func isSourceRefreshable(for id: SourceID) async -> Bool {
-        guard let origin = sourceOrigin(for: id), origin.plan != nil else { return false }
+        guard let origin = await sourceOrigin(for: id), origin.plan != nil else { return false }
         // Delegate the baseline to `provider.supportsRefresh`, then layer the
         // runtime guards on top (snapshot image siblings for websites; the
         // bundled signing helper for podcasts). See `plans/source-provider-enum.md`
@@ -3598,7 +3599,7 @@ public final class WikiStoreModel {
         guard let provider = origin.provider, provider.supportsRefresh else { return false }
         switch provider {
         case .website:
-            return !(DebugLog.trying("hasImageSiblings", operation: { try store.hasImageSiblings(sourceID: id) }) ?? false)
+            return !(await DebugLog.trying("hasImageSiblings", operation: { try await store.hasImageSiblings(sourceID: id) }) ?? false)
         case .applePodcast:
             // Apple Podcasts transcripts run through the reviewed extractor
             // package route (Apple TTML workflow, or the package's RSS
@@ -3629,12 +3630,12 @@ public final class WikiStoreModel {
     /// v1 from their verbatim bytes (origin `"source"`). After seeding, new
     /// versions are appended by edits (`"user"`) or re-extraction (`"extraction"`).
     public func processedMarkdownHead(for file: SourceSummary) async -> SourceMarkdownVersion? {
-        if let head = DebugLog.trying("processedMarkdownHead", operation: { try store.processedMarkdownHead(sourceID: file.id) }) {
+        if let head = await DebugLog.trying("processedMarkdownHead", operation: { try await store.processedMarkdownHead(sourceID: file.id) }) {
             return head
         }
         // Seed v1 from verbatim bytes for markdown-native sources (MIME-keyed).
         guard MimeType.isText(file.mimeType) else { return nil }
-        guard let bytes = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: file.id) }),
+        guard let bytes = await DebugLog.trying("sourceContent", operation: { try await store.sourceContent(id: file.id) }),
               let text = String(data: bytes, encoding: .utf8) else { return nil }
         do {
             return try await store.appendProcessedMarkdown(
@@ -3649,7 +3650,7 @@ public final class WikiStoreModel {
 
     /// True when at least one processed-markdown version exists for this source.
     public func hasProcessedMarkdown(for sourceID: SourceID) async -> Bool {
-        DebugLog.trying("hasProcessedMarkdown", operation: { try store.hasProcessedMarkdown(sourceID: sourceID) }) ?? false
+        await DebugLog.trying("hasProcessedMarkdown", operation: { try await store.hasProcessedMarkdown(sourceID: sourceID) }) ?? false
     }
 
     /// The single predicate naming the "can this source be ingested?" rule.
@@ -3664,7 +3665,7 @@ public final class WikiStoreModel {
     /// (`SourceDetailView`, `SourcesListView`) consult this so the affordance
     /// reflects the truth.
     public func canIngest(_ source: SourceSummary) async -> Bool {
-        hasProcessedMarkdown(for: source.id) || source.byteSize > 0
+        await hasProcessedMarkdown(for: source.id) || source.byteSize > 0
     }
 
     /// Whether this source's content TYPE has ANY path to markdown — the
@@ -3700,7 +3701,7 @@ public final class WikiStoreModel {
     /// future infrastructure for the PR2 chokepoint + (optionally) the UI
     /// gates — see `plans/content-type-registry.md` §5.2.
     public func shouldAutoIngest(_ source: SourceSummary) async -> Bool {
-        let origin = sourceOrigin(for: source.id)
+        let origin = await sourceOrigin(for: source.id)
         let kind = ContentKind.resolve(
             mimeType: source.mimeType,
             provider: origin?.provider,
@@ -3718,12 +3719,14 @@ public final class WikiStoreModel {
     /// the manual Ingest chokepoint and the background coordinator would
     /// drop every extracted docx on the type predicate alone.
     public func isIngestible(_ source: SourceSummary) async -> Bool {
-        shouldAutoIngest(source) || hasProcessedMarkdown(for: source.id)
+        let auto = await shouldAutoIngest(source)
+        if auto { return true }
+        return await hasProcessedMarkdown(for: source.id)
     }
 
     /// All versions for a source, newest first. Empty if none.
     public func processedMarkdownHistory(for sourceID: SourceID) async -> [SourceMarkdownVersion] {
-        DebugLog.trying("processedMarkdownHistory", operation: { try store.processedMarkdownHistory(sourceID: sourceID) }) ?? []
+        await DebugLog.trying("processedMarkdownHistory", operation: { try await store.processedMarkdownHistory(sourceID: sourceID) }) ?? []
     }
 
     /// Read a single resolved-markdown version by its smv id (Phase 6). Returns
@@ -3731,43 +3734,50 @@ public final class WikiStoreModel {
     /// pinned-extraction viewer to load the exact extraction a quote was written
     /// against.
     public func processedMarkdownVersion(for id: SourceMarkdownVersionID) async -> SourceMarkdownVersion? {
-        DebugLog.trying("processedMarkdownVersion", operation: { try store.processedMarkdownVersion(id: id) }) ?? nil
+        await DebugLog.trying("processedMarkdownVersion", operation: { try await store.processedMarkdownVersion(id: id) }) ?? nil
     }
 
     /// Every source's derived-markdown chain as `[sourceID: [smvID]]`, ULID-asc
     /// per source. Phase 6: the render precompute builds the `sourceID → [smvID]`
     /// map so `linkified` can resolve `@vN` per occurrence.
-    public func sourceDerivedChains() async -> [SourceID: [SourceMarkdownVersionID]] {
-        DebugLog.trying("sourceDerivedChains", operation: { try store.sourceDerivedChains() }) ?? [:]
+    /// Plan P1.3 — render-context inputs are PRELOADED on the async
+    /// bootstrap/reload path and read synchronously by
+    /// `WikiRenderContext.build(from:)`, so the memoized `renderContext()`
+    /// accessor keeps its sync shape (views build closures over it).
+    @ObservationIgnored private var preloadDerivedChains: [SourceID: [SourceMarkdownVersionID]] = [:]
+    @ObservationIgnored private var preloadEmbedDescriptors: [SourceID: SourceEmbedDescriptor] = [:]
+    @ObservationIgnored private var preloadSiblingMaps: [SourceID: [String: SourceID]] = [:]
+
+    /// Fetches the three derived maps from the store. Awaited from the
+    /// bootstrap and the coalesced reload drain; never call inline from a
+    /// sync path.
+    func preloadRenderContextInputs() async {
+        preloadDerivedChains = await DebugLog.trying(
+            "sourceDerivedChains",
+            operation: { try await store.sourceDerivedChains() }) ?? [:]
+        preloadEmbedDescriptors = await DebugLog.trying(
+            "embedDescriptors",
+            operation: { try await store.embedDescriptors() }) ?? [:]
+        preloadSiblingMaps = await DebugLog.trying(
+            "siblingImageResolvers",
+            operation: { try await store.siblingImageResolvers() }) ?? [:]
     }
 
-    /// The embed descriptors for every byteless source, batched in one query.
-    /// Phase 4b: the render precompute builds this once (main-actor read) and
-    /// feeds `ExternalEmbed.target(for:)` to widen `![[source:…]]` embeds to
-    /// external media. Returns `{}` on any query failure.
-    public func embedDescriptors() async -> [SourceID: SourceEmbedDescriptor] {
-        DebugLog.trying("embedDescriptors", operation: { try store.embedDescriptors() }) ?? [:]
+    /// SYNC projection (plan P1.3): the preloaded derived-markdown chains.
+    public func sourceDerivedChains() -> [SourceID: [SourceMarkdownVersionID]] {
+        preloadDerivedChains
     }
 
-    /// Phase 4: batched sibling-image resolver maps for the render precompute.
-    /// Per source, `[original_path → sibling sourceID]`. Returns `{}` on
-    /// failure (images simply won't resolve — degraded, not fatal).
-    public func siblingImageResolvers() async -> [SourceID: [String: SourceID]] {
-        DebugLog.trying("siblingImageResolvers", operation: { try store.siblingImageResolvers() }) ?? [:]
+    /// SYNC projection (plan P1.3): the preloaded embed descriptors.
+    public func embedDescriptors() -> [SourceID: SourceEmbedDescriptor] {
+        preloadEmbedDescriptors
     }
 
-    /// A memoized ``WikiRenderContext`` (Phase A.1, D1) — the pure-data snapshot
-    /// of everything a markdown render needs from the store (existence/display/
-    /// loose-match sets, `embedMap` incl. external `EmbedTarget`s,
-    /// `sourceDerivedChain`, `siblingMaps`).
-    ///
-    /// Built lazily on first access and rebuilt only when pages or sources
-    /// change — `reloadSummaries()` / `reloadSources()` bump
-    /// ``renderContextGeneration`` (every local mutation routes through them, and
-    /// `.external` `WikiEventBus` events route through `reloadFromStore()` → the
-    /// same reloads). So per-delta renders reuse the snapshot and never touch
-    /// SQLite. The returned value is `Sendable` and safe to hand to a detached
-    /// render task; its closures are pure (no store access at render time).
+    /// SYNC projection (plan P1.3): the preloaded sibling-image resolvers.
+    public func siblingImageResolvers() -> [SourceID: [String: SourceID]] {
+        preloadSiblingMaps
+    }
+
     public func renderContext() -> WikiRenderContext {
         if let cached = cachedRenderContext,
            renderContextBuiltAtGeneration == renderContextGeneration,
@@ -3806,11 +3816,11 @@ public final class WikiStoreModel {
         for sourceID: SourceID, content: String,
         backend: ExtractionBackend, modelVersion: String? = nil
     ) async -> SourceMarkdownVersion? {
-        if let head = DebugLog.trying("processedMarkdownHead", operation: { try store.processedMarkdownHead(sourceID: sourceID) }) {
+        if let head = await DebugLog.trying("processedMarkdownHead", operation: { try await store.processedMarkdownHead(sourceID: sourceID) }) {
             return head
         }
         do {
-            return try store.recordMarkdownExtraction(
+            return try await store.recordMarkdownExtraction(
                 sourceID: sourceID, content: content, backend: backend,
                 sourceVersionID: nil, note: nil, modelVersion: modelVersion)
         } catch {
@@ -3832,7 +3842,7 @@ public final class WikiStoreModel {
         for sourceID: SourceID, content: String, technique: String
     ) async -> SourceMarkdownVersion? {
         do {
-            return try store.appendDerivedMarkdown(
+            return try await store.appendDerivedMarkdown(
                 sourceID: sourceID, content: content, origin: .transcript,
                 producer: .tool(Self.transcriptTool(for: technique)), providerID: nil, modelID: nil,
                 toolVersion: nil, sourceVersionID: nil, note: nil)
@@ -3851,7 +3861,7 @@ public final class WikiStoreModel {
         for sourceID: SourceID, content: String, tool: ExtractionTool
     ) async -> SourceMarkdownVersion? {
         do {
-            return try store.appendDerivedMarkdown(
+            return try await store.appendDerivedMarkdown(
                 sourceID: sourceID, content: content, origin: .transcript,
                 producer: .tool(tool), providerID: nil, modelID: nil,
                 toolVersion: nil, sourceVersionID: nil, note: nil)
@@ -3864,8 +3874,8 @@ public final class WikiStoreModel {
     /// The source's immutable initial content version — the link target a
     /// package transcript requires.
     public func initialContentVersion(for sourceID: SourceID) async -> SourceVersion? {
-        DebugLog.trying("initialContentVersion", operation: {
-            try store.initialContentVersion(sourceID: sourceID)
+        await DebugLog.trying("initialContentVersion", operation: {
+            try await store.initialContentVersion(sourceID: sourceID)
         })
     }
 
@@ -3879,9 +3889,9 @@ public final class WikiStoreModel {
         for sourceID: SourceID, filename: String,
         using extractor: any MarkdownExtractor,
         backend: ExtractionBackend, modelVersion: String? = nil,
-        onProgress: (@Sendable (String) async -> Void)? = nil
+        onProgress: (@Sendable (String) -> Void)? = nil
     ) async -> SourceMarkdownVersion? {
-        guard let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) }) else { return nil }
+        guard let data = await DebugLog.trying("sourceContent", operation: { try await store.sourceContent(id: sourceID) }) else { return nil }
         guard let markdown = await DebugLog.trying("extractorConvert", operation: { try await extractor.convert(pdfData: data, filename: filename, onProgress: onProgress) }) else {
             return nil
         }
@@ -3933,7 +3943,7 @@ public final class WikiStoreModel {
         backend: HtmlExtractionBackend,
         extractor: (any HtmlMarkdownExtractor)? = nil
     ) async -> SourceMarkdownVersion? {
-        guard let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) }) else {
+        guard let data = await DebugLog.trying("sourceContent", operation: { try await store.sourceContent(id: sourceID) }) else {
             DebugLog.store("WikiStoreModel.extractHtml: source bytes unreadable (source=\(sourceID.rawValue))")
             return nil
         }
@@ -3995,7 +4005,7 @@ public final class WikiStoreModel {
         for sourceID: SourceID,
         extractor: any DocxMarkdownExtractor
     ) async -> SourceMarkdownVersion? {
-        guard let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) }) else {
+        guard let data = await DebugLog.trying("sourceContent", operation: { try await store.sourceContent(id: sourceID) }) else {
             DebugLog.store("WikiStoreModel.extractDocx: source bytes unreadable (source=\(sourceID.rawValue))")
             return nil
         }
@@ -4094,7 +4104,7 @@ public final class WikiStoreModel {
             // readable text. On sidecar-less paths the import version is
             // already the head and this is a no-op.
             if let version {
-                setActiveMarkdown(for: sourceID, to: version.id)
+                await setActiveMarkdown(for: sourceID, to: version.id)
             }
         }
     }
@@ -4122,7 +4132,7 @@ public final class WikiStoreModel {
     public func transcribe(
         sourceID: SourceID
     ) async throws -> SourceMarkdownVersion? {
-        guard let origin = sourceOrigin(for: sourceID),
+        guard let origin = await sourceOrigin(for: sourceID),
               let provider = origin.provider else {
             throw SourceRefreshService.RefreshError.notRefreshable("unknown")
         }
@@ -4187,19 +4197,19 @@ public final class WikiStoreModel {
     /// Nominate an existing processed-markdown row as the active HEAD for a
     /// source (UPSERT the `source-derived` ref). Thin wrapper over the store.
     public func setActiveMarkdown(for sourceID: SourceID, to versionID: SourceMarkdownVersionID) async {
-        DebugLog.trying("setActiveMarkdown", operation: { try store.setActiveMarkdown(sourceID: sourceID, to: versionID) })
+        await DebugLog.trying("setActiveMarkdown", operation: { try await store.setActiveMarkdown(sourceID: sourceID, to: versionID) })
     }
 
     /// The producing agent name for each of a source's markdown versions
     /// (smv.id → agents.name), for the alternatives UI labels.
     public func processedMarkdownAgentNames(for sourceID: SourceID) async -> [SourceMarkdownVersionID: String] {
-        DebugLog.trying("processedMarkdownAgentNames", operation: { try store.processedMarkdownAgentNames(sourceID: sourceID) }) ?? [:]
+        await DebugLog.trying("processedMarkdownAgentNames", operation: { try await store.processedMarkdownAgentNames(sourceID: sourceID) }) ?? [:]
     }
 
     /// All extraction alternatives for a source with provenance + active flag,
     /// for the compare/nominate sheet (track C). Empty if none.
     public func processedMarkdownAlternatives(for sourceID: SourceID) async -> [ExtractionAlternative] {
-        DebugLog.trying("processedMarkdownAlternatives", operation: { try store.processedMarkdownAlternatives(sourceID: sourceID) }) ?? []
+        await DebugLog.trying("processedMarkdownAlternatives", operation: { try await store.processedMarkdownAlternatives(sourceID: sourceID) }) ?? []
     }
 
     // MARK: - Source-of-truth rebuild
@@ -4230,6 +4240,7 @@ public final class WikiStoreModel {
         await reloadChatsAsync()
         await reloadBookmarkNodesAsync()
         pruneHistoryToCurrentStore()
+        await preloadRenderContextInputs()
         await reloadCurrentDraftIfCleanAsync()
     }
 
@@ -4317,13 +4328,13 @@ public final class WikiStoreModel {
             // ops on every launch for 300+ page wikis.
             let reconcileKey = "link_reconcile_version"
             let currentReconcileVersion = "1"
-            let alreadyReconciled = DebugLog.trying("getMetadata", operation: { try store.getMetadata(reconcileKey) }) ?? ""
+            let alreadyReconciled = await DebugLog.trying("getMetadata", operation: { try await store.getMetadata(reconcileKey) }) ?? ""
             if alreadyReconciled != currentReconcileVersion {
                 let start = DispatchTime.now()
                 let count = await DebugLog.trying("reconcileAllLinks", operation: { try await LinkReconciler.reconcileAll(in: store) }) ?? 0
                 let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
                 DebugLog.store("LinkReconciler: re-resolved links for \(count) page(s) in \(Int(ms))ms")
-                DebugLog.trying("setMetadata", operation: { try store.setMetadata(reconcileKey, value: currentReconcileVersion) })
+                await DebugLog.trying("setMetadata", operation: { try await store.setMetadata(reconcileKey, value: currentReconcileVersion) })
             }
         }
 
@@ -4333,9 +4344,18 @@ public final class WikiStoreModel {
         await EmbeddingService.configure()
         guard EmbeddingService.isAvailable else { return }
 
-        let pageWork   = store.missingPageEmbeddingWork()     // main-thread SQLite read
-        let sourceWork = store.missingSourceEmbeddingWork()   // main-thread SQLite read
-        let chatWork   = store.missingChatEmbeddingWork()     // main-thread SQLite read
+        let pageWork: [(id: PageID, text: String)]
+        let sourceWork: [(id: SourceID, text: String)]
+        let chatWork: [(id: ChatID, text: String)]
+        do {
+            pageWork = try await store.missingPageEmbeddingWork()
+            sourceWork = try await store.missingSourceEmbeddingWork()
+            chatWork = try await store.missingChatEmbeddingWork()
+        } catch {
+            DebugLog.store("upgradeSearchIndex: missing-work scan failed: \(error)")
+            isUpgrading = false
+            return
+        }
         let total = pageWork.count + sourceWork.count + chatWork.count
         guard total > 0 else { return }                       // nothing missing → no sheet
 
@@ -4343,11 +4363,11 @@ public final class WikiStoreModel {
         DebugLog.store("searchUpgrade: begin — \(pageWork.count) page(s), \(sourceWork.count) source(s), \(chatWork.count) chat(s)")
 
         var done = 0
-        done = await embedAndStore(pageWork, into: { id, chunks in DebugLog.trying("storePageChunks", operation: { try store.storePageChunks(id: id, chunks: chunks) }) }, running: done)
+        done = await embedAndStore(pageWork, into: { id, chunks in await DebugLog.trying("storePageChunks", operation: { try await store.storePageChunks(id: id, chunks: chunks) }) }, running: done)
         searchUpgrade?.phase = .sources
-        done = await embedAndStore(sourceWork, into: { id, chunks in DebugLog.trying("storeSourceChunks", operation: { try store.storeSourceChunks(id: id, chunks: chunks) }) }, running: done)
+        done = await embedAndStore(sourceWork, into: { id, chunks in await DebugLog.trying("storeSourceChunks", operation: { try await store.storeSourceChunks(id: id, chunks: chunks) }) }, running: done)
         searchUpgrade?.phase = .chats
-        done = await embedAndStore(chatWork, into: { id, chunks in DebugLog.trying("storeChatChunks", operation: { try store.storeChatChunks(id: id, chunks: chunks) }) }, running: done)
+        done = await embedAndStore(chatWork, into: { id, chunks in await DebugLog.trying("storeChatChunks", operation: { try await store.storeChatChunks(id: id, chunks: chunks) }) }, running: done)
 
         DebugLog.store("searchUpgrade: complete — \(done) of \(total)")
         searchUpgrade = nil                                   // dismisses the sheet
@@ -4361,13 +4381,19 @@ public final class WikiStoreModel {
     /// Returns the updated running count (for `searchUpgrade.done`).
     private func embedAndStore<ID: Hashable & Sendable>(
         _ work: [(id: ID, text: String)],
-        into store: (ID, [Data]) throws -> Void,
+        into store: (ID, [Data]) async throws -> Void,
         running done: Int
     ) async -> Int {
         var done = done
         for (id, text) in work {
             let blobs = await embedChunksOffMain(text)
-            if !blobs.isEmpty { DebugLog.trying("embedStoreWrite", operation: { try store(id, blobs) }) }       // main-thread SQLite write
+            if !blobs.isEmpty {
+                do {
+                    try await store(id, blobs)   // main-thread SQLite write
+                } catch {
+                    DebugLog.store("embedStoreWrite failed: \(error)")
+                }
+            }
             done += 1
             searchUpgrade?.done = done
             await Task.yield()                                // keep the sheet's spinner animating
@@ -4479,7 +4505,7 @@ public final class WikiStoreModel {
                 } })
                 results = fetched ?? []
             } else {
-                results = (DebugLog.trying("searchSimilarPages", operation: { try self.store.searchSimilar(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
+                results = (await DebugLog.trying("searchSimilarPages", operation: { try await self.store.searchSimilar(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
             }
             guard !Task.isCancelled else { return }
             self.logShadowComparison(kind: "pages", query: query, leg: bm25Leg, fused: results, t0: t0)
@@ -4510,7 +4536,7 @@ public final class WikiStoreModel {
                 } })
                 results = fetched ?? []
             } else {
-                results = (DebugLog.trying("searchSimilarSources", operation: { try self.store.searchSimilarSources(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
+                results = (await DebugLog.trying("searchSimilarSources", operation: { try await self.store.searchSimilarSources(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
             }
             guard !Task.isCancelled else { return }
             self.logShadowComparison(kind: "sources", query: query, leg: bm25Leg, fused: results, t0: t0)
@@ -4539,7 +4565,7 @@ public final class WikiStoreModel {
             // eliminates cross-connection staleness where the read service could
             // return a chat_id that's been renamed/reordered since the last
             // checkpoint (issue #383).
-            let results = (DebugLog.trying("searchSimilarChats", operation: { try self.store.searchSimilarChats(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
+            let results = (await DebugLog.trying("searchSimilarChats", operation: { try await self.store.searchSimilarChats(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
             guard !Task.isCancelled else { return }
             self.logShadowComparison(kind: "chats", query: query, leg: bm25Leg, fused: results, t0: t0)
             self.chatSearchResults = results
@@ -5045,7 +5071,7 @@ public final class WikiStoreModel {
         chatID: ChatID, handle: String, event: AgentEvent, isDraft: Bool
     ) async -> Bool {
         do {
-            try store.checkpointStreamingMessage(
+            try await store.checkpointStreamingMessage(
                 chatID: chatID, handle: handle, event: event, isDraft: isDraft)
             return true
         } catch {
@@ -5064,7 +5090,7 @@ public final class WikiStoreModel {
     }
 
     public func chatMessages(chatID: ChatID) async -> [ChatMessage] {
-        DebugLog.trying("chatMessages", operation: { try store.chatMessages(chatID: chatID) }) ?? []
+        await DebugLog.trying("chatMessages", operation: { try await store.chatMessages(chatID: chatID) }) ?? []
     }
 
     public func readChatTranscriptPage(
@@ -5072,8 +5098,8 @@ public final class WikiStoreModel {
         after cursor: ChatTranscriptCursor?,
         limit: Int
     ) async -> ChatTranscriptPage {
-        DebugLog.trying("readChatTranscriptPage", operation: {
-            try store.readChatTranscriptPage(chatID: chatID, after: cursor, limit: limit)
+        await DebugLog.trying("readChatTranscriptPage", operation: {
+            try await store.readChatTranscriptPage(chatID: chatID, after: cursor, limit: limit)
         }) ?? ChatTranscriptPage(
             items: [],
             checkpoint: cursor ?? .zero,
@@ -5082,8 +5108,8 @@ public final class WikiStoreModel {
     }
 
     public func chatTranscriptCheckpoint(chatID: ChatID) async -> ChatTranscriptCursor {
-        DebugLog.trying("chatTranscriptCheckpoint", operation: {
-            try store.chatTranscriptCheckpoint(chatID: chatID)
+        await DebugLog.trying("chatTranscriptCheckpoint", operation: {
+            try await store.chatTranscriptCheckpoint(chatID: chatID)
         }) ?? .zero
     }
 
@@ -5127,7 +5153,7 @@ public final class WikiStoreModel {
 
     /// Compatibility wrapper for callers that only need an optional summary.
     public func getChat(id: ChatID) async -> ChatSummary? {
-        guard case .available(let summary) = resolveChat(id: id) else { return nil }
+        guard case .available(let summary) = await resolveChat(id: id) else { return nil }
         return summary
     }
 
@@ -5153,7 +5179,7 @@ public final class WikiStoreModel {
         effectiveThinkingID: ChatConfigurationValueID?
     ) async {
         do {
-            try store.updateChatModelAndThinkingSelection(
+            try await store.updateChatModelAndThinkingSelection(
                 chatID: chatID,
                 providerID: providerID,
                 modelID: modelID,
@@ -5179,7 +5205,7 @@ public final class WikiStoreModel {
         chatID: ChatID, cursor: ChatTranscriptCursor, summary: String, kind: ChatMessageSummaryKind
     ) async {
         do {
-            try store.updateMessageSummary(
+            try await store.updateMessageSummary(
                 chatID: chatID, cursor: cursor, summary: summary, kind: kind)
         } catch {
             DebugLog.store("WikiStoreModel.updateMessageSummary failed: \(error)")

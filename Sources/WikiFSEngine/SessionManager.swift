@@ -310,20 +310,22 @@ public final class SessionManager {
     /// only after its last `RootScene` closes, so another window showing the
     /// same wiki can still resolve renderer and comparison windows through the
     /// shared manager.
-    public func releaseSession(for wikiID: WikiID) {
+    public func releaseSession(for wikiID: WikiID) async {
         guard sessions[wikiID] != nil else { return }
         let remainingLeases = max(0, sessionLeaseCounts[wikiID, default: 1] - 1)
         guard remainingLeases == 0 else {
             sessionLeaseCounts[wikiID] = remainingLeases
             return
         }
-        removeSession(for: wikiID)
+        await removeSession(for: wikiID)
     }
 
-    private func removeSession(for wikiID: WikiID) {
+    private func removeSession(for wikiID: WikiID) async {
         sessionLeaseCounts.removeValue(forKey: wikiID)
         guard let session = sessions.removeValue(forKey: wikiID) else { return }
-        session.store.flushPendingSaves()
+        // Plan P1.3: the flush is awaited — pending edits MUST land before
+        // the session teardown task starts.
+        await session.store.flushPendingSaves()
         let token = UUID()
         let task = Task { @MainActor [weak self] in
             await session.shutdown()
@@ -337,7 +339,7 @@ public final class SessionManager {
     /// search root. App termination force-removes sessions regardless of how
     /// many window leases remain. Safe to call repeatedly.
     public func shutdownSearchRuntimes() async {
-        for wikiID in Array(sessions.keys) { removeSession(for: wikiID) }
+        for wikiID in Array(sessions.keys) { await removeSession(for: wikiID) }
         let releases = Array(searchReleaseTasks.values)
         for release in releases { await release.task.value }
         searchReleaseTasks.removeAll()
@@ -345,14 +347,14 @@ public final class SessionManager {
 
     /// Flush pending saves for ONE session (used by the registry's
     /// `flushActiveStore` closure before export/delete of a specific wiki).
-    public func flushSession(for wikiID: WikiID) {
-        sessions[wikiID]?.store.flushPendingSaves()
+    public func flushSession(for wikiID: WikiID) async {
+        await sessions[wikiID]?.store.flushPendingSaves()
     }
 
     /// Flush pending saves for ALL active sessions (app background / quit).
-    public func flushAllSessions() {
+    public func flushAllSessions() async {
         for session in sessions.values {
-            session.store.flushPendingSaves()
+            await session.store.flushPendingSaves()
         }
     }
 

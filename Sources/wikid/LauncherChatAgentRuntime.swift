@@ -421,8 +421,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
 
     func cancelTurn(_ turnID: ChatTurnID?, in handle: ChatRuntimeHandle) async throws {
         guard let state = runtimeState, state.handle == handle else { throw RuntimeError.unknownHandle }
-        await MainActor.run {
-            state.launcher.stopAgent()
+        _ = await MainActor.run {
+            Task { state.launcher.stop() }
         }
         await state.launcher.awaitProviderRelease()
     }
@@ -503,8 +503,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         guard let state = runtimeState, state.handle == handle else { return }
         monitorTask?.cancel()
         monitorTask = nil
-        await MainActor.run {
-            state.launcher.stopAgent()
+        _ = await MainActor.run {
+            Task { state.launcher.stop() }
         }
         await state.launcher.awaitProviderRelease()
         if state.startedInteractiveSession == false,

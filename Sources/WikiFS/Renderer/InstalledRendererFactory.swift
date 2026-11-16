@@ -17,7 +17,7 @@ struct RendererHostNavigationRouting {
 
     static let unavailable = Self(route: { _ in })
 
-    static func store(_ store: WikiStoreModel) -> Self {
+    static func store(_ store: WikiStoreModel) async -> Self {
         Self { target in
             switch target {
             case let .page(pageID):
@@ -35,7 +35,7 @@ struct RendererHostNavigationRouting {
         }
     }
 
-    func route(_ target: RendererNavigationTarget) { routeTarget(target) }
+    func route(_ target: RendererNavigationTarget) async { routeTarget(target) }
 }
 
 /// Machine-scoped, validated package facts. It deliberately contains no
@@ -96,7 +96,7 @@ final class RendererPreparedSessionAuthority {
         externalActivationPolicy = request.descriptor.linkPolicy == .userActivatedExternal ? .enabled : .disabled
     }
 
-    func close() {
+    func close() async {
         guard isClosed == false else { return }
         isClosed = true
         inputReader.close()
@@ -129,7 +129,7 @@ enum RendererSessionPreparer {
                              WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount)
         let decodedLimit = min(request.descriptor.sizeLimits.maximumDecodedByteCount,
                                WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount)
-        try inputReader.validateInput(maximumInputByteCount: inputLimit, maximumDecodedByteCount: decodedLimit)
+        try await inputReader.validateInput(maximumInputByteCount: inputLimit, maximumDecodedByteCount: decodedLimit)
 
         var assetReader: RendererAuthorizedAssetReader?
         if let declaration = request.descriptor.assetRead {
@@ -175,7 +175,7 @@ enum RendererSessionPreparer {
 
     private static func exactPrimaryPayload(
         for request: RendererSessionPreparationRequest
-    ) throws -> RendererBridgeInputPayload {
+    ) async throws -> RendererBridgeInputPayload {
         if let source = request.admittedSource {
             return .init(mimeType: source.mimeType.rawValue, bytes: source.bytes)
         }
@@ -233,7 +233,7 @@ final class RendererSessionPreparationOwner {
     /// pane while this is true and only treat `failed` as a load failure.
     var isPending: Bool { phase == .idle || phase == .preparing }
 
-    func prepare(_ request: RendererSessionPreparationRequest) {
+    func prepare(_ request: RendererSessionPreparationRequest) async {
         generation &+= 1
         let requestedGeneration = generation
         let requestedIdentity = request.identity
@@ -257,7 +257,7 @@ final class RendererSessionPreparationOwner {
         }
     }
 
-    func cancel() {
+    func cancel() async {
         generation &+= 1
         task?.cancel()
         task = nil
@@ -270,7 +270,7 @@ final class RendererSessionPreparationOwner {
     /// The host cannot assemble a preparation request for the selected pane
     /// at all (missing configuration or authorized input). Unlike `cancel()`,
     /// this is definitive: it tells the host to fall back instead of waiting.
-    func markUnavailable() {
+    func markUnavailable() async {
         generation &+= 1
         task?.cancel()
         task = nil
