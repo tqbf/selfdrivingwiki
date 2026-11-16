@@ -339,10 +339,10 @@ public final class WikiStoreModel {
     /// selection, prefill, or attachment rows happen — the existing
     /// `storeError` alert surfaces the failure instead.
     public func beginNewChat(prefill: String? = nil,
-                             attachments: [ChatAttachmentTarget] = []) {
+                             attachments: [ChatAttachmentTarget] = []) async {
         let chat: ChatSummary
         do {
-            chat = try store.createChat(
+            chat = try await store.createChat(
                 kind: .edit, title: "", attachments: attachments)
         } catch {
             DebugLog.store("WikiStoreModel.beginNewChat failed: \(error)")
@@ -385,12 +385,12 @@ public final class WikiStoreModel {
     /// prior send), the derivation yields nothing usable (#1265 — the row
     /// stays genuinely untitled and the next send retries), or the write
     /// fails.
-    public func applyProvisionalChatTitle(chatID: ChatID, userText: String) {
+    public func applyProvisionalChatTitle(chatID: ChatID, userText: String) async {
         guard let row = chats.first(where: { $0.id == chatID }),
               row.title.isEmpty,
               let title = ChatSummary.title(fromFirstMessage: userText) else { return }
         do {
-            try internalStore.setChatTitleIfEmpty(chatID: chatID, title: title)
+            try await internalStore.setChatTitleIfEmpty(chatID: chatID, title: title)
             reloadChats()
         } catch {
             DebugLog.store("WikiStoreModel.applyProvisionalChatTitle failed: \(error)")
@@ -452,21 +452,21 @@ public final class WikiStoreModel {
     /// Create a workspace (delegates to the store). Used by
     /// `AgentOperationRunner` when `workspacesEnabled` is on.
     @discardableResult
-    public func createWorkspace(name: String?, activityID: String?) throws -> WorkspaceID {
-        try store.createWorkspace(name: name, activityID: activityID)
+    public func createWorkspace(name: String?, activityID: String?) async throws -> WorkspaceID {
+        try await store.createWorkspace(name: name, activityID: activityID)
     }
 
     /// Merge a workspace into main (delegates to the store). Used by
     /// `AgentOperationRunner` to auto-merge after an isolated ingest.
     @discardableResult
-    public func workspaceMerge(workspaceID: WorkspaceID) throws -> [String] {
-        try store.workspaceMerge(workspaceID: workspaceID)
+    public func workspaceMerge(workspaceID: WorkspaceID) async throws -> [String] {
+        try await store.workspaceMerge(workspaceID: workspaceID)
     }
 
     /// Reap stale open workspaces (delegates to the store).
     @discardableResult
-    public func reapStaleWorkspaces(ttl: TimeInterval) throws -> Int {
-        try store.reapStaleWorkspaces(ttl: ttl)
+    public func reapStaleWorkspaces(ttl: TimeInterval) async throws -> Int {
+        try await store.reapStaleWorkspaces(ttl: ttl)
     }
 
     private let store: WikiStore
@@ -806,7 +806,7 @@ public final class WikiStoreModel {
             } catch {
                 DebugLog.store("WikiStoreModel.flushCapturedDraft failed (page \(id.rawValue)): \(error)")
             }
-        case .chat, .newChat, .bookmark, .strategy, .source, .changeLog, nil:
+        case .chat, .newChat, .bookmark, .strategy, .source, .changeLog:
             break // non-page selections carry no editable page draft
         }
     }
@@ -1838,7 +1838,7 @@ public final class WikiStoreModel {
     /// `selection` has already advanced to the next page — still writes the
     /// freshest text to the RIGHT page. No-op when nothing is loaded.
     /// Always rebuilds `summaries` from source on success.
-    public func save() {
+    public func save() async {
         guard let id = loadedPage else { return }
         do {
             // The shared upsert+reparse seam (Phase A): persist the body AND
@@ -1853,13 +1853,13 @@ public final class WikiStoreModel {
             // conflicts visible — if another writer committed a new version after
             // the editor loaded, this throws `PageConflictError` instead of
             // silently clobbering.
-            try PageUpsert.upsert(in: store, id: id, title: draftTitle, body: draftBody,
+            try await PageUpsert.upsert(in: store, id: id, title: draftTitle, body: draftBody,
                                   expectedHeadVersionID: loadedPageHeadVersionID,
                                   author: "user")
             isDraftDirty = false
             // After a successful versioned save, refresh the head version id so
             // the next save CAS-expects the version we just wrote.
-            loadedPageHeadVersionID = DebugLog.trying("pageHeadVersionID", operation: { try store.pageHeadVersionID(pageID: id) })
+            loadedPageHeadVersionID = DebugLog.trying("pageHeadVersionID", operation: { try await store.pageHeadVersionID(pageID: id) })
             // No manual reload — the bus fires reloadFromStore() async after the upsert.
             // Non-blocking fence lint: the in-app save still succeeds (the
             // editor is the human escape from wikictl's hard block), but a
@@ -2107,11 +2107,11 @@ public final class WikiStoreModel {
     /// switch and on app backgrounding (§3.5 immediate-on-background).
     /// No-op when the draft hasn't been modified since the last load/save
     /// (prevents bumping `updated_at` on a tab switch for a view-only page).
-    public func flushPendingSave() {
+    public func flushPendingSave() async {
         autosaveTask?.cancel()
         autosaveTask = nil
         guard isDraftDirty else { return }
-        save()
+        await save()
         // Clear the per-tab stash — content is now committed to the database.
         if let tabID = activeTabID, let i = tabs.firstIndex(where: { $0.id == tabID }) {
             tabs[i].pendingDraftTitle = nil
@@ -2119,9 +2119,11 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Flush pending page edits. Used on selection switch and app backgrounding.
-    public func flushPendingSaves() {
-        flushPendingSave()
+    /// Flush pending page edits. Used on app backgrounding and before
+    /// agent runs (plan P1.3: async — the flush must COMPLETE before the
+    /// dependent action runs, so this is awaited, never fire-and-forget).
+    public func flushPendingSaves() async {
+        await flushPendingSave()
     }
 
     // MARK: - Blob GC (#253)
@@ -2167,8 +2169,8 @@ public final class WikiStoreModel {
     /// Increment the agent-run counter. Called at spawn commit (spawn success).
     /// Flushes pending drafts first so an in-flight edit lands in the store
     /// before the agent starts its own writes.
-    public func agentRunStarted() {
-        flushPendingSaves()
+    public func agentRunStarted() async {
+        await flushPendingSaves()
         agentRunCount += 1
     }
 
@@ -2235,7 +2237,7 @@ public final class WikiStoreModel {
         renameConflictingTitle = nil
     }
 
-    public func rename(_ id: PageID, to newTitle: String) {
+    public func rename(_ id: PageID, to newTitle: String) async {
         // Persist any pending edits to whatever's open first, then rename.
         flushPendingSave()
         renameConflictingTitle = nil
@@ -2250,7 +2252,7 @@ public final class WikiStoreModel {
                 DebugLog.store("WikiStoreModel.rename blocked: '\(sanitizedTitle)' already exists (page \(existingID.rawValue))")
                 return
             }
-            let page = try store.getPage(id: id)
+            let page = try await store.getPage(id: id)
             let cleanBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             // #797: route through `PageAuthor.user` instead of `nil`. The
             // pre-fix nil passed into `ensurePageAuthorAgent` mapped to the
@@ -2259,7 +2261,7 @@ public final class WikiStoreModel {
             // a chat wrote, once renamed in-app, would have flipped its author
             // identity to `legacy-import`). A rename is an explicit user
             // action — stamp `user`.
-            try store.updatePage(id: id, title: sanitizedTitle, body: cleanBody,
+            try await store.updatePage(id: id, title: sanitizedTitle, body: cleanBody,
                                  lastEditedBy: PageAuthor.user.rawValue)
             // No manual reload — the bus fires reloadFromStore() async after the update.
             if selection == .page(id) { draftTitle = sanitizedTitle }
@@ -2275,9 +2277,9 @@ public final class WikiStoreModel {
     /// Rename a source's display name. Rewrites `[[source:<old>…]]` links in
     /// every page that references it (fragment + alias preserved), then refreshes
     /// the sidebar, open tabs, and File Provider mount.
-    public func renameSource(id: SourceID, to newDisplayName: String) {
+    public func renameSource(id: SourceID, to newDisplayName: String) async {
         do {
-            try store.renameSource(id: id, to: newDisplayName)
+            try await store.renameSource(id: id, to: newDisplayName)
             // No manual reload — the bus fires reloadFromStore() async after the
             // rename, which reloads BOTH `sources` (display name in sidebar/detail)
             // and `summaries` (the rename rewrites inbound `[[source:…]]` links).
@@ -2293,8 +2295,8 @@ public final class WikiStoreModel {
     /// that point at it (issue #219). Throwing: a failed impact read surfaces
     /// as an error (the UI shows a failure and never offers deletion) instead
     /// of an empty impact that would read as "nothing references this".
-    public func deletionImpact(forPage id: PageID) throws -> DeletionImpact {
-        try store.deletionImpact(for: [.page(id)])
+    public func deletionImpact(forPage id: PageID) async throws -> DeletionImpact {
+        try await store.deletionImpact(for: [.page(id)])
     }
 
     /// Delete pages through the store's protected contract (issue #219
@@ -2309,8 +2311,8 @@ public final class WikiStoreModel {
     @discardableResult
     public func delete(
         _ ids: [PageID], unlinkIncomingLinks: Bool
-    ) throws -> ResourceDeletionResult {
-        let result = try store.deleteResources(ResourceDeletionRequest(
+    ) async throws -> ResourceDeletionResult {
+        let result = try await store.deleteResources(ResourceDeletionRequest(
             targets: ids.map { .page($0) },
             linkPolicy: unlinkIncomingLinks ? .unlink : .preserve))
         for target in result.deletedTargets {
