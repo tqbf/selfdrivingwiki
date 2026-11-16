@@ -47,9 +47,9 @@ public enum PageUpsert {
         expectedHeadVersionID: PageVersionID? = nil,
         author: String? = nil,
         provenance: [PageVersionSourceInput] = []
-    ) throws -> Outcome {
+    ) async throws -> Outcome {
         let expectation: PageWriteExpectation = expectedHeadVersionID.map(PageWriteExpectation.expectedHead) ?? .unrestricted
-        return try upsert(
+        return try await upsert(
             in: store, id: id, title: title, body: body,
             expectation: expectation, author: author, provenance: provenance)
     }
@@ -87,8 +87,8 @@ public enum PageUpsert {
         expectation: PageWriteExpectation,
         author: String? = nil,
         provenance: [PageVersionSourceInput] = []
-    ) throws -> Outcome {
-        let outcome = try store.upsertPage(
+    ) async throws -> Outcome {
+        let outcome = try await store.upsertPage(
             id: id, title: title, rawBody: body, expectation: expectation,
             author: author, provenance: provenance)
         // Compute + store chunk embeddings for the page body — AFTER the
@@ -99,7 +99,7 @@ public enum PageUpsert {
         let text = body.isEmpty ? title : "\(title)\n\n\(body)"
         let chunks = EmbeddingService.chunkedEmbeddings(for: text)
         if !chunks.isEmpty {
-            DebugLog.trying("upsert store chunks", operation: { try store.storePageChunks(id: outcome.id, chunks: chunks) })
+            await DebugLog.trying("upsert store chunks", operation: { try await store.storePageChunks(id: outcome.id, chunks: chunks) })
         }
         return outcome
     }
@@ -118,7 +118,7 @@ public enum PageUpsert {
         expectation: PageWriteExpectation,
         author: String?,
         provenance: [PageVersionSourceInput]
-    ) throws -> Outcome {
+    ) async throws -> Outcome {
         // Sanitize BEFORE the title→id resolve, not just in the store's
         // create/update (which sanitizes again as a backstop): resolving the
         // raw title against sanitized stored titles would always miss, and
@@ -130,18 +130,19 @@ public enum PageUpsert {
         // body is passed through so both the app and `wikictl` canonicalize
         // identically (the single shared write seam). Unresolved (forward) links
         // are left byte-identical. `nil` = nothing changed → write the body as-is.
-        let canonicalBody = (try WikiLinkRewriter.canonicalize(
-            in: rawBody, resolvePage: store.resolveTitleToID,
-            resolveSource: store.resolveSourceByName,
+        let canonicalBody = (try await WikiLinkRewriter.canonicalize(
+            in: rawBody,
+            resolvePage: { title in try await store.resolveTitleToID(title) },
+            resolveSource: { name in try await store.resolveSourceByName(name) },
             resolveChat: { title in
-                try store.resolveChatByTitle(title)
+                try await store.resolveChatByTitle(title)
             })) ?? rawBody
-        let outcome = try writePage(
+        let outcome = try await writePage(
             in: store, id: id, title: title, body: canonicalBody,
             expectation: expectation, author: author,
             provenance: provenance)
         // Parse the CANONICAL body so link rows match the stored bytes exactly.
-        try store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(canonicalBody))
+        try await store.replaceLinks(from: outcome.id, parsedLinks: WikiLinkParser.parse(canonicalBody))
         return outcome
     }
 
@@ -156,7 +157,7 @@ public enum PageUpsert {
         expectation: PageWriteExpectation,
         author: String? = nil,
         provenance: [PageVersionSourceInput]
-    ) throws -> Outcome {
+    ) async throws -> Outcome {
         // An expectation of absence with an explicit id is contradictory — the
         // id IS a target. GRDB rejects this inside its composed method; the
         // sequential path rejects it here so both seams fail the same way.
@@ -174,36 +175,36 @@ public enum PageUpsert {
             switch expectation {
             case .expectedHead(let expected):
                 do {
-                    _ = try store.getPage(id: id)
+                    _ = try await store.getPage(id: id)
                 } catch WikiStoreError.notFound {
                     throw PageExpectedTargetMissingError(
                         pageID: id, expectedHead: expected, title: title)
                 }
-                _ = try store.appendPageVersion(
+                _ = try await store.appendPageVersion(
                     pageID: id, title: title, body: body,
                     expectedHeadVersionID: expected, lastEditedBy: author, provenance: provenance)
             case .unrestricted:
-                try store.updatePage(id: id, title: title, body: body, lastEditedBy: author, provenance: provenance)
+                try await store.updatePage(id: id, title: title, body: body, lastEditedBy: author, provenance: provenance)
             case .expectedAbsence:
                 break // unreachable — rejected above
             }
             return Outcome(id: id, didCreate: false)
         }
-        if let existing = try store.resolveTitleToID(title) {
+        if let existing = try await store.resolveTitleToID(title) {
             switch expectation {
             case .expectedAbsence:
                 // The create-only race lost: a page appeared under this title
                 // since the caller's missing-page read. Report the conflict
                 // with the existing page's current head so the caller can
                 // re-read and reconcile; write nothing.
-                let head = try store.pageHeadVersionID(pageID: existing)
+                let head = try await store.pageHeadVersionID(pageID: existing)
                 throw PageCreateConflictError(pageID: existing, title: title, actualVersionID: head)
             case .expectedHead(let expected):
-                _ = try store.appendPageVersion(
+                _ = try await store.appendPageVersion(
                     pageID: existing, title: title, body: body,
                     expectedHeadVersionID: expected, lastEditedBy: author, provenance: provenance)
             case .unrestricted:
-                try store.updatePage(id: existing, title: title, body: body, lastEditedBy: author, provenance: provenance)
+                try await store.updatePage(id: existing, title: title, body: body, lastEditedBy: author, provenance: provenance)
             }
             return Outcome(id: existing, didCreate: false)
         }
@@ -218,7 +219,7 @@ public enum PageUpsert {
         // A new upsert creates its first immutable version atomically. Its
         // source inputs belong on that content-bearing root, not on a second
         // follow-up version after an empty placeholder root.
-        let page = try store.createPage(
+        let page = try await store.createPage(
             title: title, body: body, createdBy: author, provenance: provenance)
         return Outcome(id: page.id, didCreate: true)
     }

@@ -28,12 +28,12 @@ public enum LinkReconciler {
     /// actor (the SQLite single-threaded invariant; only the yields suspend).
     @discardableResult
     public static func reconcileAll(in store: WikiStore, batchSize: Int = 16) async throws -> Int {
-        let summaries = try store.listPages(sortBy: .lastUpdated)
+        let summaries = try await store.listPages(sortBy: .lastUpdated)
         // Yield up front so the window can paint before the first page is read.
         await Task.yield()
         for (index, summary) in summaries.enumerated() {
-            let page = try store.getPage(id: summary.id)
-            try store.replaceLinks(
+            let page = try await store.getPage(id: summary.id)
+            try await store.replaceLinks(
                 from: page.id,
                 parsedLinks: WikiLinkParser.parse(page.bodyMarkdown))
             if (index + 1) % batchSize == 0 {

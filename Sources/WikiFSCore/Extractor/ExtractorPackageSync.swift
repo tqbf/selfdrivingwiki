@@ -146,7 +146,7 @@ public enum ExtractorPackageSync {
                 throw ExtractorSyncEngineError.invalidItem(itemKey: itemKey)
             }
             let identity = URLFetchService.urlIdentity(sourceURL.absoluteString)
-            let existing = try identity.flatMap { try store.sourceMatchingURLIdentity($0) }
+            let existing = try identity.flatMap { await store.sourceMatchingURLIdentity($0) }
             if let existing {
                 if force {
                     let jobID = try await enqueueJob(existing.id)
@@ -160,7 +160,7 @@ public enum ExtractorPackageSync {
                 continue
             }
 
-            let summary = try store.addBytelessSource(
+            let summary = try await store.addBytelessSource(
                 filename: itemKey,
                 mimeType: sourceMIMEType.rawValue,
                 provenance: SourceProvenance(
