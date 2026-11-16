@@ -22,26 +22,26 @@ struct AgentOperationRunnerTests {
 
     @Test func singlePagePreflightReturnsEmptyBrokenLinks() async throws {
         let (model, store) = try tempStore()
-        let page = try store.createPage(title: "Test Page")
+        let page = try await store.createPage(title: "Test Page")
         await model.bootstrapFromStore()
 
-        let preflight = model.preflightLint(pageID: page.id)
+        let preflight = await model.preflightLint(pageID: page.id)
         // A fresh page with no broken links should have an empty broken list.
         #expect(preflight?.brokenPageLinks.isEmpty == true)
     }
 
     @Test func multiplePagePreflightsAreIndependent() async throws {
         let (model, store) = try tempStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
         // Create a link from A to a non-existent page so preflight
         // detects a broken link.
-        try store.updatePage(id: a.id, title: "A", body: "[[MissingOne]]")
-        try store.updatePage(id: b.id, title: "B", body: "[[MissingTwo]]")
+        try await store.updatePage(id: a.id, title: "A", body: "[[MissingOne]]")
+        try await store.updatePage(id: b.id, title: "B", body: "[[MissingTwo]]")
         await model.bootstrapFromStore()
 
-        let pa = model.preflightLint(pageID: a.id)
-        let pb = model.preflightLint(pageID: b.id)
+        let pa = await model.preflightLint(pageID: a.id)
+        let pb = await model.preflightLint(pageID: b.id)
 
         // Each page detects its own broken links independently.
         #expect(pa?.brokenPageLinks == ["MissingOne"])
@@ -90,14 +90,14 @@ struct AgentOperationRunnerTests {
 
     @Test func canonicalULIDPageLinkIsNotBroken() async throws {
         let (model, store) = try tempStore()
-        let target = try store.createPage(title: "Target Page")
-        let page = try store.createPage(title: "Linker")
+        let target = try await store.createPage(title: "Target Page")
+        let page = try await store.createPage(title: "Linker")
         // A canonical [[page:<ULID>|alias]] link should NOT be reported broken.
-        try store.updatePage(id: page.id, title: "Linker",
+        try await store.updatePage(id: page.id, title: "Linker",
             body: "See [[page:\(target.id.rawValue)#Intro|Target Page]].")
         await model.bootstrapFromStore()
 
-        let preflight = model.preflightLint(pageID: page.id)
+        let preflight = await model.preflightLint(pageID: page.id)
         #expect(preflight?.brokenPageLinks.isEmpty == true)
     }
 
@@ -105,20 +105,20 @@ struct AgentOperationRunnerTests {
 
     @Test func linksInsideCodeSpansAreNotBroken() async throws {
         let (model, store) = try tempStore()
-        let page = try store.createPage(title: "Docs")
+        let page = try await store.createPage(title: "Docs")
         // `[[Like This]]` inside backticks is example text, not a real link.
-        try store.updatePage(id: page.id, title: "Docs",
+        try await store.updatePage(id: page.id, title: "Docs",
             body: "Use `[[Like This]]` to link pages.")
         await model.bootstrapFromStore()
 
-        let preflight = model.preflightLint(pageID: page.id)
+        let preflight = await model.preflightLint(pageID: page.id)
         #expect(preflight?.brokenPageLinks.isEmpty == true)
     }
 
     @Test func linksInsideFencedBlocksAreNotBroken() async throws {
         let (model, store) = try tempStore()
-        let page = try store.createPage(title: "Docs")
-        try store.updatePage(id: page.id, title: "Docs", body: """
+        let page = try await store.createPage(title: "Docs")
+        try await store.updatePage(id: page.id, title: "Docs", body: """
         Example:
 
         ```
@@ -127,7 +127,7 @@ struct AgentOperationRunnerTests {
         """)
         await model.bootstrapFromStore()
 
-        let preflight = model.preflightLint(pageID: page.id)
+        let preflight = await model.preflightLint(pageID: page.id)
         #expect(preflight?.brokenPageLinks.isEmpty == true)
     }
 
@@ -135,50 +135,50 @@ struct AgentOperationRunnerTests {
 
     @Test func brokenSourceLinkIsDetected() async throws {
         let (model, store) = try tempStore()
-        let page = try store.createPage(title: "Citing Page")
-        try store.updatePage(id: page.id, title: "Citing Page",
+        let page = try await store.createPage(title: "Citing Page")
+        try await store.updatePage(id: page.id, title: "Citing Page",
             body: "[^1]: [[source:Nonexistent Source#\"quote\"]]\n\nText.[^1]")
         await model.bootstrapFromStore()
 
-        let preflight = model.preflightLint(pageID: page.id)
+        let preflight = await model.preflightLint(pageID: page.id)
         #expect(preflight?.brokenSourceLinks.contains("Nonexistent Source") == true)
     }
 
     @Test func resolvedSourceLinkIsNotBroken() async throws {
         let (model, store) = try tempStore()
         _ = try store.addSource(filename: "Guide.md", data: Data("# Guide".utf8))
-        let page = try store.createPage(title: "Citing Page")
-        try store.updatePage(id: page.id, title: "Citing Page",
+        let page = try await store.createPage(title: "Citing Page")
+        try await store.updatePage(id: page.id, title: "Citing Page",
             body: "[^1]: [[source:Guide#\"intro\"]]\n\nText.[^1]")
         await model.bootstrapFromStore()
 
-        let preflight = model.preflightLint(pageID: page.id)
+        let preflight = await model.preflightLint(pageID: page.id)
         #expect(preflight?.brokenSourceLinks.isEmpty == true)
     }
 
     @Test func legacySourceProjectionLinkIsNotBroken() async throws {
         let (model, store) = try tempStore()
         let source = try store.addSource(filename: "ScalaTestingWithSpecs2.md", data: Data("source".utf8))
-        let page = try store.createPage(title: "Citing Page")
+        let page = try await store.createPage(title: "Citing Page")
         let projection = "\(source.filename)–\(source.id.rawValue).md"
-        try store.updatePage(id: page.id, title: "Citing Page",
+        try await store.updatePage(id: page.id, title: "Citing Page",
             body: "[[source:\(projection)#\"quoted passage\"]]")
         await model.bootstrapFromStore()
 
-        let preflight = model.preflightLint(pageID: page.id)
+        let preflight = await model.preflightLint(pageID: page.id)
         #expect(preflight?.brokenSourceLinks.isEmpty == true)
     }
 
     @Test func stagedSourceProjectionLinkRequiresLintRepair() async throws {
         let (model, store) = try tempStore()
         let source = try store.addSource(filename: "Guide.md", data: Data("source".utf8))
-        let page = try store.createPage(title: "Citing Page")
+        let page = try await store.createPage(title: "Citing Page")
         let staged = "guide--\(source.id.rawValue).md"
-        try store.updatePage(id: page.id, title: "Citing Page",
+        try await store.updatePage(id: page.id, title: "Citing Page",
             body: "[^1]: [[source:\(staged)#\"intro\"]]\n\nText.[^1]")
         await model.bootstrapFromStore()
 
-        let preflight = model.preflightLint(pageID: page.id)
+        let preflight = await model.preflightLint(pageID: page.id)
         #expect(preflight?.brokenSourceLinks.contains(staged) == true)
     }
 
@@ -186,13 +186,13 @@ struct AgentOperationRunnerTests {
         let (model, store) = try tempStore()
         let src = try store.addSource(filename: "Guide.md", data: Data("# Guide".utf8))
         try store.renameSource(id: src.id, to: "Self-Driving Wiki \u{2014} User Guide")
-        let page = try store.createPage(title: "Citing Page")
+        let page = try await store.createPage(title: "Citing Page")
         // Agent cited the name without the em dash — looseMatchKey should resolve it.
-        try store.updatePage(id: page.id, title: "Citing Page",
+        try await store.updatePage(id: page.id, title: "Citing Page",
             body: "[^1]: [[source:Self-Driving Wiki User Guide#\"intro\"]]\n\nText.[^1]")
         await model.bootstrapFromStore()
 
-        let preflight = model.preflightLint(pageID: page.id)
+        let preflight = await model.preflightLint(pageID: page.id)
         #expect(preflight?.brokenSourceLinks.isEmpty == true)
     }
 }

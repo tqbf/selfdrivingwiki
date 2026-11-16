@@ -178,6 +178,21 @@ import Foundation
     /// without restarting it. `request` is JSON `ChatConfigOptionRequest`;
     /// reply is JSON `{"error": null}`.
     func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void)
+
+    // MARK: - Store family (Phase 2b)
+
+    /// One structured store operation (plans/daemon-only-access.md Phase 2b):
+    /// `request` is JSON-encoded `DaemonStoreRequest` and the reply is ALWAYS
+    /// the JSON-encoded `DaemonDomainReply` envelope (`family: .store`)
+    /// whose `payload` carries the JSON `DaemonStoreReply` — typed store
+    /// failures ride INSIDE that inner reply, and only a malformed outer
+    /// envelope / unknown operation is a domain-level `invalidRequest`
+    /// failure envelope, exactly matching the domain-socket path byte for
+    /// byte. The operation string comes from ``DaemonStoreOperation``; the
+    /// `wikiID` parameter must match the request's own `wikiID` (a mismatch
+    /// is a typed `invalidRequest`). Replies are frame-size pre-flighted
+    /// against the 4 MiB transport cap.
+    func storeOperation(_ wikiID: String, request: Data, reply: @escaping (Data) -> Void)
 }
 
 public struct SignedWikiDExtractorProbeRequest: Codable, Equatable, Sendable {

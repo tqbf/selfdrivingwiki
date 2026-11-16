@@ -382,7 +382,7 @@ struct SourcesTests {
 
         // A durable completion stamp is the success fact and survives unrelated
         // canceled work.
-        model.markSourceIngested(id: completed.id)
+        await model.markSourceIngested(id: completed.id)
         await model.bootstrapFromStore()
 
         #expect(try queue.getItem(runningItem.id)?.state == .cancelled)
@@ -409,7 +409,7 @@ struct SourcesTests {
         let model = WikiStoreModel(store: store)
         #expect(model.isSourceIngested(raw) == false)
 
-        model.markSourceIngested(id: raw.id)
+        await model.markSourceIngested(id: raw.id)
         await model.bootstrapFromStore()
 
         #expect(model.isSourceIngested(raw) == true)

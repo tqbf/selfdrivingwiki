@@ -63,12 +63,12 @@ struct ChatOutlineRehydrationHostedTests {
             }
         }
         let store = session.store
-        let chat = try store.internalStore.createChat(
+        let chat = try await store.internalStore.createChat(
             kind: .edit,
             title: "Outline Rehydration"
         )
         let turnID = ChatTurnID(rawValue: "outline-turn")
-        let persisted = try store.internalStore.appendChatTranscriptItems(
+        let persisted = try await store.internalStore.appendChatTranscriptItems(
             chatID: chat.id,
             items: [
                 .message(ChatTranscriptMessageItem(
@@ -88,7 +88,7 @@ struct ChatOutlineRehydrationHostedTests {
             ]
         )
         #expect(persisted.count == 2)
-        let transcriptPage = store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
+        let transcriptPage = await store.readChatTranscriptPage(chatID: chat.id, after: nil, limit: 10)
         #expect(transcriptPage.items.count == 2)
         store.reloadChats()
         store.openTab(.chat(chat.id))

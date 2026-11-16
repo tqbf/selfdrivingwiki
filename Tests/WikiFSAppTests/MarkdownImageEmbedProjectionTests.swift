@@ -272,7 +272,7 @@ struct MarkdownImageTargetProjectionTests {
 
     @Test("page canonical source image path uses typed renderer DOM output")
     @MainActor
-    func pageCanonicalSourcePathUsesTypedRendererDOMOutput() throws {
+    func pageCanonicalSourcePathUsesTypedRendererDOMOutput() async throws {
         let store = try GRDBWikiStore(databaseURL: temporaryDatabaseURL())
         let bytes = Data(##"{"type":"excalidraw","version":2,"elements":[{"type":"rectangle","x":0,"y":0,"width":80,"height":40,"angle":0,"strokeColor":"#112233","backgroundColor":"#ffffff","strokeWidth":2,"opacity":100,"roundness":null,"isDeleted":false}]}"##.utf8)
         let source = try store.addSource(
@@ -311,7 +311,7 @@ struct MarkdownImageTargetProjectionTests {
                 context: context,
                 sources: model.sources,
                 bookmarkNodes: model.bookmarkNodes))
-            let targets = WikiReaderRep.Coordinator.markdownImageTargets(
+            let targets = await WikiReaderRep.Coordinator.markdownImageTargets(
                 siblingSourceMap: sourceMap,
                 store: store,
                 installedDescriptors: [descriptor])
@@ -413,7 +413,7 @@ struct MarkdownImageTargetProjectionTests {
 
     @Test("source candidate selection excludes media unsupported MIME and page winners")
     @MainActor
-    func sourceCandidateSelectionAvoidsUnneededContentReads() throws {
+    func sourceCandidateSelectionAvoidsUnneededContentReads() async throws {
         let eligibleID = SourceID(rawValue: "01HCANDIDATEELIGIBLE00000001")
         let mermaidID = SourceID(rawValue: "01HCANDIDATEMERMAID00000001")
         let externalID = SourceID(rawValue: "01HCANDIDATEEXTERNAL0000001")
@@ -472,7 +472,7 @@ struct MarkdownImageTargetProjectionTests {
 
     @Test("missing oversized and untrusted metadata never materialize image bytes")
     @MainActor
-    func rejectedMetadataNeverReadsImageBytes() throws {
+    func rejectedMetadataNeverReadsImageBytes() async throws {
         let sourceID = SourceID(rawValue: "01HIMAGEPROJECTION0000000001")
         let version = SourceVersion(
             id: SourceVersionID(rawValue: "01HIMAGEVERSION00000000001"),
@@ -490,7 +490,7 @@ struct MarkdownImageTargetProjectionTests {
 
         for byteCount in rejectedCounts {
             var readCalls = 0
-            let source = try WikiReaderRep.Coordinator.pinnedImageSource(
+            let source = try await WikiReaderRep.Coordinator.pinnedImageSource(
                 sourceID: sourceID,
                 version: version,
                 inputByteCount: { _ in byteCount },
@@ -503,7 +503,7 @@ struct MarkdownImageTargetProjectionTests {
         }
 
         var untrustedReadCalls = 0
-        let untrustedSource = try WikiReaderRep.Coordinator.pinnedImageSource(
+        let untrustedSource = try await WikiReaderRep.Coordinator.pinnedImageSource(
             sourceID: SourceID(rawValue: "01HUNTRUSTEDSOURCE000000001"),
             version: version,
             inputByteCount: { _ in Self.jsonCanvasBytes.count },

@@ -102,7 +102,7 @@ struct PageDetailViewHostedTests {
         // The shared "Add Page" entry point (welcome screen button + sidebar +,
         // both routed through `newPageInNewTab`). This sets the new tab's
         // `isEditing = true` and switches selection to it.
-        model.newPageInNewTab(title: "Brand New Page")
+        await model.newPageInNewTab(title: "Brand New Page")
         #expect(model.activeTab?.isEditing == true)
 
         let view = try makeHostedPageDetailView(store: model)
@@ -117,7 +117,7 @@ struct PageDetailViewHostedTests {
     @Test
     func navigationOpenedPage_mountsPageDetailViewInReaderMode() async throws {
         let store = try StoreBackend.current.makeStore(databaseURL: try tempDatabaseURL())
-        let existing = try store.createPage(title: "Existing Page")
+        let existing = try await store.createPage(title: "Existing Page")
         let model = WikiStoreModel(store: store)
         await model.bootstrapFromStore()
 

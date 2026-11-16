@@ -351,7 +351,7 @@ struct QuoteHighlightWebViewTests {
         let body = "<p>The data show a clear improvement in throughput.</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
-        let (store, selection) = try storeWithPendingQuoteAnchor(quote: "clear improvement")
+        let (store, selection) = try await storeWithPendingQuoteAnchor(quote: "clear improvement")
         let coordinator = WikiReaderRep.Coordinator()
         coordinator.store = store
         coordinator.currentSelection = selection
@@ -372,7 +372,7 @@ struct QuoteHighlightWebViewTests {
         let body = "<p>alpha beta gamma</p>"
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
 
-        let (store, selection) = try storeWithPendingQuoteAnchor(quote: "beta")
+        let (store, selection) = try await storeWithPendingQuoteAnchor(quote: "beta")
         let coordinator = WikiReaderRep.Coordinator()
         coordinator.store = store
         coordinator.currentSelection = selection
@@ -392,10 +392,10 @@ struct QuoteHighlightWebViewTests {
     /// A store with a source selected + a pending quote anchor (the state a
     /// clicked `[[source:paper#"quote"]]` produces via `selectSource`).
     @MainActor
-    private func storeWithPendingQuoteAnchor(quote: String) throws -> (WikiStoreModel, WikiSelection) {
+    private func storeWithPendingQuoteAnchor(quote: String) async throws -> (WikiStoreModel, WikiSelection) {
         let store = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: URL.temporaryDirectory.appending(path: "coord-\(UUID().uuidString).sqlite")))
-        store.addSource(filename: "paper.md", data: Data("# Paper\n".utf8))
-        store.selectSource(byDisplayName: "paper", anchor: "\"\(quote)\"")
+        await store.addSource(filename: "paper.md", data: Data("# Paper\n".utf8))
+        await store.selectSource(byDisplayName: "paper", anchor: "\"\(quote)\"")
         return (store, store.selection!)
     }
 
@@ -442,11 +442,11 @@ struct QuoteHighlightWebViewTests {
         let dbURL = URL.temporaryDirectory.appending(path: "hosted-\(UUID().uuidString).sqlite")
         let store = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: dbURL))
         let markdown = "# Paper\n\nThe data show a clear improvement in throughput."
-        store.addSource(filename: "paper.md", data: Data(markdown.utf8))
+        await store.addSource(filename: "paper.md", data: Data(markdown.utf8))
 
         // Drive the real navigation seam: sets selection + a pending quote anchor,
         // exactly as a clicked `[[source:paper#"clear improvement"]]` does.
-        store.selectSource(byDisplayName: "paper", anchor: "\"clear improvement\"")
+        await store.selectSource(byDisplayName: "paper", anchor: "\"clear improvement\"")
 
         let view = WikiReaderView(markdown: markdown, currentSelection: store.selection, store: store)
         let lease = try await HostedAppKitTestGate.shared.acquire()

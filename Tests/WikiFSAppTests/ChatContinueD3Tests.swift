@@ -218,7 +218,7 @@ struct ChatContinueD3Tests {
         // Simulate the continue path's STORE effect: append the new session's
         // events to the SAME chat row (this is what the transcript sink does).
         // The builder produces the first prompt from the persisted history.
-        let history = model.chatMessages(chatID: chat.id)
+        let history = await model.chatMessages(chatID: chat.id)
         let firstPrompt = AgentOperationRunner.continuationPreamble(
             from: history, newMessage: "follow up question")
         #expect(firstPrompt.contains("first question"))
@@ -232,7 +232,7 @@ struct ChatContinueD3Tests {
         ])
         model.reloadChats()
 
-        let after = model.chatMessages(chatID: chat.id)
+        let after = await model.chatMessages(chatID: chat.id)
         // Seq continues: 0,1 (original) + 2,3 (continue) = 4 rows.
         #expect(after.count == 4)
         #expect(after.map(\.seq) == [0, 1, 2, 3])

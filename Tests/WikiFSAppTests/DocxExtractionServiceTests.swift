@@ -32,7 +32,7 @@ struct DocxExtractionServiceTests {
         #expect(version.content.contains("# Fixture Heading One"))
         // The new version becomes the head the staging path and the provenance
         // chip read.
-        #expect(model.processedMarkdownHead(for: source)?.id == version.id)
+        #expect(await model.processedMarkdownHead(for: source)?.id == version.id)
     }
 
     @Test("empty extractor output returns nil and seeds nothing")
@@ -44,7 +44,7 @@ struct DocxExtractionServiceTests {
             for: source.id,
             extractor: StubDocxExtractor(result: DocxExtractionResult(markdown: "", warnings: [])))
         #expect(version == nil)
-        #expect(model.processedMarkdownHead(for: source) == nil)
+        #expect(await model.processedMarkdownHead(for: source) == nil)
     }
 
     @Test("a registered docx extraction recognizes a dropped .docx, not a zip")
@@ -142,7 +142,7 @@ struct DocxExtractionServiceTests {
 
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(5))
-        while model.processedMarkdownHead(for: source) == nil {
+        while await model.processedMarkdownHead(for: source) == nil {
             guard clock.now < deadline else {
                 Issue.record("auto extraction did not land within the time limit")
                 return
@@ -176,8 +176,8 @@ struct DocxExtractionServiceTests {
 
         // The TYPE predicate stays false for docx by design (raw docx bytes
         // are never staged), so a head-less docx is not ingestible…
-        #expect(model.shouldAutoIngest(source) == false)
-        #expect(model.isIngestible(source) == false)
+        #expect(await model.shouldAutoIngest(source) == false)
+        #expect(await model.isIngestible(source) == false)
 
         // …but once the import extraction produces a head, the source is
         // ingestable — the head is what stages.
@@ -188,8 +188,8 @@ struct DocxExtractionServiceTests {
                 warnings: [])))
         }
         await model.runImportExtraction(sourceID: source.id, kind: .docx)
-        #expect(model.processedMarkdownHead(for: source) != nil)
-        #expect(model.isIngestible(source) == true)
+        #expect(await model.processedMarkdownHead(for: source) != nil)
+        #expect(await model.isIngestible(source) == true)
     }
 
     @Test("import auto-extraction seeds a markdown head when the registration is active")
@@ -203,7 +203,7 @@ struct DocxExtractionServiceTests {
 
         // No provider wired → the gate closes, nothing runs.
         await model.runImportExtraction(sourceID: source.id, kind: .docx)
-        #expect(model.processedMarkdownHead(for: source) == nil)
+        #expect(await model.processedMarkdownHead(for: source) == nil)
 
         // With the registration's extractor wired, the import conversion
         // seeds the markdown head with the package producer.
@@ -219,7 +219,7 @@ struct DocxExtractionServiceTests {
         }
         await model.runImportExtraction(sourceID: source.id, kind: .docx)
 
-        let head = try #require(model.processedMarkdownHead(for: source))
+        let head = try #require(await model.processedMarkdownHead(for: source))
         #expect(head.content.contains("# Auto extracted"))
         #expect(head.technique == "extractor-package:org.selfdrivingwiki.docx2md")
     }

@@ -93,7 +93,7 @@ struct DaemonStoreEventBusTests {
         bus.subscribe(nil) { collector.append($0) }
 
         // A real mutating write routes through mutate() → emit on the bus.
-        _ = try store.createPage(title: "SignalProbe")
+        _ = try await store.createPage(title: "SignalProbe")
 
         try await collector.awaitCount(1)
         #expect(collector.count >= 1)
@@ -118,7 +118,7 @@ struct DaemonStoreEventBusTests {
         _ = bus.subscribe(nil) { a.append($0) }
         _ = bus.subscribe(nil) { b.append($0) }
 
-        _ = try store.createPage(title: "MultiProbe")
+        _ = try await store.createPage(title: "MultiProbe")
 
         try await a.awaitCount(1)
         try await b.awaitCount(1)

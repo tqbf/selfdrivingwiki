@@ -236,14 +236,17 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
         case .wiki:
             return try await wikiReply(for: request)
         case .store:
-            // Phase 2a slice 1 declares the family (the envelope shape never
-            // changes); the executor that serves it lands in slice 2b
-            // (plans/daemon-only-access.md §Phase 2). Until then every store
-            // operation answers the typed `unavailable` reply — never a
-            // transport failure, never a local fallback.
-            throw DaemonDomainError(
-                code: .unavailable,
-                message: "the store family is not served by this daemon build yet")
+            // Phase 2b slice 1 (plans/daemon-only-access.md §Phase 2): the
+            // executor serves the family — small payload ops, the staged
+            // payload infra, and resolveOutcome (list/blob/event producers
+            // answer typed `unavailable` until their slices). A store-level
+            // failure rides INSIDE the DaemonStoreReply envelope; only a
+            // malformed outer envelope / unknown operation is a domain-level
+            // `invalidRequest`. The frame-cap net below stays as the last
+            // resort for an oversized reply.
+            return Self.encodedReply(
+                await daemon.storeCommandExecutor()
+                    .handleStoreOperation(request))
         case .page, .source, .chat, .bookmark, .workspace,
              .strategy, .log, .admin, .extractor:
             // Phase 3+4 command families: the daemon executes the CLI's

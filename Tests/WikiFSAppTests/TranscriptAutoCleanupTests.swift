@@ -150,7 +150,7 @@ struct TranscriptAutoCleanupTests {
         #expect(agent.callCount == 1)
         #expect(agent.lastInput == "uh um RAW CAPTIONS")
 
-        let head = try #require(try model.internalStore.processedMarkdownHead(
+        let head = try #require(try await model.internalStore.processedMarkdownHead(
             sourceID: sourceID))
         #expect(head.content == "Cleaned captions.")
         #expect(head.origin == .transcript)
@@ -161,9 +161,9 @@ struct TranscriptAutoCleanupTests {
         // (cleanup is best-effort on top of a completed extraction).
         let rawVersionID = try #require(head.parentID)
         #expect(rawVersionID.rawValue == reference?.versionID)
-        #expect(try model.internalStore.processedMarkdownHistory(sourceID: sourceID)
+        await #expect(try model.internalStore.processedMarkdownHistory(sourceID: sourceID)
             .contains(where: { $0.id == rawVersionID }))
-        #expect(try model.internalStore.processedMarkdownHistory(sourceID: sourceID)
+        await #expect(try model.internalStore.processedMarkdownHistory(sourceID: sourceID)
             .contains(where: { $0.content == "uh um RAW CAPTIONS" }))
     }
 
@@ -179,7 +179,7 @@ struct TranscriptAutoCleanupTests {
             resolution: try Self.youtubeResolution(), outcome: Self.outcome())
 
         #expect(agent.callCount == 0)
-        let head = try #require(try model.internalStore.processedMarkdownHead(
+        let head = try #require(try await model.internalStore.processedMarkdownHead(
             sourceID: sourceID))
         #expect(head.content == "uh um RAW CAPTIONS")
     }
@@ -198,12 +198,12 @@ struct TranscriptAutoCleanupTests {
             resolution: try Self.youtubeResolution(), outcome: Self.outcome())
 
         #expect(agent.callCount == 1)
-        let head = try #require(try model.internalStore.processedMarkdownHead(
+        let head = try #require(try await model.internalStore.processedMarkdownHead(
             sourceID: sourceID))
         #expect(head.content == "uh um RAW CAPTIONS")
         #expect(head.id.rawValue == reference?.versionID)
         // No cleaned version was appended.
-        #expect(try model.internalStore.processedMarkdownHistory(sourceID: sourceID).count == 1)
+        await #expect(try model.internalStore.processedMarkdownHistory(sourceID: sourceID).count == 1)
     }
 
     // MARK: - Empty transcript

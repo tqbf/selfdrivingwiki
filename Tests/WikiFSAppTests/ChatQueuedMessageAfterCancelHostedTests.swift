@@ -196,7 +196,7 @@ struct ChatQueuedMessageAfterCancelHostedTests {
             ).save(to: providersDirectory)
 
             // The durable chat the view opens; the daemon reads the same file.
-            session.store.beginNewChat()
+            await session.store.beginNewChat()
             guard case .chat(let chatID) = session.store.selection else {
                 throw FixtureError.noChatRoute
             }

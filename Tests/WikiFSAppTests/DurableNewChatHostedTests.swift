@@ -122,12 +122,12 @@ struct DurableNewChatHostedTests {
         store.reloadFromStore()
 
         // Durable creation: the row is persisted before the tab opens.
-        store.beginNewChat()
+        await store.beginNewChat()
         guard case .chat(let chatID) = store.selection else {
             Issue.record("beginNewChat must open a .chat route")
             return
         }
-        #expect(store.resolveChat(id: chatID) != .notFound)
+        #expect(await store.resolveChat(id: chatID) != .notFound)
 
         let (_, window) = mount(ChatDetailRouteView(
             store: store, session: session,
@@ -152,7 +152,7 @@ struct DurableNewChatHostedTests {
         let navigatedBack = await waitUntil { self.hasComposer(in: hostingView) }
         #expect(navigatedBack, "returning to the empty chat must re-render its surface")
         #expect(store.selection == .chat(chatID))
-        #expect(store.resolveChat(id: chatID) != .notFound)
+        #expect(await store.resolveChat(id: chatID) != .notFound)
     }
 
     /// Probe validation at the presentation level (SwiftUI static text is not

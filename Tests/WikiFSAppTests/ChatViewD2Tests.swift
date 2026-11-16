@@ -83,8 +83,8 @@ struct ChatViewD2Tests {
         // hide the row. Assert the resolution contract: the row is AVAILABLE
         // under the created ID. (Comparing the full ChatSummary value would
         // pin the store's timestamp round-trip, not the cache rule.)
-        guard case .available(let resolved) = model.resolveChat(id: chat.id) else {
-            Issue.record("resolveChat did not find the persisted chat: \(model.resolveChat(id: chat.id))")
+        guard case .available(let resolved) = await model.resolveChat(id: chat.id) else {
+            Issue.record("resolveChat did not find the persisted chat for \(chat.id)")
             return
         }
         #expect(resolved.id == chat.id)
@@ -95,7 +95,7 @@ struct ChatViewD2Tests {
         let (model, _) = try tempModel()
         let missingID = ChatID(rawValue: "01J" + String(repeating: "Z", count: 22))
 
-        #expect(model.resolveChat(id: missingID) == .notFound)
+        #expect(await model.resolveChat(id: missingID) == .notFound)
     }
 
     @Test func activeChatID_isNil_byDefault() {
@@ -186,8 +186,8 @@ struct ChatViewD2Tests {
 
     @Test func retargetTab_preservesTabOrder() async throws {
         let (model, store) = try tempModel()
-        let pageA = try store.createPage(title: "A")
-        let pageB = try store.createPage(title: "B")
+        let pageA = try await store.createPage(title: "A")
+        let pageB = try await store.createPage(title: "B")
         await model.bootstrapFromStore()
         model.openTab(.page(pageA.id))
         model.openTab(.newChat)
@@ -310,7 +310,7 @@ struct ChatViewD2Tests {
         ])
         model.reloadChats()
 
-        let messages = model.chatMessages(chatID: chat.id)
+        let messages = await model.chatMessages(chatID: chat.id)
         #expect(messages.count == 2)
         #expect(messages[0].event == .userText("hello"))
         #expect(messages[1].event == .assistantText("hi there"))

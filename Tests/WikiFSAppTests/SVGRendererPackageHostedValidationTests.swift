@@ -65,8 +65,8 @@ struct SVGRendererPackageHostedValidationTests {
         // The reader loads the selected source's content through the store,
         // exactly as a real page surface does. The host-owned document
         // identity admits renderer activation, as on a real page surface.
-        model.addSource(filename: "diagram.md", data: Data(markdown.utf8))
-        #expect(model.selectSource(byDisplayName: "diagram"))
+        await model.addSource(filename: "diagram.md", data: Data(markdown.utf8))
+        await #expect(model.selectSource(byDisplayName: "diagram"))
         let view = WikiReaderView(
             markdown: markdown,
             currentSelection: model.selection,

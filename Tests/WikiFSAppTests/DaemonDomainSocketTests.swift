@@ -329,7 +329,7 @@ struct DaemonDomainSocketTests {
         // source, seeded through the daemon's own admission seam.
         let youtubeSourceID: SourceID = try await {
             let store = try await daemon.domainCommandStore(wikiID: fixture.id)
-            let summary = try store.addSource(
+            let summary = try await store.addSource(
                 filename: "youtube-dQw4w9WgXcQ.mp4",
                 data: Data("video".utf8),
                 detectionHints: ContentTypeDetectionHints(filenameExtension: "mp4"),
@@ -346,7 +346,7 @@ struct DaemonDomainSocketTests {
         }()
         let plainSourceID: SourceID = try await {
             let store = try await daemon.domainCommandStore(wikiID: fixture.id)
-            return try store.addSource(filename: "notes.md", data: Data("text".utf8)).id
+            return try await store.addSource(filename: "notes.md", data: Data("text".utf8)).id
         }()
 
         let workload = try DaemonWorkloadClient(

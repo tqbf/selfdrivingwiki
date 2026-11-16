@@ -126,7 +126,7 @@ struct DiagramEmbedTests {
         let context = WikiRenderContext.build(from: model)
         let activeVersion = try store.activeContentVersion(sourceID: source.id)
         let pinnedVersion = try #require(activeVersion)
-        let projectedSource = try WikiReaderRep.Coordinator.pinnedImageSource(
+        let projectedSource = try await WikiReaderRep.Coordinator.pinnedImageSource(
             sourceID: source.id,
             version: pinnedVersion,
             fileExtension: "json",
@@ -141,13 +141,13 @@ struct DiagramEmbedTests {
         #expect(package.manifest.descriptors.count == 1)
         let descriptor = try #require(package.manifest.descriptors.first)
         let markdown = "![[source:\(source.id.rawValue)|Excalidraw architecture]]"
-        let candidates = WikiReaderRep.Coordinator.sourceRendererCandidates(
+        let candidates = await WikiReaderRep.Coordinator.sourceRendererCandidates(
             markdown: markdown,
             context: context,
             store: store,
             installedDescriptors: [descriptor])
         #expect(candidates[source.id]?.input == .source(pinnedSource))
-        let bareCandidates = WikiReaderRep.Coordinator.sourceRendererCandidates(
+        let bareCandidates = await WikiReaderRep.Coordinator.sourceRendererCandidates(
             markdown: "![[Excalidraw Architecture]]",
             context: context,
             store: store,

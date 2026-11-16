@@ -143,8 +143,8 @@ struct PageContextMenuTests {
 
     @Test func historyEnablesBackThenForward() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
         await model.bootstrapFromStore()
         model.select(.page(a.id))
         model.select(.page(b.id))
@@ -167,9 +167,9 @@ struct PageContextMenuTests {
 
     @Test func backNavigatesExactlyOneStep() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
         await model.bootstrapFromStore()
         model.select(.page(a.id))
         model.select(.page(b.id))
@@ -185,8 +185,8 @@ struct PageContextMenuTests {
 
     @Test func forwardNavigatesExactlyOneStep() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
         await model.bootstrapFromStore()
         model.select(.page(a.id))
         model.select(.page(b.id))
@@ -215,7 +215,7 @@ struct PageContextMenuTests {
 
     @Test func readerPageMenuMatchesSafariOrderAndKeepsShare() async throws {
         let (model, store) = try tempModel()
-        let page = try store.createPage(title: "A")
+        let page = try await store.createPage(title: "A")
         await model.bootstrapFromStore()
         let webView = WikiReaderWebView()
         webView.store = model

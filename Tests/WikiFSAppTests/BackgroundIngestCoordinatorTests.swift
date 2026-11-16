@@ -44,8 +44,8 @@ struct BackgroundIngestCoordinatorTests {
     /// A byte-bearing PNG with real magic bytes. `ContentSniff` returns
     /// `image/png`, so this is the exact shape of the bug source.
     @discardableResult
-    private func addPNG(to model: WikiStoreModel) -> SourceSummary {
-        model.addSource(
+    private func addPNG(to model: WikiStoreModel) async -> SourceSummary {
+        await model.addSource(
             filename: "diagram.png",
             data: Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
         await model.bootstrapFromStore()
@@ -56,8 +56,8 @@ struct BackgroundIngestCoordinatorTests {
     /// `application/xml` on macOS, which the registry classifies as
     /// `.binary` (§11-C3 XML exclusion).
     @discardableResult
-    private func addXML(to model: WikiStoreModel) -> SourceSummary {
-        model.addSource(
+    private func addXML(to model: WikiStoreModel) async -> SourceSummary {
+        await model.addSource(
             filename: "feed.xml",
             data: Data("<?xml version=\"1.0\"?><foo/>".utf8))
         await model.bootstrapFromStore()
@@ -65,15 +65,15 @@ struct BackgroundIngestCoordinatorTests {
     }
 
     @discardableResult
-    private func addPDF(to model: WikiStoreModel) -> SourceSummary {
-        model.addSource(filename: "paper.pdf", data: Data("%PDF-1.4\n".utf8))
+    private func addPDF(to model: WikiStoreModel) async -> SourceSummary {
+        await model.addSource(filename: "paper.pdf", data: Data("%PDF-1.4\n".utf8))
         await model.bootstrapFromStore()
         return model.sources.first(where: { $0.ext == "pdf" })!
     }
 
     @discardableResult
-    private func addMarkdown(to model: WikiStoreModel) -> SourceSummary {
-        model.addSource(filename: "notes.md", data: Data("# Title\n\nbody".utf8))
+    private func addMarkdown(to model: WikiStoreModel) async -> SourceSummary {
+        await model.addSource(filename: "notes.md", data: Data("# Title\n\nbody".utf8))
         await model.bootstrapFromStore()
         return model.sources.first(where: { $0.ext == "md" })!
     }
@@ -111,56 +111,56 @@ struct BackgroundIngestCoordinatorTests {
     // MARK: - Per-source decision (ingestionDecision)
 
     @Test("PNG source is not enqueued (registry excludes image/*)")
-    func pngIsNotIngestible() throws {
+    func pngIsNotIngestible() async throws {
         let model = WikiStoreModel(store: try tempStore())
-        let png = addPNG(to: model)
+        let png = await addPNG(to: model)
 
         // Sanity: the source has bytes (so the old byte-only gate would have
         // let it through — that's the bug).
         #expect(png.byteSize > 0)
-        #expect(model.canIngest(png))
+        #expect(await model.canIngest(png))
 
         // The registry gate filters it out BEFORE the byte gate runs.
-        let decision = BackgroundIngestCoordinator.ingestionDecision(for: png, store: model)
+        let decision = await BackgroundIngestCoordinator.ingestionDecision(for: png, store: model)
         #expect(decision == .skipNonIngestible(kind: .image))
     }
 
     @Test("XML source is not enqueued (application/xml → .binary)")
-    func xmlIsNotIngestible() throws {
+    func xmlIsNotIngestible() async throws {
         let model = WikiStoreModel(store: try tempStore())
-        let xml = addXML(to: model)
+        let xml = await addXML(to: model)
 
         #expect(xml.byteSize > 0)
-        #expect(model.canIngest(xml))
+        #expect(await model.canIngest(xml))
 
         // The XML exclusion (§11-C3) routes application/xml → .binary.
-        let decision = BackgroundIngestCoordinator.ingestionDecision(for: xml, store: model)
+        let decision = await BackgroundIngestCoordinator.ingestionDecision(for: xml, store: model)
         #expect(decision == .skipNonIngestible(kind: .binary))
     }
 
     @Test("PDF without extracted markdown is enqueued (extraction then ingest)")
-    func pdfIsEnqueued() throws {
+    func pdfIsEnqueued() async throws {
         let model = WikiStoreModel(store: try tempStore())
-        let pdf = addPDF(to: model)
+        let pdf = await addPDF(to: model)
 
         #expect(pdf.byteSize > 0)
-        #expect(!model.hasProcessedMarkdown(for: pdf.id))
+        #expect(await !model.hasProcessedMarkdown(for: pdf.id))
 
-        let decision = BackgroundIngestCoordinator.ingestionDecision(for: pdf, store: model)
+        let decision = await BackgroundIngestCoordinator.ingestionDecision(for: pdf, store: model)
         #expect(decision == .enqueue)
     }
 
     @Test("Native markdown is enqueued (already the content)")
-    func markdownIsEnqueued() throws {
+    func markdownIsEnqueued() async throws {
         let model = WikiStoreModel(store: try tempStore())
-        let md = addMarkdown(to: model)
+        let md = await addMarkdown(to: model)
 
-        let decision = BackgroundIngestCoordinator.ingestionDecision(for: md, store: model)
+        let decision = await BackgroundIngestCoordinator.ingestionDecision(for: md, store: model)
         #expect(decision == .enqueue)
     }
 
     @Test("Byteless YouTube WITHOUT transcript is skipped as byteless")
-    func youtubeWithoutTranscriptIsSkipped() throws {
+    func youtubeWithoutTranscriptIsSkipped() async throws {
         let store = try tempStore()
         _ = try addBytelessYouTube(to: store, withTranscript: false)
         let model = WikiStoreModel(store: store)
@@ -168,18 +168,18 @@ struct BackgroundIngestCoordinatorTests {
 
         let yt = try #require(model.sources.first)
         #expect(yt.byteSize == 0)
-        #expect(!model.canIngest(yt))  // byteless + no transcript → canIngest false
+        #expect(await !model.canIngest(yt))  // byteless + no transcript → canIngest false
 
         // The registry gate says YES (provider wins for byteless embeds: the
         // synthetic `video/youtube` mime alone would classify as `.binary`,
         // but `.youtube` provider → `.youtubeTranscript`). The byteless guard
         // catches it though — no transcript → no content to stage.
-        let decision = BackgroundIngestCoordinator.ingestionDecision(for: yt, store: model)
+        let decision = await BackgroundIngestCoordinator.ingestionDecision(for: yt, store: model)
         #expect(decision == .skipByteless)
     }
 
     @Test("Byteless YouTube WITH transcript is enqueued (C5 — transcript seeded)")
-    func youtubeWithTranscriptIsEnqueued() throws {
+    func youtubeWithTranscriptIsEnqueued() async throws {
         // Per §11-C5: the test description must say "YouTube WITH transcript"
         // and seed a transcript via `appendProcessedMarkdown` BEFORE the
         // decision is run. A byteless YouTube WITHOUT a transcript is
@@ -191,22 +191,22 @@ struct BackgroundIngestCoordinatorTests {
 
         let yt = try #require(model.sources.first)
         #expect(yt.byteSize == 0)               // still byteless…
-        #expect(model.hasProcessedMarkdown(for: yt.id))  // …but has a transcript now
-        #expect(model.canIngest(yt))
+        #expect(await model.hasProcessedMarkdown(for: yt.id))  // …but has a transcript now
+        #expect(await model.canIngest(yt))
 
-        let decision = BackgroundIngestCoordinator.ingestionDecision(for: yt, store: model)
+        let decision = await BackgroundIngestCoordinator.ingestionDecision(for: yt, store: model)
         #expect(decision == .enqueue)
     }
 
     // MARK: - Batch filter (filterIngestibleSources)
 
     @Test("Mixed batch: only PDF + markdown are enqueued, PNG and XML dropped")
-    func batchFilterDropsPNGandXML() throws {
+    func batchFilterDropsPNGandXML() async throws {
         let model = WikiStoreModel(store: try tempStore())
-        let png = addPNG(to: model)
-        let xml = addXML(to: model)
-        let pdf = addPDF(to: model)
-        let md = addMarkdown(to: model)
+        let png = await addPNG(to: model)
+        let xml = await addXML(to: model)
+        let pdf = await addPDF(to: model)
+        let md = await addMarkdown(to: model)
 
         let enqueued = await BackgroundIngestCoordinator.filterIngestibleSources(
             model.sources, store: model)
@@ -218,7 +218,7 @@ struct BackgroundIngestCoordinatorTests {
     }
 
     @Test("Mixed batch: YouTube-with-transcript kept, YouTube-without dropped")
-    func batchFilterDistinguishesTranscriptPresence() throws {
+    func batchFilterDistinguishesTranscriptPresence() async throws {
         // Use distinct video IDs — `addBytelessSource` dedups on external_identity.
         let store = try tempStore()
         let ytWith = try addBytelessYouTube(to: store, videoID: "dQw4w9WgXcQ", withTranscript: true)

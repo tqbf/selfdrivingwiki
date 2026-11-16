@@ -130,6 +130,10 @@ struct DaemonWorkloadClientTimeoutTests {
         func resetChatDiagnostics(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
         func resolveChatPermission(request: Data, reply: @escaping () -> Void) { reply() }
         func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
+
+        func storeOperation(_ wikiID: String, request: Data, reply: @escaping (Data) -> Void) {
+            reply(Data())
+        }
     }
 
     private func makeOwnershipReplyData(epoch: UInt64 = 7) throws -> Data {

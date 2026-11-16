@@ -39,7 +39,7 @@ import WikiFSTypes
 
     @MainActor
     @Test("preflight refusal cannot complete a queue item")
-    func preflightRefusalThrowsActionableFailure() {
+    func preflightRefusalThrowsActionableFailure() async {
         do {
             try AppQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: nil,
@@ -61,7 +61,7 @@ import WikiFSTypes
     /// stamped sources ingested.
     @MainActor
     @Test("launch failure with exit status -1 and zero turns cannot complete (#1354)")
-    func launchFailureWithExitStatusCannotComplete() {
+    func launchFailureWithExitStatusCannotComplete() async {
         do {
             try AppQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
@@ -86,7 +86,7 @@ import WikiFSTypes
     /// death is a fact the validator cannot know.
     @MainActor
     @Test("no turn failure with negative exit reports an abort, not a death (#1364)")
-    func nonzeroExitWithoutTurnFailureStillFails() {
+    func nonzeroExitWithoutTurnFailureStillFails() async {
         do {
             try AppQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: -1,
@@ -103,7 +103,7 @@ import WikiFSTypes
 
     @MainActor
     @Test("nonzero positive exit without turn failure reports an abort (#1364)")
-    func positiveExitWithoutTurnFailureReportsAbort() {
+    func positiveExitWithoutTurnFailureReportsAbort() async {
         do {
             try AppQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: 1,
@@ -172,7 +172,7 @@ import WikiFSTypes
     /// file.
     @MainActor
     @Test("stampIngestedSources stamps only the staged sources (#1344)")
-    func stampIngestedSourcesStampsOnlyStagedSources() throws {
+    func stampIngestedSourcesStampsOnlyStagedSources() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-app-provider-stamp-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -181,7 +181,7 @@ import WikiFSTypes
         let bytesUnavailable = try store.addSource(filename: "gone.pdf", data: Data("%PDF gone".utf8))
         let model = WikiStoreModel(store: store)
 
-        AppQueueIngestionProvider.stampIngestedSources(
+        await AppQueueIngestionProvider.stampIngestedSources(
             requested: [
                 (id: staged.id, outcome: .staged(name: "staged.pdf")),
                 (id: bytesUnavailable.id, outcome: .bytesUnavailable),
@@ -194,7 +194,7 @@ import WikiFSTypes
 
     @MainActor
     @Test("cancelled attempt does not stamp staged sources")
-    func cancelledAttemptDoesNotStampStagedSources() throws {
+    func cancelledAttemptDoesNotStampStagedSources() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-app-provider-cancel-stamp-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -202,7 +202,7 @@ import WikiFSTypes
         let staged = try store.addSource(filename: "staged.pdf", data: Data("%PDF staged".utf8))
         let model = WikiStoreModel(store: store)
 
-        AppQueueIngestionProvider.stampIngestedSources(
+        await AppQueueIngestionProvider.stampIngestedSources(
             requested: [(id: staged.id, outcome: .staged(name: "staged.pdf"))],
             store: model,
             attemptSucceeded: false)
@@ -212,7 +212,7 @@ import WikiFSTypes
 
     @MainActor
     @Test("failed launcher outcome after staging does not stamp sources")
-    func failedLauncherOutcomeDoesNotStampStagedSources() throws {
+    func failedLauncherOutcomeDoesNotStampStagedSources() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-app-provider-failed-stamp-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -227,7 +227,7 @@ import WikiFSTypes
                 turnFailure: .none)
             Issue.record("Expected failed launcher outcome")
         } catch QueueIngestionError.spawnFailed {
-            AppQueueIngestionProvider.stampIngestedSources(
+            await AppQueueIngestionProvider.stampIngestedSources(
                 requested: [(id: staged.id, outcome: .staged(name: "staged.pdf"))],
                 store: model,
                 attemptSucceeded: false)

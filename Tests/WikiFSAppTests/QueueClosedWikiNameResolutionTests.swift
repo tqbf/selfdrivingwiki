@@ -849,7 +849,7 @@ struct QueueClosedWikiNameResolutionTests {
     @Test func ingestionEnqueueRecordsSourceEffectiveNames() async throws {
         let store = try TestStoreFactory.inMemory()
         let model = WikiStoreModel(store: store)
-        model.addSource(filename: "notes.md", data: Data("# Heading\n\nbody".utf8))
+        await model.addSource(filename: "notes.md", data: Data("# Heading\n\nbody".utf8))
         await model.bootstrapFromStore()
         let md = try #require(model.sources.first)
         let queueStore = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))

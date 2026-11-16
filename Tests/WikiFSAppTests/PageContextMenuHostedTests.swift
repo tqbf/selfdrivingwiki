@@ -57,8 +57,8 @@ struct PageContextMenuHostedTests {
         defer { lease.release() }
         _ = Self.app
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
         await model.bootstrapFromStore()
         model.select(.page(a.id))
         model.select(.page(b.id))

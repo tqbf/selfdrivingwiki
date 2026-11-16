@@ -106,10 +106,10 @@ struct InspectorOutlineHostedTests {
 
         Deepest heading for the outline.
         """
-        let first = try store.createPage(title: "Outline Repro First")
-        try store.updatePage(id: first.id, title: "Outline Repro First", body: markdown)
-        let second = try store.createPage(title: "Outline Repro Second")
-        try store.updatePage(id: second.id, title: "Outline Repro Second", body: markdown)
+        let first = try await store.createPage(title: "Outline Repro First")
+        try await store.updatePage(id: first.id, title: "Outline Repro First", body: markdown)
+        let second = try await store.createPage(title: "Outline Repro Second")
+        try await store.updatePage(id: second.id, title: "Outline Repro Second", body: markdown)
         await model.bootstrapFromStore()
         model.openTab(.page(first.id))
 
@@ -258,11 +258,11 @@ struct InspectorOutlineHostedTests {
 
         let databaseURL = directory.appendingPathComponent("WikiFS.sqlite")
         let store = try StoreBackend.current.makeStore(databaseURL: databaseURL)
-        let source = try store.addSource(
+        let source = try await store.addSource(
             filename: "youtube-iZ_hhezC1mA",
             data: Data("# YouTube Transcript: iZ_hhezC1mA\n".utf8)
         )
-        _ = try store.appendDerivedMarkdown(
+        _ = try await store.appendDerivedMarkdown(
             sourceID: source.id,
             content: Self.transcriptMarkdown,
             origin: .extraction,
@@ -506,12 +506,12 @@ struct InspectorOutlineHostedTests {
 
         let store = try StoreBackend.current.makeStore(
             databaseURL: directory.appendingPathComponent("WikiFS.sqlite"))
-        let page = try store.createPage(title: "Swap Journey Page")
-        try store.updatePage(id: page.id, title: "Swap Journey Page", body: Self.swapPageMarkdown)
-        let source = try store.addSource(
+        let page = try await store.createPage(title: "Swap Journey Page")
+        try await store.updatePage(id: page.id, title: "Swap Journey Page", body: Self.swapPageMarkdown)
+        let source = try await store.addSource(
             filename: "youtube-swap-journey",
             data: Data("# YouTube Transcript: swap\n".utf8))
-        _ = try store.appendDerivedMarkdown(
+        _ = try await store.appendDerivedMarkdown(
             sourceID: source.id,
             content: Self.transcriptMarkdown,
             origin: .extraction,
@@ -521,8 +521,8 @@ struct InspectorOutlineHostedTests {
             toolVersion: nil,
             sourceVersionID: nil,
             note: nil)
-        let chat = try store.createChat(kind: .edit, title: "Swap Journey Chat")
-        _ = try store.appendChatTranscriptItems(
+        let chat = try await store.createChat(kind: .edit, title: "Swap Journey Chat")
+        _ = try await store.appendChatTranscriptItems(
             chatID: chat.id,
             items: [
                 .message(ChatTranscriptMessageItem(
@@ -695,8 +695,8 @@ struct InspectorOutlineHostedTests {
         """
         let store = try StoreBackend.current.makeStore(
             databaseURL: directory.appendingPathComponent("WikiFS.sqlite"))
-        let page = try store.createPage(title: "Caret Page")
-        try store.updatePage(id: page.id, title: "Caret Page", body: markdown)
+        let page = try await store.createPage(title: "Caret Page")
+        try await store.updatePage(id: page.id, title: "Caret Page", body: markdown)
         let model = WikiStoreModel(store: store)
         await model.bootstrapFromStore()
         model.openTab(.page(page.id))
@@ -763,11 +763,11 @@ struct InspectorOutlineHostedTests {
 
         let store = try StoreBackend.current.makeStore(
             databaseURL: directory.appendingPathComponent("WikiFS.sqlite"))
-        let navPage = try store.createPage(title: "Caret Source Nav Page")
-        let source = try store.addSource(
+        let navPage = try await store.createPage(title: "Caret Source Nav Page")
+        let source = try await store.addSource(
             filename: "youtube-caret-journey",
             data: Data("# YouTube Transcript: caret\n".utf8))
-        _ = try store.appendDerivedMarkdown(
+        _ = try await store.appendDerivedMarkdown(
             sourceID: source.id,
             content: Self.transcriptMarkdown,
             origin: .extraction,

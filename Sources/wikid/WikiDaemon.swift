@@ -160,6 +160,81 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     private var registry: WikiRegistry
+
+    // MARK: - Daemon epoch + store-family executor (Phase 2b)
+
+    /// The process-global monotonic counter behind ``daemonEpoch``. Each
+    /// WikiDaemon instance claims the next value at init, so a restarted
+    /// daemon always presents an epoch greater than any previously served
+    /// epoch: a stamped store mutation naming an older epoch is a typed
+    /// rejection, never a silent replay (plan 2a mutation outcome semantics).
+    private static let epochCounter = DaemonEpochCounter()
+
+    /// The epoch this daemon instance serves. Store mutation submissions pin
+    /// it (`DaemonMutationStamp.expectedEpoch`); a mismatch is a typed
+    /// rejection. Read after the counter claim in both initializers, so it
+    /// never aliases a previous instance's value.
+    let daemonEpoch: UInt64
+
+    /// The Phase 2b store-family executor, created lazily under `queue`. The
+    /// daemon owns it (its outcome ledger and staged-payload table live as
+    /// long as the daemon); the executor holds the daemon WEAKLY, so there is
+    /// no retain cycle and ownership stays test-friendly.
+    private var storeExecutorStorage: DaemonStoreCommandExecutor?
+
+    /// The executor for the structured store family (`family: .store`), the
+    /// daemon-side half of plans/daemon-only-access.md Phase 2b. One instance
+    /// per daemon: its mutation-outcome ledger and staged-payload table are
+    /// daemon-scoped state.
+    func storeCommandExecutor() -> DaemonStoreCommandExecutor {
+        if let executor = queue.sync(execute: { storeExecutorStorage }) {
+            return executor
+        }
+        return queue.sync {
+            if let executor = storeExecutorStorage { return executor }
+            let executor = DaemonStoreCommandExecutor(daemon: self)
+            storeExecutorStorage = executor
+            return executor
+        }
+    }
+
+    /// One structured store operation over XPC (plan 2b slice 1): the JSON
+    /// `DaemonStoreRequest` bytes in, the JSON `DaemonDomainReply` envelope
+    /// bytes out (its `payload` carries the `DaemonStoreReply`) — the SAME
+    /// shape the domain-socket path returns, so the client shim decodes one
+    /// reply shape on both transports. Typed failures ride INSIDE the store
+    /// reply, and the final envelope is frame-size pre-flighted (an
+    /// oversized reply is a typed error, never a truncation).
+    func storeOperationData(wikiID: String, request: Data) async -> Data {
+        let domainRequest = DaemonDomainRequest(
+            requestID: "xpc-\(ULID.generate())", family: .store,
+            operation: "store", payload: request)
+        let domainReply = await storeCommandExecutor()
+            .handleStoreOperation(domainRequest, expectedWikiID: wikiID)
+        do {
+            return try DaemonStoreFrameSizing.encodeValidatedReply(domainReply)
+        } catch {
+            DebugLog.store(
+                "wikid: store reply exceeded the frame cap: \(error)")
+            let rejected = DaemonStoreReply(
+                result: nil,
+                error: .unexpected(
+                    "the encoded reply exceeded the transport frame cap — "
+                        + "narrow the read or read the bulk through "
+                        + "payloadRead"))
+            let fallback: Data
+            do {
+                fallback = try DaemonStoreWire.encode(rejected)
+            } catch {
+                // Encode of this fixed-shape value cannot fail; an empty body
+                // is the honest "no reply" and the client surfaces it.
+                DebugLog.store("wikid: frame-cap rejection encode failed: \(error)")
+                fallback = Data()
+            }
+            return fallback
+        }
+    }
+
     #if canImport(WikiFSEngine)
     private var preparedServices: [WikiID: AppServices] = [:]
     private var preparationEpochs: [WikiID: UInt64] = [:]
@@ -350,6 +425,7 @@ final class WikiDaemon: @unchecked Sendable {
         extractionAssembly: ExtractionCompositionOwner.AssemblyFactory? = nil,
         testExtractorCatalog: (any ExtractorPackageCatalogReading)? = nil
     ) {
+        self.daemonEpoch = Self.epochCounter.claimNext()
         self.containerDirectory = containerDirectory
         self.registryPersistence = nil
         self.testFixtureMakeStore = testFixtureMakeStore
@@ -406,6 +482,7 @@ final class WikiDaemon: @unchecked Sendable {
         storeBootstrap: StoreBootstrap = StoreBootstrap(),
         registryPersistence: DaemonRegistryPersistence = DaemonRegistryPersistence()
     ) {
+        self.daemonEpoch = Self.epochCounter.claimNext()
         self.containerDirectory = containerDirectory
         self.registryPersistence = registryPersistence
         self.testFixtureMakeStore = nil

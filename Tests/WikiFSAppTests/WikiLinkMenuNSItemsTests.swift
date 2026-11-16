@@ -104,7 +104,7 @@ struct WikiLinkMenuNSItemsTests {
     /// (issue #1315's chat transcript). The menu action must resolve the
     /// source by display name and open it.
     @Test("Legacy source menu resolves an apostrophe title", .bug(id: 1315))
-    func legacySourceMenuResolvesApostropheTitle() throws {
+    func legacySourceMenuResolvesApostropheTitle() async throws {
         let (model, store) = try tempModel()
         let source = try store.addSource(
             filename: "Consciousness doesn't overflow cognition.pdf",
@@ -128,7 +128,7 @@ struct WikiLinkMenuNSItemsTests {
     /// renamed after the link was written). The id must win — no name lookup —
     /// so the menu action still opens the source.
     @Test("Canonical source menu ignores a stale display alias", .bug(id: 1315))
-    func canonicalSourceMenuIgnoresStaleDisplayAlias() throws {
+    func canonicalSourceMenuIgnoresStaleDisplayAlias() async throws {
         let (model, store) = try tempModel()
         let active = try store.createPage(title: "Active")
         let source = try store.addSource(filename: "Current title.pdf", data: Data("pdf".utf8))
@@ -153,7 +153,7 @@ struct WikiLinkMenuNSItemsTests {
     /// AC.6: menu actions RE-RESOLVE at click time. A target deleted between
     /// right-click and click no-ops — no dead tab, no selection change.
     @Test("Menu action on a target deleted after build no-ops", .bug(id: 1315))
-    func deletedTargetNoOpsAtClickTime() throws {
+    func deletedTargetNoOpsAtClickTime() async throws {
         let (model, store) = try tempModel()
         let active = try store.createPage(title: "Active")
         let source = try store.addSource(filename: "Ephemeral.pdf", data: Data("pdf".utf8))
