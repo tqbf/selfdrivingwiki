@@ -124,7 +124,7 @@ struct ThinkingEffortSelector: View {
                 remoteSession.pendingModelOverride = (providerID, targetModelID)
             }
         case .chat(let chatID):
-            store.updateChatModelAndThinkingSelection(
+            Task { await store.updateChatModelAndThinkingSelection(
                 chatID: chatID,
                 providerID: chatSummary?.modelProviderId,
                 modelID: targetModelID ?? chatSummary?.modelId,
@@ -133,7 +133,7 @@ struct ThinkingEffortSelector: View {
                     ? valueID
                     : (remoteSession.runState.isLive
                         ? chatSummary?.effectiveThinkingOptionID
-                        : valueID))
+                        : valueID)) }
         }
         if targetModelID == nil, remoteSession.runState.isLive, state.configOptionID != nil {
             remoteSession.setThinkingEffort(

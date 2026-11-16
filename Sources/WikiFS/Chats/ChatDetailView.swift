@@ -221,9 +221,9 @@ struct ChatDetailView: View {
         }
         .task(id: ChatHydrationTaskKey(chatID: chatID, sessionID: remoteSession.instanceID)) {
             if let chatID {
-                loadPersistedTranscript(chatID: chatID)
+                await loadPersistedTranscript(chatID: chatID)
                 remoteSession.installHistoryLoader { afterCursor in
-                    store.readChatTranscriptPage(
+                    await store.readChatTranscriptPage(
                         chatID: chatID,
                         after: afterCursor,
                         limit: RemoteChatSession.committedHistoryPageSize
@@ -277,7 +277,7 @@ struct ChatDetailView: View {
         ))
         .onChange(of: remoteSession.runState) { _, _ in
             if let chatID, !isLiveChat {
-                loadPersistedTranscript(chatID: chatID)
+                Task { await loadPersistedTranscript(chatID: chatID) }
             }
             updateRightSidebarRegistration()
         }
@@ -304,7 +304,7 @@ struct ChatDetailView: View {
         }
         .onChange(of: store.messageVersion) { _, _ in
             if let chatID, !isLiveChat {
-                loadPersistedTranscript(chatID: chatID)
+                Task { await loadPersistedTranscript(chatID: chatID) }
             }
         }
         .task(id: ChatAnchorTaskKey(
@@ -457,7 +457,7 @@ struct ChatDetailView: View {
                 showsInternals: $showsInternals,
                 exitStatus: remoteSession.exitStatus,
                 debugFolderURL: remoteSession.debugFolderURL,
-                onRename: { store.renameChat(id: chatSummary.id, to: $0) },
+                onRename: { newValue in Task { await store.renameChat(id: chatSummary.id, to: newValue) } },
                 onShowInList: showInList,
                 onShare: shareChat,
                 onRevealInFinder: revealChatInFinder,
@@ -632,7 +632,7 @@ struct ChatDetailView: View {
                     try Self.chatMetadataInput(chatID: chatID, store: database)
                 }
             } else {
-                durable = try Self.chatMetadataInput(chatID: chatID, store: store.internalStore)
+                durable = try await Self.chatMetadataInput(chatID: chatID, store: store.internalStore)
             }
             guard !Task.isCancelled else { return }
             durableChatMetadata = durable

@@ -164,11 +164,11 @@ struct ContentView: View {
                 onConfirm: { parentID in
                     switch ctx.targets {
                     case .pages(let ids):
-                        for id in ids { store.addPageRef(parentID: parentID, pageID: id) }
+                        for id in ids { Task { await store.addPageRef(parentID: parentID, pageID: id) } }
                     case .sources(let ids):
-                        for id in ids { store.addSourceRef(parentID: parentID, sourceID: id) }
+                        for id in ids { Task { await store.addSourceRef(parentID: parentID, sourceID: id) } }
                     case .chats(let ids):
-                        for id in ids { store.addChatRef(parentID: parentID, chatID: id) }
+                        for id in ids { Task { await store.addChatRef(parentID: parentID, chatID: id) } }
                     }
                 }
             )
@@ -383,7 +383,7 @@ struct ContentView: View {
     private func runIngest(sourceID: SourceID) {
         DebugLog.ingest("ContentView.runIngest: user pressed Ingest (sourceID=\(sourceID.rawValue))")
         Task {
-            store.flushPendingSaves()
+            await store.flushPendingSaves()
             await enqueueIngestion(
                 sourceIDs: [sourceID],
                 store: store,
