@@ -94,18 +94,197 @@ keep plain factories, so a recorded open is by construction a CLIENT open.
   matching with overlap subtraction, exact-count waivers (new violations,
   stale waivers, and count drift all fail).
 
-## Store operation manifest (filled at P2)
+## Store operation manifest (P2.0)
 
 See the plan §Phase 2.1 for the classification rules. This table lists every
 `WikiStore` protocol requirement with exactly one classification:
 **rpc** (structured wire op), **client** (client-local metadata), or
 **removed** (no production consumer after cutover).
 
+Counts (P2.0 baseline): 175 function requirements across 169 unique names
+(`createPage` and `createChat` have 3 overloads each; `addSource`,
+`claimNextPersistedChatTurn`, `finishPersistedChatTurn`, `markFetchComplete`,
+and `sourceContent` have 2 each). Overload names share one classification,
+but `RemoteWikiStore` implements every overload signature as its own wire op.
+**rpc 151** — small 37, list 25, blob 39, event-producer 50 — **client 3**,
+**removed 15**. Event-producer means the daemon executor must preserve
+exactly-one-event-per-commit (`mutate`/`mutateBatch`/renderer-settings seam
+discipline); conditional emitters and annotated no-emit rows are marked in
+Notes.
+
 | Requirement | Class | Notes |
 |---|---|---|
-| (P2 populates this table exhaustively; `RemoteStoreSurfaceExhaustivenessTests` parses `WikiStore.swift` and fails on an unclassified or unmapped requirement) | | |
+| `abandonWorkspace` | rpc | event-producer; emits one event per commit (workspace dropped) |
+| `activeContentVersion` | rpc | small |
+| `activeExtractionProvenance` | rpc | small |
+| `addBytelessSource` | rpc | event-producer; emits one event per commit |
+| `addSnapshotImage` | rpc | blob; image bytes up (staged handle); commit emits one event |
+| `addSource` | rpc | blob; source bytes up (staged handle); row + event published in ONE transaction (composed atomic — single remote op, never the sequential default) |
+| `appendChatMessages` | rpc | blob; message array up (staged handle); commit emits one event |
+| `appendChatTranscriptItems` | rpc | blob; transcript items up (staged handle); commit emits one event |
+| `appendContentVersion` | rpc | blob; bytes up (staged handle); commit emits one event |
+| `appendDerivedMarkdown` | rpc | blob; markdown up (staged handle); commit emits one event (routes via internal mutator) |
+| `appendFetchMarkdown` | rpc | blob; markdown up (staged handle); commit emits one event |
+| `appendHostSpeechTranscript` | rpc | blob; transcript up (staged handle); commit emits one event |
+| `appendInstalledPackageMarkdown` | rpc | blob; markdown up (staged handle); commit emits one event |
+| `appendLog` | rpc | event-producer; emits one event per commit |
+| `appendPageVersion` | rpc | blob; body up (staged handle); CAS on expected head; commit emits one event |
+| `appendProcessedMarkdown` | rpc | blob; markdown up (staged handle); commit emits one event |
+| `appendUserProcessedMarkdown` | rpc | blob; markdown up (staged handle); commit emits one event |
+| `attachAcquiredBytes` | rpc | blob; bytes up (staged handle); single-transaction publish emits one event |
+| `cancelUnclaimedPersistedChatTurn` | rpc | event-producer; emits one event on claim flip; reply carries the turn when present (handle read if oversized) |
+| `chatAttachments` | rpc | small |
+| `chatMessages` | rpc | list; full transcript for one chat (cursor) |
+| `chatTranscriptCheckpoint` | rpc | small |
+| `chatTurnUsage` | removed | no production consumer; ChatUsageReadTests / SchemaV48MigrationTests / ChatTurnMetadataStoreTests only |
+| `chatUsageSummary` | rpc | small |
+| `checkpointStreamingMessage` | rpc | blob; draft text up (staged handle); commit emits one event |
+| `claimNextPersistedChatTurn` | rpc | blob; event-producing claim; reply carries the full turn (handle read if oversized) |
+| `correctPageOKFVerification` | rpc | event-producer; emits one event per commit (private mutate helper) |
+| `correctSourceMarkdownOKFVerification` | rpc | event-producer; emits one event per commit (private mutate helper) |
+| `createBookmarkNode` | rpc | event-producer; emits one event per commit |
+| `createChat` | rpc | event-producer; emits one event per commit; composed attachment overload shares the family |
+| `createPage` | rpc | blob; composed overloads carry body (staged handle); commit emits one event |
+| `createWorkspace` | rpc | event-producer; emits one event per commit |
+| `deleteBookmarkNode` | rpc | event-producer; emits one event per commit |
+| `deleteChat` | rpc | event-producer; emits one event per commit |
+| `deletePage` | removed | superseded: clients delete via deleteResources (model deleteSources); test-only callers |
+| `deleteResources` | rpc | event-producer; batch mutator (mutateBatch: impact recheck, provenance gate, cleanup, delete); one transaction, post-commit events |
+| `deleteSource` | removed | superseded: model deleteSources routes through deleteResources; never called on the protocol |
+| `deletionImpact` | rpc | list; fan-out report, byte-budgeted (cursor / handle read for oversized items) |
+| `editPersistedChatTurn` | removed | no production consumer; ChatPhase2PersistenceTests / StoreEmissionTests only |
+| `embedDescriptors` | rpc | list; all-source descriptor scan (cursor) |
+| `enqueuePersistedChatTurn` | rpc | blob; submission up (staged handle); commit emits one event |
+| `ensureFetchActivity` | rpc | event-producer; emits one event per commit; returns activity id |
+| `eventBus` | client | client-local bus fed by sink events (2c); model reload + File Provider signaler subscribe |
+| `extractionProvenance` | removed | no production consumer; extraction-writer contract tests only |
+| `fetchState` | rpc | small |
+| `finalizeStaleDrafts` | rpc | event-producer; emits one event per commit |
+| `finishPersistedChatTurn` | rpc | blob; completion events up (staged handle); commit emits one event |
+| `getChat` | rpc | small |
+| `getMetadata` | rpc | small |
+| `getPage` | rpc | blob; bodyMarkdown down; oversized page served by handle read |
+| `getWikiIndex` | rpc | blob; index.md body down (handle read when oversized) |
+| `getWikiStrategy` | rpc | blob; instructions body down (staged handle read) |
+| `getWikiStrategyState` | rpc | small |
+| `hasImageSiblings` | rpc | small |
+| `hasProcessedMarkdown` | rpc | small |
+| `initialContentVersion` | rpc | small |
+| `latestChatTurnUsage` | removed | no production consumer; ChatUsageReadTests only |
+| `listAllChatsOrderedByID` | rpc | list; cursor |
+| `listBookmarkNodes` | rpc | list; cursor (bookmark tree) |
+| `listChats` | rpc | list; cursor |
+| `listPages` | rpc | list; cursor (summaries, no bodies) |
+| `listPersistedChatTurns` | rpc | list; cursor (per chat) |
+| `listRendererSourcePreferences` | removed | no production consumer; test fake (ModelDelayedWikiStore) only; per-source reads use rendererSourcePreference |
+| `listSources` | rpc | list; cursor (summaries, no bytes) |
+| `markedSourceIDs` | rpc | list; ingested-marker set scan (cursor) |
+| `markFetchComplete` | rpc | event-producer; emits one event per commit; variant overload returns conditional Bool |
+| `markPersistedChatTurnProviderSubmitted` | rpc | event-producer; emits one event per commit |
+| `markSourceIngested` | rpc | event-producer; emits one event per commit |
+| `missingChatEmbeddingWork` | rpc | blob; text batch down (handle read when oversized) |
+| `missingPageEmbeddingWork` | rpc | blob; text batch down (handle read when oversized) |
+| `missingSourceEmbeddingWork` | rpc | blob; text batch down (handle read when oversized) |
+| `moveBookmarkNode` | rpc | event-producer; emits one event per commit |
+| `pageEditHistory` | rpc | list; cursor (per page) |
+| `pageHeadSources` | rpc | small |
+| `pageHeadVersionID` | rpc | small |
+| `pageLinkingPages` | removed | no production consumer; tests only |
+| `pageOKFMetadata` | rpc | small |
+| `pageOrigin` | rpc | small |
+| `pagesCitingSources` | rpc | list; limit-bounded; cursor for large citation sets |
+| `pageVersionBody` | rpc | blob; body down (staged handle read) |
+| `pageVersionHistory` | rpc | list; cursor (per page) |
+| `pageVersionSources` | rpc | small |
+| `processedMarkdownAgentNames` | rpc | list; per-source version-name map (cursor) |
+| `processedMarkdownAlternatives` | rpc | list; per-source alternatives (cursor) |
+| `processedMarkdownHead` | rpc | blob; head markdown down (staged handle read) |
+| `processedMarkdownHistory` | rpc | list; cursor (per source) |
+| `processedMarkdownVersion` | rpc | blob; full version content down (staged handle read) |
+| `readChatTranscriptPage` | rpc | list; cursor-paged transcript |
+| `reapStaleWorkspaces` | rpc | event-producer; bulk abandon; emits events per commit |
+| `recentLogEntries` | rpc | list; log tail (cursor) |
+| `recordMarkdownExtraction` | rpc | blob; content up (staged handle); commit emits one event (delegates to appendDerivedMarkdown) |
+| `recordPageOKFVerification` | rpc | event-producer; emits one event per commit (private mutate helper) |
+| `recordSourceMarkdownOKFVerification` | rpc | event-producer; emits one event per commit (private mutate helper) |
+| `registeredExtractionInputs` | client | daemon-authoritative value in session bootstrap (2e); model reads it for import routing; settable locally |
+| `registeredRendererSourceTypes` | client | daemon-authoritative value in session bootstrap (2e); reader/renderer wiring reads it |
+| `removePersistedQueuedChatTurn` | removed | no production consumer; tests only |
+| `removeRendererSourcePresentation` | rpc | event-producer; renderer settings seam (mutateRendererSettings) emits |
+| `renameBookmarkFolder` | rpc | event-producer; emits one event per commit |
+| `renameChat` | rpc | event-producer; emits one event per commit |
+| `renameSource` | rpc | event-producer; emits one event per commit |
+| `rendererInputByteCount` | rpc | small |
+| `rendererSettingsJournalRecords` | removed | no production consumer; tests only |
+| `rendererSourcePreference` | rpc | small |
+| `rendererSourcePresentation` | rpc | small |
+| `repairMIME` | rpc | event-producer; mutateBatch; report reply |
+| `replaceLinks` | rpc | event-producer; links bounded per page; commit emits one event |
+| `resolveChatByTitle` | rpc | small |
+| `resolveSourceByName` | rpc | small |
+| `resolveTitleToID` | rpc | small |
+| `restorePage` | rpc | event-producer; emits one event per commit |
+| `retargetBookmarkNode` | rpc | event-producer; emits one event per commit |
+| `revertPage` | rpc | event-producer; emits one event per commit |
+| `revertProcessedMarkdown` | removed | no caller; doc-comment mention in SourceVersioning.swift only |
+| `saveWikiStrategy` | rpc | blob; instructions up (staged handle); CAS on expected revision; unchanged save emits nothing |
+| `searchSimilar` | rpc | small; limit-bounded reply |
+| `searchSimilarChats` | rpc | small; limit-bounded reply |
+| `searchSimilarSources` | rpc | small; limit-bounded reply |
+| `setAcquisitionProvenance` | removed | no production consumer; FetcherQueuePipelineTests only |
+| `setActiveMarkdown` | rpc | event-producer; pointer flip; commit emits one event |
+| `setChatAttachments` | rpc | event-producer; emits one event per commit |
+| `setChatTitleIf` | rpc | event-producer; conditional: true emits one .chat .updated; false emits nothing |
+| `setChatTitleIfEmpty` | rpc | event-producer; conditional: first-send write emits; already-titled emits nothing |
+| `setMetadata` | rpc | small; annotated NO-EMIT (flags do not change projected content) |
+| `setPageOKFFreshness` | rpc | event-producer; emits one .page .updated per commit |
+| `setPageOKFStatus` | rpc | event-producer; emits one .page .updated per commit |
+| `setRendererSourcePreference` | rpc | event-producer; renderer settings seam (mutateRendererSettings) emits |
+| `setRendererSourcePresentation` | rpc | event-producer; renderer settings seam (mutateRendererSettings) emits |
+| `setSourceDisplayName` | rpc | event-producer; emits one event per commit |
+| `setSourceMarkdownOKFFreshness` | rpc | event-producer; emits one .source .updated per commit |
+| `setSourceMarkdownOKFStatus` | rpc | event-producer; emits one .source .updated per commit |
+| `setWorkspaceIndexBody` | rpc | blob; index body up (staged handle); commit emits one event |
+| `siblingImageResolvers` | rpc | list; all-source resolver map (cursor) |
+| `sourceContent` | rpc | blob; bytes down (staged handle read); id and versionID overloads share the family |
+| `sourceDerivedChains` | rpc | list; all-source chain map (cursor) |
+| `sourceEditHistory` | rpc | list; cursor (per source) |
+| `sourceLinkingPages` | removed | no production consumer; tests only |
+| `sourceMarkdownOKFMetadata` | rpc | small |
+| `sourceMatchingURLIdentity` | rpc | small |
+| `sourceOrigin` | rpc | small |
+| `sourceOriginsBySource` | rpc | list; all-source origin map (cursor) |
+| `sourceProvenanceBlockers` | removed | no production consumer; blockers surface via deletionImpact / deletionRestricted |
+| `sourceReferencingPageVersions` | removed | no production consumer; tests only |
+| `sourcesWithPendingFormatJobs` | rpc | list; recovery scan (cursor) |
+| `sourceVersion` | rpc | small |
+| `storeChatChunks` | rpc | blob; chunk array up (staged handle); commit emits one event |
+| `storePageChunks` | rpc | blob; chunk array up (staged handle); commit emits one event |
+| `storeSourceChunks` | rpc | blob; chunk array up (staged handle); commit emits one event |
+| `updateChatAcpSessionId` | rpc | event-producer; emits one event per commit |
+| `updateChatModelAndThinkingSelection` | rpc | event-producer; emits one event per commit |
+| `updateChatModelOverride` | rpc | event-producer; emits one event per commit |
+| `updateMessageSummary` | rpc | event-producer; emits one event per commit |
+| `updatePage` | rpc | blob; body up (staged handle); commit emits one event |
+| `updatePersistedChatTurnUsage` | rpc | event-producer; emits one event per commit |
+| `updateWikiIndex` | rpc | blob; index body up (staged handle); commit emits one event |
+| `upsertPage` | rpc | blob; rawBody up (staged handle); composed atomic — single remote op, never the sequential default; commit emits one event |
+| `vacuumActivities` | rpc | small; no-emit maintenance write (dbWriter.write); report reply |
+| `vacuumBlobs` | rpc | small; no-emit maintenance write (dbWriter.write); report reply |
+| `vacuumPageVersions` | rpc | small; no-emit maintenance write (dbWriter.write); report reply |
+| `wikiStrategyRevision` | rpc | small |
+| `workspaceConflicts` | rpc | list; conflict set after divergent merge (cursor) |
+| `workspaceMerge` | rpc | event-producer; merge commits inside one transaction (emits); merge-log reply scales like a list |
+| `workspacePageBody` | rpc | blob; body down (staged handle read) |
+| `workspacePageVersion` | rpc | small |
+| `workspaceRefresh` | rpc | event-producer; emits one event per commit |
+| `workspaceRefs` | rpc | list; cursor (workspace-scale ref set) |
+| `workspaceResolveConflict` | rpc | event-producer; emits one event per commit |
+| `workspaceRetryMerge` | rpc | event-producer; emits one event per commit |
+| `workspaceSummary` | rpc | small |
+| `workspaceWritePage` | rpc | blob; body up (staged handle); commit emits one event |
 
-## Error mapping (filled at P2)
+## Error mapping (P2.0)
 
 `WikiStoreError` case → wire case → reconstruction, with associated values
 intact (`duplicateContent`/`duplicateURL` carry `SourceSummary`,
@@ -113,6 +292,16 @@ intact (`duplicateContent`/`duplicateURL` carry `SourceSummary`,
 family carried via `DaemonConflictDetail`). Transport-level
 `daemonUnavailable`/`outcomeUnknown` covers connection loss. Deliberate
 collapses: NONE (documented here if any appear).
+
+Case inventory verified against `WikiStoreError` at P2.0: `open`,
+`sqlite(code:message:)` (transport-opaque — reconstruct code + message, no
+more specific meaning), `notFound(PageID)` (typed not-found family),
+`chatNotFound`, `sourceNotFound`, `sourceVersionNotFound`,
+`sourceMarkdownVersionNotFound`, `noProcessedMarkdown`, `deletionRestricted`,
+`invalidBookmarkRow`, `invalidRendererEventID`, `unexpected`,
+`duplicateContent`, `duplicateURL` — plus the CAS family (`PageConflictError`,
+`PageCreateConflictError`, `PageExpectedTargetMissingError`,
+`WikiStrategyConflictError`, `SourceMarkdownConflictError`).
 
 ## Event contract (filled at P2–P3)
 
