@@ -31,18 +31,18 @@ import Testing
 
     // MARK: - bm25Leg supplied → fused output equals the leg (pages)
 
-    @Test func bm25LegIsUsedWhenSuppliedForPages() throws {
+    @Test func bm25LegIsUsedWhenSuppliedForPages() async throws {
         let store = try tempStore()
         // Seed two pages whose bodies would both match a "budget" query.
-        let a = try store.createPage(title: "Finance A")
-        try store.updatePage(id: a.id, title: a.title, body: "budget forecast ten", lastEditedBy: nil)
-        let b = try store.createPage(title: "Finance B")
-        try store.updatePage(id: b.id, title: b.title, body: "budget forecast twenty", lastEditedBy: nil)
+        let a = try await store.createPage(title: "Finance A")
+        try await store.updatePage(id: a.id, title: a.title, body: "budget forecast ten", lastEditedBy: nil)
+        let b = try await store.createPage(title: "Finance B")
+        try await store.updatePage(id: b.id, title: b.title, body: "budget forecast twenty", lastEditedBy: nil)
 
         // Post-#634: a `nil` leg returns NO pages (FTS5 fallback removed; no
         // cosine query blob under `swift test` either). This is the #634
         // contract — `searchSimilar` is empty without an explicit BM25 leg.
-        let noLeg = try store.searchSimilar(query: "budget", limit: 10, bm25Leg: nil)
+        let noLeg = try await store.searchSimilar(query: "budget", limit: 10, bm25Leg: nil)
         #expect(noLeg.isEmpty)
 
         // Supply a bm25 leg containing ONLY `b`, in first position. With no
@@ -52,19 +52,19 @@ import Testing
         let leg = [WikiPageSummary(
             id: b.id, title: b.title,
             updatedAt: b.updatedAt, createdAt: b.createdAt)]
-        let fused = try store.searchSimilar(query: "budget", limit: 10, bm25Leg: leg)
+        let fused = try await store.searchSimilar(query: "budget", limit: 10, bm25Leg: leg)
         #expect(fused.count == 1)
         #expect(fused.first?.id == b.id)
     }
 
-    @Test func bm25LegPreservesRankOrder() throws {
+    @Test func bm25LegPreservesRankOrder() async throws {
         let store = try tempStore()
-        let a = try store.createPage(title: "P Alpha")
-        try store.updatePage(id: a.id, title: a.title, body: "kappa keyword common", lastEditedBy: nil)
-        let b = try store.createPage(title: "P Beta")
-        try store.updatePage(id: b.id, title: b.title, body: "kappa keyword common", lastEditedBy: nil)
-        let c = try store.createPage(title: "P Gamma")
-        try store.updatePage(id: c.id, title: c.title, body: "kappa keyword common", lastEditedBy: nil)
+        let a = try await store.createPage(title: "P Alpha")
+        try await store.updatePage(id: a.id, title: a.title, body: "kappa keyword common", lastEditedBy: nil)
+        let b = try await store.createPage(title: "P Beta")
+        try await store.updatePage(id: b.id, title: b.title, body: "kappa keyword common", lastEditedBy: nil)
+        let c = try await store.createPage(title: "P Gamma")
+        try await store.updatePage(id: c.id, title: c.title, body: "kappa keyword common", lastEditedBy: nil)
 
         // Fabricate a best-first order [c, a, b] (Tantivy would produce a real
         // score-based order; here we assert the store preserves whatever order
@@ -73,46 +73,46 @@ import Testing
             WikiPageSummary(id: $0.id, title: $0.title,
                             updatedAt: $0.updatedAt, createdAt: $0.createdAt)
         }
-        let fused = try store.searchSimilar(query: "kappa", limit: 10, bm25Leg: leg)
+        let fused = try await store.searchSimilar(query: "kappa", limit: 10, bm25Leg: leg)
         #expect(fused.map(\.id) == [c.id, a.id, b.id])
     }
 
     // MARK: - nil / empty leg → no BM25 leg (the #634 contract)
 
-    @Test func nilLegYieldsNoLexicalResults() throws {
+    @Test func nilLegYieldsNoLexicalResults() async throws {
         // Post-#634 (#634): a `nil` bm25Leg means no BM25 leg at all. The store
         // no longer queries FTS5 (it's gone). Combined with no cosine leg under
         // `swift test`, the result is empty — the documented #634 behavior.
         let store = try tempStore()
-        let p = try store.createPage(title: "Solitude")
-        try store.updatePage(id: p.id, title: p.title, body: "kappa keyword common", lastEditedBy: nil)
-        let hits = try store.searchSimilar(query: "kappa", limit: 10, bm25Leg: nil)
+        let p = try await store.createPage(title: "Solitude")
+        try await store.updatePage(id: p.id, title: p.title, body: "kappa keyword common", lastEditedBy: nil)
+        let hits = try await store.searchSimilar(query: "kappa", limit: 10, bm25Leg: nil)
         #expect(hits.isEmpty)
     }
 
-    @Test func emptyLegTreatedAsNoLeg() throws {
+    @Test func emptyLegTreatedAsNoLeg() async throws {
         // Post-#634: an empty leg is treated identically to `nil` — no BM25 leg.
         // (Pre-#634 this differed: `[]` meant "Tantivy ran and found nothing"
         // while `nil` meant "fall back to FTS5"; without FTS5 the distinction
         // collapses and both mean "no lexical results".)
         let store = try tempStore()
-        let p = try store.createPage(title: "Solitude")
-        try store.updatePage(id: p.id, title: p.title, body: "kappa keyword common", lastEditedBy: nil)
-        let hits = try store.searchSimilar(query: "kappa", limit: 10, bm25Leg: [])
+        let p = try await store.createPage(title: "Solitude")
+        try await store.updatePage(id: p.id, title: p.title, body: "kappa keyword common", lastEditedBy: nil)
+        let hits = try await store.searchSimilar(query: "kappa", limit: 10, bm25Leg: [])
         #expect(hits.isEmpty)
     }
 
     // MARK: - Chats mirror (leg pass-through)
 
-    @Test func bm25LegUsedForChats() throws {
+    @Test func bm25LegUsedForChats() async throws {
         let store = try tempStore()
-        let chat = try store.createChat(kind: .edit, title: "Q1 Planning")
-        _ = try store.appendChatMessages(chatID: chat.id, events: [
+        let chat = try await store.createChat(kind: .edit, title: "Q1 Planning")
+        _ = try await store.appendChatMessages(chatID: chat.id, events: [
             .assistantText("budget discussion for Q1"),
         ])
 
         // Post-#634: no leg → no lexical results (FTS5 fallback gone).
-        let noLeg = try store.searchSimilarChats(query: "budget", limit: 10, bm25Leg: nil)
+        let noLeg = try await store.searchSimilarChats(query: "budget", limit: 10, bm25Leg: nil)
         #expect(noLeg.isEmpty)
 
         // Fabricated leg (same id) — store uses it, fuses with the (empty
@@ -121,7 +121,7 @@ import Testing
             id: chat.id, kind: chat.kind, title: chat.title,
             createdAt: chat.createdAt, updatedAt: chat.updatedAt,
             messageCount: chat.messageCount)]
-        let fused = try store.searchSimilarChats(query: "budget", limit: 10, bm25Leg: leg)
+        let fused = try await store.searchSimilarChats(query: "budget", limit: 10, bm25Leg: leg)
         #expect(fused.count == 1)
         #expect(fused.first?.id == chat.id)
     }

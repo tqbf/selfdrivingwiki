@@ -140,9 +140,9 @@ struct AppProfileBootTests {
         facade.pendingWikiLink = (link, true)
         #expect(facade.pendingWikiLink?.url == link)
         #expect(facade.pendingWikiLink?.openInNewTab == true)
-        facade.previewBlobVacuum()
+        await facade.previewBlobVacuum()
         #expect(facade.pendingBlobVacuum != nil)
-        facade.applyBlobVacuum()
+        await facade.applyBlobVacuum()
         #expect(facade.pendingBlobVacuum == nil)
 
         await facade.shutdown()
@@ -188,7 +188,7 @@ struct AppProfileBootTests {
         _ = try #require(try await booted.context.find(ProcessServiceKeys.urlFetchProvider))
         #expect(ProcessServiceKeys.urlFetchProvider.label == "process.integration.url-fetch-provider")
         let store = try #require(try await booted.context.find(StoreServiceKeys.store))
-        let page = try store.createPage(title: "Committed app profile page")
+        let page = try await store.createPage(title: "Committed app profile page")
 
         for _ in 0..<100 where await recorder.events.isEmpty {
             await MainActor.run { }
@@ -201,7 +201,7 @@ struct AppProfileBootTests {
         entries.removeAll { $0.id == ProfileBootFixture.listenerEntryID }
         try await booted.tree.update(to: entries)
         let countAfterDisposal = await recorder.events.count
-        try store.updatePage(
+        try await store.updatePage(
             id: page.id,
             title: page.title,
             body: "after listener disposal",

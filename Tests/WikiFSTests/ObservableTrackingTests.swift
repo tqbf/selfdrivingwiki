@@ -30,9 +30,9 @@ struct ObservableTrackingTests {
 
     // MARK: - bookmarkNodes
 
-    @Test func addPageRefFiresBookmarkNodesObservation() throws {
+    @Test func addPageRefFiresBookmarkNodesObservation() async throws {
         let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
-        let page = try store.createPage(title: "Observable Page")
+        let page = try await store.createPage(title: "Observable Page")
         let model = WikiStoreModel(store: store)
 
         let box = Box()
@@ -44,19 +44,19 @@ struct ObservableTrackingTests {
 
         #expect(model.bookmarkNodes.isEmpty)
 
-        model.addPageRef(parentID: nil, pageID: page.id)
+        await model.addPageRef(parentID: nil, pageID: page.id)
         // The bus delivers reloads async; in tests without a bus, force the
         // synchronous reload so the observation fires and the array is fresh.
-        model.reloadBookmarkNodes()
+        await model.bootstrapFromStore()
 
         #expect(box.fireCount == 1,
                 "addPageRef → reloadBookmarkNodes must fire the @Observable callback")
         #expect(model.bookmarkNodes.count == 1)
     }
 
-    @Test func addSourceRefFiresBookmarkNodesObservation() throws {
+    @Test func addSourceRefFiresBookmarkNodesObservation() async throws {
         let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
-        let source = try store.addSource(filename: "paper.pdf", data: Data("x".utf8))
+        let source = try await store.addSource(filename: "paper.pdf", data: Data("x".utf8))
         let model = WikiStoreModel(store: store)
 
         let box = Box()
@@ -66,15 +66,15 @@ struct ObservableTrackingTests {
             box.fireCount += 1
         }
 
-        model.addSourceRef(parentID: nil, sourceID: source.id)
-        model.reloadBookmarkNodes()
+        await model.addSourceRef(parentID: nil, sourceID: source.id)
+        await model.bootstrapFromStore()
 
         #expect(box.fireCount == 1,
                 "addSourceRef → reloadBookmarkNodes must fire the @Observable callback")
         #expect(model.bookmarkNodes.count == 1)
     }
 
-    @Test func createFolderFiresBookmarkNodesObservation() throws {
+    @Test func createFolderFiresBookmarkNodesObservation() async throws {
         let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
 
@@ -85,21 +85,21 @@ struct ObservableTrackingTests {
             box.fireCount += 1
         }
 
-        _ = model.createFolder(parentID: nil, name: "Research")
-        model.reloadBookmarkNodes()
+        _ = await model.createFolder(parentID: nil, name: "Research")
+        await model.bootstrapFromStore()
 
         #expect(box.fireCount == 1,
                 "createFolder → reloadBookmarkNodes must fire the @Observable callback")
         #expect(model.bookmarkNodes.count == 1)
     }
 
-    @Test func deleteBookmarkNodeFiresObservation() throws {
+    @Test func deleteBookmarkNodeFiresObservation() async throws {
         let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
 
         // Seed: create a folder, then reload so the model has data.
-        _ = model.createFolder(parentID: nil, name: "Temp")
-        model.reloadBookmarkNodes()
+        _ = await model.createFolder(parentID: nil, name: "Temp")
+        await model.bootstrapFromStore()
         #expect(model.bookmarkNodes.count == 1)
 
         let nodeID = model.bookmarkNodes.first!.id
@@ -111,21 +111,21 @@ struct ObservableTrackingTests {
             box.fireCount += 1
         }
 
-        model.deleteBookmarkNode(id: nodeID)
-        model.reloadBookmarkNodes()
+        await model.deleteBookmarkNode(id: nodeID)
+        await model.bootstrapFromStore()
 
         #expect(box.fireCount == 1,
                 "deleteBookmarkNode → reloadBookmarkNodes must fire the @Observable callback")
         #expect(model.bookmarkNodes.isEmpty)
     }
 
-    @Test func bookmarkNodesObservationIsOneShot() throws {
+    @Test func bookmarkNodesObservationIsOneShot() async throws {
         /// `withObservationTracking` installs a one-shot callback — it fires
         /// once, then unregisters. SwiftUI re-registers on each body
         /// re-evaluation, but a raw call does not. This test documents that
         /// contract so a future "optimization" that makes it sticky is caught.
         let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
-        let page = try store.createPage(title: "One-Shot Page")
+        let page = try await store.createPage(title: "One-Shot Page")
         let model = WikiStoreModel(store: store)
 
         let box = Box()
@@ -135,9 +135,9 @@ struct ObservableTrackingTests {
             box.fireCount += 1
         }
 
-        model.addPageRef(parentID: nil, pageID: page.id)
-        model.addPageRef(parentID: nil, pageID: page.id)
-        model.reloadBookmarkNodes()
+        await model.addPageRef(parentID: nil, pageID: page.id)
+        await model.addPageRef(parentID: nil, pageID: page.id)
+        await model.bootstrapFromStore()
 
         #expect(box.fireCount == 1,
                 "withObservationTracking fires once then unregisters (SwiftUI re-registers per body)")

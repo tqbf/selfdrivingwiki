@@ -63,11 +63,11 @@ struct DeletionIncomingReferenceTests {
 
     // MARK: - deletionImpact (store + model, throwing)
 
-    @Test func deletionImpactForPageReportsLinksAndBookmarks() throws {
+    @Test func deletionImpactForPageReportsLinksAndBookmarks() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
 
         let impact = try store.deletionImpact(for: [.page(b.id)])
@@ -78,29 +78,29 @@ struct DeletionIncomingReferenceTests {
         #expect(impact.hasReferences)
     }
 
-    @Test func deletionImpactForPageWithNoReferencesIsEmpty() throws {
+    @Test func deletionImpactForPageWithNoReferencesIsEmpty() async throws {
         let store = try makeStore()
-        let b = try store.createPage(title: "B")
+        let b = try await store.createPage(title: "B")
 
         let impact = try store.deletionImpact(for: [.page(b.id)])
         #expect(!impact.hasReferences)
         #expect(impact.incomingLinkCount == 0)
     }
 
-    @Test func deletionImpactForSourceReportsCitations() throws {
+    @Test func deletionImpactForSourceReportsCitations() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
+        let a = try await store.createPage(title: "A")
         let src = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "cite [[source:paper]]", author: "user")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "cite [[source:paper]]", author: "user")
 
         let impact = try store.deletionImpact(for: [.source(src.id)])
         #expect(impact.linkingPageIDs == [a.id])
         #expect(impact.hasReferences)
     }
 
-    @Test func deletionImpactForSourceReportsProvenanceBlockers() throws {
+    @Test func deletionImpactForSourceReportsProvenanceBlockers() async throws {
         let store = try makeStore()
-        let page = try store.createPage(title: "Claim")
+        let page = try await store.createPage(title: "Claim")
         let src = try store.addSource(filename: "evidence.txt", data: Data("evidence".utf8))
         try store.updatePage(
             id: page.id, title: page.title, body: "Claim", lastEditedBy: "user",
@@ -111,24 +111,24 @@ struct DeletionIncomingReferenceTests {
         #expect(impact.provenanceBlockers.count == 1)
     }
 
-    @Test func modelDeletionImpactSurfacesStoreErrors() throws {
+    @Test func modelDeletionImpactSurfacesStoreErrors() async throws {
         let store = try makeStore()
         let model = WikiStoreModel(store: store)
-        let b = try store.createPage(title: "B")
+        let b = try await store.createPage(title: "B")
 
         // Throwing passthrough: the model impact NEVER reports a false
         // "no references" when the read fails (AC.10). A missing page row
         // yields an empty-but-valid impact; the error path itself is proven
         // at the coordinator level with a throwing loader.
-        let impact = try model.deletionImpact(forPage: b.id)
+        let impact = try await model.deletionImpact(forPage: b.id)
         #expect(!impact.hasReferences)
     }
 
     // MARK: - Protected deletion basics (AC.1 / AC.2 / AC.3)
 
-    @Test func protectedPageDeleteAlwaysRemovesTargetBookmarks() throws {
+    @Test func protectedPageDeleteAlwaysRemovesTargetBookmarks() async throws {
         let store = try makeStore()
-        let b = try store.createPage(title: "B")
+        let b = try await store.createPage(title: "B")
         let folder = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "F"))
         _ = try store.createBookmarkNode(parentID: folder.id, position: 0, content: .page(b.id))
         _ = try store.createBookmarkNode(parentID: nil, position: 1, content: .chat(ChatID(rawValue: "01CHAT")))
@@ -148,7 +148,7 @@ struct DeletionIncomingReferenceTests {
         })
     }
 
-    @Test func protectedSourceDeleteAlwaysRemovesTargetBookmarks() throws {
+    @Test func protectedSourceDeleteAlwaysRemovesTargetBookmarks() async throws {
         let store = try makeStore()
         let src = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .source(src.id))
@@ -161,11 +161,11 @@ struct DeletionIncomingReferenceTests {
         #expect(try store.listBookmarkNodes().isEmpty)
     }
 
-    @Test func preservePolicyKeepsIncomingMarkdownAsGhostLinks() throws {
+    @Test func preservePolicyKeepsIncomingMarkdownAsGhostLinks() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]] end", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]] end", author: "user")
 
         _ = try store.deleteResources(ResourceDeletionRequest(
             targets: [.page(b.id)], linkPolicy: .preserve))
@@ -176,18 +176,18 @@ struct DeletionIncomingReferenceTests {
         #expect(ghostBody.contains("[[") && ghostBody.contains("]]"))
     }
 
-    @Test func unlinkPolicyRewritesPageAndSourceTargetsOnly() throws {
+    @Test func unlinkPolicyRewritesPageAndSourceTargetsOnly() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        let d = try store.createPage(title: "D")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        let d = try await store.createPage(title: "D")
         let src = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
-        try PageUpsert.upsert(
+        try await PageUpsert.upsert(
             in: store, id: a.id, title: "A",
             body: "p [[B]] s [[source:paper]] d [[D]] ![[source:paper|fig]]",
             author: "user")
-        try PageUpsert.upsert(in: store, id: c.id, title: "C", body: "keeps [[D]]", author: "user")
+        try await PageUpsert.upsert(in: store, id: c.id, title: "C", body: "keeps [[D]]", author: "user")
         let cBodyBefore = try store.getPage(id: c.id).bodyMarkdown
 
         let result = try store.deleteResources(ResourceDeletionRequest(
@@ -207,12 +207,12 @@ struct DeletionIncomingReferenceTests {
 
     // MARK: - Batch semantics (AC.5)
 
-    @Test func batchDeleteRewritesSharedLinkingPageOnce() throws {
+    @Test func batchDeleteRewritesSharedLinkingPageOnce() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "x [[B]] y [[C]]", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "x [[B]] y [[C]]", author: "user")
         let versionsBefore = try store.pageVersionHistory(pageID: a.id).count
 
         let result = try store.deleteResources(ResourceDeletionRequest(
@@ -225,14 +225,14 @@ struct DeletionIncomingReferenceTests {
         #expect(try store.getPage(id: a.id).bodyMarkdown == "x B y C")
     }
 
-    @Test func batchDeleteSkipsDeletedLinkingPage() throws {
+    @Test func batchDeleteSkipsDeletedLinkingPage() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
         // A → B, and B (itself being deleted) → C.
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
-        try PageUpsert.upsert(in: store, id: b.id, title: "B", body: "also [[C]]", author: "user")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
+        try await PageUpsert.upsert(in: store, id: b.id, title: "B", body: "also [[C]]", author: "user")
 
         let result = try store.deleteResources(ResourceDeletionRequest(
             targets: [.page(b.id), .page(c.id)], linkPolicy: .unlink))
@@ -245,12 +245,12 @@ struct DeletionIncomingReferenceTests {
         #expect(try !store.listPages(sortBy: .titleAZ).contains { $0.id == b.id })
     }
 
-    @Test func batchDeletePreservesLinksToSurvivingTargets() throws {
+    @Test func batchDeletePreservesLinksToSurvivingTargets() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "x [[B]] y [[C]]", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "x [[B]] y [[C]]", author: "user")
 
         _ = try store.deleteResources(ResourceDeletionRequest(
             targets: [.page(b.id)], linkPolicy: .unlink))
@@ -266,13 +266,13 @@ struct DeletionIncomingReferenceTests {
 
     // MARK: - Provenance gate (AC.6)
 
-    @Test func mixedBatchWithProvenanceBlockerChangesNothing() throws {
+    @Test func mixedBatchWithProvenanceBlockerChangesNothing() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let l = try store.createPage(title: "L")
+        let a = try await store.createPage(title: "A")
+        let l = try await store.createPage(title: "L")
         let src = try store.addSource(filename: "evidence.txt", data: Data("evidence".utf8))
         // A's provenance cites the source (the blocker); L links to A.
-        try PageUpsert.upsert(in: store, id: l.id, title: "L", body: "see [[A]]", author: "user")
+        try await PageUpsert.upsert(in: store, id: l.id, title: "L", body: "see [[A]]", author: "user")
         try store.updatePage(
             id: a.id, title: "Claim", body: "Claim", lastEditedBy: "user",
             provenance: [.init(sourceID: src.id, role: .primary)])
@@ -313,11 +313,11 @@ struct DeletionIncomingReferenceTests {
         #expect(nodes.first { $0.id == bm } != nil)
     }
 
-    private func rollbackFixture() throws -> (GRDBWikiStore, PageID, PageID, BookmarkID, BookmarkNode) {
+    private func rollbackFixture() async throws -> (GRDBWikiStore, PageID, PageID, BookmarkID, BookmarkNode) {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
         // Two root bookmarks: the target ref first, then a sibling whose
         // position would renumber if the cleanup committed.
         let bm = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
@@ -326,7 +326,7 @@ struct DeletionIncomingReferenceTests {
     }
 
     @Test func rewriteFailureRollsBackProtectedDeletion() async throws {
-        let (store, a, b, bm, _) = try rollbackFixture()
+        let (store, a, b, bm, _) = try await rollbackFixture()
         let stage = ProtectedDeletionFailurePoint.afterRewrite
         let recorder = makeRecorder(store)
         _ = try await awaitEvents(recorder, expected: 6) // setup writes
@@ -348,7 +348,7 @@ struct DeletionIncomingReferenceTests {
     }
 
     @Test func bookmarkCleanupFailureRollsBackProtectedDeletion() async throws {
-        let (store, a, b, bm, _) = try rollbackFixture()
+        let (store, a, b, bm, _) = try await rollbackFixture()
         let stage = ProtectedDeletionFailurePoint.afterBookmarkCleanup
         let recorder = makeRecorder(store)
         _ = try await awaitEvents(recorder, expected: 6)
@@ -370,7 +370,7 @@ struct DeletionIncomingReferenceTests {
     }
 
     @Test func targetDeleteFailureRollsBackProtectedDeletion() async throws {
-        let (store, a, b, bm, _) = try rollbackFixture()
+        let (store, a, b, bm, _) = try await rollbackFixture()
         let stage = ProtectedDeletionFailurePoint.beforeTargetDeletion
         let recorder = makeRecorder(store)
         _ = try await awaitEvents(recorder, expected: 6)
@@ -395,9 +395,9 @@ struct DeletionIncomingReferenceTests {
 
     @Test func protectedDeletionEmitsCompletePostCommitBatch() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
         let bm = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
         let recorder = makeRecorder(store)
         _ = try await awaitEvents(recorder, expected: 5)
@@ -417,9 +417,9 @@ struct DeletionIncomingReferenceTests {
 
     @Test func deletedBookmarkEventRefreshesRenumberedSiblingTree() async throws {
         let store = try makeStore()
-        let p1 = try store.createPage(title: "P1")
-        let p2 = try store.createPage(title: "P2")
-        let p3 = try store.createPage(title: "P3")
+        let p1 = try await store.createPage(title: "P1")
+        let p2 = try await store.createPage(title: "P2")
+        let p3 = try await store.createPage(title: "P3")
         let bm1 = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(p1.id))
         let bm2 = try store.createBookmarkNode(parentID: nil, position: 1, content: .page(p2.id))
         let bm3 = try store.createBookmarkNode(parentID: nil, position: 2, content: .page(p3.id))
@@ -446,9 +446,9 @@ struct DeletionIncomingReferenceTests {
 
     @Test func failedProtectedDeletionEmitsNoEvents() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
         let recorder = makeRecorder(store)
         _ = try await awaitEvents(recorder, expected: 5)
@@ -464,9 +464,9 @@ struct DeletionIncomingReferenceTests {
 
     // MARK: - Dedup + missing targets (AC.14)
 
-    @Test func protectedDeletionDeduplicatesTargets() throws {
+    @Test func protectedDeletionDeduplicatesTargets() async throws {
         let store = try makeStore()
-        let b = try store.createPage(title: "B")
+        let b = try await store.createPage(title: "B")
         let src = try store.addSource(filename: "s.txt", data: Data("s".utf8))
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
 
@@ -508,12 +508,12 @@ struct DeletionIncomingReferenceTests {
 
     // MARK: - Compatibility forwarders (AC.15)
 
-    @Test func legacySingleTargetDeleteMethodsForwardToProtectedPreservePolicy() throws {
+    @Test func legacySingleTargetDeleteMethodsForwardToProtectedPreservePolicy() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
         let src = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]] + [[source:paper]]", author: "user")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]] + [[source:paper]]", author: "user")
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
         _ = try store.createBookmarkNode(parentID: nil, position: 1, content: .source(src.id))
 
@@ -530,37 +530,37 @@ struct DeletionIncomingReferenceTests {
 
     // MARK: - Model-level protected delete paths (AC.1 / AC.2)
 
-    @Test func appModelPageDeleteRemovesTargetBookmarks() throws {
+    @Test func appModelPageDeleteRemovesTargetBookmarks() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
         let model = WikiStoreModel(store: store)
         model.reloadBookmarkNodes()
 
-        try model.delete(b.id, unlinkIncomingLinks: false)
+        try await model.delete(b.id, unlinkIncomingLinks: false)
 
         #expect(try store.listBookmarkNodes().isEmpty)
         let ghostBody = try store.getPage(id: a.id).bodyMarkdown
         #expect(ghostBody.contains("[[") && ghostBody.contains("]]"))
     }
 
-    @Test func appModelSourceDeleteRemovesTargetBookmarks() throws {
+    @Test func appModelSourceDeleteRemovesTargetBookmarks() async throws {
         let store = try makeStore()
         let src = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .source(src.id))
         let model = WikiStoreModel(store: store)
         model.reloadBookmarkNodes()
 
-        try model.deleteSource(src.id, unlinkIncomingLinks: false)
+        try await model.deleteSource(src.id, unlinkIncomingLinks: false)
 
         #expect(try store.listBookmarkNodes().isEmpty)
     }
 
-    @Test func provenanceBlockedSourceIsNotDeletedAndCitationsSurvive() throws {
+    @Test func provenanceBlockedSourceIsNotDeletedAndCitationsSurvive() async throws {
         let store = try makeStore()
-        let page = try store.createPage(title: "Claim")
+        let page = try await store.createPage(title: "Claim")
         let src = try store.addSource(filename: "evidence.txt", data: Data("evidence".utf8))
         try store.updatePage(
             id: page.id, title: page.title, body: "cite [[source:evidence]]", lastEditedBy: "user",
@@ -568,7 +568,7 @@ struct DeletionIncomingReferenceTests {
         let model = WikiStoreModel(store: store)
 
         // The UI entry point: nil result + storeError on the provenance block.
-        let result = model.performSourceDeletion([src.id], unlinkIncomingLinks: true)
+        let result = await model.performSourceDeletion([src.id], unlinkIncomingLinks: true)
 
         #expect(result == nil)
         #expect(model.storeError != nil)
@@ -584,17 +584,17 @@ struct DeletionIncomingReferenceTests {
     /// The model batch path sends the WHOLE selection in one request: a page
     /// inside the selection is never rewritten, the external linker rewrites
     /// exactly once, and both targets delete together.
-    @Test func modelBatchDeleteRoutesSelectionInOneRequest() throws {
+    @Test func modelBatchDeleteRoutesSelectionInOneRequest() async throws {
         let store = try makeStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "x [[B]] y [[C]]", author: "user")
-        try PageUpsert.upsert(in: store, id: b.id, title: "B", body: "also [[C]]", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "x [[B]] y [[C]]", author: "user")
+        try await PageUpsert.upsert(in: store, id: b.id, title: "B", body: "also [[C]]", author: "user")
         let versionsBefore = try store.pageVersionHistory(pageID: a.id).count
         let model = WikiStoreModel(store: store)
 
-        let result = try model.delete([b.id, c.id], unlinkIncomingLinks: true)
+        let result = try await model.delete([b.id, c.id], unlinkIncomingLinks: true)
 
         #expect(result.deletedTargets.contains(.page(b.id)))
         #expect(result.deletedTargets.contains(.page(c.id)))
@@ -607,9 +607,9 @@ struct DeletionIncomingReferenceTests {
     /// A provenance blocker on ANY source of a multi-selection stops the
     /// complete batch: nothing deleted, nothing rewritten, no bookmark
     /// removed, and the failure surfaced through `storeError`.
-    @Test func modelBatchSourceDeleteBlockedChangesNothingAndSurfacesError() throws {
+    @Test func modelBatchSourceDeleteBlockedChangesNothingAndSurfacesError() async throws {
         let store = try makeStore()
-        let claimingPage = try store.createPage(title: "Claim")
+        let claimingPage = try await store.createPage(title: "Claim")
         let freeSrc = try store.addSource(filename: "free.txt", data: Data("free".utf8))
         let blockedSrc = try store.addSource(filename: "blocked.txt", data: Data("blocked".utf8))
         try store.updatePage(
@@ -618,7 +618,7 @@ struct DeletionIncomingReferenceTests {
         let bm = try store.createBookmarkNode(parentID: nil, position: 0, content: .source(freeSrc.id))
         let model = WikiStoreModel(store: store)
 
-        let result = model.performSourceDeletion(
+        let result = await model.performSourceDeletion(
             [freeSrc.id, blockedSrc.id], unlinkIncomingLinks: true)
 
         #expect(result == nil)

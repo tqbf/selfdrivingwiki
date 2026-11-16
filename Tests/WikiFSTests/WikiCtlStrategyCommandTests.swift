@@ -22,7 +22,7 @@ struct WikiCtlStrategyCommandTests {
 
     // MARK: - Argument parsing
 
-    @Test func parsesReadTextAndJSON() throws {
+    @Test func parsesReadTextAndJSON() async throws {
         let text = try ArgumentParser.parse(
             ["--wiki", "W", "strategy", "read"], env: noEnv)
         #expect(text.command == .strategy(.read(json: false)))
@@ -32,7 +32,7 @@ struct WikiCtlStrategyCommandTests {
         #expect(json.command == .strategy(.read(json: true)))
     }
 
-    @Test func parsesSaveWithInlineContentAndExpectation() throws {
+    @Test func parsesSaveWithInlineContentAndExpectation() async throws {
         let absent = try ArgumentParser.parse(
             ["--wiki", "W", "strategy", "save",
              "--name", "Research", "--content", "# Plan",
@@ -51,7 +51,7 @@ struct WikiCtlStrategyCommandTests {
             expect: .revision(WikiStrategyRevision(rawValue: 3)), json: true)))
     }
 
-    @Test func parsesSaveWithFileBody() throws {
+    @Test func parsesSaveWithFileBody() async throws {
         let file = try ArgumentParser.parse(
             ["--wiki", "W", "strategy", "save",
              "--file", "-", "--expect-revision", "1"],
@@ -61,7 +61,7 @@ struct WikiCtlStrategyCommandTests {
             expect: .revision(WikiStrategyRevision(rawValue: 1)), json: false)))
     }
 
-    @Test func parsesReset() throws {
+    @Test func parsesReset() async throws {
         let reset = try ArgumentParser.parse(
             ["--wiki", "W", "strategy", "reset", "--expect-revision", "2"],
             env: noEnv)
@@ -123,14 +123,14 @@ struct WikiCtlStrategyCommandTests {
 
     // MARK: - read
 
-    @Test func readOnNeverWrittenWikiReportsAbsentAndDefault() throws {
+    @Test func readOnNeverWrittenWikiReportsAbsentAndDefault() async throws {
         let store = try tempStore()
-        let text = try StrategyCommand.run(.read(json: false), in: store)
+        let text = try await StrategyCommand.run(.read(json: false), in: store)
         #expect(text.output.contains("revision: absent"))
         #expect(text.output.contains("Default"))
         #expect(text.didCommit == false)
 
-        let json = try StrategyCommand.run(.read(json: true), in: store)
+        let json = try await StrategyCommand.run(.read(json: true), in: store)
         let object = try jsonObject(json.output)
         #expect(object["revision"] is NSNull)
         #expect(object["default"] as? Bool == true)
@@ -139,9 +139,9 @@ struct WikiCtlStrategyCommandTests {
 
     // MARK: - save roundtrip
 
-    @Test func saveFromAbsentRoundtrips() throws {
+    @Test func saveFromAbsentRoundtrips() async throws {
         let store = try tempStore()
-        let saved = try StrategyCommand.run(
+        let saved = try await StrategyCommand.run(
             .save(name: "Research", content: .inline("# Plan\n- rule one"),
                   expect: .absent, json: false),
             in: store)
@@ -151,7 +151,7 @@ struct WikiCtlStrategyCommandTests {
         // head_version_id echo — the next save needs no extra read.
         #expect(saved.stderrOutput == "next --expect-revision: 1")
 
-        let read = try StrategyCommand.run(.read(json: false), in: store)
+        let read = try await StrategyCommand.run(.read(json: false), in: store)
         #expect(read.output.contains("revision: 1"))
         #expect(read.output.contains("name: Research"))
         #expect(read.output.contains("# Plan"))
@@ -163,14 +163,14 @@ struct WikiCtlStrategyCommandTests {
         #expect(committed?.instructions == "# Plan\n- rule one")
     }
 
-    @Test func changedSaveAdvancesRevisionAndUnchangedSaveDoesNot() throws {
+    @Test func changedSaveAdvancesRevisionAndUnchangedSaveDoesNot() async throws {
         let store = try tempStore()
-        _ = try StrategyCommand.run(
+        _ = try await StrategyCommand.run(
             .save(name: "S", content: .inline("one"), expect: .absent, json: false),
             in: store)
 
         // Identical save: no write, no revision advance, no commit signal.
-        let unchanged = try StrategyCommand.run(
+        let unchanged = try await StrategyCommand.run(
             .save(name: "S", content: .inline("one"), expect: .revision(.init(rawValue: 1)), json: false),
             in: store)
         #expect(unchanged.didCommit == false)
@@ -178,7 +178,7 @@ struct WikiCtlStrategyCommandTests {
         #expect(try store.wikiStrategyRevision() == WikiStrategyRevision(rawValue: 1))
 
         // Changed save: exactly one advance.
-        let changed = try StrategyCommand.run(
+        let changed = try await StrategyCommand.run(
             .save(name: "S", content: .inline("two"), expect: .revision(.init(rawValue: 1)), json: false),
             in: store)
         #expect(changed.didCommit)
@@ -186,15 +186,15 @@ struct WikiCtlStrategyCommandTests {
         #expect(try store.wikiStrategyRevision() == WikiStrategyRevision(rawValue: 2))
     }
 
-    @Test func saveWithStaleExpectationThrowsConflictAndWritesNothing() throws {
+    @Test func saveWithStaleExpectationThrowsConflictAndWritesNothing() async throws {
         let store = try tempStore()
-        _ = try StrategyCommand.run(
+        _ = try await StrategyCommand.run(
             .save(name: "S", content: .inline("one"), expect: .absent, json: false),
             in: store)
 
         // `absent` no longer matches: a row exists at revision 1.
         do {
-            _ = try StrategyCommand.run(
+            _ = try await StrategyCommand.run(
                 .save(name: "T", content: .inline("clobber"), expect: .absent, json: false),
                 in: store)
             Issue.record("expected WikiStrategyConflictError")
@@ -211,13 +211,13 @@ struct WikiCtlStrategyCommandTests {
 
     // MARK: - reset / Default / tombstone
 
-    @Test func resetAdvancesRevisionAndKeepsTombstone() throws {
+    @Test func resetAdvancesRevisionAndKeepsTombstone() async throws {
         let store = try tempStore()
-        _ = try StrategyCommand.run(
+        _ = try await StrategyCommand.run(
             .save(name: "S", content: .inline("one"), expect: .absent, json: false),
             in: store)
 
-        let reset = try StrategyCommand.run(
+        let reset = try await StrategyCommand.run(
             .reset(expect: .revision(.init(rawValue: 1)), json: false),
             in: store)
         #expect(reset.didCommit)
@@ -229,34 +229,34 @@ struct WikiCtlStrategyCommandTests {
         #expect(try store.getWikiStrategy() == nil)
         #expect(try store.wikiStrategyRevision() == WikiStrategyRevision(rawValue: 2))
 
-        let read = try StrategyCommand.run(.read(json: true), in: store)
+        let read = try await StrategyCommand.run(.read(json: true), in: store)
         let object = try jsonObject(read.output)
         #expect(object["revision"] as? Int64 == 2)
         #expect(object["default"] as? Bool == true)
 
         // And that expectation is exactly what a post-reset save needs.
-        let resaved = try StrategyCommand.run(
+        let resaved = try await StrategyCommand.run(
             .save(name: "Back", content: .inline("two"), expect: .revision(.init(rawValue: 2)), json: false),
             in: store)
         #expect(resaved.didCommit)
         #expect(try store.wikiStrategyRevision() == WikiStrategyRevision(rawValue: 3))
     }
 
-    @Test func resetOnNeverWrittenWikiIsUnchanged() throws {
+    @Test func resetOnNeverWrittenWikiIsUnchanged() async throws {
         let store = try tempStore()
-        let reset = try StrategyCommand.run(.reset(expect: .absent, json: false), in: store)
+        let reset = try await StrategyCommand.run(.reset(expect: .absent, json: false), in: store)
         #expect(reset.didCommit == false)
         #expect(reset.output.contains("unchanged"))
         #expect(try store.wikiStrategyRevision() == nil)
     }
 
-    @Test func whitespaceOnlySaveResetsToDefault() throws {
+    @Test func whitespaceOnlySaveResetsToDefault() async throws {
         let store = try tempStore()
-        _ = try StrategyCommand.run(
+        _ = try await StrategyCommand.run(
             .save(name: "S", content: .inline("one"), expect: .absent, json: false),
             in: store)
         // Whitespace-only instructions are the store's documented reset path.
-        let reset = try StrategyCommand.run(
+        let reset = try await StrategyCommand.run(
             .save(name: "S", content: .inline(" \n\t "), expect: .revision(.init(rawValue: 1)), json: false),
             in: store)
         #expect(reset.didCommit)
@@ -266,11 +266,11 @@ struct WikiCtlStrategyCommandTests {
 
     // MARK: - write-boundary limits (named constants, never magic numbers)
 
-    @Test func nameOverTheNamedLimitIsRejectedNotTruncated() throws {
+    @Test func nameOverTheNamedLimitIsRejectedNotTruncated() async throws {
         let store = try tempStore()
         let longName = String(repeating: "n", count: WikiStrategy.nameCharacterLimit + 1)
         do {
-            _ = try StrategyCommand.run(
+            _ = try await StrategyCommand.run(
                 .save(name: longName, content: .inline("x"), expect: .absent, json: false),
                 in: store)
             Issue.record("expected WikiStrategyTextError.nameTooLong")
@@ -285,12 +285,12 @@ struct WikiCtlStrategyCommandTests {
         #expect(try store.wikiStrategyRevision() == nil)
     }
 
-    @Test func instructionsOverTheNamedByteLimitAreRejected() throws {
+    @Test func instructionsOverTheNamedByteLimitAreRejected() async throws {
         let store = try tempStore()
         let oversized = String(
             repeating: "a", count: WikiStrategy.instructionsUTF8ByteLimit + 1)
         do {
-            _ = try StrategyCommand.run(
+            _ = try await StrategyCommand.run(
                 .save(name: "S", content: .inline(oversized), expect: .absent, json: false),
                 in: store)
             Issue.record("expected WikiStrategyTextError.instructionsTooLarge")
@@ -305,15 +305,15 @@ struct WikiCtlStrategyCommandTests {
         #expect(try store.wikiStrategyRevision() == nil)
     }
 
-    @Test func oversizedWhitespaceOnlyInstructionsAreRejectedNotReset() throws {
+    @Test func oversizedWhitespaceOnlyInstructionsAreRejectedNotReset() async throws {
         let store = try tempStore()
         // The byte limit is checked BEFORE the whitespace-reset rule, so an
         // oversized whitespace-only document is rejected visibly — it can
         // never smuggle a reset past the limit.
         let oversizedWhitespace = String(
             repeating: " ", count: WikiStrategy.instructionsUTF8ByteLimit + 1)
-        #expect(throws: WikiStrategyTextError.self) {
-            _ = try StrategyCommand.run(
+        await #expect(throws: WikiStrategyTextError.self) {
+            _ = try await StrategyCommand.run(
                 .save(name: "S", content: .inline(oversizedWhitespace), expect: .absent, json: false),
                 in: store)
         }
@@ -322,9 +322,9 @@ struct WikiCtlStrategyCommandTests {
 
     // MARK: - JSON output shape
 
-    @Test func saveJSONOutputsParseWithOutcomeAndRevision() throws {
+    @Test func saveJSONOutputsParseWithOutcomeAndRevision() async throws {
         let store = try tempStore()
-        let saved = try StrategyCommand.run(
+        let saved = try await StrategyCommand.run(
             .save(name: "S", content: .inline("one"), expect: .absent, json: true),
             in: store)
         let savedObject = try jsonObject(saved.output)
@@ -333,7 +333,7 @@ struct WikiCtlStrategyCommandTests {
         #expect(savedObject["default"] as? Bool == false)
         #expect(saved.stderrOutput == nil)
 
-        let unchanged = try StrategyCommand.run(
+        let unchanged = try await StrategyCommand.run(
             .save(name: "S", content: .inline("one"), expect: .revision(.init(rawValue: 1)), json: true),
             in: store)
         let unchangedObject = try jsonObject(unchanged.output)

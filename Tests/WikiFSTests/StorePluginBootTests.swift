@@ -47,7 +47,7 @@ struct StorePluginBootTests {
             await recorder.append(event)
         }
 
-        _ = try store.createPage(title: "Paused forwarding")
+        _ = try await store.createPage(title: "Paused forwarding")
         await gate.awaitArrival()
         let disposal = Task { try await booted.tree.dispose() }
         await gate.awaitCancellation()
@@ -95,7 +95,7 @@ struct StorePluginBootTests {
             await recorder.append(event)
         }
 
-        let page = try service.createPage(title: "Cordis store bridge")
+        let page = try await service.createPage(title: "Cordis store bridge")
         for _ in 0..<100 where await recorder.events.isEmpty {
             await MainActor.run { }
             await Task.yield()
@@ -108,7 +108,7 @@ struct StorePluginBootTests {
 
         try await listener.dispose()
         let countAfterDisposal = await recorder.events.count
-        try service.updatePage(id: page.id, title: page.title, body: "after disposal")
+        try await service.updatePage(id: page.id, title: page.title, body: "after disposal")
         for _ in 0..<10 {
             await MainActor.run { }
             await Task.yield()

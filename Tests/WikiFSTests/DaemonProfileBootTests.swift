@@ -143,7 +143,7 @@ struct DaemonProfileBootTests {
 
         #expect(ObjectIdentifier(second.store as AnyObject) != firstStore)
         #expect(ObjectIdentifier(try #require(second.store.eventBus)) != firstBus)
-        _ = try second.store.listPages(sortBy: PageSortOrder.newestFirst)
+        _ = try await second.store.listPages(sortBy: PageSortOrder.newestFirst)
         await owner.shutdown()
     }
 }

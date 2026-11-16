@@ -112,14 +112,24 @@ enum GoldenMasterStoreState {
 
         let state = try runOperations(store: store, queueURL: queueURL, notes: &notes, normalizer: normalizer)
 
-        // The bus dispatches handlers via main-actor tasks; pump until the
-        // event stream settles (bounded, content-independent).
-        var settledCount = -1
-        var iterations = 0
-        while events.count != settledCount, iterations < 20 {
-            settledCount = events.count
-            try await Task.sleep(for: .milliseconds(20))
-            iterations += 1
+        // The bus dispatches handlers via main-actor tasks; pump the main
+        // actor until the event stream settles. Yields, not sleeps: the exit
+        // condition is count stability across consecutive yields, so the wait
+        // is scheduler-driven and has no wall-clock budget to overrun under
+        // `--parallel` MainActor contention (a truncated settle made two
+        // otherwise-identical fixture runs capture different event lists).
+        var yieldBudget = 1000
+        var settled = false
+        while !settled, yieldBudget > 0 {
+            let before = events.count
+            for _ in 0..<3 {
+                await Task.yield()
+                yieldBudget -= 1
+            }
+            settled = events.count == before
+        }
+        if !settled {
+            DebugLog.store("GoldenMaster: event stream never settled within the yield budget")
         }
 
         let eventLines = events.map { event in
@@ -127,6 +137,12 @@ enum GoldenMasterStoreState {
         }
         var dump = "# state\n"
         dump += state
+        if !settled {
+            // Visible-in-the-diff signal instead of a Testing macro (this
+            // exporter is a plain helper): an unsettled event stream makes
+            // the determinism comparison fail loudly.
+            dump += "# WARNING event stream unsettled\n"
+        }
         dump += "# script notes\n"
         dump += notes.map { "note \($0)" }.joined(separator: "\n") + "\n"
         dump += "# events\n"
@@ -343,7 +359,16 @@ enum GoldenMasterStoreState {
         }
 
         out += "# queue\n"
-        for item in try queue.loadRecent(limit: 50) {
+        // Recency order (loadRecent: finished_at DESC) races for jobs that
+        // complete concurrently — the fixture's extraction and ingestion jobs
+        // are independent and their terminal transitions have no scripted
+        // order. The golden master pins existence + state, not incidental
+        // completion timing, so the section is dumped in a script-derived
+        // order instead (same normalization philosophy as ULIDs/timestamps).
+        let recentQueueItems = try queue.loadRecent(limit: 50).sorted {
+            ($0.queue.rawValue, $0.id.rawValue) < ($1.queue.rawValue, $1.id.rawValue)
+        }
+        for item in recentQueueItems {
             out += "queue-item id=\(id(item.id.rawValue, normalizer)) queue=\(item.queue.rawValue) state=\(item.state.rawValue) sources=\(item.payload.sourceIDs.count) attempts=\(item.attempt)\n"
         }
         queue.close()

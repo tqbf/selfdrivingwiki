@@ -224,9 +224,9 @@ struct ClientLocalOpenBoundaryTests {
         // reads and source writes reuse the composition's store, never a new
         // local open.
         #expect(alpha.store.selectPage(byTitle: "Home"))
-        alpha.store.addSource(filename: "boundary-notes.txt", data: Data("boundary".utf8))
+        _ = await alpha.store.addSource(filename: "boundary-notes.txt", data: Data("boundary".utf8))
         alpha.store.reloadFromStore()
-        _ = alpha.store.searchSimilar(query: "boundary")
+        _ = await alpha.store.searchSimilar(query: "boundary")
         _ = await alpha.store.searchSimilarResolvingTantivy(query: "boundary")
         await alpha.upgradeSearchIndex()
         #expect(recorder.count(.wikiStore) == 1)

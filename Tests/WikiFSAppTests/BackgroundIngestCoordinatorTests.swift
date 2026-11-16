@@ -48,7 +48,7 @@ struct BackgroundIngestCoordinatorTests {
         model.addSource(
             filename: "diagram.png",
             data: Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         return model.sources.first(where: { $0.ext == "png" })!
     }
 
@@ -60,21 +60,21 @@ struct BackgroundIngestCoordinatorTests {
         model.addSource(
             filename: "feed.xml",
             data: Data("<?xml version=\"1.0\"?><foo/>".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         return model.sources.first(where: { $0.ext == "xml" })!
     }
 
     @discardableResult
     private func addPDF(to model: WikiStoreModel) -> SourceSummary {
         model.addSource(filename: "paper.pdf", data: Data("%PDF-1.4\n".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         return model.sources.first(where: { $0.ext == "pdf" })!
     }
 
     @discardableResult
     private func addMarkdown(to model: WikiStoreModel) -> SourceSummary {
         model.addSource(filename: "notes.md", data: Data("# Title\n\nbody".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         return model.sources.first(where: { $0.ext == "md" })!
     }
 
@@ -164,7 +164,7 @@ struct BackgroundIngestCoordinatorTests {
         let store = try tempStore()
         _ = try addBytelessYouTube(to: store, withTranscript: false)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let yt = try #require(model.sources.first)
         #expect(yt.byteSize == 0)
@@ -187,7 +187,7 @@ struct BackgroundIngestCoordinatorTests {
         let store = try tempStore()
         _ = try addBytelessYouTube(to: store, withTranscript: true)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let yt = try #require(model.sources.first)
         #expect(yt.byteSize == 0)               // still byteless…
@@ -224,7 +224,7 @@ struct BackgroundIngestCoordinatorTests {
         let ytWith = try addBytelessYouTube(to: store, videoID: "dQw4w9WgXcQ", withTranscript: true)
         let ytWithout = try addBytelessYouTube(to: store, videoID: "aqz-KE-bpKQ", withTranscript: false)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let enqueued = await BackgroundIngestCoordinator.filterIngestibleSources(
             model.sources, store: model)
@@ -235,7 +235,7 @@ struct BackgroundIngestCoordinatorTests {
                "YouTube WITHOUT transcript must be skipped (byteless guard)")
     }
 
-    @Test("Empty store filters to empty list") func emptyStore() throws {
+    @Test("Empty store filters to empty list") func emptyStore() async throws {
         let model = WikiStoreModel(store: try tempStore())
         let enqueued = await BackgroundIngestCoordinator.filterIngestibleSources(
             model.sources, store: model)

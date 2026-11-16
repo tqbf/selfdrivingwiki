@@ -87,7 +87,7 @@ struct InspectorOutlineHostedTests {
         let store = try StoreBackend.current.makeStore(
             databaseURL: directory.appendingPathComponent("WikiFS.sqlite"))
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let markdown = """
         # Outline Repro Page
@@ -110,7 +110,7 @@ struct InspectorOutlineHostedTests {
         try store.updatePage(id: first.id, title: "Outline Repro First", body: markdown)
         let second = try store.createPage(title: "Outline Repro Second")
         try store.updatePage(id: second.id, title: "Outline Repro Second", body: markdown)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.page(first.id))
 
         UserDefaults.standard.set(InspectorTab.outline.rawValue, forKey: "pageInspectorTab")
@@ -278,7 +278,7 @@ struct InspectorOutlineHostedTests {
         }
 
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.source(source.id))
 
         UserDefaults.standard.set(InspectorTab.outline.rawValue, forKey: "sourceInspectorTab")
@@ -539,7 +539,7 @@ struct InspectorOutlineHostedTests {
                     createdAt: .distantPast)),
             ])
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         UserDefaults.standard.set(InspectorTab.outline.rawValue, forKey: "pageInspectorTab")
         UserDefaults.standard.set(InspectorTab.outline.rawValue, forKey: "sourceInspectorTab")
@@ -698,7 +698,7 @@ struct InspectorOutlineHostedTests {
         let page = try store.createPage(title: "Caret Page")
         try store.updatePage(id: page.id, title: "Caret Page", body: markdown)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.page(page.id))
         // Seed edit mode from the active tab before mount, exactly like a
         // "start in editor" tab does.
@@ -778,7 +778,7 @@ struct InspectorOutlineHostedTests {
             sourceVersionID: nil,
             note: nil)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.source(source.id))
 
         UserDefaults.standard.set(InspectorTab.outline.rawValue, forKey: "sourceInspectorTab")

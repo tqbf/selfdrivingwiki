@@ -81,7 +81,7 @@ struct PageContextMenuTests {
 
     // MARK: - Labels and order
 
-    @Test func pageGroupIsBackForwardPrintInMenuOrder() throws {
+    @Test func pageGroupIsBackForwardPrintInMenuOrder() async throws {
         let (model, _) = try tempModel()
         let items = PageContextMenuNSItems.items(store: model, printPage: {})
 
@@ -100,7 +100,7 @@ struct PageContextMenuTests {
         #expect(NSImage(systemSymbolName: action.symbolName, accessibilityDescription: action.title) != nil)
     }
 
-    @Test func insertPutsNavigationAboveReloadAndPrintInTheGroupBelow() throws {
+    @Test func insertPutsNavigationAboveReloadAndPrintInTheGroupBelow() async throws {
         let (model, _) = try tempModel()
         let menu = webKitPageMenu()
 
@@ -114,7 +114,7 @@ struct PageContextMenuTests {
         #expect(!menu.items[2].isSeparatorItem)
     }
 
-    @Test func insertWithoutWebKitReloadStillSeparatesPrintFromNavigation() throws {
+    @Test func insertWithoutWebKitReloadStillSeparatesPrintFromNavigation() async throws {
         let (model, _) = try tempModel()
         let menu = NSMenu()
 
@@ -126,7 +126,7 @@ struct PageContextMenuTests {
 
     // MARK: - Enabled state
 
-    @Test func backAndForwardAreDisabledWithNoHistory() throws {
+    @Test func backAndForwardAreDisabledWithNoHistory() async throws {
         let (model, _) = try tempModel()
         let menu = webKitPageMenu()
         PageContextMenuNSItems.insert(into: menu, store: model, printPage: {})
@@ -141,11 +141,11 @@ struct PageContextMenuTests {
         #expect(try item(menu, titled: "Print Page…").isEnabled)
     }
 
-    @Test func historyEnablesBackThenForward() throws {
+    @Test func historyEnablesBackThenForward() async throws {
         let (model, store) = try tempModel()
         let a = try store.createPage(title: "A")
         let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.select(.page(a.id))
         model.select(.page(b.id))
 
@@ -165,12 +165,12 @@ struct PageContextMenuTests {
 
     // MARK: - Actions
 
-    @Test func backNavigatesExactlyOneStep() throws {
+    @Test func backNavigatesExactlyOneStep() async throws {
         let (model, store) = try tempModel()
         let a = try store.createPage(title: "A")
         let b = try store.createPage(title: "B")
         let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.select(.page(a.id))
         model.select(.page(b.id))
         model.select(.page(c.id))
@@ -183,11 +183,11 @@ struct PageContextMenuTests {
         #expect(model.canNavigateForward)
     }
 
-    @Test func forwardNavigatesExactlyOneStep() throws {
+    @Test func forwardNavigatesExactlyOneStep() async throws {
         let (model, store) = try tempModel()
         let a = try store.createPage(title: "A")
         let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.select(.page(a.id))
         model.select(.page(b.id))
         model.navigateBack()
@@ -200,7 +200,7 @@ struct PageContextMenuTests {
         #expect(!model.canNavigateForward)
     }
 
-    @Test func printInvokesTheInjectedActionOnce() throws {
+    @Test func printInvokesTheInjectedActionOnce() async throws {
         let (model, _) = try tempModel()
         let counter = CallCounter()
         let menu = webKitPageMenu()
@@ -213,10 +213,10 @@ struct PageContextMenuTests {
 
     // MARK: - The reader's own menu
 
-    @Test func readerPageMenuMatchesSafariOrderAndKeepsShare() throws {
+    @Test func readerPageMenuMatchesSafariOrderAndKeepsShare() async throws {
         let (model, store) = try tempModel()
         let page = try store.createPage(title: "A")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let webView = WikiReaderWebView()
         webView.store = model
         webView.currentSelection = .page(page.id)
@@ -228,7 +228,7 @@ struct PageContextMenuTests {
             == ["Back", "Forward", "Reload", "", "Print Page…", "Share…", "", "Look Up"])
     }
 
-    @Test func readerPageMenuOmitsShareWithNoShareableSelection() throws {
+    @Test func readerPageMenuOmitsShareWithNoShareableSelection() async throws {
         let (model, _) = try tempModel()
         let webView = WikiReaderWebView()
         webView.store = model
@@ -240,7 +240,7 @@ struct PageContextMenuTests {
         #expect(menu.items.map(\.title) == ["Back", "Forward", "Reload", "", "Print Page…", "", "Look Up"])
     }
 
-    @Test func printTargetsTheReaderThatWasRightClicked() throws {
+    @Test func printTargetsTheReaderThatWasRightClicked() async throws {
         let (model, _) = try tempModel()
         let probe = PrintProbe()
         let webView = WikiReaderWebView()
@@ -263,7 +263,7 @@ struct PageContextMenuTests {
     /// The real entry point — `willOpenMenu` — on a right-click that is not over
     /// a link. This also covers the WebKit-builtin removal and separator
     /// collapsing that run before the page group is inserted.
-    @Test func willOpenMenuAddsThePageGroupOnANonLinkClick() throws {
+    @Test func willOpenMenuAddsThePageGroupOnANonLinkClick() async throws {
         let (model, _) = try tempModel()
         let webView = WikiReaderWebView()
         webView.store = model
@@ -282,7 +282,7 @@ struct PageContextMenuTests {
     /// A right-click on a link is Safari's *link* menu: no Back / Forward /
     /// Print. The link items themselves are unchanged — including #925's lazy
     /// "Suggest…" submenu, which must still do no work at build time.
-    @Test func linkMenuKeepsItsOwnItemsAndGainsNoPageItems() throws {
+    @Test func linkMenuKeepsItsOwnItemsAndGainsNoPageItems() async throws {
         let (model, _) = try tempModel()
         let webView = WikiReaderWebView()
         webView.store = model

@@ -24,15 +24,15 @@ struct Phase5StoreCanonicalizationTests {
 
     // MARK: - AC.1 — save canonicalizes (the shared PageUpsert seam)
 
-    @Test func upsertCanonicalizesPageAndSourceLinks() throws {
+    @Test func upsertCanonicalizesPageAndSourceLinks() async throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         // Create the targets first so the link resolvers find them.
-        let target = try PageUpsert.upsert(in: store, id: nil, title: "Some Page", body: "")
+        let target = try await PageUpsert.upsert(in: store, id: nil, title: "Some Page", body: "")
         let source = try store.addSource(filename: "a-paper.pdf", data: Data("%PDF".utf8))
         try store.renameSource(id: source.id, to: "A Paper")
 
         // Now save a page whose body uses human titles — both should canonicalize.
-        let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Linker",
+        let outcome = try await PageUpsert.upsert(in: store, id: nil, title: "Linker",
             body: "See [[Some Page]] and [[source:A Paper]].")
 
         let stored = try store.getPage(id: outcome.id)
@@ -48,13 +48,13 @@ struct Phase5StoreCanonicalizationTests {
         #expect(sourceLinks.contains { $0.to == source.id.rawValue })
     }
 
-    @Test func upsertCanonicalizesLegacySourceProjectionLink() throws {
+    @Test func upsertCanonicalizesLegacySourceProjectionLink() async throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let source = try store.addSource(filename: "ScalaTestingWithSpecs2.md", data: Data("source".utf8))
         let projection = "\(source.filename)–\(source.id.rawValue).md"
         let quote = #""Mocks are used to isolate unit tests against external dependencies.""#
 
-        let outcome = try PageUpsert.upsert(
+        let outcome = try await PageUpsert.upsert(
             in: store, id: nil, title: "Linker",
             body: "See [[source:\(projection)#\(quote)]].")
 
@@ -66,9 +66,9 @@ struct Phase5StoreCanonicalizationTests {
 
     // MARK: - AC.3 — forward link stored verbatim, no edge
 
-    @Test func unresolvedForwardLinkStoredVerbatim() throws {
+    @Test func unresolvedForwardLinkStoredVerbatim() async throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
-        let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Page",
+        let outcome = try await PageUpsert.upsert(in: store, id: nil, title: "Page",
             body: "Link to [[No Such Page]] here.")
 
         let stored = try store.getPage(id: outcome.id)
@@ -80,19 +80,19 @@ struct Phase5StoreCanonicalizationTests {
 
     // MARK: - 5.1.4 — ULID-shaped title resolves by name (collision fallback)
 
-    @Test func ulidShapedTitleResolvesByNameFallback() throws {
+    @Test func ulidShapedTitleResolvesByNameFallback() async throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         // A page whose TITLE is a valid 26-char Crockford string. After
         // canonicalization, a link to it is `[[page:ULID|ULID]]`. The validate-
         // -by-id path finds no row by that id (it's a title, not an id), so it
         // must fall back to name resolution so the edge isn't dropped.
         let ulidTitle = "01H0ABCDEFGHJKMNPQRSTVWXYZ"  // 26 valid Crockford chars
-        let target = try PageUpsert.upsert(in: store, id: nil, title: ulidTitle, body: "")
+        let target = try await PageUpsert.upsert(in: store, id: nil, title: ulidTitle, body: "")
 
         // Save a linker via the raw path (bypass canonicalization) with the
         // ULID-title as a plain wiki link, then replaceLinks by name.
-        let linker = try store.createPage(title: "Linker")
-        try store.updatePage(id: linker.id, title: "Linker",
+        let linker = try await store.createPage(title: "Linker")
+        try await store.updatePage(id: linker.id, title: "Linker",
             body: "See [[\(ulidTitle)]].")
         try store.replaceLinks(from: linker.id,
             parsedLinks: WikiLinkParser.parse("See [[\(ulidTitle)]]."))
@@ -104,15 +104,15 @@ struct Phase5StoreCanonicalizationTests {
 
     // MARK: - AC.6 — rename self-heals at render, zero body writes
 
-    @Test func pageRenameSelfHealsAtRenderWithNoBodyRewrite() throws {
+    @Test func pageRenameSelfHealsAtRenderWithNoBodyRewrite() async throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
-        let target = try PageUpsert.upsert(in: store, id: nil, title: "Old Title", body: "content")
+        let target = try await PageUpsert.upsert(in: store, id: nil, title: "Old Title", body: "content")
 
         // 50 inbound links from 50 pages, canonicalized on save.
         var linkerIDs: [PageID] = []
         var before: [(id: PageID, version: Int, updatedAt: Date, body: String)] = []
         for i in 0..<50 {
-            let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Linker \(i)",
+            let outcome = try await PageUpsert.upsert(in: store, id: nil, title: "Linker \(i)",
                 body: "Links [[Old Title]].")
             linkerIDs.append(outcome.id)
             let p = try store.getPage(id: outcome.id)
@@ -122,7 +122,7 @@ struct Phase5StoreCanonicalizationTests {
         }
 
         // Rename the target page (re-title via updatePage on the existing row).
-        try store.updatePage(id: target.id, title: "New Title", body: "content")
+        try await store.updatePage(id: target.id, title: "New Title", body: "content")
 
         // Render an inbound-link page: the stale alias "Old Title" must display
         // the CURRENT title "New Title" (display-at-render self-heal).
@@ -146,13 +146,13 @@ struct Phase5StoreCanonicalizationTests {
 
     // MARK: - AC.9 — source rename self-heals, no body rewrite
 
-    @Test func sourceRenameSelfHealsAtRenderNoBodyRewrite() throws {
+    @Test func sourceRenameSelfHealsAtRenderNoBodyRewrite() async throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let source = try store.addSource(filename: "paper.pdf", data: Data("%PDF".utf8))
         try store.renameSource(id: source.id, to: "Old Paper")
 
         // A canonical source link: [[source:<id>|Old Paper]].
-        let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Linker",
+        let outcome = try await PageUpsert.upsert(in: store, id: nil, title: "Linker",
             body: "See [[source:Old Paper]].")
         let before = try store.getPage(id: outcome.id)
         #expect(before.bodyMarkdown.contains("[[source:\(source.id.rawValue)|Old Paper]]"))
@@ -179,7 +179,7 @@ struct Phase5StoreCanonicalizationTests {
     /// Build a v23 DB, plant a legacy (raw, uncanonicalized) body, then rewind
     /// the stamp to v22 so reopening runs the v23 sweep. Returns the URL + the
     /// linker page id + the target id + the pre-migration token/version.
-    private func buildRewoundV22DB() throws -> (url: URL, linkerID: PageID, targetID: PageID,
+    private func buildRewoundV22DB() async throws -> (url: URL, linkerID: PageID, targetID: PageID,
                                                  token: ChangeToken, version: Int) {
         let url = tempDatabaseURL()
         let targetID: PageID
@@ -188,10 +188,10 @@ struct Phase5StoreCanonicalizationTests {
         let version: Int
         do {
             let store = try GRDBWikiStore(databaseURL: url)
-            targetID = try PageUpsert.upsert(in: store, id: nil, title: "Target", body: "").id
+            targetID = try await PageUpsert.upsert(in: store, id: nil, title: "Target", body: "").id
             // Raw updatePage (no canonicalization) plants a legacy body.
-            let linker = try store.createPage(title: "Linker")
-            try store.updatePage(id: linker.id, title: "Linker",
+            let linker = try await store.createPage(title: "Linker")
+            try await store.updatePage(id: linker.id, title: "Linker",
                 body: "See [[Target]] and [[Ghost]].")
             try store.replaceLinks(from: linker.id,
                 parsedLinks: WikiLinkParser.parse("See [[Target]] and [[Ghost]]."))
@@ -206,8 +206,8 @@ struct Phase5StoreCanonicalizationTests {
         return (url, linkerID, targetID, token, version)
     }
 
-    @Test func migrateV22ToV23CanonicalizesBodiesAndAdvancesToken() throws {
-        let (url, linkerID, targetID, tokenBefore, versionBefore) = try buildRewoundV22DB()
+    @Test func migrateV22ToV23CanonicalizesBodiesAndAdvancesToken() async throws {
+        let (url, linkerID, targetID, tokenBefore, versionBefore) = try await buildRewoundV22DB()
 
         // Reopen → v23 sweep runs.
         let reopened = try GRDBWikiStore(databaseURL: url)
@@ -224,8 +224,8 @@ struct Phase5StoreCanonicalizationTests {
         #expect(migrated.version > versionBefore)
     }
 
-    @Test func migrateV22ToV23IsIdempotent() throws {
-        let (url, linkerID, targetID, _, _) = try buildRewoundV22DB()
+    @Test func migrateV22ToV23IsIdempotent() async throws {
+        let (url, linkerID, targetID, _, _) = try await buildRewoundV22DB()
 
         // First reopen: migrates.
         let first = try GRDBWikiStore(databaseURL: url)
@@ -243,7 +243,7 @@ struct Phase5StoreCanonicalizationTests {
 
     // MARK: - Issue #619 — pipe in source display_name, end-to-end through PageUpsert
 
-    @Test func upsertCanonicalizesSourceLinkWithPipeInDisplayName() throws {
+    @Test func upsertCanonicalizesSourceLinkWithPipeInDisplayName() async throws {
         // The issue's repro: a source whose `display_name` contains a literal
         // `|`. Under the app's normal ingestion flow, `WikiNameRules.sanitized`
         // (called by `addSource`/`renameSource` at every write boundary, and by
@@ -294,7 +294,7 @@ struct Phase5StoreCanonicalizationTests {
         //    With the try-resolve-whole branch at the canonicalize seam, the
         //    reconstituted whole name resolves against the store and the link
         //    canonicalizes as `[[source:<ULID>|<whole name with pipe>]]`.
-        let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Linker",
+        let outcome = try await PageUpsert.upsert(in: store, id: nil, title: "Linker",
             body: "Cite [[source:\(displayName)]].")
 
         let stored = try store.getPage(id: outcome.id)
@@ -315,7 +315,7 @@ struct Phase5StoreCanonicalizationTests {
         //    (WikiLinkRewriter.swift, `isCanonicalULID`), so neither the
         //    try-resolve-whole branch nor the regular resolve block fires.
         let before = stored.bodyMarkdown
-        _ = try PageUpsert.upsert(in: store, id: outcome.id, title: "Linker",
+        _ = try await PageUpsert.upsert(in: store, id: outcome.id, title: "Linker",
             body: stored.bodyMarkdown)
         let after = try store.getPage(id: outcome.id)
         #expect(after.bodyMarkdown == before,

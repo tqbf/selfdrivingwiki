@@ -149,7 +149,7 @@ struct SourceRefreshTests {
 
         // Availability comes from the route, not helper presence: an Apple
         // source is refreshable (transcribable) on every build.
-        #expect(model.isSourceRefreshable(for: source.id) == true)
+        #expect(await model.isSourceRefreshable(for: source.id) == true)
     }
 
     // MARK: - Refreshability gate (#218): the detail view should only offer
@@ -162,7 +162,7 @@ struct SourceRefreshTests {
             "<html><body>plain</body></html>", url: "https://example.com/a"))
         _ = try await model.addURL("https://example.com/a", fetcher: fetcher)
         let source = try #require(try store.listSources().first { $0.role == .primary })
-        #expect(model.isSourceRefreshable(for: source.id) == true)
+        #expect(await model.isSourceRefreshable(for: source.id) == true)
     }
 
     @Test func localFileSourceIsNotRefreshableGate() async throws {
@@ -174,6 +174,6 @@ struct SourceRefreshTests {
             externalItemKey: nil, externalItemTitle: nil, mimeType: nil,
             provenance: nil)
         let source = try #require(try store.listSources().first)
-        #expect(model.isSourceRefreshable(for: source.id) == false)
+        #expect(await model.isSourceRefreshable(for: source.id) == false)
     }
 }

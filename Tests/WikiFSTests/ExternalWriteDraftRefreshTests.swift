@@ -28,9 +28,9 @@ struct ExternalWriteDraftRefreshTests {
         return (model, store)
     }
 
-    @Test func reloadFromStoreRefreshesCleanDraftAfterExternalWrite() throws {
+    @Test func reloadFromStoreRefreshesCleanDraftAfterExternalWrite() async throws {
         let (model, store) = try makeModel()
-        model.newPage(title: "Home")
+        await model.newPage(title: "Home")
         guard case .page(let id) = model.selection else { Issue.record("expected page selection"); return }
 
         // The page starts empty.
@@ -38,19 +38,19 @@ struct ExternalWriteDraftRefreshTests {
 
         // Simulate an agent write: store.updatePage directly, bypassing the
         // model's draft system (exactly what AgentOperationRunner does).
-        try store.updatePage(id: id, title: "Home", body: "# Welcome\n\nAgent content.")
+        try await store.updatePage(id: id, title: "Home", body: "# Welcome\n\nAgent content.")
 
         // The event bus handler calls reloadFromStore(); call it directly.
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // The clean draft must now reflect the agent-written content.
         #expect(model.draftBody == "# Welcome\n\nAgent content.")
         #expect(model.draftTitle == "Home")
     }
 
-    @Test func reloadFromStorePreservesDirtyDraftAfterExternalWrite() throws {
+    @Test func reloadFromStorePreservesDirtyDraftAfterExternalWrite() async throws {
         let (model, store) = try makeModel()
-        model.newPage(title: "Home")
+        await model.newPage(title: "Home")
         guard case .page(let id) = model.selection else { Issue.record("expected page selection"); return }
 
         // User starts editing — draft is now dirty.
@@ -58,17 +58,17 @@ struct ExternalWriteDraftRefreshTests {
         model.bodyChanged()
 
         // Agent writes to the same page (external store write).
-        try store.updatePage(id: id, title: "Home", body: "# Agent overwrote this.")
+        try await store.updatePage(id: id, title: "Home", body: "# Agent overwrote this.")
 
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // The user's unsaved edit must win — never clobbered by the reload.
         #expect(model.draftBody == "My unsaved edit")
     }
 
-    @Test func reloadFromStoreNoOpsWhenSelectionIsNotAPage() throws {
+    @Test func reloadFromStoreNoOpsWhenSelectionIsNotAPage() async throws {
         let (model, store) = try makeModel()
-        model.newPage(title: "Home")
+        await model.newPage(title: "Home")
         guard case .page(let id) = model.selection else { Issue.record("expected page selection"); return }
 
         // Navigate away from the page (to the .newChat surface).
@@ -76,9 +76,9 @@ struct ExternalWriteDraftRefreshTests {
         #expect(model.draftBody == "")
 
         // External write to the page.
-        try store.updatePage(id: id, title: "Home", body: "# Should not affect draft.")
+        try await store.updatePage(id: id, title: "Home", body: "# Should not affect draft.")
 
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // draftBody is still empty (we're on .newChat, not the page).
         #expect(model.draftBody == "")

@@ -32,8 +32,8 @@ struct StoreConcurrencyTests {
         let (store, _) = try makeStore()
         var created: [PageID] = []
         for i in 0..<20 {
-            let page = try store.createPage(title: "Page \(i)")
-            try store.updatePage(id: page.id, title: "Page \(i)", body: "body \(i) [[Page 0]]")
+            let page = try await store.createPage(title: "Page \(i)")
+            try await store.updatePage(id: page.id, title: "Page \(i)", body: "body \(i) [[Page 0]]")
             created.append(page.id)
         }
         let ids = created   // immutable snapshot for the @Sendable task closures
@@ -381,7 +381,7 @@ extension StoreConcurrencyTests {
 
         // Nesting + commit: the nested replacement and a sibling write both
         // commit together.
-        let sibling = try store.createPage(title: "Sibling")
+        let sibling = try await store.createPage(title: "Sibling")
         try store.withTransaction {
             try store.setChatAttachments(chatID: chat.id, targets: [
                 .page(sibling.id),

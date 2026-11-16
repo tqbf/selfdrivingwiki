@@ -534,16 +534,16 @@ import Testing
         return (0..<outline.numberOfRows).compactMap { outline.item(atRow: $0) as? BookmarkNode }
     }
 
-    @Test func pageRenameUnderNameAZInvalidatesAndReSorts() throws {
+    @Test func pageRenameUnderNameAZInvalidatesAndReSorts() async throws {
         let (model, store) = try tempModel()
         let beta = try store.createPage(title: "Beta")
         let alpha = try store.createPage(title: "Alpha")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.addPageRef(parentID: nil, pageID: beta.id, position: 0)
         model.addPageRef(parentID: nil, pageID: alpha.id, position: 1)
         // addPageRef refreshes the model via the async event bus — force the
         // reload synchronously so bookmarkNodes is populated for the outline.
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let vc = BookmarksOutlineViewController()
         vc.fileProvider = nil
@@ -568,7 +568,7 @@ import Testing
         // also refreshes the model via the async bus — force it so the
         // title index below sees the new title.
         model.rename(alpha.id, to: "Zeta")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(vc.needsReload(nodes: nodes, sortOrder: .nameAZ) == true)
 
         vc.reloadData(from: nodes)
@@ -642,13 +642,13 @@ import Testing
         let (model, store) = try tempModel()
         let beta = try store.createPage(title: "Beta")
         let alpha = try store.createPage(title: "Alpha")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.addPageRef(parentID: nil, pageID: beta.id, position: 0)
         model.addPageRef(parentID: nil, pageID: alpha.id, position: 1)
         // addPageRef refreshes the model via the async event bus — force the
         // reload synchronously so the header's `!bookmarkNodes.isEmpty` gate
         // sees the nodes at mount.
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let hosting = makeContainer(model: model)
         let window = NSWindow(contentViewController: hosting)

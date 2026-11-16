@@ -17,24 +17,26 @@ struct NavigationSaveTests {
             .appendingPathComponent("wikifs-autosave-\(UUID().uuidString).sqlite")
     }
 
-    @Test func selectFlushesCurrentDraftThenLoadsNewPage() throws {
+    @Test func selectFlushesCurrentDraftThenLoadsNewPage() async throws {
         let url = tempURL()
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: url))
 
         // Create A and B (newPage selects the just-created page).
-        model.newPage(title: "A")
+        await model.newPage(title: "A")
         let aID = model.selection!
-        model.newPage(title: "B")
+        await model.newPage(title: "B")
         let bID = model.selection!
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // Select A, type into the body (no autosave — only explicit save).
         model.select(aID)
+        await model.quiesceSelectionTransitions()
         model.draftBody = "A-edit"
         model.bodyChanged()
 
         // select() flushes the outgoing draft synchronously before loading B.
         model.select(bID)
+        await model.quiesceSelectionTransitions()
 
         // B is now loaded with its (empty) body; A's edit was flushed to DB.
         #expect(model.selection == bID)
@@ -42,34 +44,37 @@ struct NavigationSaveTests {
 
         // Reload A from the store and confirm the draft was persisted.
         model.select(aID)
+        await model.quiesceSelectionTransitions()
         #expect(model.draftBody == "A-edit")
 
         // Now mutate B, flush explicitly, reopen the store at the same URL,
         // and confirm BOTH pages persisted their latest text.
         model.select(bID)
+        await model.quiesceSelectionTransitions()
         model.draftBody = "B-edit"
         model.bodyChanged()
-        model.flushPendingSave()
+        await model.flushPendingSave()
+        await model.quiesceSelectionTransitions()
 
         // selection is now a WikiSelection; pull the page ids back out to read.
         guard case let .page(aPageID) = aID, case let .page(bPageID) = bID else {
             Issue.record("expected page selections"); return
         }
         let reopened = try StoreBackend.current.makeStore(databaseURL: url)
-        #expect(try reopened.getPage(id: aPageID).bodyMarkdown == "A-edit")
-        #expect(try reopened.getPage(id: bPageID).bodyMarkdown == "B-edit")
+        #expect(try await reopened.getPage(id: aPageID).bodyMarkdown == "A-edit")
+        #expect(try await reopened.getPage(id: bPageID).bodyMarkdown == "B-edit")
     }
 
-    @Test func summariesRebuiltFromSourceAfterMutations() throws {
+    @Test func summariesRebuiltFromSourceAfterMutations() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
-        model.newPage(title: "First")
-        model.newPage(title: "Second")
-        model.reloadFromStore()
+        await model.newPage(title: "First")
+        await model.newPage(title: "Second")
+        await model.bootstrapFromStore()
         #expect(model.summaries.count == 2)
 
         let firstID = model.summaries.first { $0.title == "First" }!.id
-        try model.delete(firstID, unlinkIncomingLinks: false)
-        model.reloadFromStore()
+        try await model.delete(firstID, unlinkIncomingLinks: false)
+        await model.bootstrapFromStore()
         // Rebuilt from source — not a stale cache.
         #expect(model.summaries.count == 1)
         #expect(model.summaries.allSatisfy { $0.title != "First" })
@@ -78,40 +83,43 @@ struct NavigationSaveTests {
     /// The sidebar / List-driven path: SwiftUI writes `selection` directly, then
     /// the view calls `handleSelectionChange(to:)`. This must flush the outgoing
     /// page's draft and load the incoming page — the same guarantee as `select`.
-    @Test func listSelectionChangeFlushesAndLoads() throws {
+    @Test func listSelectionChangeFlushesAndLoads() async throws {
         let url = tempURL()
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: url))
-        model.newPage(title: "A")
+        await model.newPage(title: "A")
         let aID = model.selection!
-        model.newPage(title: "B")
+        await model.newPage(title: "B")
         let bID = model.selection!
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // Simulate List selecting A (binding writes selection, view fires onChange).
         model.selection = aID
         model.handleSelectionChange(to: aID)
+        await model.quiesceSelectionTransitions()
         model.draftBody = "A via list"
         model.bodyChanged()
 
         // Now the List selects B before the debounce fires.
         model.selection = bID
         model.handleSelectionChange(to: bID)
+        await model.quiesceSelectionTransitions()
         #expect(model.draftBody == "")  // B is empty, A's edit was flushed
 
         model.selection = aID
         model.handleSelectionChange(to: aID)
+        await model.quiesceSelectionTransitions()
         #expect(model.draftBody == "A via list")
     }
 
-    @Test func renameUpdatesSummaryFromSource() throws {
+    @Test func renameUpdatesSummaryFromSource() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
-        model.newPage(title: "Old Name")
-        model.reloadFromStore()
+        await model.newPage(title: "Old Name")
+        await model.bootstrapFromStore()
         guard case let .page(id)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
-        model.rename(id, to: "New Name")
-        model.reloadFromStore()
+        await model.rename(id, to: "New Name")
+        await model.bootstrapFromStore()
         #expect(model.summaries.first { $0.id == id }?.title == "New Name")
         #expect(model.draftTitle == "New Name")
     }

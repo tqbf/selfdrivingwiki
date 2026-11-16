@@ -34,7 +34,7 @@ struct PagesNewChatMenuHostedTests {
         for title in ["Alpha", "Beta", "Gamma"] {
             _ = try store.createPage(title: title)
         }
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let ids = model.summaries.map(\.id)
 
         let vc = PagesListViewController()
@@ -173,7 +173,7 @@ struct SourcesNewChatMenuHostedTests {
         for (name, byte) in [("alpha.pdf", "a"), ("beta.pdf", "b"), ("gamma.pdf", "g")] {
             _ = try store.addSource(filename: name, data: Data(byte.utf8))
         }
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let ids = model.sources.filter(\.isPrimary).map(\.id)
 
         let vc = SourcesListViewController()

@@ -25,7 +25,7 @@ struct SourcesTests {
 
     // MARK: - Ingest inserts a row with the right metadata
 
-    @Test func ingestInsertsRowWithByteSizeMatchingData() throws {
+    @Test func ingestInsertsRowWithByteSizeMatchingData() async throws {
         let store = try tempStore()
         let bytes = Data((0..<512).map { UInt8($0 % 256) })
         let summary = try store.addSource(filename: "blob.bin", data: bytes)
@@ -39,7 +39,7 @@ struct SourcesTests {
         #expect(try store.sourceContent(id: summary.id).count == bytes.count)
     }
 
-    @Test func extAndMimeDerivedFromFilename() throws {
+    @Test func extAndMimeDerivedFromFilename() async throws {
         let store = try tempStore()
         // Byte signatures are the top evidence tier (chooseEvidence), so the
         // fixture carries the full "%PDF-" signature the sniff matches; the
@@ -58,7 +58,7 @@ struct SourcesTests {
 
     // MARK: - MIME from content sniff (content-type-over-extension plan)
 
-    @Test func mimeFromContentSniffPDFBytesWithTextExtension() throws {
+    @Test func mimeFromContentSniffPDFBytesWithTextExtension() async throws {
         // PDF bytes with a .txt filename → mime_type is "application/pdf" from the
         // magic-byte sniff, not "text/plain" from the extension.
         let store = try tempStore()
@@ -66,7 +66,7 @@ struct SourcesTests {
         #expect(source.mimeType == "application/pdf")
     }
 
-    @Test func mimeFromContentSniffPNGBytesNoExtension() throws {
+    @Test func mimeFromContentSniffPNGBytesNoExtension() async throws {
         // Real PNG magic bytes with no extension → sniffed as image/png.
         let store = try tempStore()
         let pngMagic = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
@@ -75,7 +75,7 @@ struct SourcesTests {
         #expect(source.mimeType == "image/png")
     }
 
-    @Test func mimeByteSignatureOverridesExplicitParam() throws {
+    @Test func mimeByteSignatureOverridesExplicitParam() async throws {
         // Declared MIME cannot override a byte signature: binary evidence is
         // the top evidence tier (issue #1396). The explicit mimeType:
         // parameter wins only when the byte evidence is inconclusive
@@ -88,7 +88,7 @@ struct SourcesTests {
         #expect(source.mimeType == "application/pdf")
     }
 
-    @Test func mimeFallsBackToExtWhenSniffInconclusive() throws {
+    @Test func mimeFallsBackToExtWhenSniffInconclusive() async throws {
         // Bytes that don't match any magic number fall back to ext-derived MIME.
         let store = try tempStore()
         let source = try store.addSource(filename: "notes.md", data: Data("# Hello".utf8))
@@ -105,7 +105,7 @@ struct SourcesTests {
     /// UTF-8 text classification — readable and safe, with no hidden
     /// Mermaid policy. An active package claim normalizes to the canonical
     /// package MIME instead (covered by the catalog integration tests).
-    @Test func mmdExtensionWithoutClaimResolvesToGenericText() throws {
+    @Test func mmdExtensionWithoutClaimResolvesToGenericText() async throws {
         let store = try tempStore()
         let diagram = Data("flowchart TD\n    A --> B\n    B --> C\n".utf8)
         let source = try store.addSource(
@@ -116,7 +116,7 @@ struct SourcesTests {
         #expect(MimeType.isText(source.mimeType) == true)
     }
 
-    @Test func mmdExtensionUpperCasedAlsoFallsBackToGenericText() throws {
+    @Test func mmdExtensionUpperCasedAlsoFallsBackToGenericText() async throws {
         let store = try tempStore()
         let source = try store.addSource(
             filename: "Flow.MMD", data: Data("graph TD\n  X --> Y\n".utf8))
@@ -124,7 +124,7 @@ struct SourcesTests {
         #expect(source.mimeType == "text/plain")
     }
 
-    @Test func mermaidExtensionWithoutClaimAlsoFallsBackToGenericText() throws {
+    @Test func mermaidExtensionWithoutClaimAlsoFallsBackToGenericText() async throws {
         let store = try tempStore()
         let source = try store.addSource(
             filename: "seq.mermaid", data: Data("sequenceDiagram\n  A->>B: hi\n".utf8))
@@ -132,14 +132,14 @@ struct SourcesTests {
         #expect(source.mimeType == "text/plain")
     }
 
-    @Test func canvasExtensionResolvesToJSONMime() throws {
+    @Test func canvasExtensionResolvesToJSONMime() async throws {
         let store = try tempStore()
         let source = try store.addSource(
             filename: "diagram.canvas", data: Data("{\"nodes\":[],\"edges\":[]}".utf8))
         #expect(source.mimeType == MimeType.json)
     }
 
-    @Test func explicitMimeStillWinsOverMmdExtension() throws {
+    @Test func explicitMimeStillWinsOverMmdExtension() async throws {
         // The `mimeType:` parameter is the first fallback tried; a caller that
         // says "this is application/custom" must win over the `.mmd` map.
         let store = try tempStore()
@@ -149,7 +149,7 @@ struct SourcesTests {
         #expect(source.mimeType == "application/custom")
     }
 
-    @Test func mmdWithExplicitTextMermaidMimeRoundTrips() throws {
+    @Test func mmdWithExplicitTextMermaidMimeRoundTrips() async throws {
         // A caller that passes `text/mermaid` explicitly must round-trip
         // unchanged while no package claim is active.
         let store = try tempStore()
@@ -163,7 +163,7 @@ struct SourcesTests {
     /// resolvable MIME and readable bytes. Post renderer-package refactor the
     /// stored MIME is the generic text fallback when no claim is active; the
     /// presentation stays the format-neutral code-block wrap.
-    @Test func nilMimeMmdSourceRoundTripsThroughViewContentPath() throws {
+    @Test func nilMimeMmdSourceRoundTripsThroughViewContentPath() async throws {
         let store = try tempStore()
         let rawDiagram = "flowchart TD\n    A --> B\n    B --> C\n"
         let summary = try store.addSource(
@@ -202,7 +202,7 @@ struct SourcesTests {
     /// affected by the `.mmd` MIME map — they resolve to a Markdown MIME via
     /// UTType and stay on the native-Markdown presentation path (the fence
     /// renders as a claimed disclosure row in the reader).
-    @Test func markdownWithEmbeddedMermaidRemainsUnaffected() throws {
+    @Test func markdownWithEmbeddedMermaidRemainsUnaffected() async throws {
         let store = try tempStore()
         let md = """
         # Architecture
@@ -227,7 +227,7 @@ struct SourcesTests {
 
     /// A drag-drop / URL ingest passes no Zotero provenance, so the two new
     /// columns stay NULL and round-trip as nil through the read path.
-    @Test func ingestWithoutZoteroProvenanceRoundTripsNil() throws {
+    @Test func ingestWithoutZoteroProvenanceRoundTripsNil() async throws {
         let store = try tempStore()
         let summary = try store.addSource(
             filename: "drop.pdf", data: Data("%PDF".utf8),
@@ -245,7 +245,7 @@ struct SourcesTests {
     }
 
     /// The Zotero seam writes the item key + title and they survive a read-back.
-    @Test func ingestWithZoteroProvenanceRoundTripsKeyAndTitle() throws {
+    @Test func ingestWithZoteroProvenanceRoundTripsKeyAndTitle() async throws {
         let store = try tempStore()
         let summary = try store.addSource(
             filename: "paper.pdf", data: Data("%PDF".utf8),
@@ -260,7 +260,7 @@ struct SourcesTests {
 
     // MARK: - Content is byte-identical (== and sha256)
 
-    @Test func ingestedContentRoundTripsByteIdentical() throws {
+    @Test func ingestedContentRoundTripsByteIdentical() async throws {
         let store = try tempStore()
         // Include non-text bytes + a NUL to prove this is raw, not text handling.
         var original = Data("header\u{0}".utf8)
@@ -272,7 +272,7 @@ struct SourcesTests {
         #expect(SHA256.hash(data: fetched) == SHA256.hash(data: original))
     }
 
-    @Test func zeroByteFileIsAllowedWithSizeZero() throws {
+    @Test func zeroByteFileIsAllowedWithSizeZero() async throws {
         let store = try tempStore()
         let summary = try store.addSource(filename: "empty.txt", data: Data())
         #expect(summary.byteSize == 0)
@@ -281,7 +281,7 @@ struct SourcesTests {
 
     // MARK: - Soft cap
 
-    @Test func oversizeFileIsRejected() throws {
+    @Test func oversizeFileIsRejected() async throws {
         let store = try tempStore()
         // One byte past the cap. (Allocating exactly cap+1 of zeros is cheap.)
         let huge = Data(count: GRDBWikiStore.ingestByteCap + 1)
@@ -293,7 +293,7 @@ struct SourcesTests {
 
     // MARK: - Delete
 
-    @Test func deleteRemovesRow() throws {
+    @Test func deleteRemovesRow() async throws {
         let store = try tempStore()
         let summary = try store.addSource(filename: "x.txt", data: Data("x".utf8))
         try store.deleteSource(id: summary.id)
@@ -305,7 +305,7 @@ struct SourcesTests {
 
     // MARK: - Duplicate content detection (issue #126)
 
-    @Test func byteIdenticalContentThrowsDuplicateContent() throws {
+    @Test func byteIdenticalContentThrowsDuplicateContent() async throws {
         // Same bytes, same filename: rejected — the whole point of the check.
         let store = try tempStore()
         let a = try store.addSource(filename: "same.txt", data: Data("same".utf8))
@@ -322,7 +322,7 @@ struct SourcesTests {
         }
     }
 
-    @Test func byteIdenticalContentUnderADifferentFilenameStillThrows() throws {
+    @Test func byteIdenticalContentUnderADifferentFilenameStillThrows() async throws {
         // The hash is over CONTENT only — a renamed re-drop of the same bytes
         // is still a duplicate (issue #126's proposal: content-only, filename
         // is irrelevant to the hash).
@@ -334,7 +334,7 @@ struct SourcesTests {
         #expect(try store.listSources().count == 1)
     }
 
-    @Test func distinctContentIsNotFlaggedAsDuplicate() throws {
+    @Test func distinctContentIsNotFlaggedAsDuplicate() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "1.txt", data: Data("one".utf8))
         let b = try store.addSource(filename: "2.txt", data: Data("two".utf8))
@@ -344,7 +344,7 @@ struct SourcesTests {
 
     // MARK: - Ordering (most-recent-first for the UI list)
 
-    @Test func listIsMostRecentFirst() throws {
+    @Test func listIsMostRecentFirst() async throws {
         let store = try tempStore()
         let first = try store.addSource(filename: "1.txt", data: Data("1".utf8))
         let second = try store.addSource(filename: "2.txt", data: Data("2".utf8))
@@ -355,7 +355,7 @@ struct SourcesTests {
     }
 
     @MainActor
-    @Test func cancelledIngestionDoesNotMarkSourcesIngested() throws {
+    @Test func cancelledIngestionDoesNotMarkSourcesIngested() async throws {
         let store = try tempStore()
         let running = try store.addSource(filename: "running.pdf", data: Data("%PDF-running".utf8))
         let pending = try store.addSource(filename: "pending.pdf", data: Data("%PDF-pending".utf8))
@@ -383,7 +383,7 @@ struct SourcesTests {
         // A durable completion stamp is the success fact and survives unrelated
         // canceled work.
         model.markSourceIngested(id: completed.id)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         #expect(try queue.getItem(runningItem.id)?.state == .cancelled)
         #expect(try queue.getItem(pendingItem.id)?.state == .cancelled)
@@ -393,7 +393,7 @@ struct SourcesTests {
 
         _ = try store.appendContentVersion(
             sourceID: completed.id, data: Data("%PDF-updated".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(model.isSourceIngested(completed) == false)
     }
 
@@ -401,7 +401,7 @@ struct SourcesTests {
     /// flips the model's Ingested state, with the same explicit reload the
     /// legacy log-entry test above uses.
     @MainActor
-    @Test func modelStampMarksSourceIngested() throws {
+    @Test func modelStampMarksSourceIngested() async throws {
         let store = try tempStore()
         let raw = try store.addSource(filename: "host.pdf", data: Data("%PDF".utf8))
         let untouched = try store.addSource(filename: "untouched.txt", data: Data("x".utf8))
@@ -410,7 +410,7 @@ struct SourcesTests {
         #expect(model.isSourceIngested(raw) == false)
 
         model.markSourceIngested(id: raw.id)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         #expect(model.isSourceIngested(raw) == true)
         #expect(model.isSourceIngested(untouched) == false)
@@ -419,7 +419,7 @@ struct SourcesTests {
 
     // MARK: - Stepwise migration (v1 DB with pages → v2, pages intact)
 
-    @Test func migratesV1DatabaseToV2PreservingPages() throws {
+    @Test func migratesV1DatabaseToV2PreservingPages() async throws {
         let url = tempDatabaseURL()
 
         // Build a v1-shaped DB by hand: pages + slug index + user_version=1,
@@ -578,7 +578,7 @@ struct SourcesTests {
         #expect(result == "From MIME")
     }
 
-    @Test func displayNameFromPDFTitle() throws {
+    @Test func displayNameFromPDFTitle() async throws {
         // Core no longer links PDFKit (it would pull AppKit into the File
         // Provider extension). Install the app-only extractor so this test
         // exercises the real PDF-title path, then restore the nil default.
@@ -601,7 +601,7 @@ struct SourcesTests {
         #expect(result == nil)
     }
 
-    @Test func displayNameNilForPDFWithoutTitle() throws {
+    @Test func displayNameNilForPDFWithoutTitle() async throws {
         // Minimal PDF with no /Title entry.
         let pdfData = try minimalPDF()
         let result = DisplayNameResolver.resolve(
@@ -617,7 +617,7 @@ struct SourcesTests {
         #expect(result == nil)
     }
 
-    @Test func zoteroTitleTakesPriorityOverPDFTitle() throws {
+    @Test func zoteroTitleTakesPriorityOverPDFTitle() async throws {
         let pdfData = try minimalPDF(title: "PDF Title")
         let result = DisplayNameResolver.resolve(
             filename: "doc.pdf", data: pdfData,
@@ -641,7 +641,7 @@ struct SourcesTests {
 
     // MARK: - resolvedDisplayName bypass (issue #229)
 
-    @Test func resolvedDisplayNameBypassesInMethodResolve() throws {
+    @Test func resolvedDisplayNameBypassesInMethodResolve() async throws {
         // PDF data WITH a /Title — DisplayNameResolver.resolve would return
         // "My PDF Document" if called. Passing resolvedDisplayName: .some("Pre")
         // must bypass that entirely and use the pre-resolved value.
@@ -656,7 +656,7 @@ struct SourcesTests {
         #expect(summary.displayName == "Pre-Resolved Title")
     }
 
-    @Test func resolvedDisplayNameNilBypassSkipsResolve() throws {
+    @Test func resolvedDisplayNameNilBypassSkipsResolve() async throws {
         // PDF data WITH a /Title, but caller passes .some(nil) → store must
         // NOT call DisplayNameResolver.resolve (which would return "My PDF
         // Document"); it uses nil → display_name stays NULL (filename fallback).
@@ -671,7 +671,7 @@ struct SourcesTests {
         #expect(summary.displayName == nil)
     }
 
-    @Test func resolvedDisplayNameDefaultsToInMethodResolve() throws {
+    @Test func resolvedDisplayNameDefaultsToInMethodResolve() async throws {
         // resolvedDisplayName: nil (default) → resolve in-method as before.
         let md = "# Inline Title\nbody"
         let store = try tempStore()

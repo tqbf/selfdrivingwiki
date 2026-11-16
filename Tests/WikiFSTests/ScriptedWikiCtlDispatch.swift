@@ -60,7 +60,7 @@ enum ScriptedWikiCtl {
     /// the empty env.
     static func dispatch(
         _ argv: [String], in store: GRDBWikiStore, env: [String: String] = [:]
-    ) -> ScriptedCLIOutcome {
+    ) async -> ScriptedCLIOutcome {
         let invocation: ArgumentParser.Invocation
         do {
             invocation = try ArgumentParser.parse(argv, env: { _ in nil })
@@ -82,12 +82,12 @@ enum ScriptedWikiCtl {
             let command = ArgumentParser.applyEnv(invocation.command, env: env)
             switch command {
             case .page(let action):
-                let result = try PageCommand.run(action, in: store)
+                let result = try await PageCommand.run(action, in: store)
                 return committed(result)
             case .logAppend(let kind, let title, let note, let source, let author):
                 // The author is parsed through the typed seam exactly like
                 // the real executor does — never a bare string check.
-                let result = try LogIndexCommand.run(
+                let result = try await LogIndexCommand.run(
                     .logAppend(kind: kind, title: title, note: note, source: source,
                                author: PageAuthor(rawValue: author)),
                     in: store)

@@ -97,7 +97,7 @@ struct PageDetailViewHostedTests {
     func newPageInNewTab_mountsPageDetailViewInEditingMode() async throws {
         let store = try StoreBackend.current.makeStore(databaseURL: try tempDatabaseURL())
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // The shared "Add Page" entry point (welcome screen button + sidebar +,
         // both routed through `newPageInNewTab`). This sets the new tab's
@@ -119,7 +119,7 @@ struct PageDetailViewHostedTests {
         let store = try StoreBackend.current.makeStore(databaseURL: try tempDatabaseURL())
         let existing = try store.createPage(title: "Existing Page")
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // Opening a page by navigation (sidebar click) goes through `openTab`,
         // which leaves the tab at its default `isEditing == false`.

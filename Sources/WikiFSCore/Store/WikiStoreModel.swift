@@ -363,6 +363,7 @@ public final class WikiStoreModel {
         openTab(.chat(chat.id))
         // The persisted row becomes visible and selected in the Chats sidebar.
         requestSidebarReveal(.chat(chat.id))
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// One-shot consumption of ``pendingComposerFocusChatID``: clears it when
@@ -391,7 +392,11 @@ public final class WikiStoreModel {
               let title = ChatSummary.title(fromFirstMessage: userText) else { return }
         do {
             try await internalStore.setChatTitleIfEmpty(chatID: chatID, title: title)
-            reloadChats()
+            // Write-acknowledgment: the caller reads `chats` right after this
+            // returns, so the projection must be current NOW (same invariant
+            // as the model's other store-write methods; the bus drain is
+            // async and would race the read).
+            await refreshProjectionsAfterOwnWrite()
         } catch {
             DebugLog.store("WikiStoreModel.applyProvisionalChatTitle failed: \(error)")
         }
@@ -453,20 +458,26 @@ public final class WikiStoreModel {
     /// `AgentOperationRunner` when `workspacesEnabled` is on.
     @discardableResult
     public func createWorkspace(name: String?, activityID: String?) async throws -> WorkspaceID {
-        try await store.createWorkspace(name: name, activityID: activityID)
+        let workspaceID = try await store.createWorkspace(name: name, activityID: activityID)
+        await refreshProjectionsAfterOwnWrite()
+        return workspaceID
     }
 
     /// Merge a workspace into main (delegates to the store). Used by
     /// `AgentOperationRunner` to auto-merge after an isolated ingest.
     @discardableResult
     public func workspaceMerge(workspaceID: WorkspaceID) async throws -> [String] {
-        try await store.workspaceMerge(workspaceID: workspaceID)
+        let mergedTargets = try await store.workspaceMerge(workspaceID: workspaceID)
+        await refreshProjectionsAfterOwnWrite()
+        return mergedTargets
     }
 
     /// Reap stale open workspaces (delegates to the store).
     @discardableResult
     public func reapStaleWorkspaces(ttl: TimeInterval) async throws -> Int {
-        try await store.reapStaleWorkspaces(ttl: ttl)
+        let reapedCount = try await store.reapStaleWorkspaces(ttl: ttl)
+        await refreshProjectionsAfterOwnWrite()
+        return reapedCount
     }
 
     private let store: WikiStore
@@ -548,6 +559,12 @@ public final class WikiStoreModel {
     }
     /// The page whose text currently lives in the draft buffers.
     private var loadedPage: PageID?
+    /// Bumped whenever a clean reload assigns draft content from the store
+    /// (`reloadCurrentDraftIfCleanAsync`). A selection-transition load that
+    /// read the page BEFORE the bump knows its store-seeded draft is staler
+    /// than what a clean reload already placed, and skips that assignment
+    /// instead of clobbering fresher content with its earlier read.
+    private var draftContentStamp = 0
     /// The page-content version id captured when the page was loaded into the
     /// editor. Used as the CAS expectation when saving (W0, PR #312): if another
     /// writer committed a new version after the editor loaded, the save throws
@@ -556,6 +573,13 @@ public final class WikiStoreModel {
     /// What the drafts currently hold, so a flush saves the RIGHT document even
     /// after `selection` has advanced (§3.5 read-state-at-save-time).
     private var loadedSelection: WikiSelection?
+    /// Plan P1.3: the last selection a transition was REQUESTED for, set
+    /// synchronously at every `selection` write site (beginSelectionTransition,
+    /// setActiveTab, navigateCurrentTab, retargetTab). `loadedSelection` only
+    /// updates when the async load lands and must not gate user-facing
+    /// decisions (history recording, echo suppression) that used to be
+    /// synchronous pre-flip.
+    @ObservationIgnored private var requestedSelection: WikiSelection?
     private var isApplyingHistorySelection = false
     /// Debug timing: when the latest user-initiated navigation began (set in
     /// `openTab`). The reader's `Coordinator` reads this to log the synchronous
@@ -669,6 +693,39 @@ public final class WikiStoreModel {
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
     @ObservationIgnored private var reloadPending = false
 
+    /// Plan P1.3 test/harness seam support: the newest in-flight selection
+    /// transition task (`beginSelectionTransition`) or draft-load task
+    /// (`loadDrafts`), tagged with the generation that spawned it so a
+    /// superseded task finishing late cannot clear a newer task's slot.
+    /// `quiesceSelectionTransitions()` drains this and `reloadTask`.
+    @ObservationIgnored private var selectionTransitionTask: Task<Void, Never>?
+    @ObservationIgnored private var selectionTransitionTaskGeneration = 0
+
+    /// Plan P1.3: the newest fire-and-forget save/flush task
+    /// (`fixMarkdownInDraft`, `navigateCurrentTab`'s captured-draft flush),
+    /// tagged with a sequence so a superseded task finishing late cannot clear
+    /// a newer task's slot. `quiesceSelectionTransitions()` drains it alongside
+    /// the transition and reload tasks so settled-state readers observe
+    /// committed store state.
+    @ObservationIgnored private var pendingSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingSaveTaskSequence = 0
+
+    /// Clear the tracked transition task when the task tagged `generation`
+    /// finishes — only if no newer transition has already claimed the slot.
+    private func clearSelectionTransitionTask(generation: Int) {
+        if selectionTransitionTaskGeneration == generation {
+            selectionTransitionTask = nil
+        }
+    }
+
+    /// Clear the tracked save task when the task tagged `sequence` finishes —
+    /// only if no newer save has already claimed the slot.
+    private func clearPendingSaveTask(sequence: Int) {
+        if pendingSaveTaskSequence == sequence {
+            pendingSaveTask = nil
+        }
+    }
+
     private func subscribeToChanges() {
         changeToken = store.eventBus?.subscribe(nil) { [weak self] _ in
             self?.enqueueCoalescedReload()
@@ -726,8 +783,12 @@ public final class WikiStoreModel {
     /// edits are persisted before the incoming one loads (§3.5), with the
     /// outgoing state captured before any suspension.
     public func handleSelectionChange(to newValue: WikiSelection?) {
-        // Skip if triggered programmatically by a tab switch.
-        guard !isApplyingTabSelection, newValue != loadedSelection else { return }
+        // Skip if triggered programmatically by a tab switch, or if the view's
+        // `onChange` bridge is echoing back a selection this model already
+        // requested (Plan P1.3: compare against `requestedSelection`, which is
+        // set synchronously at every selection write — `loadedSelection` lags
+        // until the async load lands, so it can no longer suppress echoes).
+        guard !isApplyingTabSelection, newValue != requestedSelection else { return }
         beginSelectionTransition(to: newValue)
 
         // Keep the active tab's metadata in sync after a sidebar-driven change
@@ -753,8 +814,14 @@ public final class WikiStoreModel {
             dirty: isDraftDirty)
         loadGeneration &+= 1
         let generation = loadGeneration
-        recordHistoryTransition(from: outgoing.selection, to: newValue)
+        // Plan P1.3: history keys off the REQUESTED selection — the selection
+        // the user is navigating FROM — not `loadedSelection`, which only
+        // updates when the async load lands and is stale/nil mid-flight (a
+        // rapid A→B used to record nothing, leaving the back stack empty).
+        // Read BEFORE `requestedSelection` is advanced below.
+        recordHistoryTransition(from: requestedSelection, to: newValue)
         selection = newValue
+        requestedSelection = newValue
         // Eager clear: while the incoming load is in flight the editor shows
         // an empty draft, never the outgoing page's text (the old synchronous
         // path never had this window; the generation check keeps a rapid
@@ -768,12 +835,15 @@ public final class WikiStoreModel {
         markdownSaveWarning = nil
         markdownWarningTask?.cancel()
         markdownWarningTask = nil
-        Task { [weak self] in
+        let task = Task { [weak self] in
             await self?.performSelectionTransition(
                 outgoing: outgoing,
                 to: newValue,
                 generation: generation)
+            self?.clearSelectionTransitionTask(generation: generation)
         }
+        selectionTransitionTask = task
+        selectionTransitionTaskGeneration = generation
     }
 
     /// The serialized transition body: flush the OUTGOING draft (captured
@@ -789,6 +859,37 @@ public final class WikiStoreModel {
         await flushCapturedDraft(outgoing)
         guard generation == loadGeneration else { return }
         await loadDraftsAsync(for: newValue, generation: generation)
+    }
+
+    /// Plan P1.3 test/harness seam: awaits until every in-flight selection
+    /// transition task and the coalesced reload queue have drained, so callers
+    /// that need the SETTLED model state (hosted tests, golden-master export)
+    /// can await it. Fire-and-forget UI callers must NOT need this — production
+    /// views observe the model via @Observable and never read-then-assert.
+    ///
+    /// The loop re-checks after each await: completing one task can spawn or
+    /// coalesce more work (a reload event arriving mid-drain, a newer
+    /// transition requested while an older one was finishing).
+    public func quiesceSelectionTransitions() async {
+        while true {
+            let transition = selectionTransitionTask
+            let reload = reloadTask
+            let pendingSave = pendingSaveTask
+            if let transition {
+                await transition.value
+            }
+            if let reload {
+                await reload.value
+            }
+            if let pendingSave {
+                await pendingSave.value
+            }
+            // Re-check: completing one can spawn or coalesce more work (a
+            // reload event arriving mid-drain, a newer transition requested
+            // while an older one was finishing).
+            if selectionTransitionTask == nil, reloadTask == nil,
+               pendingSaveTask == nil { break }
+        }
     }
 
     /// Persist one captured draft snapshot to its selection. Extracted from
@@ -814,7 +915,10 @@ public final class WikiStoreModel {
 
     public func navigateBack() {
         guard let destination = backStack.popLast() else { return }
-        if let current = loadedSelection {
+        // Plan P1.3: push the REQUESTED selection (where the user is), not
+        // `loadedSelection` — the latter lags until the async load lands and
+        // would drop the forward entry on a mid-flight back-navigation.
+        if let current = requestedSelection {
             forwardStack.append(current)
         }
         applyHistorySelection(destination)
@@ -822,7 +926,7 @@ public final class WikiStoreModel {
 
     public func navigateForward() {
         guard let destination = forwardStack.popLast() else { return }
-        if let current = loadedSelection {
+        if let current = requestedSelection {
             backStack.append(current)
         }
         trimBackStackIfNeeded()
@@ -862,10 +966,12 @@ public final class WikiStoreModel {
         // misfire on the wrong page.
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
         pendingScrollAnchorVersion += 1
-        // Record history while `loadedSelection` still points at the outgoing
-        // page (openTab/setActiveTab/navigateCurrentTab don't record history
+        // Record history against the REQUESTED selection — the last selection
+        // a transition was requested for, tracked synchronously — so a
+        // mid-flight async load cannot drop the outgoing entry
+        // (openTab/setActiveTab/navigateCurrentTab don't record history
         // themselves).
-        recordHistoryTransition(from: loadedSelection, to: target)
+        recordHistoryTransition(from: requestedSelection, to: target)
         if openInNewTab {
             openTab(target)
         } else {
@@ -885,7 +991,7 @@ public final class WikiStoreModel {
         let target = WikiSelection.page(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
         pendingScrollAnchorVersion += 1
-        recordHistoryTransition(from: loadedSelection, to: target)
+        recordHistoryTransition(from: requestedSelection, to: target)
         if openInNewTab {
             openTab(target)
         } else {
@@ -1104,6 +1210,7 @@ public final class WikiStoreModel {
                 title: "Couldn't Save Chat Attachments",
                 message: "The attachments could not be saved: \(error.localizedDescription)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// A chat's ordered attachment targets. Empty on any read failure: the
@@ -1168,7 +1275,7 @@ public final class WikiStoreModel {
         let target = WikiSelection.source(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
         pendingScrollAnchorVersion += 1
-        recordHistoryTransition(from: loadedSelection, to: target)
+        recordHistoryTransition(from: requestedSelection, to: target)
         if openInNewTab {
             openTab(target)
         } else {
@@ -1198,7 +1305,7 @@ public final class WikiStoreModel {
         // counter — the pin travels with its anchor). Set-once/consume-once.
         pendingPinnedExtraction = pinnedExtractionID.map { (selection: target, versionID: $0) }
         pendingScrollAnchorVersion += 1
-        recordHistoryTransition(from: loadedSelection, to: target)
+        recordHistoryTransition(from: requestedSelection, to: target)
         if openInNewTab {
             openTab(target)
         } else {
@@ -1237,7 +1344,7 @@ public final class WikiStoreModel {
         let target = WikiSelection.chat(id)
         pendingScrollAnchor = anchor.map { (selection: target, fragment: $0) }
         pendingScrollAnchorVersion += 1
-        recordHistoryTransition(from: loadedSelection, to: target)
+        recordHistoryTransition(from: requestedSelection, to: target)
         if openInNewTab {
             openTab(target)
         } else {
@@ -1370,6 +1477,11 @@ public final class WikiStoreModel {
         activeTabID = id
         let sel = tabs.first { $0.id == id }?.selection
         selection = sel
+        // Plan P1.3: keep the requested selection in lockstep with every
+        // synchronous `selection` write, or the view's async `onChange` echo
+        // would pass the `handleSelectionChange` guard and re-enter a
+        // transition for a selection the model already owns.
+        requestedSelection = sel
         loadDrafts(for: sel)
         isApplyingTabSelection = false
     }
@@ -1429,6 +1541,7 @@ public final class WikiStoreModel {
         tabs[i].selection = target
         tabs[i].title = tabTitle(for: target)
         selection = target
+        requestedSelection = target // Plan P1.3: sync write sites stay in lockstep
         draftTitle = ""
         draftBody = ""
         isDraftDirty = false
@@ -1436,9 +1549,15 @@ public final class WikiStoreModel {
         loadedPageHeadVersionID = nil
         loadDrafts(for: target)
         isApplyingTabSelection = false
-        Task { [weak self] in
+        // Plan P1.3: the in-place flush rides the tracked pending-save slot
+        // (same seam as fixMarkdownInDraft) so quiesce settles it too.
+        pendingSaveTaskSequence += 1
+        let flushSequence = pendingSaveTaskSequence
+        let flushTask = Task { [weak self] in
             await self?.flushCapturedDraft(outgoing)
+            self?.clearPendingSaveTask(sequence: flushSequence)
         }
+        pendingSaveTask = flushTask
         DebugLog.store("[tabs] navigateCurrentTab: in-place to \(target) (id=\(activeID)), \(tabs.count) tabs total")
     }
 
@@ -1510,6 +1629,7 @@ public final class WikiStoreModel {
         if activeTabID == id {
             isApplyingTabSelection = true
             self.selection = selection
+            requestedSelection = selection // Plan P1.3: sync write sites stay in lockstep
             loadDrafts(for: selection)
             isApplyingTabSelection = false
         }
@@ -1714,6 +1834,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.newPageInNewTab failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// SYNC fire-and-forget entry for callers outside a selection transition
@@ -1723,9 +1844,15 @@ public final class WikiStoreModel {
     private func loadDrafts(for newValue: WikiSelection?) {
         loadGeneration &+= 1
         let generation = loadGeneration
-        Task { [weak self] in
+        // Plan P1.3: this spawned load feeds the same tracking slot as a
+        // full transition (tab switches ride setActiveTab → loadDrafts), so
+        // `quiesceSelectionTransitions()` settles openTab/selectTab too.
+        let task = Task { [weak self] in
             await self?.loadDraftsAsync(for: newValue, generation: generation)
+            self?.clearSelectionTransitionTask(generation: generation)
         }
+        selectionTransitionTask = task
+        selectionTransitionTaskGeneration = generation
     }
 
     /// Plan P1.3 — the async draft load with a generation check. The
@@ -1756,6 +1883,7 @@ public final class WikiStoreModel {
             loadedPage = nil
             loadedPageHeadVersionID = nil
         case .page(let id):
+            let stampBeforeRead = draftContentStamp
             guard let page = await DebugLog.trying("getPage", operation: { try await store.getPage(id: id) }) else {
                 // Stale completion: a newer transition owns the editor state.
                 guard generation == loadGeneration else { return }
@@ -1770,8 +1898,17 @@ public final class WikiStoreModel {
             // Stale completion check AFTER the awaits: a newer transition
             // (A→B→C) must not have C's load overwritten by B's completion.
             guard generation == loadGeneration else { return }
-            draftTitle = page.title
-            draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
+            // A clean reload (external-write refresh) that assigned draft
+            // content while this read was in flight owns the fresher text:
+            // keep its content, but still adopt this load's bookkeeping
+            // (loadedPage + head version) so the editor targets the right
+            // page. A stale head-version expectation stays W0-safe: the next
+            // save surfaces PageConflictError instead of silently clobbering.
+            let cleanReloadSupersededRead = draftContentStamp != stampBeforeRead
+            if !cleanReloadSupersededRead {
+                draftTitle = page.title
+                draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
+            }
             loadedPage = id
             // Capture the current head version id for CAS on save (W0, PR #312).
             loadedPageHeadVersionID = headVersionID
@@ -1965,7 +2102,16 @@ public final class WikiStoreModel {
         let outcome = linter.fix(markdown: draftBody)
         guard outcome.fixed != draftBody else { return }
         draftBody = outcome.fixed
-        Task { await self.save() }
+        // Plan P1.3: keep the fire-and-forget save, but track it so
+        // `quiesceSelectionTransitions()` can settle the store write for
+        // callers that read committed state (hosted tests, golden master).
+        pendingSaveTaskSequence += 1
+        let sequence = pendingSaveTaskSequence
+        let task = Task { [weak self] in
+            await self?.save()
+            self?.clearPendingSaveTask(sequence: sequence)
+        }
+        pendingSaveTask = task
     }
 
     /// The in-flight markdown warning Task (if any). Cancelled before starting a
@@ -2219,7 +2365,11 @@ public final class WikiStoreModel {
         agentRunCount -= 1
         if agentRunCount == 0 {
             reloadFromStore()
-            loadDrafts(for: loadedSelection)
+            // Plan P1.3: reload the REQUESTED (user-facing) selection —
+            // pre-flip `loadedSelection` always equalled `selection` here;
+            // reloading a mid-flight stale value would fight the pending
+            // transition and leave the editor pointing at the old page.
+            loadDrafts(for: requestedSelection)
         }
     }
 
@@ -2254,8 +2404,11 @@ public final class WikiStoreModel {
             // store write. The title is passed to openTab explicitly, so tabTitle
             // (which reads `summaries`) is never called and needs no synchronous freshness.
             let newSelection = WikiSelection.page(page.id)
-            recordHistoryTransition(from: loadedSelection, to: newSelection)
+            // Plan P1.3: history keys off the requested (user-facing)
+            // selection, not the lagging `loadedSelection`.
+            recordHistoryTransition(from: requestedSelection, to: newSelection)
             openTab(newSelection, title: title)
+            await refreshProjectionsAfterOwnWrite()
             return page.id
         } catch {
             DebugLog.store("WikiStoreModel.newPage failed: \(error)")
@@ -2307,6 +2460,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.rename failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Rename a source's display name. Rewrites `[[source:<old>…]]` links in
@@ -2324,6 +2478,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.renameSource failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// What references `id` right now — pages that link to it and bookmarks
@@ -2360,6 +2515,7 @@ public final class WikiStoreModel {
         }
         // No manual reload — the bus fires reloadFromStore() async after
         // the committed event batch.
+        await refreshProjectionsAfterOwnWrite()
         return result
     }
 
@@ -2507,6 +2663,7 @@ public final class WikiStoreModel {
             activityID: nil,
             resolvedDisplayName: resolvedDisplayName)
         await appendExtractedMarkdown(to: summary, from: m)
+        await refreshProjectionsAfterOwnWrite()
         return summary
     }
 
@@ -2761,6 +2918,7 @@ public final class WikiStoreModel {
             // addURL enqueues the standard `.extraction` queue item.
             let transcriptExtractionWanted = transcriptExtractionWanted(
                 mimeType: Self.podcastEmbedMIME)
+            await refreshProjectionsAfterOwnWrite()
             return URLFetchService.FetchOutcome(
                 filename: summary.filename,
                 byteSize: 0,
@@ -2775,9 +2933,12 @@ public final class WikiStoreModel {
         // `SourceDetailView` to enqueue the fetch explicitly via the queue
         // (the reviewed youtube-transcript package route).
         if let outcome = try await bytelessMediaOutcome(rawInput, urlFetcher: fetcher) {
+            await refreshProjectionsAfterOwnWrite()
             return outcome
         }
-        return try await addURLViaWebsite(rawInput, fetcher: fetcher)
+        let websiteOutcome = try await addURLViaWebsite(rawInput, fetcher: fetcher)
+        await refreshProjectionsAfterOwnWrite()
+        return websiteOutcome
     }
 
     /// Guard URL intake before any provider routing or network work. Invalid
@@ -2835,13 +2996,15 @@ public final class WikiStoreModel {
         // `audio/podcast` AND the bundled import-transcription policy covers
         // the podcast-transcript route, so the caller can auto-enqueue the
         // extraction.
-        return URLFetchService.FetchOutcome(
+        let outcome = URLFetchService.FetchOutcome(
             filename: summary.filename,
             byteSize: 0,
             kind: .audioEmbed,
             transcriptExtractionWanted: transcriptExtractionWanted(
                 mimeType: Self.rssPodcastEmbedMIME),
             sourceID: summary.id)
+        await refreshProjectionsAfterOwnWrite()
+        return outcome
     }
 
     /// Build the byteless-source filename for a generic RSS podcast feed
@@ -3192,6 +3355,7 @@ public final class WikiStoreModel {
         }
         // No manual reload — the bus fires reloadFromStore() async after the
         // version append.
+        await refreshProjectionsAfterOwnWrite()
         return "Refreshed \(origin.displayLabel) source."
     }
 
@@ -3218,6 +3382,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.addSource failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Import every `.md` / `.markdown` file in `directory` (recursively) as an
@@ -3314,6 +3479,7 @@ public final class WikiStoreModel {
         }
         // No manual reload — the bus fires reloadFromStore() async after
         // the committed event batch.
+        await refreshProjectionsAfterOwnWrite()
         return result
     }
 
@@ -3496,6 +3662,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.markSourceIngested[\(id.rawValue)] failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// The origin provenance of a source (provider agent + the activity that
@@ -3571,7 +3738,9 @@ public final class WikiStoreModel {
     /// wrapper posture. Returns the new version id, or `nil` on failure.
     @discardableResult
     public func restorePage(for id: PageID, to versionID: PageVersionID) async -> PageVersionID? {
-        await DebugLog.trying("restorePage", operation: { try await store.restorePage(pageID: id, to: versionID) })
+        guard let restored = await DebugLog.trying("restorePage", operation: { try await store.restorePage(pageID: id, to: versionID) }) else { return nil }
+        await refreshProjectionsAfterOwnWrite()
+        return restored
     }
 
     /// `true` iff `refreshSource(_:)` would actually succeed for this source —
@@ -3638,8 +3807,10 @@ public final class WikiStoreModel {
         guard let bytes = await DebugLog.trying("sourceContent", operation: { try await store.sourceContent(id: file.id) }),
               let text = String(data: bytes, encoding: .utf8) else { return nil }
         do {
-            return try await store.appendProcessedMarkdown(
+            let seeded = try await store.appendProcessedMarkdown(
                 sourceID: file.id, content: text, origin: .source, note: nil, technique: nil)
+            await refreshProjectionsAfterOwnWrite()
+            return seeded
         } catch {
             // #475/#492: seeding v1 from verbatim bytes is a persistence write;
             // swallowing the throw silently drops the first version with no trace.
@@ -3807,8 +3978,10 @@ public final class WikiStoreModel {
     @discardableResult
     public func saveProcessedMarkdown(for sourceID: SourceID, content: String) async -> SourceMarkdownVersion? {
         do {
-            return try await store.appendProcessedMarkdown(
+            let version = try await store.appendProcessedMarkdown(
                 sourceID: sourceID, content: content, origin: .user, note: nil, technique: nil)
+            await refreshProjectionsAfterOwnWrite()
+            return version
         } catch {
             // #475/#492: the user's source-markdown edit is lost if this write
             // throws; log so it's visible in Console.app instead of vanishing.
@@ -4108,6 +4281,14 @@ public final class WikiStoreModel {
             // source then keeps landing verbatim with the Extract button
             // available — the issue #799 manual-retry contract.
             let version = await extractHtml(for: sourceID, backend: .defuddle, extractor: extractor)
+            // Clear the in-flight marker as soon as the extraction version
+            // itself has landed: the marker means "the conversion is
+            // running", and the nomination below is activation bookkeeping
+            // the Extract button need not stay disabled for. Observers that
+            // see the new head row therefore also see the button re-enabled
+            // in the same window. The function-scope defer below is then a
+            // no-op for this path (Set removal is idempotent).
+            importExtractingSourceIDs.remove(sourceID)
             // Snapshot ingests land with the image-rewritten materializer
             // sidecar as the default head; nominate the package version so
             // the route selection, not the ingest fallback, is the active
@@ -4208,6 +4389,7 @@ public final class WikiStoreModel {
     /// source (UPSERT the `source-derived` ref). Thin wrapper over the store.
     public func setActiveMarkdown(for sourceID: SourceID, to versionID: SourceMarkdownVersionID) async {
         await DebugLog.trying("setActiveMarkdown", operation: { try await store.setActiveMarkdown(sourceID: sourceID, to: versionID) })
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// The producing agent name for each of a source's markdown versions
@@ -4254,6 +4436,26 @@ public final class WikiStoreModel {
         await reloadCurrentDraftIfCleanAsync()
     }
 
+    /// Plan P1.3 write-acknowledgment invariant: a model method that performs a
+    /// store write returns with the list projections current (summaries,
+    /// sources, chats, bookmarks), exactly as the pre-flip synchronous bus
+    /// reload guaranteed. The bus may still coalesce a second drain from this
+    /// write's own event; the reads are idempotent and the coalesced queue
+    /// serializes them against external events.
+    ///
+    /// Deliberately lighter than ``reloadFromStoreAsync()``: the draft reload
+    /// and render-context preloads are NOT part of the write-acknowledgment
+    /// invariant, and the coalesced drain every write's bus event triggers
+    /// already carries them — keeping them off the hot write path avoids
+    /// doubling main-actor read volume on every mutation.
+    private func refreshProjectionsAfterOwnWrite() async {
+        await reloadSummariesAsync()
+        await reloadSourcesAsync()
+        await reloadChatsAsync()
+        await reloadBookmarkNodesAsync()
+        pruneHistoryToCurrentStore()
+    }
+
     /// Incorporate the authoritative machine renderer index after a durable
     /// machine-event delivery. Active renderer pins and all resource state are
     /// deliberately untouched; installed records remain unavailable until the
@@ -4268,15 +4470,22 @@ public final class WikiStoreModel {
     /// edits, those are preserved — the guard skips the reload entirely.
     private func reloadCurrentDraftIfCleanAsync() async {
         guard !isDraftDirty else { return }
-        if case .page(let id) = selection, loadedPage == id,
-           let page = await DebugLog.trying("getPage", operation: { try await store.getPage(id: id) }) {
-            draftTitle = page.title
-            draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
-            // The didSets on draftTitle/draftBody set isDraftDirty = true when
-            // the value changes; reset since this is a clean reload from the
-            // store (the draft now matches persisted state again).
-            isDraftDirty = false
-        }
+        guard case .page(let id) = selection, loadedPage == nil || loadedPage == id else { return }
+        guard let page = await DebugLog.trying("getPage", operation: { try await store.getPage(id: id) }) else { return }
+        // The user may have started typing while the read was in flight; their
+        // in-flight edit wins (P1.4: typing during a pending reload).
+        guard !isDraftDirty else { return }
+        // A pending selection-transition load that read EARLIER store state
+        // must not clobber this fresher assignment when it resumes (its stamp
+        // check in loadDraftsAsync sees the bump and skips its store-seeded
+        // assignment).
+        draftContentStamp &+= 1
+        draftTitle = page.title
+        draftBody = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
+        // The didSets on draftTitle/draftBody set isDraftDirty = true when
+        // the value changes; reset since this is a clean reload from the
+        // store (the draft now matches persisted state again).
+        isDraftDirty = false
     }
 
     /// Rebuild the sidebar page list from the store using the current sort
@@ -4345,6 +4554,9 @@ public final class WikiStoreModel {
                 let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
                 DebugLog.store("LinkReconciler: re-resolved links for \(count) page(s) in \(Int(ms))ms")
                 await DebugLog.trying("setMetadata", operation: { try await store.setMetadata(reconcileKey, value: currentReconcileVersion) })
+                // The reconcile committed link-row + metadata writes; keep the
+                // projections current before the early exits below.
+                await refreshProjectionsAfterOwnWrite()
             }
         }
 
@@ -4381,6 +4593,7 @@ public final class WikiStoreModel {
 
         DebugLog.store("searchUpgrade: complete — \(done) of \(total)")
         searchUpgrade = nil                                   // dismisses the sheet
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Shared body of the page + source embed loops. **Stays on `@MainActor`**:
@@ -4626,6 +4839,7 @@ public final class WikiStoreModel {
                 parentID: parentID, position: position, content: .folder(label: name))
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write.
+            await refreshProjectionsAfterOwnWrite()
             return node.id
         } catch {
             DebugLog.store("WikiStoreModel.createFolder failed: \(error)")
@@ -4648,6 +4862,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.addPageRef failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Add a source reference to a folder. Pass `position` to insert at a specific
@@ -4662,6 +4877,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.addSourceRef failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Add a chat reference to a folder. Pass `position` to insert at a specific
@@ -4676,11 +4892,13 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.addChatRef failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Rename a folder.
     public func renameBookmarkNode(id: BookmarkID, to label: String) async throws {
         try await store.renameBookmarkFolder(id: id, to: label)
+        await refreshProjectionsAfterOwnWrite()
         // No manual reload — the bus fires reloadFromStore() async after the
         // store write.
     }
@@ -4688,6 +4906,7 @@ public final class WikiStoreModel {
     /// Retarget a bookmark reference to a new page/source/chat target.
     public func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) async throws {
         try await store.retargetBookmarkNode(id: id, to: content)
+        await refreshProjectionsAfterOwnWrite()
         // No manual reload — the bus fires reloadFromStore() async after the
         // store write.
     }
@@ -4701,6 +4920,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.deleteBookmarkNode failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Move a node to a new parent and/or position. Returns `false` (and logs)
@@ -4711,6 +4931,7 @@ public final class WikiStoreModel {
             try await store.moveBookmarkNode(id: id, toParentID: toParentID, position: position)
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write.
+            await refreshProjectionsAfterOwnWrite()
             return true
         } catch {
             DebugLog.store("WikiStoreModel.moveBookmarkNode failed: \(error)")
@@ -4880,6 +5101,7 @@ public final class WikiStoreModel {
             strategyConflict = nil
             isStrategyConflictDismissed = false
             seedStrategyDraft()
+            await refreshProjectionsAfterOwnWrite()
         } catch let conflict as WikiStrategyConflictError {
             // Someone else committed first. Keep the draft exactly as it is;
             // the banner offers Reload against the committed winner. The
@@ -5029,6 +5251,7 @@ public final class WikiStoreModel {
             // retargetTab → tabTitle) reads `chats` synchronously, so the row
             // must be present NOW.
             chats.insert(chat, at: 0)
+            await refreshProjectionsAfterOwnWrite()
             return chat
         } catch {
             DebugLog.store("WikiStoreModel.startChat failed: \(error)")
@@ -5054,6 +5277,7 @@ public final class WikiStoreModel {
         if let tab = tabs.first(where: { $0.selection == .chat(id) }) {
             retargetTab(id: tab.id, to: draft)
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Append the persistable subset of `events` to a chat. Non-persistable
@@ -5068,6 +5292,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.appendChatEvents failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Checkpoint a streaming assistant row to the store via the draft-handle
@@ -5083,6 +5308,7 @@ public final class WikiStoreModel {
         do {
             try await store.checkpointStreamingMessage(
                 chatID: chatID, handle: handle, event: event, isDraft: isDraft)
+            await refreshProjectionsAfterOwnWrite()
             return true
         } catch {
             DebugLog.store("WikiStoreModel.checkpointStreamingMessage failed: \(error)")
@@ -5097,6 +5323,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.finalizeStaleDrafts failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     public func chatMessages(chatID: ChatID) async -> [ChatMessage] {
@@ -5134,6 +5361,7 @@ public final class WikiStoreModel {
                 title: "Couldn't Rename Chat",
                 message: "Could not rename the chat: \(error.localizedDescription)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// `@MainActor` wrapper for the ACP session ID write/clear (#830). Written
@@ -5145,6 +5373,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.updateChatAcpSessionId failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Resolves one chat authoritatively instead of inferring existence from
@@ -5177,6 +5406,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.updateChatModelOverride failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// Atomically updates every durable chat selection field so observers never
@@ -5205,6 +5435,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.updateChatModelAndThinkingSelection failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     /// `@MainActor` wrapper for the per-message summary write (chat-summary
@@ -5220,6 +5451,7 @@ public final class WikiStoreModel {
         } catch {
             DebugLog.store("WikiStoreModel.updateMessageSummary failed: \(error)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 
     public func deleteChat(id: ChatID) async {
@@ -5238,6 +5470,7 @@ public final class WikiStoreModel {
                 title: "Couldn't Delete Chat",
                 message: "Could not delete the chat: \(error.localizedDescription)")
         }
+        await refreshProjectionsAfterOwnWrite()
     }
 }
 

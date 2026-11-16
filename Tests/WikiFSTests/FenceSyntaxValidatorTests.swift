@@ -259,11 +259,11 @@ struct FenceSyntaxValidatorTests {
 
     // MARK: - wikictl page add integration (abort on invalid)
 
-    @Test func upsertAbortsOnInvalidClaimedFence() throws {
+    @Test func upsertAbortsOnInvalidClaimedFence() async throws {
         let v = try packageClaimValidator()
         let bad = "```mermaid\nflowchart LR\n  A[unclosed\n```"
         do {
-            _ = try PageCommand.abortOnInvalidFence(bad, validator: v)
+            _ = try await PageCommand.abortOnInvalidFence(bad, validator: v)
             Issue.record("expected abortOnInvalidFence to throw on an invalid block")
         } catch let PageCommand.Failure.message(text) {
             #expect(text.contains("mermaid:"))
@@ -271,30 +271,30 @@ struct FenceSyntaxValidatorTests {
         }
     }
 
-    @Test func upsertAllowsValidClaimedFence() throws {
+    @Test func upsertAllowsValidClaimedFence() async throws {
         let v = try packageClaimValidator()
         let good = "```mermaid\nflowchart LR\n  A[\"X\"] --> B[\"Y\"]\n```"
-        _ = try PageCommand.abortOnInvalidFence(good, validator: v)   // no throw
+        _ = try await PageCommand.abortOnInvalidFence(good, validator: v)   // no throw
     }
 
-    @Test func upsertSkipsValidationWhenValidatorUnavailable() throws {
+    @Test func upsertSkipsValidationWhenValidatorUnavailable() async throws {
         // The no-package path: nil validator → no-op (never blocks a save).
         let bad = "```mermaid\nflowchart LR\n  A[unclosed\n```"
-        #expect(try PageCommand.abortOnInvalidFence(bad, validator: nil) == nil)
+        #expect(try await PageCommand.abortOnInvalidFence(bad, validator: nil) == nil)
     }
 
-    @Test func upsertIgnoresBodiesWithoutClaimedFences() throws {
+    @Test func upsertIgnoresBodiesWithoutClaimedFences() async throws {
         let v = try packageClaimValidator()
-        #expect(try PageCommand.abortOnInvalidFence("just prose, no diagrams", validator: v) == nil)
+        #expect(try await PageCommand.abortOnInvalidFence("just prose, no diagrams", validator: v) == nil)
     }
 
-    @Test func upsertNotifiesWhenNoPackageClaimsTheFence() throws {
+    @Test func upsertNotifiesWhenNoPackageClaimsTheFence() async throws {
         // The operator-accepted package-conditional guarantee: a
         // claimed-looking fence with no installed declaring package proceeds
         // with a one-line notice, not a silent pass and not a block.
         let v = PackageClaimValidator(runner: try packageValidator(), coveredAliases: [])
         let bad = "```mermaid\nflowchart LR\n  A[unclosed\n```"
-        let notice = try PageCommand.abortOnInvalidFence(bad, validator: v)
+        let notice = try await PageCommand.abortOnInvalidFence(bad, validator: v)
         #expect(notice?.contains("validation skipped for mermaid") == true)
     }
 
@@ -305,52 +305,52 @@ struct FenceSyntaxValidatorTests {
             .appendingPathComponent("wikifs-fence-\(UUID().uuidString).sqlite")
     }
 
-    @Test func upsertAbortsBeforeWritingAnInvalidBlock() throws {
+    @Test func upsertAbortsBeforeWritingAnInvalidBlock() async throws {
         let v = try packageClaimValidator()
         let store = try StoreBackend.current.makeStore(databaseURL: tempDB())
         let bad = "```mermaid\nflowchart LR\n  A[unclosed\n```"
         do {
-            _ = try PageCommand.run(.add(id: nil, title: "Diagrams", body: .inline(bad)),
+            _ = try await PageCommand.run(.add(id: nil, title: "Diagrams", body: .inline(bad)),
                                     in: store, validator: v)
             Issue.record("expected upsert to abort before writing")
         } catch let PageCommand.Failure.message(text) {
             #expect(text.contains("PARSE_ERROR"))
         }
         // The hard guarantee: a rejected body left NO page behind.
-        #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
+        #expect(try await store.listPages(sortBy: .lastUpdated).isEmpty)
     }
 
-    @Test func upsertEndToEndWritesAValidDiagram() throws {
+    @Test func upsertEndToEndWritesAValidDiagram() async throws {
         let v = try packageClaimValidator()
         let store = try StoreBackend.current.makeStore(databaseURL: tempDB())
         let good = "# Diagrams\n\n```mermaid\nflowchart LR\n  A[\"X\"] --> B[\"Y\"]\n```"
-        let result = try PageCommand.run(.add(id: nil, title: "Diagrams", body: .inline(good)),
+        let result = try await PageCommand.run(.add(id: nil, title: "Diagrams", body: .inline(good)),
                                          in: store, validator: v)
         #expect(result.didCommit)
         // #1228: stderr now also carries the head_version_id echo; the fence
         // contract here is that a fully-covered save emits no validation notice.
         #expect(result.stderrOutput?.contains("validation skipped") != true)
-        #expect(try store.listPages(sortBy: .lastUpdated).count == 1)
+        #expect(try await store.listPages(sortBy: .lastUpdated).count == 1)
     }
 
-    @Test func validV11ShapeSavesEndToEnd() throws {
+    @Test func validV11ShapeSavesEndToEnd() async throws {
         let v = try packageClaimValidator()
         let store = try StoreBackend.current.makeStore(databaseURL: tempDB())
         let good = "# Diagrams\n\n```mermaid\nflowchart LR\n  A@{ shape: delay }\n```"
-        let result = try PageCommand.run(.add(id: nil, title: "V11", body: .inline(good)),
+        let result = try await PageCommand.run(.add(id: nil, title: "V11", body: .inline(good)),
                                          in: store, validator: v)
         #expect(result.didCommit)
-        #expect(try store.listPages(sortBy: .lastUpdated).count == 1)
+        #expect(try await store.listPages(sortBy: .lastUpdated).count == 1)
     }
 
-    @Test func uncoveredAliasSavesWithNotice() throws {
+    @Test func uncoveredAliasSavesWithNotice() async throws {
         let v = PackageClaimValidator(runner: try packageValidator(), coveredAliases: [])
         let store = try StoreBackend.current.makeStore(databaseURL: tempDB())
         let bad = "```mermaid\nflowchart LR\n  A[unclosed\n```"
-        let result = try PageCommand.run(.add(id: nil, title: "Uncovered", body: .inline(bad)),
+        let result = try await PageCommand.run(.add(id: nil, title: "Uncovered", body: .inline(bad)),
                                          in: store, validator: v)
         #expect(result.didCommit)
         #expect(result.stderrOutput?.contains("validation skipped for mermaid") == true)
-        #expect(try store.listPages(sortBy: .lastUpdated).count == 1)
+        #expect(try await store.listPages(sortBy: .lastUpdated).count == 1)
     }
 }

@@ -177,7 +177,7 @@ struct WikiStoreModelHtmlExtractionTests {
 
         // 1. Ingest the HTML source via the regular URL path.
         let outcome = try await model.addURL("example.com/article", fetcher: fetcher)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         #expect(outcome.kind == .html, "format is still detected as .html post-PR3")
         let sourceID = try #require(model.sources.first?.id)
@@ -234,7 +234,7 @@ struct WikiStoreModelHtmlExtractionTests {
         defer { try? FileManager.default.removeItem(at: tmpFile) }
 
         await model.addFiles([tmpFile])
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         #expect(model.sources.count == 1, "the HTML file landed as a source")
         let id = try #require(model.sources.first?.id)
@@ -415,7 +415,7 @@ struct WikiStoreModelHtmlExtractionTests {
 
         _ = try await model.addURL(
             "https://example.com/page", fetcher: SnapshotPageFetcher(pageHTML: snapshotHTML))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let id = try #require(model.sources.first?.id)
 
         // Poll for the NOMINATED package head (the materializer sidecar is
@@ -464,7 +464,7 @@ struct WikiStoreModelHtmlExtractionTests {
 
         _ = try await model.addURL(
             "https://example.com/page", fetcher: SnapshotPageFetcher(pageHTML: snapshotHTML))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let id = try #require(model.sources.first?.id)
 
         guard let head = try store.processedMarkdownHead(sourceID: id) else {

@@ -138,8 +138,8 @@ struct SessionManagerTests {
         #expect(firstSession === session)
         #expect(await calls.value == 1)
         #expect(manager.sessions.count == 1)
-        manager.releaseSession(for: descriptor.id)
-        manager.releaseSession(for: descriptor.id)
+        await manager.releaseSession(for: descriptor.id)
+        await manager.releaseSession(for: descriptor.id)
         await manager.shutdownSearchRuntimes()
     }
 
@@ -241,7 +241,7 @@ struct SessionManagerTests {
 
     // MARK: - releaseSession(for:)
 
-    @Test func testReleaseSessionRemovesFromCache() {
+    @Test func testReleaseSessionRemovesFromCache() async {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let manager = makeSessionManager(dir: dir)
@@ -250,13 +250,13 @@ struct SessionManagerTests {
         _ = try! manager.session(for: descriptor.id, descriptor: descriptor)
         #expect(manager.sessions[descriptor.id] != nil)
 
-        manager.releaseSession(for: descriptor.id)
+        await manager.releaseSession(for: descriptor.id)
 
         #expect(manager.sessions[descriptor.id] == nil)
         #expect(manager.sessions.isEmpty)
     }
 
-    @Test func releasingOneOfTwoWikiWindowsKeepsSharedSessionAvailable() throws {
+    @Test func releasingOneOfTwoWikiWindowsKeepsSharedSessionAvailable() async throws {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let manager = makeSessionManager(dir: dir)
@@ -266,15 +266,15 @@ struct SessionManagerTests {
         let secondWindowSession = try manager.session(for: descriptor.id, descriptor: descriptor)
         #expect(firstWindowSession === secondWindowSession)
 
-        manager.releaseSession(for: descriptor.id)
+        await manager.releaseSession(for: descriptor.id)
 
         #expect(manager.sessions[descriptor.id] === firstWindowSession)
 
-        manager.releaseSession(for: descriptor.id)
+        await manager.releaseSession(for: descriptor.id)
         #expect(manager.sessions[descriptor.id] == nil)
     }
 
-    @Test func testReleaseSessionFlushesPendingSaves() {
+    @Test func testReleaseSessionFlushesPendingSaves() async {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let manager = makeSessionManager(dir: dir)
@@ -286,7 +286,7 @@ struct SessionManagerTests {
         // but we verify the session is gone and no crash occurs.
         #expect(manager.sessions[descriptor.id] != nil)
 
-        manager.releaseSession(for: descriptor.id)
+        await manager.releaseSession(for: descriptor.id)
 
         // After release, the session is gone from the cache.
         #expect(manager.sessions[descriptor.id] == nil)
@@ -300,7 +300,7 @@ struct SessionManagerTests {
         let descriptor = try #require(registry.wikis.first)
         let session = try manager.session(for: descriptor.id, descriptor: descriptor)
 
-        manager.releaseSession(for: descriptor.id)
+        await manager.releaseSession(for: descriptor.id)
         await manager.shutdownSearchRuntimes()
 
         #expect(manager.sessions.isEmpty)
@@ -311,7 +311,7 @@ struct SessionManagerTests {
 
     // MARK: - flushAllSessions()
 
-    @Test func testFlushAllSessionsFlushesAllActive() {
+    @Test func testFlushAllSessionsFlushesAllActive() async {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let manager = makeSessionManager(dir: dir)
@@ -329,7 +329,7 @@ struct SessionManagerTests {
         // removing them from the cache — no crash, sessions still present.
         // (No public dirty flag to assert pre/post; the structural point is
         // both are flushed and both survive.)
-        manager.flushAllSessions()
+        await manager.flushAllSessions()
 
         // Both sessions are still in the cache (flush doesn't remove).
         #expect(manager.sessions.count == 2)

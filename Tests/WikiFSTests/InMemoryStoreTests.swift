@@ -93,7 +93,7 @@ struct InMemoryStoreTests {
         let recorder = LockRecorder()
         bus.subscribe(nil) { recorder.append($0) }
 
-        let page = try store.createPage(title: "Hello")
+        let page = try await store.createPage(title: "Hello")
 
         // The bus delivers on the main actor; flush runloop until the event lands.
         try await Self.awaitCount(recorder, expected: 1)
@@ -116,7 +116,7 @@ struct InMemoryStoreTests {
         let recorder = LockRecorder()
         bus.subscribe(nil) { recorder.append($0) }
 
-        let page = try store.createPage(title: "Doomed")
+        let page = try await store.createPage(title: "Doomed")
         try await Self.awaitCount(recorder, expected: 1)
         recorder.clear()
 

@@ -64,12 +64,12 @@ struct WikiNameSanitizationStoreTests {
         #expect(try store.getSource(id: src.id).displayName == nil)
     }
 
-    @Test func upsertOfUnlinkableTitleDoesNotDuplicate() throws {
+    @Test func upsertOfUnlinkableTitleDoesNotDuplicate() async throws {
         let store = try tempStore()
         // The raw title sanitizes to the same stored title both times — the
         // second upsert must UPDATE, not create a second page.
-        let first = try PageUpsert.upsert(in: store, id: nil, title: "A | B", body: "one")
-        let second = try PageUpsert.upsert(in: store, id: nil, title: "A | B", body: "two")
+        let first = try await PageUpsert.upsert(in: store, id: nil, title: "A | B", body: "one")
+        let second = try await PageUpsert.upsert(in: store, id: nil, title: "A | B", body: "two")
         #expect(first.didCreate)
         #expect(!second.didCreate)
         #expect(second.id == first.id)

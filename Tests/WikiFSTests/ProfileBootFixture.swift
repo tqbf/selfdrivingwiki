@@ -229,7 +229,7 @@ enum ProfileBootFixture {
             ) { activation in
                 let store = try await activation.require(StoreServiceKeys.store)
                 _ = try await activation.on(StoreEventKeys.resourceChange) { event in
-                    _ = try store.getPage(id: PageID(rawValue: event.id))
+                    _ = try await store.getPage(id: PageID(rawValue: event.id))
                     await recorder.append(event, observedCommittedState: true)
                 }
             }

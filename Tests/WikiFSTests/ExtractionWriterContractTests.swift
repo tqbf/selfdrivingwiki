@@ -51,11 +51,11 @@ struct ExtractionWriterContractTests {
         #expect(value.modelID == nil)
     }
 
-    @Test func pdfSeedUsesCanonicalExtraction() throws {
+    @Test func pdfSeedUsesCanonicalExtraction() async throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
         let model = WikiStoreModel(store: store)
-        _ = try #require(model.seedPdfMarkdown(
+        _ = try await #require(model.seedPdfMarkdown(
             for: summary.id, content: "seed", backend: .doclingServe, modelVersion: "1.2"))
         let value = try provenance(store, sourceID: summary.id)
         #expect(value.producer == .tool(.docling))
@@ -127,10 +127,10 @@ struct ExtractionWriterContractTests {
         #expect(value.modelID == nil)
     }
 
-    @Test func materializerSidecarUsesTypedTool() throws {
+    @Test func materializerSidecarUsesTypedTool() async throws {
         let store = try TestStoreFactory.inMemory()
         let model = WikiStoreModel(store: store)
-        let summary = try model.storeMaterialized(.init(
+        let summary = try await model.storeMaterialized(.init(
             filename: "sidecar.html", data: Data("<p>raw</p>".utf8),
             mimeType: "text/html", extractedMarkdown: "sidecar",
             extractionTechnique: "legacy-sidecar"))
@@ -138,36 +138,36 @@ struct ExtractionWriterContractTests {
         #expect(value.producer == .tool(.materializerSidecar))
     }
 
-    @Test func appleTranscriptUsesTypedTool() throws {
-        try assertTranscript(technique: ExtractionTool.appleTTML.rawValue, expected: .appleTTML)
+    @Test func appleTranscriptUsesTypedTool() async throws {
+        try await assertTranscript(technique: ExtractionTool.appleTTML.rawValue, expected: .appleTTML)
     }
 
-    @Test func youtubeTranscriptUsesTypedTool() throws {
-        try assertTranscript(technique: ExtractionTool.youtubeCaptions.rawValue, expected: .youtubeCaptions)
+    @Test func youtubeTranscriptUsesTypedTool() async throws {
+        try await assertTranscript(technique: ExtractionTool.youtubeCaptions.rawValue, expected: .youtubeCaptions)
     }
 
-    @Test func rssTranscriptUsesTypedTool() throws {
-        try assertTranscript(technique: ExtractionTool.rssPodcastTranscript.rawValue, expected: .rssPodcastTranscript)
+    @Test func rssTranscriptUsesTypedTool() async throws {
+        try await assertTranscript(technique: ExtractionTool.rssPodcastTranscript.rawValue, expected: .rssPodcastTranscript)
     }
 
-    @Test func vimeoTranscriptUsesTypedTool() throws {
-        try assertTranscript(technique: ExtractionTool.vimeoTranscript.rawValue, expected: .vimeoTranscript)
+    @Test func vimeoTranscriptUsesTypedTool() async throws {
+        try await assertTranscript(technique: ExtractionTool.vimeoTranscript.rawValue, expected: .vimeoTranscript)
     }
 
-    @Test func wikictlTranscriptUsesTypedTool() throws {
+    @Test func wikictlTranscriptUsesTypedTool() async throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
-        try SourceCommand.persistRefreshMaterial(
+        try await SourceCommand.persistRefreshMaterial(
             .derivedMarkdown(content: "refreshed transcript"), sourceID: summary.id, in: store)
         let value = try provenance(store, sourceID: summary.id)
         #expect(value.producer == .tool(.transcript))
     }
 
-    private func assertTranscript(technique: String, expected: ExtractionTool) throws {
+    private func assertTranscript(technique: String, expected: ExtractionTool) async throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
         let model = WikiStoreModel(store: store)
-        _ = try #require(model.appendTranscriptMarkdown(
+        _ = try await #require(model.appendTranscriptMarkdown(
             for: summary.id, content: "transcript", technique: technique))
         let value = try provenance(store, sourceID: summary.id)
         #expect(value.origin == .transcript)

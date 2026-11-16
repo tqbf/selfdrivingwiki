@@ -203,15 +203,15 @@ import Testing
     /// stamping at the store level: HEAD is `"agent:lint"` (not
     /// `legacy-import`) and `agentKind` is `"agent"`.
     @MainActor
-    @Test func preflightLintAutoFixStampsAgentLintOnHead() throws {
+    @Test func preflightLintAutoFixStampsAgentLintOnHead() async throws {
         let store = try tempStore()
         // Pre-fix: the page exists with a (legitimate) prior chat author.
-        let page = try store.createPage(title: "Lint Target",
+        let page = try await store.createPage(title: "Lint Target",
                                         createdBy: PageAuthor.chat(Self.chatULID).rawValue)
 
         // The post-fix lint call: PageUpsert.upsert with the explicit
         // author param (pre-fix this passed nil — leaking legacy-import).
-        _ = try PageUpsert.upsert(
+        _ = try await PageUpsert.upsert(
             in: store, id: page.id,
             title: "Lint Target", body: "fixed [[links]]",
             author: PageAuthor.agent("lint").rawValue)

@@ -37,9 +37,9 @@ struct MarkdownEditorWarningTests {
         let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
-        model.newPage(title: "Messy")
+        await model.newPage(title: "Messy")
         model.draftBody = "#No space after hash"
-        model.save()
+        await model.save()
         // The markdown warning is computed on a background Task — poll briefly.
         try await pollFor { model.markdownSaveWarning != nil }
         #expect(model.markdownSaveWarning?.contains("MD018") == true)
@@ -49,13 +49,13 @@ struct MarkdownEditorWarningTests {
         let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
-        model.newPage(title: "FixMe")
+        await model.newPage(title: "FixMe")
         model.draftBody = "#No space"
-        model.save()
+        await model.save()
         try await pollFor { model.markdownSaveWarning != nil }
         // Fix the issue and re-save → warning clears.
         model.draftBody = "# Fixed heading\n"
-        model.save()
+        await model.save()
         try await pollFor { model.markdownSaveWarning == nil }
         #expect(model.markdownSaveWarning == nil)
     }
@@ -64,14 +64,14 @@ struct MarkdownEditorWarningTests {
         let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
-        model.newPage(title: "Original")
+        await model.newPage(title: "Original")
         let messy = "#No space\ntrailing   \n"
         model.draftBody = messy
-        model.save()
+        await model.save()
         // The in-app path saves the ORIGINAL text (no auto-fix). Re-read it
         // directly from the store (the model's draftBody IS the original).
-        let id = try store.resolveTitleToID("Original")!
-        let stored = try store.getPage(id: id).bodyMarkdown
+        let id = try await store.resolveTitleToID("Original")!
+        let stored = try await store.getPage(id: id).bodyMarkdown
         #expect(stored == messy)
     }
 
@@ -79,19 +79,20 @@ struct MarkdownEditorWarningTests {
         let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
-        model.newPage(title: "FixMe")
+        await model.newPage(title: "FixMe")
         // Trailing whitespace on heading + body — fixes cleanly in one pass.
         model.draftBody = "# Title   \n\nText with trailing   \n"
-        model.save()
+        await model.save()
         try await pollFor { model.markdownSaveWarning != nil }
         // Apply the fix button.
-        model.fixMarkdownInDraft()
+        await model.fixMarkdownInDraft()
+        await model.quiesceSelectionTransitions()
         // The draft body is now normalized (trailing whitespace stripped).
         #expect(!model.draftBody.contains("   "))
         #expect(model.draftBody.hasSuffix("\n"))
         // The stored body matches the fixed draft (save() was called).
-        let id = try store.resolveTitleToID("FixMe")!
-        let stored = try store.getPage(id: id).bodyMarkdown
+        let id = try await store.resolveTitleToID("FixMe")!
+        let stored = try await store.getPage(id: id).bodyMarkdown
         #expect(stored == model.draftBody)
         // The warning clears after the fix (fixed body has no findings).
         try await pollFor { model.markdownSaveWarning == nil }
@@ -102,11 +103,11 @@ struct MarkdownEditorWarningTests {
         let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
-        model.newPage(title: "AlreadyClean")
+        await model.newPage(title: "AlreadyClean")
         let clean = "# Title\n\nClean text.\n"
         model.draftBody = clean
-        model.save()
-        model.fixMarkdownInDraft()
+        await model.save()
+        await model.fixMarkdownInDraft()
         #expect(model.draftBody == clean)
     }
 
@@ -114,9 +115,9 @@ struct MarkdownEditorWarningTests {
         let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
-        model.newPage(title: "Clean")
+        await model.newPage(title: "Clean")
         model.draftBody = "# Title\n\nSome paragraph text here.\n"
-        model.save()
+        await model.save()
         try await pollFor { model.markdownSaveWarning == nil }
         #expect(model.markdownSaveWarning == nil)
     }
@@ -125,9 +126,9 @@ struct MarkdownEditorWarningTests {
         let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = try repoLinter()
-        model.newPage(title: "Messy")
+        await model.newPage(title: "Messy")
         model.draftBody = "#No space after hash"
-        model.save()
+        await model.save()
         // The markdown warning is computed on a background Task — poll briefly.
         try await pollFor { model.markdownSaveWarning != nil }
         #expect(model.markdownSaveWarning?.contains("MD018") == true)
@@ -135,7 +136,7 @@ struct MarkdownEditorWarningTests {
         // banner — mirroring the mermaid/fence warning behaviour. It must NOT
         // reappear: page B is clean, so nothing re-lints, and a cancelled
         // in-flight lint can't write page A's findings onto page B.
-        model.newPage(title: "Clean")
+        await model.newPage(title: "Clean")
         #expect(model.markdownSaveWarning == nil)
         // Give any cancelled-but-started lint a chance to land and confirm it
         // doesn't resurrect the stale banner on the new page.
@@ -143,14 +144,14 @@ struct MarkdownEditorWarningTests {
         #expect(model.markdownSaveWarning == nil)
     }
 
-    @Test func noCrashWhenLinterUnavailable() throws {
+    @Test func noCrashWhenLinterUnavailable() async throws {
         // The unbundled path: nil linter → no warning, no crash.
         let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
         let model = WikiStoreModel(store: store)
         model.markdownLinter = nil
-        model.newPage(title: "Unbundled")
+        await model.newPage(title: "Unbundled")
         model.draftBody = "#No space"
-        model.save()
+        await model.save()
         #expect(model.markdownSaveWarning == nil)
     }
 

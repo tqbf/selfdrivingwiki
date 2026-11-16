@@ -16,22 +16,25 @@ struct Phase6PinningModelTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func makeModel() throws -> (WikiStoreModel, SourceID, SourceMarkdownVersionID) {
+    private func makeModel() async throws -> (WikiStoreModel, SourceID, SourceMarkdownVersionID) {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let source = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
         _ = try store.appendProcessedMarkdown(sourceID: source.id, content: "v1", origin: .extraction, note: nil)
         _ = try store.appendProcessedMarkdown(sourceID: source.id, content: "v2", origin: .extraction, note: nil)
         let v3 = try store.appendProcessedMarkdown(sourceID: source.id, content: "v3", origin: .extraction, note: nil)
-        model.reloadFromStore()
+        // P1-FLIP-REVIEW: reloadFromStore() now only enqueues a coalesced async
+        // reload; bootstrapFromStore() awaits the same drain so `selectSource`'s
+        // sources guard sees the seeded row.
+        await model.bootstrapFromStore()
         return (model, source.id, v3.id)
     }
 
-    @Test func selectSourceStashesPinnedExtractionTaggedToSelection() throws {
-        let (model, sourceID, pinID) = try makeModel()
+    @Test func selectSourceStashesPinnedExtractionTaggedToSelection() async throws {
+        let (model, sourceID, pinID) = try await makeModel()
         let beforeVersion = model.pendingScrollAnchorVersion
 
-        _ = model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
+        _ = await model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
 
         // The pin is tagged to the destination selection.
         #expect(model.pendingPinnedExtraction?.versionID == pinID)
@@ -40,9 +43,9 @@ struct Phase6PinningModelTests {
         #expect(model.pendingScrollAnchorVersion == beforeVersion + 1)
     }
 
-    @Test func consumeReturnsIDOnceForMatchingSelection() throws {
-        let (model, sourceID, pinID) = try makeModel()
-        _ = model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
+    @Test func consumeReturnsIDOnceForMatchingSelection() async throws {
+        let (model, sourceID, pinID) = try await makeModel()
+        _ = await model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
 
         // First consume for the matching selection returns the id.
         #expect(model.consumePendingPinnedExtraction(for: .source(sourceID)) == pinID)
@@ -52,41 +55,41 @@ struct Phase6PinningModelTests {
         #expect(model.consumePendingPinnedExtraction(for: .source(sourceID)) == nil)
     }
 
-    @Test func consumeReturnsNilForMismatchedSelection() throws {
-        let (model, sourceID, pinID) = try makeModel()
+    @Test func consumeReturnsNilForMismatchedSelection() async throws {
+        let (model, sourceID, pinID) = try await makeModel()
         let otherID = SourceID(rawValue: "01JAAAAAAAAAAAAAAAAAAAAAAA")
-        _ = model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
+        _ = await model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
 
         // Mismatched selection → nil, state preserved.
         #expect(model.consumePendingPinnedExtraction(for: .source(otherID)) == nil)
         #expect(model.pendingPinnedExtraction?.versionID == pinID)
     }
 
-    @Test func consumeReturnsNilForNilSelection() throws {
-        let (model, sourceID, pinID) = try makeModel()
-        _ = model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
+    @Test func consumeReturnsNilForNilSelection() async throws {
+        let (model, sourceID, pinID) = try await makeModel()
+        _ = await model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
 
         #expect(model.consumePendingPinnedExtraction(for: nil) == nil)
     }
 
-    @Test func nilPinIsNoOp() throws {
-        let (model, sourceID, _) = try makeModel()
+    @Test func nilPinIsNoOp() async throws {
+        let (model, sourceID, _) = try await makeModel()
 
-        _ = model.selectSource(byID: sourceID, anchor: nil, pinnedExtractionID: nil)
+        _ = await model.selectSource(byID: sourceID, anchor: nil, pinnedExtractionID: nil)
 
         // No pending pin state set.
         #expect(model.pendingPinnedExtraction == nil)
     }
 
-    @Test func selectSourceWithoutPinClearsStalePin() throws {
-        let (model, sourceID, pinID) = try makeModel()
+    @Test func selectSourceWithoutPinClearsStalePin() async throws {
+        let (model, sourceID, pinID) = try await makeModel()
 
         // First navigation with a pin.
-        _ = model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
+        _ = await model.selectSource(byID: sourceID, anchor: #""q""#, pinnedExtractionID: pinID)
         #expect(model.pendingPinnedExtraction != nil)
 
         // Second navigation without a pin → no pending pin (cleared).
-        _ = model.selectSource(byID: sourceID, anchor: #""q2""#, pinnedExtractionID: nil)
+        _ = await model.selectSource(byID: sourceID, anchor: #""q2""#, pinnedExtractionID: nil)
         #expect(model.pendingPinnedExtraction == nil)
     }
 }

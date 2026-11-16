@@ -124,7 +124,7 @@ struct ProfileWikiSessionTests {
 
     // MARK: - Vacuum state
 
-    @Test func testVacuumPreviewSetsReportAndApplyClearsIt() {
+    @Test func testVacuumPreviewSetsReportAndApplyClearsIt() async {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let coordinator = ExtractionCoordinator(
@@ -138,18 +138,18 @@ struct ProfileWikiSessionTests {
             queueEngine: try! makeTestQueueEngine(),
             extractionProvider: StubExtractionProvider())
 
-        session.previewVacuumAll()
+        await session.previewVacuumAll()
         let report = session.pendingVacuumAll
         #expect(report != nil)
         #expect(report?.blobs.orphanCount == 0)
         #expect(report?.activities.orphanCount == 0)
         #expect(report?.isEmpty == true)
 
-        session.applyVacuumAll()
+        await session.applyVacuumAll()
         #expect(session.pendingVacuumAll == nil)
     }
 
-    @Test func testBlobVacuumPreviewSetsReportAndApplyClearsIt() {
+    @Test func testBlobVacuumPreviewSetsReportAndApplyClearsIt() async {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let coordinator = ExtractionCoordinator(
@@ -163,14 +163,14 @@ struct ProfileWikiSessionTests {
             queueEngine: try! makeTestQueueEngine(),
             extractionProvider: StubExtractionProvider())
 
-        session.previewBlobVacuum()
+        await session.previewBlobVacuum()
         let report = session.pendingBlobVacuum
         #expect(report != nil)
         #expect(report?.orphanCount == 0)
         #expect(report?.bytesReclaimed == 0)
         #expect(report?.applied == false)
 
-        session.applyBlobVacuum()
+        await session.applyBlobVacuum()
         #expect(session.pendingBlobVacuum == nil)
     }
 

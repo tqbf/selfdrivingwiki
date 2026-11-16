@@ -160,7 +160,7 @@ struct DurableNewChatHostedTests {
     /// Deleted" presentation and a `.available` one is the chat surface — so
     /// the hosted test's composer-presence probes distinguish exactly these
     /// two states.
-    @Test func deletedChatPresentationIsDetectable() throws {
+    @Test func deletedChatPresentationIsDetectable() async throws {
         let missingID = ChatID(rawValue: "01J" + String(repeating: "X", count: 22))
         let remoteState = ChatDetailPresentation.RemoteState(
             runState: .idle,

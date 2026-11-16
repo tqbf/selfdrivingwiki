@@ -16,7 +16,7 @@ struct MetadataEventEmissionTests {
 
     @Test func pageVersionAndSourcesEmitOnceAfterCommit() async throws {
         let store = try TestStoreFactory.inMemory()
-        let page = try store.createPage(title: "Event provenance")
+        let page = try await store.createPage(title: "Event provenance")
         let source = try store.addSource(filename: "evidence.txt", data: Data("evidence".utf8))
         let recorder = makeRecorder(for: store)
 
@@ -34,7 +34,7 @@ struct MetadataEventEmissionTests {
 
     @Test func rolledBackPageProvenanceEmitsNothing() async throws {
         let store = try TestStoreFactory.inMemory()
-        let page = try store.createPage(title: "Rollback provenance")
+        let page = try await store.createPage(title: "Rollback provenance")
         let source = try store.addSource(filename: "evidence.txt", data: Data("evidence".utf8))
         let recorder = makeRecorder(for: store)
         let duplicate = PageVersionSourceInput(sourceID: source.id, role: .supporting)

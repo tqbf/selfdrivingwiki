@@ -83,6 +83,28 @@ struct GoldenMasterStoreStateTests {
             wikiDirectory: first.wiki, queueURL: first.queue)
         let dumpB = try await GoldenMasterStoreState.runFixture(
             wikiDirectory: second.wiki, queueURL: second.queue)
-        #expect(dumpA == dumpB)
+        if dumpA != dumpB {
+            // Same shape as the baseline-drift report: show the first
+            // differing lines so a determinism regression is diagnosable
+            // without re-running the fixture by hand.
+            let aLines = dumpA.split(separator: "\n").map(String.init)
+            let bLines = dumpB.split(separator: "\n").map(String.init)
+            var differences: [String] = []
+            for (index, pair) in zip(aLines, bLines).enumerated() {
+                if pair.0 != pair.1 {
+                    differences.append("line \(index + 1):\n  A: \(pair.0)\n  B: \(pair.1)")
+                }
+                if differences.count >= 12 { break }
+            }
+            #expect(
+                Bool(false),
+                Comment(rawValue: """
+                determinism drift: \(differences.count)+ differing lines \
+                (A \(aLines.count) lines vs B \(bLines.count) lines)
+                \(differences.joined(separator: "\n"))
+                """))
+        } else {
+            #expect(true)
+        }
     }
 }

@@ -52,7 +52,7 @@ struct StoreEmissionReentrancyTests {
     /// transaction commits, with no deadlock (R1).
     @Test func withTransactionMutationEmitsOnceNoDeadlock() async throws {
         let (store, _, rec) = try makeHarness()
-        let page = try store.createPage(title: "Doomed")
+        let page = try await store.createPage(title: "Doomed")
         // createPage already emitted one event; clear so we isolate deletePage.
         try await awaitCount(rec, 1)
         let beforeDelete = rec.count
@@ -77,11 +77,11 @@ struct StoreEmissionReentrancyTests {
     /// short-circuit and `appendPageVersionLocked` actually runs.
     @Test func updatePageAfterVersioningRefactorEmitsOnceNoDeadlock() async throws {
         let (store, _, rec) = try makeHarness()
-        let page = try store.createPage(title: "Provenance Composer")
+        let page = try await store.createPage(title: "Provenance Composer")
         // createPage emitted one event; isolate updatePage.
         try await awaitCount(rec, 1)
         let beforeUpdate = rec.count
-        try store.updatePage(
+        try await store.updatePage(
             id: page.id, title: "Provenance Composer (v2)", body: "edited",
             lastEditedBy: "agent-edit")
         try await awaitCount(rec, beforeUpdate + 1)
@@ -117,7 +117,7 @@ struct StoreEmissionReentrancyTests {
             }
         }
 
-        let created = try store.createPage(title: "Committed")
+        let created = try await store.createPage(title: "Committed")
         // Wait for the handler's read to land. Shared budget: absorbs
         // full-suite main-actor lag (issue #1425).
         let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
@@ -153,7 +153,7 @@ struct StoreEmissionReentrancyTests {
     /// registry stay consistent across a burst.
     @Test func burstEmitsOneEventPerMutation() async throws {
         let (store, _, rec) = try makeHarness()
-        for i in 0..<5 { _ = try store.createPage(title: "P\(i)") }
+        for i in 0..<5 { _ = try await store.createPage(title: "P\(i)") }
         try await awaitCount(rec, 5)
         #expect(rec.count == 5)
         // Every event is distinct (distinct page ids) and seq is strictly

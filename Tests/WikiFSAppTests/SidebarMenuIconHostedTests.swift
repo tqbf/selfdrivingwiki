@@ -69,7 +69,7 @@ struct SidebarMenuIconHostedTests {
         for title in ["Alpha", "Beta", "Gamma"] {
             _ = try store.createPage(title: title)
         }
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let vc = PagesListViewController()
         vc.store = model
@@ -126,7 +126,7 @@ struct SidebarMenuIconHostedTests {
         for (name, byte) in [("alpha.pdf", "a"), ("beta.pdf", "b"), ("gamma.pdf", "g")] {
             _ = try store.addSource(filename: name, data: Data(byte.utf8))
         }
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let vc = SourcesListViewController()
         vc.store = model

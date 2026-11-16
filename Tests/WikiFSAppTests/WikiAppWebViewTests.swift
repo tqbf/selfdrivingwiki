@@ -324,7 +324,7 @@ struct WikiAppWebViewTests {
             body: "body one",
             expectedHeadVersionID: nil)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.page(page.id))
 
         let head = try #require(try store.pageHeadVersionID(pageID: page.id))
@@ -478,7 +478,7 @@ private func makePageDetailModel() throws -> WikiStoreModel {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let store = try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     let model = WikiStoreModel(store: store)
-    model.reloadFromStore()
+    await model.bootstrapFromStore()
     return model
 }
 

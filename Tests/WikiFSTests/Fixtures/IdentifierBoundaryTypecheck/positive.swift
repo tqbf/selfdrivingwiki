@@ -9,12 +9,12 @@ func acceptsCorrectIdentifierNamespaces(
     sourceVersionID: SourceVersionID,
     sourceMarkdownVersionID: SourceMarkdownVersionID,
     concreteStore: GRDBWikiStore
-) throws {
-    _ = try store.getPage(id: pageID)
-    _ = try store.sourceContent(id: sourceID)
-    _ = try store.getChat(id: chatID)
-    _ = try store.processedMarkdownVersion(id: sourceMarkdownVersionID)
-    _ = try store.recordMarkdownExtraction(
+) async throws {
+    _ = try await store.getPage(id: pageID)
+    _ = try await store.sourceContent(id: sourceID)
+    _ = try await store.getChat(id: chatID)
+    _ = try await store.processedMarkdownVersion(id: sourceMarkdownVersionID)
+    _ = try await store.recordMarkdownExtraction(
         sourceID: sourceID,
         content: "# markdown",
         backend: .anthropic,
@@ -22,7 +22,9 @@ func acceptsCorrectIdentifierNamespaces(
         note: nil,
         modelVersion: nil
     )
-    try store.setActiveMarkdown(sourceID: sourceID, to: sourceMarkdownVersionID)
+    try await store.setActiveMarkdown(sourceID: sourceID, to: sourceMarkdownVersionID)
+    // The concrete GRDB conformer keeps synchronous signatures (sync methods
+    // witness the async protocol requirements), so the direct call stays sync.
     try concreteStore.rollbackSourceContent(sourceID: sourceID, to: sourceVersionID)
 }
 

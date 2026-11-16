@@ -299,9 +299,9 @@ struct WikiLinkStoreTests {
     // MARK: - LinkReconciler (startup self-heal)
     @Test func reconcileHealsCitationSavedBeforeSourceExisted() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "P")
+        let page = try await store.createPage(title: "P")
         let body = "cites [[source:Agentic Static Analysis for C# Security Auditing (2026)#\"q\"]]"
-        try store.updatePage(id: page.id, title: "P", body: body)
+        try await store.updatePage(id: page.id, title: "P", body: body)
         try store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(body))
 
         // Source ingested AFTER the page was saved → no link row yet.
@@ -316,9 +316,9 @@ struct WikiLinkStoreTests {
 
     @Test func reconcileIsIdempotent() async throws {
         let store = try tempStore()
-        let a = try store.createPage(title: "A")
-        _ = try store.createPage(title: "B")
-        try store.updatePage(id: a.id, title: "A", body: "see [[B]]")
+        let a = try await store.createPage(title: "A")
+        _ = try await store.createPage(title: "B")
+        try await store.updatePage(id: a.id, title: "A", body: "see [[B]]")
         try store.replaceLinks(from: a.id, parsedLinks: WikiLinkParser.parse("see [[B]]"))
 
         try await LinkReconciler.reconcileAll(in: store)

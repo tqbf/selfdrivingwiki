@@ -53,40 +53,40 @@ struct IngestGateTests {
 
     // MARK: - canIngest predicate
 
-    @Test func bytelessYouTubeWithoutTranscriptIsNotIngestible() throws {
+    @Test func bytelessYouTubeWithoutTranscriptIsNotIngestible() async throws {
         let store = try tempStore()
         _ = try addBytelessYouTube(to: store)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let yt = try #require(model.sources.first)
         #expect(yt.byteSize == 0)
         #expect(!model.canIngest(yt))
     }
 
-    @Test func nativeMarkdownFileIsIngestible() throws {
+    @Test func nativeMarkdownFileIsIngestible() async throws {
         let model = WikiStoreModel(store: try tempStore())
         model.addSource(filename: "notes.md", data: Data("# Heading\n\nbody".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let md = try #require(model.sources.first)
         #expect(md.byteSize > 0)
         #expect(model.canIngest(md))
     }
 
-    @Test func pdfWithBytesIsIngestible() throws {
+    @Test func pdfWithBytesIsIngestible() async throws {
         let model = WikiStoreModel(store: try tempStore())
         // Raw PDF bytes (header only) — the staging path extracts markdown
         // first, but `canIngest` is true because there are bytes to act on.
         model.addSource(filename: "paper.pdf", data: Data("%PDF-1.4\n".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let pdf = try #require(model.sources.first)
         #expect(pdf.byteSize > 0)
         #expect(model.canIngest(pdf))
     }
 
-    @Test func bytelessSourceWithTranscriptIsIngestible() throws {
+    @Test func bytelessSourceWithTranscriptIsIngestible() async throws {
         let store = try tempStore()
         let yt = try addBytelessYouTube(to: store)
         // The transcript arrives as a processed-markdown version.
@@ -96,7 +96,7 @@ struct IngestGateTests {
             origin: .transcript, note: nil, technique: nil)
 
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let source = try #require(model.sources.first(where: { $0.id == yt.id }))
         #expect(source.byteSize == 0)  // still byteless…
@@ -123,7 +123,7 @@ struct IngestGateTests {
         let model = WikiStoreModel(store: try tempStore())
         model.addSource(filename: "diagram.png",
                         data: Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let png = try #require(model.sources.first)
         #expect(png.byteSize > 0)
         #expect(model.canIngest(png))        // passes byte gate (the bug)…
@@ -135,7 +135,7 @@ struct IngestGateTests {
         let model = WikiStoreModel(store: try tempStore())
         model.addSource(filename: "feed.xml",
                         data: Data("<?xml version=\"1.0\"?><foo/>".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let xml = try #require(model.sources.first)
         #expect(xml.byteSize > 0)
         #expect(model.canIngest(xml))        // passes byte gate (the bug)…
@@ -146,7 +146,7 @@ struct IngestGateTests {
     func shouldAutoIngestKeepsPDF() throws {
         let model = WikiStoreModel(store: try tempStore())
         model.addSource(filename: "paper.pdf", data: Data("%PDF-1.4\n".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let pdf = try #require(model.sources.first)
         #expect(model.canIngest(pdf))
         #expect(model.shouldAutoIngest(pdf))
@@ -156,7 +156,7 @@ struct IngestGateTests {
     func shouldAutoIngestKeepsMarkdown() throws {
         let model = WikiStoreModel(store: try tempStore())
         model.addSource(filename: "notes.md", data: Data("# Heading\n\nbody".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let md = try #require(model.sources.first)
         #expect(model.canIngest(md))
         #expect(model.shouldAutoIngest(md))
@@ -174,7 +174,7 @@ struct IngestGateTests {
         let store = try tempStore()
         _ = try addBytelessYouTube(to: store)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let yt = try #require(model.sources.first)
         #expect(!model.canIngest(yt))         // byteless + no transcript
         #expect(model.shouldAutoIngest(yt))    // but the kind is auto-ingestible
@@ -191,7 +191,7 @@ struct IngestGateTests {
             content: "# Transcript\n\ncaption body",
             origin: .transcript, note: nil, technique: nil)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let source = try #require(model.sources.first(where: { $0.id == yt.id }))
         #expect(model.canIngest(source))         // transcript staged
@@ -220,7 +220,7 @@ struct IngestGateTests {
         let store = try tempStore()
         let yt = try addBytelessYouTube(to: store)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let engine = try makeEngine()
 
         // The detail-view button / list menu would call this with the
@@ -245,7 +245,7 @@ struct IngestGateTests {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
         model.addSource(filename: "notes.md", data: Data("# Heading\n\nbody".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let md = try #require(model.sources.first)
         let engine = try makeEngine()
 
@@ -271,7 +271,7 @@ struct IngestGateTests {
         let yt = try addBytelessYouTube(to: store)
         let model = WikiStoreModel(store: store)
         model.addSource(filename: "notes.md", data: Data("# body".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let md = try #require(model.sources.first(where: { $0.id != yt.id }))
         let engine = try makeEngine()
 
@@ -313,7 +313,7 @@ struct IngestGateTests {
         let model = WikiStoreModel(store: store)
         model.addSource(filename: "diagram.png",
                         data: Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let png = try #require(model.sources.first)
         let engine = try makeEngine()
 
@@ -337,7 +337,7 @@ struct IngestGateTests {
         let model = WikiStoreModel(store: store)
         model.addSource(filename: "feed.xml",
                         data: Data("<?xml version=\"1.0\"?><foo/>".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let xml = try #require(model.sources.first)
         let engine = try makeEngine()
 
@@ -374,7 +374,7 @@ struct IngestGateTests {
             content: "# Transcript\n\ncaption body",
             origin: .transcript, note: nil, technique: nil)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // Sanity: provider-aware shouldAutoIngest says YES (would be NO if
         // the chokepoint used fromMIME alone — that's the C1 regression).
@@ -414,7 +414,7 @@ struct IngestGateTests {
         model.addSource(filename: "diagram.png",
                         data: Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
         model.addSource(filename: "notes.md", data: Data("# body".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let png = try #require(model.sources.first(where: { $0.ext == "png" }))
         let md  = try #require(model.sources.first(where: { $0.ext == "md" }))

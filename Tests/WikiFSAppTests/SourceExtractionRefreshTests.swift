@@ -22,7 +22,7 @@ struct SourceExtractionRefreshTests {
         let store = try TestStoreFactory.inMemory()
         store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "extraction-refresh"))
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let source = try store.addSource(filename: "report.docx", data: Data("docx-bytes".utf8))
         try await waitUntil("source import reloads the model") {

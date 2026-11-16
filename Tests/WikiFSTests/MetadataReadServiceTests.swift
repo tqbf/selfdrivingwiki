@@ -34,7 +34,7 @@ struct MetadataReadServiceTests {
     @Test func readerSeesCommittedPageSources() async throws {
         let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "metadata-read-service-page")
         let writer = try GRDBWikiStore(databaseURL: url)
-        let page = try writer.createPage(title: "Page")
+        let page = try await writer.createPage(title: "Page")
         let version = try #require(try writer.pageHeadVersionID(pageID: page.id))
         let source = try writer.addSource(filename: "source.txt", data: Data("source".utf8))
         writer.close()

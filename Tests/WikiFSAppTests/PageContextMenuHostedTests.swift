@@ -59,7 +59,7 @@ struct PageContextMenuHostedTests {
         let (model, store) = try tempModel()
         let a = try store.createPage(title: "A")
         let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.select(.page(a.id))
         model.select(.page(b.id))
 

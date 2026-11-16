@@ -2,9 +2,10 @@ import Foundation
 import Testing
 @testable import WikiFSCore
 
+@MainActor
 struct RendererAuthorizedInputReaderTests {
     @Test("store-backed Markdown reads retain the authorized pinned version")
-    func storeBackedMarkdownReadUsesPinnedBlobBytes() throws {
+    func storeBackedMarkdownReadUsesPinnedBlobBytes() async throws {
         let store = try GRDBWikiStore()
         let source = try store.addSource(filename: "input.md", data: Data())
         let pinned = try store.appendProcessedMarkdown(
@@ -16,14 +17,14 @@ struct RendererAuthorizedInputReaderTests {
         let input = RendererBridgeInput.markdown(versionID: pinned.id)
         let reader = RendererAuthorizedInputReader(store: store, authorizedInput: input)
 
-        let payload = try reader.read(input)
+        let payload = try await reader.read(input)
 
         #expect(payload.mimeType == "text/markdown")
         #expect(payload.bytes == Data("# pinned".utf8))
     }
 
     @Test("admitted source reads require exact pinned bytes MIME digest and typed version", arguments: [false, true])
-    func admittedSourceReadsRequireExactPinnedPayload(useMarkdownVersion: Bool) throws {
+    func admittedSourceReadsRequireExactPinnedPayload(useMarkdownVersion: Bool) async throws {
         let store = try GRDBWikiStore()
         let stored = try store.addSource(filename: "admitted.json", data: Data("source-bytes".utf8))
         let source: RendererEmbeddedContent.Source
@@ -51,7 +52,7 @@ struct RendererAuthorizedInputReaderTests {
             authorizedInput: input,
             admittedSource: source)
 
-        let payload = try reader.read(input)
+        let payload = try await reader.read(input)
 
         #expect(payload.mimeType == source.mimeType.rawValue)
         #expect(payload.bytes == source.bytes)
@@ -84,7 +85,7 @@ struct RendererAuthorizedInputReaderTests {
     }
 
     @Test("admitted source reader rejects store MIME and byte drift")
-    func admittedSourceReaderRejectsStorePayloadDrift() throws {
+    func admittedSourceReaderRejectsStorePayloadDrift() async throws {
         let store = try GRDBWikiStore()
         let stored = try store.addSource(filename: "admitted.json", data: Data("stored-bytes".utf8))
         let version = try #require(try store.activeContentVersion(sourceID: stored.id))
@@ -105,14 +106,14 @@ struct RendererAuthorizedInputReaderTests {
                 store: store,
                 authorizedInput: input,
                 admittedSource: admittedSource)
-            #expect(throws: RendererAuthorizedInputReader.ReaderError.unavailablePinnedInput) {
-                try reader.read(input)
+            await #expect(throws: RendererAuthorizedInputReader.ReaderError.unavailablePinnedInput) {
+                try await reader.read(input)
             }
         }
     }
 
     @Test("oversized pinned inputs fail before the payload reader runs")
-    func oversizedPinnedInputsDoNotMaterializePayloads() throws {
+    func oversizedPinnedInputsDoNotMaterializePayloads() async throws {
         for input in [
             RendererBridgeInput.source(versionID: .init(rawValue: "source-version")),
             .markdown(versionID: .init(rawValue: "markdown-version")),
@@ -130,15 +131,15 @@ struct RendererAuthorizedInputReaderTests {
                 }
             )
 
-            #expect(throws: RendererAuthorizedInputReader.ReaderError.oversizedInput) {
-                try reader.read(input)
+            await #expect(throws: RendererAuthorizedInputReader.ReaderError.oversizedInput) {
+                try await reader.read(input)
             }
             #expect(payloadRead == false)
         }
     }
 
     @Test("inline artifacts round-trip without store lookup and close fail closed")
-    func inlineArtifactRoundTripsAndFailsClosed() throws {
+    func inlineArtifactRoundTripsAndFailsClosed() async throws {
         let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
         let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
         let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
@@ -169,23 +170,23 @@ struct RendererAuthorizedInputReaderTests {
         )
 
         #expect(block.digest == artifact.digest)
-        let payload = try reader.read(input)
+        let payload = try await reader.read(input)
         #expect(payload.mimeType == "application/json")
         #expect(payload.bytes == bytes)
 
         reader.close()
-        #expect(throws: RendererAuthorizedInputReader.ReaderError.closed) {
-            try reader.read(input)
+        await #expect(throws: RendererAuthorizedInputReader.ReaderError.closed) {
+            try await reader.read(input)
         }
     }
 
     @MainActor
     @Test("composition seam resolves the exact pinned reader for the requested source")
-    func resolverSeamReturnsTheExactPinnedReader() throws {
+    func resolverSeamReturnsTheExactPinnedReader() async throws {
         let store = try GRDBWikiStore()
         let source = try store.addSource(filename: "reader-seam.md", data: Data("# seam".utf8))
         let resolver: any RendererAuthorizedInputResolving = WikiStoreModel(store: store)
-        let reader = try #require(resolver.rendererAuthorizedInputReader(for: source.id))
+        let reader = try await #require(resolver.rendererAuthorizedInputReader(for: source.id))
         let version = try #require(try store.activeContentVersion(sourceID: source.id))
 
         #expect(reader.authorizedInput == RendererBridgeInput.source(versionID: version.id))

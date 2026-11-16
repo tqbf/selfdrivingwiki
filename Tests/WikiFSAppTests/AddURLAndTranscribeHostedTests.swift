@@ -176,7 +176,7 @@ struct AddURLAndTranscribeHostedTests {
             (try? store.listSources().contains { $0.mimeType == "video/youtube" }) == true
         }
         #expect(landed, "the offline fetch never created the source")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(model.sources.first?.mimeType == "video/youtube")
 
         // The captions job auto-enqueues for the covered route.

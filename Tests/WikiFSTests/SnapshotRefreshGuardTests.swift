@@ -126,7 +126,7 @@ struct SnapshotRefreshGuardTests {
         _ = try await model.addURL("https://example.com/g", fetcher: fetcher)
 
         let pageID = try store.listSources().first { $0.role == .primary }!.id
-        #expect(model.isSourceRefreshable(for: pageID) == false)
+        #expect(await model.isSourceRefreshable(for: pageID) == false)
     }
 
     @Test func imagelessWebsiteSourceIsRefreshableGate() async throws {
@@ -142,6 +142,6 @@ struct SnapshotRefreshGuardTests {
         _ = try await model.addURL("https://example.com/p", fetcher: fetcher)
 
         let pageID = try store.listSources().first { $0.role == .primary }!.id
-        #expect(model.isSourceRefreshable(for: pageID) == true)
+        #expect(await model.isSourceRefreshable(for: pageID) == true)
     }
 }

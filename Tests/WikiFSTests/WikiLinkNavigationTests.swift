@@ -17,50 +17,50 @@ struct WikiLinkNavigationTests {
         return (WikiStoreModel(store: store), store)
     }
 
-    @Test func pageExistsReflectsStore() throws {
+    @Test func pageExistsReflectsStore() async throws {
         let (model, store) = try tempModel()
-        _ = try store.createPage(title: "Photosynthesis")
-        model.reloadFromStore()
+        _ = try await store.createPage(title: "Photosynthesis")
+        await model.bootstrapFromStore()
         #expect(model.pageExists(title: "Photosynthesis"))
         #expect(!model.pageExists(title: "Nonexistent"))
     }
 
-    @Test func selectPageByTitleNavigatesToThatPage() throws {
+    @Test func selectPageByTitleNavigatesToThatPage() async throws {
         let (model, store) = try tempModel()
-        let target = try store.createPage(title: "Chloroplast")
-        model.reloadFromStore()
+        let target = try await store.createPage(title: "Chloroplast")
+        await model.bootstrapFromStore()
 
         let navigated = model.selectPage(byTitle: "Chloroplast")
         #expect(navigated)
         #expect(model.selection == .page(target.id))
     }
 
-    @Test func selectPageByTitleNoOpsOnMissingTitle() throws {
+    @Test func selectPageByTitleNoOpsOnMissingTitle() async throws {
         let (model, _) = try tempModel()
         let navigated = model.selectPage(byTitle: "Ghost")
         #expect(!navigated)
         #expect(model.selection == nil)
     }
 
-    @Test func selectPageByTitleResolvesDuplicateToLowestULID() throws {
+    @Test func selectPageByTitleResolvesDuplicateToLowestULID() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "Dup")
-        let b = try store.createPage(title: "Dup")
+        let a = try await store.createPage(title: "Dup")
+        let b = try await store.createPage(title: "Dup")
         // ULID generation isn't guaranteed monotonic within a tick, so derive the
         // expected winner from the ids themselves rather than creation order.
         let lowest = a.id.rawValue < b.id.rawValue ? a.id : b.id
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         #expect(model.selectPage(byTitle: "Dup"))
         // Lowest-ULID page wins, matching the link graph's resolveTitleToID.
         #expect(model.selection == .page(lowest))
     }
 
-    @Test func selectPageByTitleReusesAlreadyOpenTab() throws {
+    @Test func selectPageByTitleReusesAlreadyOpenTab() async throws {
         let (model, store) = try tempModel()
-        let from = try store.createPage(title: "From")
-        let to = try store.createPage(title: "To")
-        model.reloadFromStore()
+        let from = try await store.createPage(title: "From")
+        let to = try await store.createPage(title: "To")
+        await model.bootstrapFromStore()
 
         // Open both pages in tabs, leaving `from` active.
         model.openTab(.page(to.id))
@@ -75,11 +75,11 @@ struct WikiLinkNavigationTests {
         #expect(model.selection == .page(to.id))
     }
 
-    @Test func selectPageByTitlePlainClickNavigatesCurrentTabInPlace() throws {
+    @Test func selectPageByTitlePlainClickNavigatesCurrentTabInPlace() async throws {
         let (model, store) = try tempModel()
-        let from = try store.createPage(title: "From")
-        let to = try store.createPage(title: "To")
-        model.reloadFromStore()
+        let from = try await store.createPage(title: "From")
+        let to = try await store.createPage(title: "To")
+        await model.bootstrapFromStore()
 
         model.openTab(.page(from.id))
         let fromTab = model.activeTabID
@@ -94,11 +94,11 @@ struct WikiLinkNavigationTests {
         #expect(model.tabs.first?.selection == .page(to.id))
     }
 
-    @Test func selectPageByTitleCommandClickOpensNewTab() throws {
+    @Test func selectPageByTitleCommandClickOpensNewTab() async throws {
         let (model, store) = try tempModel()
-        let from = try store.createPage(title: "From")
-        let to = try store.createPage(title: "To")
-        model.reloadFromStore()
+        let from = try await store.createPage(title: "From")
+        let to = try await store.createPage(title: "To")
+        await model.bootstrapFromStore()
 
         model.openTab(.page(from.id))
         #expect(model.tabs.count == 1)
@@ -110,11 +110,11 @@ struct WikiLinkNavigationTests {
         #expect(model.tabs.contains { $0.selection == .page(to.id) })
     }
 
-    @Test func selectPageByTitleCommandClickReusesAlreadyOpenTab() throws {
+    @Test func selectPageByTitleCommandClickReusesAlreadyOpenTab() async throws {
         let (model, store) = try tempModel()
-        let from = try store.createPage(title: "From")
-        let to = try store.createPage(title: "To")
-        model.reloadFromStore()
+        let from = try await store.createPage(title: "From")
+        let to = try await store.createPage(title: "To")
+        await model.bootstrapFromStore()
 
         model.openTab(.page(to.id))
         let toTab = model.tabs.first { $0.selection == .page(to.id) }!.id
@@ -128,10 +128,10 @@ struct WikiLinkNavigationTests {
         #expect(model.activeTabID == toTab)
     }
 
-    @Test func selectPageByTitlePlainClickInEmptyStateOpensTab() throws {
+    @Test func selectPageByTitlePlainClickInEmptyStateOpensTab() async throws {
         let (model, store) = try tempModel()
-        let to = try store.createPage(title: "To")
-        model.reloadFromStore()
+        let to = try await store.createPage(title: "To")
+        await model.bootstrapFromStore()
 
         #expect(model.tabs.isEmpty)
 
@@ -141,37 +141,42 @@ struct WikiLinkNavigationTests {
         #expect(model.selection == .page(to.id))
     }
 
-    @Test func selectPageByTitleNavigatesInPlaceRecordingHistory() throws {
+    @Test func selectPageByTitleNavigatesInPlaceRecordingHistory() async throws {
         let (model, store) = try tempModel()
-        let from = try store.createPage(title: "From")
-        let to = try store.createPage(title: "To")
-        model.reloadFromStore()
+        let from = try await store.createPage(title: "From")
+        let to = try await store.createPage(title: "To")
+        await model.bootstrapFromStore()
 
         model.openTab(.page(from.id))
+        await model.quiesceSelectionTransitions()
 
         // Plain-click in-place navigation records a history transition so the
         // back button can return to the outgoing page.
         #expect(model.selectPage(byTitle: "To"))
+        await model.quiesceSelectionTransitions()
         #expect(model.selection == .page(to.id))
         model.navigateBack()
+        await model.quiesceSelectionTransitions()
         #expect(model.selection == .page(from.id))
     }
 
-    @Test func selectPageByTitleFlushesOutgoingEditsOnInPlaceNavigation() throws {
+    @Test func selectPageByTitleFlushesOutgoingEditsOnInPlaceNavigation() async throws {
         let (model, store) = try tempModel()
-        let from = try store.createPage(title: "From")
-        let to = try store.createPage(title: "To")
-        model.reloadFromStore()
+        let from = try await store.createPage(title: "From")
+        let to = try await store.createPage(title: "To")
+        await model.bootstrapFromStore()
 
         // In-place navigation replaces the active tab's selection, so the
         // outgoing page's pending edits are flushed (auto-saved) rather than
         // silently discarded — the reader is read-only in practice, but this
         // keeps the edit path safe and matches sidebar `select(_:)`.
         model.openTab(.page(from.id))
+        await model.quiesceSelectionTransitions()
         model.draftBody = "edited body before clicking a link"
         model.bodyChanged()
 
         #expect(model.selectPage(byTitle: "To"))
+        await model.quiesceSelectionTransitions()
         #expect(model.selection == .page(to.id))
 
         let reloaded = try store.getPage(id: from.id)
@@ -180,64 +185,64 @@ struct WikiLinkNavigationTests {
 
     // MARK: - selectSource(byDisplayName:) (Phase B)
 
-    @Test func selectSourceByDisplayNameNavigatesToThatSource() throws {
+    @Test func selectSourceByDisplayNameNavigatesToThatSource() async throws {
         let (model, store) = try tempModel()
         let source = try store.addSource(filename: "Paper.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
-        let navigated = model.selectSource(byDisplayName: "Paper.pdf")
+        let navigated = await model.selectSource(byDisplayName: "Paper.pdf")
         #expect(navigated)
         #expect(model.selection == .source(source.id))
         #expect(model.tabs.contains { $0.selection == .source(source.id) })
     }
 
-    @Test func selectSourceByDisplayNameNoOpsOnMissingName() throws {
+    @Test func selectSourceByDisplayNameNoOpsOnMissingName() async throws {
         let (model, _) = try tempModel()
-        let navigated = model.selectSource(byDisplayName: "Ghost.pdf")
+        let navigated = await model.selectSource(byDisplayName: "Ghost.pdf")
         #expect(!navigated)
     }
 
-    @Test func selectSourceByDisplayNameReusesAlreadyOpenTab() throws {
+    @Test func selectSourceByDisplayNameReusesAlreadyOpenTab() async throws {
         let (model, store) = try tempModel()
         let source = try store.addSource(filename: "notes.md", data: Data("md".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         model.openTab(.source(source.id))
         #expect(model.tabs.count == 1)
 
-        #expect(model.selectSource(byDisplayName: "notes.md"))
+        #expect(await model.selectSource(byDisplayName: "notes.md"))
         #expect(model.tabs.count == 1) // reused, not duplicated
         #expect(model.selection == .source(source.id))
     }
 
-    @Test func selectSourceByDisplayNamePlainClickNavigatesInPlace() throws {
+    @Test func selectSourceByDisplayNamePlainClickNavigatesInPlace() async throws {
         let (model, store) = try tempModel()
-        let from = try store.createPage(title: "From")
+        let from = try await store.createPage(title: "From")
         let source = try store.addSource(filename: "notes.md", data: Data("md".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         model.openTab(.page(from.id))
         let fromTab = model.activeTabID
         #expect(model.tabs.count == 1)
 
         // Plain click on an [[source:…]] link navigates the active tab in place.
-        #expect(model.selectSource(byDisplayName: "notes.md"))
+        #expect(await model.selectSource(byDisplayName: "notes.md"))
         #expect(model.tabs.count == 1)
         #expect(model.activeTabID == fromTab)
         #expect(model.selection == .source(source.id))
     }
 
-    @Test func selectSourceByDisplayNameCommandClickOpensNewTab() throws {
+    @Test func selectSourceByDisplayNameCommandClickOpensNewTab() async throws {
         let (model, store) = try tempModel()
-        let from = try store.createPage(title: "From")
+        let from = try await store.createPage(title: "From")
         let source = try store.addSource(filename: "notes.md", data: Data("md".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         model.openTab(.page(from.id))
         #expect(model.tabs.count == 1)
 
         // ⌘-click on an [[source:…]] link opens the source in a new tab.
-        #expect(model.selectSource(byDisplayName: "notes.md", openInNewTab: true))
+        #expect(await model.selectSource(byDisplayName: "notes.md", openInNewTab: true))
         #expect(model.tabs.count == 2)
         #expect(model.selection == .source(source.id))
     }

@@ -109,7 +109,7 @@ struct WikiLinkMenuNSItemsTests {
         let source = try store.addSource(
             filename: "Consciousness doesn't overflow cognition.pdf",
             data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let url = try #require(URL(
             string: "wiki://source?title=Consciousness%20doesn%27t%20overflow%20cognition"))
 
@@ -132,7 +132,7 @@ struct WikiLinkMenuNSItemsTests {
         let (model, store) = try tempModel()
         let active = try store.createPage(title: "Active")
         let source = try store.addSource(filename: "Current title.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.page(active.id))
         let url = try #require(URL(
             string: "wiki://source?id=\(source.id.rawValue)&title=Former%20title"))
@@ -157,7 +157,7 @@ struct WikiLinkMenuNSItemsTests {
         let (model, store) = try tempModel()
         let active = try store.createPage(title: "Active")
         let source = try store.addSource(filename: "Ephemeral.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.page(active.id))
         let url = try #require(URL(
             string: "wiki://source?id=\(source.id.rawValue)&title=Ephemeral"))
@@ -169,7 +169,7 @@ struct WikiLinkMenuNSItemsTests {
 
         // The target vanishes after the menu is built.
         try store.deleteSource(id: source.id)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         try perform(item)
 
@@ -550,7 +550,7 @@ struct WikiLinkMenuNSItemsTests {
         ).isEmpty)
     }
 
-    @Test func menuConstructionReturnsSearchingPlaceholder() throws {
+    @Test func menuConstructionReturnsSearchingPlaceholder() async throws {
         let (item, probe) = openItem(query: "Alpha")
         let submenu = try #require(item.submenu)
 
@@ -668,7 +668,7 @@ struct WikiLinkMenuNSItemsTests {
 
     // MARK: - Source guard (AC.7)
 
-    @Test func wikiStoreModelHasNoSynchronousTantivyBridge() throws {
+    @Test func wikiStoreModelHasNoSynchronousTantivyBridge() async throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()

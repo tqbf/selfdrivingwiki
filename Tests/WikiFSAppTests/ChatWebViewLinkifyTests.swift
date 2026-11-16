@@ -146,11 +146,11 @@ struct AgentTranscriptRenderContextTests {
             sourceID: paper.id, content: "the quoted text", origin: .extraction, note: nil)
         _ = try store.appendProcessedMarkdown(
             sourceID: paper.id, content: "v3 body", origin: .extraction, note: nil)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         return (model, home.id, paper.id, v2.id)
     }
 
-    @Test func canonicalSourceULIDHealsToCurrentDisplayName() throws {
+    @Test func canonicalSourceULIDHealsToCurrentDisplayName() async throws {
         let (model, _, paperID, _) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         // A persisted chat recorded the STALE alias "old name"; at render it must
@@ -161,7 +161,7 @@ struct AgentTranscriptRenderContextTests {
         #expect(!html.contains("old name"))
     }
 
-    @Test func quoteLinkWithVersionPinEmitsPinQuery() throws {
+    @Test func quoteLinkWithVersionPinEmitsPinQuery() async throws {
         let (model, _, paperID, v2ID) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         // A `[[source:ULID@vN#"quote"]]` link must carry pin=<v2ID> (as `&pin=`
@@ -174,7 +174,7 @@ struct AgentTranscriptRenderContextTests {
         #expect(html.contains("wiki://"))
     }
 
-    @Test func sourceEmbedRendersInlineBlobURL() throws {
+    @Test func sourceEmbedRendersInlineBlobURL() async throws {
         let (model, _, paperID, _) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         // An `![[source:Paper.pdf]]` embed renders an inline element pointing at
@@ -188,7 +188,7 @@ struct AgentTranscriptRenderContextTests {
         #expect(html.contains("wiki-embed"))
     }
 
-    @Test func brokenLinkGhostsViaMissingHost() throws {
+    @Test func brokenLinkGhostsViaMissingHost() async throws {
         let (model, _, _, _) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         // A link to a page that doesn't exist → wiki://missing (the reader's
@@ -197,7 +197,7 @@ struct AgentTranscriptRenderContextTests {
         #expect(html.contains("wiki://missing"))
     }
 
-    @Test func typedAssistantRowThreadsContextIntoAssistantMarkup() throws {
+    @Test func typedAssistantRowThreadsContextIntoAssistantMarkup() async throws {
         let (model, _, paperID, _) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         let row = Transcript.chatDisplayRowHTML(
@@ -221,7 +221,7 @@ struct AgentTranscriptRenderContextTests {
 
     // MARK: - Two-tier streaming render (isFinal)
 
-    @Test func streamingTierSuppressesEmbeds() throws {
+    @Test func streamingTierSuppressesEmbeds() async throws {
         let (model, _, paperID, _) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         // While streaming (isFinal == false), embeds are suppressed so a
@@ -236,7 +236,7 @@ struct AgentTranscriptRenderContextTests {
         #expect(linkStreaming.contains("My Paper"))  // healed name still applies
     }
 
-    @Test func finalizedTierRendersEmbeds() throws {
+    @Test func finalizedTierRendersEmbeds() async throws {
         let (model, _, paperID, _) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         // On finalize (isFinal == true, the default), the embed renders.
@@ -246,7 +246,7 @@ struct AgentTranscriptRenderContextTests {
         #expect(finalized.contains("wiki-embed"))
     }
 
-    @Test func streamingRowThenFinalizedRowChat() throws {
+    @Test func streamingRowThenFinalizedRowChat() async throws {
         let (model, _, paperID, _) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         // Simulate the coordinator's two-tier sequence: the same assistant row is

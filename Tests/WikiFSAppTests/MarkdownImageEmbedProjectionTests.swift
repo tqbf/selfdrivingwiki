@@ -280,7 +280,7 @@ struct MarkdownImageTargetProjectionTests {
             data: bytes,
             mimeType: "application/json")
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let context = WikiRenderContext.build(from: model)
         let canonicalPath = "sources/by-id/\(source.id.rawValue).json"
 
