@@ -191,7 +191,7 @@ struct ContentView: View {
                         ingestingSourceIDs: tracker.ingestingSourceIDs,
                         showingImportMarkdown: $showingImportMarkdown,
                         onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
-                        onNewPage: { store.newPageInNewTab() })
+                        onNewPage: { Task { await store.newPageInNewTab() } })
         } detail: {
             detailColumn
         }
@@ -318,11 +318,11 @@ struct ContentView: View {
             ToolbarSpacer(.fixed, placement: .navigation)
             ToolbarItem(placement: .navigation) {
                 ToolbarAddButtons(
-                    onAddPage: { store.newPageInNewTab() },
+                    onAddPage: { Task { await store.newPageInNewTab() } },
                     onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
                     onAddFile: addFile,
                     onAddFolder: { showingImportMarkdown = true },
-                    onAddChat: { store.beginNewChat() })
+                    onAddChat: { Task { await store.beginNewChat() } })
             }
             // Adjacent `.navigation` items share one glass bubble on macOS 26,
             // even across a fixed spacer. Opt this item out of the shared
@@ -434,7 +434,7 @@ struct ContentView: View {
         .opacity(0).allowsHitTesting(false)
 
         // Cmd+Shift+P: Add Page (same handler as the sidebar + / welcome addPage).
-        Button("") { store.newPageInNewTab() }
+        Button("") { Task { await store.newPageInNewTab() } }
             .keyboardShortcut("p", modifiers: [.command, .shift])
             .opacity(0).allowsHitTesting(false)
 
@@ -459,7 +459,7 @@ struct ContentView: View {
         // Cmd+Shift+C: Add Chat (same handler as the chats sidebar + / the
         // address-bar "new chat" button — store.beginNewChat(), which
         // persists the chat row and opens its `.chat(id)` tab).
-        Button("") { store.beginNewChat() }
+        Button("") { Task { await store.beginNewChat() } }
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .opacity(0).allowsHitTesting(false)
 
