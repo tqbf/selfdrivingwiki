@@ -38,8 +38,8 @@ struct DaemonStoreWireRoundTripTests {
              DaemonStoreOperationCounts.stagedPayload),
             (DaemonStorePayloadFamily.mutationSemantics,
              DaemonStoreOperationCounts.mutationSemantics),
-            (DaemonStorePayloadFamily.reservedEvents,
-             DaemonStoreOperationCounts.reservedEvents),
+            (DaemonStorePayloadFamily.events,
+             DaemonStoreOperationCounts.events),
         ] {
             let count = DaemonStoreOperation.allCases
                 .filter { $0.family == family }.count
@@ -50,6 +50,9 @@ struct DaemonStoreWireRoundTripTests {
             $0.family == .small || $0.family == .list || $0.family == .blob
                 || $0.family == .eventProducer
         }.count == DaemonStoreOperationCounts.manifestOperations)
+        // The events slice (2c) consumed the reservation: nothing is
+        // reserved anymore, and the tombstone pins that.
+        #expect(DaemonStoreOperationCounts.reservedEvents == 0)
     }
 
     @Test("operation strings are unique and encode as their raw values")
@@ -68,7 +71,8 @@ struct DaemonStoreWireRoundTripTests {
     @Test("reserved event-slice operation name is present in the registry")
     func reservedSinkHandshakeName() {
         #expect(DaemonStoreOperation.sinkHandshake.rawValue == "sinkHandshake")
-        #expect(DaemonStoreOperation.sinkHandshake.family == .reservedEvents)
+        // Served since the events slice (2c) — under its own family.
+        #expect(DaemonStoreOperation.sinkHandshake.family == .events)
         #expect(DaemonStoreOperation.resolveOutcome.rawValue == "resolveOutcome")
         #expect(DaemonStoreOperation.sessionBootstrap.rawValue == "sessionBootstrap")
         #expect(DaemonStoreOperation.payloadRead.rawValue == "payloadRead")

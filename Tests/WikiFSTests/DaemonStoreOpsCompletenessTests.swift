@@ -12,9 +12,10 @@ import WikiDaemonContract
 // module is compiled without library evolution, so a missing case is a
 // compile error, and an added operation fails the build until it is
 // classified here). The test then asserts every manifest-family op resolves
-// to a pair and every infrastructure/reserved op resolves to nil — its DTOs
-// are slice 1's (`DaemonPayload*`, `DaemonResolveOutcome*`,
-// `DaemonStoreSessionBootstrap`, the reserved `sinkHandshake`).
+// to a pair and every infrastructure op resolves to nil — its DTOs live in
+// the slice files (`DaemonPayload*` / `DaemonResolveOutcome*` /
+// `DaemonStoreSessionBootstrap` in slice 1; the 2c `DaemonSinkHandshake*`
+// pair in DaemonStoreEventsWire.swift).
 
 /// The mechanical completeness pin: op → (request type, reply type).
 enum DaemonStoreOpsLedger {
@@ -31,7 +32,8 @@ enum DaemonStoreOpsLedger {
         // Infrastructure: mutation outcome semantics (slice 1 DTOs).
         case .resolveOutcome, .sessionBootstrap:
             return nil
-        // Reserved for the events slice.
+        // Events infrastructure (2c): the DaemonSinkHandshake* pair lives
+        // in DaemonStoreEventsWire.swift, outside this per-op ledger.
         case .sinkHandshake:
             return nil
 

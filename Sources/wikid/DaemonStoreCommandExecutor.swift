@@ -65,15 +65,17 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
     /// fault the client cannot distinguish from connection loss.
     ///
     /// Flow: decode the outer `DaemonStoreRequest` → gate the operation
-    /// family (this slice serves small + staged-payload + resolveOutcome) →
-    /// `resolveOutcome` NEVER dispatches → staged-payload ops are
-    /// daemon-scoped (no store resolution) → everything else resolves the
-    /// store through ``WikiDaemon/domainCommandStore(wikiID:)`` (admission
-    /// included), admits stamped mutations through the outcome ledger, and
-    /// dispatches by operation.
+    /// family (the events family's `sinkHandshake` is daemon-scoped; every
+    /// other family proceeds) → `resolveOutcome` NEVER dispatches →
+    /// staged-payload ops are daemon-scoped (no store resolution) →
+    /// everything else resolves the store through
+    /// ``WikiDaemon/domainCommandStore(wikiID:)`` (admission included),
+    /// admits stamped mutations through the outcome ledger, and dispatches
+    /// by operation.
     func handleStoreOperation(
         _ domainRequest: DaemonDomainRequest,
-        expectedWikiID: String? = nil
+        expectedWikiID: String? = nil,
+        sinkRegistrationID: UUID? = nil
     ) async -> DaemonDomainReply {
         guard let payload = domainRequest.payload else {
             return Self.invalidRequest(
@@ -100,17 +102,16 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
                 "unknown store operation: \(storeRequest.operation)")
         }
 
-        // Family gate: every manifest family is served; `sinkHandshake`
-        // stays reserved for the events slice (2c).
+        // Family gate: every manifest family is served. `sessionBootstrap`
+        // stays reserved for the bootstrap slice (2e); the events family is
+        // served by this build (2c handshake).
         switch operation.family {
-        case .small, .stagedPayload, .list, .blob, .eventProducer:
+        case .small, .stagedPayload, .list, .blob, .eventProducer, .events:
             break
         case .mutationSemantics:
             guard operation == .resolveOutcome else {
                 return Self.reservedReply(domainRequest, operation)
             }
-        case .reservedEvents:
-            return Self.reservedReply(domainRequest, operation)
         }
 
         // Epoch gate BEFORE store resolution (plan 2a): a stamped mutation
@@ -148,6 +149,16 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
         // real operation, not while chunks stream.
         if operation.family == .stagedPayload {
             return await stagedPayloadReply(domainRequest, storeRequest, operation)
+        }
+
+        // EVENTS family: the acknowledged `sinkHandshake` — daemon-scoped,
+        // NEVER a per-wiki store resolution (plan 2c). It carries no stamp
+        // and RETURNS the epoch, so the mutation epoch gate below does not
+        // apply.
+        if operation.family == .events {
+            return await sinkHandshakeReply(
+                domainRequest, storeRequest,
+                sinkRegistrationID: sinkRegistrationID)
         }
 
         // SMALL family: resolve through the SAME admitted seam the CLI
@@ -313,6 +324,41 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
                 throw DaemonStoreError.unexpected(
                     "\(operation.rawValue) is not a staged-payload operation")
             }
+        } catch {
+            return Self.storeErrorReply(
+                domainRequest, storeRequest, Self.wireError(error))
+        }
+    }
+
+    // MARK: - sinkHandshake (events family, 2c)
+
+    /// Serve the daemon-scoped acknowledged handshake: the reply carries the
+    /// epoch plus one watermark per PREPARED wiki, and — when the request
+    /// arrived through an XPC connection that exported an event sink — the
+    /// coordinator replays that sink's bounded pre-handshake ring and flips
+    /// it live. NO store resolution happens here: the handshake is the one
+    /// store-family operation scoped to the DAEMON, not to a wiki.
+    private func sinkHandshakeReply(
+        _ domainRequest: DaemonDomainRequest,
+        _ storeRequest: DaemonStoreRequest,
+        sinkRegistrationID: UUID?
+    ) async -> DaemonDomainReply {
+        guard let daemon else {
+            return Self.storeErrorReply(
+                domainRequest, storeRequest,
+                .daemonUnavailable("the wiki daemon has been released"))
+        }
+        do {
+            // The request DTO is empty today; decode it when present so a
+            // malformed payload is still a typed rejection.
+            if storeRequest.payload != nil {
+                _ = try Self.decodePayload(
+                    DaemonSinkHandshakeRequest.self, storeRequest)
+            }
+            let reply = daemon.sinkHandshake(
+                sinkRegistrationID: sinkRegistrationID)
+            return Self.storeSuccessReply(
+                domainRequest, try Self.encodeResult(reply))
         } catch {
             return Self.storeErrorReply(
                 domainRequest, storeRequest, Self.wireError(error))

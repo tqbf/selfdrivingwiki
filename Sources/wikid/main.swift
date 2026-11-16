@@ -149,9 +149,16 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
 
     func storeOperation(_ wikiID: String, request: Data, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
+        // Phase 2c sink correlation: THIS connection's event-sink
+        // registration id rides into the daemon-scoped `sinkHandshake`, so
+        // the daemon knows which exported sink to flip from buffering to
+        // live (and whose pre-handshake ring to replay). Any other
+        // connection's registration id never matches.
+        let registrationID = lock.withLock { sinkID }
         Task { [daemon] in
             sendableReply.reply(await daemon.storeOperationData(
-                wikiID: wikiID, request: request))
+                wikiID: wikiID, request: request,
+                sinkRegistrationID: registrationID))
         }
     }
 

@@ -231,8 +231,10 @@ struct DaemonStoreCommandExecutorTests {
 
     @Test func reservedFamilyStaysTypedUnavailableAndBlobIsNowServed() async throws {
         // Slice 2 completes the blob family: `.getPage` is SERVED now (a
-        // typed store reply, not the domain-level `unavailable`), while the
-        // reserved events handshake stays typed-unavailable until slice 2c.
+        // typed store reply, not the domain-level `unavailable`). The
+        // events slice (2c) SERVES `sinkHandshake`: with no sink
+        // correlation it still answers the daemon-scoped watermark reply
+        // (epoch + one watermark per prepared wiki, nothing replayed).
         let daemon = try makeDaemon()
         let wikiID = try fixtureWiki(daemon)
         try await seed(daemon, wikiID: wikiID) { store in
@@ -258,9 +260,15 @@ struct DaemonStoreCommandExecutorTests {
             requestID: UUID().uuidString, family: .store,
             operation: DaemonStoreOperation.sinkHandshake.rawValue,
             payload: try DaemonStoreWire.encode(handshake))
-        let reserved = await daemon.storeCommandExecutor()
+        let served = await daemon.storeCommandExecutor()
             .handleStoreOperation(domainRequest)
-        #expect(reserved.error?.code == .unavailable)
+        #expect(served.error == nil)
+        let reply = try storeReply(served)
+        let handshakeReply = try JSONDecoder().decode(
+            DaemonSinkHandshakeReply.self, from: #require(reply.result))
+        #expect(handshakeReply.daemonEpoch == daemon.daemonEpoch)
+        // The fixture wiki prepared (seeded above) — it is in the reply.
+        #expect(handshakeReply.perWiki.map(\.wikiID) == [wikiID.rawValue])
     }
 
     // MARK: - Admission pin (the executor never bypasses reconcile)

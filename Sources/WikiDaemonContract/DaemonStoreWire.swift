@@ -60,9 +60,11 @@ public enum DaemonStorePayloadFamily: String, Codable, Sendable, CaseIterable {
     /// Mutation outcome semantics (`resolveOutcome`, `sessionBootstrap`) —
     /// infrastructure, not a `WikiStore` requirement.
     case mutationSemantics
-    /// Reserved for the events slice (2c): `sinkHandshake`. The name is
-    /// reserved now so the events slice cannot re-spell it.
-    case reservedEvents
+    /// The store EVENT CONTRACT (2c): the acknowledged `sinkHandshake` —
+    /// daemon-scoped (never a per-wiki store resolution). The events slice
+    /// consumed the name reserved here as `.reservedEvents` before 2c;
+    /// nothing is reserved anymore.
+    case events
 }
 
 /// The store family's operation strings — the ONE registry shared by the
@@ -73,7 +75,7 @@ public enum DaemonStorePayloadFamily: String, Codable, Sendable, CaseIterable {
 /// compiler-enumerable, so an added operation must be classified (a missed
 /// family mapping is a compile error at ``family``), and the count tests pin
 /// the manifest partition: 151 manifest operations (small 37, list 25, blob
-/// 39, event-producer 50) plus 7 infrastructure/reserved operations.
+/// 39, event-producer 50) plus 7 infrastructure/events operations.
 public enum DaemonStoreOperation: String, Codable, Sendable, CaseIterable {
 
     // MARK: Staged payload handle flow (infrastructure)
@@ -102,11 +104,12 @@ public enum DaemonStoreOperation: String, Codable, Sendable, CaseIterable {
     /// renderer source types, change token, strategy snapshot (plan 2e).
     case sessionBootstrap
 
-    // MARK: Reserved (events slice, 2c)
+    // MARK: Store event contract (2c)
 
     /// Acknowledged sink handshake — returns `{daemonEpoch, perWiki:
-    /// [{wikiID, changeToken, lastSequence}]}`. Reserved here; implemented in
-    /// the events slice.
+    /// [{wikiID, changeToken, lastSequence}]}`, flips the requesting sink
+    /// from buffering to live, and replays the bounded pre-handshake ring.
+    /// Implemented in the events slice (2c).
     case sinkHandshake
 
     // MARK: Manifest operations — small (37)
@@ -281,7 +284,7 @@ public enum DaemonStoreOperation: String, Codable, Sendable, CaseIterable {
         case .resolveOutcome, .sessionBootstrap:
             return .mutationSemantics
         case .sinkHandshake:
-            return .reservedEvents
+            return .events
         case .activeContentVersion, .activeExtractionProvenance,
              .chatAttachments, .chatTranscriptCheckpoint, .chatUsageSummary,
              .fetchState, .getChat, .getMetadata, .getWikiStrategyState,
@@ -364,9 +367,15 @@ public enum DaemonStoreOperationCounts {
     public static let manifestOperations = 151
     public static let stagedPayload = 4
     public static let mutationSemantics = 2
-    public static let reservedEvents = 1
+    /// Tombstone: the events slice (2c) consumed the `.reservedEvents`
+    /// reservation — `sinkHandshake` is served under ``family``'s `.events`
+    /// case (count 1 below). Zero pins that NO operation is reserved anymore;
+    /// the registry test asserts it so a future slice cannot quietly
+    /// re-reserve.
+    public static let reservedEvents = 0
+    public static let events = 1
     public static let total = manifestOperations + stagedPayload
-        + mutationSemantics + reservedEvents
+        + mutationSemantics + events
 }
 
 // MARK: - Limits
@@ -416,6 +425,14 @@ public enum DaemonStoreLimits {
     /// Direct small-payload XPC carry keeps the 1 MiB rule for symmetry with
     /// the chunked path (plan 2a byte-budgeted replies).
     public static let xpcDirectPayloadBytes = 1_048_576
+
+    /// Bounded per-wiki replay ring for the store event contract (plan 2c):
+    /// events emitted before a sink completes its `sinkHandshake` are kept
+    /// per wiki in insertion (sequence) order, oldest dropped first once the
+    /// ring is full. A handshake replays the survivors; a client that
+    /// observes a sequence gap reconciles through the handshake's
+    /// `changeToken`.
+    public static let sinkEventBufferCapacity = 256
 }
 
 // MARK: - Staged payload handles

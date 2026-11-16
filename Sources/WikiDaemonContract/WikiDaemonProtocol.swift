@@ -252,20 +252,33 @@ public struct SignedWikiDExtractorProbeReply: Codable, Equatable, Sendable {
 
 /// The reverse-channel protocol the app implements so the daemon can push
 /// fine-grained *live* workload events (queue `QueueEvent`s, chat
-/// `AgentEvent`s, pending permissions). The app sets itself as the XPC
-/// connection's `exportedObject`; the daemon holds a proxy and calls
-/// `deliverEvent` with JSON-encoded payloads.
+/// `AgentEvent`s, pending permissions) AND store change events (Phase 2c).
+/// The app sets itself as the XPC connection's `exportedObject`; the daemon
+/// holds a proxy and calls `deliverEvent` with JSON-encoded payloads.
 ///
 /// This is the standard bidirectional-`NSXPCConnection` pattern: one
 /// connection carries request/reply (the daemon's `WikiDaemonProtocol`) AND
 /// callbacks (the app's `WikiDaemonEventSink`).
 ///
-/// See `plans/daemon-workloads.md` §3 + §5.2.
+/// Payload discrimination (Phase 2c): workload payloads are JSON
+/// `QueueEventEnvelope` objects — every one carries a `kind` key from the
+/// closed queue/chat raw-value set. Store change payloads are JSON
+/// `DaemonStoreEventEnvelope` objects — they carry the `wire` marker
+/// (`wikid.store-event.v1`) and never a `kind` key, so the two grammars are
+/// disjoint in both directions and a decoder dispatches deterministically
+/// (marker check, or queue-envelope-first try order). See
+/// `DaemonStoreEventsWire.swift`.
+///
+/// See `plans/daemon-workloads.md` §3 + §5.2 and
+/// `plans/daemon-only-access.md` Phase 2c.
 @objc public protocol WikiDaemonEventSink: AnyObject {
     /// One streamed workload event, JSON-encoded. The daemon encodes a
-    /// `QueueEventEnvelope` (`{itemID, kind, payload}`) or an `AgentEvent`
-    /// batch; the app decodes and forwards into its existing
-    /// `QueueEventBroadcaster` / launcher `events` array.
+    /// `QueueEventEnvelope` (`{itemID, kind, payload}`), an `AgentEvent`
+    /// batch, or (Phase 2c) a `DaemonStoreEventEnvelope`
+    /// (`{wire, event: {epoch, wikiID, sequence, changeToken, batch}}`);
+    /// the app decodes and forwards into its existing
+    /// `QueueEventBroadcaster` / launcher `events` array / session change
+    /// bus.
     func deliverEvent(_ payload: Data)
 }
 #endif
