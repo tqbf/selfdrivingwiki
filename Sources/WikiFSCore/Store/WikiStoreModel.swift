@@ -907,6 +907,14 @@ public final class WikiStoreModel {
                     expectedHeadVersionID: nil, author: PageAuthor.user.rawValue)
             } catch {
                 DebugLog.store("WikiStoreModel.flushCapturedDraft failed (page \(id.rawValue)): \(error)")
+                // P1.4: surface the failure through the same non-fatal alert
+                // as `save()`. The editor was already cleared at transition
+                // start, so a swallowed flush silently lost the outgoing
+                // draft with no UI signal; `storeError` is the model's
+                // failure projection.
+                storeError = StoreError(
+                    title: "Page Not Saved",
+                    message: "The edit to “\(snapshot.title)” could not be saved before leaving the page: \(error.localizedDescription)")
             }
         case .chat, .newChat, .bookmark, .strategy, .source, .changeLog:
             break // non-page selections carry no editable page draft
@@ -2025,10 +2033,19 @@ public final class WikiStoreModel {
             // conflicts visible — if another writer committed a new version after
             // the editor loaded, this throws `PageConflictError` instead of
             // silently clobbering.
-            try await PageUpsert.upsert(in: store, id: id, title: draftTitle, body: draftBody,
+            let savedTitle = draftTitle
+            let savedBody = draftBody
+            try await PageUpsert.upsert(in: store, id: id, title: savedTitle, body: savedBody,
                                   expectedHeadVersionID: loadedPageHeadVersionID,
                                   author: "user")
-            isDraftDirty = false
+            // P1.4: clear the dirty flag only when the draft still matches
+            // what this save wrote — a keystroke landing while the write is
+            // in flight must keep the draft dirty (and its text), so a
+            // follow-up save persists the newer content instead of the
+            // reload treating the editor as clean and reverting it.
+            if draftTitle == savedTitle, draftBody == savedBody {
+                isDraftDirty = false
+            }
             // After a successful versioned save, refresh the head version id so
             // the next save CAS-expects the version we just wrote.
             await loadedPageHeadVersionID = DebugLog.trying("pageHeadVersionID", operation: { try await store.pageHeadVersionID(pageID: id) })

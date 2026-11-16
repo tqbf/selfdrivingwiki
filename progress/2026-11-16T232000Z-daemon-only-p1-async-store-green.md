@@ -1,7 +1,9 @@
+---
 timestamp: 2026-11-16T232000Z
 title: Daemon-only P1 async store flip converges green
 branch: feature/daemon-only-p1-async-store
 status: active
+---
 
 # Daemon-only P1 async store flip converges green
 
