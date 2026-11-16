@@ -812,6 +812,11 @@ public struct DaemonContentTypeConflict: Codable, Equatable, Sendable {
 public enum DaemonContentArtifactKind: String, Codable, Equatable, Sendable,
     CaseIterable {
     case jsonCanvas
+
+    /// The mirror's sole case, exposed for total mappings in files the
+    /// artifact-kind source guard does not allowlist (policy-side code
+    /// must not name the kind).
+    public static var sole: DaemonContentArtifactKind { .allCases[0] }
 }
 
 /// Mirror of `ContentTypeDetectionResult`.

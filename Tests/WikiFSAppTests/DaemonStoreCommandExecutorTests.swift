@@ -229,14 +229,38 @@ struct DaemonStoreCommandExecutorTests {
         #expect(reply.payload == nil)
     }
 
-    @Test func blobFamilyOpIsReservedUntilItsSlice() async throws {
+    @Test func reservedFamilyStaysTypedUnavailableAndBlobIsNowServed() async throws {
+        // Slice 2 completes the blob family: `.getPage` is SERVED now (a
+        // typed store reply, not the domain-level `unavailable`), while the
+        // reserved events handshake stays typed-unavailable until slice 2c.
         let daemon = try makeDaemon()
         let wikiID = try fixtureWiki(daemon)
-        let payload = try JSONEncoder().encode(
-            DaemonGetMetadataRequest(key: "k"))
-        let reply = try await executeDomain(
-            daemon, .getPage, wikiID: wikiID, payload: payload)
-        #expect(reply.error?.code == .unavailable)
+        try await seed(daemon, wikiID: wikiID) { store in
+            _ = try await store.createPage(
+                title: "Served Blob Page", body: "body",
+                createdBy: nil, provenance: [])
+        }
+        let pageID = try #require(
+            await (try await daemon.domainCommandStore(wikiID: wikiID))
+                .resolveTitleToID("Served Blob Page")).rawValue
+        let pagePayload = try JSONEncoder().encode(
+            DaemonGetPageRequest(id: pageID))
+        let pageReply = try storeReply(await executeDomain(
+            daemon, .getPage, wikiID: wikiID, payload: pagePayload))
+        #expect(pageReply.error == nil)
+        let page = try JSONDecoder().decode(
+            DaemonGetPageReply.self, from: #require(pageReply.result))
+        #expect(page.page.title == "Served Blob Page")
+
+        let handshake = DaemonStoreRequest(
+            wikiID: wikiID.rawValue, operation: DaemonStoreOperation.sinkHandshake.rawValue)
+        let domainRequest = DaemonDomainRequest(
+            requestID: UUID().uuidString, family: .store,
+            operation: DaemonStoreOperation.sinkHandshake.rawValue,
+            payload: try DaemonStoreWire.encode(handshake))
+        let reserved = await daemon.storeCommandExecutor()
+            .handleStoreOperation(domainRequest)
+        #expect(reserved.error?.code == .unavailable)
     }
 
     // MARK: - Admission pin (the executor never bypasses reconcile)
@@ -846,6 +870,622 @@ struct DaemonStoreCommandExecutorTests {
             #expect(error.code == .invalidRequest)
             #expect(error.message.contains("unknown store operation"))
         }
+    }
+
+    // MARK: - Slice 2: list family (cursor pagination + oversized promotion)
+
+    /// The documented client behavior for page 2: re-encode the op DTO and
+    /// merge the minted `pageToken` key into the SAME payload object (the
+    /// typed DTOs decode unchanged; the executor probes the extra key).
+    private func mergePageToken(
+        _ dto: Data, token: String
+    ) throws -> Data {
+        guard var object = try JSONSerialization.jsonObject(
+            with: dto) as? [String: Any] else {
+            throw TestMergeError.notAnObject
+        }
+        object["pageToken"] = token
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    private enum TestMergeError: Error {
+        case notAnObject
+    }
+
+    @Test func listFamilyReadsRoundTripThroughTheExecutor() async throws {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        try await seed(daemon, wikiID: wikiID) { store in
+            _ = try await store.createPage(
+                title: "List Page B", body: "b",
+                createdBy: nil, provenance: [])
+            _ = try await store.createPage(
+                title: "List Page A", body: "a",
+                createdBy: nil, provenance: [])
+            _ = try await store.addSource(
+                filename: "list-source.txt", data: Data("bytes".utf8))
+            try await store.appendLog(
+                kind: .ingest, title: "list-fixture", note: nil)
+        }
+
+        // listPages (sorted)
+        let pagesReply = try storeReply(await executeDomain(
+            daemon, .listPages, wikiID: wikiID,
+            payload: try JSONEncoder().encode(
+                DaemonListPagesRequest(sortBy: .titleAZ))))
+        #expect(pagesReply.error == nil)
+        let pages = try JSONDecoder().decode(
+            DaemonListPagesReply.self, from: #require(pagesReply.result))
+        let titles = pages.pages.map(\.title)
+        #expect(titles.contains("List Page A") && titles.contains("List Page B"))
+        #expect(pages.cursor.nextAvailable == false)
+        #expect(pages.cursor.pageToken == nil)
+
+        // listSources
+        let sourcesReply = try storeReply(await executeDomain(
+            daemon, .listSources, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonListSourcesRequest())))
+        let sources = try JSONDecoder().decode(
+            DaemonListSourcesReply.self, from: #require(sourcesReply.result))
+        #expect(sources.sources.map(\.filename) == ["list-source.txt"])
+
+        // markedSourceIDs (a core Set crosses as a sorted array)
+        let markedReply = try storeReply(await executeDomain(
+            daemon, .markedSourceIDs, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonMarkedSourceIDsRequest())))
+        let marked = try JSONDecoder().decode(
+            DaemonMarkedSourceIDsReply.self, from: #require(markedReply.result))
+        #expect(marked.sourceIDs == [])
+
+        // embedDescriptors (empty: no byteless sources yet)
+        let embedReply = try storeReply(await executeDomain(
+            daemon, .embedDescriptors, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonEmbedDescriptorsRequest())))
+        let embed = try JSONDecoder().decode(
+            DaemonEmbedDescriptorsReply.self, from: #require(embedReply.result))
+        #expect(embed.entries.isEmpty)
+
+        // recentLogEntries echoes the appended row
+        let logReply = try storeReply(await executeDomain(
+            daemon, .recentLogEntries, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonRecentLogEntriesRequest(limit: 10))))
+        let log = try JSONDecoder().decode(
+            DaemonRecentLogEntriesReply.self, from: #require(logReply.result))
+        #expect(log.entries.map(\.title) == ["list-fixture"])
+    }
+
+    @Test func paginatedListContinuesThroughTheCursor() async throws {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        try await seed(daemon, wikiID: wikiID) { store in
+            let chat = try await store.createChat(kind: .edit, title: "pager")
+            // Five ~300 KiB messages: three fit the 1 MiB page budget,
+            // two continue on page 2.
+            let big = String(repeating: "m", count: 300_000)
+            _ = try await store.appendChatMessages(
+                chatID: chat.id,
+                events: (0..<5).map { AgentEvent.userText("\(big) #\($0)") })
+        }
+        let store = try await daemon.domainCommandStore(wikiID: wikiID)
+        let chatID = try #require(await store.resolveChatByTitle("pager")).rawValue
+
+        let dto = try JSONEncoder().encode(DaemonChatMessagesRequest(chatID: chatID))
+        let page1Reply = try storeReply(await executeDomain(
+            daemon, .chatMessages, wikiID: wikiID, payload: dto))
+        #expect(page1Reply.error == nil)
+        let page1 = try JSONDecoder().decode(
+            DaemonChatMessagesReply.self, from: #require(page1Reply.result))
+        #expect(page1.messages.map(\.seq) == [0, 1, 2])
+        #expect(page1.cursor.nextAvailable)
+        let token = try #require(page1.cursor.pageToken)
+
+        // Token round trip: the executor decodes exactly what it minted.
+        let decoded = try DaemonStoreCommandExecutor.decodePageToken(
+            token, wikiID: wikiID.rawValue, operation: "chatMessages")
+        #expect(decoded.bytesServed > 0)
+
+        // Page 2 continues AFTER the last-seen seq — no overlap, no skip.
+        let page2Dto = try mergePageToken(dto, token: token)
+        let page2Reply = try storeReply(await executeDomain(
+            daemon, .chatMessages, wikiID: wikiID, payload: page2Dto))
+        let page2 = try JSONDecoder().decode(
+            DaemonChatMessagesReply.self, from: #require(page2Reply.result))
+        #expect(page2.messages.map(\.seq) == [3, 4])
+        #expect(page2.cursor.nextAvailable == false)
+        #expect(page2.cursor.pageToken == nil)
+        #expect(page2.cursor.accumulatedEncodedByteCount > decoded.bytesServed)
+    }
+
+    @Test func oversizedHistoryBulkPromotesIntoACommittedPayloadHandle()
+        async throws
+    {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        // A body over DaemonStoreLimits.listReplyBudgetEncodedBytes: the
+        // header list stays inline (identity fields), the bulk crosses via
+        // the committed handle.
+        let big = String(repeating: "x", count: 1_100_000)
+        try await seed(daemon, wikiID: wikiID) { store in
+            _ = try await store.addSource(
+                filename: "oversized.txt", data: Data("seed".utf8))
+            let sourceID = try #require(
+                await store.resolveSourceByName("oversized.txt"))
+            _ = try await store.appendProcessedMarkdown(
+                sourceID: sourceID, content: big,
+                origin: .user, note: nil, technique: nil)
+        }
+
+        let historySourceID = try #require(
+            await (try await daemon.domainCommandStore(wikiID: wikiID))
+                .resolveSourceByName("oversized.txt")).rawValue
+        let reply = try storeReply(await executeDomain(
+            daemon, .processedMarkdownHistory, wikiID: wikiID,
+            payload: try JSONEncoder().encode(
+                DaemonProcessedMarkdownHistoryRequest(
+                    sourceID: historySourceID))))
+        #expect(reply.error == nil)
+        let history = try JSONDecoder().decode(
+            DaemonProcessedMarkdownHistoryReply.self,
+            from: #require(reply.result))
+        // Identity fields ride inline: exactly one header, the HEAD.
+        #expect(history.versions.count == 1)
+        #expect(history.versions[0].origin == .user)
+        #expect(history.contentByteCount > 0)
+        #expect(history.cursor.nextAvailable == false)
+
+        // The handle round-trips the exact bulk through payloadRead.
+        let staging = daemon.storeCommandExecutor().payloadStaging
+        let expected = try JSONEncoder().encode(
+            [history.versions[0].id: big])
+        let first = try staging.read(DaemonPayloadReadRequest(
+            handleID: history.contents.id, chunkIndex: 0))
+        var reassembled = first.bytes
+        if !first.isFinal {
+            for index in 1..<first.chunkCount {
+                reassembled.append(try staging.read(DaemonPayloadReadRequest(
+                    handleID: history.contents.id, chunkIndex: index)).bytes)
+            }
+        }
+        #expect(reassembled == expected)
+    }
+
+    @Test func oversizedSingleItemWithoutAHandleFieldIsATypedRejection()
+        async throws
+    {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        try await seed(daemon, wikiID: wikiID) { store in
+            let chat = try await store.createChat(kind: .edit, title: "huge")
+            _ = try await store.appendChatMessages(
+                chatID: chat.id,
+                events: [AgentEvent.userText(String(repeating: "h", count: 1_200_000))])
+        }
+        let store = try await daemon.domainCommandStore(wikiID: wikiID)
+        let chatID = try #require(await store.resolveChatByTitle("huge")).rawValue
+        let reply = try storeReply(await executeDomain(
+            daemon, .chatMessages, wikiID: wikiID,
+            payload: try JSONEncoder().encode(
+                DaemonChatMessagesRequest(chatID: chatID))))
+        let error = try #require(reply.error)
+        #expect(
+            error.errorDescription?.contains("exceeds the reply budget")
+                == true)
+    }
+
+    @Test func pagesCitingSourcesListHonorsTheFilterAndLimit() async throws {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        try await seed(daemon, wikiID: wikiID) { store in
+            _ = try await store.addSource(
+                filename: "cited.txt", data: Data("cited".utf8))
+            _ = try await store.addSource(
+                filename: "uncited.txt", data: Data("uncited".utf8))
+            let citedID = try #require(
+                await store.resolveSourceByName("cited.txt"))
+            _ = try await store.upsertPage(
+                id: nil, title: "Citing Page", rawBody: "cites",
+                expectation: .unrestricted, author: nil,
+                provenance: [PageVersionSourceInput(
+                    sourceID: citedID, role: .primary)])
+        }
+
+        let citedID = try #require(
+            await (try await daemon.domainCommandStore(wikiID: wikiID))
+                .resolveSourceByName("cited.txt")).rawValue
+        let uncitedID = try #require(
+            await (try await daemon.domainCommandStore(wikiID: wikiID))
+                .resolveSourceByName("uncited.txt")).rawValue
+
+        // The filter: only pages whose provenance cites the source.
+        let filtered = try storeReply(await executeDomain(
+            daemon, .pagesCitingSources, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonPagesCitingSourcesRequest(
+                sourceIDs: [citedID], limit: 10))))
+        let cited = try JSONDecoder().decode(
+            DaemonPagesCitingSourcesReply.self, from: #require(filtered.result))
+        #expect(cited.pages.map(\.title) == ["Citing Page"])
+
+        // A source nothing cites degrades honestly to empty.
+        let none = try storeReply(await executeDomain(
+            daemon, .pagesCitingSources, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonPagesCitingSourcesRequest(
+                sourceIDs: [uncitedID], limit: 10))))
+        let empty = try JSONDecoder().decode(
+            DaemonPagesCitingSourcesReply.self, from: #require(none.result))
+        #expect(empty.pages.isEmpty)
+    }
+
+    @Test func pageTokenIsDeterministicAndBoundToItsWikiAndOperation()
+        async throws
+    {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        try await seed(daemon, wikiID: wikiID) { store in
+            let chat = try await store.createChat(kind: .edit, title: "binding")
+            _ = try await store.appendChatMessages(
+                chatID: chat.id,
+                events: (0..<4).map {
+                    AgentEvent.userText(String(repeating: "b", count: 400_000) + "#\($0)")
+                })
+        }
+        let store = try await daemon.domainCommandStore(wikiID: wikiID)
+        let chatID = try #require(await store.resolveChatByTitle("binding")).rawValue
+        let dto = try JSONEncoder().encode(DaemonChatMessagesRequest(chatID: chatID))
+        let reply = try storeReply(await executeDomain(
+            daemon, .chatMessages, wikiID: wikiID, payload: dto))
+        let page = try JSONDecoder().decode(
+            DaemonChatMessagesReply.self, from: #require(reply.result))
+        let token = try #require(page.cursor.pageToken)
+
+        // Determinism: decode → re-encode the same minted token decodes to
+        // the same value (opaque base64 of a deterministic JSON struct).
+        let decoded = try DaemonStoreCommandExecutor.decodePageToken(
+            token, wikiID: wikiID.rawValue, operation: "chatMessages")
+        #expect(decoded.wikiID == wikiID.rawValue)
+        #expect(decoded.operation == "chatMessages")
+
+        // A token replayed against ANOTHER wiki is a typed rejection.
+        let otherWiki = try fixtureWiki(daemon, name: "Token Binding Other")
+        #expect(throws: DaemonStoreError.self) {
+            _ = try DaemonStoreCommandExecutor.decodePageToken(
+                token, wikiID: otherWiki.rawValue, operation: "chatMessages")
+        }
+        // A token replayed against ANOTHER operation is a typed rejection.
+        #expect(throws: DaemonStoreError.self) {
+            _ = try DaemonStoreCommandExecutor.decodePageToken(
+                token, wikiID: wikiID.rawValue, operation: "listSources")
+        }
+        // Garbage tokens never decode.
+        #expect(throws: DaemonStoreError.self) {
+            _ = try DaemonStoreCommandExecutor.decodePageToken(
+                "not-base64!!", wikiID: wikiID.rawValue,
+                operation: "chatMessages")
+        }
+    }
+
+    // MARK: - Slice 2: blob family (handle up/down, one consumption)
+
+    /// Stage `bytes` through the REAL payloadBegin/chunk/commit ops and
+    /// return the committed handle.
+    private func stageBytes(
+        _ daemon: WikiDaemon, wikiID: WikiID, _ bytes: Data
+    ) async throws -> DaemonPayloadHandle {
+        let beginReply = try storeReply(await executeDomain(
+            daemon, .payloadBegin, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonPayloadBeginRequest(
+                declaredByteCount: bytes.count, sha256Hex: sha256hex(bytes)))))
+        let begin = try JSONDecoder().decode(
+            DaemonPayloadBeginReply.self, from: #require(beginReply.result))
+        let chunkReply = try storeReply(await executeDomain(
+            daemon, .payloadChunk, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonPayloadChunkRequest(
+                uploadID: begin.uploadID, orderIndex: 0, bytes: bytes,
+                runningSHA256Hex: sha256hex(bytes)))))
+        _ = try JSONDecoder().decode(
+            DaemonPayloadChunkReply.self, from: #require(chunkReply.result))
+        let commitReply = try storeReply(await executeDomain(
+            daemon, .payloadCommit, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonPayloadCommitRequest(
+                uploadID: begin.uploadID))))
+        let commit = try JSONDecoder().decode(
+            DaemonPayloadCommitReply.self, from: #require(commitReply.result))
+        return commit.handle
+    }
+
+    @Test func blobUploadConsumesTheStagedHandleOnceAndCommits() async throws {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        let bytes = Data("verbatim source bytes 01".utf8)
+        let handle = try await stageBytes(daemon, wikiID: wikiID, bytes)
+
+        // The op consumes the handle: the committed store content matches.
+        let request = DaemonAddSourceRequest(
+            filename: "uploaded.txt", data: handle,
+            detectionHints: DaemonContentTypeDetectionHints(
+                declaredMIME: nil, filenameExtension: "txt", utiMIME: nil),
+            ingestMetadata: nil, provenance: nil, role: .primary,
+            originalPath: nil, activityID: nil, resolvedDisplayName: nil)
+        let stamp = DaemonMutationStamp(
+            requestID: "blob-upload-consume", expectedEpoch: daemon.daemonEpoch)
+        let reply = try storeReply(await executeDomain(
+            daemon, .addSource, wikiID: wikiID,
+            payload: try JSONEncoder().encode(request), stamp: stamp))
+        #expect(reply.error == nil)
+        let added = try JSONDecoder().decode(
+            DaemonAddSourceReply.self, from: #require(reply.result))
+        #expect(added.source.byteSize == bytes.count)
+        #expect(added.outcome.stamp == stamp)
+        #expect(added.outcome.status == .committed)
+        #expect(added.event != nil)
+
+        // The committed content is verbatim (the store read).
+        let store = try await daemon.domainCommandStore(wikiID: wikiID)
+        let stored = try await store.sourceContent(
+            id: SourceID(rawValue: added.source.id))
+        #expect(stored == bytes)
+
+        // CONSUMPTION-RELEASE: the same handle can never execute twice.
+        let second = try storeReply(await executeDomain(
+            daemon, .addSource, wikiID: wikiID,
+            payload: try JSONEncoder().encode(request),
+            stamp: DaemonMutationStamp(
+                requestID: "blob-upload-consume-2",
+                expectedEpoch: daemon.daemonEpoch)))
+        let error = try #require(second.error)
+        #expect(
+            error.errorDescription?.contains("already consumed") == true
+                || error.errorDescription?.contains("not found, expired")
+                    == true)
+    }
+
+    @Test func blobDownloadReturnsAHandlePayloadReadReturnsExactBytes()
+        async throws
+    {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        let body = "download body — plain text, no links"
+        try await seed(daemon, wikiID: wikiID) { store in
+            _ = try await store.createPage(
+                title: "Download Page", body: body,
+                createdBy: nil, provenance: [])
+        }
+        let store = try await daemon.domainCommandStore(wikiID: wikiID)
+        let pageID = try #require(
+            await store.resolveTitleToID("Download Page")).rawValue
+
+        let reply = try storeReply(await executeDomain(
+            daemon, .getPage, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonGetPageRequest(id: pageID))))
+        #expect(reply.error == nil)
+        let page = try JSONDecoder().decode(
+            DaemonGetPageReply.self, from: #require(reply.result))
+        #expect(page.page.title == "Download Page")
+        #expect(page.bodyByteCount == Data(body.utf8).count)
+
+        // payloadRead reassembles the exact bytes.
+        let staging = daemon.storeCommandExecutor().payloadStaging
+        let first = try staging.read(DaemonPayloadReadRequest(
+            handleID: page.body.id, chunkIndex: 0))
+        var reassembled = first.bytes
+        if !first.isFinal {
+            for index in 1..<first.chunkCount {
+                reassembled.append(try staging.read(DaemonPayloadReadRequest(
+                    handleID: page.body.id, chunkIndex: index)).bytes)
+            }
+        }
+        #expect(reassembled == Data(body.utf8))
+    }
+
+    @Test func versionContentReadRoundTripsThroughAHandle() async throws {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        let bytes = Data("versioned content v1".utf8)
+        try await seed(daemon, wikiID: wikiID) { store in
+            _ = try await store.addSource(
+                filename: "versioned.txt", data: bytes)
+        }
+        let store = try await daemon.domainCommandStore(wikiID: wikiID)
+        let sourceID = try #require(
+            await store.resolveSourceByName("versioned.txt"))
+        let version = try #require(await store.activeContentVersion(sourceID: sourceID))
+
+        let reply = try storeReply(await executeDomain(
+            daemon, .sourceContent, wikiID: wikiID,
+            payload: try JSONEncoder().encode(DaemonSourceContentRequest.version(
+                versionID: version.id.rawValue))))
+        #expect(reply.error == nil)
+        let content = try JSONDecoder().decode(
+            DaemonSourceContentReply.self, from: #require(reply.result))
+        #expect(content.byteCount == bytes.count)
+
+        let staging = daemon.storeCommandExecutor().payloadStaging
+        let chunk = try staging.read(DaemonPayloadReadRequest(
+            handleID: #require(content.bytes).id, chunkIndex: 0))
+        #expect(chunk.bytes == bytes)
+    }
+
+    // MARK: - Slice 2: event producer family
+
+    @Test func eventProducerEchoesExactlyOneEventPerCommit() async throws {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+
+        // CREATE: exactly one .chat .created echo.
+        let createRequest = DaemonCreateChatRequest(
+            kind: .edit, title: "echo chat", modelProviderId: nil,
+            modelId: nil, configuredThinkingOptionID: nil,
+            effectiveThinkingOptionID: nil, attachments: [])
+        let createStamp = DaemonMutationStamp(
+            requestID: "echo-create", expectedEpoch: daemon.daemonEpoch)
+        let createReply = try storeReply(await executeDomain(
+            daemon, .createChat, wikiID: wikiID,
+            payload: try JSONEncoder().encode(createRequest),
+            stamp: createStamp))
+        #expect(createReply.error == nil)
+        let created = try JSONDecoder().decode(
+            DaemonCreateChatReply.self, from: #require(createReply.result))
+        #expect(created.outcome.status == .committed)
+        #expect(created.outcome.stamp == createStamp)
+        #expect(created.events.count == 1)
+        #expect(created.events[0].kind == "chat")
+        #expect(created.events[0].change == "created")
+        #expect(created.events[0].id == created.chat.id)
+
+        // UPDATE: exactly one .chat .updated echo for the same resource.
+        let renameRequest = DaemonRenameChatRequest(id: created.chat.id, to: "renamed")
+        let renameReply = try storeReply(await executeDomain(
+            daemon, .renameChat, wikiID: wikiID,
+            payload: try JSONEncoder().encode(renameRequest),
+            stamp: DaemonMutationStamp(
+                requestID: "echo-rename", expectedEpoch: daemon.daemonEpoch)))
+        let renamed = try JSONDecoder().decode(
+            DaemonRenameChatReply.self, from: #require(renameReply.result))
+        #expect(renamed.events.count == 1)
+        #expect(renamed.events[0].kind == "chat")
+        #expect(renamed.events[0].change == "updated")
+        #expect(renamed.events[0].id == created.chat.id)
+    }
+
+    @Test func batchDeleteResourcesEchoesAnEventArray() async throws {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        try await seed(daemon, wikiID: wikiID) { store in
+            _ = try await store.createPage(
+                title: "Doomed A", body: "a", createdBy: nil, provenance: [])
+            _ = try await store.createPage(
+                title: "Doomed B", body: "b", createdBy: nil, provenance: [])
+        }
+        let store = try await daemon.domainCommandStore(wikiID: wikiID)
+        let aID = try #require(await store.resolveTitleToID("Doomed A")).rawValue
+        let bID = try #require(await store.resolveTitleToID("Doomed B")).rawValue
+
+        let request = DaemonDeleteResourcesRequest(request:
+            DaemonResourceDeletionRequest(
+                targets: [.page(id: aID), .page(id: bID)],
+                linkPolicy: .unlink))
+        let reply = try storeReply(await executeDomain(
+            daemon, .deleteResources, wikiID: wikiID,
+            payload: try JSONEncoder().encode(request),
+            stamp: DaemonMutationStamp(
+                requestID: "batch-delete", expectedEpoch: daemon.daemonEpoch)))
+        #expect(reply.error == nil)
+        let deleted = try JSONDecoder().decode(
+            DaemonDeleteResourcesReply.self, from: #require(reply.result))
+        // One echo per actually-deleted target (no rewrites, no bookmarks).
+        #expect(deleted.result.deletedTargets.count == 2)
+        #expect(deleted.events.count == 2)
+        #expect(deleted.events.allSatisfy { $0.kind == "page" && $0.change == "deleted" })
+        #expect(Set(deleted.events.map(\.id)) == Set([aID, bID]))
+    }
+
+    @Test func conditionalEmitterUnchangedSaveCommitsWithEmptyEvents()
+        async throws
+    {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        try await seed(daemon, wikiID: wikiID) { store in
+            _ = try await store.createChat(kind: .edit, title: "already titled")
+        }
+        let store = try await daemon.domainCommandStore(wikiID: wikiID)
+        let chatID = try #require(await store.resolveChatByTitle("already titled")).rawValue
+
+        // setChatTitleIfEmpty against a NONEMPTY title: didWrite == false,
+        // the commit emitted NOTHING — the empty array is the honest echo.
+        let request = DaemonSetChatTitleIfEmptyRequest(
+            chatID: chatID, title: "other")
+        let reply = try storeReply(await executeDomain(
+            daemon, .setChatTitleIfEmpty, wikiID: wikiID,
+            payload: try JSONEncoder().encode(request),
+            stamp: DaemonMutationStamp(
+                requestID: "conditional-noop", expectedEpoch: daemon.daemonEpoch)))
+        #expect(reply.error == nil)
+        let outcome = try JSONDecoder().decode(
+            DaemonSetChatTitleIfEmptyReply.self, from: #require(reply.result))
+        #expect(outcome.didWrite == false)
+        #expect(outcome.events.isEmpty)
+        #expect(outcome.outcome.status == .committed)
+
+        // saveWikiStrategy unchanged save: same honesty on the blob family
+        // (committed outcome, result .unchanged, NO event). The instructions
+        // ride as a staged handle (each save stages its own upload).
+        let instructions = Data("unchanged instructions".utf8)
+        let instructionsHandle = try await stageBytes(
+            daemon, wikiID: wikiID, instructions)
+        let save = DaemonSaveWikiStrategyRequest(
+            name: "Steady", instructions: instructionsHandle,
+            expectedRevision: nil)
+        let saveStamp = DaemonMutationStamp(
+            requestID: "strategy-save-1", expectedEpoch: daemon.daemonEpoch)
+        let firstSave = try storeReply(await executeDomain(
+            daemon, .saveWikiStrategy, wikiID: wikiID,
+            payload: try JSONEncoder().encode(save), stamp: saveStamp))
+        let saved = try JSONDecoder().decode(
+            DaemonSaveWikiStrategyReply.self, from: #require(firstSave.result))
+        guard case .saved(let revision, _) = saved.result else {
+            Issue.record("expected a changed save, got \(saved.result)")
+            return
+        }
+
+        let sameInstructionsHandle = try await stageBytes(
+            daemon, wikiID: wikiID, instructions)
+        let sameSave = DaemonSaveWikiStrategyRequest(
+            name: "Steady", instructions: sameInstructionsHandle,
+            expectedRevision: revision)
+        let secondSave = try storeReply(await executeDomain(
+            daemon, .saveWikiStrategy, wikiID: wikiID,
+            payload: try JSONEncoder().encode(sameSave),
+            stamp: DaemonMutationStamp(
+                requestID: "strategy-save-2", expectedEpoch: daemon.daemonEpoch)))
+        let unchanged = try JSONDecoder().decode(
+            DaemonSaveWikiStrategyReply.self, from: #require(secondSave.result))
+        #expect(unchanged.result == .unchanged)
+        #expect(unchanged.event == nil)
+        #expect(unchanged.outcome.status == .committed)
+    }
+
+    @Test func eventProducerThroughTheLedgerWithConcurrentDuplicateJoin()
+        async throws
+    {
+        let daemon = try makeDaemon()
+        let wikiID = try fixtureWiki(daemon)
+        let request = DaemonAppendLogRequest(
+            kind: .ingest, title: "once-only", note: nil)
+        let payload = try JSONEncoder().encode(request)
+        let stamp = DaemonMutationStamp(
+            requestID: "ledger-join-once", expectedEpoch: daemon.daemonEpoch)
+
+        // Two CONCURRENT identical submissions: the ledger admits one
+        // execution; the duplicate joins (or reads the cache). Both replies
+        // carry the same result bytes and the same committed outcome.
+        async let first = executeDomain(
+            daemon, .appendLog, wikiID: wikiID, payload: payload, stamp: stamp)
+        async let second = executeDomain(
+            daemon, .appendLog, wikiID: wikiID, payload: payload, stamp: stamp)
+        let replies = [
+            try storeReply(await first),
+            try storeReply(await second),
+        ]
+        #expect(replies[0].error == nil)
+        #expect(replies[1].error == nil)
+        #expect(replies[0].result == replies[1].result)
+        let firstOutcome = try JSONDecoder().decode(
+            DaemonAppendLogReply.self, from: #require(replies[0].result))
+        let secondOutcome = try JSONDecoder().decode(
+            DaemonAppendLogReply.self, from: #require(replies[1].result))
+        #expect(firstOutcome.outcome.status == .committed)
+        #expect(secondOutcome.outcome.status == .committed)
+        #expect(firstOutcome.outcome.stamp == stamp)
+        #expect(secondOutcome.outcome.stamp == stamp)
+
+        // Exactly-ONCE observable in the store: one row, despite two
+        // submissions.
+        let store = try await daemon.domainCommandStore(wikiID: wikiID)
+        let entries = try await store.recentLogEntries(limit: 50)
+        #expect(entries.filter { $0.title == "once-only" }.count == 1)
+        // The winning execution echoed exactly one event; the joined reply
+        // shares the winner's bytes, so its echo matches too.
+        #expect(firstOutcome.events.count == 1)
+        #expect(firstOutcome.events == secondOutcome.events)
     }
 }
 #endif
