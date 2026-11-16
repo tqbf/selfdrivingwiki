@@ -333,9 +333,9 @@ struct SourceDetailView: View {
     /// Does NOT clear on nil — the `.onChange(of: pendingScrollAnchorVersion)`
     /// handler owns the clear (so a `.task(id: file.id)` re-fire can't clobber a
     /// pin consumed synchronously by `.onChange`).
-    private func consumePinnedExtraction() {
+    private func consumePinnedExtraction() async {
         if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
-            pinnedExtraction = store.processedMarkdownVersion(for: pinID)
+            pinnedExtraction = await store.processedMarkdownVersion(for: pinID)
         }
     }
 
@@ -546,10 +546,10 @@ struct SourceDetailView: View {
         .task(id: file.id) {
             rendererSessionPreparation.cancel()
             refreshSourceBytesSnapshot()
-            headVersion = store.processedMarkdownHead(for: file)
-            origin = store.sourceOrigin(for: file.id)
-            editHistory = store.sourceEditHistory(for: file.id)
-            isRefreshable = store.isSourceRefreshable(for: file.id)
+            headVersion = await store.processedMarkdownHead(for: file)
+            origin = await store.sourceOrigin(for: file.id)
+            editHistory = await store.sourceEditHistory(for: file.id)
+            isRefreshable = await store.isSourceRefreshable(for: file.id)
             await loadActiveExtractorRegistrations()
             resolveRendererPresentation()
             updateRightSidebarRegistration()
@@ -1045,14 +1045,14 @@ struct SourceDetailView: View {
         defer { isRefreshing = false }
         do {
             _ = try await store.refreshSource(file.id)
-            headVersion = store.processedMarkdownHead(for: file)
+            headVersion = await store.processedMarkdownHead(for: file)
         } catch SourceRefreshService.RefreshError.notRefreshable(let agent) {
             refreshError = "This \(agent) source can't be refreshed."
         } catch SourceRefreshService.RefreshError.snapshotWithImages {
             refreshError = "This snapshot source includes images; re-snapshotting on refresh is coming soon."
         } catch SourceRefreshService.RefreshError.transcriptQueueRequired {
             await runTranscription()
-            if let head = store.processedMarkdownHead(for: file) {
+            if let head = await store.processedMarkdownHead(for: file) {
                 headVersion = head
             }
         } catch {
@@ -1348,7 +1348,7 @@ struct SourceDetailView: View {
         return "\(file.id.rawValue)|\(reference?.packageID.rawValue ?? "source")|\(reference?.version.rawValue ?? "none")|\(reference?.registrationID.rawValue ?? "none")|\(versionKey)"
     }
 
-    private func prepareSelectedRendererSession() {
+    private func prepareSelectedRendererSession() async {
         guard rendererPresentationLifecycle.state.selection == .rendered,
               let reference = rendererPresentationLifecycle.state.pinnedRenderer else {
             // No rendered pane is selected, so there is no session to prepare.
@@ -1414,15 +1414,15 @@ struct SourceDetailView: View {
         }
     }
 
-    private func persistRendererPreference(_ reference: RendererReference) {
+    private func persistRendererPreference(_ reference: RendererReference) async {
         // A deliberate retry gets a new session. The failure marker only keeps
         // the existing failed session from being recreated during fallback.
         failedInstalledRendererReference = nil
-        store.setRendererSourcePreference(sourceID: file.id, preference: .exact(reference))
+        await store.setRendererSourcePreference(sourceID: file.id, preference: .exact(reference))
     }
 
     @MainActor
-    private func activateRendererPane(reference: RendererReference, input: RendererBridgeInput) {
+    private func activateRendererPane(reference: RendererReference, input: RendererBridgeInput) async {
         guard headVersion != nil else {
             return
         }
@@ -1433,7 +1433,7 @@ struct SourceDetailView: View {
         var lifecycle = rendererPresentationLifecycle
         lifecycle.selectRendered(reference)
         rendererPresentationLifecycle = lifecycle
-        store.setRendererSourcePresentation(sourceID: file.id, presentation: .rendered)
+        await store.setRendererSourcePresentation(sourceID: file.id, presentation: .rendered)
     }
 
     private func rendererPlanner() throws -> SourceRendererPresentationPlanner {
@@ -1441,8 +1441,8 @@ struct SourceDetailView: View {
             installedDescriptors: installedRendererFactoryInputs.availableDescriptors)
     }
 
-    private func persistRendererPresentationSelection(_ selection: RendererPresentationState.Selection) {
-        store.setRendererSourcePresentation(sourceID: file.id, presentation: selection)
+    private func persistRendererPresentationSelection(_ selection: RendererPresentationState.Selection) async {
+        await store.setRendererSourcePresentation(sourceID: file.id, presentation: selection)
     }
 
     /// Resolve the persisted logical or exact renderer once per source. The
@@ -1456,10 +1456,10 @@ struct SourceDetailView: View {
     /// Resolve only after this view has loaded bytes, markdown, and origin for
     /// the current source. The persisted selection records an explicit user
     /// choice. Without it, a new presentable source returns to Source.
-    private func resolveRendererPresentation() {
+    private func resolveRendererPresentation() async {
         do {
             let planner = try rendererPlanner()
-            let preference = store.rendererSourcePreference(for: file.id)
+            let preference = await store.rendererSourcePreference(for: file.id)
             let descriptor: RendererDescriptor?
             if let preference {
                 descriptor = try planner.preferredDescriptor(
@@ -1497,7 +1497,7 @@ struct SourceDetailView: View {
 
     /// Refreshes using the already-loaded source facts. A source-list change is
     /// not itself permission to rebuild the pane's exact renderer pin.
-    private func refreshRendererPresentation() {
+    private func refreshRendererPresentation() async {
         do {
             let planner = try rendererPlanner()
             let descriptors = try planner.matchingDescriptors(
@@ -1505,7 +1505,7 @@ struct SourceDetailView: View {
                 boundedBytes: sourceBytesSnapshot,
                 currentMarkdown: currentMarkdownContent,
                 origin: origin)
-            let preference = store.rendererSourcePreference(for: file.id)
+            let preference = await store.rendererSourcePreference(for: file.id)
             let matching = try preference.flatMap { preference in
                 try planner.preferredDescriptor(
                     preference: preference,
@@ -1522,7 +1522,7 @@ struct SourceDetailView: View {
                 boundedBytes: sourceBytesSnapshot,
                 currentMarkdown: currentMarkdownContent,
                 origin: origin,
-                persistedSelection: store.rendererSourcePresentation(for: file.id),
+                persistedSelection: await store.rendererSourcePresentation(for: file.id),
                 isEditing: isEditing)
             rendererPresentationLifecycle = lifecycle
         } catch {
@@ -1530,8 +1530,8 @@ struct SourceDetailView: View {
         }
     }
 
-    private func refreshSourceBytesSnapshot() {
-        sourceBytesSnapshot = store.sourceBytes(id: file.id)
+    private func refreshSourceBytesSnapshot() async {
+        sourceBytesSnapshot = await store.sourceBytes(id: file.id)
     }
 
     /// Loads the active package registration snapshots that gate the Raw
@@ -1676,7 +1676,7 @@ struct SourceDetailView: View {
             switch result {
             case .success:
                 // The worker persisted the markdown; refresh the head version.
-                if let head = store.processedMarkdownHead(for: file) {
+                if let head = await store.processedMarkdownHead(for: file) {
                     headVersion = head
                 }
             case .failure:
@@ -1828,7 +1828,7 @@ struct SourceDetailView: View {
 
             switch result {
             case .success:
-                if let head = store.processedMarkdownHead(for: file) {
+                if let head = await store.processedMarkdownHead(for: file) {
                     headVersion = head
                 }
             case .failure:
@@ -1867,7 +1867,7 @@ struct SourceDetailView: View {
                 deadline: QueueEngineWaitPolicy.speechCompletionWaitDeadline)
             switch result {
             case .success:
-                if let head = store.processedMarkdownHead(for: file) {
+                if let head = await store.processedMarkdownHead(for: file) {
                     headVersion = head
                 }
             case .failure:
@@ -2052,7 +2052,7 @@ struct SourceDetailView: View {
 
             switch result {
             case .success:
-                if let head = store.processedMarkdownHead(for: file) {
+                if let head = await store.processedMarkdownHead(for: file) {
                     headVersion = head
                 }
             case .failure:
@@ -2122,24 +2122,24 @@ struct SourceDetailView: View {
 
     // MARK: - Edit helpers
 
-    private func commitEdit() {
+    private func commitEdit() async {
         let trimmed = editBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { isEditing = false; return }
         if let current = headVersion, trimmed == current.content {
             isEditing = false
             return
         }
-        if let version = store.saveProcessedMarkdown(for: file.id, content: trimmed) {
+        if let version = await store.saveProcessedMarkdown(for: file.id, content: trimmed) {
             headVersion = version
         }
         isEditing = false
     }
 
-    private func flushEditIfDirty() {
+    private func flushEditIfDirty() async {
         guard isEditing else { return }
         let trimmed = editBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
         if let current = headVersion, !trimmed.isEmpty, trimmed != current.content {
-            if let version = store.saveProcessedMarkdown(for: file.id, content: trimmed) {
+            if let version = await store.saveProcessedMarkdown(for: file.id, content: trimmed) {
                 headVersion = version
             }
         }

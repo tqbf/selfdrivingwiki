@@ -696,7 +696,7 @@ struct PageDetailView: View {
 
     // MARK: - Actions
 
-    private func commitEdit() {
+    private func commitEdit() async {
         store.flushPendingSave()
         isEditing = false
     }
@@ -710,7 +710,7 @@ struct PageDetailView: View {
 
     /// Rename the currently-selected page. `store.rename` flushes pending edits
     /// first, then updates the title (and the slug, open tabs, and `draftTitle`).
-    private func renameCurrentPage(to newTitle: String) {
+    private func renameCurrentPage(to newTitle: String) async {
         guard case .page(let id)? = store.selection else { return }
         store.rename(id, to: newTitle)
     }

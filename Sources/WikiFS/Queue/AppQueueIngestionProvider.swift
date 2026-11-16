@@ -122,7 +122,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         wikiID: WikiID,
         sourceIDs: [SourceID],
         queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) async -> Void,
+        onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
@@ -257,11 +257,13 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                     workspaceID: wsID,
                     onWorkspaceMerge: { [weak store] in
                         guard let store else { return }
+                        Task {
                         do {
-                            try store.workspaceMerge(workspaceID: wsID)
+                            try await store.workspaceMerge(workspaceID: wsID)
                             DebugLog.ingest("AppQueueIngestionProvider: workspace merged wsID=\(wsID)")
                         } catch {
                             DebugLog.ingest("AppQueueIngestionProvider: workspace merge FAILED wsID=\(wsID) — \(error.localizedDescription)")
+                        }
                         }
                     },
                     onProgress: onProgress,
@@ -325,7 +327,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // fact for the sources this job staged. Report truth rules are
         // separate: report targets still stay `.submitted` (per-source
         // completion is never inferred from agent exit there).
-        Self.stampIngestedSources(
+        await Self.stampIngestedSources(
             requested: stagingOutcomes,
             store: store,
             attemptSucceeded: launcher.exitStatus == 0 && launcher.preflightError == nil)
@@ -417,7 +419,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         wikiID: WikiID,
         pageIDs: [PageID],
         queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) async -> Void,
+        onProgress: @escaping @Sendable (String) -> Void,
         onTranscript: (@Sendable (AgentEvent) -> Void)?,
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
@@ -464,12 +466,13 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
 
         // Run the pre-flight + combined lint, mirroring
         // AgentOperationRunner.runLintPages but with progress + transcript.
-        let preflights = pages.map { page in
-            let preflight = store.preflightLint(pageID: page.id)
+        var preflights: [(title: String, brokenLinks: [String])] = []
+        for page in pages {
+            let preflight = await store.preflightLint(pageID: page.id)
             let allBroken = (preflight?.brokenPageLinks ?? [])
                 + (preflight?.brokenSourceLinks ?? [])
                 + (preflight?.brokenChatLinks ?? [])
-            return (title: page.title, brokenLinks: allBroken)
+            preflights.append((title: page.title, brokenLinks: allBroken))
         }
         let combinedTitle = pages.map(\.title).joined(separator: ", ")
         let combinedBroken = preflights.flatMap(\.brokenLinks)
