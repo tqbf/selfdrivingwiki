@@ -3649,6 +3649,12 @@ public final class WikiStoreModel {
     }
 
     /// True when at least one processed-markdown version exists for this source.
+    /// Plan P1.3 sync projection: markdown presence from the preloaded
+    /// derived chains (chain non-empty <=> at least one markdown version).
+    public func hasProcessedMarkdownSync(for sourceID: SourceID) -> Bool {
+        !(preloadDerivedChains[sourceID]?.isEmpty ?? true)
+    }
+
     public func hasProcessedMarkdown(for sourceID: SourceID) async -> Bool {
         await DebugLog.trying("hasProcessedMarkdown", operation: { try await store.hasProcessedMarkdown(sourceID: sourceID) }) ?? false
     }
@@ -3744,6 +3750,7 @@ public final class WikiStoreModel {
     /// bootstrap/reload path and read synchronously by
     /// `WikiRenderContext.build(from:)`, so the memoized `renderContext()`
     /// accessor keeps its sync shape (views build closures over it).
+    @ObservationIgnored private var cachedOriginsBySource: [SourceID: SourceOrigin] = [:]
     @ObservationIgnored private var preloadDerivedChains: [SourceID: [SourceMarkdownVersionID]] = [:]
     @ObservationIgnored private var preloadEmbedDescriptors: [SourceID: SourceEmbedDescriptor] = [:]
     @ObservationIgnored private var preloadSiblingMaps: [SourceID: [String: SourceID]] = [:]
@@ -3755,6 +3762,9 @@ public final class WikiStoreModel {
         preloadDerivedChains = await DebugLog.trying(
             "sourceDerivedChains",
             operation: { try await store.sourceDerivedChains() }) ?? [:]
+        cachedOriginsBySource = await DebugLog.trying(
+            "sourceOriginsBySource",
+            operation: { try await store.sourceOriginsBySource() }) ?? [:]
         preloadEmbedDescriptors = await DebugLog.trying(
             "embedDescriptors",
             operation: { try await store.embedDescriptors() }) ?? [:]

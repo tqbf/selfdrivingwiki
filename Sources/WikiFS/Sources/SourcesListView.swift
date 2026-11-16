@@ -550,7 +550,7 @@ extension SourcesListViewController {
         // (it classifies as `.binary`, no `extractionPath`).
         SourcesListContentGates.canExtract(
             source: source,
-            processedMarkdownHead: store?.processedMarkdownHead(for: source))
+            hasProcessedMarkdown: !(store?.sourceDerivedChains()[source.id]?.isEmpty ?? true))
     }
 
     /// Double gate hiding the Ingest menu item for sources the chokepoint
@@ -570,8 +570,13 @@ extension SourcesListViewController {
     /// item is intentionally stricter — discoverability > permissiveness
     /// for the menu (an item that does nothing is misleading).
     private func canIngest(_ source: SourceSummary) -> Bool {
+        // Plan P1.3 sync gate: bytes or preloaded markdown chains. The
+        // origin-plan precision of the model's async isIngestible is
+        // re-checked authoritatively by the enqueue chokepoint; the menu
+        // only hides items that would obviously no-op.
         guard let store else { return false }
-        return store.canIngest(source) && store.isIngestible(source)
+        let hasMarkdown = !(store.sourceDerivedChains()[source.id]?.isEmpty ?? true)
+        return (source.byteSize > 0 || hasMarkdown) && hasMarkdown
     }
 
     private func item(title: String, systemImage: String,
@@ -627,14 +632,20 @@ extension SourcesListViewController {
     }
     @objc private func extractAction(_ sender: NSMenuItem) {
         guard let p = sender.representedObject as? SourcesMenuPayload, let store else { return }
-        let toExtract = p.effective.compactMap { s -> SourceExtractItem? in
-            guard MimeType.isPDF(s.mimeType),
-                  store.processedMarkdownHead(for: s) == nil,
-                  let data = store.sourceBytes(id: s.id) else { return nil }
-            return SourceExtractItem(id: s.id, filename: s.filename, data: data)
+        Task {
+            let chains = store.sourceDerivedChains()
+            var toExtract: [SourceExtractItem] = []
+            for s in p.effective where MimeType.isPDF(s.mimeType) && chains[s.id]?.isEmpty != false {
+                do {
+                    let data = try await store.sourceBytes(id: s.id)
+                    toExtract.append(SourceExtractItem(id: s.id, filename: s.filename, data: data))
+                } catch {
+                    DebugLog.store("extractAction: sourceBytes read failed for \(s.id.rawValue): \(error)")
+                }
+            }
+            guard !toExtract.isEmpty else { return }
+            callbacks?.onExtract(toExtract)
         }
-        guard !toExtract.isEmpty else { return }
-        callbacks?.onExtract(toExtract)
     }
     @objc private func showRunningIngestJobAction(_ sender: NSMenuItem) {
         if let p = sender.representedObject as? SourcesMenuPayload {
@@ -720,12 +731,14 @@ enum SourcesListContentGates {
     /// The `processedMarkdownHead == nil` guard mirrors the detail-view
     /// `needsExtraction` shape: don't offer Extract when there's already an
     /// extracted head (use Re-extract instead).
+    /// Plan P1.3: `hasProcessedMarkdown` comes from the model's preloaded
+    /// derived-chains projection (sync), replacing the async store read.
     static func canExtract(
         source: SourceSummary,
-        processedMarkdownHead: SourceMarkdownVersion?
+        hasProcessedMarkdown: Bool
     ) -> Bool {
         ContentKind.resolve(mimeType: source.mimeType, provider: nil, ext: source.ext)
             .capabilities.hasFileExtractionBackend
-            && processedMarkdownHead == nil
+            && !hasProcessedMarkdown
     }
 }
