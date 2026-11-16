@@ -396,27 +396,30 @@ struct SourcesContainerView: View {
     /// immediately (nothing references them) or route to the typed state.
     private func requestSourceDeletion(_ ids: [SourceID]) {
         pendingDeletionIDs = ids
-        let coordinator = DeletionConfirmationCoordinator(
-            kind: .source,
-            loadImpacts: {
-                var impacts: [DeletionImpact] = []
-                for id in ids {
-                    impacts.append(try await store.deletionImpact(forSource: id))
-                }
-            },
-            onDelete: { decision in
-                performSourceDeletion(ids: ids, decision: decision)
-            },
-            pageTitle: { id in
-                store.summaries.first { $0.id == id }?.title
-            },
-            selectionCount: ids.count)
-        let outcome = coordinator.evaluate()
-        if case .deleteImmediately = outcome {
-            // No references, no blockers — delete without a dialog.
-            coordinator.perform(.delete)
-        } else {
-            deletionOutcome = outcome
+        Task {
+            let coordinator = DeletionConfirmationCoordinator(
+                kind: .source,
+                loadImpacts: {
+                    var impacts: [DeletionImpact] = []
+                    for id in ids {
+                        impacts.append(try await store.deletionImpact(forSource: id))
+                    }
+                    return impacts
+                },
+                onDelete: { decision in
+                    performSourceDeletion(ids: ids, decision: decision)
+                },
+                pageTitle: { id in
+                    store.summaries.first { $0.id == id }?.title
+                },
+                selectionCount: ids.count)
+            let outcome = await coordinator.evaluate()
+            if case .deleteImmediately = outcome {
+                // No references, no blockers — delete without a dialog.
+                coordinator.perform(.delete)
+            } else {
+                deletionOutcome = outcome
+            }
         }
     }
 

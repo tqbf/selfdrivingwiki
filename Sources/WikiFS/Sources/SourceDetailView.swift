@@ -129,6 +129,18 @@ struct SourceDetailView: View {
     /// even after the source is reprocessed (HEAD moves, v3 stays). Transient:
     /// cleared on navigation away (returns to HEAD).
     @State private var pinnedExtraction: SourceMarkdownVersion?
+    /// Extraction-alternatives snapshot for the provenance chip and the
+    /// Compare gate (`hasMultipleExtractions`). Loaded with the per-file
+    /// state and refreshed when derived content changes, so body evaluation
+    /// never queries the store synchronously.
+    @State private var extractionHistory: [SourceMarkdownVersion] = []
+    /// Producer agent per extraction version (smv.id → agent name), the
+    /// snapshot companion of `extractionHistory`.
+    @State private var extractionAgentNames: [SourceMarkdownVersion.ID: String] = [:]
+    /// Cached description of the renderer's authorized input (active content
+    /// version). `rendererPreparationKey` is evaluated per body render and
+    /// reads this snapshot instead of an async store read.
+    @State private var authorizedInputKey: String = "unavailable"
     /// Opens the Compare Extractions window (value-driven `WindowGroup`).
     @Environment(\.openWindow) private var openWindow
 
@@ -258,7 +270,10 @@ struct SourceDetailView: View {
             // The reviewed package route decides: route disabled in
             // settings → not transcribable; a missing signing helper does
             // NOT disable the route (the package falls back to RSS).
-            return store.isSourceRefreshable(for: file.id)
+            // `isRefreshable` is the loaded projection of
+            // `store.isSourceRefreshable(for:)` (async store read), so the
+            // body stays free of store queries.
+            return isRefreshable
         case .podcast:
             // Generic RSS-feed podcast: the row must carry the feed URL the
             // queue job transcribes; `uv` is the only runtime requirement.
@@ -329,7 +344,8 @@ struct SourceDetailView: View {
     /// inline reader path never emits the iframe here).
     /// Phase 6: consume a pending pinned-extraction id (if any) for the current
     /// source and load that extraction into `pinnedExtraction`. Called from
-    /// `.onAppear` so the pinned DOM is ready before the body first evaluates.
+    /// the per-file load task (`.task(id: file.id)`) so the pinned DOM is
+    /// ready shortly after the body first evaluates.
     /// Does NOT clear on nil — the `.onChange(of: pendingScrollAnchorVersion)`
     /// handler owns the clear (so a `.task(id: file.id)` re-fire can't clobber a
     /// pin consumed synchronously by `.onChange`).
@@ -399,8 +415,9 @@ struct SourceDetailView: View {
 
     /// `true` when this source has ≥2 extraction alternatives — the gate for the
     /// "Compare Extractions…" button (compare is meaningless with one).
+    /// Reads the loaded extraction snapshot, not the store (async reads).
     private var hasMultipleExtractions: Bool {
-        store.processedMarkdownHistory(for: file.id).count >= 2
+        extractionHistory.count >= 2
     }
 
     private var isMarkdownEditable: Bool {
@@ -506,14 +523,9 @@ struct SourceDetailView: View {
             Text(message)
         }
         .onAppear {
-            refreshSourceBytesSnapshot()
-            headVersion = store.processedMarkdownHead(for: file)
-            origin = store.sourceOrigin(for: file.id)
-            editHistory = store.sourceEditHistory(for: file.id)
-            isRefreshable = store.isSourceRefreshable(for: file.id)
+            // Per-file loads run in `.task(id: file.id)` (the store reads are
+            // async now); onAppear keeps only the synchronous registrations.
             lastKnownActiveTabID = store.activeTabID
-            resolveRendererPresentation()
-            consumePinnedExtraction()
             updateRightSidebarRegistration()
         }
         .onChange(of: file.id) {
@@ -523,7 +535,7 @@ struct SourceDetailView: View {
             // otherwise leaks A's "Extracting…" flag onto B's header. The header
             // spinner is additionally driven off the per-file `isThisFileExtracting`
             // launcher flag below, so it can never survive a navigation.
-            flushEditIfDirty()
+            Task { await flushEditIfDirty() }
             isEditing = false
             isExtracting = false
             htmlExtractionError = nil
@@ -551,7 +563,11 @@ struct SourceDetailView: View {
             editHistory = await store.sourceEditHistory(for: file.id)
             isRefreshable = await store.isSourceRefreshable(for: file.id)
             await loadActiveExtractorRegistrations()
-            resolveRendererPresentation()
+            extractionHistory = await store.processedMarkdownHistory(for: file.id)
+            extractionAgentNames = await store.processedMarkdownAgentNames(for: file.id)
+            await refreshAuthorizedInputKey()
+            await consumePinnedExtraction()
+            await resolveRendererPresentation()
             updateRightSidebarRegistration()
         }
         .task(id: MetadataHydrationKey.source(file.id, store.messageVersion)) {
@@ -578,13 +594,13 @@ struct SourceDetailView: View {
         // `pinnedExtraction` so the rendered DOM contains the quote.
         .onChange(of: store.pendingScrollAnchorVersion) {
             if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
-                pinnedExtraction = store.processedMarkdownVersion(for: pinID)
+                Task { pinnedExtraction = await store.processedMarkdownVersion(for: pinID) }
             } else {
                 pinnedExtraction = nil
             }
         }
         .onChange(of: store.selection) {
-            flushEditIfDirty()
+            Task { await flushEditIfDirty() }
             isEditing = false
             updateRightSidebarRegistration()
         }
@@ -615,9 +631,13 @@ struct SourceDetailView: View {
         // window, both update without relying on the initiating view's own
         // post-completion refresh.
         .onChange(of: store.sourcesVersion) { _, _ in
-            if !isEditing {
-                headVersion = store.processedMarkdownHead(for: file)
-                refreshRendererPresentation()
+            guard !isEditing else { return }
+            Task {
+                headVersion = await store.processedMarkdownHead(for: file)
+                extractionHistory = await store.processedMarkdownHistory(for: file.id)
+                extractionAgentNames = await store.processedMarkdownAgentNames(for: file.id)
+                await refreshAuthorizedInputKey()
+                await refreshRendererPresentation()
             }
             // headVersion feeds `outlinePayload`; a real content change
             // re-registers through the payload observer.
@@ -631,10 +651,15 @@ struct SourceDetailView: View {
         // instead of waiting for a close/reopen to re-run the load task.
         .onChange(of: tracker.extractingSourceIDs.contains(file.id)) { wasExtracting, isExtractingNow in
             guard wasExtracting, !isExtractingNow, !isEditing else { return }
-            if let head = store.processedMarkdownHead(for: file),
-               head.id != headVersion?.id {
-                headVersion = head
-                refreshRendererPresentation()
+            Task {
+                if let head = await store.processedMarkdownHead(for: file),
+                   head.id != headVersion?.id {
+                    headVersion = head
+                    extractionHistory = await store.processedMarkdownHistory(for: file.id)
+                    extractionAgentNames = await store.processedMarkdownAgentNames(for: file.id)
+                    await refreshAuthorizedInputKey()
+                    await refreshRendererPresentation()
+                }
             }
         }
         .background { findShortcutButton }
@@ -701,7 +726,9 @@ struct SourceDetailView: View {
                 titleLineLimit: 2,
                 isTitleDisabled: isEditLockedExternally,
                 isExpanded: $isHeaderExpanded,
-                onTitleCommit: { store.renameSource(id: file.id, to: $0) }
+                onTitleCommit: { newTitle in
+                    Task { await store.renameSource(id: file.id, to: newTitle) }
+                }
             ) {
                 VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
                     HStack(spacing: 8) {
@@ -819,7 +846,7 @@ struct SourceDetailView: View {
                 HStack(spacing: 10) {
                     Button("Save Changes", systemImage: "checkmark.circle") {
                         DebugLog.tabs("SourceDetailView: Save Changes tapped")
-                        commitEdit()
+                        Task { await commitEdit() }
                     }
                     .keyboardShortcut("s", modifiers: .command)
                     .disabled(editBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1346,8 +1373,10 @@ struct SourceDetailView: View {
 
     private var rendererPreparationKey: String {
         let reference = rendererPresentationLifecycle.state.pinnedRenderer
-        let version = rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id)?.authorizedInput
-        let versionKey = version.map { String(describing: $0) } ?? "unavailable"
+        // `authorizedInputKey` is the cached projection of the renderer's
+        // authorized input, refreshed at the per-file load edges — this key
+        // is evaluated per body render and must not query the store.
+        let versionKey = authorizedInputKey
         return "\(file.id.rawValue)|\(reference?.packageID.rawValue ?? "source")|\(reference?.version.rawValue ?? "none")|\(reference?.registrationID.rawValue ?? "none")|\(versionKey)"
     }
 
@@ -1498,6 +1527,22 @@ struct SourceDetailView: View {
         }
     }
 
+    /// Refresh the cached renderer authorized-input key that
+    /// `rendererPreparationKey` projects (the store read is async; the key
+    /// must stay synchronous).
+    private func refreshAuthorizedInputKey() async {
+        let input = await rendererAuthorizedInputResolver
+            .rendererAuthorizedInputReader(for: file.id)?.authorizedInput
+        authorizedInputKey = input.map { String(describing: $0) } ?? "unavailable"
+    }
+
+    /// `WikiReaderView` takes a synchronous activation hook; activation
+    /// itself is async (session preparation), so the hop lands on a Task.
+    private func makeRendererActivationHandler()
+        -> (@MainActor (RendererReference, RendererBridgeInput) -> Void)? {
+        { reference, input in Task { await activateRendererPane(reference: reference, input: input) } }
+    }
+
     /// Refreshes using the already-loaded source facts. A source-list change is
     /// not itself permission to rebuild the pane's exact renderer pin.
     private func refreshRendererPresentation() async {
@@ -1605,7 +1650,7 @@ struct SourceDetailView: View {
             WikiReaderView(markdown: pinnedExtraction?.content ?? head.content,
                             currentSelection: store.selection,
                             store: store,
-                            onRendererActivation: activateRendererPane(reference:input:),
+                            onRendererActivation: makeRendererActivationHandler(),
                             inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
                                 store: store.internalStore,
                                 installedRendererFactory: installedRendererFactory,
@@ -1624,7 +1669,7 @@ struct SourceDetailView: View {
             WikiReaderView(markdown: sourceMarkdown,
                             currentSelection: store.selection,
                             store: store,
-                            onRendererActivation: headVersion == nil ? nil : activateRendererPane(reference:input:),
+                            onRendererActivation: headVersion == nil ? nil : makeRendererActivationHandler(),
                             inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
                                 store: store.internalStore,
                                 installedRendererFactory: installedRendererFactory,
@@ -1921,16 +1966,21 @@ struct SourceDetailView: View {
     /// with another backend. Shown in place of the old inert provenance text.
     @ViewBuilder
     private func extractionProvenanceChip(head: SourceMarkdownVersion) -> some View {
-        let names = store.processedMarkdownAgentNames(for: file.id)
+        let names = extractionAgentNames
         Menu {
             Section("Active extraction") {
-                let history = store.processedMarkdownHistory(for: file.id)
+                let history = extractionHistory
                 let headID = headVersion?.id.rawValue
                 ForEach(history) { version in
                     let agent = names[version.id] ?? version.origin.rawValue
                     Button {
-                        store.setActiveMarkdown(for: file.id, to: version.id)
-                        headVersion = store.processedMarkdownHead(for: file)
+                        Task {
+                            await store.setActiveMarkdown(for: file.id, to: version.id)
+                            headVersion = await store.processedMarkdownHead(for: file)
+                            extractionHistory = await store.processedMarkdownHistory(for: file.id)
+                            extractionAgentNames = await store.processedMarkdownAgentNames(for: file.id)
+                            await refreshAuthorizedInputKey()
+                        }
                     } label: {
                         Label {
                             Text("\(ExtractionAlternative.backendDisplayName(agentName: agent)) — \(version.createdAt, format: .dateTime.year().month().day().hour().minute().second())")

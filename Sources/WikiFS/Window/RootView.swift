@@ -62,36 +62,40 @@ struct RootView: View {
         // bytes, or an invalid MIME simply omits the source context: the
         // activation window then prepares from the exact pinned input alone.
         if case .source(let versionID) = input {
-        var matchedSummary: SourceSummary?
-        for source in session.store.sources {
-            guard
+            var matchedSummary: SourceSummary?
+            for source in session.store.sources {
+                guard
+                    // swiftlint:disable:next silent_try_optional
+                    let activeID = try? await session.store.internalStore.activeContentVersion(sourceID: source.id)?.id,
+                    activeID == versionID
+                else { continue }
+                matchedSummary = source
+                break
+            }
+            if let summary = matchedSummary,
+               // swiftlint:disable:next silent_try_optional
+               let version = try? await session.store.internalStore.activeContentVersion(sourceID: summary.id),
+               version.id == versionID,
+               let bytes = await session.store.sourceBytes(id: summary.id),
+               let mime = summary.mimeType {
                 // swiftlint:disable:next silent_try_optional
-                let activeID = try? await session.store.internalStore.activeContentVersion(sourceID: source.id)?.id,
-                activeID == versionID
-            else { continue }
-            matchedSummary = source
-            break
-        }
-        if let summary = matchedSummary,
-           // swiftlint:disable:next silent_try_optional
-           let version = try? await session.store.internalStore.activeContentVersion(sourceID: summary.id),
-           version.id == versionID,
-           let bytes = await session.store.sourceBytes(id: summary.id),
-           let mime = summary.mimeType {
-            // swiftlint:disable:next silent_try_optional
-            let source = try? RendererEmbeddedContent.Source(
-                sourceID: summary.id, sourceVersionID: versionID,
-                mimeType: .init(validating: mime), fileExtension: summary.ext, bytes: bytes)
-            if let source {
-                let extensions = Dictionary(uniqueKeysWithValues: session.store.sources.map { ($0.id, $0.ext.lowercased()) })
-                sourceContext = .init(
-                    source: source,
-                    siblingSources: session.store.siblingImageResolvers()[summary.id] ?? [:],
-                    sourceExtensions: extensions)
+                let source = try? RendererEmbeddedContent.Source(
+                    sourceID: summary.id, sourceVersionID: versionID,
+                    mimeType: .init(validating: mime), fileExtension: summary.ext, bytes: bytes)
+                if let source {
+                    let extensions = Dictionary(uniqueKeysWithValues: session.store.sources.map { ($0.id, $0.ext.lowercased()) })
+                    sourceContext = .init(
+                        source: source,
+                        siblingSources: session.store.siblingImageResolvers()[summary.id] ?? [:],
+                        sourceExtensions: extensions)
+                } else {
+                    sourceContext = nil
+                }
             } else {
+                // No matching summary (or unreadable bytes/MIME): omit the
+                // context rather than leaving it unassigned.
                 sourceContext = nil
             }
-        }
         } else {
             sourceContext = nil
         }

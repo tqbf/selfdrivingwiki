@@ -87,7 +87,7 @@ struct WikiStrategyEditorView: View {
         } description: {
             Text("The saved strategy could not be read from this wiki.")
         } actions: {
-            Button("Try Again") { store.loadWikiStrategy() }
+            Button("Try Again") { Task { await store.loadWikiStrategy() } }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -317,7 +317,7 @@ struct WikiStrategyEditorView: View {
     private var controlsRow: some View {
         HStack(spacing: 12) {
             Button("Save") {
-                store.saveStrategyDraft()
+                Task { await store.saveStrategyDraft() }
             }
             .keyboardShortcut("s", modifiers: .command)
             .disabled(!store.isStrategyDraftDirty || validationProblem != nil)
@@ -385,7 +385,7 @@ struct WikiStrategyEditorView: View {
         case .replaceWithTemplate(let template):
             store.applyStrategyTemplate(template)
         case .resetToDefault:
-            store.resetStrategyToDefault()
+            Task { await store.resetStrategyToDefault() }
         case .reloadFromWiki:
             store.discardStrategyDraftAndReload()
         }

@@ -636,11 +636,13 @@ extension SourcesListViewController {
             let chains = store.sourceDerivedChains()
             var toExtract: [SourceExtractItem] = []
             for s in p.effective where MimeType.isPDF(s.mimeType) && chains[s.id]?.isEmpty != false {
-                do {
-                    let data = try await store.sourceBytes(id: s.id)
+                // `sourceBytes` is nil-on-failure (the model logs the read
+                // error); a nil read skips the source rather than enqueueing
+                // an extract job with no bytes.
+                if let data = await store.sourceBytes(id: s.id) {
                     toExtract.append(SourceExtractItem(id: s.id, filename: s.filename, data: data))
-                } catch {
-                    DebugLog.store("extractAction: sourceBytes read failed for \(s.id.rawValue): \(error)")
+                } else {
+                    DebugLog.store("extractAction: sourceBytes read returned nil for \(s.id.rawValue)")
                 }
             }
             guard !toExtract.isEmpty else { return }

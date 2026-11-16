@@ -100,7 +100,9 @@ struct PageDetailView: View {
                     systemImage: ResourceKind.page.systemImageName,
                     title: store.draftTitle,
                     isExpanded: $isHeaderExpanded,
-                    onTitleCommit: renameCurrentPage
+                    onTitleCommit: { newTitle in
+                        Task { await renameCurrentPage(to: newTitle) }
+                    }
                 ) {
                     VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
                         HStack(spacing: 12) {
@@ -162,8 +164,7 @@ struct PageDetailView: View {
         }
         .onChange(of: store.activeTabID) { _, newID in
             lastKnownActiveTabID = newID
-            let tab = store.tabs.first(where: { $0.id == newID })
-            isEditing = tab?.isEditing ?? false
+            isEditing = Self.isTabEditing(store.tabs, tabID: newID)
         }
         .onChange(of: isEditing) { _, newValue in
             if let id = store.activeTabID {
@@ -256,7 +257,7 @@ struct PageDetailView: View {
             if isEditing {
                 Button("Save Changes", systemImage: "checkmark.circle") {
                     DebugLog.tabs("PageDetailView: Save Changes tapped")
-                    commitEdit()
+                    Task { await commitEdit() }
                 }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(store.draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -453,6 +454,15 @@ struct PageDetailView: View {
         )
     }
 
+    /// Whether the tab with `tabID` is in edit mode. Extracted from the
+    /// `onChange` body — the chained `first(where:)` form there was a
+    /// compiler type-check timeout.
+    private static func isTabEditing(_ tabs: [EditorTab], tabID: UUID?) -> Bool {
+        guard let tabID else { return false }
+        for tab in tabs where tab.id == tabID { return tab.isEditing }
+        return false
+    }
+
     private func hydrateMetadata(pageID: PageID) async {
         await MetadataHydrator.hydrate(subject: .page(pageID), operation: {
             if MetadataHydrationReadPath.resolve(readServiceAvailable: store.readService != nil) == .readService,
@@ -461,7 +471,7 @@ struct PageDetailView: View {
                     try Self.pageMetadataModel(pageID: pageID, store: database)
                 }
             } else {
-                return try Self.pageMetadataModel(pageID: pageID, store: store.internalStore)
+                return try await Self.pageMetadataModel(pageID: pageID, store: store.internalStore)
             }
         }, publish: { state in
             metadataState = state
@@ -494,24 +504,28 @@ struct PageDetailView: View {
             okfMetadata: okfMetadata))
     }
 
-    nonisolated private static func pageMetadataModel(pageID: PageID, store: WikiStore) throws -> MetadataPanelModel {
-        let page = try store.getPage(id: pageID)
-        let sourceSummaries = try store.listSources()
-        let sources = try store.pageHeadSources(pageID: pageID).map { relation in
+    nonisolated private static func pageMetadataModel(pageID: PageID, store: WikiStore) async throws -> MetadataPanelModel {
+        let page = try await store.getPage(id: pageID)
+        let sourceSummaries = try await store.listSources()
+        let sources = try await store.pageHeadSources(pageID: pageID).map { relation in
             guard let source = sourceSummaries.first(where: { $0.id == relation.sourceID }) else {
                 throw MetadataProjectionError.missingSource(relation.sourceID)
             }
             return MetadataPageSource(sourceID: source.id, displayName: source.effectiveName, role: relation.role)
         }
-        let history = try store.pageVersionHistory(pageID: pageID)
-        let headID = try store.pageHeadVersionID(pageID: pageID)
-        let okfMetadata = try headID.flatMap {
-            try store.pageOKFMetadata(versionID: $0, includeCorrected: false)?.metadata
-        } ?? OKFConceptMetadata()
+        let history = try await store.pageVersionHistory(pageID: pageID)
+        let headID = try await store.pageHeadVersionID(pageID: pageID)
+        let okfMetadata: OKFConceptMetadata
+        if let headID {
+            okfMetadata = try await store.pageOKFMetadata(
+                versionID: headID, includeCorrected: false)?.metadata ?? OKFConceptMetadata()
+        } else {
+            okfMetadata = OKFConceptMetadata()
+        }
         return PageMetadataProjection.make(input: .init(
             page: page,
             currentVersion: history.first { $0.id == headID },
-            origin: try store.pageOrigin(pageID: pageID),
+            origin: try await store.pageOrigin(pageID: pageID),
             sources: sources,
             okfMetadata: okfMetadata))
     }
@@ -686,7 +700,7 @@ struct PageDetailView: View {
             // only happens when the linter IS loaded — so fixMarkdownInDraft()
             // will always have a linter to call. No separate nil guard needed.
             Button("Fix", systemImage: "wand.and.stars") {
-                store.fixMarkdownInDraft()
+                Task { await store.fixMarkdownInDraft() }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -697,7 +711,7 @@ struct PageDetailView: View {
     // MARK: - Actions
 
     private func commitEdit() async {
-        store.flushPendingSave()
+        await store.flushPendingSave()
         isEditing = false
     }
 
@@ -712,7 +726,7 @@ struct PageDetailView: View {
     /// first, then updates the title (and the slug, open tabs, and `draftTitle`).
     private func renameCurrentPage(to newTitle: String) async {
         guard case .page(let id)? = store.selection else { return }
-        store.rename(id, to: newTitle)
+        await store.rename(id, to: newTitle)
     }
 
 }

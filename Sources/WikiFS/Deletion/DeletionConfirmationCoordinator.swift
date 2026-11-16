@@ -167,8 +167,9 @@ enum DeletionResourceKind {
 struct DeletionConfirmationCoordinator {
     let kind: DeletionResourceKind
     /// Loads one impact per selected id. Throwing — a failed load routes to
-    /// `.failed` and can never reach `onDelete`.
-    let loadImpacts: () throws -> [DeletionImpact]
+    /// `.failed` and can never reach `onDelete`. Async: the store reads are
+    /// async, so evaluation suspends while impacts load.
+    let loadImpacts: () async throws -> [DeletionImpact]
     /// The typed decision sink — called ONLY for `.deleteImmediately` and
     /// `perform(.unlinkAndDelete / .delete)`. Never for blocked, failed, or
     /// canceled flows.
@@ -181,10 +182,14 @@ struct DeletionConfirmationCoordinator {
     let selectionCount: Int
 
     /// Evaluate the current references and produce the typed state.
-    func evaluate() -> DeletionConfirmationOutcome {
+    /// MainActor-isolated (the views and tests drive it there); the async
+    /// loader's awaits suspend inside the actor, so no state is sent across
+    /// isolation boundaries.
+    @MainActor
+    func evaluate() async -> DeletionConfirmationOutcome {
         let impact: DeletionImpact
         do {
-            impact = DeletionImpact.aggregated(try loadImpacts())
+            impact = DeletionImpact.aggregated(try await loadImpacts())
         } catch {
             // An impact-read failure must never read as "no references"
             // (AC.10): produce the failed state; deletion stays unreachable.
