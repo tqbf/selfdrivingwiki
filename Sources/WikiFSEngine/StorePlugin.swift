@@ -73,8 +73,37 @@ public enum StorePlugin {
 
     public static let definition = makeDefinition()
 
+    /// The open-seam harness variant: mounts the plugin with injected
+    /// storage-open factories. Composition identity (id, provisions, config)
+    /// is unchanged, so catalogs built with it behave like the production one.
+    public static func definition(openFactories: StoreOpenFactories) -> PluginDefinition {
+        makeDefinition(openFactories: openFactories)
+    }
+
+    /// Injected storage-open factories for the open-seam harness
+    /// (plans/daemon-only-access.md Phase 0). `nil` legs keep the production
+    /// constructors (the `StoreBackend` factory and the read-only pool's
+    /// read-only connection constructor). Recording
+    /// legs let `ClientLocalOpenBoundaryTests` count client-side opens; the
+    /// daemon and CLI compositions never inject them.
+    public struct StoreOpenFactories: Sendable {
+        public let makeStore: (@Sendable (URL) throws -> any WikiStore)?
+        public let makeReadOnlyStore: WikiReadService.ReadOnlyStoreFactory?
+
+        public init(
+            makeStore: (@Sendable (URL) throws -> any WikiStore)? = nil,
+            makeReadOnlyStore: WikiReadService.ReadOnlyStoreFactory? = nil
+        ) {
+            self.makeStore = makeStore
+            self.makeReadOnlyStore = makeReadOnlyStore
+        }
+
+        public static let production = StoreOpenFactories()
+    }
+
     static func makeDefinition(
-        beforeForward: @escaping StoreEventForwarder.BeforeEmit = { _ in }
+        beforeForward: @escaping StoreEventForwarder.BeforeEmit = { _ in },
+        openFactories: StoreOpenFactories = .production
     ) -> PluginDefinition {
         PluginDefinition(
         id: id,
@@ -93,13 +122,20 @@ public enum StorePlugin {
             ]
         ) { activation in
             let databaseURL = URL(fileURLWithPath: config.databasePath, isDirectory: false)
-            let store: any WikiStore = try StoreBackend.current.makeStore(databaseURL: databaseURL)
+            let store: any WikiStore
+            if let makeStore = openFactories.makeStore {
+                store = try makeStore(databaseURL)
+            } else {
+                store = try StoreBackend.current.makeStore(databaseURL: databaseURL)
+            }
             // Headless daemon profile: project renderer source-type claims
             // from the authoritative machine index (WebKit-free, best-effort).
             store.registeredRendererSourceTypes = await RendererCatalogResolution.productionSourceTypes()
             let bus = WikiEventBus(wikiID: WikiID(rawValue: config.wikiID))
             store.eventBus = bus
-            let readService = WikiReadService(databaseURL: databaseURL)
+            let readService = WikiReadService(
+                databaseURL: databaseURL,
+                makeReadOnlyStore: openFactories.makeReadOnlyStore)
             let forwarder = StoreEventForwarder(
                 activation: activation,
                 beforeEmit: beforeForward)

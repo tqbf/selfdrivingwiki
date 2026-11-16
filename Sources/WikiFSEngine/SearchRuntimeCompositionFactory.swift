@@ -36,30 +36,53 @@ public struct SearchRuntimeCompositionFactory: Sendable {
     public let identity: SearchRuntimeIdentity
     public let contentSource: any TantivyContentSource
     public let changeStreamFactory: any SearchChangeStreamFactory
+    /// Open-seam harness injection (plans/daemon-only-access.md Phase 0):
+    /// when non-nil, replaces the direct `TantivyIndexer(indexDirectory:
+    /// contentSource:)` construction in the `.indexer` component.
+    public let makeIndexer: (@Sendable (SearchRuntimeIdentity, any TantivyContentSource) throws -> TantivyIndexer)?
 
     public init(
         identity: SearchRuntimeIdentity,
         contentSource: any TantivyContentSource,
-        changeStreamFactory: any SearchChangeStreamFactory
+        changeStreamFactory: any SearchChangeStreamFactory,
+        makeIndexer: (@Sendable (SearchRuntimeIdentity, any TantivyContentSource) throws -> TantivyIndexer)? = nil
     ) {
         self.identity = identity
         self.contentSource = contentSource
         self.changeStreamFactory = changeStreamFactory
+        self.makeIndexer = makeIndexer
     }
 
     public static func runtimeFactory(
         identity: SearchRuntimeIdentity,
         contentSource: any TantivyContentSource,
-        changeStreamFactory: any SearchChangeStreamFactory
+        changeStreamFactory: any SearchChangeStreamFactory,
+        makeIndexer: (@Sendable (SearchRuntimeIdentity, any TantivyContentSource) throws -> TantivyIndexer)? = nil
     ) -> SearchRuntimeFactory {
         let assembly = Self(
             identity: identity,
             contentSource: contentSource,
-            changeStreamFactory: changeStreamFactory)
+            changeStreamFactory: changeStreamFactory,
+            makeIndexer: makeIndexer)
         return SearchRuntimeFactory(
             identity: identity,
             changeStreamFactory: changeStreamFactory,
             assemble: { context in try await assembly.assemble(in: context) })
+    }
+
+    /// The 3-argument `SearchRuntimeFactory.Factory` default. Function
+    /// references cannot drop trailing default parameters, so the two
+    /// `= SearchRuntimeCompositionFactory.runtimeFactory` call sites route
+    /// through this adapter.
+    public static func defaultRuntimeFactory(
+        _ identity: SearchRuntimeIdentity,
+        _ contentSource: any TantivyContentSource,
+        _ changeStreamFactory: any SearchChangeStreamFactory
+    ) -> SearchRuntimeFactory {
+        runtimeFactory(
+            identity: identity,
+            contentSource: contentSource,
+            changeStreamFactory: changeStreamFactory)
     }
 
     public func assemble(in childContext: CordisContext) async throws -> SearchRuntimeHandle {
@@ -148,9 +171,10 @@ public struct SearchRuntimeCompositionFactory: Sendable {
                     let resolvedSource = try await activation.require(Keys.contentSource)
                     let indexer: TantivyIndexer
                     do {
-                        indexer = try TantivyIndexer(
-                            indexDirectory: resolvedIdentity.indexDirectory,
-                            contentSource: resolvedSource)
+                        indexer = try makeIndexer.map({ try $0(resolvedIdentity, resolvedSource) })
+                            ?? TantivyIndexer(
+                                indexDirectory: resolvedIdentity.indexDirectory,
+                                contentSource: resolvedSource)
                     } catch {
                         throw SearchServicesError.indexConstructionFailed(String(describing: error))
                     }

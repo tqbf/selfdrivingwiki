@@ -115,8 +115,20 @@ public actor WikiReadService {
     private var activeReadCount = 0
     private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
 
-    public init(databaseURL: URL, maxIdle: Int = 3) {
-        pool = WikiReadPool(databaseURL: databaseURL, maxIdle: maxIdle)
+    /// Constructs one read-only connection for the pool. The default opens
+    /// `GRDBWikiStore(readOnlyURL:)`. The open-seam harness injects a factory
+    /// that records the open first (plans/daemon-only-access.md Phase 0).
+    public typealias ReadOnlyStoreFactory = @Sendable (URL) throws -> GRDBWikiStore
+
+    public init(
+        databaseURL: URL,
+        maxIdle: Int = 3,
+        makeReadOnlyStore: ReadOnlyStoreFactory? = nil
+    ) {
+        pool = WikiReadPool(
+            databaseURL: databaseURL,
+            maxIdle: maxIdle,
+            makeReadOnlyStore: makeReadOnlyStore ?? { try GRDBWikiStore(readOnlyURL: $0) })
     }
 
     public func asyncRead<Result: Sendable>(
@@ -188,10 +200,16 @@ private final class WikiReadPool: @unchecked Sendable {
     private var idle: [GRDBWikiStore] = []
     private let maxIdle: Int
     private var stopped = false
+    private let makeReadOnlyStore: WikiReadService.ReadOnlyStoreFactory
 
-    init(databaseURL: URL, maxIdle: Int) {
+    init(
+        databaseURL: URL,
+        maxIdle: Int,
+        makeReadOnlyStore: @escaping WikiReadService.ReadOnlyStoreFactory
+    ) {
         self.databaseURL = databaseURL
         self.maxIdle = max(1, maxIdle)
+        self.makeReadOnlyStore = makeReadOnlyStore
     }
 
     func asyncRead<Result: Sendable>(
@@ -229,7 +247,7 @@ private final class WikiReadPool: @unchecked Sendable {
         let cached = idle.popLast()
         lock.unlock()
         if let cached { return cached }
-        return try GRDBWikiStore(readOnlyURL: databaseURL)
+        return try makeReadOnlyStore(databaseURL)
     }
 
     private func checkin(_ store: GRDBWikiStore) {
