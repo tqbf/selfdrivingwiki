@@ -5,7 +5,9 @@ import Foundation
 import Testing
 import WikiFSCore
 import WikiFSSearch
+@testable import WikiCtlCore
 @testable import WikiFSEngine
+@testable import wikid
 
 /// The daemon-only open-seam harness (plans/daemon-only-access.md Phase 0).
 ///
@@ -16,24 +18,28 @@ import WikiFSSearch
 /// factories and never reach `WikiOpenSeamRecorder.shared`, so a recorded
 /// open is by construction a CLIENT-side local storage open.
 ///
-/// P0 assertions match the plan's permitted-access column: the local path is
-/// still permitted for every seam, so the harness's job is to prove the
-/// seams are CONNECTED — a disconnected seam cannot fake a zero. Later
-/// phases tighten the expected counts to the table's columns; Phase 7 flips
-/// to zero with the daemon up and down.
-@Suite("Client local open boundary", .serialized, .timeLimit(.minutes(5)))
+/// Assertions match the plan's permitted-access column: the LOCAL-mode cases
+/// (positive control, P0 column, DEBUG-override path) prove the seams are
+/// CONNECTED — a disconnected seam cannot fake a zero — and the REMOTE-mode
+/// case pins the P3 column: the store seam records ZERO client opens while
+/// the daemon serves every read and write. Later phases tighten the waived
+/// seams; Phase 7 flips everything to zero with the daemon up and down.
+@Suite("Client local open boundary", .serialized, .timeLimit(.minutes(8)))
 struct ClientLocalOpenBoundaryTests {
     // MARK: - Harness
 
     /// Boots the production app process composition + one real per-wiki
     /// session through `AppProcessProfileOwner.bootWikiSession` — the same
     /// async session loader `WikiFSApp` wires — with every storage seam
-    /// recording into `WikiOpenSeamRecorder.shared`.
+    /// recording into `WikiOpenSeamRecorder.shared`. Pass `catalog:` for a
+    /// mode-specific catalog (the P3 remote case injects the daemon-backed
+    /// store factory).
     @MainActor
     private func bootRecordingSession(
         container: URL,
         wikiID: WikiID,
-        displayName: String
+        displayName: String,
+        catalog: PluginCatalog? = nil
     ) async throws -> (ProfileWikiSession, AppProcessProfileOwner) {
         let processDisposals = ProfileProcessDisposalRecorder()
         let owner = AppProcessProfileOwner {
@@ -56,7 +62,7 @@ struct ClientLocalOpenBoundaryTests {
             wikiID: wikiID,
             descriptor: descriptor,
             containerDirectory: container,
-            catalog: try Self.recordingAppCatalog(),
+            catalog: catalog ?? Self.recordingAppCatalog(),
             extractionProvider: ProfileBootFixture.extractionProvider(),
             searchServices: UnavailableSearchServices())
         return (session, owner)
@@ -82,9 +88,10 @@ struct ClientLocalOpenBoundaryTests {
                 changeStreamFactory: changeStreamFactory,
                 makeIndexer: recordingIndexer)
         }
-        let recordingMakeStore: @Sendable (URL) throws -> any WikiStore = { url in
-            try WikiOpenSeamRecorder.shared.recording(seam: .wikiStore, label: url.path) {
-                try StoreBackend.current.makeStore(databaseURL: url)
+        let recordingMakeStore: @Sendable (StorePlugin.StoreOpenContext) throws -> any WikiStore = { context in
+            try WikiOpenSeamRecorder.shared.recording(
+                seam: .wikiStore, label: context.databaseURL.path) {
+                try StoreBackend.current.makeStore(databaseURL: context.databaseURL)
             }
         }
         let recordingReadOnlyStore: @Sendable (URL) throws -> GRDBWikiStore = { url in
@@ -244,6 +251,179 @@ struct ClientLocalOpenBoundaryTests {
             container.appendingPathComponent("open-boundary-gamma.sqlite").path))
     }
 
+    // MARK: - P3 column: remote default records ZERO client store opens
+
+    /// The P3 tightening (plans/daemon-only-access.md, permitted-access
+    /// table, "App: wiki DB" row): with the resolved mode REMOTE, the
+    /// session's store is the daemon-backed client, the store seam records
+    /// ZERO client opens, and the app container never even gains the wiki
+    /// database file — while the daemon serves every read and write (the
+    /// fixture daemon's own prepared store observes the committed write).
+    /// The waived seams (read-only pool, queue, Tantivy writer) stay
+    /// connected and still record: the harness drives them directly,
+    /// exactly like the positive control.
+    ///
+    /// Fixture mechanics reuse the `DaemonStoreCommandExecutorTests`
+    /// harness: a REAL in-process daemon serves the store family through
+    /// the same `WikiDaemonExporter.storeOperation` selector an XPC
+    /// connection vends (`XPCStoreTransport`'s invoker seam) — no local
+    /// socket, no subprocess.
+    @Test("P3 column: remote mode records zero client store opens; the daemon serves reads and writes")
+    @MainActor
+    func remoteModeRecordsZeroClientStoreOpens() async throws {
+        let recorder = WikiOpenSeamRecorder.shared
+        recorder.reset()
+
+        // The fixture daemon over its own container; its fixture wiki id
+        // IS the session wiki id, so the injected factory's context wiki id
+        // scopes the wire operations correctly (in production app and
+        // daemon share one registry).
+        let daemonContainer = try Self.makeContainer()
+        defer { Self.removeContainer(daemonContainer) }
+        let daemon = WikiDaemon(containerDirectory: daemonContainer)
+        let fixtureData = try #require(
+            daemon.testFixtureCreateWiki(name: "Remote Boundary Fixture"))
+        let wikiID = try JSONDecoder()
+            .decode(WikiDescriptor.self, from: fixtureData).id
+        let exporter = WikiDaemonExporter(daemon: daemon)
+        let transport = XPCStoreTransport(
+            invoker: { wikiID, request, reply in
+                exporter.storeOperation(wikiID, request: request, reply: reply)
+            },
+            timeout: 20)
+
+        // The remote-mode catalog: the store factory constructs the
+        // daemon-backed client and records NOTHING — no local open exists
+        // on this path. The read-only pool keeps its recording factory
+        // (the P3 waiver row: the semantic-search leg still reads locally).
+        let remoteCatalog = try AppPluginCatalog.build(factories: AppPluginCatalogFactories(
+            base: BasePluginCatalogFactories(
+                agentProviderServices: UnavailableAgentProviderServices()),
+            makeDaemonTransport: { ProfileBootFixture.fixtureTransportServices() },
+            storeOpenFactories: StorePlugin.StoreOpenFactories(
+                makeStore: { context in
+                    RemoteWikiStore(
+                        transport: transport,
+                        wikiID: WikiID(rawValue: context.wikiID))
+                },
+                makeReadOnlyStore: { url in
+                    try WikiOpenSeamRecorder.shared.recording(
+                        seam: .wikiReadOnlyStore, label: url.path) {
+                        try GRDBWikiStore(readOnlyURL: url)
+                    }
+                }),
+            storeAccessMode: .remote))
+
+        let container = try Self.makeContainer()
+        defer { Self.removeContainer(container) }
+        let (session, owner) = try await bootRecordingSession(
+            container: container,
+            wikiID: wikiID,
+            displayName: "Remote Boundary",
+            catalog: remoteCatalog)
+        defer { Task { await owner.shutdown() } }
+
+        let databasePath = container
+            .appendingPathComponent("\(wikiID.rawValue).sqlite").path
+
+        // Session boot (bootstrap + Home seeding + format-job recovery)
+        // already exercised daemon-served reads/writes — recording nothing.
+        #expect(recorder.count(.wikiStore) == 0)
+        #expect(!FileManager.default.fileExists(atPath: databasePath))
+        // The read-only pool opens lazily: nothing drove it during boot.
+        #expect(recorder.count(.wikiReadOnlyStore) == 0)
+
+        // Warm the session exactly the way the app's asyncSessionLoader
+        // does (handshake + bootstrap composition).
+        try await RemoteStoreSessionComposition.composeIfRemote(session)
+        #expect(recorder.count(.wikiStore) == 0)
+
+        // Real entry points through the session's store: daemon-served
+        // reads and writes, still zero client opens.
+        let remoteStore = session.store.internalStore
+        let homeID = try await remoteStore.resolveTitleToID("Home")
+        #expect(homeID != nil)
+        try await remoteStore.setMetadata("boundary-remote", value: "daemon-served")
+        #expect(
+            try await remoteStore.getMetadata("boundary-remote")
+                == "daemon-served")
+        #expect(recorder.count(.wikiStore) == 0)
+
+        // The write landed on the DAEMON's side: the fixture daemon's own
+        // prepared store reads it back — the client never owned a file.
+        let daemonStore = try await daemon.domainCommandStore(wikiID: wikiID)
+        #expect(
+            try await daemonStore.getMetadata("boundary-remote")
+                == "daemon-served")
+        #expect(!FileManager.default.fileExists(atPath: databasePath))
+
+        // Waived seams stay connected and record (P3 column):
+        //
+        // Read-only pool: the semantic-search leg still reads locally.
+        // The wiki DB it reads is seeded HERE because the daemon owns the
+        // real file and this container never had one (fixture setup — a
+        // direct constructor call, not a seam open).
+        _ = try GRDBWikiStore(databaseURL: URL(fileURLWithPath: databasePath))
+        let readService = try #require(session.store.readService)
+        _ = try await readService.asyncRead { access in
+            try access.listSources()
+        }
+        #expect(recorder.count(.wikiReadOnlyStore) == 1)
+        #expect(recorder.labels(.wikiReadOnlyStore) == [databasePath])
+
+        // Queue store: the local queue database stays app-local at P3 (the
+        // P4 row removes it) — the same direct drive as the positive
+        // control proves the recording seam stays connected.
+        let queueURL = container.appendingPathComponent("queue.sqlite")
+        let queueFactory = QueueRuntimeFactory(
+            databaseURL: queueURL,
+            extractionProvider: ProfileBootFixture.extractionProvider(),
+            makeIngestionProvider: { _ in HarnessIngestionProvider() },
+            makeQueueStore: { url in
+                try WikiOpenSeamRecorder.shared.recording(
+                    seam: .queueStore,
+                    label: url.path) {
+                    try QueueStore(databaseURL: url)
+                }
+            })
+        let queueHandle = try await queueFactory.assemble()
+        #expect(recorder.labels(.queueStore).contains(queueURL.path))
+
+        // Tantivy writer: still waived at P3 (the local index assembly
+        // leaves at P5) — same direct drive as the positive control.
+        let searchContainer = try Self.makeContainer()
+        defer { Self.removeContainer(searchContainer) }
+        let identity = SearchRuntimeIdentity(
+            wikiID: wikiID,
+            containerDirectory: searchContainer)
+        let fixtureStore = try GRDBWikiStore(
+            databaseURL: URL(fileURLWithPath: ":memory:"))
+        let runtime = SearchRuntimeCompositionFactory.runtimeFactory(
+            identity: identity,
+            contentSource: StoreBackedTantivyContentSource(store: fixtureStore),
+            changeStreamFactory: BusSearchChangeStreamFactory(
+                bus: WikiEventBus(wikiID: wikiID)),
+            makeIndexer: { recordedIdentity, recordedSource in
+                try WikiOpenSeamRecorder.shared.recording(
+                    seam: .tantivyIndexerWriter,
+                    label: recordedIdentity.indexDirectory.path) {
+                    try TantivyIndexer(
+                        indexDirectory: recordedIdentity.indexDirectory,
+                        contentSource: recordedSource)
+                }
+            })
+        let registry = SearchRuntimeRegistry()
+        let lease = try await registry.assemble(runtime)
+        #expect(recorder.labels(.tantivyIndexerWriter)
+            .contains(identity.indexDirectory.path))
+        await lease.dispose()
+        _ = try await queueHandle.dispose()
+
+        // The headline column, restated: nothing on the remote path ever
+        // recorded a client-side wiki-store open.
+        #expect(recorder.count(.wikiStore) == 0)
+    }
+
     // MARK: - Failing seam (future phases)
 
     /// The harness's failing-seam contract, kept connected from day one: a
@@ -302,7 +482,18 @@ struct ClientLocalOpenBoundaryTests {
 /// closures.
 private struct SeamedOpenFailure: Error {}
 
-private let failingStoreFactory: @Sendable (URL) throws -> any WikiStore = { _ in
+/// The fixture-daemon boundary for the REMOTE-mode harness case (mirrors
+/// WikiFSAppTests' `WikiDaemonTestSupport` convenience init; that target is
+/// opt-in and invisible here).
+extension WikiDaemon {
+    fileprivate convenience init(containerDirectory: URL) {
+        self.init(
+            containerDirectory: containerDirectory,
+            testFixtureMakeStore: { try GRDBWikiStore(databaseURL: $0) })
+    }
+}
+
+private let failingStoreFactory: @Sendable (StorePlugin.StoreOpenContext) throws -> any WikiStore = { _ in
     throw SeamedOpenFailure()
 }
 

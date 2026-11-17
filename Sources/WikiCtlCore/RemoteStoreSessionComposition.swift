@@ -28,14 +28,14 @@ import WikiFSEngine
 // bootstrap keeps setting the model from local services, unchanged.
 public enum RemoteStoreSessionComposition {
 
-    /// The compile-time P2 seam switch. `false` = today's local-store
-    /// composition everywhere (Phase 2 development state, per the plan's
-    /// permitted-access table). The Phase 3 cutover replaces this constant
-    /// with the injected-store composition; until then only tests (and a
-    /// developer explicitly flipping the constant) exercise the remote
-    /// branch. NOT a response to daemon failure — a down daemon never
-    /// selects the local path.
-    public static let enabled = false
+    /// The seam switch, driven by the launch-fixed `allowLocalStore` mode
+    /// (plans/daemon-only-access.md Phase 3 item 1). `.remote` sessions
+    /// compose from the daemon's bootstrap payload + one coalesced reload
+    /// hook; `.local` (the DEBUG app override / test fixtures) keeps the
+    /// local bootstrap everywhere. Like the flag itself this is fixed at
+    /// process launch and NEVER a response to daemon failure — a down
+    /// daemon never selects the local path.
+    public static let enabled = StoreModeConfiguration.resolvedMode == .remote
 
     /// Compose a booted session for a REMOTE store, when the seam is
     /// enabled and the session's underlying store is a `RemoteWikiStore`.

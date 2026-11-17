@@ -182,17 +182,30 @@ public struct AppPluginCatalogFactories: Sendable {
     /// when non-nil, the app wiki profile mounts a recording `StorePlugin`
     /// instead of the production one. nil keeps `StorePlugin.definition`.
     public let storeOpenFactories: StorePlugin.StoreOpenFactories?
+    /// The resolved `allowLocalStore` mode for the app wiki profile
+    /// (plans/daemon-only-access.md Phase 3 item 1). The production app
+    /// passes `StoreModeConfiguration.resolvedMode` (launch-fixed, remote
+    /// by default); test fixtures default to `.local` — the unit-test tier
+    /// keeps booting local sessions where no daemon is under test.
+    ///
+    /// `.remote` REQUIRES an injected store factory:
+    /// `AppPluginCatalog.build` consults `StoreOpenFactories.satisfies(_:)`
+    /// and fails at construction time rather than letting a session boot
+    /// fall back to a local store.
+    public let storeAccessMode: StoreAccessMode
 
     public init(
         base: BasePluginCatalogFactories,
         makeDaemonTransport: @escaping RegisteredTransportProvider.Factory,
         makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.defaultRuntimeFactory,
-        storeOpenFactories: StorePlugin.StoreOpenFactories? = nil
+        storeOpenFactories: StorePlugin.StoreOpenFactories? = nil,
+        storeAccessMode: StoreAccessMode = .local
     ) {
         self.base = base
         self.makeDaemonTransport = makeDaemonTransport
         self.makeTantivyRuntime = makeTantivyRuntime
         self.storeOpenFactories = storeOpenFactories
+        self.storeAccessMode = storeAccessMode
     }
 }
 
@@ -1007,10 +1020,21 @@ public enum AppPluginCatalog {
         additionalDefinitions: [PluginDefinition] = []
     ) throws -> PluginCatalog {
         let storeDefinition: PluginDefinition
+        // The P3 cutover gate (plans/daemon-only-access.md Placement): a
+        // remote app catalog without an injected store factory fails AT
+        // BUILD TIME — the session boot must never discover the hole by
+        // falling back to a local open.
+        if factories.storeAccessMode == .remote,
+           factories.storeOpenFactories?.satisfies(.remote) != true {
+            throw StoreModeError.remoteModeRequiresInjectedStoreFactory
+        }
         if let openFactories = factories.storeOpenFactories {
-            storeDefinition = StorePlugin.definition(openFactories: openFactories)
+            storeDefinition = StorePlugin.definition(
+                mode: factories.storeAccessMode,
+                openFactories: openFactories)
         } else {
-            storeDefinition = StorePlugin.definition
+            storeDefinition = StorePlugin.definition(
+                mode: factories.storeAccessMode)
         }
         var definitions = baseDefinitions(factories.base, storeDefinition: storeDefinition)
         definitions.append(contentsOf: [

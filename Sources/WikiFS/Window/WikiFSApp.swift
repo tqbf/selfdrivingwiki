@@ -290,12 +290,46 @@ struct WikiFSApp: App {
         _fileProviderBox = State(initialValue: fileProviderBox)
         _activityTracker = State(initialValue: activityTracker)
 
+        // Store-mode cutover (plans/daemon-only-access.md Phase 3 item 1):
+        // the launch-fixed `allowLocalStore` flag resolves the composition
+        // ONCE per process. Remote (the default in every configuration):
+        // every wiki session's store is a `RemoteWikiStore` over one
+        // app-scoped XPC store transport — no local GRDBWikiStore is ever
+        // opened. Local (the DEBUG-only `WIKI_ALLOW_LOCAL_STORE` override):
+        // exactly today's composition, with StorePlugin's production local
+        // open. The mode is never a response to daemon failure.
+        let storeAccessMode = StoreModeConfiguration.resolvedMode
         let appCatalog = {
             do {
+                let storeOpenFactories: StorePlugin.StoreOpenFactories?
+                if storeAccessMode == .remote {
+                    // The store transport rides its own daemon XPC
+                    // connection (the same shape DaemonSearchServices
+                    // uses); `WikiDaemonConnection` vends a fresh proxy per
+                    // call, so one connection + one transport serve every
+                    // wiki session. The factory constructs one
+                    // `RemoteWikiStore` per booted wiki — the wiki id comes
+                    // through the injected factory context, and the daemon
+                    // owns the database file the context's URL names.
+                    let storeTransport = XPCStoreTransport(
+                        connection: try WikiDaemonConnection.connect())
+                    storeOpenFactories = StorePlugin.StoreOpenFactories
+                        .remoteStore { context in
+                            RemoteWikiStore(
+                                transport: storeTransport,
+                                wikiID: WikiID(rawValue: context.wikiID))
+                        }
+                } else {
+                    // Local store access: nil factories keep StorePlugin's
+                    // production local open (DEBUG override only).
+                    storeOpenFactories = nil
+                }
                 return try AppPluginCatalog.build(factories: AppPluginCatalogFactories(
                     base: BasePluginCatalogFactories(
                         agentProviderServices: providerServices),
-                    makeDaemonTransport: { transportOwner.services }))
+                    makeDaemonTransport: { transportOwner.services },
+                    storeOpenFactories: storeOpenFactories,
+                    storeAccessMode: storeAccessMode))
             } catch {
                 preconditionFailure("App profile catalog construction failed: \(error)")
             }
