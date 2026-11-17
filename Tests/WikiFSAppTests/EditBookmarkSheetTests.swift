@@ -6,7 +6,7 @@ import WikiFSCore
 
 @MainActor
 struct EditBookmarkSheetTests {
-    @Test func folderRenameFailureReturnsVisibleErrorInsteadOfDismiss() {
+    @Test func folderRenameFailureReturnsVisibleErrorInsteadOfDismiss() async {
         let folder = BookmarkNode(
             id: BookmarkID(rawValue: "bookmark-folder-1"),
             parentID: nil,
@@ -14,7 +14,7 @@ struct EditBookmarkSheetTests {
             content: .folder(label: "Old")
         )
 
-        let result = EditBookmarkSheet.saveAction(
+        let result = await EditBookmarkSheet.saveAction(
             node: folder,
             name: "New",
             selectedTarget: nil,
@@ -30,7 +30,7 @@ struct EditBookmarkSheetTests {
         #expect(result == .showError("Invalid bookmark row \(folder.id.rawValue): only folders can be renamed"))
     }
 
-    @Test func folderRenameSuccessDismisses() {
+    @Test func folderRenameSuccessDismisses() async {
         let folder = BookmarkNode(
             id: BookmarkID(rawValue: "bookmark-folder-1"),
             parentID: nil,
@@ -39,7 +39,7 @@ struct EditBookmarkSheetTests {
         )
         var receivedName: String?
 
-        let result = EditBookmarkSheet.saveAction(
+        let result = await EditBookmarkSheet.saveAction(
             node: folder,
             name: "  New  ",
             selectedTarget: nil,

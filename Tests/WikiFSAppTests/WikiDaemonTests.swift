@@ -98,7 +98,7 @@ struct WikiDaemonTests {
         #expect(FileManager.default.fileExists(atPath: dbURL.path))
     }
 
-    @Test func createWikiSeedsHomePage() throws {
+    @Test func createWikiSeedsHomePage() async throws {
         let dir = tempDirectory()
         let daemon = makeDaemon(dir: dir)
         let data = try #require(daemon.testFixtureCreateWiki(name: "Test"))
@@ -108,7 +108,7 @@ struct WikiDaemonTests {
         // Verify the Home page actually exists in the DB
         let dbURL = dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite")
         let store = try StoreBackend.current.makeStore(databaseURL: dbURL)
-        let pages = try store.listPages(sortBy: .newestFirst)
+        let pages = try await store.listPages(sortBy: .newestFirst)
         #expect(pages.count == 1)
         #expect(pages[0].title == "Home")
     }

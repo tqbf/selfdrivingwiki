@@ -10,9 +10,9 @@ struct WikiStoreModelBookmarkMutationTests {
             .appendingPathComponent("wikifs-bm-mutation-\(UUID().uuidString).sqlite")
     }
 
-    @Test func renameBookmarkNodePropagatesStoreFailures() throws {
+    @Test func renameBookmarkNodePropagatesStoreFailures() async throws {
         let store = try GRDBWikiStore(databaseURL: tempURL())
-        let page = try store.createPage(title: "Page")
+        let page = try await store.createPage(title: "Page")
         let reference = try store.createBookmarkNode(
             parentID: nil,
             position: 0,
@@ -21,7 +21,7 @@ struct WikiStoreModelBookmarkMutationTests {
         let model = WikiStoreModel(store: store)
 
         do {
-            try model.renameBookmarkNode(id: reference.id, to: "Renamed")
+            try await model.renameBookmarkNode(id: reference.id, to: "Renamed")
             Issue.record("Expected renameBookmarkNode to throw for a non-folder bookmark")
         } catch let WikiStoreError.invalidBookmarkRow(id, reason) {
             #expect(id == reference.id.rawValue)

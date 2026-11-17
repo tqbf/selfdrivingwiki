@@ -59,7 +59,7 @@ struct SidebarMenuIconHostedTests {
 
     // MARK: - Pages
 
-    private func makePagesFixture() throws -> PagesListViewController {
+    private func makePagesFixture() async throws -> PagesListViewController {
         _ = Self.app
         let store = try GRDBWikiStore(
             databaseURL: FileManager.default.temporaryDirectory
@@ -67,9 +67,9 @@ struct SidebarMenuIconHostedTests {
         store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         for title in ["Alpha", "Beta", "Gamma"] {
-            _ = try store.createPage(title: title)
+            _ = try await store.createPage(title: title)
         }
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let vc = PagesListViewController()
         vc.store = model
@@ -96,8 +96,8 @@ struct SidebarMenuIconHostedTests {
     }
 
     @Test("pages menu: every item renders a forced-visible image, Open cluster separated, Delete separated")
-    func pagesMenuContract() throws {
-        let vc = try makePagesFixture()
+    func pagesMenuContract() async throws {
+        let vc = try await makePagesFixture()
         vc.tableView.selectRowIndexes(IndexSet([0]), byExtendingSelection: false)
         let menu = try #require(vc.menuForRow(0))
         assertRenderableMenu(menu)
@@ -106,8 +106,8 @@ struct SidebarMenuIconHostedTests {
     }
 
     @Test("pages menu: batch selection keeps the same contract")
-    func pagesMenuBatchContract() throws {
-        let vc = try makePagesFixture()
+    func pagesMenuBatchContract() async throws {
+        let vc = try await makePagesFixture()
         vc.tableView.selectRowIndexes(IndexSet([0, 1]), byExtendingSelection: false)
         let menu = try #require(vc.menuForRow(0))
         assertRenderableMenu(menu)
@@ -116,7 +116,7 @@ struct SidebarMenuIconHostedTests {
 
     // MARK: - Sources
 
-    private func makeSourcesFixture() throws -> SourcesListViewController {
+    private func makeSourcesFixture() async throws -> SourcesListViewController {
         _ = Self.app
         let store = try GRDBWikiStore(
             databaseURL: FileManager.default.temporaryDirectory
@@ -126,7 +126,7 @@ struct SidebarMenuIconHostedTests {
         for (name, byte) in [("alpha.pdf", "a"), ("beta.pdf", "b"), ("gamma.pdf", "g")] {
             _ = try store.addSource(filename: name, data: Data(byte.utf8))
         }
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let vc = SourcesListViewController()
         vc.store = model
@@ -155,8 +155,8 @@ struct SidebarMenuIconHostedTests {
     }
 
     @Test("sources menu: every item renders a forced-visible image, Open cluster separated, Delete separated")
-    func sourcesMenuContract() throws {
-        let vc = try makeSourcesFixture()
+    func sourcesMenuContract() async throws {
+        let vc = try await makeSourcesFixture()
         vc.tableView.selectRowIndexes(IndexSet([0]), byExtendingSelection: false)
         let menu = try #require(vc.menuForRow(0))
         assertRenderableMenu(menu)
@@ -165,8 +165,8 @@ struct SidebarMenuIconHostedTests {
     }
 
     @Test("sources menu: batch selection keeps the same contract")
-    func sourcesMenuBatchContract() throws {
-        let vc = try makeSourcesFixture()
+    func sourcesMenuBatchContract() async throws {
+        let vc = try await makeSourcesFixture()
         vc.tableView.selectRowIndexes(IndexSet([0, 1]), byExtendingSelection: false)
         let menu = try #require(vc.menuForRow(0))
         assertRenderableMenu(menu)

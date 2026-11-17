@@ -60,9 +60,12 @@ struct ChangeLogDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
+        .task { cachedLogMarkdown = await store.currentLogMarkdown() }
+        .task(id: store.messageVersion) { cachedLogMarkdown = await store.currentLogMarkdown() }
     }
 
-    private var logMarkdown: String {
-        store.currentLogMarkdown()
-    }
+        // Plan P1: log markdown loads async now; cached in state via .task.
+        @State private var cachedLogMarkdown = ""
+
+        private var logMarkdown: String { cachedLogMarkdown }
 }

@@ -65,7 +65,7 @@ public final class RemoteChatSession {
 
     public var onSetChatConfigOption: (@Sendable (String, String) async -> Void)?
     public var onRequestAuthoritativeSnapshot: (@Sendable () async throws -> ChatSyncSnapshot)?
-    public var onLoadCommittedHistoryPage: (@MainActor @Sendable (ChatTranscriptCursor?) throws -> ChatTranscriptPage)?
+    public var onLoadCommittedHistoryPage: (@MainActor @Sendable (ChatTranscriptCursor?) async throws -> ChatTranscriptPage)?
 
     public private(set) var runTotalUsage: SessionUsage?
 
@@ -314,7 +314,7 @@ public final class RemoteChatSession {
                 : syncState.loadedCommittedCursor
             let page: ChatTranscriptPage
             do {
-                page = try loader(afterCursor)
+                page = try await loader(afterCursor)
             } catch {
                 DebugLog.store("RemoteChatSession.loadCommittedHistory failed for \(chatID): \(error)")
                 return
@@ -497,7 +497,7 @@ public final class RemoteChatSession {
     // MARK: - Wiring
 
     func installHistoryLoader(
-        _ loader: @escaping @MainActor @Sendable (ChatTranscriptCursor?) throws -> ChatTranscriptPage
+        _ loader: @escaping @MainActor @Sendable (ChatTranscriptCursor?) async throws -> ChatTranscriptPage
     ) {
         onLoadCommittedHistoryPage = loader
         guard let syncState,

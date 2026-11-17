@@ -55,12 +55,10 @@ struct RendererSourceTypeSessionCompositionTests {
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         let queueEngine = try! makeTestQueueEngine()
-        let provider = StubExtractionProvider()
         return SessionManager(
             containerDirectory: dir,
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
-            extractionProvider: provider,
             pdf2mdScriptPathResolver: { nil },
             testSessionFactory: { wikiID, descriptor in
                 try ProfileWikiSession(
@@ -68,8 +66,7 @@ struct RendererSourceTypeSessionCompositionTests {
                     descriptor: descriptor,
                     containerDirectory: dir,
                     extractionCoordinator: coordinator,
-                    queueEngine: queueEngine,
-                    extractionProvider: provider)
+                    queueEngine: queueEngine)
             })
     }
 }

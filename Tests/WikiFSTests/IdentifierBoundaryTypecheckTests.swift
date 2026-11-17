@@ -82,15 +82,6 @@ struct IdentifierBoundaryTypecheckTests {
             ]
         ),
         BatchFixture(
-            name: "negative-read-access-batch.swift",
-            cases: [
-                .init(label: "readAccessCannotEscape", batchFixture: "negative-read-access-batch.swift", expectedDiagnostic: "requires that 'WikiReadAccess' conform to 'Copyable'"),
-                .init(label: "readAccessCannotBeCaptured", batchFixture: "negative-read-access-batch.swift", expectedDiagnostic: "implicit conversion to 'WikiReadAccess?' is consuming"),
-                .init(label: "readAccessCannotWrite", batchFixture: "negative-read-access-batch.swift", expectedDiagnostic: "value of type 'WikiReadAccess' has no member 'createPage'"),
-                .init(label: "readAccessCannotExposeStore", batchFixture: "negative-read-access-batch.swift", expectedDiagnostic: "'store' is inaccessible due to 'private' protection level"),
-            ]
-        ),
-        BatchFixture(
             name: "negative-cordis-facades.swift",
             cases: [
                 .init(label: "profileMemberIsUnavailable", batchFixture: "negative-cordis-facades.swift", expectedDiagnostic: "value of type 'AppServices' has no member 'profile'"),
@@ -128,10 +119,6 @@ struct IdentifierBoundaryTypecheckTests {
         "requireIsUnavailable",
         "findIsUnavailable",
         "supplyIsUnavailable",
-        "readAccessCannotBeCaptured",
-        "readAccessCannotEscape",
-        "readAccessCannotExposeStore",
-        "readAccessCannotWrite",
         "routeIsRejectedByKindAPI",
         "sourceIDIsRejectedByChatAPI",
         "sourceIDIsRejectedByPageAPI",

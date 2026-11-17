@@ -29,8 +29,21 @@ struct DaemonStatusBanner: View {
 
     var body: some View {
         Group {
-            if let healthMonitor, healthMonitor.state == .disconnected, !hasDismissedDisconnect {
-                disconnectedBanner
+            if let healthMonitor {
+                switch healthMonitor.state {
+                case .disconnected:
+                    if !hasDismissedDisconnect {
+                        disconnectedBanner
+                    }
+                case .reconnecting:
+                    // Store-call degradation and genuine transport
+                    // interruptions both land here (Phase 3 item 4). Not
+                    // dismissible — it stands itself down when a call or a
+                    // transport event proves the daemon reachable again.
+                    reconnectingBanner
+                case .connected:
+                    EmptyView()
+                }
             }
         }
         .animation(.easeInOut(duration: 0.2), value: healthMonitor?.state)
@@ -40,6 +53,22 @@ struct DaemonStatusBanner: View {
         .onAppear {
             previousState = healthMonitor?.state
         }
+    }
+
+    private var reconnectingBanner: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .foregroundStyle(.white)
+            Text("Reconnecting to the wiki daemon…")
+                .font(.callout)
+                .foregroundStyle(.white)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.9))
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private var disconnectedBanner: some View {

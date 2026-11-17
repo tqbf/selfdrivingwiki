@@ -16,19 +16,19 @@ struct PageUpsertTests {
 
     // MARK: - create vs update
 
-    @Test func upsertByTitleCreatesWhenAbsent() throws {
+    @Test func upsertByTitleCreatesWhenAbsent() async throws {
         let store = try tempStore()
-        let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Fresh", body: "hi")
+        let outcome = try await PageUpsert.upsert(in: store, id: nil, title: "Fresh", body: "hi")
         #expect(outcome.didCreate)
         let page = try store.getPage(id: outcome.id)
         #expect(page.title == "Fresh")
         #expect(page.bodyMarkdown == "hi")
     }
 
-    @Test func upsertByTitleUpdatesExisting() throws {
+    @Test func upsertByTitleUpdatesExisting() async throws {
         let store = try tempStore()
-        let created = try PageUpsert.upsert(in: store, id: nil, title: "Notes", body: "v1")
-        let updated = try PageUpsert.upsert(in: store, id: nil, title: "Notes", body: "v2")
+        let created = try await PageUpsert.upsert(in: store, id: nil, title: "Notes", body: "v1")
+        let updated = try await PageUpsert.upsert(in: store, id: nil, title: "Notes", body: "v2")
         #expect(!updated.didCreate)
         // Same page resolved by title, not a second one.
         #expect(updated.id == created.id)
@@ -36,10 +36,10 @@ struct PageUpsertTests {
         #expect(try store.listPages(sortBy: .lastUpdated).count == 1)
     }
 
-    @Test func upsertByExplicitIDUpdatesThatPage() throws {
+    @Test func upsertByExplicitIDUpdatesThatPage() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Original")
-        let outcome = try PageUpsert.upsert(in: store, id: page.id, title: "Renamed", body: "body")
+        let page = try await store.createPage(title: "Original")
+        let outcome = try await PageUpsert.upsert(in: store, id: page.id, title: "Renamed", body: "body")
         #expect(!outcome.didCreate)
         #expect(outcome.id == page.id)
         let reloaded = try store.getPage(id: page.id)
@@ -47,25 +47,25 @@ struct PageUpsertTests {
         #expect(reloaded.bodyMarkdown == "body")
     }
 
-    @Test func upsertByTitleResolvesDuplicateToLowestULID() throws {
+    @Test func upsertByTitleResolvesDuplicateToLowestULID() async throws {
         let store = try tempStore()
-        let a = try store.createPage(title: "Dup")
-        let b = try store.createPage(title: "Dup")
+        let a = try await store.createPage(title: "Dup")
+        let b = try await store.createPage(title: "Dup")
         // ULIDs are monotonic within a millisecond, but `a` and `b` may span
         // a millisecond boundary depending on scheduling, so pick the actually-
         // lowest ULID rather than assuming `a` < `b`.
         let lowest = a.id.rawValue < b.id.rawValue ? a.id : b.id
-        let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Dup", body: "edited")
+        let outcome = try await PageUpsert.upsert(in: store, id: nil, title: "Dup", body: "edited")
         #expect(outcome.id == lowest)
         #expect(try store.getPage(id: lowest).bodyMarkdown == "edited")
     }
 
     // MARK: - link reparse (the load-bearing reason it's shared)
 
-    @Test func upsertReparsesLinksFromBody() throws {
+    @Test func upsertReparsesLinksFromBody() async throws {
         let store = try tempStore()
-        _ = try store.createPage(title: "Target")
-        let outcome = try PageUpsert.upsert(
+        _ = try await store.createPage(title: "Target")
+        let outcome = try await PageUpsert.upsert(
             in: store,
             id: nil,
             title: "Home",
@@ -78,35 +78,35 @@ struct PageUpsertTests {
         #expect(links.first?.linkText == "Target")
     }
 
-    @Test func upsertReplacesLinksNotAppends() throws {
+    @Test func upsertReplacesLinksNotAppends() async throws {
         let store = try tempStore()
-        _ = try store.createPage(title: "A")
-        _ = try store.createPage(title: "B")
-        let outcome = try PageUpsert.upsert(in: store, id: nil, title: "Src", body: "[[A]]")
+        _ = try await store.createPage(title: "A")
+        _ = try await store.createPage(title: "B")
+        let outcome = try await PageUpsert.upsert(in: store, id: nil, title: "Src", body: "[[A]]")
         #expect(try store.listAllLinks().count == 1)
 
         // A second upsert with a different link set replaces, not appends.
-        _ = try PageUpsert.upsert(in: store, id: outcome.id, title: "Src", body: "[[B]]")
+        _ = try await PageUpsert.upsert(in: store, id: outcome.id, title: "Src", body: "[[B]]")
         let links = try store.listAllLinks()
         #expect(links.count == 1)
         #expect(links.first?.linkText == "B")
     }
 
     @MainActor
-    @Test func upsertMatchesInAppModelLinkGraph() throws {
+    @Test func upsertMatchesInAppModelLinkGraph() async throws {
         // The doc's core promise: a CLI-style upsert and an in-app save leave the
         // SAME page_links rows. Drive one wiki via PageUpsert directly and an
         // identical-content one via the model, then compare the link graphs.
         let cli = try tempStore()
-        _ = try cli.createPage(title: "X")
-        let cliOutcome = try PageUpsert.upsert(in: cli, id: nil, title: "P", body: "[[X]] [[X]]")
+        _ = try await cli.createPage(title: "X")
+        let cliOutcome = try await PageUpsert.upsert(in: cli, id: nil, title: "P", body: "[[X]] [[X]]")
 
         let appStore = try tempStore()
-        _ = try appStore.createPage(title: "X")
+        _ = try await appStore.createPage(title: "X")
         let model = WikiStoreModel(store: appStore)
-        model.newPage(title: "P")
+        await model.newPage(title: "P")
         model.draftBody = "[[X]] [[X]]"
-        model.save()
+        await model.save()
 
         let cliLinks = try cli.listAllLinks().map(\.linkText)
         let appLinks = try appStore.listAllLinks().map(\.linkText)

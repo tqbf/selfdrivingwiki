@@ -41,8 +41,7 @@ struct ProfileWikiSessionTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
         #expect(session.wikiID == descriptor.id)
         #expect(session.store.eventBus != nil)
@@ -65,15 +64,13 @@ struct ProfileWikiSessionTests {
             descriptor: registryA.wikis.first!,
             containerDirectory: dirA,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
         let sessionB = try! ProfileWikiSession(
             testFixtureWikiID: registryB.wikis.first!.id,
             descriptor: registryB.wikis.first!,
             containerDirectory: dirB,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
         // Two sessions have distinct AgentLauncher instances.
         #expect(sessionA.agentLauncher !== sessionB.agentLauncher)
@@ -101,15 +98,13 @@ struct ProfileWikiSessionTests {
             descriptor: registryA.wikis.first!,
             containerDirectory: dirA,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
         let sessionB = try! ProfileWikiSession(
             testFixtureWikiID: registryB.wikis.first!.id,
             descriptor: registryB.wikis.first!,
             containerDirectory: dirB,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
         // Acquire a slot on session A's gate.
         let acquiredA = await sessionA.generationGate.acquire(.ingest)
@@ -124,7 +119,7 @@ struct ProfileWikiSessionTests {
 
     // MARK: - Vacuum state
 
-    @Test func testVacuumPreviewSetsReportAndApplyClearsIt() {
+    @Test func testVacuumPreviewSetsReportAndApplyClearsIt() async {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let coordinator = ExtractionCoordinator(
@@ -135,21 +130,20 @@ struct ProfileWikiSessionTests {
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
-        session.previewVacuumAll()
+        await session.previewVacuumAll()
         let report = session.pendingVacuumAll
         #expect(report != nil)
         #expect(report?.blobs.orphanCount == 0)
         #expect(report?.activities.orphanCount == 0)
         #expect(report?.isEmpty == true)
 
-        session.applyVacuumAll()
+        await session.applyVacuumAll()
         #expect(session.pendingVacuumAll == nil)
     }
 
-    @Test func testBlobVacuumPreviewSetsReportAndApplyClearsIt() {
+    @Test func testBlobVacuumPreviewSetsReportAndApplyClearsIt() async {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let coordinator = ExtractionCoordinator(
@@ -160,17 +154,16 @@ struct ProfileWikiSessionTests {
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
-        session.previewBlobVacuum()
+        await session.previewBlobVacuum()
         let report = session.pendingBlobVacuum
         #expect(report != nil)
         #expect(report?.orphanCount == 0)
         #expect(report?.bytesReclaimed == 0)
         #expect(report?.applied == false)
 
-        session.applyBlobVacuum()
+        await session.applyBlobVacuum()
         #expect(session.pendingBlobVacuum == nil)
     }
 
@@ -187,8 +180,7 @@ struct ProfileWikiSessionTests {
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
         // No app bundle → no MiniLM model → upgradeSearchIndex is a safe no-op.
         await session.upgradeSearchIndex()
@@ -218,7 +210,6 @@ struct ProfileWikiSessionTests {
                 containerDirectory: dir,
                 extractionCoordinator: coordinator,
                 queueEngine: try! makeTestQueueEngine(),
-                extractionProvider: StubExtractionProvider(),
                 makeStore: { _ in throw StoreOpenFailure() })
         }
     }

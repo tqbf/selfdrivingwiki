@@ -241,10 +241,10 @@ public struct OfflineRecheckRunner: Sendable {
         recordedResults: EvaluationResultsFile,
         recordedResultsPath: String,
         artifactDatabaseURL: URL,
-        openStore: (URL) throws -> any WikiStore = { url in
+        openStore: (URL) async throws -> any WikiStore = { url in
             try StoreBackend.current.makeReadOnlyStore(readOnlyURL: url)
         }
-    ) throws -> OfflineRecheckRecord {
+    ) async throws -> OfflineRecheckRecord {
         // 1. The recorded file must be a live run.
         guard recordedResults.runKind == .live else {
             throw OfflineRecheckError.recordedRunNotLive(runKind: recordedResults.runKind.rawValue)
@@ -304,8 +304,8 @@ public struct OfflineRecheckRunner: Sendable {
         //    filenames (stems), the same derivation the live runner used at
         //    import time. Every fixture stem must resolve to exactly one
         //    observed source; anything else refuses.
-        let store = try openStore(artifactDatabaseURL)
-        let summaries = try store.listSources()
+        let store = try await openStore(artifactDatabaseURL)
+        let summaries = try await store.listSources()
         var sourcesByStem: [String: [SourceID]] = [:]
         for summary in summaries {
             let stem = (summary.filename as NSString).deletingPathExtension
@@ -328,7 +328,7 @@ public struct OfflineRecheckRunner: Sendable {
         }
 
         // 6. Capture the final state and re-evaluate.
-        let after = try WikiObservationRecorder().capture(
+        let after = try await WikiObservationRecorder().capture(
             from: store, fixtureKeysBySourceID: fixtureKeysBySourceID)
         let evaluator = StructuralEvaluator()
         var outcomes: [RecheckCheckOutcome] = []

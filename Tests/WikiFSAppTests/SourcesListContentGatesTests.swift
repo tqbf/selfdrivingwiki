@@ -101,7 +101,7 @@ import WikiFSTypes
     @Test("PDF — canExtract is true (head == nil)")
     func pdfOffersExtract() {
         #expect(SourcesListContentGates.canExtract(
-            source: pdfSource(), processedMarkdownHead: nil))
+            source: pdfSource(), hasProcessedMarkdown: false))
     }
 
     @Test("HTML — canExtract is true (the latent drift fix)")
@@ -110,20 +110,20 @@ import WikiFSTypes
         // POST-PR2: registry routes text/html → .html → hasFileExtractionBackend
         // == true → Extract menu shown.
         #expect(SourcesListContentGates.canExtract(
-            source: htmlSource(), processedMarkdownHead: nil))
+            source: htmlSource(), hasProcessedMarkdown: false))
     }
 
     @Test("XHTML — canExtract is true")
     func xhtmlOffersExtract() {
         #expect(SourcesListContentGates.canExtract(
-            source: xhtmlSource(), processedMarkdownHead: nil))
+            source: xhtmlSource(), hasProcessedMarkdown: false))
     }
 
     @Test("HTML via ext fallback (nil mime + .html ext) — canExtract is true")
     func htmlExtFallbackOffersExtract() {
         let s = source(filename: "page.html", mime: nil, ext: "html")
         #expect(SourcesListContentGates.canExtract(
-            source: s, processedMarkdownHead: nil))
+            source: s, hasProcessedMarkdown: false))
     }
 
     // MARK: - Head suppression (mirrors detail-view needsExtraction shape)
@@ -132,13 +132,13 @@ import WikiFSTypes
     func pdfWithHeadHidden() {
         // Even an extracted-head placeholder (any non-nil) suppresses.
         #expect(!SourcesListContentGates.canExtract(
-            source: pdfSource(), processedMarkdownHead: stubHead()))
+            source: pdfSource(), hasProcessedMarkdown: true))
     }
 
     @Test("HTML with a processed-markdown head — canExtract is false")
     func htmlWithHeadHidden() {
         #expect(!SourcesListContentGates.canExtract(
-            source: htmlSource(), processedMarkdownHead: stubHead()))
+            source: htmlSource(), hasProcessedMarkdown: true))
     }
 
     // MARK: - Non-extractable kinds (the bug class + native — never offer Extract)
@@ -146,37 +146,37 @@ import WikiFSTypes
     @Test("Markdown — canExtract is false (already the content)")
     func markdownHidden() {
         #expect(!SourcesListContentGates.canExtract(
-            source: markdownSource(), processedMarkdownHead: nil))
+            source: markdownSource(), hasProcessedMarkdown: false))
     }
 
     @Test("PNG — canExtract is false (the bug class)")
     func pngHidden() {
         #expect(!SourcesListContentGates.canExtract(
-            source: pngSource(), processedMarkdownHead: nil))
+            source: pngSource(), hasProcessedMarkdown: false))
     }
 
     @Test("application/xml — canExtract is false (.binary)")
     func applicationXmlHidden() {
         #expect(!SourcesListContentGates.canExtract(
-            source: xmlSource(), processedMarkdownHead: nil))
+            source: xmlSource(), hasProcessedMarkdown: false))
     }
 
     @Test("text/xml — canExtract is false (§11-C3 XML exclusion)")
     func textXmlHidden() {
         #expect(!SourcesListContentGates.canExtract(
-            source: textXmlSource(), processedMarkdownHead: nil))
+            source: textXmlSource(), hasProcessedMarkdown: false))
     }
 
     @Test("Plain text — canExtract is false (nothing to extract)")
     func plainTextHidden() {
         #expect(!SourcesListContentGates.canExtract(
-            source: plainTextSource(), processedMarkdownHead: nil))
+            source: plainTextSource(), hasProcessedMarkdown: false))
     }
 
     @Test("Unknown / binary — canExtract is false (fail safe)")
     func unknownHidden() {
         #expect(!SourcesListContentGates.canExtract(
-            source: unknownSource(), processedMarkdownHead: nil))
+            source: unknownSource(), hasProcessedMarkdown: false))
     }
 
     // MARK: - Null-store shape (mirrors SourcesListViewController.canExtract)
@@ -193,7 +193,7 @@ import WikiFSTypes
             updatedAt: Date(timeIntervalSince1970: 0),
             version: 1)
         #expect(!SourcesListContentGates.canExtract(
-            source: minimal, processedMarkdownHead: nil))
+            source: minimal, hasProcessedMarkdown: false))
     }
 }
 #endif

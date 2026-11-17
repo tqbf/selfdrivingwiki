@@ -21,18 +21,18 @@ struct AgentCASTests {
 
     // MARK: - AC1.1: expect-head current succeeds
 
-    @Test func expectHeadCurrentSucceeds() throws {
+    @Test func expectHeadCurrentSucceeds() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "CAS Page")
+        let page = try await store.createPage(title: "CAS Page")
         // First versioned save.
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "CAS Page", body: "v1 body",
             expectedHeadVersionID: nil)
         let head = try store.pageHeadVersionID(pageID: page.id)
         #expect(head != nil)
 
         // Upsert with the correct head → should succeed (no conflict).
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: page.id, title: "CAS Page", body: .inline("v2 body"),
                      expectHead: head),
             in: store)
@@ -49,22 +49,22 @@ struct AgentCASTests {
 
     // MARK: - AC1.2: expect-head stale fails with exit code 3
 
-    @Test func expectHeadStaleFailsWithConflict() throws {
+    @Test func expectHeadStaleFailsWithConflict() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Stale Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Stale Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Stale Page", body: "v1 body",
             expectedHeadVersionID: nil)
         let oldHead = try store.pageHeadVersionID(pageID: page.id)
 
         // Simulate a concurrent write: another writer commits a new version.
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Stale Page", body: "v2 body (concurrent)",
             expectedHeadVersionID: oldHead)
 
         // Now try to upsert with the STALE head → conflict.
-        #expect(throws: PageConflictError.self) {
-            _ = try PageCommand.run(
+        await #expect(throws: PageConflictError.self) {
+            _ = try await PageCommand.run(
                 .add(id: page.id, title: "Stale Page", body: .inline("v2 body (original)"),
                          expectHead: oldHead),
                 in: store)
@@ -77,15 +77,15 @@ struct AgentCASTests {
 
     // MARK: - AC1.3: page get includes head_version_id
 
-    @Test func pageGetJsonIncludesHeadVersionID() throws {
+    @Test func pageGetJsonIncludesHeadVersionID() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "JSON Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "JSON Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "JSON Page", body: "json body",
             expectedHeadVersionID: nil)
         let head = try store.pageHeadVersionID(pageID: page.id)
 
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .get(.id(page.id), json: true), in: store)
         #expect(result.didCommit == false)
 
@@ -100,12 +100,12 @@ struct AgentCASTests {
 
     // MARK: - AC1.4: blind upsert preserves behavior
 
-    @Test func blindUpsertPreservesBehavior() throws {
+    @Test func blindUpsertPreservesBehavior() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Blind Page")
+        let page = try await store.createPage(title: "Blind Page")
 
         // No --expect-head flag → blind write (no CAS check, succeeds unconditionally).
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: page.id, title: "Blind Page", body: .inline("blind body"),
                      expectHead: nil),
             in: store)
@@ -193,11 +193,11 @@ struct AgentCASTests {
 
     /// `page add --create-only` on an absent title creates the page (the
     /// create-versus-create race's happy path).
-    @Test func createOnlyCreatesAbsentPage() throws {
+    @Test func createOnlyCreatesAbsentPage() async throws {
         let store = try tempStore()
         #expect(try store.resolveTitleToID("Fresh Page") == nil)
 
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: nil, title: "Fresh Page", body: .inline("first body"),
                  createOnly: true),
             in: store)
@@ -211,13 +211,13 @@ struct AgentCASTests {
     /// `page add --create-only` on an EXISTING title conflicts (exit 3 at the
     /// process layer via `PageCreateConflictError`) and must not overwrite the
     /// existing page's body, links, or add a version.
-    @Test func createOnlyConflictDoesNotOverwrite() throws {
+    @Test func createOnlyConflictDoesNotOverwrite() async throws {
         let store = try tempStore()
         let page = try store.createPage(title: "Existing Page", body: "original body")
         let headBefore = try store.pageHeadVersionID(pageID: page.id)
 
         do {
-            _ = try PageCommand.run(
+            _ = try await PageCommand.run(
                 .add(id: nil, title: "Existing Page", body: .inline("intruder body"),
                      createOnly: true),
                 in: store)

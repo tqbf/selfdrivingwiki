@@ -77,7 +77,7 @@ struct StoreEmissionTests {
 
     @Test func createPageEmitsPageCreated() async throws {
         let (store, _, rec) = try makeHarness()
-        let page = try store.createPage(title: "Hello")
+        let page = try await store.createPage(title: "Hello")
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .page)
         #expect(events.last?.change == .created)
@@ -86,9 +86,9 @@ struct StoreEmissionTests {
 
     @Test func updatePageEmitsPageUpdated() async throws {
         let (store, _, rec) = try makeHarness()
-        let page = try store.createPage(title: "Hello")
+        let page = try await store.createPage(title: "Hello")
         try await drain(rec)
-        try store.updatePage(id: page.id, title: "World", body: "body")
+        try await store.updatePage(id: page.id, title: "World", body: "body")
         let events = try await awaitEvents(rec)
         #expect(events.last?.kind == .page)
         #expect(events.last?.change == .updated)
@@ -110,10 +110,10 @@ struct StoreEmissionTests {
     /// `appendPageVersionLocked` actually runs. (Per AC.3 / §5.3 LOW note.)
     @Test func test_updatePage_after_versioning_refactor_emits_single_page_updated() async throws {
         let (store, _, rec) = try makeHarness()
-        let page = try store.createPage(title: "Provenance")
+        let page = try await store.createPage(title: "Provenance")
         try await drain(rec)
         let beforeUpdate = rec.count
-        try store.updatePage(
+        try await store.updatePage(
             id: page.id, title: "Provenance (edited)", body: "edited body",
             lastEditedBy: "agent-edit")
         // Exactly ONE new event for the update — no double-emit, no deadlock.
@@ -127,7 +127,7 @@ struct StoreEmissionTests {
 
     @Test func deletePageEmitsPageDeleted() async throws {
         let (store, _, rec) = try makeHarness()
-        let page = try store.createPage(title: "Hello")
+        let page = try await store.createPage(title: "Hello")
         try await drain(rec)
         try store.deletePage(id: page.id)
         let events = try await awaitEvents(rec)
@@ -138,7 +138,7 @@ struct StoreEmissionTests {
 
     @Test func replaceLinksEmitsPageUpdated() async throws {
         let (store, _, rec) = try makeHarness()
-        let page = try store.createPage(title: "Hello")
+        let page = try await store.createPage(title: "Hello")
         try await drain(rec)
         try store.replaceLinks(from: page.id, parsedLinks: [])
         let events = try await awaitEvents(rec)
@@ -152,12 +152,12 @@ struct StoreEmissionTests {
     /// `revertProcessedMarkdown` emission posture on the source side.
     @Test func restorePageEmitsPageUpdated() async throws {
         let (store, _, rec) = try makeHarness()
-        let page = try store.createPage(title: "Restore Emit")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Restore Emit")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Restore Emit", body: "v1",
             expectedHeadVersionID: nil)
         let v1 = try store.pageHeadVersionID(pageID: page.id)!
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Restore Emit", body: "v2",
             expectedHeadVersionID: v1)
         try await drain(rec, expected: 3)
@@ -173,7 +173,7 @@ struct StoreEmissionTests {
 
     @Test func pageOKFStatusEmitsOneOwningPageUpdate() async throws {
         let (store, _, recorder) = try makeHarness()
-        let page = try store.createPage(title: "OKF status")
+        let page = try await store.createPage(title: "OKF status")
         let versionID = try #require(try store.pageHeadVersionID(pageID: page.id))
         try await drain(recorder)
 
@@ -205,7 +205,7 @@ struct StoreEmissionTests {
 
     @Test func combinedVerificationAndFreshnessEmitsOnce() async throws {
         let (store, _, recorder) = try makeHarness()
-        let page = try store.createPage(title: "Combined OKF mutation")
+        let page = try await store.createPage(title: "Combined OKF mutation")
         let versionID = try #require(try store.pageHeadVersionID(pageID: page.id))
         try await drain(recorder)
 
@@ -225,7 +225,7 @@ struct StoreEmissionTests {
 
     @Test func invalidOKFEvidenceEmitsNothing() async throws {
         let (store, _, recorder) = try makeHarness()
-        let page = try store.createPage(title: "Invalid OKF evidence")
+        let page = try await store.createPage(title: "Invalid OKF evidence")
         let versionID = try #require(try store.pageHeadVersionID(pageID: page.id))
         try await drain(recorder)
 

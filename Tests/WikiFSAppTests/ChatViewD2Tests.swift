@@ -74,7 +74,7 @@ struct ChatViewD2Tests {
 
     // MARK: - (a) Source-of-truth rule + flip timing
 
-    @Test func persistedChatResolvesByIDWhenSummaryCacheIsStale() throws {
+    @Test func persistedChatResolvesByIDWhenSummaryCacheIsStale() async throws {
         let (model, store) = try tempModel()
         let chat = try store.createChat(kind: .edit, title: "Created outside the model")
 
@@ -83,19 +83,19 @@ struct ChatViewD2Tests {
         // hide the row. Assert the resolution contract: the row is AVAILABLE
         // under the created ID. (Comparing the full ChatSummary value would
         // pin the store's timestamp round-trip, not the cache rule.)
-        guard case .available(let resolved) = model.resolveChat(id: chat.id) else {
-            Issue.record("resolveChat did not find the persisted chat: \(model.resolveChat(id: chat.id))")
+        guard case .available(let resolved) = await model.resolveChat(id: chat.id) else {
+            Issue.record("resolveChat did not find the persisted chat for \(chat.id)")
             return
         }
         #expect(resolved.id == chat.id)
         #expect(resolved.title == "Created outside the model")
     }
 
-    @Test func absentPersistedChatResolvesAsNotFound() throws {
+    @Test func absentPersistedChatResolvesAsNotFound() async throws {
         let (model, _) = try tempModel()
         let missingID = ChatID(rawValue: "01J" + String(repeating: "Z", count: 22))
 
-        #expect(model.resolveChat(id: missingID) == .notFound)
+        #expect(await model.resolveChat(id: missingID) == .notFound)
     }
 
     @Test func activeChatID_isNil_byDefault() {
@@ -167,10 +167,10 @@ struct ChatViewD2Tests {
 
     // MARK: - (b) retargetTab preserves UUID, changes selection
 
-    @Test func retargetTab_preservesUUID_changesSelection() throws {
+    @Test func retargetTab_preservesUUID_changesSelection() async throws {
         let (model, store) = try tempModel()
         let chat = try store.createChat(kind: .edit, title: "Chat")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.newChat)
         let askTabID = model.tabs[0].id
         #expect(model.tabs[0].selection == .newChat)
@@ -184,11 +184,11 @@ struct ChatViewD2Tests {
         #expect(model.tabs[0].selection == .chat(chatID))
     }
 
-    @Test func retargetTab_preservesTabOrder() throws {
+    @Test func retargetTab_preservesTabOrder() async throws {
         let (model, store) = try tempModel()
-        let pageA = try store.createPage(title: "A")
-        let pageB = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let pageA = try await store.createPage(title: "A")
+        let pageB = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
         model.openTab(.page(pageA.id))
         model.openTab(.newChat)
         model.openTab(.page(pageB.id))
@@ -205,7 +205,7 @@ struct ChatViewD2Tests {
         #expect(model.tabs[1].selection == .chat(chat.id))
     }
 
-    @Test func retargetTab_updatesActiveTabSelection() throws {
+    @Test func retargetTab_updatesActiveTabSelection() async throws {
         let (model, _) = try tempModel()
         model.openTab(.newChat)
         let askTabID = model.tabs[0].id
@@ -217,7 +217,7 @@ struct ChatViewD2Tests {
         #expect(model.selection == .chat(chatID))
     }
 
-    @Test func retargetTab_unknownID_isNoOp() throws {
+    @Test func retargetTab_unknownID_isNoOp() async throws {
         let (model, _) = try tempModel()
         model.openTab(.newChat)
         #expect(model.tabs.count == 1)
@@ -228,10 +228,10 @@ struct ChatViewD2Tests {
         #expect(model.tabs[0].selection == .newChat)
     }
 
-    @Test func retargetActiveTabToChat_morphsActiveTab() throws {
+    @Test func retargetActiveTabToChat_morphsActiveTab() async throws {
         let (model, store) = try tempModel()
         let chat = try store.createChat(kind: .edit, title: "Chat")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.newChat)
         let askTabID = model.tabs[0].id
 
@@ -242,7 +242,7 @@ struct ChatViewD2Tests {
         #expect(model.selection == .chat(chat.id))
     }
 
-    @Test func retargetActiveTabToChat_noActiveTab_isNoOp() throws {
+    @Test func retargetActiveTabToChat_noActiveTab_isNoOp() async throws {
         let (model, _) = try tempModel()
         #expect(model.activeTabID == nil)
         let chatID = ChatID(rawValue: "01J" + String(repeating: "C", count: 22))
@@ -252,7 +252,7 @@ struct ChatViewD2Tests {
 
     // MARK: - (c) Draft-state morph (.newChat → .chat(id))
 
-    @Test func draftMorph_askToChat_preservesTab() throws {
+    @Test func draftMorph_askToChat_preservesTab() async throws {
         let (model, _) = try tempModel()
         model.openTab(.newChat)
         let askTabID = model.tabs[0].id
@@ -268,7 +268,7 @@ struct ChatViewD2Tests {
         #expect(model.tabs[0].title == "New Chat")
     }
 
-    @Test func draftMorph_editToChat_preservesTab() throws {
+    @Test func draftMorph_editToChat_preservesTab() async throws {
         let (model, _) = try tempModel()
         model.openTab(.newChat)
         let editTabID = model.tabs[0].id
@@ -302,7 +302,7 @@ struct ChatViewD2Tests {
 
     // MARK: - Integration: persisted chat renders through ChatDetailView path
 
-    @Test func persistedChat_hasMessages_readFromStore() throws {
+    @Test func persistedChat_hasMessages_readFromStore() async throws {
         let (model, store) = try tempModel()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")
         _ = try store.appendChatMessages(chatID: chat.id, events: [
@@ -310,7 +310,7 @@ struct ChatViewD2Tests {
         ])
         model.reloadChats()
 
-        let messages = model.chatMessages(chatID: chat.id)
+        let messages = await model.chatMessages(chatID: chat.id)
         #expect(messages.count == 2)
         #expect(messages[0].event == .userText("hello"))
         #expect(messages[1].event == .assistantText("hi there"))

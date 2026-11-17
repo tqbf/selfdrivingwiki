@@ -47,7 +47,6 @@ struct SourceDetailView: View {
     let extractionCoordinator: ExtractionCoordinator
     /// Resolves reviewed HTML package adapters for this process.
     let queueEngine: any QueueEngineClient
-    let extractionProvider: any QueueExtractionProvider
     let fileProvider: FileProviderFacade
     @Bindable var store: WikiStoreModel
     /// The app composition root will supply the validated installed-renderer
@@ -100,6 +99,13 @@ struct SourceDetailView: View {
     /// Tracks the active tab ID as of the last resolved update cycle — used to
     /// distinguish tab switches from in-tab file navigation.
     @State private var lastKnownActiveTabID: UUID? = nil
+    /// The source whose editor state (`editBuffer` / `headVersion`) currently
+    /// belongs to. The flush handlers run AFTER `file.id` / `store.selection`
+    /// already changed, so `file.id` there is the INCOMING source; the flush
+    /// must target the OUTGOING one carried here. Maintained by `onAppear`,
+    /// the tail of `onChange(of: file.id)`, and the tail of `.task(id:)`
+    /// (guarded against a cancelled tail from a superseded navigation).
+    @State private var lastKnownSourceID: SourceID? = nil
     /// Set when a tab switch targets a tab that was in edit mode but whose
     /// headVersion has not yet loaded. Cleared once headVersion arrives or
     /// the user navigates to a different file.
@@ -129,6 +135,18 @@ struct SourceDetailView: View {
     /// even after the source is reprocessed (HEAD moves, v3 stays). Transient:
     /// cleared on navigation away (returns to HEAD).
     @State private var pinnedExtraction: SourceMarkdownVersion?
+    /// Extraction-alternatives snapshot for the provenance chip and the
+    /// Compare gate (`hasMultipleExtractions`). Loaded with the per-file
+    /// state and refreshed when derived content changes, so body evaluation
+    /// never queries the store synchronously.
+    @State private var extractionHistory: [SourceMarkdownVersion] = []
+    /// Producer agent per extraction version (smv.id → agent name), the
+    /// snapshot companion of `extractionHistory`.
+    @State private var extractionAgentNames: [SourceMarkdownVersion.ID: String] = [:]
+    /// Cached description of the renderer's authorized input (active content
+    /// version). `rendererPreparationKey` is evaluated per body render and
+    /// reads this snapshot instead of an async store read.
+    @State private var authorizedInputKey: String = "unavailable"
     /// Opens the Compare Extractions window (value-driven `WindowGroup`).
     @Environment(\.openWindow) private var openWindow
 
@@ -258,7 +276,10 @@ struct SourceDetailView: View {
             // The reviewed package route decides: route disabled in
             // settings → not transcribable; a missing signing helper does
             // NOT disable the route (the package falls back to RSS).
-            return store.isSourceRefreshable(for: file.id)
+            // `isRefreshable` is the loaded projection of
+            // `store.isSourceRefreshable(for:)` (async store read), so the
+            // body stays free of store queries.
+            return isRefreshable
         case .podcast:
             // Generic RSS-feed podcast: the row must carry the feed URL the
             // queue job transcribes; `uv` is the only runtime requirement.
@@ -329,13 +350,14 @@ struct SourceDetailView: View {
     /// inline reader path never emits the iframe here).
     /// Phase 6: consume a pending pinned-extraction id (if any) for the current
     /// source and load that extraction into `pinnedExtraction`. Called from
-    /// `.onAppear` so the pinned DOM is ready before the body first evaluates.
+    /// the per-file load task (`.task(id: file.id)`) so the pinned DOM is
+    /// ready shortly after the body first evaluates.
     /// Does NOT clear on nil — the `.onChange(of: pendingScrollAnchorVersion)`
     /// handler owns the clear (so a `.task(id: file.id)` re-fire can't clobber a
     /// pin consumed synchronously by `.onChange`).
-    private func consumePinnedExtraction() {
+    private func consumePinnedExtraction() async {
         if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
-            pinnedExtraction = store.processedMarkdownVersion(for: pinID)
+            pinnedExtraction = await store.processedMarkdownVersion(for: pinID)
         }
     }
 
@@ -399,8 +421,9 @@ struct SourceDetailView: View {
 
     /// `true` when this source has ≥2 extraction alternatives — the gate for the
     /// "Compare Extractions…" button (compare is meaningless with one).
+    /// Reads the loaded extraction snapshot, not the store (async reads).
     private var hasMultipleExtractions: Bool {
-        store.processedMarkdownHistory(for: file.id).count >= 2
+        extractionHistory.count >= 2
     }
 
     private var isMarkdownEditable: Bool {
@@ -506,14 +529,10 @@ struct SourceDetailView: View {
             Text(message)
         }
         .onAppear {
-            refreshSourceBytesSnapshot()
-            headVersion = store.processedMarkdownHead(for: file)
-            origin = store.sourceOrigin(for: file.id)
-            editHistory = store.sourceEditHistory(for: file.id)
-            isRefreshable = store.isSourceRefreshable(for: file.id)
+            // Per-file loads run in `.task(id: file.id)` (the store reads are
+            // async now); onAppear keeps only the synchronous registrations.
             lastKnownActiveTabID = store.activeTabID
-            resolveRendererPresentation()
-            consumePinnedExtraction()
+            lastKnownSourceID = file.id
             updateRightSidebarRegistration()
         }
         .onChange(of: file.id) {
@@ -523,7 +542,23 @@ struct SourceDetailView: View {
             // otherwise leaks A's "Extracting…" flag onto B's header. The header
             // spinner is additionally driven off the per-file `isThisFileExtracting`
             // launcher flag below, so it can never survive a navigation.
-            flushEditIfDirty()
+            // H1: flush the OUTGOING edit against the OUTGOING source. This
+            // handler runs AFTER `file.id` changed, so `file.id` here is the
+            // source the user navigated TO — `lastKnownSourceID` carries the
+            // source the editor state belonged to. Capture synchronously,
+            // before any state reset.
+            let outgoing = lastKnownSourceID
+            let buffer = editBuffer
+            let head = headVersion
+            if let outgoing, !buffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Task { await flushEditIfDirty(sourceID: outgoing, buffer: buffer, head: head) }
+                // Single-flush guard: source→source navigation fires BOTH this
+                // handler and `onChange(of: store.selection)`; clearing the
+                // buffer makes the second capture empty so `flushEditIfDirty`
+                // skips it (the role the old synchronous `isEditing = false`
+                // guard played).
+                editBuffer = ""
+            }
             isEditing = false
             isExtracting = false
             htmlExtractionError = nil
@@ -542,17 +577,31 @@ struct SourceDetailView: View {
             // Cancel any pending edit-mode restoration so it doesn't apply to
             // the new file when its headVersion loads.
             shouldRestoreEditing = false
+            // H1: the editor state now belongs to the incoming source — update
+            // the tracker at the END of the handler, after the flush above
+            // captured the outgoing id.
+            lastKnownSourceID = file.id
         }
         .task(id: file.id) {
-            rendererSessionPreparation.cancel()
-            refreshSourceBytesSnapshot()
-            headVersion = store.processedMarkdownHead(for: file)
-            origin = store.sourceOrigin(for: file.id)
-            editHistory = store.sourceEditHistory(for: file.id)
-            isRefreshable = store.isSourceRefreshable(for: file.id)
+            await rendererSessionPreparation.cancel()
+            await refreshSourceBytesSnapshot()
+            headVersion = await store.processedMarkdownHead(for: file)
+            origin = await store.sourceOrigin(for: file.id)
+            editHistory = await store.sourceEditHistory(for: file.id)
+            isRefreshable = await store.isSourceRefreshable(for: file.id)
             await loadActiveExtractorRegistrations()
-            resolveRendererPresentation()
+            extractionHistory = await store.processedMarkdownHistory(for: file.id)
+            extractionAgentNames = await store.processedMarkdownAgentNames(for: file.id)
+            await refreshAuthorizedInputKey()
+            await consumePinnedExtraction()
+            await resolveRendererPresentation()
             updateRightSidebarRegistration()
+            // H1: maintain the outgoing-identity tracker. Only the CURRENT run
+            // of this task owns it — a tail from a superseded (cancelled)
+            // navigation must not clobber the newer run's id.
+            if !Task.isCancelled {
+                lastKnownSourceID = file.id
+            }
         }
         .task(id: MetadataHydrationKey.source(file.id, store.messageVersion)) {
             await hydrateMetadata(sourceID: file.id)
@@ -578,15 +627,42 @@ struct SourceDetailView: View {
         // `pinnedExtraction` so the rendered DOM contains the quote.
         .onChange(of: store.pendingScrollAnchorVersion) {
             if let pinID = store.consumePendingPinnedExtraction(for: store.selection) {
-                pinnedExtraction = store.processedMarkdownVersion(for: pinID)
+                Task { pinnedExtraction = await store.processedMarkdownVersion(for: pinID) }
             } else {
                 pinnedExtraction = nil
             }
         }
         .onChange(of: store.selection) {
-            flushEditIfDirty()
+            // H1: flush against the OUTGOING source (`lastKnownSourceID`) —
+            // this handler also runs after the state change committed, and
+            // for a source→source switch `file.id` is already the incoming
+            // source. See the file.id handler above; the buffer clear in the
+            // flush branch is the single-flush guard for a navigation that
+            // fires BOTH handlers.
+            let outgoing = lastKnownSourceID
+            let buffer = editBuffer
+            let head = headVersion
+            if let outgoing, !buffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Task { await flushEditIfDirty(sourceID: outgoing, buffer: buffer, head: head) }
+                editBuffer = ""
+            }
             isEditing = false
             updateRightSidebarRegistration()
+        }
+        .onDisappear {
+            // H1: dismount case — a selection change to a NON-source
+            // dismantles this view without `file.id` changing, so the
+            // onChange handlers above may not both fire. Same capture-and-
+            // Task pattern; the buffer clear keeps this a single flush even
+            // when an onChange handler already consumed the buffer (handler
+            // order within the dismantling update is not guaranteed).
+            let outgoing = lastKnownSourceID
+            let buffer = editBuffer
+            let head = headVersion
+            if let outgoing, !buffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Task { await flushEditIfDirty(sourceID: outgoing, buffer: buffer, head: head) }
+                editBuffer = ""
+            }
         }
         // Tab availability and outline applicability both feed `outlinePayload`
         // (its empty-content gate is the same `showsSourceOutlineTab`
@@ -615,9 +691,13 @@ struct SourceDetailView: View {
         // window, both update without relying on the initiating view's own
         // post-completion refresh.
         .onChange(of: store.sourcesVersion) { _, _ in
-            if !isEditing {
-                headVersion = store.processedMarkdownHead(for: file)
-                refreshRendererPresentation()
+            guard !isEditing else { return }
+            Task {
+                headVersion = await store.processedMarkdownHead(for: file)
+                extractionHistory = await store.processedMarkdownHistory(for: file.id)
+                extractionAgentNames = await store.processedMarkdownAgentNames(for: file.id)
+                await refreshAuthorizedInputKey()
+                await refreshRendererPresentation()
             }
             // headVersion feeds `outlinePayload`; a real content change
             // re-registers through the payload observer.
@@ -631,10 +711,15 @@ struct SourceDetailView: View {
         // instead of waiting for a close/reopen to re-run the load task.
         .onChange(of: tracker.extractingSourceIDs.contains(file.id)) { wasExtracting, isExtractingNow in
             guard wasExtracting, !isExtractingNow, !isEditing else { return }
-            if let head = store.processedMarkdownHead(for: file),
-               head.id != headVersion?.id {
-                headVersion = head
-                refreshRendererPresentation()
+            Task {
+                if let head = await store.processedMarkdownHead(for: file),
+                   head.id != headVersion?.id {
+                    headVersion = head
+                    extractionHistory = await store.processedMarkdownHistory(for: file.id)
+                    extractionAgentNames = await store.processedMarkdownAgentNames(for: file.id)
+                    await refreshAuthorizedInputKey()
+                    await refreshRendererPresentation()
+                }
             }
         }
         .background { findShortcutButton }
@@ -701,7 +786,9 @@ struct SourceDetailView: View {
                 titleLineLimit: 2,
                 isTitleDisabled: isEditLockedExternally,
                 isExpanded: $isHeaderExpanded,
-                onTitleCommit: { store.renameSource(id: file.id, to: $0) }
+                onTitleCommit: { newTitle in
+                    Task { await store.renameSource(id: file.id, to: newTitle) }
+                }
             ) {
                 VStack(alignment: .leading, spacing: PageEditorMetrics.sectionSpacing) {
                     HStack(spacing: 8) {
@@ -819,7 +906,7 @@ struct SourceDetailView: View {
                 HStack(spacing: 10) {
                     Button("Save Changes", systemImage: "checkmark.circle") {
                         DebugLog.tabs("SourceDetailView: Save Changes tapped")
-                        commitEdit()
+                        Task { await commitEdit() }
                     }
                     .keyboardShortcut("s", modifiers: .command)
                     .disabled(editBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1030,32 +1117,62 @@ struct SourceDetailView: View {
     }
 
 
-    // MARK: - Refresh (Phase 3b)
+    // MARK: - Refresh (Phase 3b → P4.3)
 
-    /// Re-fetch the source via its provider, appending a new version. The
-    /// materialization (network fetch) runs off-main inside the service; the
-    /// store write + `reloadSources` happen on-main inside `refreshSource`.
-    /// On success, reloads the head markdown so the reader updates.
-    /// Podcast and YouTube sources are queue-routed: the typed
-    /// `.transcriptQueueRequired` error from the refresh service triggers the
-    /// same durable extraction enqueue the Transcribe action uses.
+    /// Refresh routing, client-side decision + daemon-side execution. The
+    /// podcast arms enqueue the durable transcript job (unchanged); import-only
+    /// providers surface notRefreshable; the website arm enqueues the daemon
+    /// refresh job — the daemon re-fetches the recorded URL and appends the
+    /// content version daemon-side (the store event arrives over the sink).
+    /// A failed refresh item surfaces the daemon's typed message
+    /// (missing plan, snapshot-with-images guard).
     private func runRefresh() async {
         isRefreshing = true
         refreshError = nil
         defer { isRefreshing = false }
-        do {
-            _ = try await store.refreshSource(file.id)
-            headVersion = store.processedMarkdownHead(for: file)
-        } catch SourceRefreshService.RefreshError.notRefreshable(let agent) {
-            refreshError = "This \(agent) source can't be refreshed."
-        } catch SourceRefreshService.RefreshError.snapshotWithImages {
-            refreshError = "This snapshot source includes images; re-snapshotting on refresh is coming soon."
-        } catch SourceRefreshService.RefreshError.transcriptQueueRequired {
+        guard let origin else {
+            refreshError = "This source can't be refreshed."
+            return
+        }
+        switch origin.provider {
+        case .applePodcast, .podcast:
+            // Transcript sources run through the durable extraction enqueue
+            // (the extractor-package routes) — the same job the Transcribe
+            // action uses.
             await runTranscription()
-            if let head = store.processedMarkdownHead(for: file) {
+            if let head = await store.processedMarkdownHead(for: file) {
                 headVersion = head
             }
+        case .website:
+            await runRefreshEnqueue()
+        case .youtube, .localFile, .zotero, .markdownFolder, .vimeo,
+             .spotify, .soundcloud, .remoteMedia, .legacyImport, nil:
+            refreshError = "This \(origin.agentName) source can't be refreshed."
+        }
+    }
+
+    /// The website-arm enqueue: one durable `.refreshSource` item, completion
+    /// wait, and post-success version refresh. A failed item surfaces the
+    /// daemon's typed message via `refreshError`.
+    private func runRefreshEnqueue() async {
+        do {
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
+                payload: QueueItemPayload(
+                    sourceIDs: [file.id],
+                    workloadIntent: .refreshSource))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = try await queueEngine.waitForCompletion(of: itemID)
+            switch result {
+            case .success:
+                headVersion = await store.processedMarkdownHead(for: file)
+            case .failure(let error):
+                refreshError = (error as? LocalizedError)?.errorDescription
+                    ?? "Refresh failed: \(error.localizedDescription)"
+            }
         } catch {
+            // Enqueue/transport error — tracker not updated (no queue event).
+            DebugLog.extraction("SourceDetailView: refresh enqueue failed (\(file.id.rawValue)): \(error)")
             refreshError = "Refresh failed: \(error.localizedDescription)"
         }
     }
@@ -1247,53 +1364,32 @@ struct SourceDetailView: View {
 
     private func hydrateMetadata(sourceID: SourceID) async {
         await MetadataHydrator.hydrate(subject: .source(sourceID), operation: {
-            if MetadataHydrationReadPath.resolve(readServiceAvailable: store.readService != nil) == .readService,
-               let readService = store.readService {
-                return try await readService.asyncRead { database in
-                    try Self.sourceMetadataModel(sourceID: sourceID, store: database)
-                }
-            } else {
-                return try Self.sourceMetadataModel(sourceID: sourceID, store: store.internalStore)
-            }
+            // P5: metadata hydrates through the session's store (the daemon
+            // executes each read over the wire; the local read-only pool is
+            // gone).
+            return try await Self.sourceMetadataModel(sourceID: sourceID, store: store.internalStore)
         }, publish: { state in
             metadataState = state
             updateRightSidebarRegistration()
         })
     }
 
-    nonisolated private static func sourceMetadataModel(
-        sourceID: SourceID,
-        store: borrowing WikiReadAccess
-    ) throws -> MetadataPanelModel {
-        guard let source = try store.listSources().first(where: { $0.id == sourceID }) else {
+    nonisolated private static func sourceMetadataModel(sourceID: SourceID, store: WikiStore) async throws -> MetadataPanelModel {
+        guard let source = try await store.listSources().first(where: { $0.id == sourceID }) else {
             throw MetadataProjectionError.missingSource(sourceID)
         }
-        let history = try store.processedMarkdownHistory(sourceID: sourceID)
-        let markdown = try store.processedMarkdownHead(sourceID: sourceID)
-        let okfMetadata = try markdown.flatMap {
-            try store.sourceMarkdownOKFMetadata(versionID: $0.id, includeCorrected: false)?.metadata
-        } ?? OKFConceptMetadata()
+        let history = try await store.processedMarkdownHistory(sourceID: sourceID)
+        let markdown = try await store.processedMarkdownHead(sourceID: sourceID)
+        var okfMetadata = OKFConceptMetadata()
+        if let unwrappedMarkdown = markdown {
+            okfMetadata = (try await store.sourceMarkdownOKFMetadata(
+                versionID: unwrappedMarkdown.id, includeCorrected: false))?.metadata
+                ?? OKFConceptMetadata()
+        }
         return SourceMetadataProjection.make(input: .init(
             source: source,
             markdown: markdown,
-            extraction: try store.activeExtractionProvenance(sourceID: sourceID),
-            alternativeCount: history.count,
-            okfMetadata: okfMetadata))
-    }
-
-    nonisolated private static func sourceMetadataModel(sourceID: SourceID, store: WikiStore) throws -> MetadataPanelModel {
-        guard let source = try store.listSources().first(where: { $0.id == sourceID }) else {
-            throw MetadataProjectionError.missingSource(sourceID)
-        }
-        let history = try store.processedMarkdownHistory(sourceID: sourceID)
-        let markdown = try store.processedMarkdownHead(sourceID: sourceID)
-        let okfMetadata = try markdown.flatMap {
-            try store.sourceMarkdownOKFMetadata(versionID: $0.id, includeCorrected: false)?.metadata
-        } ?? OKFConceptMetadata()
-        return SourceMetadataProjection.make(input: .init(
-            source: source,
-            markdown: markdown,
-            extraction: try store.activeExtractionProvenance(sourceID: sourceID),
+            extraction: try await store.activeExtractionProvenance(sourceID: sourceID),
             alternativeCount: history.count,
             okfMetadata: okfMetadata))
     }
@@ -1309,11 +1405,11 @@ struct SourceDetailView: View {
             showsControls: !isEditing,
             source: { sourcePresentationContent },
             rendered: { descriptor in renderedContent(for: descriptor) },
-            onRendererSelected: persistRendererPreference,
-            onPresentationSelected: persistRendererPresentationSelection,
+            onRendererSelected: { await persistRendererPreference($0) },
+            onPresentationSelected: { await persistRendererPresentationSelection($0) },
             onFallback: handleRendererFallback)
         .task(id: rendererPreparationKey) {
-            prepareSelectedRendererSession()
+            await prepareSelectedRendererSession()
         }
     }
 
@@ -1343,29 +1439,31 @@ struct SourceDetailView: View {
 
     private var rendererPreparationKey: String {
         let reference = rendererPresentationLifecycle.state.pinnedRenderer
-        let version = rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id)?.authorizedInput
-        let versionKey = version.map { String(describing: $0) } ?? "unavailable"
+        // `authorizedInputKey` is the cached projection of the renderer's
+        // authorized input, refreshed at the per-file load edges — this key
+        // is evaluated per body render and must not query the store.
+        let versionKey = authorizedInputKey
         return "\(file.id.rawValue)|\(reference?.packageID.rawValue ?? "source")|\(reference?.version.rawValue ?? "none")|\(reference?.registrationID.rawValue ?? "none")|\(versionKey)"
     }
 
-    private func prepareSelectedRendererSession() {
+    private func prepareSelectedRendererSession() async {
         guard rendererPresentationLifecycle.state.selection == .rendered,
               let reference = rendererPresentationLifecycle.state.pinnedRenderer else {
             // No rendered pane is selected, so there is no session to prepare.
-            rendererSessionPreparation.cancel()
+            await rendererSessionPreparation.cancel()
             return
         }
         guard let descriptor = rendererDescriptors.first(where: { $0.reference == reference }),
               case .webPackage = descriptor.implementation,
               let configuration = routedInstalledRendererFactoryInputs.configuration(for: descriptor),
-              let currentReader = rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id),
+              let currentReader = await rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id),
               case .source(let versionID) = currentReader.authorizedInput
         else {
             // The renderer tab is selected but its session can never be
             // prepared (no package configuration, no authorized input). Mark
             // the definitive failure so the host falls back to Source instead
             // of holding the pane forever.
-            rendererSessionPreparation.markUnavailable()
+            await rendererSessionPreparation.markUnavailable()
             return
         }
         let input = currentReader.authorizedInput
@@ -1380,7 +1478,7 @@ struct SourceDetailView: View {
                 mimeType: .init(validating: mime), fileExtension: file.ext, bytes: bytes)
         } else { admittedSource = nil }
         let extensions = Dictionary(uniqueKeysWithValues: store.sources.map { ($0.id, $0.ext.lowercased()) })
-        rendererSessionPreparation.prepare(.init(
+        await rendererSessionPreparation.prepare(.init(
             descriptor: descriptor, configuration: configuration, input: input,
             admittedSource: admittedSource, store: store.internalStore,
             siblingSources: store.siblingImageResolvers()[file.id] ?? [:],
@@ -1398,7 +1496,7 @@ struct SourceDetailView: View {
                   authority.descriptor.reference == descriptor.reference else { return nil }
             return installedRendererFactory.makeView(authority: authority) { _ in
                 Task { @MainActor in
-                    rendererSessionPreparation.cancel()
+                    await rendererSessionPreparation.cancel()
                     failedInstalledRendererReference = descriptor.reference
                 }
             }
@@ -1414,26 +1512,26 @@ struct SourceDetailView: View {
         }
     }
 
-    private func persistRendererPreference(_ reference: RendererReference) {
+    private func persistRendererPreference(_ reference: RendererReference) async {
         // A deliberate retry gets a new session. The failure marker only keeps
         // the existing failed session from being recreated during fallback.
         failedInstalledRendererReference = nil
-        store.setRendererSourcePreference(sourceID: file.id, preference: .exact(reference))
+        await store.setRendererSourcePreference(sourceID: file.id, preference: .exact(reference))
     }
 
     @MainActor
-    private func activateRendererPane(reference: RendererReference, input: RendererBridgeInput) {
+    private func activateRendererPane(reference: RendererReference, input: RendererBridgeInput) async {
         guard headVersion != nil else {
             return
         }
         // The exact typed input is carried by the markdown card and routed to
         // the current source's renderer pane. The renderer state itself only
         // needs the exact renderer reference to open the pane.
-        persistRendererPreference(reference)
+        await persistRendererPreference(reference)
         var lifecycle = rendererPresentationLifecycle
         lifecycle.selectRendered(reference)
         rendererPresentationLifecycle = lifecycle
-        store.setRendererSourcePresentation(sourceID: file.id, presentation: .rendered)
+        await store.setRendererSourcePresentation(sourceID: file.id, presentation: .rendered)
     }
 
     private func rendererPlanner() throws -> SourceRendererPresentationPlanner {
@@ -1441,8 +1539,8 @@ struct SourceDetailView: View {
             installedDescriptors: installedRendererFactoryInputs.availableDescriptors)
     }
 
-    private func persistRendererPresentationSelection(_ selection: RendererPresentationState.Selection) {
-        store.setRendererSourcePresentation(sourceID: file.id, presentation: selection)
+    private func persistRendererPresentationSelection(_ selection: RendererPresentationState.Selection) async {
+        await store.setRendererSourcePresentation(sourceID: file.id, presentation: selection)
     }
 
     /// Resolve the persisted logical or exact renderer once per source. The
@@ -1456,10 +1554,10 @@ struct SourceDetailView: View {
     /// Resolve only after this view has loaded bytes, markdown, and origin for
     /// the current source. The persisted selection records an explicit user
     /// choice. Without it, a new presentable source returns to Source.
-    private func resolveRendererPresentation() {
+    private func resolveRendererPresentation() async {
         do {
             let planner = try rendererPlanner()
-            let preference = store.rendererSourcePreference(for: file.id)
+            let preference = await store.rendererSourcePreference(for: file.id)
             let descriptor: RendererDescriptor?
             if let preference {
                 descriptor = try planner.preferredDescriptor(
@@ -1479,7 +1577,7 @@ struct SourceDetailView: View {
             if lifecycle.state.sourceID != file.id {
                 lifecycle.beginLoading(sourceID: file.id)
             }
-            lifecycle.resolveLoadedSource(
+            await lifecycle.resolveLoadedSource(
                 source: file,
                 matchingRenderer: descriptor?.reference,
                 boundedBytes: sourceBytesSnapshot,
@@ -1495,9 +1593,25 @@ struct SourceDetailView: View {
         }
     }
 
+    /// Refresh the cached renderer authorized-input key that
+    /// `rendererPreparationKey` projects (the store read is async; the key
+    /// must stay synchronous).
+    private func refreshAuthorizedInputKey() async {
+        let input = await rendererAuthorizedInputResolver
+            .rendererAuthorizedInputReader(for: file.id)?.authorizedInput
+        authorizedInputKey = input.map { String(describing: $0) } ?? "unavailable"
+    }
+
+    /// `WikiReaderView` takes a synchronous activation hook; activation
+    /// itself is async (session preparation), so the hop lands on a Task.
+    private func makeRendererActivationHandler()
+        -> (@MainActor (RendererReference, RendererBridgeInput) -> Void)? {
+        { reference, input in Task { await activateRendererPane(reference: reference, input: input) } }
+    }
+
     /// Refreshes using the already-loaded source facts. A source-list change is
     /// not itself permission to rebuild the pane's exact renderer pin.
-    private func refreshRendererPresentation() {
+    private func refreshRendererPresentation() async {
         do {
             let planner = try rendererPlanner()
             let descriptors = try planner.matchingDescriptors(
@@ -1505,7 +1619,7 @@ struct SourceDetailView: View {
                 boundedBytes: sourceBytesSnapshot,
                 currentMarkdown: currentMarkdownContent,
                 origin: origin)
-            let preference = store.rendererSourcePreference(for: file.id)
+            let preference = await store.rendererSourcePreference(for: file.id)
             let matching = try preference.flatMap { preference in
                 try planner.preferredDescriptor(
                     preference: preference,
@@ -1522,7 +1636,7 @@ struct SourceDetailView: View {
                 boundedBytes: sourceBytesSnapshot,
                 currentMarkdown: currentMarkdownContent,
                 origin: origin,
-                persistedSelection: store.rendererSourcePresentation(for: file.id),
+                persistedSelection: await store.rendererSourcePresentation(for: file.id),
                 isEditing: isEditing)
             rendererPresentationLifecycle = lifecycle
         } catch {
@@ -1530,8 +1644,8 @@ struct SourceDetailView: View {
         }
     }
 
-    private func refreshSourceBytesSnapshot() {
-        sourceBytesSnapshot = store.sourceBytes(id: file.id)
+    private func refreshSourceBytesSnapshot() async {
+        sourceBytesSnapshot = await store.sourceBytes(id: file.id)
     }
 
     /// Loads the active package registration snapshots that gate the Raw
@@ -1602,7 +1716,7 @@ struct SourceDetailView: View {
             WikiReaderView(markdown: pinnedExtraction?.content ?? head.content,
                             currentSelection: store.selection,
                             store: store,
-                            onRendererActivation: activateRendererPane(reference:input:),
+                            onRendererActivation: makeRendererActivationHandler(),
                             inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
                                 store: store.internalStore,
                                 installedRendererFactory: installedRendererFactory,
@@ -1621,7 +1735,7 @@ struct SourceDetailView: View {
             WikiReaderView(markdown: sourceMarkdown,
                             currentSelection: store.selection,
                             store: store,
-                            onRendererActivation: headVersion == nil ? nil : activateRendererPane(reference:input:),
+                            onRendererActivation: headVersion == nil ? nil : makeRendererActivationHandler(),
                             inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
                                 store: store.internalStore,
                                 installedRendererFactory: installedRendererFactory,
@@ -1676,7 +1790,7 @@ struct SourceDetailView: View {
             switch result {
             case .success:
                 // The worker persisted the markdown; refresh the head version.
-                if let head = store.processedMarkdownHead(for: file) {
+                if let head = await store.processedMarkdownHead(for: file) {
                     headVersion = head
                 }
             case .failure:
@@ -1687,125 +1801,90 @@ struct SourceDetailView: View {
         }
     }
 
-    /// HTML extraction trigger (issue #799 PR2). Inline — does NOT route
-    /// through the queue engine (which is PDF-coupled via
-    /// `ExtractionResolution.pdfData` / `convert(pdfData:)` /
-    /// `seedPdfMarkdown` — generalizing the queue is a deferred sub-project
-    /// per the parent plan's "Out of scope" section). Dispatches to
-    /// `WikiStoreModel.extractHtml(for:backend:)`, which reads the source's
-    /// HTML bytes, resolves the reviewed package extractor, and writes the
-    /// result via
-    /// `appendProcessedMarkdown` (same write path as `enrichWithDefuddle`).
-    /// Uses the configured route selection. An unavailable explicit selection
-    /// blocks extraction until the user fixes it in Extraction Settings.
+    /// HTML extraction trigger. P4.3 workload migration: the conversion runs
+    /// DAEMON-SIDE — the view enqueues a durable `.extraction` format job
+    /// through the queue engine (the same client every manual path uses) and
+    /// projects status over the queue events. The daemon resolves the
+    /// registration-claimed route (the reviewed HTML package), converts, and
+    /// persists the markdown; this view only waits for completion and
+    /// refreshes the displayed version. A failed conversion (package
+    /// inactive, empty result) fails the item visibly — its message lands in
+    /// `htmlExtractionError` here and in the Activity window.
     private func runHtmlExtraction() async {
-        isExtracting = true
-        defer {
-            isExtracting = false
-        }
-        // The label reflects the session-wired HTML selection (route-record
-        // derived); nil falls back to the tag-based execution floor. The
-        // extractor itself resolves through the route record either way.
-        let backend = store.htmlBackend ?? .tagBased
-        let extractor: any HtmlMarkdownExtractor
-        do {
-            extractor = try await extractionCoordinator.prepareHTML(backendOverride: nil)
-        } catch {
-            DebugLog.extraction("HTML extractor preparation failed: \(error.localizedDescription)")
-            htmlExtractionError = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-            return
-        }
-        if let head = await store.extractHtml(
-            for: file.id,
-            backend: backend,
-            extractor: extractor)
-        {
-            headVersion = head
-        }
+        await runFormatJobEnqueue()
     }
 
-    /// HTML re-extraction trigger (issue #799 PR2). Called by the
-    /// "Re-extract with" menu's HTML branch when the user picks a backend
-    /// from `HtmlExtractionBackend.allCases`. Mirrors `runReExtraction(with:)`
-    /// but routes through the inline `extractHtml` path (same module-level
-    /// decision as `runHtmlExtraction`). `appendProcessedMarkdown` always
-    /// appends — first version is HEAD by the default-active rule, later
-    /// versions ride as coexisting alternatives (no clobber), so re-extract
-    /// naturally creates an alternative the provenance chip surfaces.
+    /// HTML re-extraction trigger — the "Re-extract with" menu's HTML
+    /// branch. The user's explicit backend choice rides the payload's
+    /// `htmlBackend` stage-routing key; the daemon resolves that exact
+    /// backend. `appendDerivedMarkdown` always appends, so a re-run creates
+    /// a coexisting alternative the provenance chip surfaces.
     private func runHtmlReExtraction(with backend: HtmlExtractionBackend) async {
-        isExtracting = true
-        defer {
-            isExtracting = false
-        }
-        // The override is the user's explicit backend choice for this run.
-        let extractor: any HtmlMarkdownExtractor
-        do {
-            extractor = try await extractionCoordinator.prepareHTML(backendOverride: backend)
-        } catch {
-            DebugLog.extraction("HTML extractor preparation failed: \(error.localizedDescription)")
-            htmlExtractionError = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-            return
-        }
-        if let head = await store.extractHtml(for: file.id, backend: backend, extractor: extractor) {
-            headVersion = head
-        }
+        await runFormatJobEnqueue(htmlBackendOverride: backend)
     }
 
     /// DOCX extraction trigger — the package-only sibling of
-    /// `runHtmlExtraction`. Inline — does NOT route through the queue engine
-    /// (same PDF-coupling rationale as the HTML path). DOCX has no backend
-    /// choice and no built-in fallback: the route resolves the reviewed
-    /// docx2md package (or the user's explicit installed-package selection),
-    /// and an inactive package fails closed with a surfaced error.
-    /// Dispatches to `WikiStoreModel.extractDocx(for:extractor:)`, which reads
-    /// the source's `.docx` bytes and writes the result via
-    /// `appendProcessedMarkdown`.
+    /// `runHtmlExtraction`. Same daemon-side conversion: the enqueue carries
+    /// no override (DOCX has one package route), the daemon checks the
+    /// runtime readiness and fails the item with setup guidance when the
+    /// reviewed docx2md package is unavailable.
     private func runDocxExtraction() async {
+        await runFormatJobEnqueue()
+    }
+
+    /// DOCX re-extraction trigger — the "Re-extract with" menu's DOCX
+    /// branch. There is exactly one DOCX execution path (the reviewed docx2md
+    /// package; no backend enum exists to iterate), so this is
+    /// `runDocxExtraction` under a re-extraction name.
+    private func runDocxReExtraction() async {
+        await runDocxExtraction()
+    }
+
+    /// The shared manual format-job enqueue: one durable `.extraction` item,
+    /// completion wait, and post-success version refresh (newest version
+    /// first — a re-extract alternative is not the active head, but the view
+    /// displays the fresh conversion, same posture as the inline path this
+    /// replaces). A failed item surfaces its message via
+    /// `htmlExtractionError`; enqueue/transport failures are logged (the
+    /// tracker records queue-event state).
+    private func runFormatJobEnqueue(
+        htmlBackendOverride: HtmlExtractionBackend? = nil
+    ) async {
         isExtracting = true
         defer {
             isExtracting = false
         }
-        let extractor: any DocxMarkdownExtractor
         do {
-            extractor = try await extractionCoordinator.prepareDOCX()
-        } catch {
-            DebugLog.extraction("DOCX extractor preparation failed: \(error.localizedDescription)")
-            htmlExtractionError = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-            return
-        }
-        // A runtime problem (bun missing, entry point absent) is a cheap
-        // stat-based probe away — surface it instead of letting the managed
-        // spawn fail into a silent nil.
-        let readiness = await extractor.readiness()
-        switch readiness {
-        case .ready:
-            break
-        case .needsSetup(let message), .notInstalled(let message):
-            htmlExtractionError = message
-            return
-        }
-        if let head = await store.extractDocx(for: file.id, extractor: extractor) {
-            headVersion = head
-        } else {
-            // The extractor swallows process errors into nil (mirroring the
-            // HTML path) and the model logs the redacted reason; say
-            // something rather than doing nothing.
-            DebugLog.extraction("DOCX extraction returned no markdown (source=\(file.id.rawValue))")
-            htmlExtractionError = "Word document extraction failed. A redacted reason is in Console (subsystem com.selfdrivingwiki.debug)."
-        }
-    }
+            var payload = QueueItemPayload(sourceIDs: [file.id])
+            if let htmlBackendOverride {
+                payload.stageRouting = [
+                    StageRoutingKey.htmlBackend.rawValue: htmlBackendOverride.rawValue]
+            }
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
+                payload: payload)
+            let itemID = try await queueEngine.enqueue(request)
+            let result = try await queueEngine.waitForCompletion(of: itemID)
 
-    /// DOCX re-extraction trigger — the "Re-extract with" menu's DOCX branch.
-    /// There is exactly one DOCX execution path (the reviewed docx2md
-    /// package; no backend enum exists to iterate), so this is
-    /// `runDocxExtraction` under a re-extraction name. Like the HTML
-    /// re-extract, `appendProcessedMarkdown` always appends, so a re-run
-    /// creates a coexisting alternative the provenance chip surfaces.
-    private func runDocxReExtraction() async {
-        await runDocxExtraction()
+            switch result {
+            case .success:
+                // The worker persisted the markdown daemon-side; refresh the
+                // displayed version from the newest row.
+                if let newest = await store.processedMarkdownHistory(for: file.id).first {
+                    headVersion = newest
+                } else if let head = await store.processedMarkdownHead(for: file) {
+                    headVersion = head
+                }
+            case .failure(let error):
+                // The daemon failed the item (package unavailable, empty
+                // conversion) — surface the same message the inline path did.
+                htmlExtractionError = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+        } catch {
+            // Enqueue/transport error — tracker not updated (no queue event).
+            DebugLog.extraction("SourceDetailView: format-job enqueue failed (\(file.id.rawValue)): \(error)")
+        }
     }
 
     /// Enqueues a durable `.extraction` queue job for transcription. The queue
@@ -1828,7 +1907,7 @@ struct SourceDetailView: View {
 
             switch result {
             case .success:
-                if let head = store.processedMarkdownHead(for: file) {
+                if let head = await store.processedMarkdownHead(for: file) {
                     headVersion = head
                 }
             case .failure:
@@ -1867,7 +1946,7 @@ struct SourceDetailView: View {
                 deadline: QueueEngineWaitPolicy.speechCompletionWaitDeadline)
             switch result {
             case .success:
-                if let head = store.processedMarkdownHead(for: file) {
+                if let head = await store.processedMarkdownHead(for: file) {
                     headVersion = head
                 }
             case .failure:
@@ -1918,16 +1997,21 @@ struct SourceDetailView: View {
     /// with another backend. Shown in place of the old inert provenance text.
     @ViewBuilder
     private func extractionProvenanceChip(head: SourceMarkdownVersion) -> some View {
-        let names = store.processedMarkdownAgentNames(for: file.id)
+        let names = extractionAgentNames
         Menu {
             Section("Active extraction") {
-                let history = store.processedMarkdownHistory(for: file.id)
+                let history = extractionHistory
                 let headID = headVersion?.id.rawValue
                 ForEach(history) { version in
                     let agent = names[version.id] ?? version.origin.rawValue
                     Button {
-                        store.setActiveMarkdown(for: file.id, to: version.id)
-                        headVersion = store.processedMarkdownHead(for: file)
+                        Task {
+                            await store.setActiveMarkdown(for: file.id, to: version.id)
+                            headVersion = await store.processedMarkdownHead(for: file)
+                            extractionHistory = await store.processedMarkdownHistory(for: file.id)
+                            extractionAgentNames = await store.processedMarkdownAgentNames(for: file.id)
+                            await refreshAuthorizedInputKey()
+                        }
                     } label: {
                         Label {
                             Text("\(ExtractionAlternative.backendDisplayName(agentName: agent)) — \(version.createdAt, format: .dateTime.year().month().day().hour().minute().second())")
@@ -2052,7 +2136,7 @@ struct SourceDetailView: View {
 
             switch result {
             case .success:
-                if let head = store.processedMarkdownHead(for: file) {
+                if let head = await store.processedMarkdownHead(for: file) {
                     headVersion = head
                 }
             case .failure:
@@ -2122,28 +2206,36 @@ struct SourceDetailView: View {
 
     // MARK: - Edit helpers
 
-    private func commitEdit() {
+    private func commitEdit() async {
         let trimmed = editBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { isEditing = false; return }
         if let current = headVersion, trimmed == current.content {
             isEditing = false
             return
         }
-        if let version = store.saveProcessedMarkdown(for: file.id, content: trimmed) {
+        if let version = await store.saveProcessedMarkdown(for: file.id, content: trimmed) {
             headVersion = version
         }
         isEditing = false
     }
 
-    private func flushEditIfDirty() {
-        guard isEditing else { return }
-        let trimmed = editBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let current = headVersion, !trimmed.isEmpty, trimmed != current.content {
-            if let version = store.saveProcessedMarkdown(for: file.id, content: trimmed) {
+    /// H1: flush the OUTGOING edit using explicitly captured values. Callers
+    /// capture `(lastKnownSourceID, editBuffer, headVersion)` synchronously
+    /// BEFORE any state reset and pass them in from a Task — the handler that
+    /// runs after a navigation sees the INCOMING `file.id`, so the outgoing
+    /// source id must come from the tracker, not from `file.id` (flushing
+    /// against the incoming id appended the draft to the wrong source). Same
+    /// save behavior as before: skip empty/unchanged content; assign the
+    /// returned version only while the loaded file still matches the captured
+    /// outgoing id.
+    private func flushEditIfDirty(sourceID: SourceID, buffer: String, head: SourceMarkdownVersion?) async {
+        let trimmed = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let current = head, !trimmed.isEmpty, trimmed != current.content {
+            if let version = await store.saveProcessedMarkdown(for: sourceID, content: trimmed),
+               file.id == sourceID {
                 headVersion = version
             }
         }
-        isEditing = false
     }
 
     // MARK: - Shared sub-views

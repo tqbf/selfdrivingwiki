@@ -6,7 +6,7 @@ import Testing
 @Suite struct WikiCtlOKFCommandTests {
     private let noEnv: (String) -> String? = { _ in nil }
 
-    @Test func parsesPageStatusWithExactPageVersionID() throws {
+    @Test func parsesPageStatusWithExactPageVersionID() async throws {
         let invocation = try ArgumentParser.parse([
             "--wiki", "W", "page", "okf", "status",
             "--version", "01PV", "--status", "stable"
@@ -15,7 +15,7 @@ import Testing
             versionID: PageVersionID(rawValue: "01PV"), status: .stable)))
     }
 
-    @Test func parsesSourceVerificationWithExactMarkdownVersionIDAndTypedEvidence() throws {
+    @Test func parsesSourceVerificationWithExactMarkdownVersionIDAndTypedEvidence() async throws {
         let invocation = try ArgumentParser.parse([
             "--wiki", "W", "source", "okf", "verify",
             "--version", "01SMV", "--by", "checker/2",
@@ -68,16 +68,16 @@ import Testing
         }
     }
 
-    @Test func pageMutationAndInspectionSetCommitFlagsAndJSONFields() throws {
+    @Test func pageMutationAndInspectionSetCommitFlagsAndJSONFields() async throws {
         let store = try TestStoreFactory.inMemory()
-        let page = try store.createPage(title: "CLI trust")
+        let page = try await store.createPage(title: "CLI trust")
         let versionID = try #require(try store.pageHeadVersionID(pageID: page.id))
 
-        let mutation = try PageCommand.run(
+        let mutation = try await PageCommand.run(
             .okfStatus(versionID: versionID, status: .draft), in: store)
         #expect(mutation.didCommit)
 
-        let inspection = try PageCommand.run(
+        let inspection = try await PageCommand.run(
             .okfInspect(versionID: versionID, json: true), in: store)
         #expect(!inspection.didCommit)
         let object = try #require(JSONSerialization.jsonObject(
@@ -88,14 +88,14 @@ import Testing
         #expect(object["trust_tier"] as? String == "unverified")
     }
 
-    @Test func sourceVerificationAndCorrectionRoundTrip() throws {
+    @Test func sourceVerificationAndCorrectionRoundTrip() async throws {
         let store = try TestStoreFactory.inMemory()
         let source = try store.addSource(filename: "cli.txt", data: Data("raw".utf8))
         let markdown = try store.appendProcessedMarkdown(
             sourceID: source.id, content: "processed", origin: .user,
             note: nil, technique: nil)
         let verifiedAt = Date(timeIntervalSince1970: 2_000_000_000)
-        let verify = try SourceCommand.run(
+        let verify = try await SourceCommand.run(
             .okfVerify(versionID: markdown.id, input: .init(
                 verifier: try OKFVerifierIdentity("human:reviewer"),
                 verifiedAt: verifiedAt,
@@ -108,7 +108,7 @@ import Testing
             Issue.record("Expected verification id output")
             return
         }
-        let correction = try SourceCommand.run(
+        let correction = try await SourceCommand.run(
             .okfCorrect(versionID: markdown.id, input: .init(
                 verificationID: .init(rawValue: String(rawID)),
                 verifier: try OKFVerifierIdentity("human:editor"),

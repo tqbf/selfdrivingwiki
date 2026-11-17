@@ -33,13 +33,13 @@ public struct StoreBootstrap: Sendable {
         self.makeStore = makeStore
     }
 
-    public func createAndSeed(databaseURL: URL) throws -> StoreBootstrapResult {
+    public func createAndSeed(databaseURL: URL) async throws -> StoreBootstrapResult {
         let store = try makeStore(databaseURL)
-        let pages = try store.listPages(sortBy: .newestFirst)
+        let pages = try await store.listPages(sortBy: .newestFirst)
         guard pages.isEmpty else {
             return StoreBootstrapResult(homePageID: nil)
         }
-        let home = try store.createPage(
+        let home = try await store.createPage(
             title: "Home",
             createdBy: PageAuthor.user.rawValue)
         return StoreBootstrapResult(homePageID: home.id)

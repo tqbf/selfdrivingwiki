@@ -10,7 +10,7 @@ struct ExtractionCompatibilityWriterTests {
         try store.addSource(filename: "compatibility.pdf", data: Data("pdf".utf8))
     }
 
-    @Test func appendProcessedMarkdownDerivedCompatibilityRoutesThroughAppendDerivedMarkdown() throws {
+    @Test func appendProcessedMarkdownDerivedCompatibilityRoutesThroughAppendDerivedMarkdown() async throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
         let version = try store.appendProcessedMarkdown(
@@ -21,7 +21,7 @@ struct ExtractionCompatibilityWriterTests {
         #expect(provenance.producer == .tool(.pdf2md))
     }
 
-    @Test func legacyTranscriptWriterRoutesThroughAppendDerivedMarkdown() throws {
+    @Test func legacyTranscriptWriterRoutesThroughAppendDerivedMarkdown() async throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
         let version = try store.appendProcessedMarkdown(
@@ -32,10 +32,10 @@ struct ExtractionCompatibilityWriterTests {
         #expect(provenance.producer == .tool(.youtubeCaptions))
     }
 
-    @Test func wikictlTranscriptCompatibilityRoutesThroughAppendDerivedMarkdown() throws {
+    @Test func wikictlTranscriptCompatibilityRoutesThroughAppendDerivedMarkdown() async throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
-        try SourceCommand.persistRefreshMaterial(
+        try await SourceCommand.persistRefreshMaterial(
             .derivedMarkdown(content: "cli transcript"), sourceID: summary.id, in: store)
         let version = try #require(try store.processedMarkdownHead(sourceID: summary.id))
         let provenance = try #require(try store.extractionProvenance(markdownVersionID: version.id))
@@ -62,7 +62,7 @@ struct ExtractionCompatibilityWriterTests {
         let added = try #require(try store.listSources().first)
         #expect(added.mimeType == MimeType.pdf)
 
-        try SourceCommand.persistRefreshMaterial(
+        try await SourceCommand.persistRefreshMaterial(
             .contentVersion(
                 data: Data("%PDF-1.7 refreshed".utf8),
                 detectionHints: .init(
@@ -79,7 +79,7 @@ struct ExtractionCompatibilityWriterTests {
         #expect(activeVersion.mimeType == MimeType.pdf)
     }
 
-    @Test func GRDBAddAppendAndSnapshotImageRedetectAtFinalBoundary() throws {
+    @Test func GRDBAddAppendAndSnapshotImageRedetectAtFinalBoundary() async throws {
         let store = try TestStoreFactory.inMemory()
         let pdfBytes = Data("%PDF-1.7".utf8)
         let hints = ContentTypeDetectionHints(
@@ -116,7 +116,7 @@ struct ExtractionCompatibilityWriterTests {
         #expect(try store.activeContentVersion(sourceID: snapshot.id)?.mimeType == MimeType.pdf)
     }
 
-    @Test func wikictlContentRefreshPreservesDeclaredMIMEHints() throws {
+    @Test func wikictlContentRefreshPreservesDeclaredMIMEHints() async throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
         let provenance = SourceProvenance(
@@ -128,7 +128,7 @@ struct ExtractionCompatibilityWriterTests {
                 "application/x-refresh-test; version=1",
                 origin: .httpResponse))
 
-        try SourceCommand.persistRefreshMaterial(
+        try await SourceCommand.persistRefreshMaterial(
             .contentVersion(
                 data: Data([0x00, 0x01, 0x02]),
                 detectionHints: hints,

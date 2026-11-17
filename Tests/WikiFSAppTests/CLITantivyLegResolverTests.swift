@@ -86,10 +86,10 @@ struct CLITantivyLegResolverTests {
         defer { try? fm.removeItem(at: container) }
         let wikiID = WikiID(rawValue: "01TEST0002")
         let store = try tempStore(in: container, wikiID: wikiID)
-        let first = try store.createPage(title: "Rust Ownership")
-        try store.updatePage(id: first.id, title: "Rust Ownership", body: "rust")
-        let second = try store.createPage(title: "Async Rust")
-        try store.updatePage(id: second.id, title: "Async Rust", body: "async")
+        let first = try await store.createPage(title: "Rust Ownership")
+        try await store.updatePage(id: first.id, title: "Rust Ownership", body: "rust")
+        let second = try await store.createPage(title: "Async Rust")
+        try await store.updatePage(id: second.id, title: "Async Rust", body: "async")
 
         // The daemon's rank order — deliberately NOT the catalog order —
         // plus one hit naming an id that does not exist in the catalog.
@@ -217,9 +217,9 @@ struct CLITantivyLegResolverTests {
         let wikiID = WikiID(rawValue: "01TEST0010")
         let store = try tempStore(in: container, wikiID: wikiID)
 
-        let pageRust = try store.createPage(title: "Rust Ownership")
-        let pageOwnership = try store.createPage(title: "Ownership Guide")
-        let pageAsync = try store.createPage(title: "Async Rust")
+        let pageRust = try await store.createPage(title: "Rust Ownership")
+        let pageOwnership = try await store.createPage(title: "Ownership Guide")
+        let pageAsync = try await store.createPage(title: "Async Rust")
         let rustSourceID = try store.addSource(
             filename: "zircon-rust.pdf", data: Data("%PDF-rust".utf8)).id
         let ownershipSourceID = try store.addSource(
@@ -331,8 +331,8 @@ struct CLITantivyLegResolverTests {
         defer { try? fm.removeItem(at: container) }
         let wikiID = WikiID(rawValue: "01TEST0012")
         let store = try tempStore(in: container, wikiID: wikiID)
-        let page = try store.createPage(title: "Rust Ownership")
-        try store.updatePage(id: page.id, title: "Rust Ownership", body: "rust")
+        let page = try await store.createPage(title: "Rust Ownership")
+        try await store.updatePage(id: page.id, title: "Rust Ownership", body: "rust")
 
         let recorder = SearchRequestRecorder()
         let results = try await CLITantivyLegResolver.withTestSearchBackend({ key in

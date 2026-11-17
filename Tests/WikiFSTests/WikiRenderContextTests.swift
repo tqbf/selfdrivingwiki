@@ -26,7 +26,7 @@ struct WikiRenderContextTests {
     /// Fixture: one page, one byteful source ("Paper.pdf") with a 3-deep
     /// `@vN` chain, one byteless YouTube source ("youtube-dQw4w9WgXcQ") for the
     /// external embed path. Returns the store + model + the key ids.
-    private func makeFixture() throws -> (store: GRDBWikiStore,
+    private func makeFixture() async throws -> (store: GRDBWikiStore,
                                           model: WikiStoreModel,
                                           homeID: PageID,
                                           paperID: SourceID,
@@ -38,7 +38,7 @@ struct WikiRenderContextTests {
         let model = WikiStoreModel(store: store)
 
         // A page.
-        let home = try store.createPage(title: "Home")
+        let home = try await store.createPage(title: "Home")
 
         // A byteful source with a display name + a 3-version derived chain.
         let paper = try store.addSource(
@@ -65,14 +65,14 @@ struct WikiRenderContextTests {
                 externalIdentity: "dQw4w9WgXcQ"),
             role: .primary)
 
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         return (store, model, home.id, paper.id, v1.id, v2.id, v3.id, yt.id)
     }
 
     // MARK: - isResolved
 
-    @Test func isResolvedPageByTitle() throws {
-        let (_, model, _, _, _, _, _, _) = try makeFixture()
+    @Test func isResolvedPageByTitle() async throws {
+        let (_, model, _, _, _, _, _, _) = try await makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         let isResolved = ctx.isResolved
         #expect(isResolved("Home", .page))
@@ -80,16 +80,16 @@ struct WikiRenderContextTests {
         #expect(!isResolved("Ghost Page", .page))    // missing → ghost
     }
 
-    @Test func isResolvedPageByCanonicalULID() throws {
-        let (_, model, homeID, _, _, _, _, _) = try makeFixture()
+    @Test func isResolvedPageByCanonicalULID() async throws {
+        let (_, model, homeID, _, _, _, _, _) = try await makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         let isResolved = ctx.isResolved
         #expect(isResolved(homeID.rawValue, .page))
         #expect(!isResolved(homeID.rawValue, .source))  // page id isn't a source
     }
 
-    @Test func sourceMapsUseSourceID() throws {
-        let (_, model, _, paperID, _, _, _, _) = try makeFixture()
+    @Test func sourceMapsUseSourceID() async throws {
+        let (_, model, _, paperID, _, _, _, _) = try await makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         let isResolved = ctx.isResolved
         // Display name "My Paper" + filename "Paper.pdf" + ext-stripped "Paper".
@@ -105,8 +105,8 @@ struct WikiRenderContextTests {
 
     // MARK: - embedInfo
 
-    @Test func embedInfoResolvesBytefulByNameAndId() throws {
-        let (_, model, _, paperID, _, _, _, _) = try makeFixture()
+    @Test func embedInfoResolvesBytefulByNameAndId() async throws {
+        let (_, model, _, paperID, _, _, _, _) = try await makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         let embedInfo = ctx.embedInfo
         // By display name, filename, and ext-stripped (lowercased).
@@ -127,14 +127,14 @@ struct WikiRenderContextTests {
         #expect(embedInfo("nope") == nil)
     }
 
-    @Test func embedInfoRejectsAmbiguousNamesButKeepsCanonicalIDs() throws {
+    @Test func embedInfoRejectsAmbiguousNamesButKeepsCanonicalIDs() async throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let first = try store.addSource(filename: "report.txt", data: Data("first".utf8))
         let second = try store.addSource(filename: "report.md", data: Data("second".utf8))
         try store.renameSource(id: first.id, to: "Report")
         try store.renameSource(id: second.id, to: "Report")
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let context = WikiRenderContext.build(from: model)
 
         #expect(context.embedInfo("report") == nil)
@@ -142,8 +142,8 @@ struct WikiRenderContextTests {
         #expect(context.embedInfo(second.id.rawValue)?.id == second.id)
     }
 
-    @Test func embedInfoResolvesBytelessExternalTarget() throws {
-        let (_, model, _, _, _, _, _, ytID) = try makeFixture()
+    @Test func embedInfoResolvesBytelessExternalTarget() async throws {
+        let (_, model, _, _, _, _, _, ytID) = try await makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         let embedInfo = ctx.embedInfo
         let info = try #require(embedInfo("youtube-dqw4w9wgxcq"))
@@ -157,8 +157,8 @@ struct WikiRenderContextTests {
 
     // MARK: - displayName
 
-    @Test func displayNameHealsCanonicalULIDToCurrentName() throws {
-        let (_, model, homeID, paperID, _, _, _, _) = try makeFixture()
+    @Test func displayNameHealsCanonicalULIDToCurrentName() async throws {
+        let (_, model, homeID, paperID, _, _, _, _) = try await makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         let displayName = ctx.displayName
         // Source ULID → current display name (not the filename).
@@ -173,8 +173,8 @@ struct WikiRenderContextTests {
 
     // MARK: - pinnedExtractionID
 
-    @Test func sourceDerivedChainKeepsVersionIDs() throws {
-        let (_, model, _, paperID, v1ID, v2ID, v3ID, _) = try makeFixture()
+    @Test func sourceDerivedChainKeepsVersionIDs() async throws {
+        let (_, model, _, paperID, v1ID, v2ID, v3ID, _) = try await makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         let pin = ctx.pinnedExtractionID
         // 1-based ordinals into the ULID-asc chain (index 0 = v1).
@@ -192,8 +192,8 @@ struct WikiRenderContextTests {
 
     // MARK: - memoization + invalidation
 
-    @Test func renderContextMemoReusesUntilMutation() throws {
-        let (_, model, _, _, _, _, _, _) = try makeFixture()
+    @Test func renderContextMemoReusesUntilMutation() async throws {
+        let (_, model, _, _, _, _, _, _) = try await makeFixture()
         // First call builds.
         let c1 = model.renderContext()
         // Second call (no mutation) returns the cached snapshot — same data.
@@ -204,22 +204,22 @@ struct WikiRenderContextTests {
         #expect(c1.sourceDerivedChain == c2.sourceDerivedChain)
     }
 
-    @Test func renderContextRebuildsAfterPageMutation() throws {
-        let (store, model, _, _, _, _, _, _) = try makeFixture()
+    @Test func renderContextRebuildsAfterPageMutation() async throws {
+        let (store, model, _, _, _, _, _, _) = try await makeFixture()
         let before = model.renderContext()
         // A page mutation → reloadFromStore → reloadSummaries bumps the generation.
-        _ = try store.createPage(title: "Another Page")
-        model.reloadFromStore()
+        _ = try await store.createPage(title: "Another Page")
+        await model.bootstrapFromStore()
         let after = model.renderContext()
         #expect(after.pageTitles.contains("another page"))
         #expect(!before.pageTitles.contains("another page"))
     }
 
-    @Test func renderContextRebuildsAfterSourceMutation() throws {
-        let (store, model, _, _, _, _, _, _) = try makeFixture()
+    @Test func renderContextRebuildsAfterSourceMutation() async throws {
+        let (store, model, _, _, _, _, _, _) = try await makeFixture()
         let before = model.renderContext()
         _ = try store.addSource(filename: "extra.txt", data: Data("x".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let after = model.renderContext()
         #expect(after.sourceNames.contains("extra.txt"))
         #expect(!before.sourceNames.contains("extra.txt"))
@@ -227,8 +227,8 @@ struct WikiRenderContextTests {
 
     // MARK: - blob scheme
 
-    @Test func blobSchemeMatchesBlobHandlerConstant() throws {
-        let (_, model, _, _, _, _, _, _) = try makeFixture()
+    @Test func blobSchemeMatchesBlobHandlerConstant() async throws {
+        let (_, model, _, _, _, _, _, _) = try await makeFixture()
         let ctx = WikiRenderContext.build(from: model)
         // The context captures the core constant the reader's BlobSchemeHandler
         // also resolves to — so a transcript render (Phase A.2) rewrites image

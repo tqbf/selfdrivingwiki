@@ -6,6 +6,7 @@ import Synchronization
 /// Reads only the immutable input version pinned when a renderer session began.
 /// This intentionally has no SourceID-based API, which prevents an accidental
 /// call to the live-ref `WikiStore.sourceContent(id:)` path.
+@MainActor
 public final class RendererAuthorizedInputReader {
     public enum ReaderError: Error, Equatable, Sendable {
         case closed
@@ -19,15 +20,15 @@ public final class RendererAuthorizedInputReader {
         var isClosed: Bool = false
     }
 
-    private let inputByteCount: (RendererBridgeInput) throws -> Int?
-    private let readPayload: (RendererBridgeInput) throws -> RendererBridgeInputPayload
+    private let inputByteCount: (RendererBridgeInput) async throws -> Int?
+    private let readPayload: (RendererBridgeInput) async throws -> RendererBridgeInputPayload
     private let state: Mutex<State>
     public let authorizedInput: RendererBridgeInput
 
     public init(store: any WikiStore, authorizedInput: RendererBridgeInput) {
         self.authorizedInput = authorizedInput
-        inputByteCount = { try store.rendererInputByteCount($0) }
-        readPayload = { try Self.readPinnedPayload(from: store, input: $0) }
+        inputByteCount = { try await store.rendererInputByteCount($0) }
+        readPayload = { try await Self.readPinnedPayload(from: store, input: $0) }
         state = Mutex(State())
     }
 
@@ -46,7 +47,7 @@ public final class RendererAuthorizedInputReader {
         }
         readPayload = { requestedInput in
             guard requestedInput == authorizedInput else { throw ReaderError.unauthorizedInput }
-            let payload = try Self.readPinnedPayload(from: store, input: requestedInput)
+            let payload = try await Self.readPinnedPayload(from: store, input: requestedInput)
             guard payload.mimeType == admittedSource.mimeType.rawValue,
                   payload.bytes == admittedSource.bytes,
                   RendererSHA256.digest(payload.bytes) == admittedSource.digest else {
@@ -59,8 +60,8 @@ public final class RendererAuthorizedInputReader {
 
     init(
         authorizedInput: RendererBridgeInput,
-        inputByteCount: @escaping (RendererBridgeInput) throws -> Int?,
-        readPayload: @escaping (RendererBridgeInput) throws -> RendererBridgeInputPayload
+        inputByteCount: @escaping (RendererBridgeInput) async throws -> Int?,
+        readPayload: @escaping (RendererBridgeInput) async throws -> RendererBridgeInputPayload
     ) {
         self.authorizedInput = authorizedInput
         self.inputByteCount = inputByteCount
@@ -68,7 +69,7 @@ public final class RendererAuthorizedInputReader {
         state = Mutex(State())
     }
 
-    public func read(_ requestedInput: RendererBridgeInput) throws -> RendererBridgeInputPayload {
+    public func read(_ requestedInput: RendererBridgeInput) async throws -> RendererBridgeInputPayload {
         try validateOpen()
         guard requestedInput == authorizedInput else {
             // Encoding for the mismatch log cannot fail for these Codable
@@ -84,26 +85,26 @@ public final class RendererAuthorizedInputReader {
             DebugLog.reader("reader input mismatch: requested[\(encodeForLog(requestedInput).prefix(160))] authorized[\(encodeForLog(authorizedInput).prefix(160))]")
             throw ReaderError.unauthorizedInput
         }
-        try validateInput(
+        try await validateInput(
             maximumInputByteCount: WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount,
             maximumDecodedByteCount: WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
         )
         return try payload(
-            readPayload(requestedInput),
+            try await readPayload(requestedInput),
             maximumDecodedByteCount: WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
         )
     }
 
     /// Checks that the pinned input is still available and fits both the
     /// descriptor and bridge limits before a WebKit session is created.
-    public func validateInput(maximumByteCount: Int) throws {
-        try validateInput(
+    public func validateInput(maximumByteCount: Int) async throws {
+        try await validateInput(
             maximumInputByteCount: maximumByteCount,
             maximumDecodedByteCount: WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
         )
     }
 
-    public func validateInput(maximumInputByteCount: Int, maximumDecodedByteCount: Int) throws {
+    public func validateInput(maximumInputByteCount: Int, maximumDecodedByteCount: Int) async throws {
         try validateOpen()
         guard maximumInputByteCount > 0, maximumDecodedByteCount > 0 else {
             throw ReaderError.oversizedInput
@@ -111,7 +112,7 @@ public final class RendererAuthorizedInputReader {
         guard maximumDecodedByteCount >= maximumInputByteCount else {
             throw ReaderError.oversizedInput
         }
-        guard let byteCount = try inputByteCount(authorizedInput) else {
+        guard let byteCount = try await inputByteCount(authorizedInput) else {
             throw ReaderError.unavailablePinnedInput
         }
         guard byteCount >= 0, byteCount <= maximumInputByteCount else {
@@ -136,21 +137,21 @@ public final class RendererAuthorizedInputReader {
     private static func readPinnedPayload(
         from store: any WikiStore,
         input requestedInput: RendererBridgeInput
-    ) throws -> RendererBridgeInputPayload {
+    ) async throws -> RendererBridgeInputPayload {
         switch requestedInput {
         case .source(let versionID):
-            guard let version = try store.sourceVersion(id: versionID) else {
+            guard let version = try await store.sourceVersion(id: versionID) else {
                 throw ReaderError.unavailablePinnedInput
             }
             let bytes: Data
             do {
-                bytes = try store.sourceContent(versionID: versionID)
+                bytes = try await store.sourceContent(versionID: versionID)
             } catch {
                 throw ReaderError.unavailablePinnedInput
             }
             return .init(mimeType: version.mimeType ?? "application/octet-stream", bytes: bytes)
         case .markdown(let versionID):
-            guard let version = try store.processedMarkdownVersion(id: versionID) else {
+            guard let version = try await store.processedMarkdownVersion(id: versionID) else {
                 throw ReaderError.unavailablePinnedInput
             }
             return .init(mimeType: version.mimeType, bytes: Data(version.content.utf8))

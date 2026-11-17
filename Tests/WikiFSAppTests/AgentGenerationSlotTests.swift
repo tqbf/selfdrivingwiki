@@ -296,7 +296,7 @@ struct AgentGenerationSlotTests {
 
         // Spawn commit simulation: the runner calls onLock when the process launches.
         // This is what increments the counter — not the gate acquire.
-        store.agentRunStarted()
+        await store.agentRunStarted()
         #expect(store.agentRunCount == 1)  // agent run IS active during agent run
 
         // Agent finishes: slot released, counter decremented. Counter back to 0.

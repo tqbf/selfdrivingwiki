@@ -33,7 +33,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
         do {
             switch kind {
             case .page:
-                let page = try store.getPage(id: id)
+                let page = try await store.getPage(id: id)
                 return TantivyContentSnapshot(
                     ulid: ulid,
                     kind: .page,
@@ -49,10 +49,10 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
                 // a delete — index the source with an empty body so its title
                 // is searchable; the version will re-index when markdown lands.
                 let sourceID = SourceID(rawValue: ulid)
-                let sources = try store.listSources()
+                let sources = try await store.listSources()
                 guard let source = sources.first(where: { $0.id == sourceID }) else { return nil }
                 let body: String
-                if let head = try store.processedMarkdownHead(sourceID: sourceID) {
+                if let head = try await store.processedMarkdownHead(sourceID: sourceID) {
                     body = head.content
                 } else {
                     body = ""
@@ -66,9 +66,9 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
                     versionSum: UInt64(max(0, source.version))
                 )
             case .chat:
-                let chats = try store.listChats()
+                let chats = try await store.listChats()
                 guard let chat = chats.first(where: { $0.id == chatID }) else { return nil }
-                let body = chatBody(chatID: chatID)
+                let body = await chatBody(chatID: chatID)
                 return TantivyContentSnapshot(
                     ulid: ulid,
                     kind: .chat,
@@ -96,14 +96,14 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
         // Pages
         let pageSummaries: [WikiPageSummary]
         do {
-            pageSummaries = try store.listPages(sortBy: .newestFirst)
+            pageSummaries = try await store.listPages(sortBy: .newestFirst)
         } catch {
             DebugLog.store("StoreBackedTantivyContentSource: listPages failed: \(error)")
             pageSummaries = []
         }
         for summary in pageSummaries {
             do {
-                let page = try store.getPage(id: summary.id)
+                let page = try await store.getPage(id: summary.id)
                 snapshots.append(TantivyContentSnapshot(
                     ulid: summary.id.rawValue,
                     kind: .page,
@@ -119,7 +119,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
         // Sources
         let sources: [SourceSummary]
         do {
-            sources = try store.listSources()
+            sources = try await store.listSources()
         } catch {
             DebugLog.store("StoreBackedTantivyContentSource: listSources failed: \(error)")
             sources = []
@@ -129,7 +129,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
             // searchable. A missing HEAD is not an error worth aborting the
             // build over.
             var body = ""
-            if let head = DebugLog.trying("buildSnapshots", operation: { try store.processedMarkdownHead(sourceID: source.id) }) {
+            if let head = await DebugLog.trying("buildSnapshots", operation: { try await store.processedMarkdownHead(sourceID: source.id) }) {
                 body = head.content
             }
             snapshots.append(TantivyContentSnapshot(
@@ -144,7 +144,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
         // Chats
         let chats: [ChatSummary]
         do {
-            chats = try store.listChats()
+            chats = try await store.listChats()
         } catch {
             DebugLog.store("StoreBackedTantivyContentSource: listChats failed: \(error)")
             chats = []
@@ -154,7 +154,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
                 ulid: chat.id.rawValue,
                 kind: .chat,
                 title: chat.title,
-                body: chatBody(chatID: chat.id),
+                body: await chatBody(chatID: chat.id),
                 updatedAt: chat.updatedAt,
                 versionSum: UInt64(max(0, chat.messageCount))
             ))
@@ -164,7 +164,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
 
     public func requiresTantivyRebuild() async -> Bool {
         do {
-            return try store.getMetadata(Self.rebuildMarkerKey) == "1"
+            return try await store.getMetadata(Self.rebuildMarkerKey) == "1"
         } catch {
             DebugLog.store("StoreBackedTantivyContentSource: rebuild marker read failed: \(error)")
             return false
@@ -173,7 +173,7 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
 
     public func clearTantivyRebuildRequirement() async {
         do {
-            try store.setMetadata(Self.rebuildMarkerKey, value: "0")
+            try await store.setMetadata(Self.rebuildMarkerKey, value: "0")
         } catch {
             DebugLog.store("StoreBackedTantivyContentSource: rebuild marker clear failed: \(error)")
         }
@@ -184,10 +184,10 @@ final public class StoreBackedTantivyContentSource: TantivyContentSource, Tantiv
     /// Concatenate the plain text of every chat message (user/assistant/tool
     /// events) into one searchable body. `AgentEvent.plainText` already
     /// produces a human-readable rendering per event kind.
-    private func chatBody(chatID: ChatID) -> String {
+    private func chatBody(chatID: ChatID) async -> String {
         let messages: [ChatMessage]
         do {
-            messages = try store.chatMessages(chatID: chatID)
+            messages = try await store.chatMessages(chatID: chatID)
         } catch {
             // A chat with no retrievable messages (e.g. race during deletion)
             // indexes empty body — the title is still searchable. This is an

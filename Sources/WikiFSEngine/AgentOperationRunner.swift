@@ -19,7 +19,7 @@ public enum AgentOperationRunner {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
+        guard let stateMarkdown = await stateMarkdownForRequest(store: store, launcher: launcher) else { return }
         await run(
             request: .query(
                 question: trimmed,
@@ -62,7 +62,7 @@ public enum AgentOperationRunner {
         // strategy read failure refuses the run entirely (no chat created, no
         // session started) rather than launching under invented Default
         // instructions.
-        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
+        guard let stateMarkdown = await stateMarkdownForRequest(store: store, launcher: launcher) else { return }
 
         await changeSignaler.signalChange()
         // The mount is reference-only (the agent reads via `wikictl`); proceed even
@@ -73,7 +73,7 @@ public enum AgentOperationRunner {
 
         // Persist the chat from the first message (issue #119). Best-effort:
         // a store failure yields chat == nil and the session runs unpersisted.
-        let chat = store.startChat(kind: .edit, firstMessage: trimmed)
+        let chat = await store.startChat(kind: .edit, firstMessage: trimmed)
 
         // D2 draft-state morph: if a chat row was created, retarget the active
         // tab IN PLACE from the draft state (.newChat) to .chat(id). The tab's
@@ -99,29 +99,29 @@ public enum AgentOperationRunner {
             // The model seeded the first user message at chat creation; tell the
             // launcher so it skips double-inserting it on the first flush.
             firstMessagePrePersisted: chat != nil,
-            onAcpSessionId: chat.map { chat -> (@MainActor (AcpSessionID?) -> Void) in
+            onAcpSessionId: chat.map { chat -> (@MainActor (AcpSessionID?) async -> Void) in
                 return { [weak store] sessionId in
                     guard let store else { return }
                     if let sessionId {
-                        store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: sessionId)
+                        await store.updateChatAcpSessionId(chatID: chat.id, acpSessionId: sessionId)
                     }
                 }
             },
-            onLock: { store.agentRunStarted() },
+            onLock: { await store.agentRunStarted() },
             onUnlock: { store.agentRunEnded() },
             // Weak store: if the user switches wikis mid-session the model may be
             // torn down — persistence degrades to a no-op rather than writing into
             // the wrong wiki (issue #119).
-            onTranscript: chat.map { chat -> (@MainActor ([AgentEvent]) -> Void) in
-                return { [weak store] events in store?.appendChatEvents(chatID: chat.id, events: events) }
+            onTranscript: chat.map { chat -> (@MainActor ([AgentEvent]) async -> Void) in
+                return { [weak store] events in await store?.appendChatEvents(chatID: chat.id, events: events) }
             },
-            onMessageSummary: chat.map { chat -> (@MainActor (ChatID) -> Void) in
+            onMessageSummary: chat.map { chat -> (@MainActor (ChatID) async -> Void) in
                 return { [weak store] id in
                     Self.summarizePendingMessages(chatID: id, store: store, launcher: launcher)
                 }
             },
             onStreamingCheckpoint: { [weak store] chatID, handle, event, isDraft in
-                store?.checkpointStreamingMessage(
+                await store?.checkpointStreamingMessage(
                     chatID: chatID, handle: handle, event: event, isDraft: isDraft) ?? false
             }
         )
@@ -136,7 +136,7 @@ public enum AgentOperationRunner {
         // holds its first message — never titled-but-empty.)
         if let chat, launcher.preflightError != nil {
             DebugLog.agent("startChat: ROLLBACK chat=\(chat.id.rawValue) preflightError=\(launcher.preflightError ?? "?")")
-            store.rollbackChatCreation(id: chat.id, toDraft: .newChat)
+            await store.rollbackChatCreation(id: chat.id, toDraft: .newChat)
         }
         DebugLog.agent("startChat: done preflightError=\(launcher.preflightError ?? "nil")")
     }
@@ -409,7 +409,7 @@ public enum AgentOperationRunner {
             // flushTranscript() (persisting the other chat's tail) and clears its
             // transcriptSink + activeChatID before we take over. Nothing is lost.
             DebugLog.agent("continueChat: ending between-turns session before takeover")
-            launcher.stopAgent()
+            await launcher.stopAgent()
         case .idle:
             DebugLog.agent("continueChat: idle — taking over directly")
         }
@@ -427,7 +427,7 @@ public enum AgentOperationRunner {
         // Capture the wiki state BEFORE the mount signal: a strategy read
         // failure refuses the run (no session takeover) rather than launching
         // under invented Default instructions.
-        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
+        guard let stateMarkdown = await stateMarkdownForRequest(store: store, launcher: launcher) else { return }
 
         await changeSignaler.signalChange()
         let root = changeSignaler.path ?? ""
@@ -437,7 +437,7 @@ public enum AgentOperationRunner {
         // (hard kill before finalize ran). Cheap single UPDATE → is_draft=0 so
         // the draft flag stays meaningful over time. Must run BEFORE
         // chatMessages so the seed reflects finalized state.
-        store.finalizeStaleDrafts(forChat: chatID)
+        await store.finalizeStaleDrafts(forChat: chatID)
 
         // Build the condensed transcript + new message as the first prompt.
         // #825: the preamble window is adaptive — it scales with conversation
@@ -445,7 +445,7 @@ public enum AgentOperationRunner {
         // legacy flat 10-turn / 12 KB cap. This is the FALLBACK path (used when
         // ACP resume fails / returns nil); the resume path sends the raw
         // `trimmed` message via `firstMessageDisplay`, which is unaffected here.
-        let history = store.chatMessages(chatID: chatID)
+        let history = await store.chatMessages(chatID: chatID)
         let budget = Self.adaptivePreambleBudget(
             eligibleTurns: Self.projectedPreambleTurns(from: history).count)
         let firstMessage = continuationPreamble(
@@ -453,7 +453,7 @@ public enum AgentOperationRunner {
             maxTurns: budget.maxTurns, maxBytes: budget.maxBytes)
         // #830: Read the chat's prior ACP session ID so startInteractiveQuery
         // can attempt resume before falling back to the fresh-start + preamble.
-        let priorAcpSessionId = store.getChat(id: chatID)?.acpSessionId
+        let priorAcpSessionId = await store.getChat(id: chatID)?.acpSessionId
         DebugLog.agent("continueChat: historyRows=\(history.count) preambleChars=\(firstMessage.count) displayMsg=\(trimmed.count) priorAcpSessionId=\(priorAcpSessionId?.rawValue ?? "nil")")
 
         // Start a fresh session writing to the SAME chat row. activeChatID = chat.id
@@ -475,18 +475,18 @@ public enum AgentOperationRunner {
             priorAcpSessionId: priorAcpSessionId,
             onAcpSessionId: { [weak store] sessionId in
                 guard let store else { return }
-                store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionId)
+                await store.updateChatAcpSessionId(chatID: chatID, acpSessionId: sessionId)
             },
-            onLock: { store.agentRunStarted() },
+            onLock: { await store.agentRunStarted() },
             onUnlock: { store.agentRunEnded() },
             onTranscript: { [weak store] events in
-                store?.appendChatEvents(chatID: chatID, events: events)
+                await store?.appendChatEvents(chatID: chatID, events: events)
             },
             onMessageSummary: { [weak store] id in
                 Self.summarizePendingMessages(chatID: id, store: store, launcher: launcher)
             },
             onStreamingCheckpoint: { [weak store] chatID, handle, event, isDraft in
-                store?.checkpointStreamingMessage(
+                await store?.checkpointStreamingMessage(
                     chatID: chatID, handle: handle, event: event, isDraft: isDraft) ?? false
             })
     }
@@ -498,7 +498,7 @@ public enum AgentOperationRunner {
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
-        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
+        guard let stateMarkdown = await stateMarkdownForRequest(store: store, launcher: launcher) else { return }
         await run(
             request: .lint(stateMarkdown: stateMarkdown),
             launcher: launcher,
@@ -519,19 +519,20 @@ public enum AgentOperationRunner {
         changeSignaler: any ChangeSignaler,
         wikictlDirectory: String
     ) async {
-        let preflights = pages.map { page in
-            let preflight = store.preflightLint(pageID: page.id)
+        var preflights: [(title: String, brokenLinks: [String])] = []
+        for page in pages {
+            let preflight = await store.preflightLint(pageID: page.id)
             // Combine all three namespaces, preserving each link's namespace
             // prefix so the agent can tell page links from source/chat links.
             let pageLinks = (preflight?.brokenPageLinks ?? []).map { "[[\($0)]]" }
             let sourceLinks = (preflight?.brokenSourceLinks ?? []).map { "[[source:\($0)]]" }
             let chatLinks = (preflight?.brokenChatLinks ?? []).map { "[[chat:\($0)]]" }
             let allBroken = pageLinks + sourceLinks + chatLinks
-            return (title: page.title, brokenLinks: allBroken)
+            preflights.append((title: page.title, brokenLinks: allBroken))
         }
         let combinedTitle = pages.map(\.title).joined(separator: ", ")
         let combinedBroken = preflights.flatMap(\.brokenLinks)
-        guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
+        guard let stateMarkdown = await stateMarkdownForRequest(store: store, launcher: launcher) else { return }
         await run(
             request: .lintPage(
                 pageTitle: combinedTitle,
@@ -553,9 +554,9 @@ public enum AgentOperationRunner {
     private static func stateMarkdownForRequest(
         store: WikiStoreModel,
         launcher: AgentLauncher
-    ) -> String? {
+    ) async -> String? {
         do {
-            return try store.currentStateSnapshot().renderStateFile()
+            return try await store.currentStateSnapshot().renderStateFile()
         } catch {
             DebugLog.agent("operation preflight: wiki state capture failed — no request: \(error)")
             launcher.preflightError = error.localizedDescription
@@ -594,7 +595,7 @@ public enum AgentOperationRunner {
             wikictlDirectory: wikictlDirectory,
             ingestingSourceIDs: ingestingSourceIDs,
             workspaceID: workspaceID,
-            onLock: { store.agentRunStarted() },
+            onLock: { await store.agentRunStarted() },
             onUnlock: {
                 store.agentRunEnded()
                 // Ingest runs also clear the ingest-in-progress flag (issue #235).
@@ -678,7 +679,7 @@ public enum AgentOperationRunner {
         var after: ChatTranscriptCursor?
         // Page budget: guards against a concurrent-writer livelock.
         for _ in 0..<1000 {
-            let page = store.readChatTranscriptPage(
+            let page = await store.readChatTranscriptPage(
                 chatID: chatID, after: after, limit: 200)
             items.append(contentsOf: page.items)
             guard let next = page.nextCursor else { break }
@@ -687,14 +688,14 @@ public enum AgentOperationRunner {
         let pending = MessageSummarizer.pendingSummaryTargets(from: items)
         guard !pending.isEmpty else { return }
         guard let services = launcher.providerServices else {
-            Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
+            await Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
             return
         }
         do {
             let preparation = try await services.prepareSummarization()
             switch preparation {
             case .defaultTruncation:
-                Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
+                await Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
             case .model(let preparation):
                 await Self.runModelSummarization(
                     chatID: chatID,
@@ -712,7 +713,7 @@ public enum AgentOperationRunner {
                     store: store)
             }
         } catch AgentProviderRuntimeError.unavailable {
-            Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
+            await Self.writeDefaultSummaries(chatID: chatID, pending: pending, store: store)
         } catch {
             DebugLog.agent("AgentOperationRunner: summarization preparation failed: \(error)")
         }
@@ -723,11 +724,13 @@ public enum AgentOperationRunner {
         chatID: ChatID,
         pending: [(cursor: ChatTranscriptCursor, text: String)],
         store: WikiStoreModel
-    ) {
+    ) async {
         for target in pending {
             let summary = MessageSummarizer.defaultSummary(for: target.text)
             guard !summary.isEmpty else { continue }
-            store.updateMessageSummary(chatID: chatID, cursor: target.cursor, summary: summary, kind: .defaultTruncation)
+            await store.updateMessageSummary(
+                chatID: chatID, cursor: target.cursor, summary: summary,
+                kind: .defaultTruncation)
         }
     }
 
@@ -752,10 +755,10 @@ public enum AgentOperationRunner {
                     // like the thrown path; never a silent unsummarized row
                     // (#1279 found this branch skipping the fallback).
                     DebugLog.agent("AgentOperationRunner: model summary returned nil — degrading to truncation")
-                    Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
+                    await Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
                     continue
                 }
-                store.updateMessageSummary(
+                await store.updateMessageSummary(
                     chatID: chatID, cursor: target.cursor,
                     summary: summary, kind: .model)
             } catch {
@@ -763,7 +766,7 @@ public enum AgentOperationRunner {
                 // the strict sandbox fences) must DEGRADE to the default
                 // truncation summary — never leave the message unsummarized.
                 DebugLog.agent("AgentOperationRunner: model summary failed — degrading to truncation: \(error.localizedDescription)")
-                Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
+                await Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
             }
         }
     }
@@ -784,12 +787,12 @@ public enum AgentOperationRunner {
         for target in pending {
             guard let summary = await services.appleIntelligenceSummary(text: target.text) else {
                 DebugLog.agent("AgentOperationRunner: Apple Intelligence summary returned nil — degrading to truncation")
-                Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
+                await Self.writeDefaultSummaries(chatID: chatID, pending: [target], store: store)
                 continue
             }
             // Non-throwing: `WikiStoreModel.updateMessageSummary` logs write
             // failures itself (same as `writeDefaultSummaries` above).
-            store.updateMessageSummary(
+            await store.updateMessageSummary(
                 chatID: chatID, cursor: target.cursor,
                 summary: summary, kind: .model)
         }

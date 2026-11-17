@@ -35,19 +35,19 @@ struct PageTitleCollisionTests {
         #expect(title1 != title2)
     }
 
-    @Test func newPageWithoutExplicitTitleGetsTimestamp() throws {
+    @Test func newPageWithoutExplicitTitleGetsTimestamp() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
-        model.newPage()
-        model.reloadFromStore()
+        await model.newPage()
+        await model.bootstrapFromStore()
         let summary = try #require(model.summaries.first)
         #expect(summary.title.hasPrefix("Untitled "))
         #expect(summary.title != "Untitled")
     }
 
-    @Test func newPageInNewTabWithoutExplicitTitleGetsTimestamp() throws {
+    @Test func newPageInNewTabWithoutExplicitTitleGetsTimestamp() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
-        model.newPageInNewTab()
-        model.reloadFromStore()
+        await model.newPageInNewTab()
+        await model.bootstrapFromStore()
         let summary = try #require(model.summaries.first)
         #expect(summary.title.hasPrefix("Untitled "))
         #expect(summary.title != "Untitled")
@@ -55,80 +55,80 @@ struct PageTitleCollisionTests {
 
     // MARK: - Rename collision
 
-    @Test func renameToExistingTitleIsBlocked() throws {
+    @Test func renameToExistingTitleIsBlocked() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
-        model.newPage(title: "First Page")
-        model.newPage(title: "Second Page")
-        model.reloadFromStore()
+        await model.newPage(title: "First Page")
+        await model.newPage(title: "Second Page")
+        await model.bootstrapFromStore()
         guard case let .page(secondID)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
 
         // Try to rename Second Page → "First Page" (already exists).
-        model.rename(secondID, to: "First Page")
-        model.reloadFromStore()
+        await model.rename(secondID, to: "First Page")
+        await model.bootstrapFromStore()
 
         // The rename should be blocked: title unchanged, conflict surfaced.
         #expect(model.summaries.first { $0.id == secondID }?.title == "Second Page")
         #expect(model.renameConflictingTitle == "First Page")
     }
 
-    @Test func renameToOwnTitleIsAllowed() throws {
+    @Test func renameToOwnTitleIsAllowed() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
-        model.newPage(title: "Same Title")
-        model.reloadFromStore()
+        await model.newPage(title: "Same Title")
+        await model.bootstrapFromStore()
         guard case let .page(id)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
 
         // Renaming to the same title should not trigger a conflict.
-        model.rename(id, to: "Same Title")
-        model.reloadFromStore()
+        await model.rename(id, to: "Same Title")
+        await model.bootstrapFromStore()
         #expect(model.renameConflictingTitle == nil)
         #expect(model.summaries.first { $0.id == id }?.title == "Same Title")
     }
 
-    @Test func renameToExistingTitleCaseInsensitiveIsBlocked() throws {
+    @Test func renameToExistingTitleCaseInsensitiveIsBlocked() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
-        model.newPage(title: "My Page")
-        model.newPage(title: "Other Page")
-        model.reloadFromStore()
+        await model.newPage(title: "My Page")
+        await model.newPage(title: "Other Page")
+        await model.bootstrapFromStore()
         guard case let .page(otherID)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
 
         // "MY PAGE" should collide with "My Page" (case-insensitive).
-        model.rename(otherID, to: "MY PAGE")
-        model.reloadFromStore()
+        await model.rename(otherID, to: "MY PAGE")
+        await model.bootstrapFromStore()
         #expect(model.summaries.first { $0.id == otherID }?.title == "Other Page")
         #expect(model.renameConflictingTitle == "MY PAGE")
     }
 
-    @Test func renameToUniqueTitleSucceeds() throws {
+    @Test func renameToUniqueTitleSucceeds() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
-        model.newPage(title: "Alpha")
-        model.newPage(title: "Beta")
-        model.reloadFromStore()
+        await model.newPage(title: "Alpha")
+        await model.newPage(title: "Beta")
+        await model.bootstrapFromStore()
         guard case let .page(betaID)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
 
-        model.rename(betaID, to: "Gamma")
-        model.reloadFromStore()
+        await model.rename(betaID, to: "Gamma")
+        await model.bootstrapFromStore()
         #expect(model.renameConflictingTitle == nil)
         #expect(model.summaries.first { $0.id == betaID }?.title == "Gamma")
     }
 
-    @Test func clearRenameConflictResets() throws {
+    @Test func clearRenameConflictResets() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
-        model.newPage(title: "A")
-        model.newPage(title: "B")
-        model.reloadFromStore()
+        await model.newPage(title: "A")
+        await model.newPage(title: "B")
+        await model.bootstrapFromStore()
         guard case let .page(bID)? = model.selection else {
             Issue.record("expected a page selection"); return
         }
 
-        model.rename(bID, to: "A")
+        await model.rename(bID, to: "A")
         #expect(model.renameConflictingTitle != nil)
 
         model.clearRenameConflict()

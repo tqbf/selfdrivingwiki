@@ -107,12 +107,13 @@ struct ChatPresentationAPIManifestTests {
     }
 
     @Test func appAgentEventImportsStayAtActivityFeedBoundaries() throws {
+        // P4.3 removed the app-target queue providers (the last AgentEvent
+        // importer); NO app source may import or mention the legacy event
+        // type outside the engine boundary.
         let legacyEventSources = try appSwiftSources()
             .filter { $0.contents.contains("AgentEvent") }
             .map(\.path)
-        let allowedActivityFeedSources: Set<String> = [
-            "Queue/AppQueueIngestionProvider.swift",
-        ]
+        let allowedActivityFeedSources: Set<String> = []
 
         #expect(Set(legacyEventSources) == allowedActivityFeedSources)
         #expect(legacyEventSources.contains("Chats/RemoteChatSession.swift") == false)

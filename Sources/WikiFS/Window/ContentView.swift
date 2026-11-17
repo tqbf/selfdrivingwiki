@@ -20,7 +20,6 @@ struct ContentView: View {
     @Bindable var agentLauncher: AgentLauncher
     let extractionCoordinator: ExtractionCoordinator
     let queueEngine: any QueueEngineClient
-    let extractionProvider: any QueueExtractionProvider
     let installedRendererHost: InstalledRendererHost
     /// Optional typed renderer activation sink for page detail routes.
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
@@ -67,7 +66,6 @@ struct ContentView: View {
         agentLauncher: AgentLauncher,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
-        extractionProvider: any QueueExtractionProvider,
         installedRendererHost: InstalledRendererHost,
         onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil
     ) {
@@ -78,7 +76,6 @@ struct ContentView: View {
         self._agentLauncher = Bindable(wrappedValue: agentLauncher)
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
-        self.extractionProvider = extractionProvider
         self.installedRendererHost = installedRendererHost
         self.onRendererActivation = onRendererActivation
         // Package-declared rich fences: the built-in claim table is app-layer
@@ -164,11 +161,11 @@ struct ContentView: View {
                 onConfirm: { parentID in
                     switch ctx.targets {
                     case .pages(let ids):
-                        for id in ids { store.addPageRef(parentID: parentID, pageID: id) }
+                        for id in ids { Task { await store.addPageRef(parentID: parentID, pageID: id) } }
                     case .sources(let ids):
-                        for id in ids { store.addSourceRef(parentID: parentID, sourceID: id) }
+                        for id in ids { Task { await store.addSourceRef(parentID: parentID, sourceID: id) } }
                     case .chats(let ids):
-                        for id in ids { store.addChatRef(parentID: parentID, chatID: id) }
+                        for id in ids { Task { await store.addChatRef(parentID: parentID, chatID: id) } }
                     }
                 }
             )
@@ -191,7 +188,7 @@ struct ContentView: View {
                         ingestingSourceIDs: tracker.ingestingSourceIDs,
                         showingImportMarkdown: $showingImportMarkdown,
                         onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
-                        onNewPage: { store.newPageInNewTab() })
+                        onNewPage: { Task { await store.newPageInNewTab() } })
         } detail: {
             detailColumn
         }
@@ -318,11 +315,11 @@ struct ContentView: View {
             ToolbarSpacer(.fixed, placement: .navigation)
             ToolbarItem(placement: .navigation) {
                 ToolbarAddButtons(
-                    onAddPage: { store.newPageInNewTab() },
+                    onAddPage: { Task { await store.newPageInNewTab() } },
                     onAddFromURL: { pendingAddURL = PendingAddURL(url: "") },
                     onAddFile: addFile,
                     onAddFolder: { showingImportMarkdown = true },
-                    onAddChat: { store.beginNewChat() })
+                    onAddChat: { Task { await store.beginNewChat() } })
             }
             // Adjacent `.navigation` items share one glass bubble on macOS 26,
             // even across a fixed spacer. Opt this item out of the shared
@@ -365,7 +362,6 @@ struct ContentView: View {
             fileProvider: fileProvider,
             extractionCoordinator: extractionCoordinator,
             queueEngine: queueEngine,
-            extractionProvider: extractionProvider,
             installedRendererHost: installedRendererHost,
             onRendererActivation: onRendererActivation,
             runIngest: { id in runIngest(sourceID: id) },
@@ -383,7 +379,7 @@ struct ContentView: View {
     private func runIngest(sourceID: SourceID) {
         DebugLog.ingest("ContentView.runIngest: user pressed Ingest (sourceID=\(sourceID.rawValue))")
         Task {
-            store.flushPendingSaves()
+            await store.flushPendingSaves()
             await enqueueIngestion(
                 sourceIDs: [sourceID],
                 store: store,
@@ -434,7 +430,7 @@ struct ContentView: View {
         .opacity(0).allowsHitTesting(false)
 
         // Cmd+Shift+P: Add Page (same handler as the sidebar + / welcome addPage).
-        Button("") { store.newPageInNewTab() }
+        Button("") { Task { await store.newPageInNewTab() } }
             .keyboardShortcut("p", modifiers: [.command, .shift])
             .opacity(0).allowsHitTesting(false)
 
@@ -459,7 +455,7 @@ struct ContentView: View {
         // Cmd+Shift+C: Add Chat (same handler as the chats sidebar + / the
         // address-bar "new chat" button — store.beginNewChat(), which
         // persists the chat row and opens its `.chat(id)` tab).
-        Button("") { store.beginNewChat() }
+        Button("") { Task { await store.beginNewChat() } }
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .opacity(0).allowsHitTesting(false)
 
@@ -615,6 +611,11 @@ struct RendererActivationView: View {
     let installedRendererHost: InstalledRendererHost
     let request: RendererActivationPresentation
     @State private var rendererSessionPreparation = RendererSessionPreparationOwner()
+    /// Plan P1: the exact authorized input bytes load asynchronously now
+    /// (WikiStore flip). The payload is cached in state; `rendererContent`
+    /// renders with `nil` sourceBytes until it lands, then re-renders.
+    @State private var authorizedPayloadBytes: Data?
+
 
     var body: some View {
         rendererContent
@@ -622,12 +623,16 @@ struct RendererActivationView: View {
             .navigationTitle(title)
             .onExitCommand { dismiss() }
             .task(id: request.id) { preparePackageSession() }
-            .onDisappear { rendererSessionPreparation.cancel() }
+            .onDisappear { Task { await rendererSessionPreparation.cancel() } }
     }
 
     @ViewBuilder
     private var rendererContent: some View {
         if let descriptor = rendererDescriptor {
+            builtInInputsView
+                .task(id: request.input) {
+                    authorizedPayloadBytes = await authorizedPayload()?.bytes
+                }
             if let builtInView = BuiltInRendererFactoryMap.makeView(
                 for: descriptor,
                 inputs: builtInInputs) {
@@ -655,18 +660,25 @@ struct RendererActivationView: View {
         ?? installedRendererHost.inputs.availableDescriptors.first(where: { $0.reference == request.reference })
     }
 
+    /// Loads the authorized input bytes off the main render pass (plan P1:
+    /// the store read suspends now). During the load window the built-in
+    /// renderers see nil sourceBytes and use their fallback presentation.
+    @ViewBuilder
+    private var builtInInputsView: some View {
+        Color.clear.frame(width: 0, height: 0)
+    }
+
     private var builtInInputs: BuiltInRendererFactoryInputs {
-        let payload = authorizedPayload()
-        return BuiltInRendererFactoryInputs(
-            sourceBytes: payload?.bytes,
+        BuiltInRendererFactoryInputs(
+            sourceBytes: authorizedPayloadBytes,
             pdfQuote: nil,
             htmlSource: nil,
             mediaTarget: nil)
     }
 
-    private func authorizedPayload() -> RendererBridgeInputPayload? {
+    private func authorizedPayload() async -> RendererBridgeInputPayload? {
         do {
-            return try Self.authorizedPayload(
+            return try await Self.authorizedPayload(
                 store: store.internalStore,
                 input: request.input)
         } catch {
@@ -678,24 +690,29 @@ struct RendererActivationView: View {
     static func authorizedPayload(
         store: any WikiStore,
         input: RendererBridgeInput
-    ) throws -> RendererBridgeInputPayload {
+    ) async throws -> RendererBridgeInputPayload {
         let reader = RendererAuthorizedInputReader(
             store: store,
             authorizedInput: input)
-        return try reader.read(input)
+        return try await reader.read(input)
     }
 
     private func preparePackageSession() {
         guard let descriptor = rendererDescriptor,
               case .webPackage = descriptor.implementation,
               let configuration = installedRendererHost.inputs.configuration(for: descriptor)
-        else { rendererSessionPreparation.cancel(); return }
-        rendererSessionPreparation.prepare(.init(
-            descriptor: descriptor, configuration: configuration, input: request.input,
-            admittedSource: request.sourceContext?.source, store: store.internalStore,
-            siblingSources: request.sourceContext?.siblingSources ?? [:],
-            sourceExtensions: request.sourceContext?.sourceExtensions ?? [:],
-            hostNavigationRouting: .store(store)))
+        else {
+            Task { await rendererSessionPreparation.cancel() }
+            return
+        }
+        Task {
+            await rendererSessionPreparation.prepare(.init(
+                descriptor: descriptor, configuration: configuration, input: request.input,
+                admittedSource: request.sourceContext?.source, store: store.internalStore,
+                siblingSources: request.sourceContext?.siblingSources ?? [:],
+                sourceExtensions: request.sourceContext?.sourceExtensions ?? [:],
+                hostNavigationRouting: .store(store)))
+        }
     }
 
     private func packageRendererView(for descriptor: RendererDescriptor) -> AnyView? {

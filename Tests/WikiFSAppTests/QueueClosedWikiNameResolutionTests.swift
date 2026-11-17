@@ -34,7 +34,7 @@ struct QueueClosedWikiNameResolutionTests {
 
     /// A payload persisted before `recordedNames` existed — the field is
     /// absent from the stored JSON — must decode unchanged with `nil`.
-    @Test func legacyPayloadWithoutRecordedNamesDecodesNil() throws {
+    @Test func legacyPayloadWithoutRecordedNamesDecodesNil() async throws {
         let json = #"{"sourceIDs":["rs1"]}"#
         let payload = try JSONDecoder().decode(QueueItemPayload.self, from: Data(json.utf8))
         #expect(payload.sourceIDs == [SourceID(rawValue: "rs1")])
@@ -45,7 +45,7 @@ struct QueueClosedWikiNameResolutionTests {
     /// The field round-trips through the storage encoding, and the typed
     /// accessors restore the namespace. An empty recorded string counts as
     /// unrecorded — it can never resolve to a display name.
-    @Test func recordedNamesRoundTripThroughStorageEncoding() throws {
+    @Test func recordedNamesRoundTripThroughStorageEncoding() async throws {
         let payload = QueueItemPayload(
             sourceIDs: [],
             lintPageIDs: [PageID(rawValue: "pg1")],
@@ -511,7 +511,12 @@ struct QueueClosedWikiNameResolutionTests {
             attempt: 0,
             createdAt: 0)
 
-        let tracker = QueueActivityTracker()
+        // P5: the production reader is daemon-mediated; the seam injects a
+        // local-store-backed reader here (the store answers through the same
+        // `any WikiStore` protocol the daemon transport serves).
+        let tracker = QueueActivityTracker(loader: QueueClosedWikiNameLoader.daemonLoader { _ in
+            try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        })
         await tracker.refreshClosedWikiNames(
             for: [lintJob, ingestJob],
             sessions: [:], // the wiki's window is closed
@@ -548,6 +553,9 @@ struct QueueClosedWikiNameResolutionTests {
             orderingKey: 1,
             attempt: 0,
             createdAt: 0)
+        // P5: no local reader — an UNINJECTED tracker (no daemon reader) fails
+        // every load explicitly, which is the same unavailable surface a
+        // nonexistent database produces.
         let tracker = QueueActivityTracker()
         let missing = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-no-such-db-\(UUID().uuidString).sqlite")
@@ -755,7 +763,7 @@ struct QueueClosedWikiNameResolutionTests {
     /// cross-window seam `RootView` consumes once the session exists) and
     /// then opens the wiki window. The link parses back to the exact page
     /// ID through the same router the in-wiki transcript uses.
-    @Test func clickThroughStashesDeepLinkThenOpensClosedWiki() throws {
+    @Test func clickThroughStashesDeepLinkThenOpensClosedWiki() async throws {
         let spy = RouterSpy()
         let wikiID = WikiID(rawValue: "closed-wiki")
         let pageID = PageID(rawValue: "pg-123")
@@ -773,7 +781,7 @@ struct QueueClosedWikiNameResolutionTests {
     }
 
     /// A source target stashes a `wiki://source` link (#598 reveal seam).
-    @Test func clickThroughStashesSourceDeepLink() throws {
+    @Test func clickThroughStashesSourceDeepLink() async throws {
         let spy = RouterSpy()
         let sourceID = SourceID(rawValue: "src-9")
         spy.router.route(.source(sourceID), title: "notes.md", in: WikiID(rawValue: "closed-wiki"))
@@ -788,7 +796,7 @@ struct QueueClosedWikiNameResolutionTests {
 
     /// Live session: the navigation lands on the shared store BEFORE the
     /// window focus (the historical #583/#598 order), and no stash happens.
-    @Test func clickThroughNavigatesLiveSessionBeforeFocusingWindow() throws {
+    @Test func clickThroughNavigatesLiveSessionBeforeFocusingWindow() async throws {
         let dir = try tempDirectory()
         let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         let model = WikiStoreModel(store: store)
@@ -803,7 +811,7 @@ struct QueueClosedWikiNameResolutionTests {
 
     /// A live source link opens the exact typed source tab. It must not
     /// reinterpret the raw ULID in the page namespace.
-    @Test func liveSourceLinkOpensExactTypedSource() throws {
+    @Test func liveSourceLinkOpensExactTypedSource() async throws {
         let dir = try tempDirectory()
         let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         let model = WikiStoreModel(store: store)
@@ -820,7 +828,7 @@ struct QueueClosedWikiNameResolutionTests {
 
     /// An empty or missing recorded title uses the raw ID for the link title.
     /// The canonical `id` query item still controls the route.
-    @Test func deepLinkTitleFallsBackToRawID() throws {
+    @Test func deepLinkTitleFallsBackToRawID() async throws {
         let pageID = PageID(rawValue: "pg-77")
         let url = QueueTargetRouter.deepLinkURL(for: .page(pageID), title: nil)
         guard case .page(let title, let id, _) = WikiReaderView.linkRoute(for: url) else {
@@ -849,8 +857,8 @@ struct QueueClosedWikiNameResolutionTests {
     @Test func ingestionEnqueueRecordsSourceEffectiveNames() async throws {
         let store = try TestStoreFactory.inMemory()
         let model = WikiStoreModel(store: store)
-        model.addSource(filename: "notes.md", data: Data("# Heading\n\nbody".utf8))
-        model.reloadFromStore()
+        await model.addSource(filename: "notes.md", data: Data("# Heading\n\nbody".utf8))
+        await model.bootstrapFromStore()
         let md = try #require(model.sources.first)
         let queueStore = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
         let engine = QueueEngine(store: queueStore, workerFactory: NoopWorkerFactory())

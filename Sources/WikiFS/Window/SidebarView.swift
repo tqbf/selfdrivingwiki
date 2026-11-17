@@ -101,7 +101,7 @@ struct SidebarView: View {
             Button("Create") {
                 let name = newBookmarkFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !name.isEmpty else { return }
-                store.createFolder(parentID: nil, name: name)
+                Task { _ = await store.createFolder(parentID: nil, name: name) }
             }
         }
         // "Show In List" reveal (issue #183): a detail-view button asked the
@@ -183,7 +183,6 @@ struct SidebarView: View {
             SourcesContainerView(store: store, fileProvider: fileProvider,
                                  session: session, launcher: launcher,
                                  queueEngine: session.queueEngine,
-                                 extractionProvider: session.extractionProvider,
                                  ingestingSourceIDs: ingestingSourceIDs,
                                  sourceSort: $sourceSort,
                                  showingImportMarkdown: $showingImportMarkdown,
@@ -290,8 +289,8 @@ private struct BookmarkPickerSheetModifier: ViewModifier {
                     let parentID = ctx.parentID
                     for id in selectedIDs {
                         switch id {
-                        case .page(let pageID): store.addPageRef(parentID: parentID, pageID: pageID)
-                        case .source(let sourceID): store.addSourceRef(parentID: parentID, sourceID: sourceID)
+                        case .page(let pageID): Task { await store.addPageRef(parentID: parentID, pageID: pageID) }
+                        case .source(let sourceID): Task { await store.addSourceRef(parentID: parentID, sourceID: sourceID) }
                         }
                     }
                 }

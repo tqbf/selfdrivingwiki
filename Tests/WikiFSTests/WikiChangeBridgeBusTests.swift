@@ -53,7 +53,7 @@ struct WikiChangeBridgeBusTests {
 
         // A direct store write emits a local event; Phase E: the model
         // reloads on ALL events, including its own writes.
-        _ = try store.createPage(title: "Local")
+        _ = try await store.createPage(title: "Local")
         try await awaitTitles(model, expected: ["Local"])
 
         let titles = Set(model.summaries.map(\.title))
@@ -63,11 +63,11 @@ struct WikiChangeBridgeBusTests {
     @MainActor @Test func coarseBusEventReloadsModel() async throws {
         let (store, bus, model) = try makeModel()
         // A direct store write already reloads the model (Phase E).
-        _ = try store.createPage(title: "External")
+        _ = try await store.createPage(title: "External")
         try await awaitTitles(model, expected: ["External"])
 
         // The bridge's flush emits this coarse event for the active wiki.
-        _ = try store.createPage(title: "Second")
+        _ = try await store.createPage(title: "Second")
         bus.emit(ResourceChangeEvent(wikiID: WikiID(rawValue: "W"), kind: nil, id: "", change: .updated))
         try await awaitTitles(model, expected: ["External", "Second"])
 
@@ -78,11 +78,11 @@ struct WikiChangeBridgeBusTests {
 
     @MainActor @Test func externalEventThenAnotherExternalReloadsAgain() async throws {
         let (store, bus, model) = try makeModel()
-        _ = try store.createPage(title: "First")
+        _ = try await store.createPage(title: "First")
         bus.emit(ResourceChangeEvent(wikiID: WikiID(rawValue: "W"), kind: nil, id: "", change: .updated))
         try await awaitTitles(model, expected: ["First"])
 
-        _ = try store.createPage(title: "Second")
+        _ = try await store.createPage(title: "Second")
         bus.emit(ResourceChangeEvent(wikiID: WikiID(rawValue: "W"), kind: nil, id: "", change: .updated))
         try await awaitTitles(model, expected: ["First", "Second"])
 
@@ -108,7 +108,7 @@ struct WikiChangeBridgeBusTests {
 
         // Store B = wikictl's store (same DB file, no bus).
         let storeB = try GRDBWikiStore(databaseURL: url)
-        _ = try storeB.createPage(title: "Chat-Created Page")
+        _ = try await storeB.createPage(title: "Chat-Created Page")
 
         // No bus event has fired yet → model is stale.
         #expect(model.summaries.isEmpty, "no bus event yet → model must be stale")
@@ -137,7 +137,7 @@ struct WikiChangeBridgeBusTests {
         // per page, but the bridge collapses them into one flush).
         let storeB = try GRDBWikiStore(databaseURL: url)
         for title in ["Alpha", "Beta", "Gamma"] {
-            _ = try storeB.createPage(title: title)
+            _ = try await storeB.createPage(title: title)
         }
 
         // One coarse event after the burst settles.

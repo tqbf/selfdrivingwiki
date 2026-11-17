@@ -206,7 +206,7 @@ struct WikiStrategyRunTests {
 
     // MARK: - App + daemon capture (AC.2: WikiStrategyRunTests.appAndDaemonCapture)
 
-    @Test func appAndDaemonCapture() throws {
+    @Test func appAndDaemonCapture() async throws {
         // Two wikis, two committed strategies. Capture is per-request from each
         // wiki's own store — a wiki never sees another wiki's strategy (and no
         // process-scoped service is involved, so this must hold by construction).
@@ -223,7 +223,7 @@ struct WikiStrategyRunTests {
             expectedRevision: nil)
 
         // App host: the snapshot the model builds at request time.
-        let appSnapshot = try appModel.currentStateSnapshot()
+        let appSnapshot = try await appModel.currentStateSnapshot()
         #expect(appSnapshot.strategy == appStrategy)
         assertCustomStrategyRendered(
             appSnapshot.renderStateFile(), strategy: appStrategy,
@@ -243,7 +243,7 @@ struct WikiStrategyRunTests {
 
     // MARK: - Every operation kind receives the strategy (AC.2)
 
-    @Test func allOperationKindsReceiveStrategy() throws {
+    @Test func allOperationKindsReceiveStrategy() async throws {
         let (model, store) = try makeModel(wikiID: "strategy-run-kinds")
         let strategy = try saveStrategy(
             store, name: "Kinds strategy",
@@ -257,7 +257,7 @@ struct WikiStrategyRunTests {
         // (AgentOperationRunner :25/:86/:456/:490/:525 and
         // AppQueueIngestionProvider :164/:376/:461) — one snapshot, rendered
         // per request at construction time.
-        let appStateMarkdown = try model.currentStateSnapshot().renderStateFile()
+        let appStateMarkdown = try await model.currentStateSnapshot().renderStateFile()
 
         let stagedSource = OperationRequest.StagedSource(
             bytes: Data("# Staged".utf8),
@@ -290,7 +290,7 @@ struct WikiStrategyRunTests {
 
     // MARK: - A run keeps its captured strategy (AC.2)
 
-    @Test func activeRunRetainsCapturedStrategy() throws {
+    @Test func activeRunRetainsCapturedStrategy() async throws {
         let (model, store) = try makeModel(wikiID: "strategy-run-retain")
         let first = try saveStrategy(
             store, name: "First revision strategy",
@@ -299,7 +299,7 @@ struct WikiStrategyRunTests {
 
         // Snapshot paths: the request's snapshot is an immutable value. A save
         // after construction must not change what the in-flight run sees.
-        let captured = try model.currentStateSnapshot()
+        let captured = try await model.currentStateSnapshot()
         let capturedRendered = captured.renderStateFile()
         let second = try saveStrategy(
             store, name: "Second revision strategy",
@@ -310,7 +310,7 @@ struct WikiStrategyRunTests {
         assertCustomStrategyRendered(capturedRendered, strategy: first, context: "retained snapshot")
         #expect(!capturedRendered.contains(second.instructions))
         // The store itself has moved on — only LATER requests see revision 2.
-        let later = try model.currentStateSnapshot()
+        let later = try await model.currentStateSnapshot()
         #expect(later.strategy == second)
         assertCustomStrategyRendered(later.renderStateFile(), strategy: second, context: "later snapshot")
 
@@ -336,13 +336,13 @@ struct WikiStrategyRunTests {
 
     // MARK: - Default snapshots unchanged (AC.2)
 
-    @Test func defaultSnapshotParity() throws {
+    @Test func defaultSnapshotParity() async throws {
         let (model, store) = try makeModel(wikiID: "strategy-run-default")
         _ = try store.createPage(title: "Plain Page")
 
         // A wiki that never saved a strategy captures Default: no strategy
         // section, byte-identical to the pre-strategy snapshot.
-        let snapshot = try model.currentStateSnapshot()
+        let snapshot = try await model.currentStateSnapshot()
         #expect(snapshot.strategy == nil)
         let rendered = snapshot.renderStateFile()
         #expect(!rendered.contains("Wiki Strategy"), "Default adds no strategy section")
@@ -358,10 +358,10 @@ struct WikiStrategyRunTests {
             store, name: "Transient",
             instructions: "Briefly custom.",
             expectedRevision: nil)
-        #expect(try model.currentStateSnapshot().strategy == saved)
+        #expect(try await model.currentStateSnapshot().strategy == saved)
         try resetToDefault(store, after: saved)
-        #expect(try model.currentStateSnapshot().strategy == nil, "tombstone reads as Default")
-        #expect(try model.currentStateSnapshot().renderStateFile().contains("Wiki Strategy") == false)
+        #expect(try await model.currentStateSnapshot().strategy == nil, "tombstone reads as Default")
+        #expect(try await model.currentStateSnapshot().renderStateFile().contains("Wiki Strategy") == false)
         #expect(try DaemonWikiState.stateMarkdown(from: store).contains("Wiki Strategy") == false)
 
         // The Default-strategy chat turn still carries EXPLICIT authority —
@@ -389,7 +389,7 @@ struct WikiStrategyRunTests {
     /// deterministically: a second connection to the same file-backed database
     /// drops the `wiki_strategy` table, so every later strategy read errors
     /// while the inventory reads keep succeeding.
-    @Test func strategyReadFailureThrowsNeverDefaults() throws {
+    @Test func strategyReadFailureThrowsNeverDefaults() async throws {
         let directory = try makeChatDirectory("read-error")
         defer { removeFixture(directory) }
         let url = directory.appendingPathComponent("WikiFS.sqlite")
@@ -403,12 +403,12 @@ struct WikiStrategyRunTests {
             do { try other.close() }
             catch { Issue.record("Failed to close strategy fixture pool: \(error)") }
         }
-        try other.write { db in
+        try await other.write { db in
             try db.execute(sql: "DROP TABLE wiki_strategy")
         }
 
-        #expect(throws: WikiStateSnapshotError.self) {
-            try model.currentStateSnapshot()
+        await #expect(throws: WikiStateSnapshotError.self) {
+            try await model.currentStateSnapshot()
         }
         #expect(throws: WikiStateSnapshotError.self) {
             try DaemonWikiState.stateMarkdown(from: store)

@@ -50,7 +50,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         let result = await model.importFromMarkdownFolder(directory: dir)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(result.imported == 3)
         #expect(result.errors.isEmpty)
         #expect(model.sources.count == 3)
@@ -65,7 +65,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         _ = await model.importFromMarkdownFolder(directory: dir)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let filenames = Set(model.sources.map(\.filename))
         #expect(filenames == ["My Note.md", "Project Plan.md"])
     }
@@ -77,7 +77,7 @@ struct WikiStoreModelMarkdownImportTests {
         let dir = try tempMarkdownDir(files: ["note.md": body])
 
         _ = await model.importFromMarkdownFolder(directory: dir)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(model.sources.count == 1)
         let id = model.sources.first!.id
         let storedContent = try store.sourceContent(id: id)
@@ -95,7 +95,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         let result = await model.importFromMarkdownFolder(directory: dir)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(result.imported == 1)
         #expect(model.sources.count == 1)
         #expect(model.sources.first?.filename == "note.md")
@@ -120,7 +120,7 @@ struct WikiStoreModelMarkdownImportTests {
         let dir = try tempMarkdownDir(files: [:])
 
         let result = await model.importFromMarkdownFolder(directory: dir)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(result.imported == 0)
         #expect(result.errors.isEmpty)
         #expect(model.sources.isEmpty)
@@ -135,7 +135,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         let result = await model.importFromMarkdownFolder(directory: dir)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(result.imported == 0)
         #expect(model.sources.isEmpty)
     }
@@ -150,7 +150,7 @@ struct WikiStoreModelMarkdownImportTests {
         ])
 
         let result = await model.importFromMarkdownFolder(directory: dir)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(result.imported == 3)
         #expect(result.errors.isEmpty)
         let filenames = Set(model.sources.map(\.filename))
@@ -181,7 +181,7 @@ struct WikiStoreModelMarkdownImportTests {
         let dir = try tempMarkdownDir(files: ["ObsidianNote.md": body])
 
         _ = await model.importFromMarkdownFolder(directory: dir)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(model.sources.count == 1)
         let id = model.sources.first!.id
         let stored = try store.sourceContent(id: id)
@@ -213,7 +213,7 @@ struct WikiStoreModelMarkdownImportTests {
         try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
 
         let result = await model.importFromMarkdownFolder(directory: root)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(result.imported == 1)
         #expect(model.sources.first?.filename == "visible.md")
     }
@@ -225,14 +225,14 @@ struct WikiStoreModelMarkdownImportTests {
         // First import
         let dir1 = try tempMarkdownDir(files: ["one.md": "# One"])
         let r1 = await model.importFromMarkdownFolder(directory: dir1)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(r1.imported == 1)
         let countAfterFirst = model.sources.count
 
         // Second import
         let dir2 = try tempMarkdownDir(files: ["two.md": "# Two"])
         let r2 = await model.importFromMarkdownFolder(directory: dir2)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(r2.imported == 1)
         #expect(model.sources.count == countAfterFirst + 1)
     }
@@ -255,17 +255,20 @@ struct WikiStoreModelMarkdownImportTests {
     /// the verbatim bytes (origin "source"). Every source has a chain: PDFs are
     /// seeded from extraction, markdown-native sources self-seed. The seed means
     /// headVersion is never nil — the original content is always available as v1.
-    @Test func processedMarkdownHeadOnMdSourceSelfSeedsV1() throws {
+    @Test func processedMarkdownHeadOnMdSourceSelfSeedsV1() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
 
-        model.addSource(filename: "note.md", data: Data("# Hello".utf8))
-        model.reloadFromStore()
+        await model.addSource(filename: "note.md", data: Data("# Hello".utf8))
+        // P1-FLIP-REVIEW: reloadFromStore() now only enqueues a coalesced async
+        // reload; bootstrapFromStore() awaits the same drain so the sources
+        // projection below is populated.
+        await model.bootstrapFromStore()
         #expect(model.sources.count == 1)
         let source = model.sources[0]
 
         // Self-seeds: the verbatim bytes become v1 (origin "source").
-        let head = model.processedMarkdownHead(for: source)
+        let head = await model.processedMarkdownHead(for: source)
         #expect(head != nil)
         #expect(head?.content == "# Hello")
         #expect(head?.origin == .source)
@@ -275,23 +278,23 @@ struct WikiStoreModelMarkdownImportTests {
         #expect(try store.processedMarkdownHistory(sourceID: source.id).count == 1)
 
         // Second call returns the same head — no double-seed.
-        let head2 = model.processedMarkdownHead(for: source)
+        let head2 = await model.processedMarkdownHead(for: source)
         #expect(head2?.id == head?.id)
         #expect(try store.processedMarkdownHistory(sourceID: source.id).count == 1)
     }
 
     /// Binary sources (non-text MIME) do NOT self-seed — only markdown-native
     /// sources get a chain from their verbatim bytes.
-    @Test func processedMarkdownHeadOnBinarySourceReturnsNil() throws {
+    @Test func processedMarkdownHeadOnBinarySourceReturnsNil() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
 
-        model.addSource(filename: "data.bin", data: Data([0x00, 0x01, 0x02]))
-        model.reloadFromStore()
+        await model.addSource(filename: "data.bin", data: Data([0x00, 0x01, 0x02]))
+        await model.bootstrapFromStore()
         #expect(model.sources.count == 1)
         let source = model.sources[0]
 
-        #expect(model.processedMarkdownHead(for: source) == nil)
+        #expect(await model.processedMarkdownHead(for: source) == nil)
         #expect(try !store.hasProcessedMarkdown(sourceID: source.id))
     }
 }

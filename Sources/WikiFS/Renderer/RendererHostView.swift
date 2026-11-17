@@ -16,8 +16,8 @@ struct RendererHostView<Source: View, Rendered: View>: View {
     let showsControls: Bool
     let source: () -> Source
     let rendered: (RendererDescriptor) -> Rendered?
-    let onRendererSelected: (RendererReference) -> Void
-    let onPresentationSelected: (RendererPresentationState.Selection) -> Void
+    let onRendererSelected: (RendererReference) async -> Void
+    let onPresentationSelected: (RendererPresentationState.Selection) async -> Void
     let onFallback: (String) -> Void
 
     private var selectedDescriptor: RendererDescriptor? {
@@ -79,14 +79,16 @@ struct RendererHostView<Source: View, Rendered: View>: View {
                 return .renderer(reference)
             },
             set: { tab in
-                switch tab {
-                case .source:
-                    state.selectSource()
-                    onPresentationSelected(.source)
-                case let .renderer(reference):
-                    state.selectRendered(reference)
-                    onRendererSelected(reference)
-                    onPresentationSelected(.rendered)
+                Task { @MainActor in
+                    switch tab {
+                    case .source:
+                        state.selectSource()
+                        await onPresentationSelected(.source)
+                    case let .renderer(reference):
+                        state.selectRendered(reference)
+                        await onRendererSelected(reference)
+                        await onPresentationSelected(.rendered)
+                    }
                 }
             })
     }

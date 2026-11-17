@@ -63,10 +63,10 @@ enum RendererAssetSessionPreparer {
         maximumBytesPerAsset: Int,
         maximumAggregateSessionBytes: Int,
         maximumPerRequestReadCount: Int
-    ) -> RendererAuthorizedAssetReader? {
+    ) async -> RendererAuthorizedAssetReader? {
         guard result.records.isEmpty == false else { return nil }
         do {
-            let admissions = try RendererAssetAdmissionProjection.buildAdmissions(
+            let admissions = try await RendererAssetAdmissionProjection.buildAdmissions(
                 records: result.records,
                 siblingSourceMap: siblingSources,
                 store: store,

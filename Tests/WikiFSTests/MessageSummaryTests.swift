@@ -521,7 +521,7 @@ struct MessageSummaryTests {
     /// `reloadChats()`. `.onChange(of: chats)` would never fire. The
     /// `messageVersion` counter fixes this — it bumps unconditionally in
     /// `reloadChats()`, giving SwiftUI an always-changing observable.
-    @Test @MainActor func messageVersion_bumpsEvenWhenChatsUnchanged() throws {
+    @Test @MainActor func messageVersion_bumpsEvenWhenChatsUnchanged() async throws {
         let store = try TestStoreFactory.inMemory()
         let model = WikiStoreModel(store: store)
         let chat = try store.createChat(kind: .edit, title: "Chat")
@@ -529,6 +529,9 @@ struct MessageSummaryTests {
             store, chatID: chat.id, id: "a1", text: "Long answer.")
 
         model.reloadChats()
+        // P1-FLIP-REVIEW: reloadChats() now only enqueues a coalesced async
+        // reload; bootstrapFromStore() awaits the same drain before asserting.
+        await model.bootstrapFromStore()
         let chatsBefore = model.chats
         let versionBefore = model.messageVersion
 
@@ -539,6 +542,7 @@ struct MessageSummaryTests {
             summary: "Cached.", kind: .model)
 
         model.reloadChats()
+        await model.bootstrapFromStore()
 
         // Root cause: chats array is structurally identical.
         #expect(model.chats == chatsBefore,
@@ -574,18 +578,25 @@ struct MessageSummaryTests {
     /// `messageVersion` bumps on every `reloadChats()` call, even back-to-back
     /// with no store change at all. This guarantees `.onChange` fires after
     /// every mutation that routes through `reloadFromStore()` → `reloadChats()`.
-    @Test @MainActor func messageVersion_bumpsOnEveryReloadChats() throws {
+    @Test @MainActor func messageVersion_bumpsOnEveryReloadChats() async throws {
         let store = try TestStoreFactory.inMemory()
         let model = WikiStoreModel(store: store)
         _ = try store.createChat(kind: .edit, title: "Chat")
 
         model.reloadChats()
+        await model.bootstrapFromStore()
         let v0 = model.messageVersion
         model.reloadChats()
+        await model.bootstrapFromStore()
         let v1 = model.messageVersion
         model.reloadChats()
+        await model.bootstrapFromStore()
         let v2 = model.messageVersion
 
+        // P1-FLIP-REVIEW: reloadChats() now only enqueues a coalesced async
+        // reload (back-to-back calls merge into one drain), so each cycle is
+        // separated by an awaited bootstrapFromStore() drain; the assertions
+        // that every reload cycle bumps the version are unchanged.
         #expect(v1 > v0)
         #expect(v2 > v1)
     }

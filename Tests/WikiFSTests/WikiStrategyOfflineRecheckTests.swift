@@ -163,10 +163,10 @@ struct WikiStrategyOfflineRecheckTests {
         results: EvaluationResultsFile,
         includeADR021: Bool = true,
         artifactURL: URL? = nil
-    ) throws -> OfflineRecheckRecord {
+    ) async throws -> OfflineRecheckRecord {
         let seeded = try seedRepositoryArtifact(includeADR021: includeADR021)
         let url = artifactURL ?? seeded.url
-        return try OfflineRecheckRunner().recheck(
+        return try await OfflineRecheckRunner().recheck(
             scenario: scenario,
             recordedResults: results,
             recordedResultsPath: "/recorded/results.json",
@@ -177,9 +177,9 @@ struct WikiStrategyOfflineRecheckTests {
     // MARK: - Happy path
 
     @Test("re-evaluates after-only checks read-only and carries before-dependent checks unchanged")
-    func reevaluatesAndCarriesForward() throws {
+    func reevaluatesAndCarriesForward() async throws {
         let results = recordedResultsFile()
-        let recheck = try runRecheck(results: results)
+        let recheck = try await runRecheck(results: results)
 
         // Combined verdict: the corrected heuristic passes the re-evaluated
         // superseded check; the carried rows were already PASS.
@@ -221,29 +221,29 @@ struct WikiStrategyOfflineRecheckTests {
     // MARK: - Refusals
 
     @Test("refuses a canned or dry-run record")
-    func refusesNonLiveRecord() {
+    func refusesNonLiveRecord() async {
         for kind in [EvaluationRunKind.canned, .dryRun] {
-            #expect(throws: OfflineRecheckError.recordedRunNotLive(runKind: kind.rawValue)) {
-                _ = try runRecheck(results: recordedResultsFile(runKind: kind))
+            await #expect(throws: OfflineRecheckError.recordedRunNotLive(runKind: kind.rawValue)) {
+                _ = try await runRecheck(results: recordedResultsFile(runKind: kind))
             }
         }
     }
 
     @Test("refuses when the scenario has no record")
-    func refusesMissingScenarioRecord() {
-        #expect(throws: OfflineRecheckError.scenarioRecordMissing(.supersededRepositoryDecision)) {
-            _ = try runRecheck(results: recordedResultsFile(includeScenario: false))
+    func refusesMissingScenarioRecord() async {
+        await #expect(throws: OfflineRecheckError.scenarioRecordMissing(.supersededRepositoryDecision)) {
+            _ = try await runRecheck(results: recordedResultsFile(includeScenario: false))
         }
     }
 
     @Test("refuses an incomplete recorded run")
-    func refusesIncompleteRecord() throws {
+    func refusesIncompleteRecord() async throws {
         for variant in 0..<2 {
             let results = variant == 0
                 ? recordedResultsFile(scenarioError: "agent turn failed")
                 : recordedResultsFile(strategyDelivered: false)
             do {
-                _ = try runRecheck(results: results)
+                _ = try await runRecheck(results: results)
                 Issue.record("variant \(variant): recheck should have refused")
             } catch let error as OfflineRecheckError {
                 guard case .recordedScenarioIncomplete = error else {
@@ -255,11 +255,11 @@ struct WikiStrategyOfflineRecheckTests {
     }
 
     @Test("refuses fixture drift between the record and the current fixture code")
-    func refusesFixtureDrift() throws {
+    func refusesFixtureDrift() async throws {
         // One recorded outcome short of the current fixture's check list.
         let drifted = Array(recordedOutcomes().dropLast())
         do {
-            _ = try runRecheck(results: recordedResultsFile(outcomes: drifted))
+            _ = try await runRecheck(results: recordedResultsFile(outcomes: drifted))
             Issue.record("recheck should have refused drifted outcomes")
         } catch let error as OfflineRecheckError {
             guard case .recordedFixtureMismatch = error else {
@@ -270,10 +270,10 @@ struct WikiStrategyOfflineRecheckTests {
     }
 
     @Test("refuses a missing artifact database")
-    func refusesMissingArtifactDatabase() throws {
+    func refusesMissingArtifactDatabase() async throws {
         let missing = URL(fileURLWithPath: "/nonexistent/recheck-artifact.sqlite")
         do {
-            _ = try runRecheck(
+            _ = try await runRecheck(
                 results: recordedResultsFile(),
                 artifactURL: missing)
             Issue.record("recheck should have refused a missing artifact database")
@@ -286,10 +286,10 @@ struct WikiStrategyOfflineRecheckTests {
     }
 
     @Test("refuses when the artifact's sources do not map onto the fixture stems")
-    func refusesFixtureMappingGap() throws {
+    func refusesFixtureMappingGap() async throws {
         // The artifact holds only one of the two fixture sources.
         do {
-            _ = try runRecheck(results: recordedResultsFile(), includeADR021: false)
+            _ = try await runRecheck(results: recordedResultsFile(), includeADR021: false)
             Issue.record("recheck should have refused the mapping gap")
         } catch let error as OfflineRecheckError {
             guard case .fixtureMappingIncomplete = error else {

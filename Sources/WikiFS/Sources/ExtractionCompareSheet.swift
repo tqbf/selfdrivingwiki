@@ -94,7 +94,7 @@ struct ExtractionCompareSheet: View {
         }
         .frame(minWidth: 900, minHeight: 580)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear { refresh(assignDefaults: true) }
+        .onAppear { Task { await refresh(assignDefaults: true) } }
     }
 
     // MARK: - Header / toolbar
@@ -344,14 +344,16 @@ struct ExtractionCompareSheet: View {
     // MARK: - Actions
 
     private func setActive(to versionID: SourceMarkdownVersionID) {
-        store.setActiveMarkdown(for: sourceID, to: versionID)
-        refresh(assignDefaults: false)
+        Task {
+            await store.setActiveMarkdown(for: sourceID, to: versionID)
+            await refresh(assignDefaults: false)
+        }
     }
 
     /// Reload alternatives from the store and (on first load) assign sensible
     /// defaults: base = active HEAD, compare = the most recent other alternative.
-    private func refresh(assignDefaults: Bool) {
-        let fresh = store.processedMarkdownAlternatives(for: sourceID)
+    private func refresh(assignDefaults: Bool) async {
+        let fresh = await store.processedMarkdownAlternatives(for: sourceID)
         alternatives = fresh
         if assignDefaults {
             let active = fresh.first { $0.isActive } ?? fresh.first

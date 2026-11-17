@@ -172,7 +172,7 @@ struct ProvenanceDeletionRestrictionTests {
     @Test func restrictedDeletionWritesNothingAndEmitsNothing() async throws {
         let store = try TestStoreFactory.inMemory()
         let source = try store.addSource(filename: "evidence.txt", data: Data("evidence".utf8))
-        let page = try store.createPage(title: "Quiet")
+        let page = try await store.createPage(title: "Quiet")
         try store.updatePage(id: page.id, title: page.title, body: "claim", lastEditedBy: "writer", provenance: [.init(sourceID: source.id, role: .primary)])
         let version = try #require(try store.pageHeadVersionID(pageID: page.id))
         let events = recorder(for: store)

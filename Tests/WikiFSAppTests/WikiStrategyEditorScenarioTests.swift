@@ -219,7 +219,7 @@ struct WikiStrategyEditorScenarioTests {
         NSApplication.shared.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         hosting.layoutSubtreeIfNeeded()
-        model.loadWikiStrategy()
+        await model.loadWikiStrategy()
         for _ in 0..<60 {
             if model.strategyDidLoad || model.strategyLoadFailed { break }
             try await Task.sleep(for: .milliseconds(50))
@@ -837,7 +837,7 @@ struct WikiStrategyEditorScenarioTests {
         try #require(findButton(labeled: "Reset to Default", in: window), "Reset must render on a clean draft")
         try press(labeled: "Save", in: window)
         try await settle()
-        #expect(try model.internalStore.getWikiStrategy() == nil,
+        #expect(try await model.internalStore.getWikiStrategy() == nil,
                 "pressing Save on a clean draft must not save")
         #expect(!model.isStrategyDraftDirty)
 
@@ -852,7 +852,7 @@ struct WikiStrategyEditorScenarioTests {
         try press(labeled: "Save", in: window)
         try await settle()
         #expect(!model.isStrategyDraftDirty)
-        let saved = try #require(try model.internalStore.getWikiStrategy())
+        let saved = try #require(try await model.internalStore.getWikiStrategy())
         #expect(saved.name == "Story Notes")
         #expect(saved.instructions == "Track characters and themes.")
         #expect(saved.revision.rawValue == 1)
@@ -882,8 +882,9 @@ struct WikiStrategyEditorScenarioTests {
             ],
             in: window)
         try await settle()
-        #expect(try model.internalStore.getWikiStrategy() == nil, "reset returns the wiki to Default")
-        #expect(try #require(try model.internalStore.wikiStrategyRevision()).rawValue == 2,
+        #expect(try await model.internalStore.getWikiStrategy() == nil, "reset returns the wiki to Default")
+        let tombstoneRevision = try #require(try await model.internalStore.wikiStrategyRevision())
+        #expect(tombstoneRevision.rawValue == 2,
                 "reset keeps the revision monotonic via the tombstone")
         #expect(!model.isStrategyDraftDirty)
     }
@@ -1005,12 +1006,12 @@ struct WikiStrategyEditorScenarioTests {
         try await settle()
         try press(labeled: "Save", in: window)
         try await settle()
-        let revision1 = try #require(try model.internalStore.wikiStrategyRevision())
+        let revision1 = try #require(try await model.internalStore.wikiStrategyRevision())
 
         // Another editor commits on a SECOND real connection to the same
         // WAL database (the AC.6 two-connection pattern).
         let otherEditor = try StoreBackend.current.makeStore(databaseURL: databaseURL)
-        _ = try otherEditor.saveWikiStrategy(
+        _ = try await otherEditor.saveWikiStrategy(
             name: "Theirs", instructions: "their instructions",
             expectedRevision: revision1)
 
@@ -1076,7 +1077,7 @@ struct WikiStrategyEditorScenarioTests {
         try press(labeled: "Save", in: window)
         try await settle()
         #expect(model.strategyConflict == nil, "adopting the winner re-authorizes saves")
-        #expect(try #require(try model.internalStore.getWikiStrategy()).instructions == "their instructions!")
+        #expect(try #require(try await model.internalStore.getWikiStrategy()).instructions == "their instructions!")
     }
 
     // MARK: - AC.4 templateCopiesWithoutLiveDependency
@@ -1095,7 +1096,7 @@ struct WikiStrategyEditorScenarioTests {
 
         // Blank draft: selecting a template copies immediately — no
         // confirmation, no save, no committed change.
-        let revisionBefore = try model.internalStore.wikiStrategyRevision()
+        let revisionBefore = try await model.internalStore.wikiStrategyRevision()
         try await chooseTemplate(.storyAnalysis, in: window)
         try await settle()
         let storyTemplate = WikiStrategyTemplates.template(for: .storyAnalysis)
@@ -1103,8 +1104,8 @@ struct WikiStrategyEditorScenarioTests {
                 "the real menu selection must copy the template name into the draft")
         #expect(model.strategyDraftInstructions == storyTemplate.markdown)
         #expect(model.isStrategyDraftDirty)
-        #expect(try model.internalStore.getWikiStrategy() == nil, "template selection must not save")
-        #expect(try model.internalStore.wikiStrategyRevision() == revisionBefore,
+        #expect(try await model.internalStore.getWikiStrategy() == nil, "template selection must not save")
+        #expect(try await model.internalStore.wikiStrategyRevision() == revisionBefore,
                 "template selection must not advance the revision")
 
         // Nonblank draft: selecting another template asks for confirmation
@@ -1139,7 +1140,7 @@ struct WikiStrategyEditorScenarioTests {
         try await settle()
         try press(labeled: "Save", in: window)
         try await settle()
-        let saved = try #require(try model.internalStore.getWikiStrategy())
+        let saved = try #require(try await model.internalStore.getWikiStrategy())
         #expect(saved.instructions == repoTemplate.markdown)
         #expect(saved.name == "Repo Notes")
     }
@@ -1160,7 +1161,7 @@ struct WikiStrategyEditorScenarioTests {
         let contentView = try #require(window.contentView)
 
         // Seed one page, then save a strategy through the real controls.
-        let page = try model.internalStore.createPage(title: "Stable Page")
+        let page = try await model.internalStore.createPage(title: "Stable Page")
         try await setName("Anything", in: window, store: model)
         try type("instructions", into: try #require(instructionsTextView(in: contentView)), in: window)
         try await settle()
@@ -1169,11 +1170,11 @@ struct WikiStrategyEditorScenarioTests {
 
         // The page, its body, and the activity log are unchanged; saving
         // enqueues nothing and rewrites nothing.
-        let pages = try model.internalStore.listPages(sortBy: .lastUpdated)
+        let pages = try await model.internalStore.listPages(sortBy: .lastUpdated)
         #expect(pages.count == 1)
         #expect(pages.first?.id == page.id)
         #expect(pages.first?.title == "Stable Page")
-        let logEntries = try model.internalStore.recentLogEntries(limit: 100)
+        let logEntries = try await model.internalStore.recentLogEntries(limit: 100)
         #expect(logEntries.isEmpty, "a strategy save must not append activity-log entries")
     }
 
@@ -1311,7 +1312,7 @@ struct WikiStrategyEditorScenarioTests {
         let seededInstructions = (0..<40)
             .map { "Instruction line \($0): editorial guidance for future runs." }
             .joined(separator: "\n")
-        _ = try model.internalStore.saveWikiStrategy(
+        _ = try await model.internalStore.saveWikiStrategy(
             name: "Tall Strategy", instructions: seededInstructions, expectedRevision: nil)
         let window = try await host(
             WikiStrategyEditorView(store: model, wikiDisplayName: "Layout Wiki"),
@@ -1432,7 +1433,7 @@ struct WikiStrategyEditorScenarioTests {
             try await settle()
             try press(labeled: "Save", in: window)
             try await settle()
-            #expect(try #require(try model.internalStore.getWikiStrategy()).name == "Dark Save")
+            #expect(try #require(try await model.internalStore.getWikiStrategy()).name == "Dark Save")
         }
     }
 }

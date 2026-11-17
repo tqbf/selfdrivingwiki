@@ -86,13 +86,31 @@ struct EditBookmarkSheet: View {
         }
     }
 
+    private func performSave() async {
+        errorMessage = nil
+        switch await Self.saveAction(
+            node: node,
+            name: name,
+            selectedTarget: selectedTarget?.content,
+            renameFolder: { try await store.renameBookmarkNode(id: nodeID, to: $0) },
+            retargetBookmark: { try await store.retargetBookmarkNode(id: nodeID, to: $0) }
+        ) {
+        case .dismiss?:
+            dismiss()
+        case .showError(let message)?:
+            errorMessage = message
+        case nil:
+            break
+        }
+    }
+
     static func saveAction(
         node: BookmarkNode?,
         name: String,
         selectedTarget: BookmarkNode.Content?,
-        renameFolder: (String) throws -> Void,
-        retargetBookmark: (BookmarkNode.Content) throws -> Void
-    ) -> SaveActionResult? {
+        renameFolder: (String) async throws -> Void,
+        retargetBookmark: (BookmarkNode.Content) async throws -> Void
+    ) async -> SaveActionResult? {
         guard let node else {
             return .dismiss
         }
@@ -102,7 +120,7 @@ struct EditBookmarkSheet: View {
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.isEmpty == false else { return nil }
             do {
-                try renameFolder(trimmed)
+                try await renameFolder(trimmed)
                 return .dismiss
             } catch {
                 return .showError(error.localizedDescription)
@@ -110,7 +128,7 @@ struct EditBookmarkSheet: View {
         case .page, .source, .chat:
             guard let selectedTarget else { return nil }
             do {
-                try retargetBookmark(selectedTarget)
+                try await retargetBookmark(selectedTarget)
                 return .dismiss
             } catch {
                 return .showError(error.localizedDescription)
@@ -180,20 +198,8 @@ struct EditBookmarkSheet: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Save") {
-                    errorMessage = nil
-                    switch Self.saveAction(
-                        node: node,
-                        name: name,
-                        selectedTarget: selectedTarget?.content,
-                        renameFolder: { try store.renameBookmarkNode(id: nodeID, to: $0) },
-                        retargetBookmark: { try store.retargetBookmarkNode(id: nodeID, to: $0) }
-                    ) {
-                    case .dismiss?:
-                        dismiss()
-                    case .showError(let message)?:
-                        errorMessage = message
-                    case nil:
-                        break
+                    Task { @MainActor in
+                        await performSave()
                     }
                 }
                 .keyboardShortcut(.defaultAction)

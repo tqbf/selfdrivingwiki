@@ -24,7 +24,7 @@ struct DiagramEmbedTests {
 
     // MARK: - EmbedTarget API surface
 
-    @Test func mediaKindsCarryNoDiagramCase() throws {
+    @Test func mediaKindsCarryNoDiagramCase() async throws {
         // The media target union is closed: provider iframe, direct-remote
         // audio, direct-remote video. A diagram is renderer-package data.
         let iframe = EmbedTarget(kind: .iframe, url: "https://player/1")
@@ -37,7 +37,7 @@ struct DiagramEmbedTests {
 
     // MARK: - WikiRenderContext resolution
 
-    @Test func renderContextResolvesMmdSourceNamesWithoutASpecialTarget() throws {
+    @Test func renderContextResolvesMmdSourceNamesWithoutASpecialTarget() async throws {
         // A `.mmd` source — the byteful case `embedDescriptors()` skips —
         // resolves its embed entries by name/id, but carries no special
         // target: rendering is a renderer-package concern, not a host one.
@@ -46,7 +46,7 @@ struct DiagramEmbedTests {
         let diagram = "flowchart LR\n  A --> B\n  B --> C"
         let src = try store.addSource(
             filename: "Flow.mmd", data: Data(diagram.utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let ctx = WikiRenderContext.build(from: model)
 
@@ -63,14 +63,14 @@ struct DiagramEmbedTests {
         #expect(ctx.sourceIDToExtension[src.id] == "mmd")
     }
 
-    @Test func renderContextResolvesTextMermaidMimeSourceWithoutASpecialTarget() throws {
+    @Test func renderContextResolvesTextMermaidMimeSourceWithoutASpecialTarget() async throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let diagram = "sequenceDiagram\n  Alice->>Bob: Hi"
         _ = try store.addSource(
             filename: "sequence.txt", data: Data(diagram.utf8),
             mimeType: "text/mermaid")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let ctx = WikiRenderContext.build(from: model)
         let info = try #require(ctx.embedInfo("sequence.txt"))
@@ -78,7 +78,7 @@ struct DiagramEmbedTests {
         #expect(info.mimeType == "text/mermaid")
     }
 
-    @Test func canonicalAliasedMmdEmbedFallsBackToReadableCodeWithoutAPackage() throws {
+    @Test func canonicalAliasedMmdEmbedFallsBackToReadableCodeWithoutAPackage() async throws {
         // No package claims the format, so the embed lowers as a readable
         // code fallback / transclusion — the same no-package contract as any
         // other renderer-package format.
@@ -94,7 +94,7 @@ struct DiagramEmbedTests {
             data: Data(diagram.utf8),
             mimeType: "application/vnd.chipnuts.karaoke-mmd")
         try store.renameSource(id: source.id, to: "Mermaid Architecture")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let context = WikiRenderContext.build(from: model)
         let markdown = "![[source:\(source.id.rawValue)|Mermaid Architecture]]"
         let prepared = ReaderMarkdown.preparedDocument(markdown)
@@ -113,7 +113,7 @@ struct DiagramEmbedTests {
         #expect(!html.contains("sdw-renderer-card"))
     }
 
-    @Test func canonicalAliasedExcalidrawSourceUsesGenericInlineRendererAttachment() throws {
+    @Test func canonicalAliasedExcalidrawSourceUsesGenericInlineRendererAttachment() async throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let bytes = Data(##"{"type":"excalidraw","version":2,"elements":[{"id":"box","type":"rectangle","x":40,"y":80,"width":180,"height":90,"angle":0,"strokeColor":"#1e3a8a","backgroundColor":"#dbeafe","strokeWidth":2,"opacity":100,"roundness":{"type":3},"isDeleted":false},{"id":"label","type":"text","x":88,"y":110,"width":84,"height":30,"angle":0,"strokeColor":"#1e1e1e","backgroundColor":"transparent","strokeWidth":1,"opacity":100,"roundness":null,"isDeleted":false,"text":"Input <trusted>","fontSize":24},{"id":"flow","type":"arrow","x":220,"y":125,"width":80,"height":0,"angle":0,"strokeColor":"#475569","backgroundColor":"transparent","strokeWidth":2,"opacity":100,"roundness":{"type":2},"isDeleted":false,"points":[[0,0],[80,0]],"endArrowhead":"triangle"}],"appState":{"viewBackgroundColor":"#ffffff"}}"##.utf8)
@@ -122,11 +122,11 @@ struct DiagramEmbedTests {
             data: bytes,
             mimeType: "application/json")
         try store.renameSource(id: source.id, to: "Excalidraw Architecture")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let context = WikiRenderContext.build(from: model)
         let activeVersion = try store.activeContentVersion(sourceID: source.id)
         let pinnedVersion = try #require(activeVersion)
-        let projectedSource = try WikiReaderRep.Coordinator.pinnedImageSource(
+        let projectedSource = try await WikiReaderRep.Coordinator.pinnedImageSource(
             sourceID: source.id,
             version: pinnedVersion,
             fileExtension: "json",
@@ -141,13 +141,13 @@ struct DiagramEmbedTests {
         #expect(package.manifest.descriptors.count == 1)
         let descriptor = try #require(package.manifest.descriptors.first)
         let markdown = "![[source:\(source.id.rawValue)|Excalidraw architecture]]"
-        let candidates = WikiReaderRep.Coordinator.sourceRendererCandidates(
+        let candidates = await WikiReaderRep.Coordinator.sourceRendererCandidates(
             markdown: markdown,
             context: context,
             store: store,
             installedDescriptors: [descriptor])
         #expect(candidates[source.id]?.input == .source(pinnedSource))
-        let bareCandidates = WikiReaderRep.Coordinator.sourceRendererCandidates(
+        let bareCandidates = await WikiReaderRep.Coordinator.sourceRendererCandidates(
             markdown: "![[Excalidraw Architecture]]",
             context: context,
             store: store,
@@ -189,14 +189,14 @@ struct DiagramEmbedTests {
         #expect(html.contains("data-renderer-role=\"inlineContent\""))
     }
 
-    @Test func renderContextDoesNotResolveSpecialTargetsForTextSources() throws {
+    @Test func renderContextDoesNotResolveSpecialTargetsForTextSources() async throws {
         // Any byteful text source — markdown, notes, anything — resolves no
         // special embed target; inline rendering is descriptor-driven.
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         _ = try store.addSource(
             filename: "notes.md", data: Data("# Notes\nHello world".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let ctx = WikiRenderContext.build(from: model)
         let info = try #require(ctx.embedInfo("notes.md"))
@@ -205,7 +205,7 @@ struct DiagramEmbedTests {
 
     // MARK: - Compatibility bridge
 
-    @Test func compatibilityBridgePreservesDiagramEmbedSyntax() throws {
+    @Test func compatibilityBridgePreservesDiagramEmbedSyntax() async throws {
         let id = SourceID(rawValue: "01HDIAGRAM000000000000000A")
         let authored = "![[source:Flow]]"
         let out = WikiLinkMarkdown.linkified(

@@ -138,7 +138,7 @@ actor DaemonWikiCreationCoordinator {
         databaseURL: URL
     ) async throws -> StoreBootstrapResult {
         try Task.checkCancellation()
-        return try bootstrap.createAndSeed(databaseURL: databaseURL)
+        return try await bootstrap.createAndSeed(databaseURL: databaseURL)
     }
 
     private func ensureAdmitted(_ wikiID: WikiID, requestID: RequestID, state: State) throws {

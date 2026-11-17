@@ -178,6 +178,21 @@ import Foundation
     /// without restarting it. `request` is JSON `ChatConfigOptionRequest`;
     /// reply is JSON `{"error": null}`.
     func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void)
+
+    // MARK: - Store family (Phase 2b)
+
+    /// One structured store operation (plans/daemon-only-access.md Phase 2b):
+    /// `request` is JSON-encoded `DaemonStoreRequest` and the reply is ALWAYS
+    /// the JSON-encoded `DaemonDomainReply` envelope (`family: .store`)
+    /// whose `payload` carries the JSON `DaemonStoreReply` — typed store
+    /// failures ride INSIDE that inner reply, and only a malformed outer
+    /// envelope / unknown operation is a domain-level `invalidRequest`
+    /// failure envelope, exactly matching the domain-socket path byte for
+    /// byte. The operation string comes from ``DaemonStoreOperation``; the
+    /// `wikiID` parameter must match the request's own `wikiID` (a mismatch
+    /// is a typed `invalidRequest`). Replies are frame-size pre-flighted
+    /// against the 4 MiB transport cap.
+    func storeOperation(_ wikiID: String, request: Data, reply: @escaping (Data) -> Void)
 }
 
 public struct SignedWikiDExtractorProbeRequest: Codable, Equatable, Sendable {
@@ -237,20 +252,36 @@ public struct SignedWikiDExtractorProbeReply: Codable, Equatable, Sendable {
 
 /// The reverse-channel protocol the app implements so the daemon can push
 /// fine-grained *live* workload events (queue `QueueEvent`s, chat
-/// `AgentEvent`s, pending permissions). The app sets itself as the XPC
-/// connection's `exportedObject`; the daemon holds a proxy and calls
-/// `deliverEvent` with JSON-encoded payloads.
+/// `AgentEvent`s, pending permissions) AND store change events (Phase 2c).
+/// The app sets itself as the XPC connection's `exportedObject`; the daemon
+/// holds a proxy and calls `deliverEvent` with JSON-encoded payloads.
 ///
 /// This is the standard bidirectional-`NSXPCConnection` pattern: one
 /// connection carries request/reply (the daemon's `WikiDaemonProtocol`) AND
 /// callbacks (the app's `WikiDaemonEventSink`).
 ///
-/// See `plans/daemon-workloads.md` §3 + §5.2.
+/// Payload discrimination (Phase 2c + Phase 3 slice 2): workload payloads are
+/// JSON `QueueEventEnvelope` objects — every one carries a `kind` key from the
+/// closed queue/chat raw-value set. Store change payloads are JSON
+/// `DaemonStoreEventEnvelope` objects — they carry the `wire` marker
+/// (`wikid.store-event.v1`) and never a top-level `kind` key. Registry change
+/// payloads (Phase 3 slice 2) are JSON `DaemonRegistryEventEnvelope` objects
+/// (`wikid.registry-event.v1`, one per daemon-side `wikis.json` mutation).
+/// The three grammars are pairwise two-way disjoint by required keys, so a
+/// decoder dispatches deterministically (marker check, or queue-envelope-first
+/// try order). See `DaemonStoreEventsWire.swift` and
+/// `DaemonRegistryEventsWire.swift`.
+///
+/// See `plans/daemon-workloads.md` §3 + §5.2 and
+/// `plans/daemon-only-access.md` Phase 2c.
 @objc public protocol WikiDaemonEventSink: AnyObject {
     /// One streamed workload event, JSON-encoded. The daemon encodes a
-    /// `QueueEventEnvelope` (`{itemID, kind, payload}`) or an `AgentEvent`
-    /// batch; the app decodes and forwards into its existing
-    /// `QueueEventBroadcaster` / launcher `events` array.
+    /// `QueueEventEnvelope` (`{itemID, kind, payload}`), an `AgentEvent`
+    /// batch, or (Phase 2c) a `DaemonStoreEventEnvelope`
+    /// (`{wire, event: {epoch, wikiID, sequence, changeToken, batch}}`);
+    /// the app decodes and forwards into its existing
+    /// `QueueEventBroadcaster` / launcher `events` array / session change
+    /// bus.
     func deliverEvent(_ payload: Data)
 }
 #endif

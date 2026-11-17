@@ -234,8 +234,7 @@ struct ChatAttachmentHostedScenarioTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: extractionCoordinator,
-            queueEngine: try makeScenarioQueueEngine(),
-            extractionProvider: ScenarioStubExtractionProvider())
+            queueEngine: try makeScenarioQueueEngine())
         let dbURL = try #require(
             (try FileManager.default.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: nil))
@@ -298,6 +297,21 @@ struct ChatAttachmentHostedScenarioTests {
         return true
     }
 
+    /// Bounded condition wait for async predicates (never blocks the
+    /// cooperative pool). Mirrors the waitUntilAsync helper used by the
+    /// queued-after-cancel hosted suite.
+    private func waitUntilAsync(
+        timeout: Duration = .seconds(6),
+        _ condition: @MainActor () async -> Bool
+    ) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while await condition() == false {
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return true
+    }
+
     // MARK: - Latch lifecycle (fixture infrastructure)
 
     @Test("the hydration latch releases on cancellation or deadline without leaking a waiter")
@@ -341,7 +355,7 @@ struct ChatAttachmentHostedScenarioTests {
     func chipsLandBeforeHydrationCompletes() async throws {
         let fixture = try makeFixture()
         let page = try firstPage(fixture)
-        fixture.store.beginNewChat(attachments: [.page(page.id)])
+        await fixture.store.beginNewChat(attachments: [.page(page.id)])
 
         let (_, window) = mount(fixture)
         defer { window.orderOut(nil) }
@@ -361,7 +375,7 @@ struct ChatAttachmentHostedScenarioTests {
     func nothingAttachesToTheWrongChat() async throws {
         let fixture = try makeFixture()
         let page = try firstPage(fixture)
-        fixture.store.beginNewChat(attachments: [.page(page.id)])
+        await fixture.store.beginNewChat(attachments: [.page(page.id)])
         let attachedChatID: ChatID
         if case .chat(let id) = fixture.store.selection { attachedChatID = id } else {
             Issue.record("beginNewChat must open the chat route")
@@ -371,7 +385,7 @@ struct ChatAttachmentHostedScenarioTests {
         let (_, window) = mount(fixture)
         defer { window.orderOut(nil) }
         _ = await waitUntil { !fixture.capture.attachments.isEmpty }
-        #expect(fixture.store.chatAttachments(chatID: attachedChatID) == [.page(page.id)],
+        #expect(await fixture.store.chatAttachments(chatID: attachedChatID) == [.page(page.id)],
                 "the attached chat's rows are the restore source")
 
         // Navigate to a plain page tab (no attachment request involved).
@@ -393,7 +407,7 @@ struct ChatAttachmentHostedScenarioTests {
     func remountAddsNoDuplicateChips() async throws {
         let fixture = try makeFixture()
         let page = try firstPage(fixture)
-        fixture.store.beginNewChat(attachments: [.page(page.id)])
+        await fixture.store.beginNewChat(attachments: [.page(page.id)])
         guard case .chat(let chatID) = fixture.store.selection else {
             Issue.record("beginNewChat must open the chat route")
             return
@@ -429,7 +443,7 @@ struct ChatAttachmentHostedScenarioTests {
     @Test("a duplicate target produces one chip")
     func duplicateTargetProducesOneChip() async throws {
         let fixture = try makeFixture()
-        fixture.store.beginNewChat()
+        await fixture.store.beginNewChat()
         let (_, window) = mount(fixture)
         defer { window.orderOut(nil) }
 
@@ -452,7 +466,7 @@ struct ChatAttachmentHostedScenarioTests {
     @Test("the new chat's composer takes keyboard focus")
     func newChatComposerTakesFocus() async throws {
         let fixture = try makeFixture()
-        fixture.store.beginNewChat()
+        await fixture.store.beginNewChat()
         let (_, window) = mount(fixture)
         defer { window.orderOut(nil) }
 
@@ -481,13 +495,13 @@ struct ChatAttachmentHostedScenarioTests {
     func chatPayloadAttachmentSurvivesReopenAndRestart() async throws {
         let fixture = try makeFixture()
         // Chat B is the attach TARGET; chat A receives the chip.
-        fixture.store.beginNewChat()
+        await fixture.store.beginNewChat()
         let targetChatID: ChatID
         if case .chat(let id) = fixture.store.selection { targetChatID = id } else {
             Issue.record("beginNewChat must open the chat route")
             return
         }
-        fixture.store.beginNewChat()
+        await fixture.store.beginNewChat()
         guard case .chat(let hostChatID) = fixture.store.selection else {
             Issue.record("beginNewChat must open the chat route")
             return
@@ -506,8 +520,8 @@ struct ChatAttachmentHostedScenarioTests {
         props.onAddAttachment(ChatAttachment(
             payload: SidebarDragPayload(kind: .chat, id: targetChatID.rawValue),
             store: fixture.store))
-        let persisted = await waitUntil {
-            fixture.store.chatAttachments(chatID: hostChatID) == [.chat(targetChatID)]
+        let persisted = await waitUntilAsync {
+            await fixture.store.chatAttachments(chatID: hostChatID) == [.chat(targetChatID)]
         }
         #expect(persisted, "the chat-tagged target row is in SQLite")
 
@@ -528,7 +542,7 @@ struct ChatAttachmentHostedScenarioTests {
         let freshStore = try GRDBWikiStore(databaseURL: fixture.dbURL)
         freshStore.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let freshModel = WikiStoreModel(store: freshStore)
-        #expect(freshModel.chatAttachments(chatID: hostChatID) == [.chat(targetChatID)])
+        #expect(await freshModel.chatAttachments(chatID: hostChatID) == [.chat(targetChatID)])
         freshModel.openTab(.chat(hostChatID))
         let restartCapture = PropsCapture()
         let (_, restartWindow) = mount(fixture, store: freshModel, capture: restartCapture)
@@ -544,18 +558,18 @@ struct ChatAttachmentHostedScenarioTests {
     func renamedTargetsRestoreWithFreshNames() async throws {
         let fixture = try makeFixture()
         let page = try firstPage(fixture)
-        fixture.store.addSource(filename: "before.pdf", data: Data("b".utf8))
+        await fixture.store.addSource(filename: "before.pdf", data: Data("b".utf8))
         fixture.store.reloadFromStore()
         let source = try #require(
             fixture.store.sources.first { $0.isPrimary },
             "the fixture's only source")
-        fixture.store.beginNewChat()
+        await fixture.store.beginNewChat()
         let chatB: ChatID
         if case .chat(let id) = fixture.store.selection { chatB = id } else {
             Issue.record("beginNewChat must open the chat route")
             return
         }
-        fixture.store.beginNewChat(attachments: [.page(page.id), .source(source.id)])
+        await fixture.store.beginNewChat(attachments: [.page(page.id), .source(source.id)])
         guard case .chat(let hostChatID) = fixture.store.selection else {
             Issue.record("beginNewChat must open the chat route")
             return
@@ -577,9 +591,9 @@ struct ChatAttachmentHostedScenarioTests {
         // Rename all three through the model's cache-refreshing paths, then
         // remount: the restore must resolve the NEW display names. Bounded
         // retries absorb single-transition timing gaps.
-        fixture.store.rename(page.id, to: "Renamed Page")
-        fixture.store.renameSource(id: source.id, to: "renamed.pdf")
-        fixture.store.renameChat(id: chatB, to: "Renamed Chat")
+        await fixture.store.rename(page.id, to: "Renamed Page")
+        await fixture.store.renameSource(id: source.id, to: "renamed.pdf")
+        await fixture.store.renameChat(id: chatB, to: "Renamed Chat")
         fixture.store.reloadFromStore()
         let expectedNames = ["Renamed Page", "renamed.pdf", "Renamed Chat"]
         var restoredNames: [String]?
@@ -598,7 +612,7 @@ struct ChatAttachmentHostedScenarioTests {
             }
             if sawFreshNames { break }
         }
-        let diagRows = fixture.store.chatAttachments(chatID: hostChatID)
+        let diagRows = await fixture.store.chatAttachments(chatID: hostChatID)
         let diagChips = fixture.capture.latest?.attachments
             .map { "\($0.kind.rawValue):\( $0.itemID.prefix(6))=\($0.displayName)" }
         #expect(sawFreshNames, "names resolve fresh at restore; last=\(String(describing: restoredNames)) rows=\(diagRows) chips=\(String(describing: diagChips))")

@@ -22,7 +22,7 @@ struct RendererActivationPresentationTests {
 
     @Test("source activation reads exact pinned bytes for the renderer window")
     @MainActor
-    func sourceActivationReadsExactPinnedBytes() throws {
+    func sourceActivationReadsExactPinnedBytes() async throws {
         let store = try GRDBWikiStore(databaseURL: temporaryDatabaseURL())
         let bytes = Data(#"{"type":"excalidraw","version":2,"elements":[]}"#.utf8)
         let source = try store.addSource(
@@ -31,7 +31,7 @@ struct RendererActivationPresentationTests {
             mimeType: "application/json")
         let activeVersion = try store.activeContentVersion(sourceID: source.id)
         let version = try #require(activeVersion)
-        let payload = try RendererActivationView.authorizedPayload(
+        let payload = try await RendererActivationView.authorizedPayload(
             store: store,
             input: .source(versionID: version.id))
 

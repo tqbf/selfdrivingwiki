@@ -35,9 +35,8 @@ struct RootView: View {
             agentLauncher: session.agentLauncher,
             extractionCoordinator: session.extractionCoordinator,
             queueEngine: session.queueEngine,
-            extractionProvider: session.extractionProvider,
             installedRendererHost: installedRendererHost,
-            onRendererActivation: presentRendererActivation
+            onRendererActivation: { reference, input in Task { await presentRendererActivation(reference: reference, input: input) } }
         )
         .id(session.wikiID)
         // Consume a deferred cross-window `wiki://` navigation (set on the
@@ -56,32 +55,44 @@ struct RootView: View {
     /// `WindowGroup(for:)` dedups by `==`, so activating the same content again
     /// focuses the window already showing it.
     @MainActor
-    private func presentRendererActivation(reference: RendererReference, input: RendererBridgeInput) {
+    private func presentRendererActivation(reference: RendererReference, input: RendererBridgeInput) async {
         let sourceContext: RendererActivationPresentation.SourceContext?
         // A version that is no longer the active content version, unreadable
         // bytes, or an invalid MIME simply omits the source context: the
         // activation window then prepares from the exact pinned input alone.
-        if case .source(let versionID) = input,
-           let summary = session.store.sources.first(where: { source in
+        if case .source(let versionID) = input {
+            var matchedSummary: SourceSummary?
+            for source in session.store.sources {
+                guard
+                    // swiftlint:disable:next silent_try_optional
+                    let activeID = try? await session.store.internalStore.activeContentVersion(sourceID: source.id)?.id,
+                    activeID == versionID
+                else { continue }
+                matchedSummary = source
+                break
+            }
+            if let summary = matchedSummary,
                // swiftlint:disable:next silent_try_optional
-               (try? session.store.internalStore.activeContentVersion(sourceID: source.id)?.id) == versionID
-           }),
-           // swiftlint:disable:next silent_try_optional
-           let version = try? session.store.internalStore.activeContentVersion(sourceID: summary.id),
-           version.id == versionID,
-           let bytes = session.store.sourceBytes(id: summary.id),
-           let mime = summary.mimeType {
-            // swiftlint:disable:next silent_try_optional
-            let source = try? RendererEmbeddedContent.Source(
-                sourceID: summary.id, sourceVersionID: versionID,
-                mimeType: .init(validating: mime), fileExtension: summary.ext, bytes: bytes)
-            if let source {
-                let extensions = Dictionary(uniqueKeysWithValues: session.store.sources.map { ($0.id, $0.ext.lowercased()) })
-                sourceContext = .init(
-                    source: source,
-                    siblingSources: session.store.siblingImageResolvers()[summary.id] ?? [:],
-                    sourceExtensions: extensions)
+               let version = try? await session.store.internalStore.activeContentVersion(sourceID: summary.id),
+               version.id == versionID,
+               let bytes = await session.store.sourceBytes(id: summary.id),
+               let mime = summary.mimeType {
+                // swiftlint:disable:next silent_try_optional
+                let source = try? RendererEmbeddedContent.Source(
+                    sourceID: summary.id, sourceVersionID: versionID,
+                    mimeType: .init(validating: mime), fileExtension: summary.ext, bytes: bytes)
+                if let source {
+                    let extensions = Dictionary(uniqueKeysWithValues: session.store.sources.map { ($0.id, $0.ext.lowercased()) })
+                    sourceContext = .init(
+                        source: source,
+                        siblingSources: session.store.siblingImageResolvers()[summary.id] ?? [:],
+                        sourceExtensions: extensions)
+                } else {
+                    sourceContext = nil
+                }
             } else {
+                // No matching summary (or unreadable bytes/MIME): omit the
+                // context rather than leaving it unassigned.
                 sourceContext = nil
             }
         } else {

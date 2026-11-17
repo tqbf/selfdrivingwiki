@@ -270,11 +270,14 @@ public enum ACPIngestPlanValidation {
     ///     load-bearing and is never silently skipped. Only an ABSENT
     ///     resolver (`nil` seam, e.g. an uninjected test harness) falls
     ///     back to new-title ASCII folding.
+    /// `async` since the WikiStore flip (plan P1): the resolver reads
+    /// through the store, whose requirements are async. Validation runs in
+    /// an async launcher context, so the whole pass suspends per title.
     public static func problems(
         in plan: ACPIngestPlan,
         stagedSourceFiles: [String],
-        resolveTitleToPageID: (String) throws -> PageID?
-    ) -> [Problem] {
+        resolveTitleToPageID: (String) async throws -> PageID?
+    ) async -> [Problem] {
         var problems: [Problem] = []
         let staged = Set(stagedSourceFiles)
 
@@ -301,7 +304,7 @@ public enum ACPIngestPlanValidation {
             let sanitized = WikiNameRules.sanitized(page.title)
             let existing: PageID?
             do {
-                existing = try resolveTitleToPageID(sanitized)
+                existing = try await resolveTitleToPageID(sanitized)
             } catch {
                 // Actionable failure, not a silent degrade: an injected
                 // resolver that cannot read the wiki makes the plan

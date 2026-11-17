@@ -38,7 +38,7 @@ struct WikiStoreModelAddURLTests {
         #expect(outcome.sourceID != nil)
         // The created source's MIME is what the claim matched. The byteless
         // path reloads async off the bus — reload explicitly for the read.
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let source = try #require(model.sources.first(where: { $0.id == outcome.sourceID }))
         #expect(source.mimeType == "video/youtube")
     }
@@ -56,7 +56,7 @@ struct WikiStoreModelAddURLTests {
         #expect(outcome.kind == .audioEmbed)
         #expect(outcome.transcriptExtractionWanted)
         #expect(outcome.sourceID != nil)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let source = try #require(model.sources.first(where: { $0.id == outcome.sourceID }))
         #expect(source.mimeType == "audio/apple-podcast")
     }
@@ -168,7 +168,7 @@ struct WikiStoreModelAddURLTests {
             finalURL: URL(string: "https://example.com/doc")!))
 
         let outcome = try await model.addURL("example.com/doc", fetcher: fetcher)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // Issue #599 (issue #799 PR3 post-state): HTML sources preserve the
         // original HTML bytes as the source blob. The extracted-markdown
@@ -212,7 +212,7 @@ struct WikiStoreModelAddURLTests {
             finalURL: URL(string: "https://example.com/files/paper.pdf")!))
 
         let outcome = try await model.addURL("https://example.com/files/paper.pdf", fetcher: fetcher)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(outcome.kind == .pdf)
         #expect(model.sources.first?.filename == "paper.pdf")
         let id = model.sources.first!.id

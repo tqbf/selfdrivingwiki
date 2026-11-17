@@ -63,9 +63,9 @@ struct CordisBootIntegrationTests {
         #expect(firstScope.contextID != secondScope.contextID)
 
         #expect(ObjectIdentifier(firstStore as AnyObject) != ObjectIdentifier(secondStore as AnyObject))
-        let page = try firstStore.createPage(title: "First profile only")
-        #expect(try firstStore.listPages(sortBy: .lastUpdated).map { $0.id }.contains(page.id))
-        #expect(!(try secondStore.listPages(sortBy: .lastUpdated).map { $0.id }.contains(page.id)))
+        let page = try await firstStore.createPage(title: "First profile only")
+        #expect(try await firstStore.listPages(sortBy: .lastUpdated).map { $0.id }.contains(page.id))
+        #expect(!(try await secondStore.listPages(sortBy: .lastUpdated).map { $0.id }.contains(page.id)))
 
         try await second.shutdown()
         try await first.shutdown()

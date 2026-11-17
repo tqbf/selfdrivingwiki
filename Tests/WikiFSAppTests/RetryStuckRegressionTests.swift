@@ -3,7 +3,58 @@ import Testing
 import Foundation
 import WikiFSCore
 import WikiFSEngine
+@testable import wikid
 @testable import WikiFS
+
+/// Thrown by the retry tests' stub launcher factory (never reached — the
+/// readiness contracts resolve before launcher construction).
+private struct RetryStubResolverError: Error {
+    static let unavailable = RetryStubResolverError()
+}
+
+/// An always-ready provider-runtime stub so the mixed-provider readiness case
+/// falls through to the PATH check (the contract under test) instead of the
+/// runtime-unavailable message. Every other requirement throws unavailable —
+/// the readiness probe never reaches them.
+private struct ReadyAgentProviderServices: AgentProviderServices {
+    func readiness() async -> Bool { true }
+
+    func prepare(
+        _ operation: AgentProviderOperationKind, providerOverride: ProviderID?,
+        modelOverride: ModelID?, thinkingOverride: String?, queuedWorkUnits: Int?
+    ) async throws -> AgentOperationPreparation {
+        throw AgentProviderRuntimeError.unavailable
+    }
+
+    func preparation(
+        from token: AgentProviderAttemptToken, stage: AgentProviderStage
+    ) async throws -> AgentOperationPreparation {
+        throw AgentProviderRuntimeError.unavailable
+    }
+
+    func fallbackPreparation(
+        from token: AgentProviderAttemptToken, stage: AgentProviderStage,
+        fallbackProviderID: ProviderID
+    ) async throws -> AgentOperationPreparation {
+        throw AgentProviderRuntimeError.unavailable
+    }
+
+    func prepareSummarization() async throws -> AgentProviderSummaryPreparation {
+        throw AgentProviderRuntimeError.unavailable
+    }
+
+    func discoverCatalog(for provider: AgentProvider) async throws -> ACPProviderCatalogObservation {
+        throw AgentProviderRuntimeError.unavailable
+    }
+
+    func modelSummary(
+        text: String, preparation: AgentOperationPreparation
+    ) async throws -> String? {
+        throw AgentProviderRuntimeError.unavailable
+    }
+
+    func release(_ token: AgentProviderAttemptToken) async {}
+}
 
 /// #635 regression tests for the retry-after-kill / agent-disabled / odd-shaped
 /// window fixes. These cover the three parts of the issue's recommended fix:
@@ -116,13 +167,14 @@ struct RetryStuckRegressionTests {
                 enabled: false, isDefault: false),
         ])
         let queueStore = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
-        let provider = AppQueueIngestionProvider(
-            sessionBox: SessionLookupBox(),
-            fileProviderBox: FileProviderBox(),
-            wikictlDirectory: NSTemporaryDirectory(),
+        let provider = DaemonQueueIngestionProvider(
+            containerDirectory: URL(fileURLWithPath: NSTemporaryDirectory()),
+            storeResolver: { _ in nil },
+            launcherFactoryResolver: { _ in throw RetryStubResolverError.unavailable },
             queueStore: queueStore,
             resolveSelectedProvider: { disabledProviders.selectedProvider() },
-            resolveProviderConfig: { disabledProviders })
+            resolveProviderConfig: { disabledProviders },
+            providerServices: UnavailableAgentProviderServices())
 
         let msg = await provider.readiness()
         #expect(msg != nil)
@@ -148,14 +200,14 @@ struct RetryStuckRegressionTests {
                 isDefault: true),
         ])
         let queueStore = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
-        let provider = AppQueueIngestionProvider(
-            sessionBox: SessionLookupBox(),
-            fileProviderBox: FileProviderBox(),
-            wikictlDirectory: NSTemporaryDirectory(),
+        let provider = DaemonQueueIngestionProvider(
+            containerDirectory: URL(fileURLWithPath: NSTemporaryDirectory()),
+            storeResolver: { _ in nil },
+            launcherFactoryResolver: { _ in throw RetryStubResolverError.unavailable },
             queueStore: queueStore,
-            providerServices: UnavailableAgentProviderServices(),
             resolveSelectedProvider: { config.selectedProvider() },
-            resolveProviderConfig: { config })
+            resolveProviderConfig: { config },
+            providerServices: UnavailableAgentProviderServices())
 
         let message = try #require(await provider.readiness())
         #expect(message.contains("provider runtime is unavailable"))
@@ -181,15 +233,16 @@ struct RetryStuckRegressionTests {
                 enabled: true, isDefault: false),
         ])
         let queueStore = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
-        let provider = AppQueueIngestionProvider(
-            sessionBox: SessionLookupBox(),
-            fileProviderBox: FileProviderBox(),
-            wikictlDirectory: NSTemporaryDirectory(),
+        let provider = DaemonQueueIngestionProvider(
+            containerDirectory: URL(fileURLWithPath: NSTemporaryDirectory()),
+            storeResolver: { _ in nil },
+            launcherFactoryResolver: { _ in throw RetryStubResolverError.unavailable },
             queueStore: queueStore,
             resolveSelectedProvider: { mixedConfig.selectedProvider() },
             // Use Hermes's command but route to a nonexistent binary so the
             // PATH-based readiness check surfaces a message we can verify.
-            resolveProviderConfig: { mixedConfig })
+            resolveProviderConfig: { mixedConfig },
+            providerServices: ReadyAgentProviderServices())
 
         let msg = await provider.readiness()
         // Either nil (if `hermes` happens to be on PATH on the test machine)
@@ -218,13 +271,14 @@ struct RetryStuckRegressionTests {
                 enabled: false, isDefault: true),
         ])
         let queueStore = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
-        let provider = AppQueueIngestionProvider(
-            sessionBox: SessionLookupBox(),
-            fileProviderBox: FileProviderBox(),
-            wikictlDirectory: NSTemporaryDirectory(),
+        let provider = DaemonQueueIngestionProvider(
+            containerDirectory: URL(fileURLWithPath: NSTemporaryDirectory()),
+            storeResolver: { _ in nil },
+            launcherFactoryResolver: { _ in throw RetryStubResolverError.unavailable },
             queueStore: queueStore,
             resolveSelectedProvider: { disabledConfig.selectedProvider() },
-            resolveProviderConfig: { disabledConfig })
+            resolveProviderConfig: { disabledConfig },
+            providerServices: UnavailableAgentProviderServices())
 
         let first = await provider.readiness()
         let second = await provider.readiness()

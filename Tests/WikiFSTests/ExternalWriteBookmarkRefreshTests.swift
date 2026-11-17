@@ -27,7 +27,7 @@ struct ExternalWriteBookmarkRefreshTests {
         return (model, store)
     }
 
-    @Test func reloadFromStoreRefreshesBookmarksAfterExternalCreateFolder() throws {
+    @Test func reloadFromStoreRefreshesBookmarksAfterExternalCreateFolder() async throws {
         let (model, store) = try makeModel()
         #expect(model.bookmarkNodes.isEmpty)
 
@@ -43,7 +43,7 @@ struct ExternalWriteBookmarkRefreshTests {
 
         // reloadFromStore() is what the bus handler calls after a Darwin
         // notification; it must now pick up the bookmark change.
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         #expect(model.bookmarkNodes.count == 1)
         let node = model.bookmarkNodes[0]
@@ -52,11 +52,11 @@ struct ExternalWriteBookmarkRefreshTests {
         #expect(node.parentID == nil)
     }
 
-    @Test func reloadFromStoreRefreshesBookmarksAfterExternalAddRef() throws {
+    @Test func reloadFromStoreRefreshesBookmarksAfterExternalAddRef() async throws {
         let (model, store) = try makeModel()
 
         // Create a page to reference.
-        model.newPage(title: "A Page")
+        await model.newPage(title: "A Page")
         guard case .page(let pageID) = model.selection else {
             Issue.record("expected page selection"); return
         }
@@ -67,7 +67,7 @@ struct ExternalWriteBookmarkRefreshTests {
         _ = try store.createBookmarkNode(
             parentID: folder.id, position: 0, content: .page(pageID))
 
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         #expect(model.bookmarkNodes.count == 2)
         let refs = model.bookmarkNodes.filter { $0.kind == .pageRef }
@@ -76,7 +76,7 @@ struct ExternalWriteBookmarkRefreshTests {
         #expect(refs[0].parentID == folder.id)
     }
 
-    @Test func reloadFromStoreRefreshesBookmarksAfterExternalRename() throws {
+    @Test func reloadFromStoreRefreshesBookmarksAfterExternalRename() async throws {
         let (model, store) = try makeModel()
 
         // Agent creates a folder, then renames it — all through the store.
@@ -84,29 +84,32 @@ struct ExternalWriteBookmarkRefreshTests {
             parentID: nil, position: 0, content: .folder(label: "Old Name"))
         try store.renameBookmarkFolder(id: node.id, to: "New Name")
 
-        model.reloadFromStore()
+        // P1-FLIP-REVIEW: reloadFromStore() now only enqueues a coalesced async
+        // reload; bootstrapFromStore() awaits the same drain so the bookmark
+        // projections below are populated.
+        await model.bootstrapFromStore()
 
         #expect(model.bookmarkNodes.count == 1)
         #expect(model.bookmarkNodes[0].label == "New Name")
     }
 
-    @Test func reloadFromStoreRefreshesBookmarksAfterExternalDelete() throws {
+    @Test func reloadFromStoreRefreshesBookmarksAfterExternalDelete() async throws {
         let (model, store) = try makeModel()
 
         // Seed the model with a folder via the store, then reload.
         _ = try store.createBookmarkNode(
             parentID: nil, position: 0, content: .folder(label: "Doomed"))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(model.bookmarkNodes.count == 1)
 
         // Agent deletes it directly through the store.
         try store.deleteBookmarkNode(id: model.bookmarkNodes[0].id)
 
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         #expect(model.bookmarkNodes.isEmpty)
     }
 
-    @Test func reloadFromStoreRefreshesBookmarksAfterExternalMove() throws {
+    @Test func reloadFromStoreRefreshesBookmarksAfterExternalMove() async throws {
         let (model, store) = try makeModel()
 
         // Create two folders + a page ref under the first folder.
@@ -117,7 +120,16 @@ struct ExternalWriteBookmarkRefreshTests {
         _ = try store.createBookmarkNode(
             parentID: folderA.id, position: 0, content: .folder(label: "Child"))
 
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
+        // P1-FLIP-REVIEW: reloadFromStore() now enqueues a coalesced async
+        // reload and returns before the drain lands (it used to reload
+        // synchronously). Poll for the drained state before the unchanged
+        // assertions below; the force-unwrap still fails loudly if the
+        // bookmark tree never drains.
+        let drainDeadline = ContinuousClock.now + .seconds(5)
+        while model.bookmarkNodes.count != 3, ContinuousClock.now < drainDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         #expect(model.bookmarkNodes.count == 3)
         let child = model.bookmarkNodes.first { $0.label == "Child" }!
         #expect(child.parentID == folderA.id)
@@ -125,7 +137,12 @@ struct ExternalWriteBookmarkRefreshTests {
         // Agent moves "Child" from Folder A to Folder B.
         try store.moveBookmarkNode(id: child.id, toParentID: folderB.id, position: 0)
 
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
+        let moveDeadline = ContinuousClock.now + .seconds(5)
+        while model.bookmarkNodes.first(where: { $0.label == "Child" })?.parentID != folderB.id,
+              ContinuousClock.now < moveDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         let movedChild = model.bookmarkNodes.first { $0.label == "Child" }!
         #expect(movedChild.parentID == folderB.id)
     }

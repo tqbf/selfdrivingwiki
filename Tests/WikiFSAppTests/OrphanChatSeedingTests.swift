@@ -35,10 +35,10 @@ struct OrphanChatSeedingTests {
 
     // MARK: - Seeding: a chat is never titled-but-empty
 
-    @Test func startChatSeedsFirstUserMessageImmediately() throws {
+    @Test func startChatSeedsFirstUserMessageImmediately() async throws {
         let (model, store) = try tempModel()
 
-        let chat = try #require(model.startChat(kind: .edit, firstMessage: "Set up the home page"))
+        let chat = try #require(await model.startChat(kind: .edit, firstMessage: "Set up the home page"))
 
         // The title is still derived from the first message (unchanged behavior).
         #expect(chat.title.contains("Set up the home page"))
@@ -52,10 +52,10 @@ struct OrphanChatSeedingTests {
         #expect(messages[0].event == .userText("Set up the home page"))
     }
 
-    @Test func startChatUpdatesChatsListWithOneMessage() throws {
+    @Test func startChatUpdatesChatsListWithOneMessage() async throws {
         let (model, _) = try tempModel()
 
-        let chat = try #require(model.startChat(kind: .edit, firstMessage: "Hello"))
+        let chat = try #require(await model.startChat(kind: .edit, firstMessage: "Hello"))
 
         // startChat inserts the row synchronously, but the messageCount field
         // is only accurate after a full reload. Force it so the assertion sees 1.
@@ -66,17 +66,17 @@ struct OrphanChatSeedingTests {
 
     // MARK: - No duplicate: a post-seed flush continues from seq 1
 
-    @Test func appendAfterSeedContinuesFromSeq1WithoutDuplicatingUserMessage() throws {
+    @Test func appendAfterSeedContinuesFromSeq1WithoutDuplicatingUserMessage() async throws {
         let (model, store) = try tempModel()
 
-        let chat = try #require(model.startChat(kind: .edit, firstMessage: "first"))
+        let chat = try #require(await model.startChat(kind: .edit, firstMessage: "first"))
 
         // Simulate the launcher's first transcript flush AFTER it has marked the
         // seeded user message as already-persisted (firstMessagePrePersisted →
         // persistedEventCount bumped past it). The flush therefore sends only the
         // agent's response tail — which must land at seq 1+, not duplicate the
         // user message at seq 0.
-        model.appendChatEvents(chatID: chat.id, events: [
+        await model.appendChatEvents(chatID: chat.id, events: [
             .assistantText("here is the answer"),
             .result(isError: false, text: "done"),
         ])
@@ -89,16 +89,16 @@ struct OrphanChatSeedingTests {
         #expect(messages[1].event == .assistantText("here is the answer"))
     }
 
-    @Test func seedingThenAppendingManyTurnsKeepsDenseUniqueSeq() throws {
+    @Test func seedingThenAppendingManyTurnsKeepsDenseUniqueSeq() async throws {
         let (model, store) = try tempModel()
 
-        let chat = try #require(model.startChat(kind: .edit, firstMessage: "q1"))
+        let chat = try #require(await model.startChat(kind: .edit, firstMessage: "q1"))
 
         // Turn 1 response.
-        model.appendChatEvents(chatID: chat.id, events: [.assistantText("a1")])
+        await model.appendChatEvents(chatID: chat.id, events: [.assistantText("a1")])
         // Turn 2: user + response (the continue path appends the user message,
         // since seeding only happens at creation, not on continue).
-        model.appendChatEvents(chatID: chat.id, events: [.userText("q2"), .assistantText("a2")])
+        await model.appendChatEvents(chatID: chat.id, events: [.userText("q2"), .assistantText("a2")])
 
         let messages = try store.chatMessages(chatID: chat.id)
         // Dense, gap-free, unique seqs — the UNIQUE(chat_id, seq) index holds.
@@ -111,16 +111,16 @@ struct OrphanChatSeedingTests {
 
     // MARK: - Rollback: a session that never started leaves no trace
 
-    @Test func rollbackChatCreationDeletesRowAndSeededMessage() throws {
+    @Test func rollbackChatCreationDeletesRowAndSeededMessage() async throws {
         let (model, store) = try tempModel()
 
-        let chat = try #require(model.startChat(kind: .edit, firstMessage: "doomed"))
+        let chat = try #require(await model.startChat(kind: .edit, firstMessage: "doomed"))
         model.reloadChats()
         #expect(try store.chatMessages(chatID: chat.id).count == 1)
         #expect(model.chats.contains { $0.id == chat.id })
 
         // The session never started (preflight/spawn failure) → roll back.
-        model.rollbackChatCreation(id: chat.id, toDraft: .newChat)
+        await model.rollbackChatCreation(id: chat.id, toDraft: .newChat)
         model.reloadChats()
 
         // Row + cascaded message both gone; the model's chat list no longer
@@ -130,31 +130,31 @@ struct OrphanChatSeedingTests {
         #expect(model.chats.isEmpty)
     }
 
-    @Test func rollbackRevertsRetargetedTabToDraftComposer() throws {
+    @Test func rollbackRevertsRetargetedTabToDraftComposer() async throws {
         let (model, _) = try tempModel()
 
         model.openTab(.newChat)
         let activeID = try #require(model.activeTabID)
 
-        let chat = try #require(model.startChat(kind: .edit, firstMessage: "doomed"))
+        let chat = try #require(await model.startChat(kind: .edit, firstMessage: "doomed"))
         model.retargetActiveTabToChat(chatID: chat.id)
         // The legacy runner path retargeted the tab to .chat(id).
         let retargeted = try #require(model.tabs.first { $0.id == activeID })
         #expect(retargeted.selection == .chat(chat.id))
 
-        model.rollbackChatCreation(id: chat.id, toDraft: .newChat)
+        await model.rollbackChatCreation(id: chat.id, toDraft: .newChat)
 
         // The tab is reverted to the draft composer, not left on a dead .chat.
         let reverted = try #require(model.tabs.first { $0.id == activeID })
         #expect(reverted.selection == .newChat)
     }
 
-    @Test func rollbackIsHarmlessWhenChatAlreadyAbsent() throws {
+    @Test func rollbackIsHarmlessWhenChatAlreadyAbsent() async throws {
         let (model, store) = try tempModel()
         // No chat created — rolling back a never-created id must not throw and
         // must leave the store untouched.
         let phantom = ChatID(rawValue: "01PHANTOMCHAT0000000000Z")
-        model.rollbackChatCreation(id: phantom, toDraft: .newChat)
+        await model.rollbackChatCreation(id: phantom, toDraft: .newChat)
         model.reloadChats()
         #expect(try store.listChats().isEmpty)
         #expect(model.chats.isEmpty)

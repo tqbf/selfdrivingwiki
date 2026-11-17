@@ -266,26 +266,26 @@ public protocol WikiStore: AnyObject, Sendable {
     var registeredRendererSourceTypes: RegisteredRendererSourceTypes { get set }
 
     /// Page summaries ordered by the given sort criterion.
-    func listPages(sortBy: PageSortOrder) throws -> [WikiPageSummary]
-    func getPage(id: PageID) throws -> WikiPage
+    func listPages(sortBy: PageSortOrder) async throws -> [WikiPageSummary]
+    func getPage(id: PageID) async throws -> WikiPage
     /// Create a page with no author. Convenience so callers omitting
     /// `createdBy` (the common case) route through a protocol requirement —
     /// protocol requirements can't declare default arguments, so both backends
     /// implement this 1-arg forwarder. Equivalent to
     /// `createPage(title: createdBy: nil)`.
     @discardableResult
-    func createPage(title: String) throws -> WikiPage
+    func createPage(title: String) async throws -> WikiPage
     func createPage(
         title: String, body: String, createdBy: String?,
         provenance: [PageVersionSourceInput]
-    ) throws -> WikiPage
-    func createPage(title: String, createdBy: String?, provenance: [PageVersionSourceInput]) throws -> WikiPage
-    func updatePage(id: PageID, title: String, body: String, lastEditedBy: String?, provenance: [PageVersionSourceInput]) throws
+    ) async throws -> WikiPage
+    func createPage(title: String, createdBy: String?, provenance: [PageVersionSourceInput]) async throws -> WikiPage
+    func updatePage(id: PageID, title: String, body: String, lastEditedBy: String?, provenance: [PageVersionSourceInput]) async throws
     /// Compatibility forwarder: deletes one page through the protected
     /// contract with the `.preserve` link policy (ghost links stay, matching
     /// bookmarks are always removed). Equivalent to
     /// `deleteResources(ResourceDeletionRequest(target: .page(id), linkPolicy: .preserve))`.
-    func deletePage(id: PageID) throws
+    func deletePage(id: PageID) async throws
 
     // MARK: - Protected deletion (issue #219 hardening)
     //
@@ -301,7 +301,7 @@ public protocol WikiStore: AnyObject, Sendable {
     /// one deterministic snapshot. Throwing (never an empty result on failure):
     /// a failed read surfaces as an error so callers cannot mistake it for
     /// "nothing references these targets". Read-only; emits nothing.
-    func deletionImpact(for targets: Set<ResourceDeletionTarget>) throws -> DeletionImpact
+    func deletionImpact(for targets: Set<ResourceDeletionTarget>) async throws -> DeletionImpact
 
     /// Delete the request's targets under its link policy in ONE transaction:
     /// rechecked impact → provenance validation (any blocker throws the typed
@@ -314,23 +314,23 @@ public protocol WikiStore: AnyObject, Sendable {
     /// are idempotent no-ops (stale matching bookmarks are still removed, but
     /// no target-deleted event is emitted for a row that wasn't there).
     @discardableResult
-    func deleteResources(_ request: ResourceDeletionRequest) throws -> ResourceDeletionResult
+    func deleteResources(_ request: ResourceDeletionRequest) async throws -> ResourceDeletionResult
 
     /// Resolve a page *title* to its id, or nil if no page has that title.
     /// On duplicate titles, the lowest ULID (oldest page) wins. Used by
     /// `[[wiki-link]]` resolution (INITIAL §4 v1).
-    func resolveTitleToID(_ title: String) throws -> PageID?
+    func resolveTitleToID(_ title: String) async throws -> PageID?
 
     /// Resolve a `[[source:…]]` target to a source id. Matches display_name first,
     /// falling back to filename (so a retired display name still resolves via its
     /// original filename). Case-insensitive (COLLATE NOCASE). On a multi-match
     /// collision, the most recently updated source wins.
-    func resolveSourceByName(_ displayName: String) throws -> SourceID?
+    func resolveSourceByName(_ displayName: String) async throws -> SourceID?
 
     /// Replace ALL outgoing links for `pageID` with the resolved subset of
     /// `parsedLinks`, in one transaction. Targets that don't resolve to a page
     /// are omitted (the schema forbids a NULL `to_page_id`). Self-links allowed.
-    func replaceLinks(from pageID: PageID, parsedLinks: [ParsedLink]) throws
+    func replaceLinks(from pageID: PageID, parsedLinks: [ParsedLink]) async throws
 
     /// The composed page write (cumulative ingestion, plan phase 4 §9):
     /// title/id resolution, the ``PageWriteExpectation`` check, body
@@ -356,17 +356,17 @@ public protocol WikiStore: AnyObject, Sendable {
         expectation: PageWriteExpectation,
         author: String?,
         provenance: [PageVersionSourceInput]
-    ) throws -> PageUpsert.Outcome
+    ) async throws -> PageUpsert.Outcome
 
     /// Pages whose bodies link TO `pageID` via `[[wiki-link]]` — the incoming
     /// edge set (issue #219). Used to warn before deleting a page that other
     /// pages still reference, and to rewrite those links to plain text.
-    func pageLinkingPages(to pageID: PageID) throws -> [PageID]
+    func pageLinkingPages(to pageID: PageID) async throws -> [PageID]
 
     /// Pages whose bodies link TO `sourceID` via `[[source:…]]` — the incoming
     /// source-link edge set (issue #219). Used to warn before deleting a source
     /// that pages still cite, and to rewrite those citations to plain text.
-    func sourceLinkingPages(to sourceID: SourceID) throws -> [PageID]
+    func sourceLinkingPages(to sourceID: SourceID) async throws -> [PageID]
 
     // MARK: - Ingested files (Phase 5)
     //
@@ -385,7 +385,7 @@ public protocol WikiStore: AnyObject, Sendable {
     /// which routes to the full-signature impl with the trailing args at their
     /// defaults. This is the most common test call shape.
     @discardableResult
-    func addSource(filename: String, data: Data) throws -> SourceSummary
+    func addSource(filename: String, data: Data) async throws -> SourceSummary
 
     @discardableResult
     func addSource(
@@ -398,7 +398,7 @@ public protocol WikiStore: AnyObject, Sendable {
         originalPath: String?,
         activityID: String?,
         resolvedDisplayName: String??
-    ) throws -> SourceSummary
+    ) async throws -> SourceSummary
 
     /// Store a **byteless** source: a source whose identity row + v1 content
     /// version carry NO blob (`blob_hash = NULL`, `byte_size = 0`,
@@ -421,10 +421,10 @@ public protocol WikiStore: AnyObject, Sendable {
         mimeType: String?,
         provenance: SourceProvenance,
         role: SourceRole
-    ) throws -> SourceSummary
+    ) async throws -> SourceSummary
 
     /// Source summaries (no content blob), most-recent-first.
-    func listSources() throws -> [SourceSummary]
+    func listSources() async throws -> [SourceSummary]
 
     // MARK: - Wiki strategy (per-wiki editorial document)
 
@@ -434,14 +434,14 @@ public protocol WikiStore: AnyObject, Sendable {
     /// and pair a stale body with a fresh revision, defeating the save's
     /// compare-and-swap. Use `WikiStrategyState.saveExpectation` as the
     /// save's `expectedRevision`. Read-only: emits nothing.
-    func getWikiStrategyState() throws -> WikiStrategyState
+    func getWikiStrategyState() async throws -> WikiStrategyState
 
     /// The committed strategy document for this wiki, or `nil` when the wiki
     /// uses the **Default** strategy. Absence is the representation of Default
     /// — no sentinel name, no special page, and a reset tombstone reads back
     /// as `nil` exactly like a never-written wiki. Read-only: emits nothing
     /// and returns a copied `Sendable` value.
-    func getWikiStrategy() throws -> WikiStrategy?
+    func getWikiStrategy() async throws -> WikiStrategy?
 
     /// The committed revision counter, **including tombstones**: `nil` when
     /// no strategy row has ever been written, otherwise the row's revision —
@@ -449,7 +449,7 @@ public protocol WikiStore: AnyObject, Sendable {
     /// after a reset. An editor that read a Default wiki composes its
     /// compare-and-swap expectation from this value (`nil` for true absence,
     /// the tombstone revision otherwise). Read-only: emits nothing.
-    func wikiStrategyRevision() throws -> WikiStrategyRevision?
+    func wikiStrategyRevision() async throws -> WikiStrategyRevision?
 
     /// Compare-and-swap save of the strategy document. `expectedRevision`
     /// must equal the committed row revision exactly — `nil` matches only a
@@ -478,49 +478,49 @@ public protocol WikiStore: AnyObject, Sendable {
         name: String,
         instructions: String,
         expectedRevision: WikiStrategyRevision?
-    ) throws -> WikiStrategySaveOutcome
+    ) async throws -> WikiStrategySaveOutcome
 
     // MARK: - Renderer settings (dynamic renderers Phase 3)
 
-    func listRendererSourcePreferences() throws -> [RendererSourcePreference]
-    func rendererSourcePreference(sourceID: SourceID) throws -> RendererSourcePreference?
-    func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference) throws
-    func rendererSourcePresentation(sourceID: SourceID) throws -> RendererSourcePresentation?
-    func setRendererSourcePresentation(sourceID: SourceID, presentation: RendererSourcePresentationMode) throws
-    func removeRendererSourcePresentation(sourceID: SourceID) throws
-    func rendererSettingsJournalRecords() throws -> [PersistedWikiStoreChangeRecord]
+    func listRendererSourcePreferences() async throws -> [RendererSourcePreference]
+    func rendererSourcePreference(sourceID: SourceID) async throws -> RendererSourcePreference?
+    func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference) async throws
+    func rendererSourcePresentation(sourceID: SourceID) async throws -> RendererSourcePresentation?
+    func setRendererSourcePresentation(sourceID: SourceID, presentation: RendererSourcePresentationMode) async throws
+    func removeRendererSourcePresentation(sourceID: SourceID) async throws
+    func rendererSettingsJournalRecords() async throws -> [PersistedWikiStoreChangeRecord]
 
     /// The verbatim content bytes for one source, fetched on demand. On the
     /// protocol so `WikiStoreModel` can STAGE the source into the agent's scratch
     /// dir (reading from SQLite, not the laggy mount) without downcasting. Throws
     /// `.notFound` if absent.
-    func sourceContent(id: SourceID) throws -> Data
+    func sourceContent(id: SourceID) async throws -> Data
 
     /// The verbatim bytes for one exact immutable source-content version.
     /// This never follows the live `source-content` ref and is therefore the
     /// only source-byte read permitted for a version-pinned renderer session.
-    func sourceContent(versionID: SourceVersionID) throws -> Data
+    func sourceContent(versionID: SourceVersionID) async throws -> Data
 
     /// The byte count for the one exact renderer input version. This must not
     /// materialize its source or Markdown body.
-    func rendererInputByteCount(_ input: RendererBridgeInput) throws -> Int?
+    func rendererInputByteCount(_ input: RendererBridgeInput) async throws -> Int?
 
     /// Metadata for one exact immutable source-content version. This never
     /// resolves the active version for the source that owns it.
-    func sourceVersion(id: SourceVersionID) throws -> SourceVersion?
+    func sourceVersion(id: SourceVersionID) async throws -> SourceVersion?
 
     /// Compatibility forwarder: deletes one source through the protected
     /// contract with the `.preserve` link policy (citations stay as ghost
     /// links, matching bookmarks are always removed). Provenance blockers
     /// still throw the typed deletion restriction before any write. Equivalent
     /// to `deleteResources(ResourceDeletionRequest(target: .source(id), linkPolicy: .preserve))`.
-    func deleteSource(id: SourceID) throws
+    func deleteSource(id: SourceID) async throws
 
     /// The page versions whose provenance cites `sourceID`, making the source
     /// undeletable (issue #219). Empty when the source is free to delete. The
     /// delete-confirmation dialog surfaces these so the user sees WHY a source
     /// can't be removed instead of a silent failure.
-    func sourceProvenanceBlockers(sourceID: SourceID) throws -> [ProvenanceDeletionBlocker]
+    func sourceProvenanceBlockers(sourceID: SourceID) async throws -> [ProvenanceDeletionBlocker]
 
     /// The origin provenance of a source: the provider agent + the activity that
     /// fetched/imported it, joined from the active content version to its activity
@@ -528,16 +528,16 @@ public protocol WikiStore: AnyObject, Sendable {
     /// `plan`/`externalRef` come from the per-ingest **activity** row (so two
     /// website sources with different URLs each return their own URL); `agentName`
     /// from the **agent** row.
-    func sourceOrigin(sourceID: SourceID) throws -> SourceOrigin?
+    func sourceOrigin(sourceID: SourceID) async throws -> SourceOrigin?
 
     /// Find an active source whose URL provenance has the given canonical
     /// identity. The identity is produced by `URLFetchService.urlIdentity(_:)`.
-    func sourceMatchingURLIdentity(_ identity: String) throws -> SourceSummary?
+    func sourceMatchingURLIdentity(_ identity: String) async throws -> SourceSummary?
 
     /// The full edit history for a source — every `source_versions` row joined
     /// to its `activities` → `agents` (the source-side mirror of
     /// `pageEditHistory`). Ordered NEWEST-FIRST. Read-only: emits nothing.
-    func sourceEditHistory(sourceID: SourceID) throws -> [SourceOrigin]
+    func sourceEditHistory(sourceID: SourceID) async throws -> [SourceOrigin]
 
     /// The active content version for a source, resolved exactly like
     /// `sourceContent` (ref → version, else default-active `MAX(id)`). Returns
@@ -546,18 +546,18 @@ public protocol WikiStore: AnyObject, Sendable {
     /// and the refresh guard — can read it through `any WikiStore` without
     /// downcasting to a concrete backend. Both `GRDBWikiStore` and
     /// `GRDBWikiStore` implement this identically.
-    func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
+    func activeContentVersion(sourceID: SourceID) async throws -> SourceVersion?
 
     /// The immutable root content version created when a source is ingested.
     /// Returns nil when the source has no version rows.
-    func initialContentVersion(sourceID: SourceID) throws -> SourceVersion?
+    func initialContentVersion(sourceID: SourceID) async throws -> SourceVersion?
 
     /// Rename a source's display_name and rewrite every `[[source:<old>…]]` link
     /// that points at it. Transactional — source row + all affected pages + their
     /// link rows in one commit. Fragment and alias are preserved.
-    func renameSource(id: SourceID, to newDisplayName: String) throws
+    func renameSource(id: SourceID, to newDisplayName: String) async throws
     /// Set display_name without the link-rewrite/FTS overhead of renameSource.
-    func setSourceDisplayName(id: SourceID, displayName: String) throws
+    func setSourceDisplayName(id: SourceID, displayName: String) async throws
 
     /// Stamp a source as summarized-into-the-wiki (`sources.ingested_at`).
     /// Two stampers set it: the host, at validated-successful pipeline
@@ -565,11 +565,11 @@ public protocol WikiStore: AnyObject, Sendable {
     /// `wikictl log append --kind ingest --source <id>`. The first completed
     /// ingest wins — see `markSourceIngested(id:)` for the no-rewrite rule.
     /// The UI reads it as the authoritative "Processed" status.
-    func markSourceIngested(id: SourceID) throws
+    func markSourceIngested(id: SourceID) async throws
 
     /// IDs of sources the agent has marked ingested — the deterministic
     /// source of truth for the "Processed" badge (no fuzzy log-title matching).
-    func markedSourceIDs() throws -> Set<String>
+    func markedSourceIDs() async throws -> Set<String>
 
     // MARK: - Processed markdown versions (v8, renamed v10)
 
@@ -582,7 +582,7 @@ public protocol WikiStore: AnyObject, Sendable {
         sourceID: SourceID, data: Data,
         detectionHints: ContentTypeDetectionHints,
         provenance: SourceProvenance?
-    ) throws -> SourceVersion
+    ) async throws -> SourceVersion
 
     /// Attach acquired bytes to an existing (byteless) source — the
     /// attachment drain's one store write for any acquisition package. Creates
@@ -605,7 +605,7 @@ public protocol WikiStore: AnyObject, Sendable {
         externalItemKey: String?,
         externalItemTitle: String?,
         producer: ExtractionInstalledPackageProducer?
-    ) throws -> SourceVersion
+    ) async throws -> SourceVersion
 
     /// Populate the neutral external-provenance columns (and optionally the
     /// display name) for a source whose product arrived as a Markdown
@@ -616,7 +616,7 @@ public protocol WikiStore: AnyObject, Sendable {
         externalItemKey: String?,
         externalItemTitle: String?,
         displayName: String?
-    ) throws
+    ) async throws
 
     /// The fetcher markdown result's single-transaction write: the derived
     /// Markdown version, the neutral external provenance, and the
@@ -627,10 +627,10 @@ public protocol WikiStore: AnyObject, Sendable {
         package: ExtractionInstalledPackageProducer,
         externalItemKey: String?, externalItemTitle: String?,
         sourceVersionID: SourceVersionID
-    ) throws -> SourceMarkdownVersion
+    ) async throws -> SourceMarkdownVersion
 
     /// Marks one fetch source `complete` — the pipeline is done. Idempotent.
-    func markFetchComplete(sourceID: SourceID) throws
+    func markFetchComplete(sourceID: SourceID) async throws
 
     /// The recovery-scan settle: version-aware variant that only advances
     /// `formatJobPending` → `complete` while `expectedContentVersionID` is
@@ -640,44 +640,44 @@ public protocol WikiStore: AnyObject, Sendable {
     func markFetchComplete(
         sourceID: SourceID,
         expectedContentVersionID: SourceVersionID
-    ) throws -> Bool
+    ) async throws -> Bool
 
     /// The typed fetch lifecycle state of one source (`nil` = never a fetch
     /// source).
-    func fetchState(sourceID: SourceID) throws -> SourceFetchState?
+    func fetchState(sourceID: SourceID) async throws -> SourceFetchState?
 
     /// Every source still holding a `formatJobPending` marker — the recovery
     /// scan set for the queue startup path.
-    func sourcesWithPendingFormatJobs() throws -> [SourceID]
+    func sourcesWithPendingFormatJobs() async throws -> [SourceID]
 
     /// The latest (HEAD) version of the processed markdown for a source, or nil
     /// when no version exists yet (not yet seeded/extracted).
-    func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion?
+    func processedMarkdownHead(sourceID: SourceID) async throws -> SourceMarkdownVersion?
 
     /// True when at least one processed-markdown version exists for this source.
-    func hasProcessedMarkdown(sourceID: SourceID) throws -> Bool
+    func hasProcessedMarkdown(sourceID: SourceID) async throws -> Bool
 
     /// All versions for a source, newest first (HEAD → v1). Empty if none.
-    func processedMarkdownHistory(sourceID: SourceID) throws -> [SourceMarkdownVersion]
+    func processedMarkdownHistory(sourceID: SourceID) async throws -> [SourceMarkdownVersion]
 
     /// Read a single resolved-markdown version by its smv id (Phase 6). Returns
     /// the blob-decoded `SourceMarkdownVersion`, or `nil` when no row matches.
     /// Used by the pinned-extraction viewer to load the exact extraction a quote
     /// was written against.
-    func processedMarkdownVersion(id: SourceMarkdownVersionID) throws -> SourceMarkdownVersion?
+    func processedMarkdownVersion(id: SourceMarkdownVersionID) async throws -> SourceMarkdownVersion?
 
     /// Every source's derived-markdown chain as `[sourceID: [smvID]]`, ULID-asc
     /// per source (chronological; index 0 = v1). Phase 6: the render precompute
     /// builds the `sourceID → [smvID]` map in one query so `linkified` can
     /// resolve `@vN` per occurrence.
-    func sourceDerivedChains() throws -> [SourceID: [SourceMarkdownVersionID]]
+    func sourceDerivedChains() async throws -> [SourceID: [SourceMarkdownVersionID]]
 
     /// Embed descriptors for every **byteless** source, batched in one query
     /// (`[sourceID: SourceEmbedDescriptor]`). Joins the active content version →
     /// activity (`plan`) → agent (`name`), restricted to `blob_hash IS NULL`.
     /// Byteful sources are excluded. Used by the page-reader precompute to feed
     /// `ExternalEmbed.target(for:)` for byteless external embeds.
-    func embedDescriptors() throws -> [SourceID: SourceEmbedDescriptor]
+    func embedDescriptors() async throws -> [SourceID: SourceEmbedDescriptor]
 
     /// Batched `sourceOrigin(sourceID:)` for ALL sources in one query —
     /// `[SourceID: SourceOrigin]`, same shared column list and `originFrom`
@@ -685,7 +685,7 @@ public protocol WikiStore: AnyObject, Sendable {
     /// visible for fetched sources WITH bytes too, e.g. website snapshots).
     /// READ seam — no mutate/emit. Enumeration callers MUST use this map
     /// instead of per-source `sourceOrigin` calls (N+1).
-    func sourceOriginsBySource() throws -> [SourceID: SourceOrigin]
+    func sourceOriginsBySource() async throws -> [SourceID: SourceOrigin]
 
     // MARK: - Phase 4: website snapshot store primitives
 
@@ -693,7 +693,7 @@ public protocol WikiStore: AnyObject, Sendable {
     /// agent + activity FIRST (own transaction) so `source_versions.activity_id`
     /// FK is satisfied before any image version is written. Returns the id.
     @discardableResult
-    func ensureFetchActivity(provenance: SourceProvenance) throws -> String
+    func ensureFetchActivity(provenance: SourceProvenance) async throws -> String
 
     /// Store one snapshot image as a per-snapshot `.media` source — NO
     /// source-level content-hash dedup (each snapshot owns its image sources);
@@ -707,35 +707,35 @@ public protocol WikiStore: AnyObject, Sendable {
         sourceURL: URL,
         activityID: String,
         role: SourceRole
-    ) throws -> SourceSummary
+    ) async throws -> SourceSummary
 
     /// True when the source's active content version's `activity_id` has
     /// sibling versions with non-null `original_path` (a snapshot page with
     /// images). Used by the refresh guard.
-    func hasImageSiblings(sourceID: SourceID) throws -> Bool
+    func hasImageSiblings(sourceID: SourceID) async throws -> Bool
 
     /// Batched sibling-image resolver maps: per source,
     /// `[original_path → sibling sourceID]`, joined on the source's active
     /// version's `activity_id`. First-wins per path in ULID order (§7).
-    func siblingImageResolvers() throws -> [SourceID: [String: SourceID]]
+    func siblingImageResolvers() async throws -> [SourceID: [String: SourceID]]
 
     /// The producing agent name for each of a source's markdown versions
     /// (smv.id → agents.name), for the alternatives UI labels.
-    func processedMarkdownAgentNames(sourceID: SourceID) throws -> [SourceMarkdownVersionID: String]
+    func processedMarkdownAgentNames(sourceID: SourceID) async throws -> [SourceMarkdownVersionID: String]
 
     /// All extraction alternatives for a source, newest first, each bundled
     /// with its recoverable provenance (backend display name, model version,
     /// char count) and whether it is the active HEAD. Consolidates
     /// `processedMarkdownHistory` + `processedMarkdownAgentNames` into one join
     /// (smv → activity → agent). For the track C compare/nominate UI.
-    func processedMarkdownAlternatives(sourceID: SourceID) throws -> [ExtractionAlternative]
+    func processedMarkdownAlternatives(sourceID: SourceID) async throws -> [ExtractionAlternative]
 
     /// Append a new full-text markdown version to the chain. Reads the current
     /// head to set `parentID`. Returns the new version.
     @discardableResult
     func appendProcessedMarkdown(sourceID: SourceID, content: String,
                                  origin: SourceMarkdownOrigin, note: String?,
-                                 technique: String?) throws -> SourceMarkdownVersion
+                                 technique: String?) async throws -> SourceMarkdownVersion
 
     /// Append a `.user` processed-markdown version with compare-and-swap on
     /// the active head: the write commits ONLY when the chain's current head
@@ -748,7 +748,7 @@ public protocol WikiStore: AnyObject, Sendable {
     @discardableResult
     func appendUserProcessedMarkdown(
         sourceID: SourceID, content: String, expectedHead: SourceMarkdownVersionID
-    ) throws -> SourceMarkdownVersion
+    ) async throws -> SourceMarkdownVersion
 
     /// Append typed, non-user derived markdown and make it the active source
     /// markdown head. This is the canonical persistence seam for extraction and
@@ -758,7 +758,7 @@ public protocol WikiStore: AnyObject, Sendable {
         sourceID: SourceID, content: String, origin: SourceMarkdownOrigin,
         producer: ExtractionProducer?, providerID: ProviderID?, modelID: ModelID?,
         toolVersion: String?, sourceVersionID: SourceVersionID?, note: String?
-    ) throws -> SourceMarkdownVersion
+    ) async throws -> SourceMarkdownVersion
 
     /// Append one package-backed result with exact immutable package identity.
     /// The origin is derived: `.extraction` for document packages, `.transcript`
@@ -770,7 +770,7 @@ public protocol WikiStore: AnyObject, Sendable {
         package: ExtractionInstalledPackageProducer,
         origin: SourceMarkdownOrigin, toolVersion: String?,
         sourceVersionID: SourceVersionID?, note: String?
-    ) throws -> SourceMarkdownVersion
+    ) async throws -> SourceMarkdownVersion
 
     /// Append one HOST-produced on-device speech transcript as ONE
     /// `.transcript` version with the typed host-speech producer and the
@@ -781,12 +781,12 @@ public protocol WikiStore: AnyObject, Sendable {
         sourceID: SourceID, content: String,
         producer: ExtractionHostSpeechProducer,
         sourceVersionID: SourceVersionID
-    ) throws -> SourceMarkdownVersion
+    ) async throws -> SourceMarkdownVersion
 
     /// Revert to an older version by appending a NEW version whose content
     /// copies the target. History is preserved; HEAD = the new revert version.
     @discardableResult
-    func revertProcessedMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws -> SourceMarkdownVersion
+    func revertProcessedMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) async throws -> SourceMarkdownVersion
 
     /// Record a provenance-carrying extraction alternative (§4.5, §4.7): create
     /// the backend's Agent + an `extract` Activity + a CAS'd markdown row in one
@@ -797,12 +797,12 @@ public protocol WikiStore: AnyObject, Sendable {
     func recordMarkdownExtraction(
         sourceID: SourceID, content: String, backend: ExtractionBackend,
         sourceVersionID: SourceVersionID?, note: String?, modelVersion: String?
-    ) throws -> SourceMarkdownVersion
+    ) async throws -> SourceMarkdownVersion
 
     /// Nominate an existing processed-markdown row as the active HEAD for a
     /// source (UPSERT the `source-derived` ref). Used by the alternatives UI,
     /// `wikictl source set-active`, and revert.
-    func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) throws
+    func setActiveMarkdown(sourceID: SourceID, to versionID: SourceMarkdownVersionID) async throws
 
     // MARK: - Page versions (W0, PR #312)
 
@@ -816,14 +816,14 @@ public protocol WikiStore: AnyObject, Sendable {
         pageID: PageID, title: String, body: String,
         expectedHeadVersionID: PageVersionID?,
         lastEditedBy: String?, provenance: [PageVersionSourceInput]
-    ) throws -> PageVersionID
+    ) async throws -> PageVersionID
 
     /// Immutable source evidence for one page version. Compatibility readers
     /// return an empty collection against v47 instead of attempting a schema
     /// migration.
-    func pageVersionSources(versionID: PageVersionID) throws -> [PageVersionSource]
-    func pageHeadSources(pageID: PageID) throws -> [PageVersionSource]
-    func sourceReferencingPageVersions(sourceID: SourceID) throws -> [PageVersionID]
+    func pageVersionSources(versionID: PageVersionID) async throws -> [PageVersionSource]
+    func pageHeadSources(pageID: PageID) async throws -> [PageVersionSource]
+    func sourceReferencingPageVersions(sourceID: SourceID) async throws -> [PageVersionID]
 
     /// The distinct pages whose recorded page-version provenance cites any of
     /// `sourceIDs` — the inverse of `sourceReferencingPageVersions(sourceID:)`
@@ -838,19 +838,19 @@ public protocol WikiStore: AnyObject, Sendable {
     /// `pages` row and are `nil` when the page row has vanished — callers
     /// degrade honestly. Read-only: routes through `dbWriter.read` (usable
     /// from read-only store handles) and emits no `ResourceChangeEvent`.
-    func pagesCitingSources(sourceIDs: [SourceID], limit: Int) throws -> [CitedPage]
+    func pagesCitingSources(sourceIDs: [SourceID], limit: Int) async throws -> [CitedPage]
 
     /// Typed read projections over existing source-markdown activity data.
-    func extractionProvenance(markdownVersionID: SourceMarkdownVersionID) throws -> ExtractionProvenance?
-    func activeExtractionProvenance(sourceID: SourceID) throws -> ExtractionProvenance?
+    func extractionProvenance(markdownVersionID: SourceMarkdownVersionID) async throws -> ExtractionProvenance?
+    func activeExtractionProvenance(sourceID: SourceID) async throws -> ExtractionProvenance?
 
     /// Resolve the active page-content version id (ref → version_id, or
     /// MAX(id) if no ref row exists — the default-active rule). Returns nil if
     /// the page has no versions (shouldn't happen post-migration).
-    func pageHeadVersionID(pageID: PageID) throws -> PageVersionID?
+    func pageHeadVersionID(pageID: PageID) async throws -> PageVersionID?
 
     /// The full version chain for a page, ordered by ULID (chain order).
-    func pageVersionHistory(pageID: PageID) throws -> [PageVersionSummary]
+    func pageVersionHistory(pageID: PageID) async throws -> [PageVersionSummary]
 
     /// The origin provenance of a page's active (HEAD) version: joins
     /// `refs → page_versions → activities → agents` (the PROV-DM read
@@ -865,7 +865,7 @@ public protocol WikiStore: AnyObject, Sendable {
     /// `any WikiStore`. No default implementation (mirrors `sourceOrigin`):
     /// `GRDBWikiStore` is the sole conformer; a future mock/test double must
     /// stub `nil`.
-    func pageOrigin(pageID: PageID) throws -> PageOrigin?
+    func pageOrigin(pageID: PageID) async throws -> PageOrigin?
 
     /// The full edit history for a page — every `page_versions` row joined to
     /// its `activities` → `agents` (extending `pageVersionHistory` with the
@@ -875,61 +875,61 @@ public protocol WikiStore: AnyObject, Sendable {
     /// therefore returns exactly 2 entries (the empty root + the first real
     /// edit). NULL activity/agent columns degrade gracefully. New protocol
     /// requirement (no default — mirrors `pageOrigin`/`sourceOrigin`).
-    func pageEditHistory(pageID: PageID) throws -> [PageOrigin]
+    func pageEditHistory(pageID: PageID) async throws -> [PageOrigin]
 
     /// Read the full blob-decoded body of an arbitrary page version by its id
     /// (the read-side counterpart of `revertPage`'s internal `page_versions →
     /// blobs` join). Returns `nil` when no row matches. READ-ONLY: routes
     /// through `dbWriter.read` and emits no `ResourceChangeEvent`. Used by the
     /// Versions window to view/diff a historical version without restoring it.
-    func pageVersionBody(versionID: PageVersionID) throws -> String?
+    func pageVersionBody(versionID: PageVersionID) async throws -> String?
 
     // MARK: - Exact-version OKF trust, lifecycle, and freshness (v52)
 
-    func pageOKFMetadata(versionID: PageVersionID, includeCorrected: Bool) throws -> PageOKFTrustMetadata?
+    func pageOKFMetadata(versionID: PageVersionID, includeCorrected: Bool) async throws -> PageOKFTrustMetadata?
     func sourceMarkdownOKFMetadata(
         versionID: SourceMarkdownVersionID, includeCorrected: Bool
-    ) throws -> SourceMarkdownOKFTrustMetadata?
+    ) async throws -> SourceMarkdownOKFTrustMetadata?
 
-    func setPageOKFStatus(versionID: PageVersionID, status: OKFConceptStatus?) throws
+    func setPageOKFStatus(versionID: PageVersionID, status: OKFConceptStatus?) async throws
     func setSourceMarkdownOKFStatus(
         versionID: SourceMarkdownVersionID, status: OKFConceptStatus?
-    ) throws
+    ) async throws
     func setPageOKFFreshness(
         versionID: PageVersionID, policy: OKFFreshnessPolicy?
-    ) throws
+    ) async throws
     func setSourceMarkdownOKFFreshness(
         versionID: SourceMarkdownVersionID, policy: OKFFreshnessPolicy?
-    ) throws
+    ) async throws
 
     @discardableResult
     func recordPageOKFVerification(
         versionID: PageVersionID, verifier: OKFVerifierIdentity,
         verifiedAt: Date, basis: OKFVerificationBasis,
         freshnessPolicy: OKFFreshnessPolicy?
-    ) throws -> OKFVerificationID
+    ) async throws -> OKFVerificationID
     @discardableResult
     func recordSourceMarkdownOKFVerification(
         versionID: SourceMarkdownVersionID, verifier: OKFVerifierIdentity,
         verifiedAt: Date, basis: OKFVerificationBasis,
         freshnessPolicy: OKFFreshnessPolicy?
-    ) throws -> OKFVerificationID
+    ) async throws -> OKFVerificationID
 
     func correctPageOKFVerification(
         versionID: PageVersionID, verificationID: OKFVerificationID,
         correctingVerifier: OKFVerifierIdentity, correctedAt: Date,
         reason: OKFVerificationCorrectionReason?
-    ) throws
+    ) async throws
     func correctSourceMarkdownOKFVerification(
         versionID: SourceMarkdownVersionID, verificationID: OKFVerificationID,
         correctingVerifier: OKFVerifierIdentity, correctedAt: Date,
         reason: OKFVerificationCorrectionReason?
-    ) throws
+    ) async throws
 
     /// Revert a page to a specific version: repoint the `page-content` ref to
     /// `versionID` and update the denormalized `pages.body_markdown` from the
     /// version's blob. Emits a `.page .updated` change event.
-    func revertPage(pageID: PageID, to versionID: PageVersionID) throws
+    func revertPage(pageID: PageID, to versionID: PageVersionID) async throws
 
     /// Restore a page to a previous version by **appending a new version node**
     /// (mirrors `revertProcessedMarkdown` for sources). The new row reuses the
@@ -938,19 +938,19 @@ public protocol WikiStore: AnyObject, Sendable {
     /// becomes the new HEAD (ref repointed to the NEW node). History is never
     /// mutated. Returns the new version's id. Emits a `.page .updated` event.
     @discardableResult
-    func restorePage(pageID: PageID, to versionID: PageVersionID) throws -> PageVersionID
+    func restorePage(pageID: PageID, to versionID: PageVersionID) async throws -> PageVersionID
 
     // MARK: - Workspaces (W1, PR #312)
 
     /// Create a durable, named workspace for a speculative ingestion branch.
     /// Returns the new workspace's id. The workspace starts in `open` status.
-    func createWorkspace(name: String?, activityID: String?) throws -> WorkspaceID
+    func createWorkspace(name: String?, activityID: String?) async throws -> WorkspaceID
 
     /// Read the workspace's current status + metadata.
-    func workspaceSummary(id: WorkspaceID) throws -> WorkspaceSummary?
+    func workspaceSummary(id: WorkspaceID) async throws -> WorkspaceSummary?
 
     /// List all page-overlay refs in a workspace (the write set).
-    func workspaceRefs(workspaceID: WorkspaceID) throws -> [WorkspaceRef]
+    func workspaceRefs(workspaceID: WorkspaceID) async throws -> [WorkspaceRef]
 
     /// Write a page version into the workspace's overlay: append a
     /// `page_versions` row + UPSERT the `workspace_refs` row (recording
@@ -962,24 +962,24 @@ public protocol WikiStore: AnyObject, Sendable {
     func workspaceWritePage(
         workspaceID: WorkspaceID, pageID: PageID, title: String, body: String,
         author: String?, provenance: [PageVersionSourceInput]
-    ) throws -> PageVersionID?
+    ) async throws -> PageVersionID?
 
     /// Resolve the workspace's current version id for a page (overlay read).
     /// Returns nil if the workspace hasn't touched this page.
-    func workspacePageVersion(workspaceID: WorkspaceID, pageID: PageID) throws -> PageVersionID?
+    func workspacePageVersion(workspaceID: WorkspaceID, pageID: PageID) async throws -> PageVersionID?
 
     /// Overlay read for the workspace's staged page body (Phase 7). Returns the
     /// body the agent would see if it read the page from within this workspace —
     /// either the workspace's version blob (existing page) or the staged blob
     /// (created page). Returns nil if the workspace hasn't touched this page,
     /// so the caller falls through to the main version.
-    func workspacePageBody(workspaceID: WorkspaceID, pageID: PageID) throws -> String?
+    func workspacePageBody(workspaceID: WorkspaceID, pageID: PageID) async throws -> String?
 
     /// Stage wiki-index changes into the workspace (`index_body` +
     /// `index_base_version`). Phase 7: routed from `index set --workspace`.
     func setWorkspaceIndexBody(
         workspaceID: WorkspaceID, indexBody: String, indexBaseVersion: String
-    ) throws
+    ) async throws
 
     /// Attempt a fast-forward-only merge. For each workspace_ref: if main head
     /// == base_version_id (or base is nil = page created in workspace), fast-
@@ -991,36 +991,36 @@ public protocol WikiStore: AnyObject, Sendable {
     /// transaction commits, those pages are re-embedded and an ingest-
     /// completion log entry is appended — both best-effort.
     @discardableResult
-    func workspaceMerge(workspaceID: WorkspaceID) throws -> [String]
+    func workspaceMerge(workspaceID: WorkspaceID) async throws -> [String]
 
     /// Abandon a workspace: set status to `abandoned` + delete its
     /// `workspace_refs`. Orphaned versions/blobs fall to lazy GC.
-    func abandonWorkspace(id: WorkspaceID) throws
+    func abandonWorkspace(id: WorkspaceID) async throws
 
     /// Refresh (re-base) a workspace against current main: for each
     /// workspace_ref, run diff3 against the new main head. If clean, update
     /// `base_version_id` to current main_head. If conflict, park.
-    func workspaceRefresh(workspaceID: WorkspaceID) throws
+    func workspaceRefresh(workspaceID: WorkspaceID) async throws
 
     /// List persisted conflict details for a parked workspace (W3).
-    func workspaceConflicts(workspaceID: WorkspaceID) throws -> [WorkspaceConflict]
+    func workspaceConflicts(workspaceID: WorkspaceID) async throws -> [WorkspaceConflict]
 
     /// Resolve a conflict: write the resolved body as a new workspace
     /// version for the page + delete the conflict row (W3). After resolving
     /// all conflicts, call `workspaceRetryMerge`.
     func workspaceResolveConflict(
         workspaceID: WorkspaceID, pageID: PageID, body: String
-    ) throws
+    ) async throws
 
     /// Set a conflicted workspace back to `open` and attempt merge again
     /// (W3). Resolves remaining conflicts (or parks again).
-    func workspaceRetryMerge(workspaceID: WorkspaceID) throws
+    func workspaceRetryMerge(workspaceID: WorkspaceID) async throws
 
     /// Reap stale open workspaces: mark any workspace with status `open`
     /// whose `updated_at` is older than the TTL as `abandoned` (W4, PR #312).
     /// Called on app launch or via `wikictl workspace reap` to clean up
     /// crashed/abandoned runs. Returns the number of workspaces reaped.
-    func reapStaleWorkspaces(ttl: TimeInterval) throws -> Int
+    func reapStaleWorkspaces(ttl: TimeInterval) async throws -> Int
 
     // MARK: - Log + wiki index (Phase B)
     //
@@ -1034,31 +1034,31 @@ public protocol WikiStore: AnyObject, Sendable {
     /// Append one row to the append-only chronological log, returning the inserted
     /// entry (so the caller can echo its id).
     @discardableResult
-    func appendLog(kind: LogEntry.Kind, title: String, note: String?) throws -> LogEntry
+    func appendLog(kind: LogEntry.Kind, title: String, note: String?) async throws -> LogEntry
 
     /// The most recent `limit` log entries in chronological order (oldest-of-the-tail
     /// first), for the live state snapshot the operation prompts inject. On the
     /// protocol (not only the concrete read helper) so `WikiStoreModel` can gather
     /// the snapshot without downcasting. An empty/absent log yields `[]`.
-    func recentLogEntries(limit: Int) throws -> [LogEntry]
+    func recentLogEntries(limit: Int) async throws -> [LogEntry]
 
     /// Read the curated singleton index document (projected at the root as
     /// `index.md`). Returns the seeded default if absent.
-    func getWikiIndex() throws -> WikiIndex
+    func getWikiIndex() async throws -> WikiIndex
 
     /// Replace the wiki-index body wholesale, bumping its version + `updated_at`.
-    func updateWikiIndex(body: String) throws
+    func updateWikiIndex(body: String) async throws
 
     // MARK: - Semantic search (v14 chunk embeddings)
 
     /// Store or replace ALL chunk embeddings for a page (one 512 × Float32 BLOB
     /// per text chunk). Replaces any existing chunks for the page atomically.
-    func storePageChunks(id: PageID, chunks: [Data]) throws
+    func storePageChunks(id: PageID, chunks: [Data]) async throws
 
     /// Pages with no chunk embeddings yet, as `(id, embeddable text)`. Used by
     /// the background embedding backfill (read on the caller's thread; the
     /// embedding compute runs off it).
-    func missingPageEmbeddingWork() -> [(id: PageID, text: String)]
+    func missingPageEmbeddingWork() async throws -> [(id: PageID, text: String)]
 
     /// Search pages semantically (cosine similarity via Swift-side
     /// `VectorCosine`, ranked by each page's best-matching chunk). The cosine
@@ -1071,17 +1071,17 @@ public protocol WikiStore: AnyObject, Sendable {
     ///   (empty under `swift test` where MiniLM is unavailable). Callers
     ///   (the model, `wikictl`) resolve the Tantivy leg before calling; the
     ///   store fuses both legs via `RankFusion.rrf` exactly as before.
-    func searchSimilar(query: String, limit: Int, bm25Leg: [WikiPageSummary]?) throws -> [WikiPageSummary]
+    func searchSimilar(query: String, limit: Int, bm25Leg: [WikiPageSummary]?) async throws -> [WikiPageSummary]
 
     // MARK: - Semantic source search (v14 source chunk embeddings)
 
     /// Store or replace ALL chunk embeddings for a source. Mirrors
     /// `storePageChunks` for sources.
-    func storeSourceChunks(id: SourceID, chunks: [Data]) throws
+    func storeSourceChunks(id: SourceID, chunks: [Data]) async throws
 
     /// Sources with no chunk embeddings yet, as `(id, embeddable text)`. Mirrors
     /// `missingPageEmbeddingWork`.
-    func missingSourceEmbeddingWork() -> [(id: SourceID, text: String)]
+    func missingSourceEmbeddingWork() async throws -> [(id: SourceID, text: String)]
 
     /// Search sources semantically (cosine similarity via Swift-side
     /// `VectorCosine`, ranked by each source's best-matching chunk). Mirrors
@@ -1089,13 +1089,13 @@ public protocol WikiStore: AnyObject, Sendable {
     ///
     /// - Parameter bm25Leg: The pre-computed best-first BM25 leg from Tantivy
     ///   (post-#634, the sole lexical path). See `searchSimilar(query:limit:bm25Leg:)`.
-    func searchSimilarSources(query: String, limit: Int, bm25Leg: [SourceSummary]?) throws -> [SourceSummary]
+    func searchSimilarSources(query: String, limit: Int, bm25Leg: [SourceSummary]?) async throws -> [SourceSummary]
 
     // MARK: - Bookmark nodes (Bookmarks sidebar tree)
 
     /// All bookmark nodes (flat), ordered so that parents precede children and
     /// siblings sort by position. The tree is assembled by `BookmarkTreeBuilder`.
-    func listBookmarkNodes() throws -> [BookmarkNode]
+    func listBookmarkNodes() async throws -> [BookmarkNode]
 
     /// Insert a new bookmark node, shifting sibling positions ≥ `position` up by 1.
     /// Returns the inserted node with its generated id.
@@ -1104,28 +1104,28 @@ public protocol WikiStore: AnyObject, Sendable {
         parentID: BookmarkID?,
         position: Int,
         content: BookmarkNode.Content
-    ) throws -> BookmarkNode
+    ) async throws -> BookmarkNode
 
     /// Update the label of a bookmark node (folders only).
-    func renameBookmarkFolder(id: BookmarkID, to label: String) throws
+    func renameBookmarkFolder(id: BookmarkID, to label: String) async throws
 
     /// Retarget a bookmark reference to a new page/source/chat target.
     /// Folders cannot be retargeted.
-    func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) throws
+    func retargetBookmarkNode(id: BookmarkID, to content: BookmarkNode.Content) async throws
 
     /// Delete a bookmark node by id. `ON DELETE CASCADE` removes descendants.
-    func deleteBookmarkNode(id: BookmarkID) throws
+    func deleteBookmarkNode(id: BookmarkID) async throws
 
     /// Move a node to a new parent and/or position. Renumber siblings of both
     /// the old and new parent so positions stay contiguous (0, 1, 2, …).
-    func moveBookmarkNode(id: BookmarkID, toParentID: BookmarkID?, position: Int) throws
+    func moveBookmarkNode(id: BookmarkID, toParentID: BookmarkID?, position: Int) async throws
 
     // MARK: - Persisted chats (issue #119 phase 1)
 
     /// Create a new chat row. `id` is a fresh ULID; `createdAt`/`updatedAt` both
     /// start at "now"; `messageCount` starts at 0. Returns the inserted summary.
     @discardableResult
-    func createChat(kind: ChatKind, title: String) throws -> ChatSummary
+    func createChat(kind: ChatKind, title: String) async throws -> ChatSummary
 
     /// `createChat(kind:title:)`, atomically seeding the draft's provider,
     /// model, configured thinking intent, and resolved effective value.
@@ -1136,7 +1136,7 @@ public protocol WikiStore: AnyObject, Sendable {
         modelProviderId: ProviderID?, modelId: ModelID?,
         configuredThinkingOptionID: ChatConfigurationValueID?,
         effectiveThinkingOptionID: ChatConfigurationValueID?
-    ) throws -> ChatSummary
+    ) async throws -> ChatSummary
 
     /// `createChat(kind:title:)` composed with the chat's initial attachment
     /// targets: the chats row and the ordered `chat_attachments` rows persist
@@ -1144,15 +1144,15 @@ public protocol WikiStore: AnyObject, Sendable {
     @discardableResult
     func createChat(
         kind: ChatKind, title: String, attachments: [ChatAttachmentTarget]
-    ) throws -> ChatSummary
+    ) async throws -> ChatSummary
 
     /// A chat's ordered attachment targets (kind + raw id; names resolve
     /// fresh at restore). Empty for a chat with no persisted chips.
-    func chatAttachments(chatID: ChatID) throws -> [ChatAttachmentTarget]
+    func chatAttachments(chatID: ChatID) async throws -> [ChatAttachmentTarget]
 
     /// Replaces a chat's whole attachment-target set, ordered, in one
     /// transaction. Throws `.chatNotFound` if the chat has no row.
-    func setChatAttachments(chatID: ChatID, targets: [ChatAttachmentTarget]) throws
+    func setChatAttachments(chatID: ChatID, targets: [ChatAttachmentTarget]) async throws
 
     /// Append the given events as new `chat_messages` rows, in one transaction:
     /// each row gets the next dense `seq` (continuing from the chat's current
@@ -1162,20 +1162,20 @@ public protocol WikiStore: AnyObject, Sendable {
     /// empty. Throws `.notFound` if `chatID` has no row. Returns the inserted
     /// messages in `seq` order.
     @discardableResult
-    func appendChatMessages(chatID: ChatID, events: [AgentEvent]) throws -> [ChatMessage]
+    func appendChatMessages(chatID: ChatID, events: [AgentEvent]) async throws -> [ChatMessage]
 
     /// All chat summaries, most-recently-updated first (ties broken by
     /// insertion order), for the history list.
-    func listChats() throws -> [ChatSummary]
+    func listChats() async throws -> [ChatSummary]
 
     /// A chat's messages in `seq` order. Tolerant read: a row whose
     /// `event_json` fails to decode (e.g. a future event case) is skipped
     /// rather than failing the whole read.
-    func chatMessages(chatID: ChatID) throws -> [ChatMessage]
+    func chatMessages(chatID: ChatID) async throws -> [ChatMessage]
 
     /// Rename a chat's title, bumping `updated_at`. Throws `.notFound` if no
     /// chat has `id`.
-    func renameChat(id: ChatID, to title: String) throws
+    func renameChat(id: ChatID, to title: String) async throws
 
     /// Set a chat's title ONLY when its current title is empty, in one
     /// conditional `UPDATE` (`WHERE id = ? AND title = ''`). The first send
@@ -1187,7 +1187,7 @@ public protocol WikiStore: AnyObject, Sendable {
     /// event is emitted) and `false` when the chat exists with a nonempty
     /// title (no event). Throws `.chatNotFound` when no chat has `id`.
     @discardableResult
-    func setChatTitleIfEmpty(chatID: ChatID, title: String) throws -> Bool
+    func setChatTitleIfEmpty(chatID: ChatID, title: String) async throws -> Bool
 
     /// Replace a chat's title ONLY when it still equals `expectedTitle`, in
     /// one conditional `UPDATE` (`WHERE id = ? AND title = ?`). The
@@ -1203,22 +1203,22 @@ public protocol WikiStore: AnyObject, Sendable {
     @discardableResult
     func setChatTitleIf(
         chatID: ChatID, expectedTitle: String, title: String
-    ) throws -> Bool
+    ) async throws -> Bool
 
     /// Delete a chat. `ON DELETE CASCADE` removes its messages. No error if
     /// `id` doesn't exist.
-    func deleteChat(id: ChatID) throws
+    func deleteChat(id: ChatID) async throws
 
     /// Write the one-line summary of the model's first response (issue #411),
     /// bumping `updated_at`. Throws `.notFound` if no chat has `id`.
     /// Write or clear the ACP session ID for resume (#830). Pass `nil` to
     /// clear (terminal teardown / permanent resume failure). Bumps
     /// `updated_at`.
-    func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) throws
+    func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) async throws
 
     /// Write or clear the per-chat model override while preserving its thinking
     /// fields. Use the coherent mutation below for UI provider/model switches.
-    func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) throws
+    func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) async throws
 
     /// Atomically write provider/model selection, configured thinking intent,
     /// and effective thinking value. Emits exactly one `.chat .updated` event.
@@ -1228,10 +1228,10 @@ public protocol WikiStore: AnyObject, Sendable {
         modelID: ModelID?,
         configuredThinkingID: ChatConfigurationValueID?,
         effectiveThinkingID: ChatConfigurationValueID?
-    ) throws
+    ) async throws
 
     /// One chat summary by id. Throws `.notFound` if no chat has `id`.
-    func getChat(id: ChatID) throws -> ChatSummary
+    func getChat(id: ChatID) async throws -> ChatSummary
 
     /// Write the cached one-line summary for a single transcript item
     /// (chat-summary plan §3.5; v54, issue #1266 — the summary lives on the
@@ -1242,7 +1242,7 @@ public protocol WikiStore: AnyObject, Sendable {
     /// compute-once (AC.6).
     func updateMessageSummary(
         chatID: ChatID, cursor: ChatTranscriptCursor, summary: String, kind: ChatMessageSummaryKind
-    ) throws
+    ) async throws
 
     /// Upsert a streaming assistant row under a stable draft handle (#826).
     /// First call INSERTs (is_draft=1); subsequent calls UPDATE the same row's
@@ -1251,21 +1251,21 @@ public protocol WikiStore: AnyObject, Sendable {
     /// NOT bump `updated_at` (C6). Throws `.notFound` if `chatID` has no row.
     func checkpointStreamingMessage(
         chatID: ChatID, handle: String, event: AgentEvent, isDraft: Bool
-    ) throws
+    ) async throws
 
     /// Finalize any stale draft rows for a chat (C8). Called on chat reopen
     /// so a draft left by an interrupted turn (hard kill) is no longer marked
     /// in-progress. Sets `is_draft=0` for all draft rows belonging to `chatID`.
-    func finalizeStaleDrafts(forChat chatID: ChatID) throws
+    func finalizeStaleDrafts(forChat chatID: ChatID) async throws
 
     /// Persist durable Phase 2 turns for daemon-owned claiming/recovery. The
     /// `commandID` boundary is idempotent per chat: re-enqueueing the same
     /// submission returns the existing row rather than duplicating it.
     @discardableResult
-    func enqueuePersistedChatTurn(chatID: ChatID, submission: ChatTurnSubmission) throws -> PersistedChatTurn
+    func enqueuePersistedChatTurn(chatID: ChatID, submission: ChatTurnSubmission) async throws -> PersistedChatTurn
 
     /// Durable turn rows in ordinal order for a chat.
-    func listPersistedChatTurns(chatID: ChatID) throws -> [PersistedChatTurn]
+    func listPersistedChatTurns(chatID: ChatID) async throws -> [PersistedChatTurn]
 
     /// Edit a queued durable turn in place, preserving `turnID` / `commandID`.
     @discardableResult
@@ -1275,19 +1275,19 @@ public protocol WikiStore: AnyObject, Sendable {
         userText: String,
         contextReferences: [ChatContextReference],
         editedAt: Date
-    ) throws -> PersistedChatTurn
+    ) async throws -> PersistedChatTurn
 
     /// Remove a durable queued turn before it is claimed. Returns whether a row
     /// was removed.
     @discardableResult
-    func removePersistedQueuedChatTurn(chatID: ChatID, turnID: ChatTurnID) throws -> Bool
+    func removePersistedQueuedChatTurn(chatID: ChatID, turnID: ChatTurnID) async throws -> Bool
 
     /// Atomically cancel one unclaimed queued turn in place. The row, ordinal,
     /// and submission identity are retained; the returned row has terminal
     /// `cancelled` state, a cancellation timestamp, and cancellation metadata.
     /// Returns nil when the matching row is absent or is no longer queued.
     @discardableResult
-    func cancelUnclaimedPersistedChatTurn(chatID: ChatID, turnID: ChatTurnID) throws -> PersistedChatTurn?
+    func cancelUnclaimedPersistedChatTurn(chatID: ChatID, turnID: ChatTurnID) async throws -> PersistedChatTurn?
 
     /// Atomically claim the oldest currently-queued turn for provider
     /// submission. Returns nil when no queued turn remains.
@@ -1296,7 +1296,7 @@ public protocol WikiStore: AnyObject, Sendable {
         chatID: ChatID,
         claimID: ChatTurnClaimID,
         claimedAt: Date
-    ) throws -> PersistedChatTurn?
+    ) async throws -> PersistedChatTurn?
 
     @discardableResult
     func claimNextPersistedChatTurn(
@@ -1305,7 +1305,7 @@ public protocol WikiStore: AnyObject, Sendable {
         claimedAt: Date,
         providerID: ProviderID?,
         modelID: ModelID?
-    ) throws -> PersistedChatTurn?
+    ) async throws -> PersistedChatTurn?
 
     /// Record the at-most-once boundary where a claimed turn is handed to the
     /// provider/runtime.
@@ -1316,7 +1316,7 @@ public protocol WikiStore: AnyObject, Sendable {
         claimID: ChatTurnClaimID,
         providerSessionID: AcpSessionID?,
         submittedAt: Date
-    ) throws -> PersistedChatTurn
+    ) async throws -> PersistedChatTurn
 
     /// Mark a claimed or submitted durable turn terminal.
     @discardableResult
@@ -1326,7 +1326,7 @@ public protocol WikiStore: AnyObject, Sendable {
         claimID: ChatTurnClaimID,
         state: ChatTurnPersistenceState,
         terminalMessage: String?
-    ) throws -> PersistedChatTurn
+    ) async throws -> PersistedChatTurn
 
     @discardableResult
     func finishPersistedChatTurn(
@@ -1337,11 +1337,11 @@ public protocol WikiStore: AnyObject, Sendable {
         terminalMessage: String?,
         finishedAt: Date,
         usage: ChatTurnUsageValues?
-    ) throws -> PersistedChatTurn
+    ) async throws -> PersistedChatTurn
 
-    func chatTurnUsage(chatID: ChatID, turnID: ChatTurnID) throws -> ChatTurnUsage?
-    func latestChatTurnUsage(chatID: ChatID) throws -> ChatTurnUsage?
-    func chatUsageSummary(chatID: ChatID) throws -> ChatUsageSummary
+    func chatTurnUsage(chatID: ChatID, turnID: ChatTurnID) async throws -> ChatTurnUsage?
+    func latestChatTurnUsage(chatID: ChatID) async throws -> ChatTurnUsage?
+    func chatUsageSummary(chatID: ChatID) async throws -> ChatUsageSummary
 
     @discardableResult
     func updatePersistedChatTurnUsage(
@@ -1349,7 +1349,7 @@ public protocol WikiStore: AnyObject, Sendable {
         turnID: ChatTurnID,
         claimID: ChatTurnClaimID,
         usage: ChatTurnUsageValues
-    ) throws -> PersistedChatTurn
+    ) async throws -> PersistedChatTurn
 
     /// Persist typed transcript rows while also maintaining the current
     /// renderer compatibility projection.
@@ -1357,36 +1357,36 @@ public protocol WikiStore: AnyObject, Sendable {
     func appendChatTranscriptItems(
         chatID: ChatID,
         items: [ChatTranscriptItem]
-    ) throws -> [PersistedChatTranscriptItem]
+    ) async throws -> [PersistedChatTranscriptItem]
 
     /// Cursor-page authoritative typed transcript history.
     func readChatTranscriptPage(
         chatID: ChatID,
         after cursor: ChatTranscriptCursor?,
         limit: Int
-    ) throws -> ChatTranscriptPage
+    ) async throws -> ChatTranscriptPage
 
     /// Current high-water transcript cursor for a chat (`0` when empty).
-    func chatTranscriptCheckpoint(chatID: ChatID) throws -> ChatTranscriptCursor
+    func chatTranscriptCheckpoint(chatID: ChatID) async throws -> ChatTranscriptCursor
 
     /// All chat summaries ordered by ULID (creation order) — for the File
     /// Provider projection. Mirrors `listAllPagesOrderedByID()`.
-    func listAllChatsOrderedByID() throws -> [ChatSummary]
+    func listAllChatsOrderedByID() async throws -> [ChatSummary]
 
     /// Resolve a `[[chat:…]]` target to a chat id. Case-insensitive; lowest
     /// ULID wins on a duplicate-title collision.
-    func resolveChatByTitle(_ title: String) throws -> ChatID?
+    func resolveChatByTitle(_ title: String) async throws -> ChatID?
 
     // MARK: - Semantic chat search (v28 chat chunk embeddings)
 
     /// Store or replace ALL chunk embeddings for a chat. Mirrors
     /// `storePageChunks`/`storeSourceChunks` (used by the bulk search-index
     /// upgrade; incremental appends embed inline).
-    func storeChatChunks(id: ChatID, chunks: [Data]) throws
+    func storeChatChunks(id: ChatID, chunks: [Data]) async throws
 
     /// Chats with no chunk embeddings yet, as `(id, embeddable text)`. Mirrors
     /// `missingPageEmbeddingWork`/`missingSourceEmbeddingWork`.
-    func missingChatEmbeddingWork() -> [(id: ChatID, text: String)]
+    func missingChatEmbeddingWork() async throws -> [(id: ChatID, text: String)]
 
     /// Search chats semantically + lexically (hybrid RRF, same as
     /// `searchSimilar`/`searchSimilarSources`). The semantic cosine leg runs
@@ -1395,7 +1395,7 @@ public protocol WikiStore: AnyObject, Sendable {
     ///
     /// - Parameter bm25Leg: The pre-computed best-first BM25 leg from Tantivy
     ///   (post-#634). See `searchSimilar(query:limit:bm25Leg:)`.
-    func searchSimilarChats(query: String, limit: Int, bm25Leg: [ChatSummary]?) throws -> [ChatSummary]
+    func searchSimilarChats(query: String, limit: Int, bm25Leg: [ChatSummary]?) async throws -> [ChatSummary]
 
     // MARK: - Blob GC (#253)
 
@@ -1406,11 +1406,11 @@ public protocol WikiStore: AnyObject, Sendable {
     /// matches exactly what was reclaimed. Classified NO_EMIT on the concrete
     /// store: vacuuming orphans changes no projected `ResourceKind`.
     @discardableResult
-    func vacuumBlobs(dryRun: Bool) throws -> BlobVacuumReport
+    func vacuumBlobs(dryRun: Bool) async throws -> BlobVacuumReport
 
     /// Detect canonical MIME values for active byte-bearing sources with a NULL mirror.
     @discardableResult
-    func repairMIME(dryRun: Bool) throws -> MIMERepairReport
+    func repairMIME(dryRun: Bool) async throws -> MIMERepairReport
 
     /// Sweep **orphaned** activity rows — activities no version references (the
     /// leak left by `deleteSource`, which cascades version rows but not their
@@ -1420,7 +1420,7 @@ public protocol WikiStore: AnyObject, Sendable {
     /// `activities` count folds into the changeToken but the token only needs
     /// to *change* on mutation, which a GC delete does).
     @discardableResult
-    func vacuumActivities(dryRun: Bool) throws -> ActivityVacuumReport
+    func vacuumActivities(dryRun: Bool) async throws -> ActivityVacuumReport
 
     /// Sweep **orphaned** `page_versions` rows — versions not reachable from
     /// any `page-content` ref target (by walking `parent_id`/`merge_parent_id`
@@ -1429,18 +1429,18 @@ public protocol WikiStore: AnyObject, Sendable {
     /// transaction. Classified NO_EMIT: vacuuming orphans changes no projected
     /// `ResourceKind` — the served tree is unaffected.
     @discardableResult
-    func vacuumPageVersions(dryRun: Bool) throws -> PageVersionVacuumReport
+    func vacuumPageVersions(dryRun: Bool) async throws -> PageVersionVacuumReport
 
     // MARK: - Wiki metadata (v37, issue #477)
 
     /// Read a metadata value for `key`, or `nil` if the key doesn't exist.
     /// Used to persist one-time work flags (e.g. link-reconcile version) so
     /// they survive model recreation between launches.
-    func getMetadata(_ key: String) throws -> String?
+    func getMetadata(_ key: String) async throws -> String?
 
     /// Set a metadata value for `key` (upsert). NO-EMIT: metadata flags don't
     /// change projected content — they only gate one-time maintenance work.
-    func setMetadata(_ key: String, value: String) throws
+    func setMetadata(_ key: String, value: String) async throws
 }
 
 // MARK: - searchSimilar default-argument convenience (Phase 2 bm25Leg)
@@ -1458,30 +1458,30 @@ extension WikiStore {
     func workspaceWritePage(
         workspaceID: WorkspaceID, pageID: PageID, title: String, body: String,
         author: String? = nil
-    ) throws -> PageVersionID? {
-        try workspaceWritePage(
+    ) async throws -> PageVersionID? {
+        try await workspaceWritePage(
             workspaceID: workspaceID, pageID: pageID, title: title, body: body,
             author: author, provenance: [])
     }
-    func createPage(title: String, createdBy: String? = nil) throws -> WikiPage {
-        try createPage(title: title, createdBy: createdBy, provenance: [])
+    func createPage(title: String, createdBy: String? = nil) async throws -> WikiPage {
+        try await createPage(title: title, createdBy: createdBy, provenance: [])
     }
 
     func createPage(
         title: String, createdBy: String?, provenance: [PageVersionSourceInput]
-    ) throws -> WikiPage {
-        try createPage(title: title, body: "", createdBy: createdBy, provenance: provenance)
+    ) async throws -> WikiPage {
+        try await createPage(title: title, body: "", createdBy: createdBy, provenance: provenance)
     }
 
-    func updatePage(id: PageID, title: String, body: String, lastEditedBy: String? = nil) throws {
-        try updatePage(id: id, title: title, body: body, lastEditedBy: lastEditedBy, provenance: [])
+    func updatePage(id: PageID, title: String, body: String, lastEditedBy: String? = nil) async throws {
+        try await updatePage(id: id, title: title, body: body, lastEditedBy: lastEditedBy, provenance: [])
     }
 
     func appendPageVersion(
         pageID: PageID, title: String, body: String,
         expectedHeadVersionID: PageVersionID?, lastEditedBy: String? = nil
-    ) throws -> PageVersionID {
-        try appendPageVersion(
+    ) async throws -> PageVersionID {
+        try await appendPageVersion(
             pageID: pageID, title: title, body: body,
             expectedHeadVersionID: expectedHeadVersionID,
             lastEditedBy: lastEditedBy, provenance: [])
@@ -1501,8 +1501,8 @@ extension WikiStore {
         expectation: PageWriteExpectation,
         author: String? = nil,
         provenance: [PageVersionSourceInput] = []
-    ) throws -> PageUpsert.Outcome {
-        try PageUpsert.upsertSequential(
+    ) async throws -> PageUpsert.Outcome {
+        try await PageUpsert.upsertSequential(
             in: self, id: id, title: title, rawBody: rawBody,
             expectation: expectation, author: author, provenance: provenance)
     }
@@ -1514,8 +1514,8 @@ extension WikiStore {
     /// or `CLITantivyLegResolver` (CLI). A `nil` leg yields cosine-only (empty
     /// under `swift test` where MiniLM is unavailable).
     @available(*, deprecated, message: "Pass an explicit `bm25Leg:` — resolve a Tantivy leg for the BM25 leg, or `nil` for cosine-only. See #637 / #634.")
-    public func searchSimilar(query: String, limit: Int) throws -> [WikiPageSummary] {
-        try searchSimilar(query: query, limit: limit, bm25Leg: nil)
+    public func searchSimilar(query: String, limit: Int) async throws -> [WikiPageSummary] {
+        try await searchSimilar(query: query, limit: limit, bm25Leg: nil)
     }
 
     /// Legacy 2-arg entry point for sources. See
@@ -1524,8 +1524,8 @@ extension WikiStore {
     /// Deprecated (#637 / #634): call `searchSimilarSources(query:limit:bm25Leg:)`
     /// and resolve a Tantivy leg. See ``searchSimilar(query:limit:)``.
     @available(*, deprecated, message: "Pass an explicit `bm25Leg:` — resolve a Tantivy leg for the BM25 leg, or `nil` for cosine-only. See #637 / #634.")
-    public func searchSimilarSources(query: String, limit: Int) throws -> [SourceSummary] {
-        try searchSimilarSources(query: query, limit: limit, bm25Leg: nil)
+    public func searchSimilarSources(query: String, limit: Int) async throws -> [SourceSummary] {
+        try await searchSimilarSources(query: query, limit: limit, bm25Leg: nil)
     }
 
     /// Legacy 2-arg entry point for chats. See
@@ -1534,7 +1534,7 @@ extension WikiStore {
     /// Deprecated (#637 / #634): call `searchSimilarChats(query:limit:bm25Leg:)`
     /// and resolve a Tantivy leg. See ``searchSimilar(query:limit:)``.
     @available(*, deprecated, message: "Pass an explicit `bm25Leg:` — resolve a Tantivy leg for the BM25 leg, or `nil` for cosine-only. See #637 / #634.")
-    public func searchSimilarChats(query: String, limit: Int) throws -> [ChatSummary] {
-        try searchSimilarChats(query: query, limit: limit, bm25Leg: nil)
+    public func searchSimilarChats(query: String, limit: Int) async throws -> [ChatSummary] {
+        try await searchSimilarChats(query: query, limit: limit, bm25Leg: nil)
     }
 }

@@ -205,7 +205,7 @@ struct ChatContinueD3Tests {
 
     // MARK: - (c) continue appends to the SAME chat row
 
-    @Test func continueAppendsToSameChatRow_seqContinues_titlePreserved() throws {
+    @Test func continueAppendsToSameChatRow_seqContinues_titlePreserved() async throws {
         let (model, store) = try tempModel()
         // Create a chat with two persisted messages (a prior turn).
         let chat = try store.createChat(kind: .edit, title: "Original Title")
@@ -213,12 +213,12 @@ struct ChatContinueD3Tests {
             .userText("first question"),
             .assistantText("first answer"),
         ])
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // Simulate the continue path's STORE effect: append the new session's
         // events to the SAME chat row (this is what the transcript sink does).
         // The builder produces the first prompt from the persisted history.
-        let history = model.chatMessages(chatID: chat.id)
+        let history = await model.chatMessages(chatID: chat.id)
         let firstPrompt = AgentOperationRunner.continuationPreamble(
             from: history, newMessage: "follow up question")
         #expect(firstPrompt.contains("first question"))
@@ -232,7 +232,7 @@ struct ChatContinueD3Tests {
         ])
         model.reloadChats()
 
-        let after = model.chatMessages(chatID: chat.id)
+        let after = await model.chatMessages(chatID: chat.id)
         // Seq continues: 0,1 (original) + 2,3 (continue) = 4 rows.
         #expect(after.count == 4)
         #expect(after.map(\.seq) == [0, 1, 2, 3])
@@ -245,7 +245,7 @@ struct ChatContinueD3Tests {
         #expect(summary?.title == "Original Title")
     }
 
-    @Test func continueBumpsUpdatedAtToTopOfRecent() throws {
+    @Test func continueBumpsUpdatedAtToTopOfRecent() async throws {
         let (model, store) = try tempModel()
         let chat = try store.createChat(kind: .edit, title: "Older Chat")
         let other = try store.createChat(kind: .edit, title: "Newer Chat")

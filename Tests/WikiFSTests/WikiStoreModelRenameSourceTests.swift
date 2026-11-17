@@ -16,14 +16,14 @@ struct WikiStoreModelRenameSourceTests {
         return WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite")))
     }
 
-    @Test func renameSourceRefreshesSourcesList() throws {
+    @Test func renameSourceRefreshesSourcesList() async throws {
         let model = try makeModel()
-        model.addSource(filename: "old-name.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.addSource(filename: "old-name.pdf", data: Data("pdf".utf8))
+        await model.bootstrapFromStore()
         let id = try #require(model.sources.first?.id)
 
-        model.renameSource(id: id, to: "Friendly Name")
-        model.reloadFromStore()
+        await model.renameSource(id: id, to: "Friendly Name")
+        await model.bootstrapFromStore()
 
         let renamed = model.sources.first(where: { $0.id == id })
         #expect(renamed?.displayName == "Friendly Name")

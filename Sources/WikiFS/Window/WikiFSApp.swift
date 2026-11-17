@@ -6,6 +6,47 @@ import WikiCtlCore
 import WikiDaemonContract
 import WikiFSMLX
 
+// MARK: - Store-mode composition (Phase 3 slice 3)
+
+/// What the app constructed for the launch-fixed
+/// `StoreModeConfiguration.resolvedMode`. REMOTE fills every field:
+/// `transport`/`invoker`/`router` share ONE daemon connection (the same
+/// live-object injection pattern as `makeDaemonTransport`). The DEBUG
+/// local override — and a failed remote connection — leave the remote
+/// pieces nil: the registry client degrades to typed lifecycle failures
+/// (`daemonInvokerUnavailable`, never a local write), and the catalog build
+/// fails explicitly in remote mode (no session can boot without the store
+/// transport; no local open is ever substituted).
+struct StoreModeComposition {
+    let registry: WikiRegistryClient
+    let transport: XPCStoreTransport?
+    let invoker: DaemonWikiRegistryInvoker?
+    let router: DaemonStoreEventRouter?
+}
+
+/// A weak, Sendable hop into the `@MainActor` health monitor. The remote
+/// store's degradation/recovery hooks fire from store call sites on
+/// arbitrary tasks; the monitor's state machine is main-actor bound.
+/// Sendable invariant: the only stored property is a `weak` reference,
+/// written once at init from the main actor and only read afterwards;
+/// every monitor touch happens inside the `@MainActor` task.
+// swiftlint:disable:next unchecked_sendable
+private final class WeakDaemonHealthBox: @unchecked Sendable {
+    private weak var monitor: DaemonHealthMonitor?
+
+    init(_ monitor: DaemonHealthMonitor) {
+        self.monitor = monitor
+    }
+
+    func callAsFunction(_ action: @MainActor @escaping (DaemonHealthMonitor) -> Void) {
+        Task { @MainActor [weak self] in
+            if let monitor = self?.monitor {
+                action(monitor)
+            }
+        }
+    }
+}
+
 /// Entry point for the WikiFS macOS app.
 ///
 /// Phase 0 (many wikis) + Phase 2b (multi-window): a `WikiRegistryClient` owns
@@ -46,22 +87,14 @@ struct WikiFSApp: App {
     private let daemonTransportBridge: DaemonTransportAppBridge
     /// Adapts typed transport events into queue/chat ownership policy.
     private let daemonTransportCoordinator: DaemonTransportAppCoordinator
-    /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
-    /// extraction/ingestion workers off-main. One instance, shared across
-    /// sessions via `WikiSession`.
+    /// App-wide queue engine. Owns the hot-swap daemon client; drives
+    /// extraction/ingestion workloads DAEMON-SIDE (P4.3: the app constructs
+    /// no queue provider and executes no workload — it enqueues and projects
+    /// progress/status over the queue event stream). One instance, shared
+    /// across sessions via `WikiSession`.
     @State private var queueEngine: QueueEngineHotSwap
     /// Sole owner of the app-local Cordis queue runtime and all ownership transitions.
     @State private var localQueueRuntimeController: LocalQueueRuntimeController
-    /// App-wide extraction provider. Bridges the headless queue engine to the
-    /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`. Handles both
-    /// bytes-based extraction (PDF, HTML) AND transcript fetching (YouTube
-    /// captions, podcast feeds) — transcript sources resolve to a
-    /// `transcriptFetch` closure in the `ExtractionResolution`.
-    @State private var extractionProvider: any QueueExtractionProvider
-    /// Mutable box for the file provider reference — the ingestion provider
-    /// uses it to access the `FileProviderFacade` which is only available
-    /// after the `@State` property is initialized by SwiftUI.
-    @State private var fileProviderBox: FileProviderBox
     /// App-wide queue-activity tracker. Observes `QueueEngine.events` and
     /// exposes `@Observable` extraction state (extractingSourceIDs, progress
     /// log, etc.) that replaces the launcher's slot machinery.
@@ -75,12 +108,6 @@ struct WikiFSApp: App {
     /// struct (see the model's doc comment). `@State` writes from that copy
     /// are silently lost; mutations of this shared instance always land.
     @State private var fileProviderSetupAlert = FileProviderSetupAlertModel()
-    /// Issue #881: user-visible error shown when the local `queue.sqlite`
-    /// could not be opened at launch (no silent `:memory:` fallback). Drives
-    /// an alert over the main window so the user understands ingestion /
-    /// extraction are unavailable (instead of silently dropping every
-    /// enqueued item on restart).
-    private var queueStoreError: String? { localQueueRuntimeController.startupError }
     /// Drives the Settings TabView selection so the activity windows can open
     /// Settings on the relevant tab (gear button → extraction/agents config).
     @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.extraction.rawValue
@@ -117,10 +144,6 @@ struct WikiFSApp: App {
 
     /// Presentation-only adapter for typed daemon transport events.
     @State private var healthMonitor: DaemonHealthMonitor
-
-    /// The session-lookup box, retained so the local-engine fallback factory
-    /// (called on disconnect/reconnect) can re-wire it.
-    private var sessionLookupBox: SessionLookupBox?
 
     // NOTE: There must be exactly ONE @NSApplicationDelegateAdaptor. Registering
     // two adaptors with different types (e.g. a separate QuitConfirmationDelegate)
@@ -197,6 +220,19 @@ struct WikiFSApp: App {
             }
         }
         containerDirectory = directory
+        // Store-mode composition (plans/daemon-only-access.md Phase 3
+        // slices 1+3): the launch-fixed mode composes the process ONCE.
+        // REMOTE (the default): the registry client is a daemon-mediated
+        // read cache — lifecycle ops cross the invoker, `wikis.json` is
+        // only ever read, and firehose registry events refresh it — and
+        // every wiki session boots a `RemoteWikiStore` over the shared
+        // transport. LOCAL (the DEBUG-only `WIKI_ALLOW_LOCAL_STORE`
+        // override): exactly the pre-remote composition. Never a response
+        // to daemon failure: a daemon-down run stays remote and degrades
+        // through the health surface.
+        let storeAccessMode = StoreModeConfiguration.resolvedMode
+        let storeModeComposition = Self.makeStoreModeComposition(
+            containerDirectory: directory)
         // Populate wikis BEFORE handing the registry to @State so SwiftUI's
         // first render sees a non-empty list.  activateNow: false means
         // activeWikiID stays nil for that render — NSTableView's initial
@@ -204,49 +240,22 @@ struct WikiFSApp: App {
         // activateMostRecent() in .task sets the selection AFTER the first
         // render; that update is selectRow-only (no concurrent reloadData),
         // avoiding an NSTableView reentrant-delegate warning on macOS 26.
-        let r = WikiRegistryClient(containerDirectory: directory)
+        let r = storeModeComposition.registry
         r.bootstrap(activateNow: false)
         _registry = State(initialValue: r)
         // The synchronous app initializer creates stable UI adapters and injects an
         // app-target plugin catalog. Committed process-profile rows select the
         // five concrete runtime factories; their leases are the sole owners.
-        let sessionBox = SessionLookupBox()
-        sessionLookupBox = sessionBox
-        let fileProviderBox = FileProviderBox()
         let transportBridge = DaemonTransportAppBridge()
         daemonTransportBridge = transportBridge
         let processComposition = AppProcessPluginCatalog(
             containerDirectory: directory,
-            transportBridge: transportBridge,
-            extractionProvider: { services, providerServices, queueDBURL in
-                AppQueueExtractionProvider(
-                    extractionServices: services,
-                    sessionBox: sessionBox,
-                    queueDatabaseURL: queueDBURL,
-                    transcriptCleanupAgent: ModelTranscriptCleanupAgent(
-                        services: providerServices))
-            },
-            makeIngestionProvider: { store, providerServices in
-                AppQueueIngestionProvider(
-                    sessionBox: sessionBox,
-                    fileProviderBox: fileProviderBox,
-                    wikictlDirectory: HelpersLocation.wikictlDirectory,
-                    queueStore: store,
-                    providerServices: providerServices)
-            })
+            transportBridge: transportBridge)
         let providerServices = processComposition.providerServices
         _agentProviderServices = State(initialValue: providerServices)
         let extractionServices = processComposition.extractionServices
         let coordinator = ExtractionCoordinator(services: extractionServices)
         _extractionCoordinator = State(initialValue: coordinator)
-        let extractionProvider = AppQueueExtractionProvider(
-            extractionServices: extractionServices,
-            sessionBox: sessionBox,
-            queueDatabaseURL: DebugLog.trying(
-                "resolve queue database URL",
-                operation: { try DatabaseLocation.queueDatabaseURL() }),
-            transcriptCleanupAgent: ModelTranscriptCleanupAgent(
-                services: providerServices))
         let runtimeController = processComposition.queueController
         let transportOwner = processComposition.transportOwner
         let rendererOwner = processComposition.rendererOwner
@@ -278,7 +287,18 @@ struct WikiFSApp: App {
                 transportMonitor?.consume(event)
             })
 
-        let activityTracker = QueueActivityTracker()
+        let activityTracker = QueueActivityTracker(loader: QueueClosedWikiNameLoader.daemonLoader { wikiID in
+            // The closed-wiki name reader: the DAEMON answers each target
+            // read over the shared store transport (P5 — no local read
+            // pool). The transport is mandatory in remote mode (the
+            // fail-explicit contract above).
+            guard let storeTransport = storeModeComposition.transport else {
+                preconditionFailure(
+                    "Remote store composition failed at launch — "
+                        + "no local fallback exists")
+            }
+            return RemoteWikiStore(transport: storeTransport, wikiID: wikiID)
+        })
         let queueEngine = runtimeController.client
         activityTracker.attach(engine: queueEngine)
         Task { await activityTracker.rehydrate(from: queueEngine) }
@@ -286,16 +306,71 @@ struct WikiFSApp: App {
 
         _queueEngine = State(initialValue: queueEngine)
         _localQueueRuntimeController = State(initialValue: runtimeController)
-        _extractionProvider = State(initialValue: extractionProvider)
-        _fileProviderBox = State(initialValue: fileProviderBox)
         _activityTracker = State(initialValue: activityTracker)
 
+        // Store-mode cutover (plans/daemon-only-access.md Phase 3 item 1 +
+        // slice 3): the launch-fixed mode resolved `storeModeComposition`
+        // above; the catalog consumes it here. Remote (the default in every
+        // configuration): every wiki session's store is a `RemoteWikiStore`
+        // over the shared app-scoped XPC store transport — no local
+        // GRDBWikiStore is ever opened. Local (the DEBUG-only
+        // `WIKI_ALLOW_LOCAL_STORE` override): nil factories keep
+        // StorePlugin's production local open. The mode is never a response
+        // to daemon failure.
         let appCatalog = {
             do {
+                let storeOpenFactories: StorePlugin.StoreOpenFactories?
+                if storeAccessMode == .remote {
+                    // The plumbing bundle is MANDATORY in remote mode (the
+                    // fail-explicit contract): a missing transport fails the
+                    // catalog build — never a local open. (The invoker is
+                    // already injected INTO the registry client by the
+                    // composition builder; the catalog needs only the
+                    // transport and the firehose router.)
+                    guard let storeTransport = storeModeComposition.transport,
+                        let eventRouter = storeModeComposition.router
+                    else {
+                        preconditionFailure(
+                            "Remote store composition failed at launch — "
+                                + "no local fallback exists")
+                    }
+                    // Degradation UX (Phase 3 item 4): transport-level
+                    // store failures feed the EXISTING health state
+                    // machine (the wiki-window reconnecting banner); the
+                    // first successful call stands it back down. Writes
+                    // still fail explicitly through their normal throw
+                    // path — this only drives the surface.
+                    let healthFeed = WeakDaemonHealthBox(transportMonitor)
+                    storeOpenFactories = StorePlugin.StoreOpenFactories
+                        .remoteStore { context in
+                            let store = RemoteWikiStore(
+                                transport: storeTransport,
+                                wikiID: WikiID(rawValue: context.wikiID))
+                            store.onTransportDegraded = {
+                                healthFeed { $0.noteStoreTransportDegraded() }
+                            }
+                            store.onTransportRecovered = {
+                                healthFeed { $0.noteStoreTransportRecovered() }
+                            }
+                            // This connection's ONE firehose sink fans
+                            // store commits + registry events out to every
+                            // open session's store (the router registered
+                            // with the exporter before the first
+                            // handshake — see makeStoreModeComposition).
+                            eventRouter.register(store: store)
+                            return store
+                        }
+                } else {
+                    // Local store access: nil factories keep StorePlugin's
+                    // production local open (DEBUG override only).
+                    storeOpenFactories = nil
+                }
                 return try AppPluginCatalog.build(factories: AppPluginCatalogFactories(
                     base: BasePluginCatalogFactories(
                         agentProviderServices: providerServices),
-                    makeDaemonTransport: { transportOwner.services }))
+                    makeDaemonTransport: { transportOwner.services },
+                    storeOpenFactories: storeOpenFactories,
+                    storeAccessMode: storeAccessMode))
             } catch {
                 preconditionFailure("App profile catalog construction failed: \(error)")
             }
@@ -304,7 +379,6 @@ struct WikiFSApp: App {
             containerDirectory: directory,
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
-            extractionProvider: extractionProvider,
             providerServices: providerServices,
             htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlSelectionLabel },
             interactiveUsageRecorder: { [weak activityTracker] usage in
@@ -314,17 +388,25 @@ struct WikiFSApp: App {
                 guard let processProfileOwner else {
                     throw SessionLoadingError.processProfileUnavailable("app process profile owner was released")
                 }
-                return try await processProfileOwner.bootWikiSession(
+                let session = try await processProfileOwner.bootWikiSession(
                     wikiID: wikiID,
                     descriptor: descriptor,
                     containerDirectory: directory,
                     catalog: appCatalog,
-                    extractionProvider: extractionProvider,
                     searchServices: try DaemonSearchServices(wikiID: wikiID),
                     htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlSelectionLabel },
                     interactiveUsageRecorder: { usage in
                         activityTracker?.recordInteractiveUsage(usage)
                     })
+                // Phase 2 seam (flag-gated, plans/daemon-only-access.md 2e):
+                // a REMOTE store session composes from the daemon's
+                // bootstrap payload + one coalesced reload hook. With the
+                // seam switch off (P2 default) and local stores, this is a
+                // no-op guard — the local bootstrap in SessionsPlugin stays
+                // the composition. A remote establishment failure throws:
+                // the session open fails explicitly, never silently local.
+                try await RemoteStoreSessionComposition.composeIfRemote(session)
+                return session
             }
         )
         _sessionManager = State(initialValue: sm)
@@ -346,15 +428,6 @@ struct WikiFSApp: App {
             quotaCoordinator: QuotaFallbackCoordinator()
         )
         _backgroundIngestCoordinator = State(initialValue: backgroundIngestCoordinator)
-        // Wire the session-lookup box to the real session manager now that
-        // it's constructed. The provider (already captured by the factory)
-        // sees live sessions through the box.
-        sessionBox.setLookup { [weak sm] wikiID in
-            sm?.sessions[wikiID]?.store
-        }
-        sessionBox.setSessionLookup { [weak sm] wikiID in
-            sm?.sessions[wikiID]
-        }
         // Settings-only launcher (D5): a main-actor UI adapter installed by the
         // app-target catalog boundary, independent of every per-wiki gate.
         _settingsLauncher = State(initialValue: processComposition.makeSettingsLauncher(
@@ -408,6 +481,61 @@ struct WikiFSApp: App {
         }
     }
 
+    /// Build the store-mode composition for the launch-fixed mode.
+    ///
+    /// REMOTE: one daemon connection shared by the store transport, the
+    /// mediated-registry invoker (injected INTO the registry client), and
+    /// the firehose router — registered with the exporter BEFORE any store
+    /// operation exists to send (same-connection XPC messages deliver in
+    /// issue order, so the handshake correlates the registered sink and
+    /// flips it live). A connection failure here degrades explicitly: the
+    /// registry client keeps remote semantics with no invoker (typed
+    /// `daemonInvokerUnavailable` lifecycle failures, no local write path),
+    /// and the remote pieces stay nil so the catalog build fails the app at
+    /// launch — the plan's fail-explicit contract.
+    /// REMOTE-ONLY (P5): the registry client is a daemon-mediated read
+    /// cache — lifecycle ops cross the invoker, `wikis.json` is only ever
+    /// read, and firehose registry events refresh it — and every wiki
+    /// session boots a `RemoteWikiStore` over the shared transport. The
+    /// `allowLocalStore` override is DELETED (the sole-writer milestone):
+    /// there is no local branch, and this is never a response to daemon
+    /// failure — a daemon-down run stays remote and degrades through the
+    /// health surface. A connection failure here degrades explicitly: the
+    /// registry client keeps remote semantics with no invoker (typed
+    /// `daemonInvokerUnavailable` lifecycle failures, no local write path),
+    /// and the remote pieces stay nil so the catalog build fails the app at
+    /// launch — the plan's fail-explicit contract.
+    private static func makeStoreModeComposition(
+        containerDirectory: URL
+    ) -> StoreModeComposition {
+        let connection: WikiDaemonConnection
+        let invoker: DaemonWikiRegistryInvoker
+        do {
+            connection = try WikiDaemonConnection.connect()
+            invoker = DaemonWikiRegistryInvoker(connection: connection)
+        } catch {
+            DebugLog.store(
+                "WikiFSApp: store daemon connection failed at launch: \(error)")
+            return StoreModeComposition(
+                registry: WikiRegistryClient(
+                    containerDirectory: containerDirectory,
+                    accessMode: .remote,
+                    daemonInvoker: nil),
+                transport: nil, invoker: nil, router: nil)
+        }
+        let registry = WikiRegistryClient(
+            containerDirectory: containerDirectory,
+            accessMode: .remote,
+            daemonInvoker: invoker)
+        let router = DaemonStoreEventRouter(registryClient: registry)
+        connection.registerEventSink(router)
+        return StoreModeComposition(
+            registry: registry,
+            transport: XPCStoreTransport(connection: connection),
+            invoker: invoker,
+            router: router)
+    }
+
     /// App-level bootstrap: activateMostRecent + file provider wiring. Called
     /// directly and unconditionally from `init()` — no Scene/window needs to
     /// appear first. Idempotent — guarded by a static flag, so the redundant
@@ -419,7 +547,6 @@ struct WikiFSApp: App {
         bootstrapApp()
         startStatusItem()
         applyAppKitAppearance()
-        await localQueueRuntimeController.awaitSettled()
         await optionalRuntimeSetupModel.refresh()
         showingOptionalRuntimeSetup = !optionalRuntimeSetupModel.isComplete
         connectToDaemon()
@@ -437,10 +564,9 @@ struct WikiFSApp: App {
 
         // Synchronous part: activate most recent + file provider wiring.
         registry.activateMostRecent()
-        fileProviderBox.provider = fileProvider
         fileProvider.wire(into: registry)
         registry.flushActiveStore = { [sessionManager] wikiID in
-            sessionManager.flushSession(for: wikiID)
+            await sessionManager.flushSession(for: wikiID)
         }
     }
 
@@ -535,7 +661,7 @@ struct WikiFSApp: App {
         // quit dialog message is tailored and the app won't silently quit
         // mid-work even with the setting off.
         appDelegate.flushPendingSaves = { [weak sessionManager] in
-            sessionManager?.flushAllSessions()
+            Task { await sessionManager?.flushAllSessions() }
         }
         appDelegate.activeOperationDescription = { [weak activityTracker, weak sessionManager] in
             if activityTracker?.isExtracting == true {
@@ -889,22 +1015,11 @@ struct WikiFSApp: App {
             } message: { warning in
                 Text(warning.message)
             }
-            // Issue #881: surface a queue-database open failure (the local
-            // `queue.sqlite` could not be opened). No silent in-memory
-            // fallback — ingestion / extraction are unavailable until the
-            // underlying issue is resolved.
-            .alert(
-                "Queue Database Unavailable",
-                isPresented: Binding(
-                    get: { queueStoreError != nil },
-                    set: { if !$0 { localQueueRuntimeController.dismissStartupError() } }
-                ),
-                presenting: queueStoreError
-            ) { _ in
-                Button("OK", role: .cancel) {}
-            } message: { message in
-                Text(message)
-            }
+            // The launch-time "Queue Database Unavailable" alert (#881) is
+            // gone with the local queue assembly (Phase 4): the app no
+            // longer opens `queue.sqlite` at launch. Queue degradation is
+            // the daemon-health surface (`UnavailableQueueEngine` states in
+            // the activity tracker).
             // No `.onChange(of: registry.wikis)` handler here any more: it
             // existed ONLY to keep the bridge's per-wiki Darwin subscriptions in
             // lockstep with the wiki set (#1374). The bridge now subscribes once
@@ -1326,9 +1441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillResignActive(_ notification: Notification) {
-        MainActor.assumeIsolated {
-            sessionManager?.flushAllSessions()
-        }
+        Task { await sessionManager?.flushAllSessions() }
     }
 
     /// Keep the app alive after the last window closes — it drops to

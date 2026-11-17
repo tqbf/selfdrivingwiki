@@ -62,10 +62,10 @@ public enum RendererAssetAdmissionBuilder {
     ///   - maximumBytesPerAsset: the declared per-asset byte cap.
     public static func buildAdmissions(
         records: [RendererAssetReferenceExtractorClient.ExtractedRecord],
-        resolveSourceFacts: (String) throws -> (sourceID: SourceID, sourceVersionID: SourceVersionID, mimeType: String, byteCount: Int, digest: String)?,
+        resolveSourceFacts: (String) async throws -> (sourceID: SourceID, sourceVersionID: SourceVersionID, mimeType: String, byteCount: Int, digest: String)?,
         allowedRoles: Set<RendererAssetRole>,
         maximumBytesPerAsset: Int
-    ) throws -> [RendererAuthorizedAssetReader.Admission] {
+    ) async throws -> [RendererAuthorizedAssetReader.Admission] {
         var admissions: [RendererAuthorizedAssetReader.Admission] = []
         var seen = Set<RendererAssetReference>()
         for record in records {
@@ -84,7 +84,7 @@ public enum RendererAssetAdmissionBuilder {
             // A reference not present in the sibling context falls back
             // (the image is unavailable) rather than broadening authority or
             // failing the whole canvas.
-            guard let facts = try resolveSourceFacts(record.reference) else { continue }
+            guard let facts = try await resolveSourceFacts(record.reference) else { continue }
             guard facts.byteCount >= 0, facts.byteCount <= maximumBytesPerAsset else {
                 throw BuildError.oversizedReference
             }

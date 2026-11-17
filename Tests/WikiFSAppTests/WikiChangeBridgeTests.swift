@@ -43,14 +43,12 @@ struct WikiChangeBridgeTests {
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         let queueEngine = try! makeTestQueueEngine()
-        let provider = StubExtractionProvider()
         return try ProfileWikiSession(
             testFixtureWikiID: wikiID,
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: queueEngine,
-            extractionProvider: provider)
+            queueEngine: queueEngine)
     }
 
     /// Write a second wiki's descriptor to the registry FILE on disk, bypassing

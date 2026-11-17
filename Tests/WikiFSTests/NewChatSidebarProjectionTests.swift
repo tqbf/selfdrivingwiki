@@ -46,10 +46,10 @@ struct NewChatSidebarProjectionTests {
     // MARK: - AC.1 Persist before opening the tab
 
     @Test("beginNewChat persists exactly one empty chat before opening its tab")
-    func beginNewChatPersistsRowBeforeOpeningTab() throws {
+    func beginNewChatPersistsRowBeforeOpeningTab() async throws {
         let (model, store) = try makeModel()
 
-        model.beginNewChat()
+        await model.beginNewChat()
 
         // The tab is a `.chat` route keyed by the STORED id — no draft state.
         let tabChatID = try #require(activeChatID(model))
@@ -70,7 +70,7 @@ struct NewChatSidebarProjectionTests {
     }
 
     @Test("beginNewChat failure shows the store error and opens no tab")
-    func beginNewChatFailureShowsStoreErrorAndOpensNoTab() throws {
+    func beginNewChatFailureShowsStoreErrorAndOpensNoTab() async throws {
         let (model, readOnly, _) = try makeReadOnlyModel()
 
         // The double's own failure detail, captured from the same store.
@@ -85,7 +85,7 @@ struct NewChatSidebarProjectionTests {
 
         // A failed creation must not leak an omnibox prefill question into a
         // later, unrelated chat.
-        model.beginNewChat(prefill: "stale question")
+        await model.beginNewChat(prefill: "stale question")
 
         let storeError = try #require(model.storeError, "the failure must surface the store error alert")
         #expect(storeError.title == "Could Not Create Chat")
@@ -101,10 +101,10 @@ struct NewChatSidebarProjectionTests {
     }
 
     @Test("beginNewChat installs the prefill only after the store write succeeds")
-    func beginNewChatPrefillInstallsAfterPersistence() throws {
+    func beginNewChatPrefillInstallsAfterPersistence() async throws {
         let (model, store) = try makeModel()
 
-        model.beginNewChat(prefill: "Explain the venturi effect")
+        await model.beginNewChat(prefill: "Explain the venturi effect")
 
         let chatID = try #require(activeChatID(model))
         #expect(model.pendingChatQuestion == "Explain the venturi effect")
@@ -118,19 +118,19 @@ struct NewChatSidebarProjectionTests {
     /// `pendingComposerFocusChatID` marker is how the new chat's composer
     /// receives keyboard focus exactly once.
     @Test("beginNewChat requests composer focus for the chat it opened")
-    func beginNewChatRequestsComposerFocus() throws {
+    func beginNewChatRequestsComposerFocus() async throws {
         let (model, _) = try makeModel()
 
-        model.beginNewChat()
+        await model.beginNewChat()
 
         let chatID = try #require(activeChatID(model))
         #expect(model.pendingComposerFocusChatID == chatID)
     }
 
     @Test("composer focus request is consumed once, by its own chat only")
-    func composerFocusRequestConsumedOnceByItsOwnChat() throws {
+    func composerFocusRequestConsumedOnceByItsOwnChat() async throws {
         let (model, _) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
 
         // A different chat's composer must not consume the request.
@@ -149,12 +149,12 @@ struct NewChatSidebarProjectionTests {
     }
 
     @Test("a second beginNewChat retargets the focus request to the newest chat")
-    func secondBeginNewChatRetargetsFocusRequest() throws {
+    func secondBeginNewChatRetargetsFocusRequest() async throws {
         let (model, _) = try makeModel()
 
-        model.beginNewChat()
+        await model.beginNewChat()
         let firstID = try #require(activeChatID(model))
-        model.beginNewChat()
+        await model.beginNewChat()
         let secondID = try #require(activeChatID(model))
 
         #expect(firstID != secondID)
@@ -162,10 +162,10 @@ struct NewChatSidebarProjectionTests {
     }
 
     @Test("a failed beginNewChat leaves no focus request pending")
-    func failedBeginNewChatLeavesNoFocusRequest() throws {
+    func failedBeginNewChatLeavesNoFocusRequest() async throws {
         let (model, _, _) = try makeReadOnlyModel()
 
-        model.beginNewChat()
+        await model.beginNewChat()
 
         // No row was created, so no composer can claim a focus request.
         #expect(model.pendingComposerFocusChatID == nil)
@@ -174,12 +174,12 @@ struct NewChatSidebarProjectionTests {
     // MARK: - AC.2 Resolve the durable row after navigation
 
     @Test("new chat resolves from the store after switching to a page and back")
-    func newChatResolvesAfterSwitchingToPageAndBack() throws {
+    func newChatResolvesAfterSwitchingToPageAndBack() async throws {
         let (model, store) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
-        let page = try store.createPage(title: "A Page")
-        model.reloadFromStore()
+        let page = try await store.createPage(title: "A Page")
+        await model.bootstrapFromStore()
 
         // Switch to the page tab, then back to the chat.
         model.openTab(.page(page.id))
@@ -189,16 +189,16 @@ struct NewChatSidebarProjectionTests {
         // The same stored identity resolves authoritatively from SQLite —
         // never a "Chat Deleted" state for a live row.
         #expect(model.selection == .chat(chatID))
-        #expect(model.resolveChat(id: chatID) == .available(try store.getChat(id: chatID)))
+        #expect(await model.resolveChat(id: chatID) == .available(try store.getChat(id: chatID)))
         #expect(model.chats.contains { $0.id == chatID })
     }
 
     // MARK: - AC.7 Empty chats are durable resources
 
     @Test("closing an empty chat tab keeps the persisted row")
-    func closingEmptyChatTabKeepsPersistedRow() throws {
+    func closingEmptyChatTabKeepsPersistedRow() async throws {
         let (model, store) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
         let tabID = try #require(model.activeTabID)
 
@@ -211,9 +211,9 @@ struct NewChatSidebarProjectionTests {
     }
 
     @Test("reopening an empty chat from the sidebar uses the same stored ID")
-    func reopeningEmptyChatUsesSameID() throws {
+    func reopeningEmptyChatUsesSameID() async throws {
         let (model, store) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
         // Consume the creation-time reveal so the reopen assertions observe
         // only NEW reveal requests.
@@ -224,7 +224,7 @@ struct NewChatSidebarProjectionTests {
 
         #expect(model.selection == .chat(chatID))
         #expect(activeChatID(model) == chatID)
-        #expect(model.resolveChat(id: chatID) != .notFound)
+        #expect(await model.resolveChat(id: chatID) != .notFound)
         #expect(model.pendingSidebarReveal == nil,
                 "plain tab opens do not request a Show-In-List reveal")
         _ = store
@@ -233,14 +233,14 @@ struct NewChatSidebarProjectionTests {
     // MARK: - AC.8 Repeated commands create distinct durable chats
 
     @Test("multiple new chats create distinct persisted rows and tabs")
-    func multipleNewChatsCreateDistinctPersistedRowsAndTabs() throws {
+    func multipleNewChatsCreateDistinctPersistedRowsAndTabs() async throws {
         let (model, store) = try makeModel()
 
-        model.beginNewChat()
+        await model.beginNewChat()
         let firstID = try #require(activeChatID(model))
         let firstTabID = try #require(model.activeTabID)
         // Guarantee distinct updatedAt timestamps for the ordering assertion.
-        model.beginNewChat()
+        await model.beginNewChat()
         let secondID = try #require(activeChatID(model))
         let secondTabID = try #require(model.activeTabID)
 
@@ -255,75 +255,80 @@ struct NewChatSidebarProjectionTests {
     // MARK: - App-side provisional title (no cross-process round trip)
 
     @Test("applyProvisionalChatTitle fills the row and cache at send time")
-    func provisionalTitleAppliesAtSend() throws {
+    func provisionalTitleAppliesAtSend() async throws {
         let (model, store) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
 
-        model.applyProvisionalChatTitle(
+        await model.applyProvisionalChatTitle(
             chatID: chatID, userText: "What is a tide pool?")
+        await model.quiesceSelectionTransitions()
 
         // Cache AND store carry the provisional title instantly.
         #expect(model.chats.first?.title == "What is a tide pool?")
         #expect(try store.getChat(id: chatID).title == "What is a tide pool?")
 
         // A renamed chat is never touched by a later provisional write.
-        model.renameChat(id: chatID, to: "Renamed")
-        model.applyProvisionalChatTitle(chatID: chatID, userText: "another question")
+        await model.renameChat(id: chatID, to: "Renamed")
+        await model.applyProvisionalChatTitle(chatID: chatID, userText: "another question")
         #expect(try store.getChat(id: chatID).title == "Renamed")
     }
 
     @Test("a derivation-failing send leaves the row untitled and retriable (#1265)")
-    func derivationFailureLeavesRowUntitledAndRetriable() throws {
+    func derivationFailureLeavesRowUntitledAndRetriable() async throws {
         let (model, store) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
 
         // A whitespace-only first send derives nothing usable: no title write,
         // the row stays genuinely untitled (rendered as "New Chat" by the
         // display fallback) — not stuck as a persisted "New Chat" sentinel.
-        model.applyProvisionalChatTitle(chatID: chatID, userText: "   \n\t  ")
+        await model.applyProvisionalChatTitle(chatID: chatID, userText: "   \n\t  ")
         #expect(model.chats.first?.title.isEmpty == true)
         #expect(try store.getChat(id: chatID).title.isEmpty)
 
         // The next send with a usable question titles the row — the failure
         // didn't permanently block automatic titling.
-        model.applyProvisionalChatTitle(chatID: chatID, userText: "What is a tide pool?")
+        await model.applyProvisionalChatTitle(chatID: chatID, userText: "What is a tide pool?")
+        await model.quiesceSelectionTransitions()
         #expect(model.chats.first?.title == "What is a tide pool?")
         #expect(try store.getChat(id: chatID).title == "What is a tide pool?")
     }
 
     @Test("an open chat tab's title re-syncs when the row changes")
-    func chatTabTitleResyncsOnReload() throws {
+    func chatTabTitleResyncsOnReload() async throws {
         let (model, store) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
         #expect(model.activeTab?.title == "New Chat")
 
         // The daemon titles the row (provisional or model title); the next
         // reload must re-derive the OPEN TAB's snapshot, not just the sidebar.
         _ = try store.setChatTitleIfEmpty(chatID: chatID, title: "Titled Row")
-        model.reloadChats()
+        // P1-FLIP-REVIEW: reloadChats() now only enqueues a coalesced async
+        // reload; bootstrapFromStore() awaits the same drain so the chats
+        // projection and the tab-title snapshot re-derive before asserting.
+        await model.bootstrapFromStore()
 
         #expect(model.chats.first?.title == "Titled Row")
         #expect(model.activeTab?.title == "Titled Row",
                 "the tab title is a snapshot — reloadChats must re-derive it")
 
         // A manual rename re-syncs the same way.
-        model.renameChat(id: chatID, to: "Renamed")
-        model.reloadChats()
+        await model.renameChat(id: chatID, to: "Renamed")
+        await model.bootstrapFromStore()
         #expect(model.activeTab?.title == "Renamed")
     }
 
     @Test("an external store refresh keeps every persisted chat row visible")
-    func externalRefreshKeepsPersistedRows() throws {
+    func externalRefreshKeepsPersistedRows() async throws {
         let (model, store) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
 
         // A wikictl/agent write lands; the change bridge fires reloadFromStore.
         let external = try store.createChat(kind: .edit, title: "Written externally")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         #expect(model.chats.map(\.id) == [external.id, chatID],
                 "most-recent-first, no overlay merging, no duplicates")
@@ -331,9 +336,9 @@ struct NewChatSidebarProjectionTests {
     }
 
     @Test("the first send titles the untouched empty chat without re-creating a row")
-    func firstSendTitlesTheUntouchedEmptyChat() throws {
+    func firstSendTitlesTheUntouchedEmptyChat() async throws {
         let (model, store) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
 
         // The daemon's first-send title write (one conditional UPDATE).
@@ -341,7 +346,7 @@ struct NewChatSidebarProjectionTests {
             chatID: chatID,
             title: "What is a wiki link?")
         #expect(titled)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // Same identity, same single row, new title.
         #expect(activeChatID(model) == chatID)
@@ -351,12 +356,12 @@ struct NewChatSidebarProjectionTests {
     }
 
     @Test("a manual rename before the first send is never overwritten by the title write")
-    func manualRenameBeforeFirstSendIsPreserved() throws {
+    func manualRenameBeforeFirstSendIsPreserved() async throws {
         let (model, store) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
 
-        model.renameChat(id: chatID, to: "My rename")
+        await model.renameChat(id: chatID, to: "My rename")
         let titled = try store.setChatTitleIfEmpty(
             chatID: chatID,
             title: "first message")
@@ -373,14 +378,14 @@ struct NewChatSidebarProjectionTests {
     /// stale projection — `updateChatModelAndThinkingSelection` refreshes the
     /// cache synchronously after the store write.
     @Test("back-to-back provider and thinking picks both survive")
-    func backToBackSelectionsDoNotClobber() throws {
+    func backToBackSelectionsDoNotClobber() async throws {
         let (model, store) = try makeModel()
-        model.beginNewChat()
+        await model.beginNewChat()
         let chatID = try #require(activeChatID(model))
         let configured = ChatConfigurationValueID(rawValue: "high")
 
         // Pick 1: the provider (ProviderSelector.selectRow's durable path).
-        model.updateChatModelAndThinkingSelection(
+        await model.updateChatModelAndThinkingSelection(
             chatID: chatID,
             providerID: ProviderID(rawValue: "acme"),
             modelID: ModelID(rawValue: "acme-1"),
@@ -393,7 +398,7 @@ struct NewChatSidebarProjectionTests {
         // Pick 2: the thinking selector derives provider/model from the
         // projection, exactly as ThinkingEffortSelector.select does.
         let summary = try #require(model.chats.first { $0.id == chatID })
-        model.updateChatModelAndThinkingSelection(
+        await model.updateChatModelAndThinkingSelection(
             chatID: chatID,
             providerID: summary.modelProviderId,
             modelID: summary.modelId,
@@ -412,9 +417,9 @@ struct NewChatSidebarProjectionTests {
     // chat-attachment-persistence)
 
     @Test("beginNewChat with attachments persists the chat row AND the ordered chips")
-    func beginNewChatWithAttachmentsPersistsChatAndAttachmentRows() throws {
+    func beginNewChatWithAttachmentsPersistsChatAndAttachmentRows() async throws {
         let (model, store) = try makeModel()
-        let page = try store.createPage(title: "Attach Me")
+        let page = try await store.createPage(title: "Attach Me")
         // Constructing the SourceID from raw text is deliberate: this test
         // pins the hand-off's typed boundaries, not store rows.
         let targets: [ChatAttachmentTarget] = [
@@ -422,81 +427,81 @@ struct NewChatSidebarProjectionTests {
             .source(SourceID(rawValue: "01HATTACHSOURCE")),
         ]
 
-        model.beginNewChat(attachments: targets)
+        await model.beginNewChat(attachments: targets)
 
         let chatID = try #require(activeChatID(model))
         #expect(try store.listChats().map(\.id) == [chatID])
         // The composed store write persisted the ordered rows, and the model
         // read resolves them back to typed targets.
-        #expect(model.chatAttachments(chatID: chatID) == targets)
+        #expect(await model.chatAttachments(chatID: chatID) == targets)
         #expect(try store.chatAttachments(chatID: chatID) == targets)
         #expect(model.pendingSidebarReveal == .chat(chatID))
     }
 
     @Test("a failed beginNewChat with attachments leaves no chat and no rows")
-    func failedBeginNewChatWithAttachmentsLeavesNoChatAndNoRows() throws {
+    func failedBeginNewChatWithAttachmentsLeavesNoChatAndNoRows() async throws {
         let (model, _, _) = try makeReadOnlyModel()
 
-        model.beginNewChat(attachments: [.page(PageID(rawValue: "01HANY"))])
+        await model.beginNewChat(attachments: [.page(PageID(rawValue: "01HANY"))])
 
         #expect(model.storeError != nil, "the failure must surface the store error alert")
         #expect(model.tabs.isEmpty)
         #expect(model.chats.isEmpty)
         // Nothing to read back: no chat ever existed.
-        #expect(model.chatAttachments(chatID: ChatID(rawValue: "01HMISSING")).isEmpty)
+        #expect(await model.chatAttachments(chatID: ChatID(rawValue: "01HMISSING")).isEmpty)
     }
 
     @Test("a chat created without attachments has an empty persisted set")
-    func chatCreatedWithoutAttachmentsHasEmptySet() throws {
+    func chatCreatedWithoutAttachmentsHasEmptySet() async throws {
         let (model, store) = try makeModel()
 
-        model.beginNewChat()
+        await model.beginNewChat()
 
         let chatID = try #require(activeChatID(model))
-        #expect(model.chatAttachments(chatID: chatID).isEmpty)
+        #expect(await model.chatAttachments(chatID: chatID).isEmpty)
         #expect(try store.chatAttachments(chatID: chatID).isEmpty)
     }
 
     @Test("setChatAttachments replaces the whole set, ordered, through the model")
-    func setChatAttachmentsReplacesWholeSetInOrder() throws {
+    func setChatAttachmentsReplacesWholeSetInOrder() async throws {
         let (model, store) = try makeModel()
-        let pageB = try store.createPage(title: "B")
-        model.beginNewChat(attachments: [.source(SourceID(rawValue: "01HA"))])
+        let pageB = try await store.createPage(title: "B")
+        await model.beginNewChat(attachments: [.source(SourceID(rawValue: "01HA"))])
         let chatID = try #require(activeChatID(model))
 
         // Replace: the whole set swaps (never appends).
-        model.setChatAttachments(
+        await model.setChatAttachments(
             chatID: chatID,
             targets: [.source(SourceID(rawValue: "01HS1")), .page(pageB.id)])
-        #expect(model.chatAttachments(chatID: chatID)
+        #expect(await model.chatAttachments(chatID: chatID)
             == [.source(SourceID(rawValue: "01HS1")), .page(pageB.id)])
 
         // Clearing persists the empty set.
-        model.setChatAttachments(chatID: chatID, targets: [])
-        #expect(model.chatAttachments(chatID: chatID).isEmpty)
+        await model.setChatAttachments(chatID: chatID, targets: [])
+        #expect(await model.chatAttachments(chatID: chatID).isEmpty)
         _ = store
     }
 
     @Test("persisted chips survive reopen and a fresh model over the same DB")
-    func persistedAttachmentsSurviveReopenAndFreshModel() throws {
+    func persistedAttachmentsSurviveReopenAndFreshModel() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("attach-reopen-\(UUID().uuidString).sqlite")
         let store = try GRDBWikiStore(databaseURL: url)
         store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
-        let page = try store.createPage(title: "Sticky")
-        model.beginNewChat(attachments: [.page(page.id)])
+        let page = try await store.createPage(title: "Sticky")
+        await model.beginNewChat(attachments: [.page(page.id)])
         let chatID = try #require(activeChatID(model))
 
         // Reopen through the same model (tab navigation).
         model.openTab(.page(page.id))
         model.openTab(.chat(chatID))
-        #expect(model.chatAttachments(chatID: chatID) == [.page(page.id)])
+        #expect(await model.chatAttachments(chatID: chatID) == [.page(page.id)])
 
         // Restart: a fresh store + model over the SAME DB file.
         let freshStore = try GRDBWikiStore(databaseURL: url)
         freshStore.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let freshModel = WikiStoreModel(store: freshStore)
-        #expect(freshModel.chatAttachments(chatID: chatID) == [.page(page.id)])
+        #expect(await freshModel.chatAttachments(chatID: chatID) == [.page(page.id)])
     }
 }

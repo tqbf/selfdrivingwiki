@@ -104,12 +104,12 @@ struct WikiLinkMenuNSItemsTests {
     /// (issue #1315's chat transcript). The menu action must resolve the
     /// source by display name and open it.
     @Test("Legacy source menu resolves an apostrophe title", .bug(id: 1315))
-    func legacySourceMenuResolvesApostropheTitle() throws {
+    func legacySourceMenuResolvesApostropheTitle() async throws {
         let (model, store) = try tempModel()
         let source = try store.addSource(
             filename: "Consciousness doesn't overflow cognition.pdf",
             data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let url = try #require(URL(
             string: "wiki://source?title=Consciousness%20doesn%27t%20overflow%20cognition"))
 
@@ -128,11 +128,11 @@ struct WikiLinkMenuNSItemsTests {
     /// renamed after the link was written). The id must win — no name lookup —
     /// so the menu action still opens the source.
     @Test("Canonical source menu ignores a stale display alias", .bug(id: 1315))
-    func canonicalSourceMenuIgnoresStaleDisplayAlias() throws {
+    func canonicalSourceMenuIgnoresStaleDisplayAlias() async throws {
         let (model, store) = try tempModel()
         let active = try store.createPage(title: "Active")
         let source = try store.addSource(filename: "Current title.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.page(active.id))
         let url = try #require(URL(
             string: "wiki://source?id=\(source.id.rawValue)&title=Former%20title"))
@@ -153,11 +153,11 @@ struct WikiLinkMenuNSItemsTests {
     /// AC.6: menu actions RE-RESOLVE at click time. A target deleted between
     /// right-click and click no-ops — no dead tab, no selection change.
     @Test("Menu action on a target deleted after build no-ops", .bug(id: 1315))
-    func deletedTargetNoOpsAtClickTime() throws {
+    func deletedTargetNoOpsAtClickTime() async throws {
         let (model, store) = try tempModel()
         let active = try store.createPage(title: "Active")
         let source = try store.addSource(filename: "Ephemeral.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.page(active.id))
         let url = try #require(URL(
             string: "wiki://source?id=\(source.id.rawValue)&title=Ephemeral"))
@@ -169,7 +169,7 @@ struct WikiLinkMenuNSItemsTests {
 
         // The target vanishes after the menu is built.
         try store.deleteSource(id: source.id)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         try perform(item)
 
@@ -550,7 +550,7 @@ struct WikiLinkMenuNSItemsTests {
         ).isEmpty)
     }
 
-    @Test func menuConstructionReturnsSearchingPlaceholder() throws {
+    @Test func menuConstructionReturnsSearchingPlaceholder() async throws {
         let (item, probe) = openItem(query: "Alpha")
         let submenu = try #require(item.submenu)
 
@@ -668,7 +668,7 @@ struct WikiLinkMenuNSItemsTests {
 
     // MARK: - Source guard (AC.7)
 
-    @Test func wikiStoreModelHasNoSynchronousTantivyBridge() throws {
+    @Test func wikiStoreModelHasNoSynchronousTantivyBridge() async throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()

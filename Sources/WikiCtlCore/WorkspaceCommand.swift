@@ -42,44 +42,44 @@ public enum WorkspaceCommand {
         }
     }
 
-    public static func run(_ action: Action, in store: WikiStore) throws -> Result {
+    public static func run(_ action: Action, in store: WikiStore) async throws -> Result {
         switch action {
         case .create(let name):
-            return try create(name: name, in: store)
+            return try await create(name: name, in: store)
         case .status(let id):
-            return try status(id: id, in: store)
+            return try await status(id: id, in: store)
         case .abandon(let id):
-            return try abandon(id: id, in: store)
+            return try await abandon(id: id, in: store)
         case .merge(let id):
-            return try merge(id: id, in: store)
+            return try await merge(id: id, in: store)
         case .refresh(let id):
-            return try refresh(id: id, in: store)
+            return try await refresh(id: id, in: store)
         case .conflicts(let id):
-            return try conflicts(id: id, in: store)
+            return try await conflicts(id: id, in: store)
         case .resolve(let id, let pageID, let body):
-            return try resolve(id: id, pageID: pageID, body: body, in: store)
+            return try await resolve(id: id, pageID: pageID, body: body, in: store)
         case .retry(let id):
-            return try retry(id: id, in: store)
+            return try await retry(id: id, in: store)
         case .reap(let ttl):
-            return try reap(ttl: ttl, in: store)
+            return try await reap(ttl: ttl, in: store)
         }
     }
 
     // MARK: - create
 
-    private static func create(name: String?, in store: WikiStore) throws -> Result {
-        let id = try store.createWorkspace(name: name, activityID: nil)
+    private static func create(name: String?, in store: WikiStore) async throws -> Result {
+        let id = try await store.createWorkspace(name: name, activityID: nil)
         return Result(output: id.rawValue, didCommit: true)
     }
 
     // MARK: - status
 
-    private static func status(id: WorkspaceID, in store: WikiStore) throws -> Result {
-        guard let ws = try store.workspaceSummary(id: id) else {
+    private static func status(id: WorkspaceID, in store: WikiStore) async throws -> Result {
+        guard let ws = try await store.workspaceSummary(id: id) else {
             throw Failure.message("workspace \(id.rawValue) not found")
         }
         var lines = ["\(ws.id)\t\(ws.status.rawValue)\t\(ws.name ?? "")"]
-        let refs = try store.workspaceRefs(workspaceID: id)
+        let refs = try await store.workspaceRefs(workspaceID: id)
         if refs.isEmpty {
             lines.append("(no pages)")
         } else {
@@ -94,33 +94,33 @@ public enum WorkspaceCommand {
 
     // MARK: - abandon
 
-    private static func abandon(id: WorkspaceID, in store: WikiStore) throws -> Result {
-        try store.abandonWorkspace(id: id)
+    private static func abandon(id: WorkspaceID, in store: WikiStore) async throws -> Result {
+        try await store.abandonWorkspace(id: id)
         return Result(output: "abandoned \(id.rawValue)", didCommit: true)
     }
 
     // MARK: - merge
 
-    private static func merge(id: WorkspaceID, in store: WikiStore) throws -> Result {
-        try store.workspaceMerge(workspaceID: id)
-        let ws = try store.workspaceSummary(id: id)
+    private static func merge(id: WorkspaceID, in store: WikiStore) async throws -> Result {
+        try await store.workspaceMerge(workspaceID: id)
+        let ws = try await store.workspaceSummary(id: id)
         let status = ws?.status.rawValue ?? "unknown"
         return Result(output: "merge: \(id.rawValue) → \(status)", didCommit: true)
     }
 
     // MARK: - refresh
 
-    private static func refresh(id: WorkspaceID, in store: WikiStore) throws -> Result {
-        try store.workspaceRefresh(workspaceID: id)
-        let ws = try store.workspaceSummary(id: id)
+    private static func refresh(id: WorkspaceID, in store: WikiStore) async throws -> Result {
+        try await store.workspaceRefresh(workspaceID: id)
+        let ws = try await store.workspaceSummary(id: id)
         let status = ws?.status.rawValue ?? "unknown"
         return Result(output: "refresh: \(id.rawValue) → \(status)", didCommit: true)
     }
 
     // MARK: - conflicts
 
-    private static func conflicts(id: WorkspaceID, in store: WikiStore) throws -> Result {
-        let conflicts = try store.workspaceConflicts(workspaceID: id)
+    private static func conflicts(id: WorkspaceID, in store: WikiStore) async throws -> Result {
+        let conflicts = try await store.workspaceConflicts(workspaceID: id)
         if conflicts.isEmpty {
             // #1230 (axi.md principle 5): the stdout "(no conflicts)" marker
             // predates the zero-results convention and stays byte-identical;
@@ -144,28 +144,28 @@ public enum WorkspaceCommand {
 
     private static func resolve(
         id: WorkspaceID, pageID: PageID, body: BodySource, in store: WikiStore
-    ) throws -> Result {
+    ) async throws -> Result {
         // The body source resolves HERE (file path or `-` = stdin), the same
         // deferred read every other body-carrying action performs. The daemon
         // execution path hands this an `.inline` body (resolved CLI-side).
         let bodyText = try resolveBodySource(body)
-        try store.workspaceResolveConflict(workspaceID: id, pageID: pageID, body: bodyText)
+        try await store.workspaceResolveConflict(workspaceID: id, pageID: pageID, body: bodyText)
         return Result(output: "resolved \(pageID.rawValue) in \(id.rawValue)", didCommit: true)
     }
 
     // MARK: - retry
 
-    private static func retry(id: WorkspaceID, in store: WikiStore) throws -> Result {
-        try store.workspaceRetryMerge(workspaceID: id)
-        let ws = try store.workspaceSummary(id: id)
+    private static func retry(id: WorkspaceID, in store: WikiStore) async throws -> Result {
+        try await store.workspaceRetryMerge(workspaceID: id)
+        let ws = try await store.workspaceSummary(id: id)
         let status = ws?.status.rawValue ?? "unknown"
         return Result(output: "retry: \(id.rawValue) → \(status)", didCommit: true)
     }
 
     // MARK: - reap
 
-    private static func reap(ttl: TimeInterval, in store: WikiStore) throws -> Result {
-        let count = try store.reapStaleWorkspaces(ttl: ttl)
+    private static func reap(ttl: TimeInterval, in store: WikiStore) async throws -> Result {
+        let count = try await store.reapStaleWorkspaces(ttl: ttl)
         return Result(output: "reaped \(count) stale workspace(s)", didCommit: count > 0)
     }
 }

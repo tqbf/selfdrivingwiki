@@ -101,7 +101,7 @@ struct WikiAppWebViewTests {
     }
 
     @Test("a bridge-oversized pinned input preserves Source fallback before a session starts")
-    func oversizedPinnedInputReturnsNoView() throws {
+    func oversizedPinnedInputReturnsNoView() async throws {
         let store = try GRDBWikiStore()
         let source = try store.addSource(
             filename: "input.txt",
@@ -116,8 +116,8 @@ struct WikiAppWebViewTests {
         let authority = installedAuthority(
             descriptor: descriptor, configuration: configuration, inputReader: reader)
 
-        #expect(throws: RendererAuthorizedInputReader.ReaderError.oversizedInput) {
-            try reader.validateInput(
+        await #expect(throws: RendererAuthorizedInputReader.ReaderError.oversizedInput) {
+            try await reader.validateInput(
                 maximumInputByteCount: min(
                     descriptor.sizeLimits.maximumInputByteCount,
                     WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount),
@@ -278,8 +278,8 @@ struct WikiAppWebViewTests {
     }
 
     @Test("page detail accepts an injected renderer sink and preserves the nil default")
-    func pageDetailConstructsOptionalRendererSink() throws {
-        let store = try makePageDetailModel()
+    func pageDetailConstructsOptionalRendererSink() async throws {
+        let store = try await makePageDetailModel()
         let session = try makePageDetailSession()
         let nullView = PageDetailView(
             store: store,
@@ -312,19 +312,19 @@ struct WikiAppWebViewTests {
     }
 
     @Test("page detail keeps the loaded page version identity stable for reader renders")
-    func pageDetailUsesLoadedPageVersionIdentity() throws {
+    func pageDetailUsesLoadedPageVersionIdentity() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("page-detail-version-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
-        let page = try store.createPage(title: "Versioned Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Versioned Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id,
             title: "Versioned Page",
             body: "body one",
             expectedHeadVersionID: nil)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.page(page.id))
 
         let head = try #require(try store.pageHeadVersionID(pageID: page.id))
@@ -344,8 +344,8 @@ struct WikiAppWebViewTests {
         let descriptor = WikiDescriptor.make(displayName: "Test")
         let store = try GRDBWikiStore(
             databaseURL: dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite"))
-        let page = try store.createPage(title: "Renderer Route")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Renderer Route")
+        _ = try await store.appendPageVersion(
             pageID: page.id,
             title: "Renderer Route",
             body: """
@@ -363,8 +363,7 @@ struct WikiAppWebViewTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try makePageDetailQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try makePageDetailQueueEngine())
         session.store.openTab(.page(page.id))
         let rendererLayout = try RendererPackageStoreLayout(
             appGroupContainerRoot: dir.appendingPathComponent("renderer-machine", isDirectory: true))
@@ -472,13 +471,13 @@ struct WikiAppWebViewTests {
 }
 
 @MainActor
-private func makePageDetailModel() throws -> WikiStoreModel {
+private func makePageDetailModel() async throws -> WikiStoreModel {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("page-detail-webview-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let store = try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     let model = WikiStoreModel(store: store)
-    model.reloadFromStore()
+    await model.bootstrapFromStore()
     return model
 }
 
@@ -496,8 +495,7 @@ private func makePageDetailSession() throws -> ProfileWikiSession {
         descriptor: descriptor,
         containerDirectory: dir,
         extractionCoordinator: coordinator,
-        queueEngine: try makePageDetailQueueEngine(),
-        extractionProvider: StubExtractionProvider())
+        queueEngine: try makePageDetailQueueEngine())
 }
 
 @MainActor

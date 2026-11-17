@@ -89,7 +89,7 @@ struct GRDBEmissionReentrancyTests {
             }
         }
 
-        let created = try store.createPage(title: "Committed")
+        let created = try await store.createPage(title: "Committed")
         let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
         while ContinuousClock.now < deadline, slot.get() == nil, !Task.isCancelled {
             await flushBusDeliveries()
@@ -108,7 +108,7 @@ struct GRDBEmissionReentrancyTests {
     /// increasing and every page id is distinct.
     @Test func burstEmitsOneEventPerMutation() async throws {
         let (store, _, rec) = try makeHarness()
-        for i in 0..<5 { _ = try store.createPage(title: "P\(i)") }
+        for i in 0..<5 { _ = try await store.createPage(title: "P\(i)") }
         try await awaitCount(rec, 5)
         #expect(rec.count == 5)
         let ids = rec.snapshot.map(\.id)
@@ -123,7 +123,7 @@ struct GRDBEmissionReentrancyTests {
     /// deadlock from re-entering the writer queue.
     @Test func deletePageEmitsOneDeletedEvent() async throws {
         let (store, _, rec) = try makeHarness()
-        let page = try store.createPage(title: "Doomed")
+        let page = try await store.createPage(title: "Doomed")
         try await awaitCount(rec, 1)
         let beforeDelete = rec.count
         try store.deletePage(id: page.id)
@@ -139,7 +139,7 @@ struct GRDBEmissionReentrancyTests {
     /// body observes the new content (post-commit, outside the writer queue).
     @Test func updatePageEmitsUpdatedEventReentrantRead() async throws {
         let (store, _, rec) = try makeHarness()
-        let page = try store.createPage(title: "Original")
+        let page = try await store.createPage(title: "Original")
         try await awaitCount(rec, 1)
 
         final class BodySlot: @unchecked Sendable {
@@ -156,7 +156,7 @@ struct GRDBEmissionReentrancyTests {
             }
         }
 
-        try store.updatePage(id: page.id, title: "Updated", body: "new body text", lastEditedBy: nil)
+        try await store.updatePage(id: page.id, title: "Updated", body: "new body text", lastEditedBy: nil)
         try await awaitCount(rec, 2)
         let deadline = ContinuousClock.now + EventBusDeliveryWaits.budget
         while ContinuousClock.now < deadline, bodySlot.get() == nil, !Task.isCancelled {

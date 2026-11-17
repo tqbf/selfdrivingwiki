@@ -67,8 +67,7 @@ struct DurableNewChatHostedTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: extractionCoordinator,
-            queueEngine: try makeDurableChatTestQueueEngine(),
-            extractionProvider: DurableChatStubExtractionProvider())
+            queueEngine: try makeDurableChatTestQueueEngine())
         let coordinator = ChatDaemonCoordinator(
             client: StubChatDaemonCommands(),
             eventSink: DaemonQueueEventSink())
@@ -122,12 +121,12 @@ struct DurableNewChatHostedTests {
         store.reloadFromStore()
 
         // Durable creation: the row is persisted before the tab opens.
-        store.beginNewChat()
+        await store.beginNewChat()
         guard case .chat(let chatID) = store.selection else {
             Issue.record("beginNewChat must open a .chat route")
             return
         }
-        #expect(store.resolveChat(id: chatID) != .notFound)
+        #expect(await store.resolveChat(id: chatID) != .notFound)
 
         let (_, window) = mount(ChatDetailRouteView(
             store: store, session: session,
@@ -152,7 +151,7 @@ struct DurableNewChatHostedTests {
         let navigatedBack = await waitUntil { self.hasComposer(in: hostingView) }
         #expect(navigatedBack, "returning to the empty chat must re-render its surface")
         #expect(store.selection == .chat(chatID))
-        #expect(store.resolveChat(id: chatID) != .notFound)
+        #expect(await store.resolveChat(id: chatID) != .notFound)
     }
 
     /// Probe validation at the presentation level (SwiftUI static text is not
@@ -160,7 +159,7 @@ struct DurableNewChatHostedTests {
     /// Deleted" presentation and a `.available` one is the chat surface — so
     /// the hosted test's composer-presence probes distinguish exactly these
     /// two states.
-    @Test func deletedChatPresentationIsDetectable() throws {
+    @Test func deletedChatPresentationIsDetectable() async throws {
         let missingID = ChatID(rawValue: "01J" + String(repeating: "X", count: 22))
         let remoteState = ChatDetailPresentation.RemoteState(
             runState: .idle,

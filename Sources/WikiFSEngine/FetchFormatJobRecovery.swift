@@ -44,7 +44,7 @@ public enum FetchFormatJobRecovery {
     ) async {
         let pending: [SourceID]
         do {
-            pending = try store.sourcesWithPendingFormatJobs()
+            pending = try await store.sourcesWithPendingFormatJobs()
         } catch {
             DebugLog.store("FetchFormatJobRecovery: pending-format scan failed for wiki \(wikiID.rawValue): \(error)")
             return
@@ -70,7 +70,7 @@ public enum FetchFormatJobRecovery {
         // would convert nothing.
         let acquired: SourceVersion?
         do {
-            acquired = try store.activeContentVersion(sourceID: sourceID)
+            acquired = try await store.activeContentVersion(sourceID: sourceID)
         } catch {
             DebugLog.store("FetchFormatJobRecovery: acquired-version read failed for \(sourceID.rawValue): \(error)")
             return
@@ -101,7 +101,7 @@ public enum FetchFormatJobRecovery {
                 // committed a newer acquisition (re-marking formatJobPending)
                 // is never clobbered by this stale scan.
                 do {
-                    let settled = try store.markFetchComplete(
+                    let settled = try await store.markFetchComplete(
                         sourceID: sourceID,
                         expectedContentVersionID: acquired.id)
                     if settled == false {

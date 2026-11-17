@@ -586,12 +586,14 @@ struct ProviderSelector: View {
                 modelID: modelId,
                 configuredValueID: configured,
                 priorEffectiveValueID: summary?.effectiveThinkingOptionID)
-            store.updateChatModelAndThinkingSelection(
-                chatID: pageID,
-                providerID: provider.id,
-                modelID: modelId,
-                configuredThinkingID: configured,
-                effectiveThinkingID: resolved.effectiveValueID)
+            Task {
+                await store.updateChatModelAndThinkingSelection(
+                    chatID: pageID,
+                    providerID: provider.id,
+                    modelID: modelId,
+                    configuredThinkingID: configured,
+                    effectiveThinkingID: resolved.effectiveValueID)
+            }
         }
         isPresented = false
         searchText = ""

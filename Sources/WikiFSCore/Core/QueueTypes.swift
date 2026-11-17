@@ -9,6 +9,12 @@ import Foundation
 public enum StageRoutingKey: String, Sendable {
     /// Backend override for re-extraction (value is an `ExtractionBackend.rawValue`).
     case backend
+    /// Backend override for an HTML format-route conversion (value is an
+    /// `HtmlExtractionBackend.rawValue`) — the "Re-extract with" menu's HTML
+    /// branch. Distinct from `backend` because the two backend enums are
+    /// separate namespaces; an explicit key keeps a future rawValue collision
+    /// from silently misrouting.
+    case htmlBackend
 }
 
 /// The persistent processing queues. Each `QueueItem` belongs to exactly
@@ -138,6 +144,15 @@ public struct QueueItemPayload: Codable, Sendable {
     /// action and has no import path.
     public var transcriptionIntent: TranscriptionIntent?
 
+    /// The workload intent a `.extraction` item carries. `nil` (the decoded
+    /// default for payloads persisted before this field) is the ordinary
+    /// manual conversion. `.importConversion` marks the import auto-extract
+    /// enqueue: the HTML arm nominates the new version active when a head
+    /// already exists (issue #1380 — the route selection, not the snapshot
+    /// sidecar, is the readable text). `.refreshSource` selects the daemon
+    /// refresh arm (re-fetch the recorded URL, append a content version).
+    public var workloadIntent: WorkloadIntent?
+
     public init(
         sourceIDs: [SourceID],
         stageRouting: [String: String]? = nil,
@@ -145,7 +160,8 @@ public struct QueueItemPayload: Codable, Sendable {
         lintPageIDs: [PageID]? = nil,
         acpSessionId: AcpSessionID? = nil,
         recordedNames: [String: String]? = nil,
-        transcriptionIntent: TranscriptionIntent? = nil
+        transcriptionIntent: TranscriptionIntent? = nil,
+        workloadIntent: WorkloadIntent? = nil
     ) {
         self.sourceIDs = sourceIDs
         self.stageRouting = stageRouting
@@ -154,6 +170,18 @@ public struct QueueItemPayload: Codable, Sendable {
         self.acpSessionId = acpSessionId
         self.recordedNames = recordedNames
         self.transcriptionIntent = transcriptionIntent
+        self.workloadIntent = workloadIntent
+    }
+
+    /// The workload an extraction item must run. Pure value type; the raw
+    /// values are the persistence contract. Purely additive + optional:
+    /// payloads persisted before this field decode unchanged (`nil`).
+    public enum WorkloadIntent: String, Codable, Sendable {
+        /// Import-time auto-extraction (the durable format-job path's
+        /// import arm). Only enqueued by the client-side registration gate.
+        case importConversion = "import-conversion"
+        /// Daemon-side URL re-acquisition for one source (the refresh arm).
+        case refreshSource = "refresh-source"
     }
 
     /// The transcription engine an extraction item must run. Pure value

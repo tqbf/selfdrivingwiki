@@ -80,18 +80,18 @@ struct DaemonCommandWriteSocketTests {
 
     private func seed(
         _ daemon: WikiDaemon, wikiID: WikiID,
-        _ mutate: (WikiStore) throws -> Void
+        _ mutate: (WikiStore) async throws -> Void
     ) async throws {
         let store = try await daemon.domainCommandStore(wikiID: wikiID)
-        try mutate(store)
+        try await mutate(store)
     }
 
     private func seedValue<Value>(
         _ daemon: WikiDaemon, wikiID: WikiID,
-        _ mutate: (WikiStore) throws -> Value
+        _ mutate: (WikiStore) async throws -> Value
     ) async throws -> Value {
         let store = try await daemon.domainCommandStore(wikiID: wikiID)
-        return try mutate(store)
+        return try await mutate(store)
     }
 
     /// Seed one source WITH a processed-markdown HEAD (a derived transcript
@@ -101,9 +101,9 @@ struct DaemonCommandWriteSocketTests {
         _ daemon: WikiDaemon, wikiID: WikiID
     ) async throws -> (sourceID: SourceID, headID: SourceMarkdownVersionID) {
         try await seedValue(daemon, wikiID: wikiID) { store in
-            let summary = try store.addSource(
+            let summary = try await store.addSource(
                 filename: "notes.md", data: Data("raw bytes".utf8))
-            let version = try store.appendDerivedMarkdown(
+            let version = try await store.appendDerivedMarkdown(
                 sourceID: summary.id, content: "first markdown",
                 origin: .transcript, producer: .tool(.transcript),
                 providerID: nil, modelID: nil, toolVersion: nil,
@@ -133,7 +133,7 @@ struct DaemonCommandWriteSocketTests {
 
         // Visible through the daemon's own store.
         let titles = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.listPages(sortBy: .lastUpdated).map(\.title)
+            try await store.listPages(sortBy: .lastUpdated).map(\.title)
         }
         #expect(titles.contains("Socket Written"))
     }
@@ -146,10 +146,10 @@ struct DaemonCommandWriteSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         let pageID: PageID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.createPage(title: "Contested", body: "v1", createdBy: nil, provenance: []).id
+            try await store.createPage(title: "Contested", body: "v1", createdBy: nil, provenance: []).id
         }
         let actualHead: PageVersionID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            guard let head = try store.pageHeadVersionID(pageID: pageID) else {
+            guard let head = try await store.pageHeadVersionID(pageID: pageID) else {
                 Issue.record("expected a head version")
                 return PageVersionID(rawValue: "missing-head")
             }
@@ -181,7 +181,7 @@ struct DaemonCommandWriteSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         try await seed(daemon, wikiID: fixture.id) { store in
-            _ = try store.createPage(title: "Race Winner", body: "v1", createdBy: nil, provenance: [])
+            _ = try await store.createPage(title: "Race Winner", body: "v1", createdBy: nil, provenance: [])
         }
 
         let client = try makeSocketClient(container: container)
@@ -231,10 +231,10 @@ struct DaemonCommandWriteSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         let pageID: PageID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.createPage(title: "Doomed Page", body: "v1", createdBy: nil, provenance: []).id
+            try await store.createPage(title: "Doomed Page", body: "v1", createdBy: nil, provenance: []).id
         }
         let headID: PageVersionID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            guard let head = try store.pageHeadVersionID(pageID: pageID) else {
+            guard let head = try await store.pageHeadVersionID(pageID: pageID) else {
                 Issue.record("expected a head version")
                 return PageVersionID(rawValue: "missing-head")
             }
@@ -262,7 +262,7 @@ struct DaemonCommandWriteSocketTests {
         #expect(deleted.didCommit == true)
 
         let titles = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.listPages(sortBy: .lastUpdated).map(\.title)
+            try await store.listPages(sortBy: .lastUpdated).map(\.title)
         }
         #expect(titles.contains("Doomed Page") == false)
     }
@@ -272,15 +272,15 @@ struct DaemonCommandWriteSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         let versionID: PageVersionID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            let page = try store.createPage(title: "Verified", body: "b", createdBy: nil, provenance: [])
-            guard let head = try store.pageHeadVersionID(pageID: page.id) else {
+            let page = try await store.createPage(title: "Verified", body: "b", createdBy: nil, provenance: [])
+            guard let head = try await store.pageHeadVersionID(pageID: page.id) else {
                 Issue.record("expected a head version")
                 return PageVersionID(rawValue: "missing-head")
             }
             return head
         }
         let verificationID: OKFVerificationID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.recordPageOKFVerification(
+            try await store.recordPageOKFVerification(
                 versionID: versionID, verifier: try OKFVerifierIdentity("human:tester"),
                 verifiedAt: Date(), basis: OKFVerificationBasis(
                     kind: .humanReview, evidence: [], note: nil),
@@ -323,12 +323,12 @@ struct DaemonCommandWriteSocketTests {
         let added = try DaemonCommandOutcome.decode(add.payload)
         #expect(added.didCommit == true)
         let sourceID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try #require(store.listSources().first?.id)
+            try #require(try await store.listSources().first?.id)
         }
 
         // Seed a markdown head so the CAS write has something to pin.
         let headID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.appendDerivedMarkdown(
+            try await store.appendDerivedMarkdown(
                 sourceID: sourceID, content: "first markdown",
                 origin: .transcript, producer: .tool(.transcript),
                 providerID: nil, modelID: nil, toolVersion: nil,
@@ -348,7 +348,7 @@ struct DaemonCommandWriteSocketTests {
 
         // The new head is what a re-read sees.
         let newHead = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.processedMarkdownHead(sourceID: sourceID)
+            try await store.processedMarkdownHead(sourceID: sourceID)
         }
         #expect(newHead?.content == "rewritten markdown")
         #expect(newHead?.id != headID)
@@ -399,7 +399,7 @@ struct DaemonCommandWriteSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         let sourceID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.addSource(filename: "plain.md", data: Data("bytes".utf8)).id
+            try await store.addSource(filename: "plain.md", data: Data("bytes".utf8)).id
         }
 
         let client = try makeSocketClient(container: container)
@@ -479,7 +479,7 @@ struct DaemonCommandWriteSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         let pageID: PageID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.createPage(title: "Bookmarked", body: "b", createdBy: nil, provenance: []).id
+            try await store.createPage(title: "Bookmarked", body: "b", createdBy: nil, provenance: []).id
         }
 
         let client = try makeSocketClient(container: container)
@@ -487,7 +487,7 @@ struct DaemonCommandWriteSocketTests {
         // add-ref / rename / delete (create-folder's output decorates the id,
         // which the CLI surface prints verbatim).
         let folderID: String = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.createBookmarkNode(
+            try await store.createBookmarkNode(
                 parentID: nil, position: -1, content: .folder(label: "Reading")
             ).id.rawValue
         }
@@ -682,7 +682,7 @@ struct DaemonCommandWriteSocketTests {
         defer { server.stop() }
         let pageID: PageID = try await seedValue(daemon, wikiID: fixture.id) { store in
             let huge = String(repeating: "x", count: 5 * 1024 * 1024)
-            return try store.createPage(title: "Huge", body: huge, createdBy: nil, provenance: []).id
+            return try await store.createPage(title: "Huge", body: huge, createdBy: nil, provenance: []).id
         }
 
         let client = try makeSocketClient(container: container)

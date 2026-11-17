@@ -90,14 +90,25 @@ struct DaemonTransportBoundaryPolicyTests {
         #expect(!WikiDaemonError.connectionFailed.localizedDescription.contains("make install-daemon"))
     }
 
-    @Test("safe queue relinquishment keeps chat connected")
+    @Test("no local fallback: unresolved queue ownership resolves only via a fresh daemon epoch")
     func safeQueueRelinquishmentKeepsChatConnected() throws {
         let source = try read(
             "Sources/WikiFS/Queue/DaemonTransportAppCoordinator.swift",
             root: repositoryRoot())
 
+        // Phase 4 (plans/daemon-only-access.md): the app never owns a local
+        // queue engine, so the coordinator never produces the fallback
+        // outcome, never asks the daemon to relinquish, and never installs a
+        // local chat coordinator after a fallback.
         #expect(!source.contains("return .localFallbackReady"))
-        #expect(source.contains("replaceChatCoordinator(makeChatCoordinator())"))
+        #expect(!source.contains("relinquishQueue"))
+        #expect(!source.contains("fallBackAfterRelinquishment"))
+        #expect(!source.contains("makeChatCoordinator()"))
+        // An unresolved epoch is resolved by one path only: a reconnecting
+        // daemon presenting a fresh epoch, which installs that daemon's chat
+        // coordinator with it.
+        #expect(source.contains("replaceUnresolvedDaemon("))
+        #expect(source.contains("replaceChatCoordinator(daemon.chatCoordinator)"))
     }
 }
 

@@ -89,7 +89,6 @@ struct MenuBarItemMaintenanceMenuTests {
             containerDirectory: dir,
             extractionCoordinator: coordinator,
             queueEngine: engine,
-            extractionProvider: StubExtractionProvider(),
             pdf2mdScriptPathResolver: { nil })
         let registry = WikiRegistryClient(containerDirectory: dir)
         if bootstrapRegistry {

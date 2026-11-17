@@ -529,11 +529,11 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         for payload in list.items {
             switch payload.kind {
             case .page:
-                store.addPageRef(parentID: parentID, pageID: PageID(rawValue: payload.id), position: position)
+                Task { await store.addPageRef(parentID: parentID, pageID: PageID(rawValue: payload.id), position: position) }
             case .source:
-                store.addSourceRef(parentID: parentID, sourceID: SourceID(rawValue: payload.id), position: position)
+                Task { await store.addSourceRef(parentID: parentID, sourceID: SourceID(rawValue: payload.id), position: position) }
             case .chat:
-                store.addChatRef(parentID: parentID, chatID: ChatID(rawValue: payload.id), position: position)
+                Task { await store.addChatRef(parentID: parentID, chatID: ChatID(rawValue: payload.id), position: position) }
             }
             DebugLog.tabs("[drop] sidebar-item bookmark created: kind=\(payload.kind) id=\(payload.id) parentID=\(parentID?.rawValue ?? "root") position=\(position)")
             position += 1
@@ -596,10 +596,10 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
         switch kind {
         case .page:
             guard let pageID else { return false }
-            store.addPageRef(parentID: parentID, pageID: pageID, position: position)
+            Task { await store.addPageRef(parentID: parentID, pageID: pageID, position: position) }
         case .source:
             guard let sourceID else { return false }
-            store.addSourceRef(parentID: parentID, sourceID: sourceID, position: position)
+            Task { await store.addSourceRef(parentID: parentID, sourceID: sourceID, position: position) }
         case .chat:
             // Chat refs aren't a bookmark target yet (no `addChatRef`); reject
             // the drop so a chat wiki-link drag is a no-op rather than a crash.
@@ -705,14 +705,17 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
             let draggedIDs = Self.draggedBookmarkNodeIDs(from: info.draggingPasteboard).map { BookmarkID(rawValue: $0) }
             guard !draggedIDs.isEmpty else { return false }
 
-            func moveAll(toParentID parentID: BookmarkID?, startingAt position: Int) -> Bool {
+            func moveAll(toParentID parentID: BookmarkID?, startingAt position: Int) async {
                 var position = position
-                var succeeded = true
                 for id in draggedIDs {
-                    succeeded = store.moveBookmarkNode(id: id, toParentID: parentID, position: position) && succeeded
+                    let moved = await store.moveBookmarkNode(id: id, toParentID: parentID, position: position)
+                    if !moved {
+                        DebugLog.tabs("acceptDrop: moveBookmarkNode failed for \(id.rawValue) — dropped at \(position)")
+                    } else {
+                        DebugLog.tabs("acceptDrop: moveBookmarkNode failed for \(id.rawValue) — dropped at \(position)")
+                    }
                     position += 1
                 }
-                return succeeded
             }
 
             if let folder = item as? BookmarkNode, folder.kind == .folder {
@@ -723,7 +726,8 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
                     DebugLog.tabs("[drop] bookmark move refused: \(id) → \(folder.id) (descendant)")
                     return false
                 }
-                return moveAll(toParentID: folder.id, startingAt: children(of: folder.id).count)
+                Task { await moveAll(toParentID: folder.id, startingAt: children(of: folder.id).count) }
+                return true
             }
 
             if let leaf = item as? BookmarkNode {
@@ -736,11 +740,13 @@ extension BookmarksOutlineViewController: NSOutlineViewDataSource {
                     return false
                 }
                 // Reorder within the same parent.
-                return moveAll(toParentID: leaf.parentID, startingAt: index >= 0 ? index : leaf.position)
+                Task { await moveAll(toParentID: leaf.parentID, startingAt: index >= 0 ? index : leaf.position) }
+                return true
             }
 
             // Root append
-            return moveAll(toParentID: nil, startingAt: children(of: nil).count)
+            Task { await moveAll(toParentID: nil, startingAt: children(of: nil).count) }
+            return true
         }
 
         // Sidebar-item drop → create a bookmark for each page/source/chat in

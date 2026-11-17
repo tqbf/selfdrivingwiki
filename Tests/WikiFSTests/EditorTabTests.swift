@@ -15,7 +15,7 @@ struct EditorTabTests {
 
     // MARK: - Initial state
 
-    @Test func startsWithNoTabs() throws {
+    @Test func startsWithNoTabs() async throws {
         let (model, _) = try tempModel()
         #expect(model.tabs.isEmpty)
         #expect(model.activeTabID == nil)
@@ -24,16 +24,16 @@ struct EditorTabTests {
         #expect(model.recentlyClosedTabs.isEmpty)
     }
 
-    @Test func openingConfiguredHomePageCreatesTheHomeTab() throws {
+    @Test func openingConfiguredHomePageCreatesTheHomeTab() async throws {
         let (model, store) = try tempModel()
-        let home = try store.createPage(title: "Home")
-        model.reloadFromStore()
+        let home = try await store.createPage(title: "Home")
+        await model.bootstrapFromStore()
 
         #expect(model.openHomePageIfConfigured(homePageID: home.id))
         #expect(model.activeTab?.selection == .page(home.id))
     }
 
-    @Test func openingMissingConfiguredHomePageDoesNothing() throws {
+    @Test func openingMissingConfiguredHomePageDoesNothing() async throws {
         let (model, _) = try tempModel()
         let missingHomeID = PageID(rawValue: ULID.generate())
 
@@ -43,10 +43,10 @@ struct EditorTabTests {
 
     // MARK: - Sidebar-driven selection creates tabs
 
-    @Test func firstSidebarSelectionCreatesInitialTab() throws {
+    @Test func firstSidebarSelectionCreatesInitialTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         #expect(model.tabs.isEmpty)
 
@@ -59,11 +59,11 @@ struct EditorTabTests {
         #expect(model.activeTabID == model.tabs[0].id)
     }
 
-    @Test func sidebarSingleClickReplacesActiveTabContent() throws {
+    @Test func sidebarSingleClickReplacesActiveTabContent() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -82,11 +82,11 @@ struct EditorTabTests {
 
     // MARK: - openTab
 
-    @Test func openTabAddsNewTab() throws {
+    @Test func openTabAddsNewTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         // Seed the first tab via selection.
         model.selection = .page(a.id)
@@ -103,11 +103,11 @@ struct EditorTabTests {
         #expect(model.selection == .page(b.id))
     }
 
-    @Test func openTabForExistingPageReusesTab() throws {
+    @Test func openTabForExistingPageReusesTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -127,7 +127,7 @@ struct EditorTabTests {
 
     /// `.newChat` is a draft state, not a unique resource — opening it twice
     /// creates two draft tabs, not a duplicate of a singleton (#348).
-    @Test func newChatAllowsMultipleDraftTabs() throws {
+    @Test func newChatAllowsMultipleDraftTabs() async throws {
         let (model, _) = try tempModel()
         model.openTab(.newChat)
         #expect(model.tabs.count == 1)
@@ -140,10 +140,10 @@ struct EditorTabTests {
 
     // MARK: - Singleton reuse
 
-    @Test func singletonSelectionReusesExistingTab() throws {
+    @Test func singletonSelectionReusesExistingTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -155,7 +155,7 @@ struct EditorTabTests {
         #expect(model.tabs.count == 3)
     }
 
-    @Test func singletonChangeLogReusesExistingTab() throws {
+    @Test func singletonChangeLogReusesExistingTab() async throws {
         let (model, _) = try tempModel()
         model.openTab(.changeLog)
         #expect(model.tabs.count == 1)
@@ -167,10 +167,10 @@ struct EditorTabTests {
 
     /// Retargeting a tab to `.newChat` should not reuse an existing draft tab
     /// — each `.newChat` is a separate draft state (#348).
-    @Test func retargetTabToNewChatDoesNotReuseExistingDraft() throws {
+    @Test func retargetTabToNewChatDoesNotReuseExistingDraft() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         // Open a page tab and a .newChat draft tab.
         model.openTab(.page(a.id))
@@ -190,11 +190,11 @@ struct EditorTabTests {
 
     // MARK: - selectTab
 
-    @Test func selectTabSwitchesContent() throws {
+    @Test func selectTabSwitchesContent() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -207,30 +207,33 @@ struct EditorTabTests {
         #expect(model.selection == .page(a.id))
     }
 
-    @Test func selectTabFlushesOutgoingDraft() throws {
+    @Test func selectTabFlushesOutgoingDraft() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
+        await model.quiesceSelectionTransitions()
         let tabA = model.tabs[0].id
         model.openTab(.page(b.id))
+        await model.quiesceSelectionTransitions()
         model.draftBody = "B content has been edited"
         model.bodyChanged()
-        model.flushPendingSave()
+        await model.flushPendingSave()
 
         // Switch back to tab A. B's draft should have been persisted.
         model.selectTab(id: tabA)
+        await model.quiesceSelectionTransitions()
         let bPage = try store.getPage(id: b.id)
         #expect(bPage.bodyMarkdown == "B content has been edited")
     }
 
-    @Test func selectTabWithActiveIDIsNoOp() throws {
+    @Test func selectTabWithActiveIDIsNoOp() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -243,10 +246,10 @@ struct EditorTabTests {
         #expect(model.draftBody == "some text")
     }
 
-    @Test func selectTabWithUnknownIDIsNoOp() throws {
+    @Test func selectTabWithUnknownIDIsNoOp() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -259,11 +262,11 @@ struct EditorTabTests {
 
     // MARK: - Pinning
 
-    @Test func toggleTabPinChangesOnlyTheTargetTab() throws {
+    @Test func toggleTabPinChangesOnlyTheTargetTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
         model.openTab(.page(a.id))
         let tabA = try #require(model.activeTabID)
         model.openTab(.page(b.id))
@@ -279,11 +282,11 @@ struct EditorTabTests {
         #expect(model.tabs.first { $0.id == tabA }?.isPinned == false)
     }
 
-    @Test func pinnedTabKeepsPinStateWhenRetargetedAndReopened() throws {
+    @Test func pinnedTabKeepsPinStateWhenRetargetedAndReopened() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
         model.openTab(.page(a.id))
         let tabID = try #require(model.activeTabID)
 
@@ -297,11 +300,11 @@ struct EditorTabTests {
         #expect(model.tabs.first?.isPinned == true)
     }
 
-    @Test func navigationFromPinnedTabOpensANewUnpinnedTab() throws {
+    @Test func navigationFromPinnedTabOpensANewUnpinnedTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
         model.openTab(.page(a.id))
         let pinnedTabID = try #require(model.activeTabID)
         model.toggleTabPin(id: pinnedTabID)
@@ -316,12 +319,12 @@ struct EditorTabTests {
 
     // MARK: - closeTab
 
-    @Test func closeTabActivatesRightNeighbor() throws {
+    @Test func closeTabActivatesRightNeighbor() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -340,11 +343,11 @@ struct EditorTabTests {
         #expect(model.activeTabID == tabC)
     }
 
-    @Test func closeRightmostActiveTabActivatesLeftNeighbor() throws {
+    @Test func closeRightmostActiveTabActivatesLeftNeighbor() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -360,12 +363,12 @@ struct EditorTabTests {
         #expect(model.tabs[0].selection == .page(a.id))
     }
 
-    @Test func closeActiveLeftmostTabActivatesNewLeftmost() throws {
+    @Test func closeActiveLeftmostTabActivatesNewLeftmost() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -382,10 +385,10 @@ struct EditorTabTests {
         #expect(model.activeTabID == tabB)
     }
 
-    @Test func closeLastTabShowsEmptyState() throws {
+    @Test func closeLastTabShowsEmptyState() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -398,12 +401,12 @@ struct EditorTabTests {
         #expect(model.selection == nil)
     }
 
-    @Test func closeNonActiveTabDoesNotChangeActive() throws {
+    @Test func closeNonActiveTabDoesNotChangeActive() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -424,12 +427,12 @@ struct EditorTabTests {
 
     /// Open three page tabs (A, B, C) and return their tab IDs in bar order.
     /// C ends up active.
-    private func threeTabModel() throws -> (WikiStoreModel, [UUID]) {
+    private func threeTabModel() async throws -> (WikiStoreModel, [UUID]) {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
         model.openTab(.page(b.id))
@@ -437,36 +440,36 @@ struct EditorTabTests {
         return (model, model.tabs.map(\.id))
     }
 
-    @Test func moveTabForwardReordersBar() throws {
-        let (model, ids) = try threeTabModel()
+    @Test func moveTabForwardReordersBar() async throws {
+        let (model, ids) = try await threeTabModel()
         model.moveTab(id: ids[0], to: 2)
         #expect(model.tabs.map(\.id) == [ids[1], ids[2], ids[0]])
     }
 
-    @Test func moveTabBackwardReordersBar() throws {
-        let (model, ids) = try threeTabModel()
+    @Test func moveTabBackwardReordersBar() async throws {
+        let (model, ids) = try await threeTabModel()
         model.moveTab(id: ids[2], to: 0)
         #expect(model.tabs.map(\.id) == [ids[2], ids[0], ids[1]])
     }
 
-    @Test func moveTabKeepsDraggedTabActive() throws {
-        let (model, ids) = try threeTabModel()
+    @Test func moveTabKeepsDraggedTabActive() async throws {
+        let (model, ids) = try await threeTabModel()
         // C (ids[2]) is active; drag it to the front — it must stay active.
         model.moveTab(id: ids[2], to: 0)
         #expect(model.activeTabID == ids[2])
         #expect(model.activeTabIndex == 0)
     }
 
-    @Test func moveTabKeepsInactiveActiveTabUntouched() throws {
-        let (model, ids) = try threeTabModel()
+    @Test func moveTabKeepsInactiveActiveTabUntouched() async throws {
+        let (model, ids) = try await threeTabModel()
         // C is active; move A (not active) — the active tab must not change.
         model.moveTab(id: ids[0], to: 1)
         #expect(model.activeTabID == ids[2])
         #expect(model.tabs.map(\.id) == [ids[1], ids[0], ids[2]])
     }
 
-    @Test func moveTabPreservesPerTabState() throws {
-        let (model, ids) = try threeTabModel()
+    @Test func moveTabPreservesPerTabState() async throws {
+        let (model, ids) = try await threeTabModel()
         model.toggleTabPin(id: ids[0])
         model.setTabEditing(tabID: ids[0], isEditing: true)
         model.moveTab(id: ids[0], to: 2)
@@ -476,34 +479,34 @@ struct EditorTabTests {
         #expect(moved.isEditing)
     }
 
-    @Test func moveTabSameIndexIsNoOp() throws {
-        let (model, ids) = try threeTabModel()
+    @Test func moveTabSameIndexIsNoOp() async throws {
+        let (model, ids) = try await threeTabModel()
         model.moveTab(id: ids[1], to: 1)
         #expect(model.tabs.map(\.id) == ids)
     }
 
-    @Test func moveTabClampsOutOfBoundsIndex() throws {
-        let (model, ids) = try threeTabModel()
+    @Test func moveTabClampsOutOfBoundsIndex() async throws {
+        let (model, ids) = try await threeTabModel()
         model.moveTab(id: ids[0], to: 99)
         #expect(model.tabs.map(\.id) == [ids[1], ids[2], ids[0]])
         model.moveTab(id: ids[0], to: -5)
         #expect(model.tabs.map(\.id) == [ids[0], ids[1], ids[2]])
     }
 
-    @Test func moveTabUnknownIDIsNoOp() throws {
-        let (model, ids) = try threeTabModel()
+    @Test func moveTabUnknownIDIsNoOp() async throws {
+        let (model, ids) = try await threeTabModel()
         model.moveTab(id: UUID(), to: 0)
         #expect(model.tabs.map(\.id) == ids)
     }
 
     // MARK: - closeOtherTabs
 
-    @Test func closeOtherTabsKeepsOnlySpecifiedActiveTab() throws {
+    @Test func closeOtherTabsKeepsOnlySpecifiedActiveTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -521,12 +524,12 @@ struct EditorTabTests {
         #expect(model.recentlyClosedTabs.count == 2)
     }
 
-    @Test func closeOtherTabsActivatesKeptTabWhenNotActive() throws {
+    @Test func closeOtherTabsActivatesKeptTabWhenNotActive() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -542,10 +545,10 @@ struct EditorTabTests {
         #expect(model.selection == .page(a.id))
     }
 
-    @Test func closeOtherTabsWithSingleTabIsNoOp() throws {
+    @Test func closeOtherTabsWithSingleTabIsNoOp() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -558,12 +561,12 @@ struct EditorTabTests {
 
     // MARK: - closeTabsAfter
 
-    @Test func closeTabsAfterClosesRightSideAndActivatesAnchor() throws {
+    @Test func closeTabsAfterClosesRightSideAndActivatesAnchor() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -581,12 +584,12 @@ struct EditorTabTests {
         _ = tabB
     }
 
-    @Test func closeTabsAfterLeavesActiveUnchangedWhenAnchorIsActive() throws {
+    @Test func closeTabsAfterLeavesActiveUnchangedWhenAnchorIsActive() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -601,12 +604,12 @@ struct EditorTabTests {
         #expect(model.activeTabID == tabA)
     }
 
-    @Test func closeTabsAfterLeavesActiveUnchangedWhenActiveIsLeftOfAnchor() throws {
+    @Test func closeTabsAfterLeavesActiveUnchangedWhenActiveIsLeftOfAnchor() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -622,11 +625,11 @@ struct EditorTabTests {
         #expect(model.activeTabID == tabA)  // unchanged, A still present
     }
 
-    @Test func closeTabsAfterRightmostIsNoOp() throws {
+    @Test func closeTabsAfterRightmostIsNoOp() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -640,11 +643,11 @@ struct EditorTabTests {
 
     // MARK: - closeAllTabs
 
-    @Test func closeAllTabsClearsAllAndEntersEmptyState() throws {
+    @Test func closeAllTabsClearsAllAndEntersEmptyState() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -658,7 +661,7 @@ struct EditorTabTests {
         #expect(model.recentlyClosedTabs.count == 2)
     }
 
-    @Test func closeAllTabsWithNoTabsIsNoOp() throws {
+    @Test func closeAllTabsWithNoTabsIsNoOp() async throws {
         let (model, _) = try tempModel()
         model.closeAllTabs()
         #expect(model.tabs.isEmpty)
@@ -667,10 +670,10 @@ struct EditorTabTests {
 
     // MARK: - Reopen closed tab
 
-    @Test func reopenLastClosedTab() throws {
+    @Test func reopenLastClosedTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -684,10 +687,10 @@ struct EditorTabTests {
         #expect(model.activeTabID == model.tabs[0].id)
     }
 
-    @Test func closeTabPreservesInRecentlyClosedStack() throws {
+    @Test func closeTabPreservesInRecentlyClosedStack() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -698,22 +701,22 @@ struct EditorTabTests {
         #expect(model.recentlyClosedTabs[0].title == "A")
     }
 
-    @Test func reopenWhenStackIsEmptyIsNoOp() throws {
+    @Test func reopenWhenStackIsEmptyIsNoOp() async throws {
         let (model, _) = try tempModel()
         #expect(model.recentlyClosedTabs.isEmpty)
         model.reopenLastClosedTab()
         #expect(model.tabs.isEmpty)
     }
 
-    @Test func recentlyClosedStackCapsAtTen() throws {
+    @Test func recentlyClosedStackCapsAtTen() async throws {
         let (model, store) = try tempModel()
         // Open and close 12 distinct pages.
         var firstTitle: String?
         for i in 0..<12 {
             let title = "P\(i)"
             if firstTitle == nil { firstTitle = title }
-            let page = try store.createPage(title: title)
-            model.reloadFromStore()
+            let page = try await store.createPage(title: title)
+            await model.bootstrapFromStore()
             model.openTab(.page(page.id))
             model.closeTab(id: model.tabs[0].id)
         }
@@ -726,27 +729,27 @@ struct EditorTabTests {
 
     // MARK: - Delete page closes affected tab
 
-    @Test func deletePage_closesAffectedTab() throws {
+    @Test func deletePage_closesAffectedTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
         model.openTab(.page(b.id))
         #expect(model.tabs.count == 2)
 
-        try model.delete(a.id, unlinkIncomingLinks: false)
+        try await model.delete(a.id, unlinkIncomingLinks: false)
         #expect(model.tabs.count == 1)
         #expect(model.tabs[0].selection == .page(b.id))
     }
 
-    @Test func deleteActivePageActivatesNeighbor() throws {
+    @Test func deleteActivePageActivatesNeighbor() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -754,18 +757,18 @@ struct EditorTabTests {
         model.openTab(.page(b.id))
         // Active is B.
 
-        try model.delete(b.id, unlinkIncomingLinks: false)
+        try await model.delete(b.id, unlinkIncomingLinks: false)
         #expect(model.tabs.count == 1)
         #expect(model.activeTabID == tabA)
         #expect(model.tabs[0].selection == .page(a.id))
     }
 
-    @Test func deletePage_notInAnyTab_doesNotAffectTabs() throws {
+    @Test func deletePage_notInAnyTab_doesNotAffectTabs() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -773,33 +776,33 @@ struct EditorTabTests {
         let activeBefore = model.activeTabID
 
         // Delete C — not open in any tab.
-        try model.delete(c.id, unlinkIncomingLinks: false)
+        try await model.delete(c.id, unlinkIncomingLinks: false)
         #expect(model.tabs.count == 2)
         #expect(model.activeTabID == activeBefore)
     }
 
     // MARK: - Delete ingested file closes affected tab
 
-    @Test func deleteSource_closesAffectedTab() throws {
+    @Test func deleteSource_closesAffectedTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
+        let a = try await store.createPage(title: "A")
         let f1 = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
         model.openTab(.source(f1.id))
         #expect(model.tabs.count == 2)
 
-        try model.deleteSource(f1.id, unlinkIncomingLinks: false)
+        try await model.deleteSource(f1.id, unlinkIncomingLinks: false)
         #expect(model.tabs.count == 1)
         #expect(model.tabs[0].selection == .page(a.id))
     }
 
-    @Test func sourceSelectionRestoresCorrectTab() throws {
+    @Test func sourceSelectionRestoresCorrectTab() async throws {
         let (model, store) = try tempModel()
         let source = try store.addSource(filename: "source.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         model.openTab(.source(source.id))
 
@@ -809,24 +812,24 @@ struct EditorTabTests {
 
     // MARK: - Rename updates tab titles
 
-    @Test func renameUpdatesTabTitles() throws {
+    @Test func renameUpdatesTabTitles() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
         #expect(model.tabs[0].title == "A")
 
-        model.rename(a.id, to: "Renamed A")
+        await model.rename(a.id, to: "Renamed A")
         #expect(model.tabs[0].title == "Renamed A")
     }
 
-    @Test func renamePageOnlyAffectsMatchingTabs() throws {
+    @Test func renamePageOnlyAffectsMatchingTabs() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
@@ -834,7 +837,7 @@ struct EditorTabTests {
         model.openTab(.newChat)
         #expect(model.tabs.count == 3)
 
-        model.rename(a.id, to: "Renamed A")
+        await model.rename(a.id, to: "Renamed A")
         #expect(model.tabs[0].title == "Renamed A")  // page A
         #expect(model.tabs[1].title == "B")          // page B unchanged
         #expect(model.tabs[2].title == "New Chat")    // Chat tab unchanged
@@ -842,11 +845,11 @@ struct EditorTabTests {
 
     // MARK: - newPageInNewTab
 
-    @Test func newPageInNewTab_createsPageAndOpensTab() throws {
+    @Test func newPageInNewTab_createsPageAndOpensTab() async throws {
         let (model, store) = try tempModel()
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
-        model.newPageInNewTab(title: "Fresh Page")
+        await model.newPageInNewTab(title: "Fresh Page")
         #expect(model.tabs.count == 1)
         if case .page = model.tabs[0].selection {
             // OK
@@ -863,21 +866,21 @@ struct EditorTabTests {
         #expect(summaries.contains(where: { $0.title == "Fresh Page" }))
     }
 
-    @Test func newPageInNewTab_setsActiveTabEditingTrue() throws {
+    @Test func newPageInNewTab_setsActiveTabEditingTrue() async throws {
         let (model, _) = try tempModel()
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
-        model.newPageInNewTab(title: "Auto-Edit Page")
+        await model.newPageInNewTab(title: "Auto-Edit Page")
         // The newly-created tab is marked editing so the user lands on the
         // source view, and the model-level edit flag reflects it.
         #expect(model.activeTab?.isEditing == true)
         #expect(model.isActiveTabEditing == true)
     }
 
-    @Test func newPageInNewTab_doesNotAffectOtherTabs() throws {
+    @Test func newPageInNewTab_doesNotAffectOtherTabs() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "Existing")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "Existing")
+        await model.bootstrapFromStore()
 
         // A navigation-opened page keeps the default (non-editing) tab state.
         model.openTab(.page(a.id))
@@ -885,7 +888,7 @@ struct EditorTabTests {
         #expect(model.tabs[0].isEditing == false)
 
         // Adding a new page marks ONLY the new tab editing.
-        model.newPageInNewTab(title: "Brand New")
+        await model.newPageInNewTab(title: "Brand New")
         #expect(model.tabs.count == 2)
         #expect(model.activeTabID == model.tabs[1].id)
         #expect(model.tabs[1].isEditing == true)
@@ -895,21 +898,24 @@ struct EditorTabTests {
 
     // MARK: - History navigation preserves tab metadata
 
-    @Test func historyBackUpdatesActiveTabMetadata() throws {
+    @Test func historyBackUpdatesActiveTabMetadata() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.selection = .page(a.id)
         model.handleSelectionChange(to: .page(a.id))
+        await model.quiesceSelectionTransitions()
         model.selection = .page(b.id)
         model.handleSelectionChange(to: .page(b.id))
+        await model.quiesceSelectionTransitions()
 
         #expect(model.tabs.count == 1)
         #expect(model.tabs[0].title == "B")
 
         model.navigateBack()
+        await model.quiesceSelectionTransitions()
         #expect(model.selection == .page(a.id))
         #expect(model.tabs[0].title == "A")
         #expect(model.tabs[0].selection == .page(a.id))
@@ -917,55 +923,58 @@ struct EditorTabTests {
 
     // MARK: - tabTitle helper
 
-    @Test func tabTitleForPage() throws {
+    @Test func tabTitleForPage() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "My Page")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "My Page")
+        await model.bootstrapFromStore()
         #expect(model.tabTitle(for: .page(a.id)) == "My Page")
     }
 
-    @Test func tabTitleForMissingPageReturnsUntitled() throws {
+    @Test func tabTitleForMissingPageReturnsUntitled() async throws {
         let (model, _) = try tempModel()
         #expect(model.tabTitle(for: .page(PageID(rawValue: "nonexistent"))) == "Untitled")
     }
 
-    @Test func tabTitleForSpecialSelections() throws {
+    @Test func tabTitleForSpecialSelections() async throws {
         let (model, _) = try tempModel()
         #expect(model.tabTitle(for: .newChat) == "New Chat")
         #expect(model.tabTitle(for: .changeLog) == "Activity")
     }
 
-    @Test func tabTitleForSourceFallsBackToFilenameWhenNoDisplayName() throws {
+    @Test func tabTitleForSourceFallsBackToFilenameWhenNoDisplayName() async throws {
         let (model, store) = try tempModel()
         let f1 = try store.addSource(filename: "report.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        // P1-FLIP-REVIEW: reloadFromStore() now only enqueues a coalesced async
+        // reload; bootstrapFromStore() awaits the same drain so the projection
+        // read below observes the store state.
+        await model.bootstrapFromStore()
         #expect(model.tabTitle(for: .source(f1.id)) == "report.pdf")
     }
 
-    @Test func tabTitleForSourcePrefersDisplayNameOverFilename() throws {
+    @Test func tabTitleForSourcePrefersDisplayNameOverFilename() async throws {
         let (model, store) = try tempModel()
         let f1 = try store.addSource(filename: "report.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
-        model.renameSource(id: f1.id, to: "My Custom Title")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
+        await model.renameSource(id: f1.id, to: "My Custom Title")
+        await model.bootstrapFromStore()
         #expect(model.tabTitle(for: .source(f1.id)) == "My Custom Title")
     }
 
-    @Test func sourceTabTitleUpdatesOnRename() throws {
+    @Test func sourceTabTitleUpdatesOnRename() async throws {
         let (model, store) = try tempModel()
         let f1 = try store.addSource(filename: "doc.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.source(f1.id))
         #expect(model.tabs[0].title == "doc.pdf")
 
-        model.renameSource(id: f1.id, to: "Annual Report")
-        model.reloadFromStore()
+        await model.renameSource(id: f1.id, to: "Annual Report")
+        await model.bootstrapFromStore()
         #expect(model.tabs[0].title == "Annual Report")
     }
 
     // MARK: - tabIcon helper
 
-    @Test func tabIconReturnsExpectedSymbols() throws {
+    @Test func tabIconReturnsExpectedSymbols() async throws {
         let (model, _) = try tempModel()
         #expect(model.tabIcon(for: .newChat) == "bubble.left.and.bubble.right")
         #expect(model.tabIcon(for: .changeLog) == "clock.arrow.circlepath")
@@ -974,12 +983,12 @@ struct EditorTabTests {
 
     // MARK: - Batch open
 
-    @Test func batchOpenCreatesAllTabs() throws {
+    @Test func batchOpenCreatesAllTabs() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         // Simulate batch opening all three pages.
         for id in [a.id, b.id, c.id] { model.openTab(.page(id)) }
@@ -991,12 +1000,12 @@ struct EditorTabTests {
         #expect(model.activeTabID == model.tabs.last?.id)
     }
 
-    @Test func batchOpenBackgroundCreatesAllTabsWithoutSwitching() throws {
+    @Test func batchOpenBackgroundCreatesAllTabsWithoutSwitching() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        let c = try store.createPage(title: "C")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        let c = try await store.createPage(title: "C")
+        await model.bootstrapFromStore()
 
         // Open A first (active), then batch-open B and C in background.
         model.openTab(.page(a.id))
@@ -1008,11 +1017,11 @@ struct EditorTabTests {
         #expect(model.tabs.first?.selection == .page(a.id))
     }
 
-    @Test func sourceBackgroundOpenPreservesActiveTab() throws {
+    @Test func sourceBackgroundOpenPreservesActiveTab() async throws {
         let (model, store) = try tempModel()
-        let page = try store.createPage(title: "Active")
+        let page = try await store.createPage(title: "Active")
         let source = try store.addSource(filename: "background.pdf", data: Data("pdf".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.page(page.id))
         let activeID = model.activeTabID
 
@@ -1023,10 +1032,10 @@ struct EditorTabTests {
         #expect(model.tabs.contains { $0.selection == .source(source.id) })
     }
 
-    @Test func batchOpenSkipsDuplicateTabs() throws {
+    @Test func batchOpenSkipsDuplicateTabs() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         // Open A first, then batch-open including A again.
         model.openTab(.page(a.id))
@@ -1037,11 +1046,11 @@ struct EditorTabTests {
         #expect(model.tabs.count == 1)
     }
 
-    @Test func batchOpenBackgroundSkipsDuplicateTabs() throws {
+    @Test func batchOpenBackgroundSkipsDuplicateTabs() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
 
         model.openTabInBackground(.page(a.id))
         #expect(model.tabs.count == 1)
@@ -1053,10 +1062,10 @@ struct EditorTabTests {
         #expect(model.tabs.map(\.title).sorted() == ["A", "B"])
     }
 
-    @Test func backgroundOpenOnEmptyBarFocusesTheNewTab() throws {
+    @Test func backgroundOpenOnEmptyBarFocusesTheNewTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
 
         // No tabs open yet — "Open in Background" has nothing to keep focused,
         // so it must fall back to opening AND activating the tab (issue #138).
@@ -1079,27 +1088,27 @@ struct EditorTabTests {
     // synced from `PageDetailView`/`SourceDetailView` via `setTabEditing` — pin
     // the model-level contract here so the SwiftUI gate stays correct.
 
-    @Test func isActiveTabEditing_falseWhenNoTabs() throws {
+    @Test func isActiveTabEditing_falseWhenNoTabs() async throws {
         let (model, _) = try tempModel()
         #expect(model.tabs.isEmpty)
         #expect(model.activeTabID == nil)
         #expect(model.isActiveTabEditing == false)
     }
 
-    @Test func isActiveTabEditing_falseWhenActiveTabNotEditing() throws {
+    @Test func isActiveTabEditing_falseWhenActiveTabNotEditing() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
         model.openTab(.page(a.id))
         // Default tab state is `isEditing == false`.
         #expect(model.activeTab?.isEditing == false)
         #expect(model.isActiveTabEditing == false)
     }
 
-    @Test func isActiveTabEditing_trueWhenActiveTabIsEditing() throws {
+    @Test func isActiveTabEditing_trueWhenActiveTabIsEditing() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
         model.openTab(.page(a.id))
         guard let id = model.activeTabID else {
             Issue.record("expected active tab after openTab")
@@ -1110,10 +1119,10 @@ struct EditorTabTests {
         #expect(model.isActiveTabEditing == true)
     }
 
-    @Test func isActiveTabEditing_falseAfterEditingTurnedOff() throws {
+    @Test func isActiveTabEditing_falseAfterEditingTurnedOff() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        await model.bootstrapFromStore()
         model.openTab(.page(a.id))
         guard let id = model.activeTabID else {
             Issue.record("expected active tab after openTab")
@@ -1125,11 +1134,11 @@ struct EditorTabTests {
         #expect(model.isActiveTabEditing == false)
     }
 
-    @Test func isActiveTabEditing_tracksActiveTabSwitch() throws {
+    @Test func isActiveTabEditing_tracksActiveTabSwitch() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
         model.openTab(.page(a.id))
         model.openTab(.page(b.id))
         // Active is B; mark A as editing (a non-active tab's state is preserved
@@ -1148,11 +1157,11 @@ struct EditorTabTests {
         #expect(model.isActiveTabEditing == true)
     }
 
-    @Test func isActiveTabEditing_ignoresNonActiveEditingTab() throws {
+    @Test func isActiveTabEditing_ignoresNonActiveEditingTab() async throws {
         let (model, store) = try tempModel()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        model.reloadFromStore()
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        await model.bootstrapFromStore()
         model.openTab(.page(a.id))
         model.openTab(.page(b.id))
         // Mark A (non-active) as editing. Active tab (B) is not.

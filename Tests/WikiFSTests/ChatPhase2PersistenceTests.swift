@@ -641,7 +641,7 @@ struct ChatPhase2PersistenceTests {
     @Test func tantivyRebuildMarkerClearsAfterServiceRebuild() async throws {
         let (store, url) = try TestStoreFactory.fileBacked(prefix: "chat-phase2-tantivy")
         store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "wiki-1"))
-        _ = try store.createPage(title: "Searchable")
+        _ = try await store.createPage(title: "Searchable")
         try store.setMetadata(Self.tantivyMarkerKey, value: "1")
 
         let service = try TantivySearchService(

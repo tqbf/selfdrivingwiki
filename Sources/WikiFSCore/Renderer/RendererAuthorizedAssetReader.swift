@@ -18,6 +18,7 @@ import WikiFSTypes
 /// missing, invalid, unauthorized, changed, oversized, exhausted, or closed
 /// assets all look identical to the caller. Typed internal errors exist for
 /// tests and `DebugLog` without paths, titles, IDs, or existence details.
+@MainActor
 public final class RendererAuthorizedAssetReader {
     public enum ReaderError: Error, Equatable, Sendable {
         case closed
@@ -73,8 +74,8 @@ public final class RendererAuthorizedAssetReader {
     private let maximumBytesPerAsset: Int
     private let maximumAggregateSessionBytes: Int
     private let maximumPerRequestReadCount: Int
-    private let readPinned: (SourceVersionID) throws -> Data?
-    private let pinnedMime: (SourceVersionID) throws -> String?
+    private let readPinned: (SourceVersionID) async throws -> Data?
+    private let pinnedMime: (SourceVersionID) async throws -> String?
     private let state: Mutex<State>
 
     public init(
@@ -96,7 +97,7 @@ public final class RendererAuthorizedAssetReader {
         self.maximumAggregateSessionBytes = maximumAggregateSessionBytes
         self.maximumPerRequestReadCount = maximumPerRequestReadCount
         readPinned = { versionID in
-            do { return try store.sourceContent(versionID: versionID) }
+            do { return try await store.sourceContent(versionID: versionID) }
             catch { return nil }
         }
         pinnedMime = { versionID in
@@ -105,7 +106,7 @@ public final class RendererAuthorizedAssetReader {
             // the digest/size checks still gate the return. `try?` is
             // intentional here — the denial surface is uniform.
             // swiftlint:disable:next silent_try_optional
-            guard let version = try? store.sourceVersion(id: versionID) else { return nil }
+            guard let version = try? await store.sourceVersion(id: versionID) else { return nil }
             return version.mimeType
         }
         state = Mutex(State(sessionBytesRemaining: maximumAggregateSessionBytes))
@@ -118,7 +119,7 @@ public final class RendererAuthorizedAssetReader {
     }
 
     /// Read one admitted asset. Fail-closed on every miss, before disclosure.
-    public func read(_ reference: RendererAssetReference) throws -> RendererAssetPayload {
+    public func read(_ reference: RendererAssetReference) async throws -> RendererAssetPayload {
         try validateOpen()
         guard let admission = admissions[reference] else {
             throw ReaderError.unadmittedReference
@@ -139,7 +140,7 @@ public final class RendererAuthorizedAssetReader {
         }
 
         // Read the pinned EXACT version only.
-        guard let bytes = try readPinned(admission.sourceVersionID) else {
+        guard let bytes = try await readPinned(admission.sourceVersionID) else {
             throw ReaderError.unavailablePinnedAsset
         }
         guard bytes.count == admission.expectedByteCount else {
@@ -156,7 +157,7 @@ public final class RendererAuthorizedAssetReader {
         // authorization must be fully cross-checked before any byte is
         // returned — never substitute the admission's stored MIME when the
         // live version cannot be verified.
-        guard let mime = try pinnedMime(admission.sourceVersionID),
+        guard let mime = try await pinnedMime(admission.sourceVersionID),
               mime == admission.mimeType else {
             throw ReaderError.changedAsset
         }

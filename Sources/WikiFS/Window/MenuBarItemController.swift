@@ -535,7 +535,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     }
 
     @objc private func vacuumAll(_ sender: NSMenuItem?) {
-        targetSession?.previewVacuumAll()
+        Task { await targetSession?.previewVacuumAll() }
         activateWikiWindow()
     }
 

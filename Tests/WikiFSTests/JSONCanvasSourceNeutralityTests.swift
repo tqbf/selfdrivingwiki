@@ -23,6 +23,10 @@ struct JSONCanvasSourceNeutralityTests {
         "Sources/WikiFS/Renderer/BuiltInRendererDescriptors.swift",
         "Sources/WikiFSTypes/MimeType.swift",
         "Sources/WikiFSTypes/Renderer/RendererMatcher.swift",
+        // Daemon wire mirrors: the store family's DTOs echo the domain
+        // artifact-kind enum as opaque Codable data (no decoder, view,
+        // router, or presentation policy lives here).
+        "Sources/WikiDaemonContract/DaemonStoreValueMirrors.swift",
     ]
 
     /// Symbols that must not appear in production Swift (native decoder/core,

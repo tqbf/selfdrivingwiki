@@ -24,7 +24,7 @@ struct PagesNewChatMenuHostedTests {
         return app
     }()
 
-    private func makeFixture() throws -> (model: WikiStoreModel, vc: PagesListViewController, window: NSWindow, ids: [PageID], storeURL: URL) {
+    private func makeFixture() async throws -> (model: WikiStoreModel, vc: PagesListViewController, window: NSWindow, ids: [PageID], storeURL: URL) {
         _ = Self.app
         let storeURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("pages-menu-\(UUID().uuidString).sqlite")
@@ -32,9 +32,9 @@ struct PagesNewChatMenuHostedTests {
         store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         for title in ["Alpha", "Beta", "Gamma"] {
-            _ = try store.createPage(title: title)
+            _ = try await store.createPage(title: title)
         }
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let ids = model.summaries.map(\.id)
 
         let vc = PagesListViewController()
@@ -51,7 +51,7 @@ struct PagesNewChatMenuHostedTests {
             onSetHomePage: { _ in },
             onAddToBookmarks: { _ in },
             onNewChat: { ids in
-                model.beginNewChat(attachments: ChatAttachmentTarget.pages(ids))
+                Task { await model.beginNewChat(attachments: ChatAttachmentTarget.pages(ids)) }
             })
 
         let window = NSWindow(
@@ -78,8 +78,8 @@ struct PagesNewChatMenuHostedTests {
     }
 
     @Test("single selection offers the exact item: title, icon, enabled, placement")
-    func pagesMenuOffersSingularItem() throws {
-        let (model, vc, _, _, _) = try makeFixture()
+    func pagesMenuOffersSingularItem() async throws {
+        let (model, vc, _, _, _) = try await makeFixture()
         select(vc, [0])
 
         let menu = try #require(vc.menuForRow(0))
@@ -94,16 +94,16 @@ struct PagesNewChatMenuHostedTests {
     }
 
     @Test("batch selection offers the count-prefixed title")
-    func pagesMenuOffersBatchTitle() throws {
-        let (_, vc, _, _, _) = try makeFixture()
+    func pagesMenuOffersBatchTitle() async throws {
+        let (_, vc, _, _, _) = try await makeFixture()
         select(vc, [0, 1])
         let menu = try #require(vc.menuForRow(0))
         _ = try newChatItem(in: menu, titled: "New Chat with 2 Pages")
     }
 
     @Test("right-click inside the selection acts on the whole selection in row order")
-    func pagesMenuActsOnWholeSelectionWhenClickedInside() throws {
-        let (model, vc, _, ids, storeURL) = try makeFixture()
+    func pagesMenuActsOnWholeSelectionWhenClickedInside() async throws {
+        let (model, vc, _, ids, storeURL) = try await makeFixture()
         select(vc, [0, 1])
         let menu = try #require(vc.menuForRow(0))
         let item = try newChatItem(in: menu, titled: "New Chat with 2 Pages")
@@ -113,15 +113,15 @@ struct PagesNewChatMenuHostedTests {
         let chatID = try #require(activeChatID(model))
         // The composed write persisted the ordered rows; a fresh model over
         // the same DB restores them (restart half of the proof).
-        #expect(model.chatAttachments(chatID: chatID) == [.page(ids[0]), .page(ids[1])])
+        #expect(await model.chatAttachments(chatID: chatID) == [.page(ids[0]), .page(ids[1])])
         let freshStore = try GRDBWikiStore(databaseURL: storeURL)
         freshStore.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         #expect(try freshStore.chatAttachments(chatID: chatID) == [.page(ids[0]), .page(ids[1])])
     }
 
     @Test("right-click outside the selection acts on the clicked row only")
-    func pagesMenuActsOnClickedRowOnlyWhenClickedOutside() throws {
-        let (model, vc, _, ids, _) = try makeFixture()
+    func pagesMenuActsOnClickedRowOnlyWhenClickedOutside() async throws {
+        let (model, vc, _, ids, _) = try await makeFixture()
         select(vc, [0, 1])
         let menu = try #require(vc.menuForRow(2))
         let item = try newChatItem(in: menu, titled: "New Chat with Page")
@@ -129,12 +129,12 @@ struct PagesNewChatMenuHostedTests {
         _ = item.target?.perform(item.action, with: item)
 
         let chatID = try #require(activeChatID(model))
-        #expect(model.chatAttachments(chatID: chatID) == [.page(ids[2])])
+        #expect(await model.chatAttachments(chatID: chatID) == [.page(ids[2])])
     }
 
     @Test("the action keeps the host window and opens the chat as its active tab")
-    func newChatStaysInHostWindow() throws {
-        let (model, vc, window, ids, _) = try makeFixture()
+    func newChatStaysInHostWindow() async throws {
+        let (model, vc, window, ids, _) = try await makeFixture()
         select(vc, [0])
         let menu = try #require(vc.menuForRow(0))
         let item = try newChatItem(in: menu, titled: "New Chat with Page")
@@ -163,7 +163,7 @@ struct SourcesNewChatMenuHostedTests {
         return app
     }()
 
-    private func makeFixture() throws -> (model: WikiStoreModel, vc: SourcesListViewController, window: NSWindow, ids: [SourceID]) {
+    private func makeFixture() async throws -> (model: WikiStoreModel, vc: SourcesListViewController, window: NSWindow, ids: [SourceID]) {
         _ = Self.app
         let store = try GRDBWikiStore(
             databaseURL: FileManager.default.temporaryDirectory
@@ -173,7 +173,7 @@ struct SourcesNewChatMenuHostedTests {
         for (name, byte) in [("alpha.pdf", "a"), ("beta.pdf", "b"), ("gamma.pdf", "g")] {
             _ = try store.addSource(filename: name, data: Data(byte.utf8))
         }
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         let ids = model.sources.filter(\.isPrimary).map(\.id)
 
         let vc = SourcesListViewController()
@@ -192,7 +192,7 @@ struct SourcesNewChatMenuHostedTests {
             onDelete: { _ in },
             onAddToBookmarks: { _ in },
             onNewChat: { ids in
-                model.beginNewChat(attachments: ChatAttachmentTarget.sources(ids))
+                Task { await model.beginNewChat(attachments: ChatAttachmentTarget.sources(ids)) }
             })
 
         let window = NSWindow(
@@ -219,8 +219,8 @@ struct SourcesNewChatMenuHostedTests {
     }
 
     @Test("single selection offers the exact item: title, icon, enabled, placement")
-    func sourcesMenuOffersSingularItem() throws {
-        let (model, vc, _, _) = try makeFixture()
+    func sourcesMenuOffersSingularItem() async throws {
+        let (model, vc, _, _) = try await makeFixture()
         select(vc, [0])
 
         let menu = try #require(vc.menuForRow(0))
@@ -235,16 +235,16 @@ struct SourcesNewChatMenuHostedTests {
     }
 
     @Test("batch selection offers the count-prefixed title")
-    func sourcesMenuOffersBatchTitle() throws {
-        let (_, vc, _, _) = try makeFixture()
+    func sourcesMenuOffersBatchTitle() async throws {
+        let (_, vc, _, _) = try await makeFixture()
         select(vc, [0, 1])
         let menu = try #require(vc.menuForRow(0))
         _ = try newChatItem(in: menu, titled: "New Chat with 2 Sources")
     }
 
     @Test("right-click inside the selection acts on the whole selection in row order")
-    func sourcesMenuActsOnWholeSelectionWhenClickedInside() throws {
-        let (model, vc, _, ids) = try makeFixture()
+    func sourcesMenuActsOnWholeSelectionWhenClickedInside() async throws {
+        let (model, vc, _, ids) = try await makeFixture()
         select(vc, [0, 1])
         let menu = try #require(vc.menuForRow(0))
         let item = try newChatItem(in: menu, titled: "New Chat with 2 Sources")
@@ -252,12 +252,12 @@ struct SourcesNewChatMenuHostedTests {
         _ = item.target?.perform(item.action, with: item)
 
         let chatID = try #require(activeChatID(model))
-        #expect(model.chatAttachments(chatID: chatID) == [.source(ids[0]), .source(ids[1])])
+        #expect(await model.chatAttachments(chatID: chatID) == [.source(ids[0]), .source(ids[1])])
     }
 
     @Test("right-click outside the selection acts on the clicked row only")
-    func sourcesMenuActsOnClickedRowOnlyWhenClickedOutside() throws {
-        let (model, vc, _, ids) = try makeFixture()
+    func sourcesMenuActsOnClickedRowOnlyWhenClickedOutside() async throws {
+        let (model, vc, _, ids) = try await makeFixture()
         select(vc, [0, 1])
         let menu = try #require(vc.menuForRow(2))
         let item = try newChatItem(in: menu, titled: "New Chat with Source")
@@ -265,12 +265,12 @@ struct SourcesNewChatMenuHostedTests {
         _ = item.target?.perform(item.action, with: item)
 
         let chatID = try #require(activeChatID(model))
-        #expect(model.chatAttachments(chatID: chatID) == [.source(ids[2])])
+        #expect(await model.chatAttachments(chatID: chatID) == [.source(ids[2])])
     }
 
     @Test("the action keeps the host window and opens the chat as its active tab")
-    func newChatStaysInHostWindow() throws {
-        let (model, vc, window, _) = try makeFixture()
+    func newChatStaysInHostWindow() async throws {
+        let (model, vc, window, _) = try await makeFixture()
         select(vc, [0])
         let menu = try #require(vc.menuForRow(0))
         let item = try newChatItem(in: menu, titled: "New Chat with Source")

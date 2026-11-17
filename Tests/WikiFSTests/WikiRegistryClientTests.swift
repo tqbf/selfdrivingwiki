@@ -164,11 +164,12 @@ struct WikiRegistryClientTests {
 
         // Write a uniquely-titled page into wiki A via the store directly.
         let storeA = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(first.rawValue).sqlite"))
-        let pageA = try storeA.createPage(title: "Only-In-A")
-        try storeA.updatePage(id: pageA.id, title: "Only-In-A", body: "A")
+        let pageA = try await storeA.createPage(title: "Only-In-A")
+        try await storeA.updatePage(id: pageA.id, title: "Only-In-A", body: "A")
 
-        // Create wiki B.
-        let b = await registry.createWiki(displayName: "Wiki B")
+        // Create wiki B. (`createWiki` returns `nil` only when the mediated
+        // create failed — unreachable in this local-mode suite, asserted.)
+        let b = try #require(await registry.createWiki(displayName: "Wiki B"))
         #expect(registry.activeWikiID == b.id)
         #expect(b.id != first)
 
@@ -188,7 +189,10 @@ struct WikiRegistryClientTests {
         let registry = WikiRegistryClient(containerDirectory: dir)
         registry.bootstrap()
         let a = registry.activeWikiID!
-        let b = await registry.createWiki(displayName: "B")
+        guard let b = await registry.createWiki(displayName: "B") else {
+            Issue.record("local-mode createWiki must not return nil")
+            return
+        }
 
         let fm = FileManager.default
         #expect(fm.fileExists(atPath: dir.appendingPathComponent("\(a.rawValue).sqlite").path))
@@ -203,7 +207,10 @@ struct WikiRegistryClientTests {
         let registry = WikiRegistryClient(containerDirectory: dir)
         registry.bootstrap()
         _ = registry.activeWikiID!
-        let b = await registry.createWiki(displayName: "B")
+        guard let b = await registry.createWiki(displayName: "B") else {
+            Issue.record("local-mode createWiki must not return nil")
+            return
+        }
         let bPath = dir.appendingPathComponent("\(b.id.rawValue).sqlite").path
         #expect(FileManager.default.fileExists(atPath: bPath))
 
@@ -237,12 +244,16 @@ struct WikiRegistryClientTests {
 
     // MARK: - Rename keeps the DB stable (identity = ULID)
 
-    @Test func renameDoesNotMoveTheDatabaseFile() async {
+    @Test func renameDoesNotMoveTheDatabaseFile() async throws {
         let dir = tempDirectory()
         let registry = WikiRegistryClient(containerDirectory: dir)
         registry.bootstrap()
         let id = registry.activeWikiID!
         let path = dir.appendingPathComponent("\(id.rawValue).sqlite").path
+        // Plan P1.3: bootstrap() now spawns first-run DB creation as a Task;
+        // create the store synchronously so the file-exists assertions below
+        // are deterministic (mirrors exportWritesAPortableSQLiteFileWithCurrentContent).
+        _ = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(id.rawValue).sqlite"))
         #expect(FileManager.default.fileExists(atPath: path))
 
         await registry.renameWiki(id: id, to: "Renamed")
@@ -295,6 +306,10 @@ struct WikiRegistryClientTests {
         registry.bootstrap()
         let id = try #require(registry.activeWikiID)
         let sourceURL = dir.appendingPathComponent("\(id.rawValue).sqlite")
+        // Plan P1.3: bootstrap() now spawns first-run DB creation as a Task;
+        // create the store synchronously so the source file exists before the
+        // export-refusal assertions (mirrors exportWritesAPortableSQLiteFileWithCurrentContent).
+        _ = try GRDBWikiStore(databaseURL: sourceURL)
 
         #expect(throws: WikiRegistryError.exportWouldOverwriteSource) {
             try registry.exportWiki(id: id, to: sourceURL)
@@ -310,8 +325,8 @@ struct WikiRegistryClientTests {
 
         // Write a page via the store directly.
         let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("\(originalID.rawValue).sqlite"))
-        let page = try store.createPage(title: "Restored Page")
-        try store.updatePage(id: page.id, title: "Restored Page", body: "restored body")
+        let page = try await store.createPage(title: "Restored Page")
+        try await store.updatePage(id: page.id, title: "Restored Page", body: "restored body")
 
         let backupURL = dir.appendingPathComponent("restore-source.sqlite")
         try registry.exportWiki(id: originalID, to: backupURL)
@@ -336,14 +351,14 @@ struct WikiRegistryClientTests {
 
     // MARK: - v0 migration: legacy WikiFS.sqlite becomes wiki #1, content intact
 
-    @Test func migratesLegacyV0WikiAsWikiOnePreservingContent() throws {
+    @Test func migratesLegacyV0WikiAsWikiOnePreservingContent() async throws {
         let dir = tempDirectory()
 
         let legacy = dir.appendingPathComponent(DatabaseLocation.legacyDatabaseFileName)
         do {
             let store = try GRDBWikiStore(databaseURL: legacy)
-            let page = try store.createPage(title: "Legacy Home")
-            try store.updatePage(id: page.id, title: "Legacy Home", body: "VERIFY-V0-CONTENT")
+            let page = try await store.createPage(title: "Legacy Home")
+            try await store.updatePage(id: page.id, title: "Legacy Home", body: "VERIFY-V0-CONTENT")
         }
         #expect(FileManager.default.fileExists(atPath: legacy.path))
 

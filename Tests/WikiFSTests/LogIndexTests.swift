@@ -29,7 +29,7 @@ struct LogIndexTests {
 
     // MARK: - Seeded defaults on a fresh DB
 
-    @Test func freshDatabaseSeedsDefaultIndexAndEmptyLog() throws {
+    @Test func freshDatabaseSeedsDefaultIndexAndEmptyLog() async throws {
         let store = try tempStore()
         let index = try store.getWikiIndex()
         #expect(index.body == WikiIndex.defaultBody)
@@ -39,7 +39,7 @@ struct LogIndexTests {
 
     // MARK: - log append
 
-    @Test func appendLogWritesRowWithCorrectFields() throws {
+    @Test func appendLogWritesRowWithCorrectFields() async throws {
         let store = try tempStore()
         let entry = try store.appendLog(kind: .ingest, title: "Article Title", note: "a note")
         #expect(entry.kind == .ingest)
@@ -54,7 +54,7 @@ struct LogIndexTests {
         #expect(all[0].note == "a note")
     }
 
-    @Test func appendLogPersistsNilNoteAsAbsent() throws {
+    @Test func appendLogPersistsNilNoteAsAbsent() async throws {
         let store = try tempStore()
         _ = try store.appendLog(kind: .query, title: "no note here", note: nil)
         let all = try store.listAllLogEntriesOrderedByID()
@@ -62,7 +62,7 @@ struct LogIndexTests {
         #expect(all[0].note == nil)
     }
 
-    @Test func logEntriesOrderChronologicallyByULID() throws {
+    @Test func logEntriesOrderChronologicallyByULID() async throws {
         let store = try tempStore()
         _ = try store.appendLog(kind: .ingest, title: "first", note: nil)
         _ = try store.appendLog(kind: .lint, title: "second", note: nil)
@@ -73,7 +73,7 @@ struct LogIndexTests {
 
     // MARK: - log.md rendering (grep-able prefix format)
 
-    @Test func renderProducesGrepablePrefixLines() throws {
+    @Test func renderProducesGrepablePrefixLines() async throws {
         // A fixed UTC date so the "[YYYY-MM-DD]" stamp is deterministic.
         let date = Date(timeIntervalSince1970: 1_750_000_000)  // 2025-06-15 UTC
         let entries = [
@@ -98,11 +98,11 @@ struct LogIndexTests {
     }
 
     @MainActor
-    @Test func modelCurrentLogMarkdownUsesProjectionRenderer() throws {
+    @Test func modelCurrentLogMarkdownUsesProjectionRenderer() async throws {
         let store = try tempStore()
         _ = try store.appendLog(kind: .query, title: "What changed?", note: "The agent answered from the wiki.")
         let model = WikiStoreModel(store: store)
-        let markdown = model.currentLogMarkdown()
+        let markdown = await model.currentLogMarkdown()
 
         #expect(markdown.contains("## ["))
         #expect(markdown.contains("query | What changed?"))
@@ -111,7 +111,7 @@ struct LogIndexTests {
 
     // MARK: - index set (UPSERT)
 
-    @Test func updateWikiIndexPersistsAndBumpsVersion() throws {
+    @Test func updateWikiIndexPersistsAndBumpsVersion() async throws {
         let url = tempDatabaseURL()
         do {
             let store = try GRDBWikiStore(databaseURL: url)
@@ -127,7 +127,7 @@ struct LogIndexTests {
         #expect(index.version == 2)
     }
 
-    @Test func repeatedIndexWritesKeepBumpingVersion() throws {
+    @Test func repeatedIndexWritesKeepBumpingVersion() async throws {
         let store = try tempStore()
         try store.updateWikiIndex(body: "one")
         try store.updateWikiIndex(body: "two")
@@ -137,7 +137,7 @@ struct LogIndexTests {
         #expect(index.version == 4)  // 1 (seed) + 3 writes
     }
 
-    @Test func updateWikiIndexRecreatesRowIfDeleted() throws {
+    @Test func updateWikiIndexRecreatesRowIfDeleted() async throws {
         let url = tempDatabaseURL()
         let store = try GRDBWikiStore(databaseURL: url)
 
@@ -159,7 +159,7 @@ struct LogIndexTests {
 
     // MARK: - changeToken folds (the load-bearing regression)
 
-    @Test func changeTokenAdvancesOnLogOnlyWrite() throws {
+    @Test func changeTokenAdvancesOnLogOnlyWrite() async throws {
         let store = try tempStore()
         // Fresh DB: no pages/files, systemPrompt is hash of default, wiki_index at v1, no log rows.
         let token0 = try store.changeToken()
@@ -179,7 +179,7 @@ struct LogIndexTests {
         #expect(token2.log == 2)
     }
 
-    @Test func changeTokenAdvancesOnIndexOnlyWrite() throws {
+    @Test func changeTokenAdvancesOnIndexOnlyWrite() async throws {
         let store = try tempStore()
         let token0 = try store.changeToken()
         #expect(token0.wikiIndex == 1)
@@ -196,7 +196,7 @@ struct LogIndexTests {
 
     // MARK: - v3 → v43 migration (preserves prior data, drops system_prompt, seeds index)
 
-    @Test func migratesV3DatabaseToV43PreservingData() throws {
+    @Test func migratesV3DatabaseToV43PreservingData() async throws {
         let url = tempDatabaseURL()
 
         // Build a v3-shaped DB by hand: pages + slug index + sources +
