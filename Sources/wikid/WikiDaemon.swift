@@ -471,6 +471,17 @@ final class WikiDaemon: @unchecked Sendable {
         self.testFixtureMakeStore = testFixtureMakeStore
         self.testExtractorCatalog = testExtractorCatalog
         self.registry = WikiRegistry.load(from: containerDirectory)
+        // P3.3: the legacy v0 import is daemon-owned — one shot at daemon
+        // start when the registry view is empty (the app's first-run branch
+        // is a no-op in remote mode). Init is the pre-serving serialized
+        // boundary: nothing serves until it returns, and every later registry
+        // mutation runs on `queue`, so no concurrent writer can interleave.
+        // Idempotent: the empty-registry gate plus the target-absent guard
+        // make re-runs no-ops.
+        if registry.isEmpty {
+            DaemonLegacyWikiImporter.migrateLegacyWikiIfNeeded(
+                into: &registry, containerDirectory: containerDirectory)
+        }
         #if canImport(WikiFSEngine)
         self.profileOwner = nil
         let providerServices = MutableAgentProviderServices()
@@ -532,6 +543,12 @@ final class WikiDaemon: @unchecked Sendable {
         self.testFixtureMakeStore = nil
         self.testExtractorCatalog = nil
         self.registry = WikiRegistry.load(from: containerDirectory)
+        // P3.3: same daemon-owned legacy v0 import as the fixture init —
+        // one shot at daemon start, empty-registry gated, pre-serving.
+        if registry.isEmpty {
+            DaemonLegacyWikiImporter.migrateLegacyWikiIfNeeded(
+                into: &registry, containerDirectory: containerDirectory)
+        }
         self.profileOwner = profileOwner
         self.legacyAgentProviderServices = nil
         self.legacyExtractionCompositionOwner = nil
@@ -1125,6 +1142,12 @@ final class WikiDaemon: @unchecked Sendable {
         }
         do {
             let descriptor = try await creationCoordinator.createWiki(name: name)
+            // Registry event (Phase 3 slice 2): the daemon's wikis.json
+            // mutation answers with a wikid.registry-event.v1 payload. Called
+            // OUTSIDE any queue.sync block (the helper snapshots the sink
+            // table on the queue).
+            deliverRegistryEvent(
+                .created, wikiID: descriptor.id, displayName: descriptor.displayName)
             return try JSONEncoder().encode(descriptor)
         } catch {
             DebugLog.store("wikid: createWiki failed: \(error)")
@@ -1136,7 +1159,11 @@ final class WikiDaemon: @unchecked Sendable {
     /// Synchronous test/Linux compatibility boundary. Production uses
     /// `createWiki(name:) async` with `StoreBootstrap` and child profiles.
     func testFixtureCreateWiki(name: String) -> Data? {
-        queue.sync { () -> Data? in
+        // The registry mutation + its event stay split: the queue.sync block
+        // performs the mutation, the event is delivered AFTER the block
+        // returns (the emit helper snapshots the sink table on the queue —
+        // nesting would deadlock).
+        let created: (data: Data?, descriptor: WikiDescriptor?) = queue.sync { () -> (Data?, WikiDescriptor?) in
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             let displayName = trimmed.isEmpty ? "Untitled Wiki" : trimmed
             let descriptor = WikiDescriptor.make(displayName: displayName)
@@ -1144,7 +1171,7 @@ final class WikiDaemon: @unchecked Sendable {
             // Open + seed the DB (runs the bootstrap ladder — pages, system prompt, search tables)
             let dbURL = databaseURL(forWikiID: descriptor.id)
             do {
-                guard let testFixtureMakeStore else { return nil }
+                guard let testFixtureMakeStore else { return (nil, nil) }
                 let store = try testFixtureMakeStore(dbURL) as? GRDBWikiStore
                 if let store {
                     wireEventBus(on: store, wikiID: descriptor.id)
@@ -1154,7 +1181,7 @@ final class WikiDaemon: @unchecked Sendable {
                 }
             } catch {
                 DebugLog.store("wikid: createWiki failed for \(descriptor.id): \(error)")
-                return nil
+                return (nil, nil)
             }
 
             // Seed a Home page if the store is empty (mirrors WikiRegistryClient.createWiki)
@@ -1185,10 +1212,16 @@ final class WikiDaemon: @unchecked Sendable {
             }
 
             DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })
-            return (DebugLog.trying("JSONEncoder.encode", operation: {
+            let data = DebugLog.trying("JSONEncoder.encode", operation: {
                 try JSONEncoder().encode(registry.descriptor(id: descriptor.id) ?? descriptor)
-            }))
+            })
+            return (data, registry.descriptor(id: descriptor.id) ?? descriptor)
         }
+        if let descriptor = created.descriptor {
+            deliverRegistryEvent(
+                .created, wikiID: descriptor.id, displayName: descriptor.displayName)
+        }
+        return created.data
     }
 
     #if canImport(WikiFSEngine)
@@ -1203,6 +1236,8 @@ final class WikiDaemon: @unchecked Sendable {
             guard let registryPersistence else { return false }
             try removePersistedDescriptor(wikiID, persistence: registryPersistence)
             try deleteDatabaseArtifacts(wikiID: wikiID)
+            // Registry event (Phase 3 slice 2) — outside any queue.sync block.
+            deliverRegistryEvent(.deleted, wikiID: wikiID, displayName: nil)
             return true
         } catch {
             DebugLog.store("wikid: deleteWiki failed for \(wikiID.rawValue): \(error)")
@@ -1212,7 +1247,9 @@ final class WikiDaemon: @unchecked Sendable {
     #endif
 
     func testFixtureDeleteWiki(id wikiID: WikiID) -> Bool {
-        queue.sync { () -> Bool in
+        // Same mutation/event split as testFixtureCreateWiki: the event goes
+        // out AFTER the queue.sync block (no nested queue.sync deadlock).
+        let deleted: Bool = queue.sync { () -> Bool in
             // Close the held store if open
             openStores.removeValue(forKey: wikiID)
             #if os(macOS)
@@ -1234,11 +1271,16 @@ final class WikiDaemon: @unchecked Sendable {
             }
             return true
         }
+        if deleted {
+            deliverRegistryEvent(.deleted, wikiID: wikiID, displayName: nil)
+        }
+        return deleted
     }
 
     func renameWiki(id wikiID: WikiID, name: String) -> Bool {
-        queue.sync { () -> Bool in
-            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Same mutation/event split as the fixture create/delete above.
+        let renamed: Bool = queue.sync { () -> Bool in
             guard !trimmed.isEmpty else { return false }
             switch reconcileRegistry(wikiID) {
             case .missing, .deleted:
@@ -1257,6 +1299,10 @@ final class WikiDaemon: @unchecked Sendable {
             DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })
             return true
         }
+        if renamed {
+            deliverRegistryEvent(.renamed, wikiID: wikiID, displayName: trimmed)
+        }
+        return renamed
     }
 
     func resolveWiki(selector: String) -> Data? {
@@ -1994,6 +2040,30 @@ final class WikiDaemon: @unchecked Sendable {
     /// (handshake phase), so they need the id paired with the proxy.
     func eventSinkProxies() -> [(id: UUID, sink: WikiDaemonEventSink)] {
         queue.sync { eventSinks.map { (id: $0.id, sink: $0.sink) } }
+    }
+
+    // MARK: - Registry events (Phase 3 slice 2)
+
+    /// Deliver one registry-event envelope to every LIVE sink: the daemon's
+    /// `wikis.json` mutations answer with a `wikid.registry-event.v1` payload
+    /// that the app's registry client answers by re-reading the file (its
+    /// read-cache refresh). Delivery rides the store-event coordinator's
+    /// live-phase gating (post-handshake sinks); changes landing before a
+    /// handshake are reconciled by the client's bootstrap read and the reload
+    /// after every lifecycle reply.
+    ///
+    /// MUST be called OUTSIDE any `queue.sync` block — this helper snapshots
+    /// the sink table on the queue itself, and nesting would deadlock.
+    private func deliverRegistryEvent(
+        _ kind: DaemonRegistryEventKind, wikiID: WikiID, displayName: String?
+    ) {
+        #if os(macOS)
+        let proxies = eventSinkProxies()
+        _ = storeEvents.deliverRegistryEvent(
+            DaemonRegistryEvent(
+                kind: kind, wikiID: wikiID.rawValue, displayName: displayName),
+            proxies: proxies)
+        #endif
     }
 
     // MARK: - Store event contract (Phase 2c)

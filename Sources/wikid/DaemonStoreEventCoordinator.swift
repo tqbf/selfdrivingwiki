@@ -203,6 +203,55 @@ final class DaemonStoreEventCoordinator: @unchecked Sendable {
         return wikis[wikiID]?.stampCounter ?? 0
     }
 
+    // MARK: - Registry events (Phase 3 slice 2)
+
+    /// Deliver one registry-event envelope to every LIVE sink. Registry
+    /// events carry no watermark machinery: they are self-validating — the
+    /// client answers one by re-reading the whole `wikis.json` (its cache
+    /// refresh) — so a dropped or duplicated envelope costs one missed or
+    /// idempotent reload, never stale-writes. Registry changes that land
+    /// before a sink's handshake are NOT replayed: the client's bootstrap
+    /// read plus the reload after every lifecycle reply reconcile them.
+    ///
+    /// Callers pass the sink proxies IN (same discipline as ``ingest``: no
+    /// code path under the lock touches the daemon queue).
+    ///
+    /// Returns the number of live deliveries made (diagnostics/tests).
+    @discardableResult
+    func deliverRegistryEvent(
+        _ event: DaemonRegistryEvent,
+        proxies: [(id: UUID, sink: WikiDaemonEventSink)]
+    ) -> Int {
+        let envelope = DaemonRegistryEventEnvelope(event: event)
+        lock.lock()
+        defer { lock.unlock() }
+        var delivered = 0
+        for proxy in proxies where sinkPhases[proxy.id] == .live {
+            deliverRegistry(envelope, to: proxy.sink)
+            delivered += 1
+        }
+        return delivered
+    }
+
+    /// Fire-and-forget registry delivery. MUST hold `lock` (same rationale as
+    /// ``deliver`` — the XPC proxy send never re-enters this lock).
+    private func deliverRegistry(
+        _ envelope: DaemonRegistryEventEnvelope, to sink: WikiDaemonEventSink
+    ) {
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(envelope)
+        } catch {
+            // Encode of this fixed-shape value cannot fail; a failure would
+            // lose exactly one refresh signal, which the client's next reload
+            // covers — but it must be visible.
+            DebugLog.store(
+                "wikid: registry event envelope encode failed: \(error)")
+            return
+        }
+        sink.deliverEvent(data)
+    }
+
     // MARK: - Handshake (executor path)
 
     /// Complete one sink's handshake: snapshot every prepared wiki's

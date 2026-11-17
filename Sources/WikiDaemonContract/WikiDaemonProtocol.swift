@@ -260,14 +260,17 @@ public struct SignedWikiDExtractorProbeReply: Codable, Equatable, Sendable {
 /// connection carries request/reply (the daemon's `WikiDaemonProtocol`) AND
 /// callbacks (the app's `WikiDaemonEventSink`).
 ///
-/// Payload discrimination (Phase 2c): workload payloads are JSON
-/// `QueueEventEnvelope` objects — every one carries a `kind` key from the
+/// Payload discrimination (Phase 2c + Phase 3 slice 2): workload payloads are
+/// JSON `QueueEventEnvelope` objects — every one carries a `kind` key from the
 /// closed queue/chat raw-value set. Store change payloads are JSON
 /// `DaemonStoreEventEnvelope` objects — they carry the `wire` marker
-/// (`wikid.store-event.v1`) and never a `kind` key, so the two grammars are
-/// disjoint in both directions and a decoder dispatches deterministically
-/// (marker check, or queue-envelope-first try order). See
-/// `DaemonStoreEventsWire.swift`.
+/// (`wikid.store-event.v1`) and never a top-level `kind` key. Registry change
+/// payloads (Phase 3 slice 2) are JSON `DaemonRegistryEventEnvelope` objects
+/// (`wikid.registry-event.v1`, one per daemon-side `wikis.json` mutation).
+/// The three grammars are pairwise two-way disjoint by required keys, so a
+/// decoder dispatches deterministically (marker check, or queue-envelope-first
+/// try order). See `DaemonStoreEventsWire.swift` and
+/// `DaemonRegistryEventsWire.swift`.
 ///
 /// See `plans/daemon-workloads.md` §3 + §5.2 and
 /// `plans/daemon-only-access.md` Phase 2c.

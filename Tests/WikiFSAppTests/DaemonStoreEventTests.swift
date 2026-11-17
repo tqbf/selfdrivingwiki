@@ -112,16 +112,19 @@ struct DaemonStoreEventTests {
     }
 
     /// Non-blocking completion poll (AGENTS.md #1051): waits until the sink
-    /// holds at least `count` payloads, with a diagnosed timeout.
+    /// holds at least `count` STORE-grammar payloads, with a diagnosed
+    /// timeout. Phase 3 slice 2: the firehose also carries registry-event
+    /// envelopes, so the count is over the store grammar (what every caller
+    /// of this helper asserts on), not the raw payload array.
     private func waitForDeliveries(
         _ sink: RecordingSink, count: Int, timeout: Duration = .seconds(10)
     ) async throws -> [Data] {
         let deadline = ContinuousClock.now + timeout
-        while sink.snapshot().count < count {
+        while (try? decodedEnvelopes(sink.snapshot()))?.count ?? 0 < count {
             if ContinuousClock.now >= deadline {
                 let have = sink.snapshot().count
                 Issue.record(
-                    "timed out waiting for \(count) deliveries; have \(have)")
+                    "timed out waiting for \(count) deliveries; have \(have) raw")
                 break
             }
             try await Task.sleep(for: .milliseconds(20))
@@ -131,8 +134,18 @@ struct DaemonStoreEventTests {
 
     private func decodedEnvelopes(_ payloads: [Data]) throws
         -> [DaemonStoreEventEnvelope] {
-        try payloads.map {
-            try JSONDecoder().decode(DaemonStoreEventEnvelope.self, from: $0)
+        // Phase 3 slice 2: the firehose now also carries
+        // `wikid.registry-event.v1` envelopes (one per fixture-daemon create).
+        // The store decoder dispatches by grammar — a payload that decodes as
+        // a store envelope with the store marker is a store event; everything
+        // else belongs to another grammar's consumer. (The filter is
+        // non-throwing; the `throws` signature is kept for the callers.)
+        payloads.compactMap { data -> DaemonStoreEventEnvelope? in
+            guard let envelope = try? JSONDecoder().decode(
+                DaemonStoreEventEnvelope.self, from: data),
+                envelope.wire == DaemonStoreEventWire.marker
+            else { return nil }
+            return envelope
         }
     }
 
@@ -431,6 +444,63 @@ struct DaemonStoreEventTests {
             QueueEventEnvelope(kind: .enqueued))
         #expect(throws: DecodingError.self) {
             try JSONDecoder().decode(DaemonStoreEventEnvelope.self, from: queueJSON)
+        }
+
+        // Phase 3 slice 2: the registry grammar joins the firehose — the
+        // store envelope must also NOT be a registry envelope (its inner
+        // event has no `kind` field), and the queue envelope still misses it.
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(DaemonRegistryEventEnvelope.self, from: data)
+        }
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(DaemonRegistryEventEnvelope.self, from: queueJSON)
+        }
+    }
+
+    /// The `wikid.registry-event.v1` envelope round-trips and stays pairwise
+    /// two-way disjoint against BOTH other firehose grammars: a registry
+    /// payload fails the queue decode (no top-level `kind`) AND the store
+    /// decode (the inner event lacks `epoch`/`sequence`/`changeToken`/
+    /// `batch`); queue and store payloads fail the registry decode. Three
+    /// deterministically dispatchable grammars on one channel.
+    @Test func registryEventEnvelopeRoundTripsAndStaysDisjointFromQueueAndStore()
+        throws {
+        let event = DaemonRegistryEvent(
+            kind: .renamed, wikiID: "01JWIKI0000000000000000CD",
+            displayName: "Renamed Wiki")
+        let envelope = DaemonRegistryEventEnvelope(event: event)
+
+        let data = try JSONEncoder().encode(envelope)
+        let decoded = try JSONDecoder().decode(
+            DaemonRegistryEventEnvelope.self, from: data)
+        #expect(decoded == envelope)
+        #expect(decoded.wire == DaemonRegistryEventWire.marker)
+        #expect(decoded.event.kind == .renamed)
+        #expect(decoded.event.wikiID == "01JWIKI0000000000000000CD")
+        #expect(decoded.event.displayName == "Renamed Wiki")
+
+        // vs queue: no top-level `kind` on the registry envelope; the queue
+        // envelope has no `wire`.
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(QueueEventEnvelope.self, from: data)
+        }
+        let queueJSON = try JSONEncoder().encode(
+            QueueEventEnvelope(kind: .enqueued))
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(DaemonRegistryEventEnvelope.self, from: queueJSON)
+        }
+
+        // vs store: `DaemonStoreEvent` requires `epoch` (missing on a
+        // registry event); `DaemonRegistryEvent` requires `kind` (missing on
+        // a store event). The markers differ too.
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(DaemonStoreEventEnvelope.self, from: data)
+        }
+        let storeJSON = try JSONEncoder().encode(DaemonStoreEventEnvelope(event: DaemonStoreEvent(
+            epoch: 7, wikiID: "01JWIKI0000000000000000CD", sequence: 1,
+            changeToken: "1:2:3", batch: [])))
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(DaemonRegistryEventEnvelope.self, from: storeJSON)
         }
     }
 }

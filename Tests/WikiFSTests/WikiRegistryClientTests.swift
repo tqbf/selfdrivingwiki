@@ -167,8 +167,9 @@ struct WikiRegistryClientTests {
         let pageA = try await storeA.createPage(title: "Only-In-A")
         try await storeA.updatePage(id: pageA.id, title: "Only-In-A", body: "A")
 
-        // Create wiki B.
-        let b = await registry.createWiki(displayName: "Wiki B")
+        // Create wiki B. (`createWiki` returns `nil` only when the mediated
+        // create failed — unreachable in this local-mode suite, asserted.)
+        let b = try #require(await registry.createWiki(displayName: "Wiki B"))
         #expect(registry.activeWikiID == b.id)
         #expect(b.id != first)
 
@@ -188,7 +189,10 @@ struct WikiRegistryClientTests {
         let registry = WikiRegistryClient(containerDirectory: dir)
         registry.bootstrap()
         let a = registry.activeWikiID!
-        let b = await registry.createWiki(displayName: "B")
+        guard let b = await registry.createWiki(displayName: "B") else {
+            Issue.record("local-mode createWiki must not return nil")
+            return
+        }
 
         let fm = FileManager.default
         #expect(fm.fileExists(atPath: dir.appendingPathComponent("\(a.rawValue).sqlite").path))
@@ -203,7 +207,10 @@ struct WikiRegistryClientTests {
         let registry = WikiRegistryClient(containerDirectory: dir)
         registry.bootstrap()
         _ = registry.activeWikiID!
-        let b = await registry.createWiki(displayName: "B")
+        guard let b = await registry.createWiki(displayName: "B") else {
+            Issue.record("local-mode createWiki must not return nil")
+            return
+        }
         let bPath = dir.appendingPathComponent("\(b.id.rawValue).sqlite").path
         #expect(FileManager.default.fileExists(atPath: bPath))
 
