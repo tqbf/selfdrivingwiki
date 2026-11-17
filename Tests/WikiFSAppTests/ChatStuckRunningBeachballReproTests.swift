@@ -196,8 +196,7 @@ struct ChatStuckRunningBeachballReproTests {
             descriptor: descriptor,
             containerDirectory: directory,
             extractionCoordinator: extractionCoordinator,
-            queueEngine: try makeStubQueueEngine(),
-            extractionProvider: ChatStuckRunningStubExtractionProvider()
+            queueEngine: try makeStubQueueEngine()
         )
         let daemon = StubChatDaemonCommands()
         let coordinator = ChatDaemonCoordinator(

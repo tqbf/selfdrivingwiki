@@ -363,8 +363,7 @@ struct WikiAppWebViewTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try makePageDetailQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try makePageDetailQueueEngine())
         session.store.openTab(.page(page.id))
         let rendererLayout = try RendererPackageStoreLayout(
             appGroupContainerRoot: dir.appendingPathComponent("renderer-machine", isDirectory: true))
@@ -496,8 +495,7 @@ private func makePageDetailSession() throws -> ProfileWikiSession {
         descriptor: descriptor,
         containerDirectory: dir,
         extractionCoordinator: coordinator,
-        queueEngine: try makePageDetailQueueEngine(),
-        extractionProvider: StubExtractionProvider())
+        queueEngine: try makePageDetailQueueEngine())
 }
 
 @MainActor

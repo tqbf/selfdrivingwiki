@@ -532,11 +532,18 @@ public final class WikiStoreModel {
     /// convert at import comes from package data, not host branches: the
     /// wiring derives the kinds set from the active registration claims
     /// minus the host catalog's built-in routes (package-only kinds), and
-    /// the provider resolves the typed extractor for whichever kind that
-    /// data selects. The model never names a kind.
+    /// the claimed kind selects the conversion. The model never names a
+    /// kind — and never converts one: the claimed source is enqueued as a
+    /// durable format job through the session's queue-engine client, the
+    /// daemon executes the conversion, and progress/status arrive over the
+    /// queue event stream.
     @ObservationIgnored public var importAutoExtractionKinds: Set<ExtractorKind> = []
-    @ObservationIgnored public var importExtractorProvider:
-        (@Sendable (ExtractorKind) async -> PreparedImportExtractor?)?
+    /// The import format-job enqueue seam, set at session boot from the
+    /// session's queue-engine client (the hot-swap daemon client). The
+    /// enqueue is durable — `queue.sqlite` — so a conversion survives app
+    /// closure; `nil` for hosts without a queue (plain fixtures).
+    @ObservationIgnored public var enqueueImportFormatJob:
+        (@Sendable (SourceID) async throws -> Void)?
     /// Sources whose import-time auto-extraction is currently running.
     /// Observable so the source detail can show the same "Extracting…"
     /// state the queue tracker drives, and disable the manual Extract
@@ -2909,26 +2916,6 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Technique tag stamped on an HTML source's extracted-markdown version
-    /// (`appendDerivedMarkdown(producer:)`). Mirrors the PDF extraction
-    /// technique tags (e.g. `"pdf2md"`) so the "Converted" provenance row
-    /// surfaces the producer in the alternatives UI.
-    private static let htmlToMarkdownTechnique = "html-to-markdown"
-
-    /// Technique tag stamped on an HTML source's defuddle-extraction version
-    /// (issue #799 PR2: the Extract button / Re-extract menu picks the
-    /// defuddle backend). Mirrors the PDF extraction technique tags so the
-    /// provenance chip surfaces the producer. Matches the technique
-    /// `FormatMaterializer.enrich` returns for a successful defuddle run.
-    private static let defuddleTechnique = "defuddle"
-
-    /// Technique tag stamped on a DOCX source's extracted-markdown version.
-    /// DOCX extraction is package-only, so production runs always record the
-    /// `.installedPackage` producer; this tag is the `note`/technique text
-    /// alongside it and the fallback producer tag for an injected test double
-    /// that carries no package provenance.
-    private static let docxToMarkdownTechnique = "docx-to-markdown"
-
     /// Best-effort: if the materialized source is HTML (has an extracted-markdown
     /// sidecar from `FormatMaterializer.dispatch`), run the defuddle extractor to
     /// obtain site-specific markdown + metadata. On any failure, keep the
@@ -2943,11 +2930,8 @@ public final class WikiStoreModel {
     /// `addURLViaWebsite` no-images branch, `ingestFromZotero`) NO LONGER call
     /// this — non-snapshot HTML stops auto-extracting at ingest; the user
     /// triggers extraction via the Extract button (PR2). Retained as a private
-    /// building block for any future ingest-side defuddle enrichment and to
-    /// preserve the comment chain to the active trigger path
-    /// (`extractHtml(for:backend:)` + its `extractHtml(html:backend:using:)`
-    /// static helper below). The active HTML extraction dispatch is
-    /// `extractHtml(html:backend:using:)`, NOT this method.
+    /// building block for any future ingest-side defuddle enrichment. HTML
+    /// conversion itself is the daemon queue's format route (P4.3).
     private func enrichWithDefuddle(_ m: MaterializedSource) async -> MaterializedSource {
         // Only HTML sources have a non-nil extractedMarkdown sidecar (issue #599
         // two-layer model). Non-HTML sources skip enrichment entirely.
@@ -3523,62 +3507,13 @@ public final class WikiStoreModel {
         return pageSummary
     }
 
-    // MARK: - Source refresh (Phase 3b)
+    // MARK: - Source refresh (Phase 3b → P4.3)
 
-    /// Refresh a source: re-fetch it via its provider (reconstructed from the
-    /// stored origin), appending a new version instead of overwriting. Website
-    /// sources append a content version; podcast (byteless) sources append a
-    /// derived markdown version. Import-only sources (local-file, Zotero,
-    /// folder) throw `.notRefreshable`. Materialization runs off-main (the
-    /// provider's network fetch); the store write happens HERE on the main
-    /// actor, exactly like `addURL`.
-    ///
-    /// Returns a human-readable description for UI surfacing.
-    @discardableResult
-    public func refreshSource(
-        _ id: SourceID,
-        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
-    ) async throws -> String {
-        let service = SourceRefreshService(fetcher: fetcher)
-        return try await performRefresh(id: id, service: service)
-    }
-
-    /// Shared refresh body: materialize off-main, append the version on-main,
-    /// reload. Split out so the `#if PODCAST_TRANSCRIPTS` gated inits don't
-    /// duplicate the store-write logic.
-    private func performRefresh(
-        id: SourceID, service: SourceRefreshService
-    ) async throws -> String {
-        guard let origin = try await store.sourceOrigin(sourceID: id) else {
-            throw SourceRefreshService.RefreshError.notRefreshable("unknown")
-        }
-        // Phase 4 refresh guard (D3): a snapshot source with image siblings
-        // cannot be refreshed by the single-source path — a new activity would
-        // orphan its images (the resolver joins on the active activity). Guard
-        // BEFORE materialize so no version is appended. Snapshot-aware refresh
-        // (re-snapshotting images) is a named follow-on.
-        if try await store.hasImageSiblings(sourceID: id) {
-            throw SourceRefreshService.RefreshError.snapshotWithImages
-        }
-        let material = try await service.materialize(origin: origin)
-        switch material {
-        case .contentVersion(let data, let detectionHints, let prov):
-            _ = try await store.appendContentVersion(
-                sourceID: id,
-                data: data,
-                detectionHints: detectionHints,
-                provenance: prov)
-        case .derivedMarkdown(let content):
-            try await store.appendDerivedMarkdown(
-                sourceID: id, content: content, origin: .transcript,
-                producer: .tool(.transcript), providerID: nil, modelID: nil,
-                toolVersion: nil, sourceVersionID: nil, note: nil)
-        }
-        // No manual reload — the bus fires reloadFromStore() async after the
-        // version append.
-        await refreshProjectionsAfterOwnWrite()
-        return "Refreshed \(origin.displayLabel) source."
-    }
+    /// The refresh WRITE no longer lives here: the daemon re-fetches the
+    /// source's recorded URL (the `.refreshSource` workload intent) and
+    /// appends the content version daemon-side; the app's runRefresh
+    /// enqueues the durable job and projects status over the queue events.
+    /// `isSourceRefreshable(for:)` below stays the client-side gate.
 
     /// Synchronous ingest seam used by tests/verifiers (no drag gesture). Stores
     /// the bytes, rebuilds the list, and signals the daemon.
@@ -4321,143 +4256,22 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Extract markdown from an HTML source's verbatim bytes using the chosen
-    /// backend (issue #799 PR2). Inline — does NOT route through the queue
-    /// engine (the queue is PDF-coupled via `ExtractionResolution.pdfData` /
-    /// `convert(pdfData:)` / `seedPdfMarkdown`; generalizing it is a deferred
-    /// sub-project per the parent plan's "Out of scope" section). The write
-    /// path mirrors what `enrichWithDefuddle` → `appendExtractedMarkdown`
-    /// USED to do at ingest time pre-PR3: reads source bytes, runs the chosen
-    /// extractor, writes the result through `appendDerivedMarkdown` with
-    /// the matching technique tag. Post-PR3 this is the CANONICAL way to
-    /// extract HTML — non-snapshot HTML sources no longer auto-extract at
-    /// ingest, so a fresh HTML source has zero `source_markdown_versions`
-    /// rows until the user clicks Extract (which routes here).
-    ///
-    /// `appendDerivedMarkdown` always appends a new version — the FIRST
-    /// version becomes HEAD by the default-active rule; subsequent calls
-    /// append coexisting alternatives (no clobber). So the initial Extract
-    /// and a later Re-extract with a different backend both flow through
-    /// this method — provenance is differentiated by the `technique` column
-    /// (`"defuddle"` vs `"html-to-markdown"`) and the version id, surfaced
-    /// in the alternatives UI.
-    ///
-    /// The process extraction facade resolves the selected adapter, and that
-    /// adapter runs alone. A failed selection returns nil; nothing substitutes
-    /// another extractor. Without an injected adapter, only an explicit
-    /// `.tagBased` request runs the built-in tag extractor.
-    ///
-    /// - Returns: the new `SourceMarkdownVersion`, or nil if the source's
-    ///   bytes couldn't be read, the extractor returned empty markdown, or
-    ///   the store write threw.
-    @discardableResult
-    public func extractHtml(
-        for sourceID: SourceID,
-        backend: HtmlExtractionBackend,
-        extractor: (any HtmlMarkdownExtractor)? = nil
-    ) async -> SourceMarkdownVersion? {
-        guard let data = await DebugLog.trying("sourceContent", operation: { try await store.sourceContent(id: sourceID) }) else {
-            DebugLog.store("WikiStoreModel.extractHtml: source bytes unreadable (source=\(sourceID.rawValue))")
-            return nil
-        }
-        let html = String(data: data, encoding: .utf8)
-            ?? String(decoding: data, as: UTF8.self)
-        guard !html.isEmpty else {
-            DebugLog.store("WikiStoreModel.extractHtml: source HTML is empty (source=\(sourceID.rawValue))")
-            return nil
-        }
-        let (markdown, technique) = await Self.extractHtml(
-            html: html, backend: backend, using: extractor)
-        guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            DebugLog.store("WikiStoreModel.extractHtml: extractor returned empty markdown (source=\(sourceID.rawValue), backend=\(backend.rawValue))")
-            return nil
-        }
-        let package = extractor.flatMap { value -> ExtractionInstalledPackageProducer? in
-            guard let processExtractor = value as? any ProcessPackageProvenanceProviding else { return nil }
-            return ExtractionInstalledPackageProducer(
-                revision: processExtractor.packageProvenance.revision,
-                registrationID: processExtractor.packageProvenance.registrationID,
-                protocolRevision: processExtractor.packageProvenance.protocolRevision,
-                reportedMetadata: processExtractor.packageProvenance.reportedMetadata)
-        }
-        do {
-            return try await store.appendDerivedMarkdown(
-                sourceID: sourceID, content: markdown, origin: .extraction,
-                producer: package.map(ExtractionProducer.installedPackage) ?? .tool(.html),
-                providerID: nil, modelID: nil, toolVersion: nil,
-                sourceVersionID: nil, note: "extract via \(backend.displayName): \(technique)")
-        } catch {
-            // #475/#492: never silently swallow — extraction output is
-            // user-triggered (a button tap or Re-extract menu click), so a
-            // swallowed throw would silently lose the result with no trace.
-            DebugLog.store("WikiStoreModel.extractHtml appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
-            return nil
-        }
-    }
-
-    /// DOCX extraction trigger — the package-only sibling of
-    /// `extractHtml(for:backend:extractor:)`. Mirrors its shape (read source
-    /// bytes → run the injected adapter → append a processed-markdown
-    /// version) without refactoring the HTML path.
-    ///
-    /// There is no backend parameter and no built-in fallback: DOCX runs
-    /// exclusively through the reviewed docx2md package adapter the caller
-    /// resolved via `ExtractionCoordinator.prepareDOCX()`. A failed package
-    /// preparation never reaches this method (preparation throws at the
-    /// coordinator), and an extractor that returns empty markdown returns nil
-    /// here — nothing substitutes another extractor.
-    ///
-    /// The extractor contract requires exact installed-package provenance.
-    /// The write always records the additive `.installedPackage` producer.
-    ///
-    /// - Returns: the new `SourceMarkdownVersion`, or nil if the source's
-    ///   bytes couldn't be read, the extractor returned empty markdown, or
-    ///   the store write threw.
-    @discardableResult
-    public func extractDocx(
-        for sourceID: SourceID,
-        extractor: any DocxMarkdownExtractor
-    ) async -> SourceMarkdownVersion? {
-        guard let data = await DebugLog.trying("sourceContent", operation: { try await store.sourceContent(id: sourceID) }) else {
-            DebugLog.store("WikiStoreModel.extractDocx: source bytes unreadable (source=\(sourceID.rawValue))")
-            return nil
-        }
-        guard !data.isEmpty else {
-            DebugLog.store("WikiStoreModel.extractDocx: source is empty (source=\(sourceID.rawValue))")
-            return nil
-        }
-        guard let result = await extractor.extract(docx: data),
-              !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            DebugLog.store("WikiStoreModel.extractDocx: extractor returned empty markdown (source=\(sourceID.rawValue))")
-            return nil
-        }
-        do {
-            return try await store.appendDerivedMarkdown(
-                sourceID: sourceID, content: result.markdown, origin: .extraction,
-                producer: .installedPackage(extractor.packageProvenance),
-                providerID: nil, modelID: nil, toolVersion: nil,
-                sourceVersionID: nil, note: "extract via \(Self.docxToMarkdownTechnique)")
-        } catch {
-            // #475/#492: never silently swallow — see the HTML sibling above.
-            DebugLog.store("WikiStoreModel.extractDocx appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
-            return nil
-        }
-    }
-
     /// Registration-driven auto-extraction: when an active package
     /// registration's claims recognize this source at import (an unambiguous
     /// claim on its stored MIME type or filename extension) and the wiring's
-    /// derived kinds set includes the claimed kind, the conversion runs
-    /// immediately after the source commits. Recognition and selection both
-    /// come from the registration data; this gate names no kind. The gate is
-    /// synchronous and cheap; the work is a detached main-actor task so the
-    /// drop itself never blocks on a conversion — best-effort, with the
-    /// manual Extract button as the retry when preparation fails.
+    /// derived kinds set includes the claimed kind, the conversion is
+    /// ENQUEUED as a durable daemon format job immediately after the source
+    /// commits. Recognition and selection both come from the registration
+    /// data; this gate names no kind. The gate is synchronous and cheap; the
+    /// enqueue is a detached main-actor task so the drop itself never blocks
+    /// on it — best-effort at import, with the manual Extract button as the
+    /// retry when the enqueue fails (a daemon down leaves the source
+    /// verbatim, never a silent local conversion).
     ///
     /// Public as the import-gate test seam (the fire-and-forget task itself
     /// cannot be awaited from a test).
     public func autoExtractIfRegistered(_ summary: SourceSummary) {
-        guard importExtractorProvider != nil else { return }
+        guard enqueueImportFormatJob != nil else { return }
         let claimedKind = registeredExtractionInputs
             .registeredMIME(forNormalizedMIME: summary.mimeType ?? "")?.kind
             ?? registeredExtractionInputs
@@ -4467,66 +4281,22 @@ public final class WikiStoreModel {
         let sourceID = summary.id
         // Mark in flight synchronously with the commit so the just-opened
         // source view shows the converting state immediately, not only
-        // after the detached task starts.
+        // after the detached task starts. The marker clears once the enqueue
+        // is acknowledged — from then on the job is durably queued and the
+        // queue activity tracker owns the converting state.
         importExtractingSourceIDs.insert(sourceID)
+        let enqueue = enqueueImportFormatJob
         Task { @MainActor in
-            await self.runImportExtraction(sourceID: sourceID, kind: claimedKind)
-        }
-    }
-
-    /// The auto-extraction work behind the gate. Public as the test seam
-    /// (the fire-and-forget task itself cannot be awaited from a test).
-    ///
-    /// Import-time extraction is deliberately log-only: the manual Extract
-    /// button is the retry that surfaces failures to the user. The readiness
-    /// gate still skips a missing runtime with one clear log line instead of
-    /// letting the managed spawn fail.
-    public func runImportExtraction(sourceID: SourceID, kind: ExtractorKind) async {
-        // Every exit — including the early returns below — clears the
-        // in-flight marker, so a skipped or failed import extraction always
-        // restores the Extract button.
-        defer { importExtractingSourceIDs.remove(sourceID) }
-        guard let provider = importExtractorProvider,
-              let prepared = await provider(kind) else {
-            DebugLog.extraction(
-                "Import auto-extraction skipped: no active extractor for kind \(kind.rawValue) (source=\(sourceID.rawValue))")
-            return
-        }
-        switch prepared {
-        // typed-kind-dispatch: import adapter — the single typed dispatch
-        // over the prepared extractor; policy never reaches this switch.
-        case .docx(let extractor):
-            let readiness = await extractor.readiness()
-            guard readiness.isReady else {
+            do {
+                try await enqueue?(sourceID)
+            } catch {
+                // Import-time extraction is deliberately log-only: the
+                // manual Extract button is the retry that surfaces failures
+                // to the user (a daemon down leaves the source verbatim).
                 DebugLog.extraction(
-                    "Import auto-extraction skipped: not ready — \(String(describing: readiness)) (source=\(sourceID.rawValue))")
-                return
+                    "Import auto-extraction enqueue failed (source=\(sourceID.rawValue), kind=\(claimedKind.rawValue)): \(error)")
             }
-            _ = await extractDocx(for: sourceID, extractor: extractor)
-        case .html(let extractor):
-            // HtmlMarkdownExtractor has no readiness probe: preparation
-            // resolves the adapter or throws, and a runtime failure (bun
-            // missing, SPA page with no article body) surfaces as an empty
-            // result `extractHtml` already treats as skip-and-log. The
-            // source then keeps landing verbatim with the Extract button
-            // available — the issue #799 manual-retry contract.
-            let version = await extractHtml(for: sourceID, backend: .defuddle, extractor: extractor)
-            // Clear the in-flight marker as soon as the extraction version
-            // itself has landed: the marker means "the conversion is
-            // running", and the nomination below is activation bookkeeping
-            // the Extract button need not stay disabled for. Observers that
-            // see the new head row therefore also see the button re-enabled
-            // in the same window. The function-scope defer below is then a
-            // no-op for this path (Set removal is idempotent).
             importExtractingSourceIDs.remove(sourceID)
-            // Snapshot ingests land with the image-rewritten materializer
-            // sidecar as the default head; nominate the package version so
-            // the route selection, not the ingest fallback, is the active
-            // readable text. On sidecar-less paths the import version is
-            // already the head and this is a no-op.
-            if let version {
-                await setActiveMarkdown(for: sourceID, to: version.id)
-            }
         }
     }
 
@@ -4568,37 +4338,6 @@ public final class WikiStoreModel {
              .localFile, .website, .zotero, .markdownFolder, .legacyImport:
             throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
         }
-    }
-
-    /// Generic RSS-feed podcast arm of the unified dispatch (podcast-generalize).
-    /// Pure dispatch from the caller's resolved extractor to a concrete
-    /// extractor call. Returns `(markdown, techniqueTag)` so the caller can
-    /// stamp the right technique on the processed-markdown version row
-    /// (the technique is how the alternatives UI surfaces the producer).
-    /// The caller injects exactly the adapter its route selection resolved,
-    /// and that adapter runs alone. A failed selected adapter returns empty
-    /// markdown for the caller to treat as a failure; this method never
-    /// substitutes another extractor. Without an injected adapter, only an
-    /// explicit `.tagBased` request runs the built-in tag extractor.
-    private static func extractHtml(
-        html: String,
-        backend: HtmlExtractionBackend,
-        using injectedExtractor: (any HtmlMarkdownExtractor)?
-    ) async -> (markdown: String, technique: String) {
-        let selectedTechnique = backend == .defuddle ? Self.defuddleTechnique : Self.htmlToMarkdownTechnique
-        if let injected = injectedExtractor {
-            guard let result = await injected.extract(html: html),
-                  !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return ("", selectedTechnique)
-            }
-            return (result.markdown, selectedTechnique)
-        }
-        guard backend == .tagBased else { return ("", selectedTechnique) }
-        if let result = await TagBasedHtmlExtractor().extract(html: html),
-           !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return (result.markdown, Self.htmlToMarkdownTechnique)
-        }
-        return ("", Self.htmlToMarkdownTechnique)
     }
 
     /// Build the byteless-source filename for an Apple Podcasts episode

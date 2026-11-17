@@ -93,6 +93,11 @@ final class WikiDaemon: @unchecked Sendable {
     /// injects a catalog double so a socket round trip can drive a REAL
     /// sync→enqueue without an installed package. Nil = production.
     let testExtractorCatalog: (any ExtractorPackageCatalogReading)?
+    /// Test-only workload invocation recording (P4 gate): fires inside the
+    /// daemon's own `DaemonQueueExtractionProvider` so a fixture-daemon test
+    /// can prove the provider executed IN THE DAEMON COMPOSITION. `nil` in
+    /// every production construction site.
+    let testWorkloadInvocationHook: (@Sendable (String, WikiID, SourceID) -> Void)?
     private let daemonChatDiagnostics = DaemonChatDiagnostics()
     #if canImport(WikiFSEngine)
     /// Production owns provider, extraction, and per-wiki store lifetimes here.
@@ -459,7 +464,8 @@ final class WikiDaemon: @unchecked Sendable {
         containerDirectory: URL,
         testFixtureMakeStore: @escaping (URL) throws -> WikiStore,
         extractionAssembly: ExtractionCompositionOwner.AssemblyFactory? = nil,
-        testExtractorCatalog: (any ExtractorPackageCatalogReading)? = nil
+        testExtractorCatalog: (any ExtractorPackageCatalogReading)? = nil,
+        testWorkloadInvocationHook: (@Sendable (String, WikiID, SourceID) -> Void)? = nil
     ) {
         let claimedEpoch = Self.epochCounter.claimNext()
         self.daemonEpoch = claimedEpoch
@@ -470,6 +476,7 @@ final class WikiDaemon: @unchecked Sendable {
         self.registryPersistence = nil
         self.testFixtureMakeStore = testFixtureMakeStore
         self.testExtractorCatalog = testExtractorCatalog
+        self.testWorkloadInvocationHook = testWorkloadInvocationHook
         self.registry = WikiRegistry.load(from: containerDirectory)
         // P3.3: the legacy v0 import is daemon-owned — one shot at daemon
         // start when the registry view is empty (the app's first-run branch
@@ -542,6 +549,7 @@ final class WikiDaemon: @unchecked Sendable {
         self.registryPersistence = registryPersistence
         self.testFixtureMakeStore = nil
         self.testExtractorCatalog = nil
+        self.testWorkloadInvocationHook = nil
         self.registry = WikiRegistry.load(from: containerDirectory)
         // P3.3: same daemon-owned legacy v0 import as the fixture init —
         // one shot at daemon start, empty-registry gated, pre-serving.
@@ -2179,7 +2187,9 @@ final class WikiDaemon: @unchecked Sendable {
                 return try await self.performQueueOperation { engine in
                     try await engine.enqueue(request)
                 }.value
-            })
+            },
+            // P4 gate: test-only invocation recording (nil in production).
+            recordWorkloadInvocation: self.testWorkloadInvocationHook)
         let dir = containerDirectory
         let ingestionProvider = DaemonQueueIngestionProvider(
             containerDirectory: dir,

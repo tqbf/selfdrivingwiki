@@ -63,7 +63,6 @@ struct ClientLocalOpenBoundaryTests {
             descriptor: descriptor,
             containerDirectory: container,
             catalog: catalog ?? Self.recordingAppCatalog(),
-            extractionProvider: ProfileBootFixture.extractionProvider(),
             searchServices: UnavailableSearchServices())
         return (session, owner)
     }
@@ -152,23 +151,18 @@ struct ClientLocalOpenBoundaryTests {
         #expect(recorder.count(.wikiReadOnlyStore) == 1)
         #expect(recorder.labels(.wikiReadOnlyStore) == [databasePath])
 
-        // Queue store: the local runtime factory opens the queue database
-        // through the seam when the harness assembles one with a recording
-        // factory (the app's P4 removal target).
+        // Queue store: the local runtime factory is retired (P4.3), so the
+        // positive control drives the queue-store recording closure DIRECTLY
+        // — the same shape as the Tantivy control below. A disconnected seam
+        // cannot fake a recorded label.
         let queueURL = container.appendingPathComponent("queue.sqlite")
-        let queueFactory = QueueRuntimeFactory(
-            databaseURL: queueURL,
-            extractionProvider: ProfileBootFixture.extractionProvider(),
-            makeIngestionProvider: { _ in HarnessIngestionProvider() },
-            makeQueueStore: { url in
-                try WikiOpenSeamRecorder.shared.recording(
-                    seam: .queueStore,
-                    label: url.path) {
-                    try QueueStore(databaseURL: url)
-                }
-            })
-        let queueHandle = try await queueFactory.assemble()
+        let recordedQueueStore = try WikiOpenSeamRecorder.shared.recording(
+            seam: .queueStore,
+            label: queueURL.path) {
+            try QueueStore(databaseURL: queueURL)
+        }
         #expect(recorder.labels(.queueStore).contains(queueURL.path))
+        recordedQueueStore.close()
 
         // Tantivy writer: the app's P0 local index assembly is a DEAD PATH at
         // session boot (sessions consume the daemon search facade), so the
@@ -198,8 +192,6 @@ struct ClientLocalOpenBoundaryTests {
         let lease = try await registry.assemble(runtime)
         #expect(recorder.labels(.tantivyIndexerWriter).contains(identity.indexDirectory.path))
         await lease.dispose()
-
-        _ = try await queueHandle.dispose()
     }
 
     // MARK: - P0 column: real entry points across multiple sessions/wikis
@@ -381,23 +373,17 @@ struct ClientLocalOpenBoundaryTests {
         #expect(recorder.count(.wikiReadOnlyStore) == 1)
         #expect(recorder.labels(.wikiReadOnlyStore) == [databasePath])
 
-        // Queue store: the app no longer assembles the local queue runtime
-        // (P4 slice 1), so this direct drive is only the seam-connectivity
-        // positive control — the same shape as the P0 control — kept until
-        // the factory itself retires with the P4.3 workload migration.
+        // Queue store: the app never opens queue.sqlite (P4). This direct
+        // drive is only the seam-connectivity positive control — the same
+        // shape as the Tantivy control below — proving the recording
+        // closure still wraps the queue store constructor.
         let queueURL = container.appendingPathComponent("queue.sqlite")
-        let queueFactory = QueueRuntimeFactory(
-            databaseURL: queueURL,
-            extractionProvider: ProfileBootFixture.extractionProvider(),
-            makeIngestionProvider: { _ in HarnessIngestionProvider() },
-            makeQueueStore: { url in
-                try WikiOpenSeamRecorder.shared.recording(
-                    seam: .queueStore,
-                    label: url.path) {
-                    try QueueStore(databaseURL: url)
-                }
-            })
-        let queueHandle = try await queueFactory.assemble()
+        let recordedQueueStore = try WikiOpenSeamRecorder.shared.recording(
+            seam: .queueStore,
+            label: queueURL.path) {
+            try QueueStore(databaseURL: queueURL)
+        }
+        _ = recordedQueueStore
         #expect(recorder.labels(.queueStore).contains(queueURL.path))
 
         // Tantivy writer: still waived at P3 (the local index assembly
@@ -428,7 +414,6 @@ struct ClientLocalOpenBoundaryTests {
         #expect(recorder.labels(.tantivyIndexerWriter)
             .contains(identity.indexDirectory.path))
         await lease.dispose()
-        _ = try await queueHandle.dispose()
 
         // The headline column, restated: nothing on the remote path ever
         // recorded a client-side wiki-store open.
@@ -478,7 +463,6 @@ struct ClientLocalOpenBoundaryTests {
                     lastUsedAt: timestamp),
                 containerDirectory: container,
                 catalog: failingCatalog,
-                extractionProvider: ProfileBootFixture.extractionProvider(),
                 searchServices: UnavailableSearchServices())
             Issue.record("session boot must surface the seamed store-open failure")
         } catch {

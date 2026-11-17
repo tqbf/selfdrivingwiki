@@ -35,7 +35,6 @@ public protocol WikiSessionProtocol: AnyObject, Observable, Sendable {
     var agentLauncher: AgentLauncher { get }
     var extractionCoordinator: ExtractionCoordinator { get }
     var queueEngine: any QueueEngineClient { get }
-    var extractionProvider: any QueueExtractionProvider { get }
     var generationGate: GenerationGate { get }
     var searchServices: any SearchServices { get }
     var pendingBlobVacuum: BlobVacuumReport? { get set }
@@ -99,11 +98,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     /// from in-process `QueueEngine` to an `XPCQueueEngineProxy` without
     /// rewriting call sites. See `plans/daemon-workloads.md` Phase 0 §4.
     public let queueEngine: any QueueEngineClient
-
-    /// Shared, app-wide extraction provider. The app-layer bridge from the
-    /// headless queue engine to the `@MainActor` `ExtractionCoordinator` +
-    /// `WikiStoreModel`. One instance serves every session.
-    public let extractionProvider: any QueueExtractionProvider
 
     /// Per-session generation gate. Each `WikiSession` owns its own so
     /// cross-wiki isolation is structural: a held gate on session A does not
@@ -180,7 +174,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         agentLauncher: AgentLauncher,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
-        extractionProvider: any QueueExtractionProvider,
         htmlBackend: HtmlExtractionBackend? = nil,
         profileLifetime: ProfileLifetime
     ) {
@@ -189,7 +182,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         self.databaseWikiID = wikiID
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
-        self.extractionProvider = extractionProvider
         self.store = store
         self.searchCompositionOwner = nil
         self.searchServices = searchServices
@@ -236,7 +228,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         agentLauncher: AgentLauncher,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
-        extractionProvider: any QueueExtractionProvider,
         htmlBackend: HtmlExtractionBackend? = nil
     ) {
         self.profileLifetime = nil
@@ -244,7 +235,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         self.databaseWikiID = nil
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
-        self.extractionProvider = extractionProvider
         self.store = store
         self.searchCompositionOwner = searchCompositionOwner
         self.searchServices = searchCompositionOwner.services

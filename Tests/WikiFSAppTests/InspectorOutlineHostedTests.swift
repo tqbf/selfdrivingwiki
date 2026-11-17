@@ -195,7 +195,6 @@ struct InspectorOutlineHostedTests {
                         localExtractorFactory: { InspectorOutlineStubExtractor() }
                     ),
                     queueEngine: queueEngine,
-                    extractionProvider: InspectorOutlineStubExtractionProvider(),
                     fileProvider: FileProviderFacade(),
                     store: store,
                     installedRendererFactory: .unavailable,
@@ -433,7 +432,6 @@ struct InspectorOutlineHostedTests {
                             localExtractorFactory: { InspectorOutlineStubExtractor() }
                         ),
                         queueEngine: queueEngine,
-                        extractionProvider: InspectorOutlineStubExtractionProvider(),
                         fileProvider: FileProviderFacade(),
                         store: store,
                         installedRendererFactory: .unavailable,
@@ -933,8 +931,7 @@ struct InspectorOutlineHostedTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try makeInspectorOutlineTestQueueEngine(),
-            extractionProvider: InspectorOutlineStubExtractionProvider()
+            queueEngine: try makeInspectorOutlineTestQueueEngine()
         )
     }
 

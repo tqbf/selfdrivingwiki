@@ -59,7 +59,9 @@ struct ContentTypeDetectionArchitectureTests {
                 declarations: [
                     ("func storeMaterialized(", 1),
                     ("private func storeSnapshot(", 1),
-                    ("private func performRefresh(", 1),
+                    // `performRefresh` retired at P4.3: URL refresh is a
+                    // daemon queue arm now (the writer manifest for it
+                    // lives with the daemon's queue provider).
                     ("public func addSource(filename: String, data: Data)", 1),
                 ],
                 testFunctions: [

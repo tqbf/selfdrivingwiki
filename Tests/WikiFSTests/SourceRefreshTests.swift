@@ -1,10 +1,16 @@
 import Foundation
 import Testing
 @testable import WikiFSCore
+@testable import WikiFSEngine
+@testable import wikid
 
-/// Phase 3b tests: `SourceRefreshService` + `WikiStoreModel.refreshSource`.
-/// Covers website refresh (content version append), podcast refresh (derived
-/// markdown append), and non-refreshable rejection — all via injected fakes.
+/// Phase 3b refresh semantics, now exercised through the DAEMON refresh arm
+/// (P4.3 workload migration): the app's inline `refreshSource` pipeline is
+/// gone — the daemon's `DaemonQueueExtractionProvider.resolveSourceRefresh`
+/// re-materializes the source's provider and
+/// `QueueFormatRoute.persistRefresh` appends the content version. Covers
+/// website refresh (content version append) and non-refreshable rejection —
+/// via the same injected fakes the inline tests used.
 @MainActor
 struct SourceRefreshTests {
 
@@ -21,6 +27,18 @@ struct SourceRefreshTests {
             .appendingPathComponent("wikifs-refresh-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+    }
+
+    /// The daemon refresh arm under test: the provider resolves the refresh
+    /// from the stored origin and persists the fresh content version.
+    private func makeRefreshProvider(
+        store: GRDBWikiStore,
+        fetcher: URLFetchService.URLResourceFetcher
+    ) -> DaemonQueueExtractionProvider {
+        DaemonQueueExtractionProvider(
+            extractionServices: UnavailableExtractionServices(),
+            storeResolver: { _ in store },
+            refreshFetcher: fetcher)
     }
 
     private func htmlResponse(_ body: String, url: String) -> URLFetchService.FetchResponse {
@@ -45,11 +63,20 @@ struct SourceRefreshTests {
         let historyBefore = try store.contentVersionHistory(sourceID: source.id)
         #expect(historyBefore.count == 1)
 
-        // Swap to v2 and refresh.
+        // Swap to v2 and refresh through the DAEMON arm.
         fetcher.response = htmlResponse(
             "<html><head><title>Test</title></head><body>v2 content</body></html>",
             url: "https://example.com/article")
-        _ = try await model.refreshSource(source.id, fetcher: fetcher)
+        let provider = makeRefreshProvider(store: store, fetcher: fetcher)
+        let resolution = try #require(await provider.resolveSourceRefresh(
+            wikiID: WikiID(rawValue: "w"), sourceID: source.id))
+        guard case .refresh(let refresh) = resolution else {
+            Issue.record("expected a refresh resolution")
+            return
+        }
+        let outcome = try await refresh.fetch { _ in }
+        _ = try await provider.persistSourceRefresh(
+            wikiID: WikiID(rawValue: "w"), sourceID: source.id, outcome: outcome)
 
         // A new content version was appended.
         let historyAfter = try store.contentVersionHistory(sourceID: source.id)
@@ -73,7 +100,16 @@ struct SourceRefreshTests {
 
         _ = try await model.addURL("https://example.com/download", fetcher: fetcher)
         let source = try #require(try store.listSources().first)
-        _ = try await model.refreshSource(source.id, fetcher: fetcher)
+        let provider = makeRefreshProvider(store: store, fetcher: fetcher)
+        let resolution = try #require(await provider.resolveSourceRefresh(
+            wikiID: WikiID(rawValue: "w"), sourceID: source.id))
+        guard case .refresh(let refresh) = resolution else {
+            Issue.record("expected a refresh resolution")
+            return
+        }
+        let outcome = try await refresh.fetch { _ in }
+        _ = try await provider.persistSourceRefresh(
+            wikiID: WikiID(rawValue: "w"), sourceID: source.id, outcome: outcome)
 
         let refreshed = try #require(try store.listSources().first { $0.id == source.id })
         let activeVersion = try #require(try store.contentVersionHistory(sourceID: source.id).first)
@@ -92,8 +128,17 @@ struct SourceRefreshTests {
         let source = try #require(try store.listSources().first)
 
         // Refresh with identical bytes — still appends a version ("checked,
-        // unchanged").
-        _ = try await model.refreshSource(source.id, fetcher: fetcher)
+        // unchanged"). The DAEMON arm drives the write.
+        let provider = makeRefreshProvider(store: store, fetcher: fetcher)
+        let resolution = try #require(await provider.resolveSourceRefresh(
+            wikiID: WikiID(rawValue: "w"), sourceID: source.id))
+        guard case .refresh(let refresh) = resolution else {
+            Issue.record("expected a refresh resolution")
+            return
+        }
+        let outcome = try await refresh.fetch { _ in }
+        _ = try await provider.persistSourceRefresh(
+            wikiID: WikiID(rawValue: "w"), sourceID: source.id, outcome: outcome)
         let history = try store.contentVersionHistory(sourceID: source.id)
         #expect(history.count == 2)
     }
@@ -120,14 +165,14 @@ struct SourceRefreshTests {
     // MARK: - AC.5: Podcast refresh routes through the queue
 
     /// The Apple TTML packaging: BOTH podcast refresh arms route through the
-    /// extraction queue's package routes. `refreshSource(_:)` on an Apple
-    /// episode source throws `.transcriptQueueRequired` (the caller enqueues),
-    /// and the queue's installed-package adapter preserves the v1 lineage via
-    /// the initial source-version link (asserted by the app/daemon queue
-    /// provider tests). This test pins the model-level contract and the
-    /// refreshability predicate, which now derives from the package ROUTE —
-    /// not from signing-helper presence (a missing helper keeps the route
-    /// usable through the package's RSS fallback).
+    /// extraction queue's package routes. The refresh arm on an Apple episode
+    /// source throws `.transcriptQueueRequired` (the caller enqueues the
+    /// transcript job), and the queue's installed-package adapter preserves
+    /// the v1 lineage via the initial source-version link (asserted by the
+    /// daemon queue provider tests). This test pins the service-level
+    /// contract and the refreshability predicate, which derives from the
+    /// package ROUTE — not from signing-helper presence (a missing helper
+    /// keeps the route usable through the package's RSS fallback).
     @Test func applePodcastRefreshRequiresQueueEnqueueAndRouteAvailability() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
@@ -140,10 +185,11 @@ struct SourceRefreshTests {
         #expect(try store.processedMarkdownHead(sourceID: source.id) == nil)
 
         // Refresh MUST direct the caller to the extraction queue — and write
-        // nothing itself.
+        // nothing itself. The DAEMON arm carries the same typed rejection.
+        let service = SourceRefreshService(fetcher: SwapFetcher(htmlResponse("", url: "https://x")))
+        let origin = try #require(try store.sourceOrigin(sourceID: source.id))
         await #expect(throws: SourceRefreshService.RefreshError.transcriptQueueRequired) {
-            _ = try await model.refreshSource(
-                source.id, fetcher: SwapFetcher(htmlResponse("", url: "https://x")))
+            _ = try await service.materialize(origin: origin)
         }
         #expect(try store.processedMarkdownHead(sourceID: source.id) == nil)
 
@@ -153,7 +199,7 @@ struct SourceRefreshTests {
     }
 
     // MARK: - Refreshability gate (#218): the detail view should only offer
-    // Refresh when `refreshSource(_:)` would actually succeed.
+    // Refresh when the refresh job would actually succeed.
 
     @Test func websiteSourceIsRefreshable() async throws {
         let store = try tempStore()

@@ -2,6 +2,7 @@
 import Testing
 import Foundation
 @testable import WikiFSEngine
+@testable import wikid
 @testable import WikiFS
 import WikiFSCore
 
@@ -122,7 +123,7 @@ struct AgentLauncherLaunchFailureCompletionTests {
         // state is REJECTED by the queue validator — the job fails with the
         // diagnostic instead of completing and stamping sources ingested.
         do {
-            try AppQueueIngestionProvider.validateLauncherOutcome(
+            try DaemonQueueIngestionProvider.validateLauncherOutcome(
                 exitStatus: launcher.exitStatus,
                 preflightError: launcher.preflightError,
                 turnFailure: launcher.runTurnFailureFact)
@@ -170,7 +171,7 @@ struct AgentLauncherLaunchFailureCompletionTests {
         #expect(launcher.isRunning == false)
 
         // The recovered run is a valid completion.
-        try AppQueueIngestionProvider.validateLauncherOutcome(
+        try DaemonQueueIngestionProvider.validateLauncherOutcome(
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
             turnFailure: launcher.runTurnFailureFact)

@@ -113,12 +113,6 @@ enum ProfileBootFixture {
         try CLIPluginCatalog.build()
     }
 
-    static func extractionProvider() -> any QueueExtractionProvider {
-        ProfileQueueExtractionProvider()
-    }
-
-    /// Internal re-export for the open-seam harness (the free function below
-    /// is file-private).
     static func fixtureTransportServices() -> DaemonTransportServices {
         fixtureTransportServicesImpl()
     }

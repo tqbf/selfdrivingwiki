@@ -256,14 +256,142 @@ public struct SpeechExtractionResolution: Sendable {
 }
 
 /// The result of resolving an extraction request. The tag is the execution
-/// model — staged bytes, a URL-backed transcript, a URL-backed fetch, or an
-/// explicit-intent speech job — so an invalid combination is
-/// unrepresentable and the worker switches exhaustively.
+/// model — staged bytes, a URL-backed transcript, a URL-backed fetch, an
+/// explicit-intent speech job, a package format conversion, or a source
+/// refresh — so an invalid combination is unrepresentable and the worker
+/// switches exhaustively.
 public enum ExtractionResolution: Sendable {
     case bytes(BytesExtractionResolution)
     case transcript(TranscriptExtractionResolution)
     case fetch(FetcherResolution)
     case speech(SpeechExtractionResolution)
+    /// Package format conversion (HTML / DOCX) — the durable format-job
+    /// path's conversion arm.
+    case html(HtmlExtractionResolution)
+    case docx(DocxExtractionResolution)
+    /// URL re-acquisition (source refresh) appending a content version.
+    case refresh(SourceRefreshResolution)
+}
+
+/// One format-route (HTML) conversion: the prepared package adapter is
+/// closed over by the resolution's `extract` closure — the worker never
+/// sees the typed extractor, only the markdown the closure returns.
+public struct HtmlExtractionResolution: Sendable {
+    /// Runs the prepared extractor against the source's stored HTML bytes.
+    /// Throws when the conversion fails or returns empty markdown — a failed
+    /// queue conversion fails the item visibly (the Activity window carries
+    /// the reason), never silently lands nothing.
+    public let extract: @Sendable () async throws -> String
+    public let filename: String
+    /// The route selection the daemon resolved; the persisted note names it
+    /// (parity with the model's inline write semantics).
+    public let backend: HtmlExtractionBackend
+    /// The exact installed-package producer when the selection resolved a
+    /// package adapter; `nil` for the built-in tag-based execution floor
+    /// (`.tool(.html)` producer, parity with the model's inline write).
+    public let producer: ExtractionInstalledPackageProducer?
+    public let technique: String
+    /// The engine's capacity bucket for this resolution. Package format
+    /// conversions share one non-PDF bucket — the bun-managed adapters are
+    /// lightweight relative to PDF pipelines.
+    public let capacityID: String
+
+    /// Package format conversions share one non-PDF capacity bucket — the
+    /// bun-managed adapters are lightweight relative to PDF pipelines.
+    public static let defaultCapacityID = "package-format"
+
+    public init(
+        extract: @escaping @Sendable () async throws -> String,
+        filename: String,
+        backend: HtmlExtractionBackend,
+        producer: ExtractionInstalledPackageProducer?,
+        technique: String,
+        capacityID: String = HtmlExtractionResolution.defaultCapacityID
+    ) {
+        self.extract = extract
+        self.filename = filename
+        self.backend = backend
+        self.producer = producer
+        self.technique = technique
+        self.capacityID = capacityID
+    }
+}
+
+/// The DOCX sibling of ``HtmlExtractionResolution``. DOCX is package-only:
+/// the producer is part of the resolution contract (parity with the typed
+/// extractor protocol).
+public struct DocxExtractionResolution: Sendable {
+    /// Runs the prepared docx2md adapter against the source's stored bytes.
+    /// Throws on failure/empty conversion — same visible-failure contract as
+    /// the HTML arm.
+    public let extract: @Sendable () async throws -> String
+    public let filename: String
+    public let producer: ExtractionInstalledPackageProducer
+    public let technique: String
+    /// Shares the package-format bucket with the HTML sibling.
+    public let capacityID: String
+
+    public static let defaultCapacityID = HtmlExtractionResolution.defaultCapacityID
+
+    public init(
+        extract: @escaping @Sendable () async throws -> String,
+        filename: String,
+        producer: ExtractionInstalledPackageProducer,
+        technique: String,
+        capacityID: String = DocxExtractionResolution.defaultCapacityID
+    ) {
+        self.extract = extract
+        self.filename = filename
+        self.producer = producer
+        self.technique = technique
+        self.capacityID = capacityID
+    }
+}
+
+/// One source refresh acquisition: the daemon re-fetches the source's
+/// recorded URL off-host and returns the fresh bytes for a content-version
+/// append. The transcript providers never reach this arm — the client
+/// routes them to the transcript enqueue.
+public struct SourceRefreshResolution: Sendable {
+    public struct Outcome: Sendable {
+        public let data: Data
+        public let detectionHints: ContentTypeDetectionHints
+        public let provenance: SourceProvenance
+
+        public init(
+            data: Data,
+            detectionHints: ContentTypeDetectionHints,
+            provenance: SourceProvenance
+        ) {
+            self.data = data
+            self.detectionHints = detectionHints
+            self.provenance = provenance
+        }
+    }
+
+    /// Materializes the source's provider off-host (the refresh service's
+    /// website arm). Throws the typed `SourceRefreshService.RefreshError`
+    /// cases — notRefreshable / missingPlan / snapshotWithImages — which the
+    /// worker surfaces on the item.
+    public let fetch: @Sendable (_ onProgress: @Sendable (String) -> Void) async throws -> Outcome
+    public let filename: String
+    /// A refresh is one lightweight network acquisition; it shares the
+    /// transcript bucket's non-PDF concurrency.
+    public let capacityID: String
+
+    /// A refresh is one lightweight network acquisition; it shares the
+    /// transcript bucket's non-PDF concurrency.
+    public static let defaultCapacityID = TranscriptExtractionResolution.defaultCapacityID
+
+    public init(
+        fetch: @escaping @Sendable (_ onProgress: @Sendable (String) -> Void) async throws -> Outcome,
+        filename: String,
+        capacityID: String = SourceRefreshResolution.defaultCapacityID
+    ) {
+        self.fetch = fetch
+        self.filename = filename
+        self.capacityID = capacityID
+    }
 }
 
 /// The speech arm's typed resolution failures. Visible per-item failures —
@@ -384,6 +512,134 @@ public protocol QueueExtractionProvider: Sendable {
         acquiredContentVersionID: SourceVersionID,
         dedupeKey: QueueItemDedupeKey
     ) async throws
+
+    /// Resolve the source-refresh arm for one item carrying the
+    /// `.refreshSource` workload intent. Returns the refresh resolution that
+    /// re-fetches the source's recorded URL off-host, or `nil` when the
+    /// source has no refresh route.
+    func resolveSourceRefresh(
+        wikiID: WikiID,
+        sourceID: SourceID
+    ) async throws -> ExtractionResolution?
+
+    /// Resolve the package format route (HTML / DOCX) for one source from
+    /// the active registration claims — the durable format-job path's
+    /// conversion arm. Dispatched BEFORE the generic arms so a claimed
+    /// source never reaches the PDF fallback. Returns `nil` when no active
+    /// claim recognizes the source (the generic resolution proceeds).
+    /// Preparation failures THROW: a claimed kind whose package is inactive
+    /// fails the item visibly, never a silent PDF fallback.
+    func resolveFormatRoute(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        htmlBackendOverride: HtmlExtractionBackend?
+    ) async throws -> ExtractionResolution?
+
+    /// Persist one format-route (HTML) conversion with the model's inline
+    /// write semantics: an `.extraction`-origin derived-markdown version,
+    /// the package producer (or `.tool(.html)` for the tag-based floor), and
+    /// the backend-named note. `nominateActive` flips the active-markdown
+    /// pointer to the new version when a head already exists — the import
+    /// conversion contract (issue #1380); manual runs never nominate.
+    @discardableResult
+    func persistHtmlExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: HtmlExtractionResolution,
+        markdown: String,
+        nominateActive: Bool
+    ) async throws -> QueueExtractionOutputReference?
+
+    /// Persist one format-route (DOCX) conversion: the `.extraction`-origin
+    /// derived-markdown version with the exact installed-package producer.
+    @discardableResult
+    func persistDocxExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: DocxExtractionResolution,
+        markdown: String
+    ) async throws -> QueueExtractionOutputReference?
+
+    /// Persist one source refresh: a new content version with the fresh
+    /// bytes, detection hints, and the provider's provenance — the same
+    /// write the model's inline refresh performed.
+    @discardableResult
+    func persistSourceRefresh(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        outcome: SourceRefreshResolution.Outcome
+    ) async throws -> QueueExtractionOutputReference?
+}
+
+/// Default requirement bodies for the arms a queue host may not serve. The
+/// defaults THROW: a provider that cannot resolve or persist an arm fails
+/// its items loudly — the factory routes the item into the neutral capacity
+/// bucket and the worker surfaces the message — never a silent skip.
+public extension QueueExtractionProvider {
+    func resolveSourceRefresh(
+        wikiID: WikiID,
+        sourceID: SourceID
+    ) async throws -> ExtractionResolution? {
+        throw QueueExtractionProviderUnsupportedError.refresh
+    }
+
+    func resolveFormatRoute(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        htmlBackendOverride: HtmlExtractionBackend?
+    ) async throws -> ExtractionResolution? {
+        // The nil default: a host without format-route support recognizes no
+        // claimed sources, so the generic resolution proceeds unchanged.
+        return nil
+    }
+
+    @discardableResult
+    func persistHtmlExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: HtmlExtractionResolution,
+        markdown: String,
+        nominateActive: Bool
+    ) async throws -> QueueExtractionOutputReference? {
+        throw QueueExtractionProviderUnsupportedError.persist
+    }
+
+    @discardableResult
+    func persistDocxExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: DocxExtractionResolution,
+        markdown: String
+    ) async throws -> QueueExtractionOutputReference? {
+        throw QueueExtractionProviderUnsupportedError.persist
+    }
+
+    @discardableResult
+    func persistSourceRefresh(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        outcome: SourceRefreshResolution.Outcome
+    ) async throws -> QueueExtractionOutputReference? {
+        throw QueueExtractionProviderUnsupportedError.persist
+    }
+}
+
+/// A queue-extraction provider does not serve one of the defaulted arms.
+/// Carries a user-readable message the worker puts on the item.
+public enum QueueExtractionProviderUnsupportedError: Error, LocalizedError {
+    /// The host has no source-refresh resolution.
+    case refresh
+    /// The host cannot persist one of the new arms.
+    case persist
+
+    public var errorDescription: String? {
+        switch self {
+        case .refresh:
+            return "This queue host does not support source refresh."
+        case .persist:
+            return "This queue host cannot persist the requested extraction result."
+        }
+    }
 }
 
 // MARK: - QueueIngestSignaling

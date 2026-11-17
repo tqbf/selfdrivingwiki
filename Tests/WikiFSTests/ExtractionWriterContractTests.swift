@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import WikiCtlCore
 @testable import WikiFSCore
+@testable import WikiFSEngine
 
 @MainActor
 struct ExtractionWriterContractTests {
@@ -119,8 +120,19 @@ struct ExtractionWriterContractTests {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(
             store, filename: "page.html", data: Data("<h1>Heading</h1><p>Body</p>".utf8))
-        let model = WikiStoreModel(store: store)
-        _ = try #require(await model.extractHtml(for: summary.id, backend: .tagBased))
+        // The daemon format route's tag-based floor: a resolution with a nil
+        // package producer writes `.tool(.html)` provenance — the same
+        // contract the inline pipeline this replaced asserted (P4.3).
+        let resolution = HtmlExtractionResolution(
+            extract: { "tag-extracted" },
+            filename: summary.filename,
+            backend: .tagBased,
+            producer: nil,
+            technique: QueueFormatRoute.htmlToMarkdownTechnique)
+        let reference = try QueueFormatRoute.persistHtml(
+            store: store, sourceID: summary.id, resolution: resolution,
+            markdown: "tag-extracted", nominateActive: false)
+        _ = try #require(reference)
         let value = try provenance(store, sourceID: summary.id)
         #expect(value.producer == .tool(.html))
         #expect(value.providerID == nil)

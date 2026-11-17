@@ -280,17 +280,18 @@ struct SpeechQueuePipelineTests {
         return summary.id
     }
 
-    private func makeAppProvider(
+    private func makeProvider(
         store: GRDBWikiStore,
         services: any ExtractionServices,
         engine: ScriptedSpeechEngine,
         stageRoot: URL
-    ) -> AppQueueExtractionProvider {
-        let box = SessionLookupBox()
-        box.setLookup { _ in WikiStoreModel(store: store) }
-        return AppQueueExtractionProvider(
+    ) -> DaemonQueueExtractionProvider {
+        // P4.3: the daemon provider is the ONLY queue-extraction host — the
+        // app-local provider is deleted, and these speech-routing contracts
+        // hold against the surviving host.
+        DaemonQueueExtractionProvider(
             extractionServices: services,
-            sessionBox: box,
+            storeResolver: { _ in store },
             speechEngine: engine,
             speechLocaleID: "en-US",
             speechStageRoot: stageRoot)
@@ -302,12 +303,7 @@ struct SpeechQueuePipelineTests {
         engine: ScriptedSpeechEngine,
         stageRoot: URL
     ) -> DaemonQueueExtractionProvider {
-        DaemonQueueExtractionProvider(
-            extractionServices: services,
-            storeResolver: { _ in store },
-            speechEngine: engine,
-            speechLocaleID: "en-US",
-            speechStageRoot: stageRoot)
+        makeProvider(store: store, services: services, engine: engine, stageRoot: stageRoot)
     }
 
     // MARK: - Routing
@@ -325,7 +321,7 @@ struct SpeechQueuePipelineTests {
         // `.captions` intents resolve the caption arm.
         let captionServices = CaptionOverridingServices(
             base: services, captionExecutor: FakeCaptionExecutor())
-        let app = makeAppProvider(store: store, services: captionServices, engine: engine, stageRoot: stageRoot)
+        let app = makeProvider(store: store, services: captionServices, engine: engine, stageRoot: stageRoot)
         let speechResolution = try await app.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
             backendOverride: nil, transcriptionIntent: .onDeviceSpeech)
@@ -377,7 +373,7 @@ struct SpeechQueuePipelineTests {
         // DISABLED selection: the item fails visibly with the typed
         // message — never a silent completion, never a caption fallback.
         let disabled = try await makeServices(executor: FakeAudioExecutor(), fetcherDisabled: true)
-        let disabledProvider = makeAppProvider(store: store, services: disabled, engine: engine, stageRoot: stageRoot)
+        let disabledProvider = makeProvider(store: store, services: disabled, engine: engine, stageRoot: stageRoot)
         await #expect(throws: ExtractionServicesError.self) {
             _ = try await disabledProvider.resolveExtraction(
                 wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
@@ -389,7 +385,7 @@ struct SpeechQueuePipelineTests {
         let ready = try await makeServices(executor: FakeAudioExecutor())
         let notReadyEngine = ScriptedSpeechEngine()
         notReadyEngine.readinessAnswer = .needsSetup(.assetsNotInstalled)
-        let notReadyProvider = makeAppProvider(store: store, services: ready, engine: notReadyEngine, stageRoot: stageRoot)
+        let notReadyProvider = makeProvider(store: store, services: ready, engine: notReadyEngine, stageRoot: stageRoot)
         do {
             _ = try await notReadyProvider.resolveExtraction(
                 wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
@@ -413,7 +409,7 @@ struct SpeechQueuePipelineTests {
                 externalRef: "https://api.zotero.org/users/1/items/ABCD1234/file",
                 externalIdentity: "ABCD1234"),
             role: .primary)
-        let scoped = makeAppProvider(store: store, services: ready, engine: engine, stageRoot: stageRoot)
+        let scoped = makeProvider(store: store, services: ready, engine: engine, stageRoot: stageRoot)
         do {
             _ = try await scoped.resolveExtraction(
                 wikiID: WikiID(rawValue: "w"), sourceID: nonYouTube.id,
@@ -434,7 +430,7 @@ struct SpeechQueuePipelineTests {
         let engine = ScriptedSpeechEngine()
         let stageRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("speech-success-\(UUID().uuidString)", isDirectory: true)
-        let provider = makeAppProvider(
+        let provider = makeProvider(
             store: store, services: try await makeServices(executor: executor),
             engine: engine, stageRoot: stageRoot)
 
@@ -523,7 +519,7 @@ struct SpeechQueuePipelineTests {
 
         // The app appends a SECOND speech alternative with the same
         // semantics (identical persistence, one more version).
-        let app = makeAppProvider(store: store, services: services, engine: engine, stageRoot: stageRoot)
+        let app = makeProvider(store: store, services: services, engine: engine, stageRoot: stageRoot)
         _ = try await app.persistSpeechExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
             outcome: SpeechOutcome(
@@ -547,7 +543,7 @@ struct SpeechQueuePipelineTests {
         let engine = ScriptedSpeechEngine()
         let stageRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("speech-transient-\(UUID().uuidString)", isDirectory: true)
-        let provider = makeAppProvider(
+        let provider = makeProvider(
             store: store, services: try await makeServices(executor: executor),
             engine: engine, stageRoot: stageRoot)
 
@@ -592,7 +588,7 @@ struct SpeechQueuePipelineTests {
         let engine = ScriptedSpeechEngine()
         let stageRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("speech-clean-\(UUID().uuidString)", isDirectory: true)
-        let provider = makeAppProvider(
+        let provider = makeProvider(
             store: store, services: try await makeServices(executor: FakeAudioExecutor()),
             engine: engine, stageRoot: stageRoot)
 
@@ -665,7 +661,7 @@ struct SpeechQueuePipelineTests {
         let stageRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("speech-captionfail-\(UUID().uuidString)", isDirectory: true)
         let services = try await makeServices(executor: FakeAudioExecutor())
-        let provider = makeAppProvider(store: store, services: CaptionOverridingServices(base: services, captionExecutor: executor), engine: engine, stageRoot: stageRoot)
+        let provider = makeProvider(store: store, services: CaptionOverridingServices(base: services, captionExecutor: executor), engine: engine, stageRoot: stageRoot)
 
         // The caption intent resolves the caption arm; its fetch fails.
         guard case .transcript(let transcript)? = try await provider.resolveExtraction(

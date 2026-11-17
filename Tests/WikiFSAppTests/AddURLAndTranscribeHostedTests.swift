@@ -225,7 +225,6 @@ struct AddURLAndTranscribeHostedTests {
             launcher: AgentLauncher(),
             extractionCoordinator: session.extractionCoordinator,
             queueEngine: engine,
-            extractionProvider: NoopExtractionProvider(),
             fileProvider: FileProviderFacade(),
             store: model,
             installedRendererFactory: .unavailable,
@@ -334,9 +333,7 @@ struct AddURLAndTranscribeHostedTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: queueEngine,
-            extractionProvider: NoopExtractionProvider()
-        )
+            queueEngine: queueEngine)
     }
 }
 #endif

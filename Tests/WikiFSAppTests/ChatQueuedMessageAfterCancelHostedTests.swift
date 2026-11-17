@@ -183,8 +183,7 @@ struct ChatQueuedMessageAfterCancelHostedTests {
                 extractionCoordinator: ExtractionCoordinator(
                     containerDirectory: dir,
                     localExtractorFactory: { QueuedAfterCancelStubExtractor() }),
-                queueEngine: try makeQueuedAfterCancelQueueEngine(),
-                extractionProvider: QueuedAfterCancelStubExtractionProvider())
+                queueEngine: try makeQueuedAfterCancelQueueEngine())
 
             // A configured provider, so the view's chat-operation gate is open.
             let providersDirectory = dir.appendingPathComponent("providers", isDirectory: true)

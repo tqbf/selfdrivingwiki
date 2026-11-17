@@ -44,6 +44,15 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
     private let speechLocaleID: String
     /// The host-owned private stage root for speech jobs.
     private let speechStageRoot: URL
+    /// Test-only invocation recording: fires once per resolveFormatRoute /
+    /// resolveSourceRefresh / persist dispatch so a fixture-daemon gate test
+    /// can assert the provider executed IN THE DAEMON COMPOSITION. `nil` in
+    /// production construction sites.
+    private let recordWorkloadInvocation: (@Sendable (String, WikiID, SourceID) -> Void)?
+    /// The refresh arm's URL fetcher. Production keeps the URLSession
+    /// default; tests inject a controllable fake (the same seam the inline
+    /// refresh pipeline took a fetcher through).
+    private let refreshFetcher: any URLFetchService.URLResourceFetcher
 
     init(
         extractionServices: any ExtractionServices,
@@ -53,7 +62,9 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
         engineEnqueue: (@Sendable (QueueItemRequest) async throws -> QueueItem.ID)? = nil,
         speechEngine: any SpeechTranscribing = SystemSpeechTranscriber(),
         speechLocaleID: String = Locale.current.identifier(.bcp47),
-        speechStageRoot: URL? = nil
+        speechStageRoot: URL? = nil,
+        recordWorkloadInvocation: (@Sendable (String, WikiID, SourceID) -> Void)? = nil,
+        refreshFetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher()
     ) {
         self.extractionServices = extractionServices
         self.storeResolver = storeResolver
@@ -65,6 +76,8 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
         self.speechStageRoot = speechStageRoot
             ?? FileManager.default.temporaryDirectory
                 .appendingPathComponent("wikid-speech-stages-\(UUID().uuidString)", isDirectory: true)
+        self.recordWorkloadInvocation = recordWorkloadInvocation
+        self.refreshFetcher = refreshFetcher
     }
 
     // MARK: - QueueExtractionProvider
@@ -263,6 +276,139 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider, @unchecked S
             backend: preparation.backend,
             modelVersion: preparation.modelVersion,
             packageProducer: preparation.packageProvenance))
+    }
+
+    // MARK: - Format route + refresh arms (P4.3 workload migration)
+
+    func resolveFormatRoute(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        htmlBackendOverride: HtmlExtractionBackend?
+    ) async throws -> ExtractionResolution? {
+        recordWorkloadInvocation?("resolveFormatRoute", wikiID, sourceID)
+        guard let store = await resolvedStore(wikiID: wikiID) else {
+            throw DaemonStoreUnavailableError(wikiID: wikiID)
+        }
+        // The summary row names the claim inputs (stored MIME + extension).
+        let sources = (DebugLog.trying("listSources", operation: { try store.listSources() })) ?? []
+        guard let summary = sources.first(where: { $0.id == sourceID }) else {
+            DebugLog.extraction("DaemonQueueExtractionProvider: no source row for format route \(sourceID.rawValue)")
+            return nil
+        }
+        return try await QueueFormatRoute.resolve(
+            store: store,
+            sourceID: sourceID,
+            summary: summary,
+            services: extractionServices,
+            htmlBackendOverride: htmlBackendOverride)
+    }
+
+    func resolveSourceRefresh(
+        wikiID: WikiID,
+        sourceID: SourceID
+    ) async throws -> ExtractionResolution? {
+        recordWorkloadInvocation?("resolveSourceRefresh", wikiID, sourceID)
+        guard let store = await resolvedStore(wikiID: wikiID) else {
+            throw DaemonStoreUnavailableError(wikiID: wikiID)
+        }
+        // Reconstruct the provider from the stored origin (the refresh
+        // service's typed errors — notRefreshable / missingPlan /
+        // snapshotWithImages — fail the item with their messages).
+        guard let origin = DebugLog.trying("sourceOrigin", operation: {
+            try store.sourceOrigin(sourceID: sourceID)
+        }) else {
+            throw SourceRefreshService.RefreshError.notRefreshable("unknown")
+        }
+        // Phase 4 (D3) refresh guard: a snapshot source with image siblings
+        // cannot refresh single-source — a new activity would orphan its
+        // images. Guard BEFORE materializing (parity with the inline path).
+        if try store.hasImageSiblings(sourceID: sourceID) {
+            throw SourceRefreshService.RefreshError.snapshotWithImages
+        }
+        let service = SourceRefreshService(fetcher: refreshFetcher)
+        let material = try await service.materialize(origin: origin)
+        switch material {
+        case .contentVersion(let data, let detectionHints, let prov):
+            return .refresh(SourceRefreshResolution(
+                fetch: { _ in
+                    SourceRefreshResolution.Outcome(
+                        data: data,
+                        detectionHints: detectionHints,
+                        provenance: prov)
+                },
+                filename: origin.externalIdentity ?? "source"))
+        case .derivedMarkdown:
+            // The transcript providers are client-routed to the transcript
+            // enqueue; a refresh intent on a transcript source never lands.
+            throw SourceRefreshService.RefreshError.transcriptQueueRequired
+        }
+    }
+
+    @discardableResult
+    func persistHtmlExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: HtmlExtractionResolution,
+        markdown: String,
+        nominateActive: Bool
+    ) async throws -> QueueExtractionOutputReference? {
+        recordWorkloadInvocation?("persistHtmlExtraction", wikiID, sourceID)
+        guard let store = await resolvedStore(wikiID: wikiID) else {
+            // A finished conversion whose store vanished mid-flight is data
+            // loss — fail the item loudly instead of silently completing.
+            throw DaemonStoreUnavailableError(wikiID: wikiID)
+        }
+        let reference = try QueueFormatRoute.persistHtml(
+            store: store, sourceID: sourceID, resolution: resolution,
+            markdown: markdown, nominateActive: nominateActive)
+        DarwinNotifier.postChange()
+        return reference
+    }
+
+    @discardableResult
+    func persistDocxExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: DocxExtractionResolution,
+        markdown: String
+    ) async throws -> QueueExtractionOutputReference? {
+        recordWorkloadInvocation?("persistDocxExtraction", wikiID, sourceID)
+        guard let store = await resolvedStore(wikiID: wikiID) else {
+            throw DaemonStoreUnavailableError(wikiID: wikiID)
+        }
+        let reference = try QueueFormatRoute.persistDocx(
+            store: store, sourceID: sourceID, resolution: resolution,
+            markdown: markdown)
+        DarwinNotifier.postChange()
+        return reference
+    }
+
+    @discardableResult
+    func persistSourceRefresh(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        outcome: SourceRefreshResolution.Outcome
+    ) async throws -> QueueExtractionOutputReference? {
+        recordWorkloadInvocation?("persistSourceRefresh", wikiID, sourceID)
+        guard let store = await resolvedStore(wikiID: wikiID) else {
+            throw DaemonStoreUnavailableError(wikiID: wikiID)
+        }
+        let reference = try QueueFormatRoute.persistRefresh(
+            store: store, sourceID: sourceID, outcome: outcome)
+        DarwinNotifier.postChange()
+        return reference
+    }
+
+    /// The provider's store resolution shared by the new arms: the resolver,
+    /// with the on-demand open for a fresh relaunch (parity with the
+    /// generic resolveExtraction prologue).
+    private func resolvedStore(wikiID: WikiID) async -> GRDBWikiStore? {
+        var store = storeResolver(wikiID)
+        if store == nil {
+            _ = await openStore(wikiID)
+            store = storeResolver(wikiID)
+        }
+        return store
     }
 
     /// The EXPLICIT speech arm — identical semantics to the app provider:

@@ -183,7 +183,6 @@ struct SidebarView: View {
             SourcesContainerView(store: store, fileProvider: fileProvider,
                                  session: session, launcher: launcher,
                                  queueEngine: session.queueEngine,
-                                 extractionProvider: session.extractionProvider,
                                  ingestingSourceIDs: ingestingSourceIDs,
                                  sourceSort: $sourceSort,
                                  showingImportMarkdown: $showingImportMarkdown,

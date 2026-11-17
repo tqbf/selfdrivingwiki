@@ -20,7 +20,6 @@ struct SourcesContainerView: View {
     @Environment(\.openActivityWindow) private var openActivityWindow
     let launcher: AgentLauncher
     let queueEngine: any QueueEngineClient
-    let extractionProvider: any QueueExtractionProvider
     var ingestingSourceIDs: Set<SourceID> = []
 
     /// Display order backing the "Sort by" menu. Owned by `SidebarView` —

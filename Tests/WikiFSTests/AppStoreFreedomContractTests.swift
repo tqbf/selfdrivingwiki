@@ -17,7 +17,6 @@ struct AppStoreFreedomContractTests {
         "Sources/WikiFSEngine/SessionsPlugin.swift",
         "Sources/WikiFSEngine/ProductionPluginCatalogs.swift",
         "Sources/WikiFSEngine/StorePlugin.swift",
-        "Sources/WikiFSEngine/QueueRuntimeFactory.swift",
     ]
 
     /// The P0 waiver column. Each entry names the phase that clears it:
@@ -35,22 +34,16 @@ struct AppStoreFreedomContractTests {
             token: "GRDBWikiStore(readOnlyURL:",
             count: 1,
             clearedIn: "P3"),
-        // The app-local queue assembly: follow-on queue-database opens.
-        StoreFreedomGuardSupport.Waiver(
-            file: "Sources/WikiFS/Queue/AppQueueExtractionProvider.swift",
-            token: "QueueStore(",
-            count: 2,
-            clearedIn: "P4"),
+        // (P4.3: the app-local queue waivers were REMOVED with their files —
+        // `AppQueueExtractionProvider.swift` and `QueueRuntimeFactory.swift`
+        // are deleted; queue.sqlite opens are daemon-only now.)
         StoreFreedomGuardSupport.Waiver(
             file: "Sources/WikiFS/Queue/QueueClosedWikiNameLoader.swift",
             token: "WikiReadService(",
             count: 1,
             clearedIn: "P5"),
-        StoreFreedomGuardSupport.Waiver(
-            file: "Sources/WikiFSEngine/QueueRuntimeFactory.swift",
-            token: "QueueStore(",
-            count: 1,
-            clearedIn: "P4"),
+        // (P4.3: QueueRuntimeFactory.swift is DELETED — its QueueStore waiver
+        // is removed with it.)
         StoreFreedomGuardSupport.Waiver(
             file: "Sources/WikiFSEngine/SessionsPlugin.swift",
             token: "WikiReadService(",

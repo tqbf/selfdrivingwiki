@@ -87,27 +87,14 @@ struct WikiFSApp: App {
     private let daemonTransportBridge: DaemonTransportAppBridge
     /// Adapts typed transport events into queue/chat ownership policy.
     private let daemonTransportCoordinator: DaemonTransportAppCoordinator
-    /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
-    /// extraction/ingestion workers off-main. One instance, shared across
-    /// sessions via `WikiSession`.
+    /// App-wide queue engine. Owns the hot-swap daemon client; drives
+    /// extraction/ingestion workloads DAEMON-SIDE (P4.3: the app constructs
+    /// no queue provider and executes no workload — it enqueues and projects
+    /// progress/status over the queue event stream). One instance, shared
+    /// across sessions via `WikiSession`.
     @State private var queueEngine: QueueEngineHotSwap
     /// Sole owner of the app-local Cordis queue runtime and all ownership transitions.
     @State private var localQueueRuntimeController: LocalQueueRuntimeController
-    /// App-wide extraction provider. Bridges the daemon queue engine's
-    /// workload surface to the `@MainActor` `ExtractionCoordinator` +
-    /// `WikiStoreModel`: the wiki-session boot uses its
-    /// `FetchFormatJobRecovering` conformance for the stranded-format-job
-    /// scan, and `ProfileWikiSession` exposes it to the UI layer (Phase 4
-    /// slice 2 migrates both consumers daemon-side; the app no longer feeds
-    /// a local queue engine with it). Handles both bytes-based extraction
-    /// (PDF, HTML) AND transcript fetching (YouTube captions, podcast
-    /// feeds) — transcript sources resolve to a `transcriptFetch` closure
-    /// in the `ExtractionResolution`.
-    @State private var extractionProvider: any QueueExtractionProvider
-    /// Mutable box for the file provider reference — the ingestion provider
-    /// uses it to access the `FileProviderFacade` which is only available
-    /// after the `@State` property is initialized by SwiftUI.
-    @State private var fileProviderBox: FileProviderBox
     /// App-wide queue-activity tracker. Observes `QueueEngine.events` and
     /// exposes `@Observable` extraction state (extractingSourceIDs, progress
     /// log, etc.) that replaces the launcher's slot machinery.
@@ -157,10 +144,6 @@ struct WikiFSApp: App {
 
     /// Presentation-only adapter for typed daemon transport events.
     @State private var healthMonitor: DaemonHealthMonitor
-
-    /// The session-lookup box, retained so the local-engine fallback factory
-    /// (called on disconnect/reconnect) can re-wire it.
-    private var sessionLookupBox: SessionLookupBox?
 
     // NOTE: There must be exactly ONE @NSApplicationDelegateAdaptor. Registering
     // two adaptors with different types (e.g. a separate QuitConfirmationDelegate)
@@ -263,9 +246,6 @@ struct WikiFSApp: App {
         // The synchronous app initializer creates stable UI adapters and injects an
         // app-target plugin catalog. Committed process-profile rows select the
         // five concrete runtime factories; their leases are the sole owners.
-        let sessionBox = SessionLookupBox()
-        sessionLookupBox = sessionBox
-        let fileProviderBox = FileProviderBox()
         let transportBridge = DaemonTransportAppBridge()
         daemonTransportBridge = transportBridge
         let processComposition = AppProcessPluginCatalog(
@@ -276,14 +256,6 @@ struct WikiFSApp: App {
         let extractionServices = processComposition.extractionServices
         let coordinator = ExtractionCoordinator(services: extractionServices)
         _extractionCoordinator = State(initialValue: coordinator)
-        let extractionProvider = AppQueueExtractionProvider(
-            extractionServices: extractionServices,
-            sessionBox: sessionBox,
-            queueDatabaseURL: DebugLog.trying(
-                "resolve queue database URL",
-                operation: { try DatabaseLocation.queueDatabaseURL() }),
-            transcriptCleanupAgent: ModelTranscriptCleanupAgent(
-                services: providerServices))
         let runtimeController = processComposition.queueController
         let transportOwner = processComposition.transportOwner
         let rendererOwner = processComposition.rendererOwner
@@ -323,8 +295,6 @@ struct WikiFSApp: App {
 
         _queueEngine = State(initialValue: queueEngine)
         _localQueueRuntimeController = State(initialValue: runtimeController)
-        _extractionProvider = State(initialValue: extractionProvider)
-        _fileProviderBox = State(initialValue: fileProviderBox)
         _activityTracker = State(initialValue: activityTracker)
 
         // Store-mode cutover (plans/daemon-only-access.md Phase 3 item 1 +
@@ -398,7 +368,6 @@ struct WikiFSApp: App {
             containerDirectory: directory,
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
-            extractionProvider: extractionProvider,
             providerServices: providerServices,
             htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlSelectionLabel },
             interactiveUsageRecorder: { [weak activityTracker] usage in
@@ -413,7 +382,6 @@ struct WikiFSApp: App {
                     descriptor: descriptor,
                     containerDirectory: directory,
                     catalog: appCatalog,
-                    extractionProvider: extractionProvider,
                     searchServices: try DaemonSearchServices(wikiID: wikiID),
                     htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlSelectionLabel },
                     interactiveUsageRecorder: { usage in
@@ -449,15 +417,6 @@ struct WikiFSApp: App {
             quotaCoordinator: QuotaFallbackCoordinator()
         )
         _backgroundIngestCoordinator = State(initialValue: backgroundIngestCoordinator)
-        // Wire the session-lookup box to the real session manager now that
-        // it's constructed. The provider (already captured by the factory)
-        // sees live sessions through the box.
-        sessionBox.setLookup { [weak sm] wikiID in
-            sm?.sessions[wikiID]?.store
-        }
-        sessionBox.setSessionLookup { [weak sm] wikiID in
-            sm?.sessions[wikiID]
-        }
         // Settings-only launcher (D5): a main-actor UI adapter installed by the
         // app-target catalog boundary, independent of every per-wiki gate.
         _settingsLauncher = State(initialValue: processComposition.makeSettingsLauncher(
@@ -591,7 +550,6 @@ struct WikiFSApp: App {
 
         // Synchronous part: activate most recent + file provider wiring.
         registry.activateMostRecent()
-        fileProviderBox.provider = fileProvider
         fileProvider.wire(into: registry)
         registry.flushActiveStore = { [sessionManager] wikiID in
             await sessionManager.flushSession(for: wikiID)

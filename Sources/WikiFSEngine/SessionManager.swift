@@ -91,10 +91,6 @@ public final class SessionManager {
     /// rewriting call sites.
     public let queueEngine: any QueueEngineClient
 
-    /// Shared, app-wide extraction provider. The app-layer bridge from the
-    /// headless queue engine to `@MainActor` types.
-    public let extractionProvider: any QueueExtractionProvider
-
     private struct SearchRelease: Sendable {
         let token: UUID
         let task: Task<Void, Never>
@@ -149,7 +145,6 @@ public final class SessionManager {
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
-        extractionProvider: any QueueExtractionProvider,
         providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
@@ -162,7 +157,6 @@ public final class SessionManager {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
-        self.extractionProvider = extractionProvider
         self.providerServices = providerServices
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         self.htmlMarkdownExtractorFactory = htmlMarkdownExtractorFactory

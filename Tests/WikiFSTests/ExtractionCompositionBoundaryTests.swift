@@ -9,7 +9,9 @@ struct ExtractionCompositionBoundaryTests {
         let root = repositoryRoot()
         let paths = [
             "Sources/WikiFS/Sources/SourceDetailView.swift",
-            "Sources/WikiFS/Queue/AppQueueExtractionProvider.swift",
+            // The AppQueue* provider files were deleted at P4.3 (the daemon
+            // queue is the sole extraction/ingestion executor); the boundary
+            // they guarded now lives in the daemon provider.
             "Sources/wikid/DaemonQueueExtractionProvider.swift",
         ]
         let source = try paths.map { path in

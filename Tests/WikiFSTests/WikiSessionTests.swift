@@ -41,8 +41,7 @@ struct ProfileWikiSessionTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
         #expect(session.wikiID == descriptor.id)
         #expect(session.store.eventBus != nil)
@@ -65,15 +64,13 @@ struct ProfileWikiSessionTests {
             descriptor: registryA.wikis.first!,
             containerDirectory: dirA,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
         let sessionB = try! ProfileWikiSession(
             testFixtureWikiID: registryB.wikis.first!.id,
             descriptor: registryB.wikis.first!,
             containerDirectory: dirB,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
         // Two sessions have distinct AgentLauncher instances.
         #expect(sessionA.agentLauncher !== sessionB.agentLauncher)
@@ -101,15 +98,13 @@ struct ProfileWikiSessionTests {
             descriptor: registryA.wikis.first!,
             containerDirectory: dirA,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
         let sessionB = try! ProfileWikiSession(
             testFixtureWikiID: registryB.wikis.first!.id,
             descriptor: registryB.wikis.first!,
             containerDirectory: dirB,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
         // Acquire a slot on session A's gate.
         let acquiredA = await sessionA.generationGate.acquire(.ingest)
@@ -135,8 +130,7 @@ struct ProfileWikiSessionTests {
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
         await session.previewVacuumAll()
         let report = session.pendingVacuumAll
@@ -160,8 +154,7 @@ struct ProfileWikiSessionTests {
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
         await session.previewBlobVacuum()
         let report = session.pendingBlobVacuum
@@ -187,8 +180,7 @@ struct ProfileWikiSessionTests {
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try! makeTestQueueEngine())
 
         // No app bundle → no MiniLM model → upgradeSearchIndex is a safe no-op.
         await session.upgradeSearchIndex()
@@ -218,7 +210,6 @@ struct ProfileWikiSessionTests {
                 containerDirectory: dir,
                 extractionCoordinator: coordinator,
                 queueEngine: try! makeTestQueueEngine(),
-                extractionProvider: StubExtractionProvider(),
                 makeStore: { _ in throw StoreOpenFailure() })
         }
     }

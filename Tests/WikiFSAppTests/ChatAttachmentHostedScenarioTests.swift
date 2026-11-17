@@ -234,8 +234,7 @@ struct ChatAttachmentHostedScenarioTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: extractionCoordinator,
-            queueEngine: try makeScenarioQueueEngine(),
-            extractionProvider: ScenarioStubExtractionProvider())
+            queueEngine: try makeScenarioQueueEngine())
         let dbURL = try #require(
             (try FileManager.default.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: nil))

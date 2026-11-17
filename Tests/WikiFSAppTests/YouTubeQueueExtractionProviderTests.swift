@@ -216,17 +216,14 @@ struct YouTubeQueueExtractionProviderTests {
 
     // MARK: - App provider
 
-    @Test func appProviderResolvesYouTubeThroughPackageAndPersistsProvenance() async throws {
+    @Test func providerResolvesYouTubeThroughPackageAndPersistsProvenance() async throws {
         let store = try makeStore()
         let sourceID = try seedYouTubeSource(store)
-        let model = WikiStoreModel(store: store)
         let executor = FakeYouTubeExecutor()
 
-        let box = SessionLookupBox()
-        box.setLookup { _ in model }
-        let provider = AppQueueExtractionProvider(
+        let provider = DaemonQueueExtractionProvider(
             extractionServices: try await makeServices(executor: executor),
-            sessionBox: box)
+            storeResolver: { _ in store })
 
         // Resolution runs the package arm with the stored watch URL.
         let resolution = try await provider.resolveExtraction(
@@ -277,21 +274,18 @@ struct YouTubeQueueExtractionProviderTests {
     /// route that actually produced the bytes (`yt-dlp` at its pinned
     /// release) while the package provenance stays the exact reviewed
     /// revision — both survive persistence.
-    @Test func appProviderPersistsYtdlpFallbackProvenance() async throws {
+    @Test func providerPersistsYtdlpFallbackProvenance() async throws {
         let store = try makeStore()
         let sourceID = try seedYouTubeSource(store)
-        let model = WikiStoreModel(store: store)
         let executor = FakeYouTubeExecutor(metadata: try ExtractorReportedMetadata(
             toolName: "yt-dlp",
             toolVersion: "2026.08.19",
             language: "en",
             transcriptGenerated: true))
 
-        let box = SessionLookupBox()
-        box.setLookup { _ in model }
-        let provider = AppQueueExtractionProvider(
+        let provider = DaemonQueueExtractionProvider(
             extractionServices: try await makeServices(executor: executor),
-            sessionBox: box)
+            storeResolver: { _ in store })
 
         guard case .transcript(let transcript)? = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
@@ -403,11 +397,9 @@ struct YouTubeQueueExtractionProviderTests {
         let sourceID = try seedYouTubeSource(store, plan: shortsURL, externalIdentity: Self.videoID)
         let executor = FakeYouTubeExecutor()
 
-        let box = SessionLookupBox()
-        box.setLookup { _ in WikiStoreModel(store: store) }
-        let provider = AppQueueExtractionProvider(
+        let provider = DaemonQueueExtractionProvider(
             extractionServices: try await makeServices(executor: executor),
-            sessionBox: box)
+            storeResolver: { _ in store })
 
         guard case .transcript(let transcript)? = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
@@ -426,11 +418,9 @@ struct YouTubeQueueExtractionProviderTests {
         let sourceID = try seedYouTubeSource(store, plan: "not a url", externalIdentity: Self.videoID)
         let executor = FakeYouTubeExecutor()
 
-        let box = SessionLookupBox()
-        box.setLookup { _ in WikiStoreModel(store: store) }
-        let provider = AppQueueExtractionProvider(
+        let provider = DaemonQueueExtractionProvider(
             extractionServices: try await makeServices(executor: executor),
-            sessionBox: box)
+            storeResolver: { _ in store })
 
         guard case .transcript(let transcript)? = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
@@ -457,11 +447,9 @@ struct YouTubeQueueExtractionProviderTests {
                 filenameSuffix: "invalid-\(index)")
             let executor = FakeYouTubeExecutor()
 
-            let box = SessionLookupBox()
-            box.setLookup { _ in WikiStoreModel(store: store) }
-            let provider = AppQueueExtractionProvider(
+            let provider = DaemonQueueExtractionProvider(
                 extractionServices: try await makeServices(executor: executor),
-                sessionBox: box)
+                storeResolver: { _ in store })
 
             let resolution = try await provider.resolveExtraction(
                 wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil, transcriptionIntent: nil)

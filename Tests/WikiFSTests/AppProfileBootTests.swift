@@ -117,7 +117,6 @@ struct AppProfileBootTests {
             descriptor: descriptor,
             containerDirectory: directory,
             catalog: try ProfileBootFixture.appCatalog(),
-            extractionProvider: ProfileBootFixture.extractionProvider(),
             searchServices: UnavailableSearchServices())
 
         #expect(facade.wikiID == wikiID)

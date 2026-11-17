@@ -195,67 +195,6 @@ struct AppleQueueExtractionProviderTests {
         return summary.id
     }
 
-    // MARK: - App provider (AC.9)
-
-    @Test func appProviderResolvesAppleThroughPackageAndPersistsProvenance() async throws {
-        let store = try makeStore()
-        let sourceID = try seedAppleSource(store)
-        let model = WikiStoreModel(store: store)
-        let executor = FakeAppleExecutor()
-
-        let box = SessionLookupBox()
-        box.setLookup { _ in model }
-        let provider = AppQueueExtractionProvider(
-            extractionServices: try await makeServices(executor: executor),
-            sessionBox: box)
-
-        // Resolution runs the package arm with the validated episode URL.
-        let resolution = try await provider.resolveExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil,
-            transcriptionIntent: nil)
-        guard case .transcript(let transcript)? = resolution else {
-            Issue.record("expected a transcript resolution")
-            return
-        }
-        guard case .installedPackage(let producer) = transcript.resultMode else {
-            Issue.record("expected installedPackage result mode")
-            return
-        }
-        #expect(producer.revision == Self.applePackage.revision)
-        #expect(producer.registrationID.rawValue == "apple-episode")
-        #expect(producer.protocolRevision == .v3)
-        // The package workflow never ran here, but the request the executor
-        // received carried the validated remote URL.
-        _ = try await transcript.fetch { _ in }
-        #expect(executor.lastRequest?.remoteURL?.rawValue == Self.episodeURL)
-        #expect(executor.lastRequest?.kind == .applePodcastTranscript)
-
-        // Persistence: exact provenance, transcript origin, initial v1 link.
-        let outcome = TranscriptFetchOutcome(
-            markdown: "SPEAKER_1: Hello from the episode.",
-            reportedMetadata: try ExtractorReportedMetadata(toolName: "apple-podcast-transcript"))
-        try await provider.persistTranscriptExtraction(
-            wikiID: WikiID(rawValue: "w"), sourceID: sourceID,
-            resolution: transcript, outcome: outcome)
-
-        let head = try #require(try store.processedMarkdownHead(sourceID: sourceID))
-        #expect(head.origin == .transcript)
-        #expect(head.content == outcome.markdown)
-        let initialV1 = try #require(
-            try store.contentVersionHistory(sourceID: sourceID)
-                .first(where: { $0.parentID == nil }))
-        #expect(head.sourceVersionID == initialV1.id)
-        let provenance = try #require(
-            try store.extractionProvenance(markdownVersionID: head.id))
-        #expect(provenance.origin == .transcript)
-        guard case .installedPackage(let persisted) = provenance.producer else {
-            Issue.record("expected installed-package producer")
-            return
-        }
-        #expect(persisted.revision == Self.applePackage.revision)
-        #expect(persisted.reportedMetadata.toolName == "apple-podcast-transcript")
-    }
-
     // MARK: - Daemon provider (AC.9)
 
     @Test func daemonProviderResolvesAppleThroughPackageAndPersistsProvenance() async throws {
@@ -288,6 +227,9 @@ struct AppleQueueExtractionProviderTests {
         #expect(head.sourceVersionID == initialV1.id)
     }
 
+    // MARK: - (AC.9) — the app-local provider is deleted (P4.3); these
+    // contracts hold against the daemon twin above, the sole host.
+
     // MARK: - Invalid URLs fail closed (AC.5's front door)
 
     @Test func nonApplePlanURLYieldsNoResolution() async throws {
@@ -303,12 +245,9 @@ struct AppleQueueExtractionProviderTests {
                 externalRef: "not a url",
                 externalIdentity: "1"),
             role: .primary)
-        let model = WikiStoreModel(store: store)
-        let box = SessionLookupBox()
-        box.setLookup { _ in model }
-        let provider = AppQueueExtractionProvider(
+        let provider = DaemonQueueExtractionProvider(
             extractionServices: try await makeServices(executor: FakeAppleExecutor()),
-            sessionBox: box)
+            storeResolver: { _ in store })
 
         let resolution = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: summary.id, backendOverride: nil,

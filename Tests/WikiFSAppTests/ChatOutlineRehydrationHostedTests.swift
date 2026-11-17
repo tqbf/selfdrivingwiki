@@ -211,8 +211,7 @@ struct ChatOutlineRehydrationHostedTests {
             descriptor: descriptor,
             containerDirectory: directory,
             extractionCoordinator: extractionCoordinator,
-            queueEngine: try makeChatOutlineTestQueueEngine(),
-            extractionProvider: ChatOutlineStubExtractionProvider()
+            queueEngine: try makeChatOutlineTestQueueEngine()
         )
         let daemon = StubChatDaemonCommands()
         let coordinator = ChatDaemonCoordinator(

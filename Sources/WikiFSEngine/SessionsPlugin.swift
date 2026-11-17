@@ -72,7 +72,6 @@ extension ProfileWikiSession {
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
-        extractionProvider: any QueueExtractionProvider,
         providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         makeStore: (URL) throws -> any WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
@@ -117,7 +116,6 @@ extension ProfileWikiSession {
             agentLauncher: launcher,
             extractionCoordinator: extractionCoordinator,
             queueEngine: queueEngine,
-            extractionProvider: extractionProvider,
             htmlBackend: htmlBackendResolver())
     }
 }
@@ -131,7 +129,6 @@ extension AppProcessProfileOwner {
         descriptor: WikiDescriptor,
         containerDirectory: URL,
         catalog: PluginCatalog,
-        extractionProvider: any QueueExtractionProvider,
         searchServices: any SearchServices,
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
@@ -189,15 +186,20 @@ extension AppProcessProfileOwner {
         let dataSelectedKinds = claimedKinds
             .intersection(ExtractorRouteDefaults.bundled.autoExtractKinds)
         model.importAutoExtractionKinds = packageOnlyKinds.union(dataSelectedKinds)
-        model.importExtractorProvider = { [extractionCoordinator] kind in
-            await extractionCoordinator.prepareImportExtractor(kind: kind)
-        }
-        // Queue-startup recovery (fetcher packages): the wiki session open
-        // owns one stranded-format-job scan. App and daemon use the SAME
-        // dedupe keys, so a scan racing the other host converges on one item.
-        if let recovering = extractionProvider as? any FetchFormatJobRecovering {
-            await recovering.recoverStrandedFormatJobs(
-                wikiID: wikiID, store: childServices.store)
+        // P4.3 workload migration: import conversion is a durable DAEMON
+        // format job. The model enqueues through the SAME hot-swap
+        // queue-engine client the manual paths use (`processServices.queue`);
+        // the daemon's provider executes the conversion and persists the
+        // markdown, and progress/status arrive over the queue event stream.
+        // No in-app conversion runs at import.
+        let queueClient = processServices.queue
+        model.enqueueImportFormatJob = { [wikiID] sourceID in
+            _ = try await queueClient.enqueue(QueueItemRequest(
+                queue: .extraction,
+                wikiID: wikiID,
+                payload: QueueItemPayload(
+                    sourceIDs: [sourceID],
+                    workloadIntent: .importConversion)))
         }
         // Plan P1.3 readiness barrier: bootstrap the model's projections and
         // seed a Home page for an empty wiki BEFORE the session reaches the
@@ -212,7 +214,6 @@ extension AppProcessProfileOwner {
             agentLauncher: pair.launcher,
             extractionCoordinator: extractionCoordinator,
             queueEngine: processServices.queue,
-            extractionProvider: extractionProvider,
             htmlBackend: htmlBackendResolver(),
             profileLifetime: childServices.lifetime)
         await session.seedHomeIfNeeded()

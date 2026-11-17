@@ -47,7 +47,6 @@ struct SourceDetailView: View {
     let extractionCoordinator: ExtractionCoordinator
     /// Resolves reviewed HTML package adapters for this process.
     let queueEngine: any QueueEngineClient
-    let extractionProvider: any QueueExtractionProvider
     let fileProvider: FileProviderFacade
     @Bindable var store: WikiStoreModel
     /// The app composition root will supply the validated installed-renderer
@@ -1118,32 +1117,62 @@ struct SourceDetailView: View {
     }
 
 
-    // MARK: - Refresh (Phase 3b)
+    // MARK: - Refresh (Phase 3b → P4.3)
 
-    /// Re-fetch the source via its provider, appending a new version. The
-    /// materialization (network fetch) runs off-main inside the service; the
-    /// store write + `reloadSources` happen on-main inside `refreshSource`.
-    /// On success, reloads the head markdown so the reader updates.
-    /// Podcast and YouTube sources are queue-routed: the typed
-    /// `.transcriptQueueRequired` error from the refresh service triggers the
-    /// same durable extraction enqueue the Transcribe action uses.
+    /// Refresh routing, client-side decision + daemon-side execution. The
+    /// podcast arms enqueue the durable transcript job (unchanged); import-only
+    /// providers surface notRefreshable; the website arm enqueues the daemon
+    /// refresh job — the daemon re-fetches the recorded URL and appends the
+    /// content version daemon-side (the store event arrives over the sink).
+    /// A failed refresh item surfaces the daemon's typed message
+    /// (missing plan, snapshot-with-images guard).
     private func runRefresh() async {
         isRefreshing = true
         refreshError = nil
         defer { isRefreshing = false }
-        do {
-            _ = try await store.refreshSource(file.id)
-            headVersion = await store.processedMarkdownHead(for: file)
-        } catch SourceRefreshService.RefreshError.notRefreshable(let agent) {
-            refreshError = "This \(agent) source can't be refreshed."
-        } catch SourceRefreshService.RefreshError.snapshotWithImages {
-            refreshError = "This snapshot source includes images; re-snapshotting on refresh is coming soon."
-        } catch SourceRefreshService.RefreshError.transcriptQueueRequired {
+        guard let origin else {
+            refreshError = "This source can't be refreshed."
+            return
+        }
+        switch origin.provider {
+        case .applePodcast, .podcast:
+            // Transcript sources run through the durable extraction enqueue
+            // (the extractor-package routes) — the same job the Transcribe
+            // action uses.
             await runTranscription()
             if let head = await store.processedMarkdownHead(for: file) {
                 headVersion = head
             }
+        case .website:
+            await runRefreshEnqueue()
+        case .youtube, .localFile, .zotero, .markdownFolder, .vimeo,
+             .spotify, .soundcloud, .remoteMedia, .legacyImport, nil:
+            refreshError = "This \(origin.agentName) source can't be refreshed."
+        }
+    }
+
+    /// The website-arm enqueue: one durable `.refreshSource` item, completion
+    /// wait, and post-success version refresh. A failed item surfaces the
+    /// daemon's typed message via `refreshError`.
+    private func runRefreshEnqueue() async {
+        do {
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
+                payload: QueueItemPayload(
+                    sourceIDs: [file.id],
+                    workloadIntent: .refreshSource))
+            let itemID = try await queueEngine.enqueue(request)
+            let result = try await queueEngine.waitForCompletion(of: itemID)
+            switch result {
+            case .success:
+                headVersion = await store.processedMarkdownHead(for: file)
+            case .failure(let error):
+                refreshError = (error as? LocalizedError)?.errorDescription
+                    ?? "Refresh failed: \(error.localizedDescription)"
+            }
         } catch {
+            // Enqueue/transport error — tracker not updated (no queue event).
+            DebugLog.extraction("SourceDetailView: refresh enqueue failed (\(file.id.rawValue)): \(error)")
             refreshError = "Refresh failed: \(error.localizedDescription)"
         }
     }
@@ -1796,125 +1825,90 @@ struct SourceDetailView: View {
         }
     }
 
-    /// HTML extraction trigger (issue #799 PR2). Inline — does NOT route
-    /// through the queue engine (which is PDF-coupled via
-    /// `ExtractionResolution.pdfData` / `convert(pdfData:)` /
-    /// `seedPdfMarkdown` — generalizing the queue is a deferred sub-project
-    /// per the parent plan's "Out of scope" section). Dispatches to
-    /// `WikiStoreModel.extractHtml(for:backend:)`, which reads the source's
-    /// HTML bytes, resolves the reviewed package extractor, and writes the
-    /// result via
-    /// `appendProcessedMarkdown` (same write path as `enrichWithDefuddle`).
-    /// Uses the configured route selection. An unavailable explicit selection
-    /// blocks extraction until the user fixes it in Extraction Settings.
+    /// HTML extraction trigger. P4.3 workload migration: the conversion runs
+    /// DAEMON-SIDE — the view enqueues a durable `.extraction` format job
+    /// through the queue engine (the same client every manual path uses) and
+    /// projects status over the queue events. The daemon resolves the
+    /// registration-claimed route (the reviewed HTML package), converts, and
+    /// persists the markdown; this view only waits for completion and
+    /// refreshes the displayed version. A failed conversion (package
+    /// inactive, empty result) fails the item visibly — its message lands in
+    /// `htmlExtractionError` here and in the Activity window.
     private func runHtmlExtraction() async {
-        isExtracting = true
-        defer {
-            isExtracting = false
-        }
-        // The label reflects the session-wired HTML selection (route-record
-        // derived); nil falls back to the tag-based execution floor. The
-        // extractor itself resolves through the route record either way.
-        let backend = store.htmlBackend ?? .tagBased
-        let extractor: any HtmlMarkdownExtractor
-        do {
-            extractor = try await extractionCoordinator.prepareHTML(backendOverride: nil)
-        } catch {
-            DebugLog.extraction("HTML extractor preparation failed: \(error.localizedDescription)")
-            htmlExtractionError = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-            return
-        }
-        if let head = await store.extractHtml(
-            for: file.id,
-            backend: backend,
-            extractor: extractor)
-        {
-            headVersion = head
-        }
+        await runFormatJobEnqueue()
     }
 
-    /// HTML re-extraction trigger (issue #799 PR2). Called by the
-    /// "Re-extract with" menu's HTML branch when the user picks a backend
-    /// from `HtmlExtractionBackend.allCases`. Mirrors `runReExtraction(with:)`
-    /// but routes through the inline `extractHtml` path (same module-level
-    /// decision as `runHtmlExtraction`). `appendProcessedMarkdown` always
-    /// appends — first version is HEAD by the default-active rule, later
-    /// versions ride as coexisting alternatives (no clobber), so re-extract
-    /// naturally creates an alternative the provenance chip surfaces.
+    /// HTML re-extraction trigger — the "Re-extract with" menu's HTML
+    /// branch. The user's explicit backend choice rides the payload's
+    /// `htmlBackend` stage-routing key; the daemon resolves that exact
+    /// backend. `appendDerivedMarkdown` always appends, so a re-run creates
+    /// a coexisting alternative the provenance chip surfaces.
     private func runHtmlReExtraction(with backend: HtmlExtractionBackend) async {
-        isExtracting = true
-        defer {
-            isExtracting = false
-        }
-        // The override is the user's explicit backend choice for this run.
-        let extractor: any HtmlMarkdownExtractor
-        do {
-            extractor = try await extractionCoordinator.prepareHTML(backendOverride: backend)
-        } catch {
-            DebugLog.extraction("HTML extractor preparation failed: \(error.localizedDescription)")
-            htmlExtractionError = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-            return
-        }
-        if let head = await store.extractHtml(for: file.id, backend: backend, extractor: extractor) {
-            headVersion = head
-        }
+        await runFormatJobEnqueue(htmlBackendOverride: backend)
     }
 
     /// DOCX extraction trigger — the package-only sibling of
-    /// `runHtmlExtraction`. Inline — does NOT route through the queue engine
-    /// (same PDF-coupling rationale as the HTML path). DOCX has no backend
-    /// choice and no built-in fallback: the route resolves the reviewed
-    /// docx2md package (or the user's explicit installed-package selection),
-    /// and an inactive package fails closed with a surfaced error.
-    /// Dispatches to `WikiStoreModel.extractDocx(for:extractor:)`, which reads
-    /// the source's `.docx` bytes and writes the result via
-    /// `appendProcessedMarkdown`.
+    /// `runHtmlExtraction`. Same daemon-side conversion: the enqueue carries
+    /// no override (DOCX has one package route), the daemon checks the
+    /// runtime readiness and fails the item with setup guidance when the
+    /// reviewed docx2md package is unavailable.
     private func runDocxExtraction() async {
+        await runFormatJobEnqueue()
+    }
+
+    /// DOCX re-extraction trigger — the "Re-extract with" menu's DOCX
+    /// branch. There is exactly one DOCX execution path (the reviewed docx2md
+    /// package; no backend enum exists to iterate), so this is
+    /// `runDocxExtraction` under a re-extraction name.
+    private func runDocxReExtraction() async {
+        await runDocxExtraction()
+    }
+
+    /// The shared manual format-job enqueue: one durable `.extraction` item,
+    /// completion wait, and post-success version refresh (newest version
+    /// first — a re-extract alternative is not the active head, but the view
+    /// displays the fresh conversion, same posture as the inline path this
+    /// replaces). A failed item surfaces its message via
+    /// `htmlExtractionError`; enqueue/transport failures are logged (the
+    /// tracker records queue-event state).
+    private func runFormatJobEnqueue(
+        htmlBackendOverride: HtmlExtractionBackend? = nil
+    ) async {
         isExtracting = true
         defer {
             isExtracting = false
         }
-        let extractor: any DocxMarkdownExtractor
         do {
-            extractor = try await extractionCoordinator.prepareDOCX()
-        } catch {
-            DebugLog.extraction("DOCX extractor preparation failed: \(error.localizedDescription)")
-            htmlExtractionError = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-            return
-        }
-        // A runtime problem (bun missing, entry point absent) is a cheap
-        // stat-based probe away — surface it instead of letting the managed
-        // spawn fail into a silent nil.
-        let readiness = await extractor.readiness()
-        switch readiness {
-        case .ready:
-            break
-        case .needsSetup(let message), .notInstalled(let message):
-            htmlExtractionError = message
-            return
-        }
-        if let head = await store.extractDocx(for: file.id, extractor: extractor) {
-            headVersion = head
-        } else {
-            // The extractor swallows process errors into nil (mirroring the
-            // HTML path) and the model logs the redacted reason; say
-            // something rather than doing nothing.
-            DebugLog.extraction("DOCX extraction returned no markdown (source=\(file.id.rawValue))")
-            htmlExtractionError = "Word document extraction failed. A redacted reason is in Console (subsystem com.selfdrivingwiki.debug)."
-        }
-    }
+            var payload = QueueItemPayload(sourceIDs: [file.id])
+            if let htmlBackendOverride {
+                payload.stageRouting = [
+                    StageRoutingKey.htmlBackend.rawValue: htmlBackendOverride.rawValue]
+            }
+            let request = QueueItemRequest(
+                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
+                payload: payload)
+            let itemID = try await queueEngine.enqueue(request)
+            let result = try await queueEngine.waitForCompletion(of: itemID)
 
-    /// DOCX re-extraction trigger — the "Re-extract with" menu's DOCX branch.
-    /// There is exactly one DOCX execution path (the reviewed docx2md
-    /// package; no backend enum exists to iterate), so this is
-    /// `runDocxExtraction` under a re-extraction name. Like the HTML
-    /// re-extract, `appendProcessedMarkdown` always appends, so a re-run
-    /// creates a coexisting alternative the provenance chip surfaces.
-    private func runDocxReExtraction() async {
-        await runDocxExtraction()
+            switch result {
+            case .success:
+                // The worker persisted the markdown daemon-side; refresh the
+                // displayed version from the newest row.
+                if let newest = await store.processedMarkdownHistory(for: file.id).first {
+                    headVersion = newest
+                } else if let head = await store.processedMarkdownHead(for: file) {
+                    headVersion = head
+                }
+            case .failure(let error):
+                // The daemon failed the item (package unavailable, empty
+                // conversion) — surface the same message the inline path did.
+                htmlExtractionError = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+        } catch {
+            // Enqueue/transport error — tracker not updated (no queue event).
+            DebugLog.extraction("SourceDetailView: format-job enqueue failed (\(file.id.rawValue)): \(error)")
+        }
     }
 
     /// Enqueues a durable `.extraction` queue job for transcription. The queue

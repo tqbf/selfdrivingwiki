@@ -340,9 +340,10 @@ struct ExtractorKindNeutralityContractTests {
                 gateMatches.isEmpty,
                 "\(file.lastPathComponent) gates behavior on the .zotero origin provider; acquisition must come from fetcher registration claims")
 
-            // Both hosts must consult the shared decision.
-            if file.lastPathComponent == "AppQueueExtractionProvider.swift"
-                || file.lastPathComponent == "DaemonQueueExtractionProvider.swift" {
+            // The surviving host must consult the shared decision (P4.3:
+            // the app-local provider is deleted; the daemon provider is the
+            // only queue-extraction host).
+            if file.lastPathComponent == "DaemonQueueExtractionProvider.swift" {
                 queueProviderFiles += 1
                 #expect(
                     contents.contains("FetchRouteDecision"),
@@ -350,8 +351,8 @@ struct ExtractorKindNeutralityContractTests {
             }
         }
         #expect(
-            queueProviderFiles == 2,
-            "the app and daemon queue extraction providers must both exist and be scanned")
+            queueProviderFiles == 1,
+            "the daemon queue extraction provider is the sole host and must be scanned")
     }
 
     /// The on-device speech acquisition runs as a FETCHER route, never as

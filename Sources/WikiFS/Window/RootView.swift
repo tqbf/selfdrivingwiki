@@ -35,7 +35,6 @@ struct RootView: View {
             agentLauncher: session.agentLauncher,
             extractionCoordinator: session.extractionCoordinator,
             queueEngine: session.queueEngine,
-            extractionProvider: session.extractionProvider,
             installedRendererHost: installedRendererHost,
             onRendererActivation: { reference, input in Task { await presentRendererActivation(reference: reference, input: input) } }
         )

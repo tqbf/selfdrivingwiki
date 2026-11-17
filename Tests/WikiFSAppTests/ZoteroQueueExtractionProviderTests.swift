@@ -294,7 +294,7 @@ struct ZoteroQueueExtractionProviderTests {
 
     // MARK: - source-bytes result (AC.7 pdf variant)
 
-    @Test func appProviderBytesResultStoresBlobAndProvenanceAndEnqueuesFollowOn() async throws {
+    @Test func providerBytesResultStoresBlobAndProvenanceAndEnqueuesFollowOn() async throws {
         let store = try makeStore()
         let sourceID = try seedZoteroSource(store)
         let pdfBytes = Data("%PDF-1.4 fixture bytes".utf8)
@@ -303,14 +303,12 @@ struct ZoteroQueueExtractionProviderTests {
             resultMIMEType: try ExtractorMIMEType(validating: "application/pdf"),
             identifier: "PARENT01")
 
-        let (queueStore, queueURL) = try makeFollowOnQueueStore()
+        let (queueStore, _) = try makeFollowOnQueueStore()
         defer { queueStore.close() }
-        let box = SessionLookupBox()
-        box.setLookup { _ in WikiStoreModel(store: store) }
-        let provider = AppQueueExtractionProvider(
+        let provider = DaemonQueueExtractionProvider(
             extractionServices: try await makeServices(executor: executor),
-            sessionBox: box,
-            queueDatabaseURL: queueURL)
+            storeResolver: { _ in store },
+            queueStore: queueStore)
 
         // Resolution runs the fetch arm with the stored file URL, revision-5.
         let resolution = try await provider.resolveExtraction(
@@ -368,7 +366,7 @@ struct ZoteroQueueExtractionProviderTests {
 
     // MARK: - Markdown result
 
-    @Test func appProviderMarkdownResultAppendsPackageMarkdownAndProvenance() async throws {
+    @Test func providerMarkdownResultAppendsPackageMarkdownAndProvenance() async throws {
         let store = try makeStore()
         let sourceID = try seedZoteroSource(store)
         let markdown = Data("# Converted notes\n".utf8)
@@ -377,11 +375,9 @@ struct ZoteroQueueExtractionProviderTests {
             resultMIMEType: nil, // no resultMIMEType: the output IS the Markdown
             identifier: "PARENT02")
 
-        let box = SessionLookupBox()
-        box.setLookup { _ in WikiStoreModel(store: store) }
-        let provider = AppQueueExtractionProvider(
+        let provider = DaemonQueueExtractionProvider(
             extractionServices: try await makeServices(executor: executor),
-            sessionBox: box)
+            storeResolver: { _ in store })
 
         guard case .fetch(let fetcher)? = try await provider.resolveExtraction(
             wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil, transcriptionIntent: nil) else {
@@ -487,7 +483,7 @@ struct ZoteroQueueExtractionProviderTests {
     /// a fetch again and re-fetched the same attachment forever
     /// (observed live: one PDF re-acquired 200+ times, one queue item per
     /// fetch, no markdown ever produced).
-    @Test func appProviderAcquiredBytesResolveThroughFormatRoute() async throws {
+    @Test func providerAcquiredBytesResolveThroughFormatRoute() async throws {
         let store = try makeStore()
         let sourceID = try seedZoteroSource(store)
         let pdfBytes = Data("%PDF-1.4 fixture bytes".utf8)
@@ -495,13 +491,11 @@ struct ZoteroQueueExtractionProviderTests {
             outputBytes: pdfBytes,
             resultMIMEType: try ExtractorMIMEType(validating: "application/pdf"),
             identifier: "PARENT10")
-        let box = SessionLookupBox()
-        box.setLookup { _ in WikiStoreModel(store: store) }
-        let provider = AppQueueExtractionProvider(
+        let provider = DaemonQueueExtractionProvider(
             extractionServices: try await makeServices(
                 executor: executor,
                 formatRoutePreparation: Self.formatRoutePreparation),
-            sessionBox: box)
+            storeResolver: { _ in store })
 
         // First resolution (byteless source): the acquisition arm.
         guard case .fetch(let fetcher)? = try await provider.resolveExtraction(

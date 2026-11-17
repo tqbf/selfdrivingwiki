@@ -37,12 +37,10 @@ struct SessionManagerTests {
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         let queueEngine = try! makeTestQueueEngine()
-        let provider = StubExtractionProvider()
         return SessionManager(
             containerDirectory: dir,
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
-            extractionProvider: provider,
             pdf2mdScriptPathResolver: { nil },
             testSessionFactory: { wikiID, descriptor in
                 try ProfileWikiSession(
@@ -50,8 +48,7 @@ struct SessionManagerTests {
                     descriptor: descriptor,
                     containerDirectory: dir,
                     extractionCoordinator: coordinator,
-                    queueEngine: queueEngine,
-                    extractionProvider: provider)
+                    queueEngine: queueEngine)
             })
     }
 
@@ -63,12 +60,10 @@ struct SessionManagerTests {
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         let queueEngine = try makeTestQueueEngine()
-        let provider = StubExtractionProvider()
         return SessionManager(
             containerDirectory: dir,
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
-            extractionProvider: provider,
             pdf2mdScriptPathResolver: { nil },
             testSessionFactory: { wikiID, descriptor in
                 try ProfileWikiSession(
@@ -77,7 +72,6 @@ struct SessionManagerTests {
                     containerDirectory: dir,
                     extractionCoordinator: coordinator,
                     queueEngine: queueEngine,
-                    extractionProvider: provider,
                     makeStore: makeStore)
             })
     }
@@ -114,7 +108,6 @@ struct SessionManagerTests {
             containerDirectory: dir,
             extractionCoordinator: coordinator,
             queueEngine: try makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider(),
             pdf2mdScriptPathResolver: { nil },
             asyncSessionLoader: { _, _ in
                 await calls.increment()
@@ -153,7 +146,6 @@ struct SessionManagerTests {
             containerDirectory: dir,
             extractionCoordinator: coordinator,
             queueEngine: try makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider(),
             pdf2mdScriptPathResolver: { nil },
             asyncSessionLoader: { _, _ in throw AsyncReadinessFailure() })
         let descriptor = try #require(registry.wikis.first)

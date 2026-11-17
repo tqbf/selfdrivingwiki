@@ -79,7 +79,7 @@ struct SessionOpenLatencyBudgetTests {
                     base: BasePluginCatalogFactories(
                         agentProviderServices: UnavailableAgentProviderServices()),
                     makeDaemonTransport: { ProfileBootFixture.fixtureTransportServices() })),
-                extractionProvider: ProfileBootFixture.extractionProvider(),
+    
                 searchServices: UnavailableSearchServices())
             coldOpens.append(clock.now - start)
             sessions.append(session)

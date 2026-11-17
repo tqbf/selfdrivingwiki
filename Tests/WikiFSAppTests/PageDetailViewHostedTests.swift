@@ -149,8 +149,7 @@ struct PageDetailViewHostedTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try makeTestQueueEngine())
     }
 }
 

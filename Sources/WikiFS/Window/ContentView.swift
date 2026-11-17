@@ -20,7 +20,6 @@ struct ContentView: View {
     @Bindable var agentLauncher: AgentLauncher
     let extractionCoordinator: ExtractionCoordinator
     let queueEngine: any QueueEngineClient
-    let extractionProvider: any QueueExtractionProvider
     let installedRendererHost: InstalledRendererHost
     /// Optional typed renderer activation sink for page detail routes.
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
@@ -67,7 +66,6 @@ struct ContentView: View {
         agentLauncher: AgentLauncher,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
-        extractionProvider: any QueueExtractionProvider,
         installedRendererHost: InstalledRendererHost,
         onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil
     ) {
@@ -78,7 +76,6 @@ struct ContentView: View {
         self._agentLauncher = Bindable(wrappedValue: agentLauncher)
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
-        self.extractionProvider = extractionProvider
         self.installedRendererHost = installedRendererHost
         self.onRendererActivation = onRendererActivation
         // Package-declared rich fences: the built-in claim table is app-layer
@@ -365,7 +362,6 @@ struct ContentView: View {
             fileProvider: fileProvider,
             extractionCoordinator: extractionCoordinator,
             queueEngine: queueEngine,
-            extractionProvider: extractionProvider,
             installedRendererHost: installedRendererHost,
             onRendererActivation: onRendererActivation,
             runIngest: { id in runIngest(sourceID: id) },

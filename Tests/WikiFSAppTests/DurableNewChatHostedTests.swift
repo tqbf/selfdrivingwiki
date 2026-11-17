@@ -67,8 +67,7 @@ struct DurableNewChatHostedTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: extractionCoordinator,
-            queueEngine: try makeDurableChatTestQueueEngine(),
-            extractionProvider: DurableChatStubExtractionProvider())
+            queueEngine: try makeDurableChatTestQueueEngine())
         let coordinator = ChatDaemonCoordinator(
             client: StubChatDaemonCommands(),
             eventSink: DaemonQueueEventSink())
