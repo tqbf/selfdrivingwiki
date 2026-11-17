@@ -93,11 +93,16 @@ struct WikiFSApp: App {
     @State private var queueEngine: QueueEngineHotSwap
     /// Sole owner of the app-local Cordis queue runtime and all ownership transitions.
     @State private var localQueueRuntimeController: LocalQueueRuntimeController
-    /// App-wide extraction provider. Bridges the headless queue engine to the
-    /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`. Handles both
-    /// bytes-based extraction (PDF, HTML) AND transcript fetching (YouTube
-    /// captions, podcast feeds) — transcript sources resolve to a
-    /// `transcriptFetch` closure in the `ExtractionResolution`.
+    /// App-wide extraction provider. Bridges the daemon queue engine's
+    /// workload surface to the `@MainActor` `ExtractionCoordinator` +
+    /// `WikiStoreModel`: the wiki-session boot uses its
+    /// `FetchFormatJobRecovering` conformance for the stranded-format-job
+    /// scan, and `ProfileWikiSession` exposes it to the UI layer (Phase 4
+    /// slice 2 migrates both consumers daemon-side; the app no longer feeds
+    /// a local queue engine with it). Handles both bytes-based extraction
+    /// (PDF, HTML) AND transcript fetching (YouTube captions, podcast
+    /// feeds) — transcript sources resolve to a `transcriptFetch` closure
+    /// in the `ExtractionResolution`.
     @State private var extractionProvider: any QueueExtractionProvider
     /// Mutable box for the file provider reference — the ingestion provider
     /// uses it to access the `FileProviderFacade` which is only available
@@ -116,12 +121,6 @@ struct WikiFSApp: App {
     /// struct (see the model's doc comment). `@State` writes from that copy
     /// are silently lost; mutations of this shared instance always land.
     @State private var fileProviderSetupAlert = FileProviderSetupAlertModel()
-    /// Issue #881: user-visible error shown when the local `queue.sqlite`
-    /// could not be opened at launch (no silent `:memory:` fallback). Drives
-    /// an alert over the main window so the user understands ingestion /
-    /// extraction are unavailable (instead of silently dropping every
-    /// enqueued item on restart).
-    private var queueStoreError: String? { localQueueRuntimeController.startupError }
     /// Drives the Settings TabView selection so the activity windows can open
     /// Settings on the relevant tab (gear button → extraction/agents config).
     @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.extraction.rawValue
@@ -271,23 +270,7 @@ struct WikiFSApp: App {
         daemonTransportBridge = transportBridge
         let processComposition = AppProcessPluginCatalog(
             containerDirectory: directory,
-            transportBridge: transportBridge,
-            extractionProvider: { services, providerServices, queueDBURL in
-                AppQueueExtractionProvider(
-                    extractionServices: services,
-                    sessionBox: sessionBox,
-                    queueDatabaseURL: queueDBURL,
-                    transcriptCleanupAgent: ModelTranscriptCleanupAgent(
-                        services: providerServices))
-            },
-            makeIngestionProvider: { store, providerServices in
-                AppQueueIngestionProvider(
-                    sessionBox: sessionBox,
-                    fileProviderBox: fileProviderBox,
-                    wikictlDirectory: HelpersLocation.wikictlDirectory,
-                    queueStore: store,
-                    providerServices: providerServices)
-            })
+            transportBridge: transportBridge)
         let providerServices = processComposition.providerServices
         _agentProviderServices = State(initialValue: providerServices)
         let extractionServices = processComposition.extractionServices
@@ -591,7 +574,6 @@ struct WikiFSApp: App {
         bootstrapApp()
         startStatusItem()
         applyAppKitAppearance()
-        await localQueueRuntimeController.awaitSettled()
         await optionalRuntimeSetupModel.refresh()
         showingOptionalRuntimeSetup = !optionalRuntimeSetupModel.isComplete
         connectToDaemon()
@@ -1061,22 +1043,11 @@ struct WikiFSApp: App {
             } message: { warning in
                 Text(warning.message)
             }
-            // Issue #881: surface a queue-database open failure (the local
-            // `queue.sqlite` could not be opened). No silent in-memory
-            // fallback — ingestion / extraction are unavailable until the
-            // underlying issue is resolved.
-            .alert(
-                "Queue Database Unavailable",
-                isPresented: Binding(
-                    get: { queueStoreError != nil },
-                    set: { if !$0 { localQueueRuntimeController.dismissStartupError() } }
-                ),
-                presenting: queueStoreError
-            ) { _ in
-                Button("OK", role: .cancel) {}
-            } message: { message in
-                Text(message)
-            }
+            // The launch-time "Queue Database Unavailable" alert (#881) is
+            // gone with the local queue assembly (Phase 4): the app no
+            // longer opens `queue.sqlite` at launch. Queue degradation is
+            // the daemon-health surface (`UnavailableQueueEngine` states in
+            // the activity tracker).
             // No `.onChange(of: registry.wikis)` handler here any more: it
             // existed ONLY to keep the bridge's per-wiki Darwin subscriptions in
             // lockstep with the wiki set (#1374). The bridge now subscribes once

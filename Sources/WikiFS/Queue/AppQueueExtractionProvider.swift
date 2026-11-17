@@ -127,6 +127,18 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                 .appendingPathComponent("wikifs-speech-stages-\(UUID().uuidString)", isDirectory: true)
     }
 
+    // MARK: - Worker-invocation counter (Phase 4 gate harness)
+
+    /// Records one app-local provider worker invocation for the open-seam
+    /// harness (`plans/daemon-only-access.md`, AC.8). Only the queue engine's
+    /// worker path reaches these methods, so a record proves a pipeline ran
+    /// in the app process; the gate asserts ZERO.
+    private func recordWorkerInvocation(_ worker: String) {
+        WikiOpenSeamRecorder.shared.record(
+            seam: .queueProviderInvocation,
+            label: "AppQueueExtractionProvider.\(worker)")
+    }
+
     // MARK: - QueueExtractionProvider
 
     func resolveExtraction(
@@ -135,6 +147,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         backendOverride: ExtractionBackend?,
         transcriptionIntent: QueueItemPayload.TranscriptionIntent?
     ) async throws -> ExtractionResolution? {
+        recordWorkerInvocation("resolveExtraction")
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             DebugLog.extraction("AppQueueExtractionProvider: no session for wikiID=\(wikiID)")
             return nil
@@ -369,6 +382,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         sourceID: SourceID,
         outcome: SpeechOutcome
     ) async throws -> QueueExtractionOutputReference? {
+        recordWorkerInvocation("persistSpeechExtraction")
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             DebugLog.extraction("AppQueueExtractionProvider: persistSpeechExtraction — no session for wikiID=\(wikiID)")
             throw AppendDerivedMarkdownError.missingSource(sourceID)
@@ -404,6 +418,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         resolution: BytesExtractionResolution,
         markdown: String
     ) async throws -> QueueExtractionOutputReference? {
+        recordWorkerInvocation("persistBytesExtraction")
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             DebugLog.extraction("AppQueueExtractionProvider: persistBytesExtraction — no session for wikiID=\(wikiID)")
             return nil
@@ -449,6 +464,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         resolution: TranscriptExtractionResolution,
         outcome: TranscriptFetchOutcome
     ) async throws -> QueueExtractionOutputReference? {
+        recordWorkerInvocation("persistTranscriptExtraction")
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             DebugLog.extraction("AppQueueExtractionProvider: persistTranscriptExtraction — no session for wikiID=\(wikiID)")
             return nil
@@ -571,6 +587,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         resolution: FetcherResolution,
         outcome: FetchOutcome
     ) async throws -> QueueExtractionOutputReference? {
+        recordWorkerInvocation("persistFetch")
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             DebugLog.extraction("AppQueueExtractionProvider: persistFetch — no session for wikiID=\(wikiID)")
             return nil

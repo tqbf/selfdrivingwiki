@@ -64,7 +64,7 @@ struct QueueAssemblyContractTests {
         #expect(relinquish.contains("daemon.relinquishQueue"))
     }
 
-    @Test("both construction roots use one ready output channel")
+    @Test("the daemon is the only queue construction root; the app keeps the hot-swap client")
     func constructionRootsInjectReadyChannel() throws {
         let root = repositoryRoot()
         let app = try String(
@@ -77,8 +77,12 @@ struct QueueAssemblyContractTests {
             contentsOf: root.appendingPathComponent("Sources/wikid/WikiDaemon.swift"),
             encoding: .utf8)
 
+        // Phase 4 (plans/daemon-only-access.md): the app never assembles a
+        // local queue engine — neither the app root nor the app composition
+        // constructs the local runtime factory. The daemon is the sole
+        // construction root.
         #expect(!app.contains("QueueRuntimeFactory("))
-        #expect(composition.contains("QueueRuntimeFactory("))
+        #expect(!composition.contains("QueueRuntimeFactory("))
         #expect(app.contains("let queueEngine = runtimeController.client"))
         #expect(!app.contains("QueueWorkerOutputChannel(store:"))
         #expect(daemon.contains("let outputChannel = QueueWorkerOutputChannel(store: queueStore)"))

@@ -76,6 +76,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     // MARK: - Readiness (#440, extended #635)
 
     func readiness() async -> String? {
+        recordWorkerInvocation("readiness")
         // #635: detect the operator-disabled state. `selectedProvider()` falls
         // back to the hardcoded `claudeAcpDefault` when every configured
         // provider is disabled — that fallback passes the existing PATH-based
@@ -116,6 +117,18 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         return nil
     }
 
+    // MARK: - Worker-invocation counter (Phase 4 gate harness)
+
+    /// Records one app-local provider worker invocation for the open-seam
+    /// harness (`plans/daemon-only-access.md`, AC.8). Only the queue engine's
+    /// worker path reaches these methods, so a record proves an agent
+    /// pipeline ran in the app process; the gate asserts ZERO.
+    private func recordWorkerInvocation(_ worker: String) {
+        WikiOpenSeamRecorder.shared.record(
+            seam: .queueProviderInvocation,
+            label: "AppQueueIngestionProvider.\(worker)")
+    }
+
     // MARK: - QueueIngestionProvider
 
     func runIngestion(
@@ -130,6 +143,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
         onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
+        recordWorkerInvocation("runIngestion")
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
         }
@@ -365,6 +379,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
         onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
+        recordWorkerInvocation("runLint")
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
         }
@@ -427,6 +442,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
         onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
+        recordWorkerInvocation("runLint")
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
         }

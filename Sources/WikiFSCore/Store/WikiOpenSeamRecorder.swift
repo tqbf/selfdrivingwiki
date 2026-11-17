@@ -15,6 +15,17 @@ public enum WikiStorageSeam: String, CaseIterable, Sendable {
     /// The local Tantivy writer assembled by
     /// `SearchRuntimeCompositionFactory`.
     case tantivyIndexerWriter
+    /// One app-local queue-provider WORKER invocation (the
+    /// `QueueExtractionProvider` / `QueueIngestionProvider` entry points the
+    /// queue engine calls to execute an item). Recorded only by the APP
+    /// providers (`AppQueueExtractionProvider` / `AppQueueIngestionProvider`)
+    /// — the daemon's provider types never touch this recorder, so a record
+    /// proves a pipeline ran in the app process. Phase 4's gate
+    /// (plans/daemon-only-access.md, AC.8) asserts ZERO of these once the
+    /// app-local engine is gone; slice 1 removes the engine (the only
+    /// caller), so the count is already zero, and the P4.3 workload
+    /// migration deletes the provider types' remaining non-worker consumers.
+    case queueProviderInvocation
 }
 
 /// One recorded open at an injected seam.

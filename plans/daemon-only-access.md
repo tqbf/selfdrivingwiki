@@ -359,3 +359,89 @@ the test files):
 
 - P0: app 8 waiver entries, File Provider 1, CLI 0.
 - (later phases append "removed X at Pn" lines here)
+
+## Workload entry-point inventory (P4.3 prerequisite)
+
+Phase 4 slice 1 deliverable (branch `feature/daemon-only-p1-async-store`).
+Every app-path workload execution, its current execution location, and its P4
+destination. Line numbers are from the slice-1 tree.
+
+**The crux first:** `AppQueueExtractionProvider` and
+`AppQueueIngestionProvider` are the WORKER implementations of the app-local
+`QueueEngine`. They do not hand work to the daemon. `AppProcessPluginCatalog`
+closes over them into a `QueueRuntimeFactory` assembly
+(`RendererCompositionOwner.swift:212-222`), which
+`LocalQueueRuntimeController` assembles whenever the daemon is not the active
+owner. When a local engine runs, extraction, ingestion, transcript, and agent
+pipelines all execute IN THE APP PROCESS through these providers. When the
+daemon is active, the controller disposes the local handle and swaps the
+client to `XPCQueueEngineProxy`; the daemon's own providers
+(`DaemonQueueExtractionProvider`, `DaemonQueueIngestionProvider`) execute
+daemon-side, and the app providers sit idle. The two provider pairs are
+mutually exclusive execution hosts, not a relay.
+
+### Queue-routed workloads (enqueue through the hot-swap client)
+
+These UI paths enqueue `QueueItemRequest`s through `session.queueEngine` (the
+`QueueEngineHotSwap` client). Execution location follows the active owner:
+app-local engine + app providers, or daemon engine + daemon providers. The
+enqueue sites are already engine-agnostic; only the execution host changes at
+P4 close.
+
+| Entry point | Site (file:line) | Execution today | P4 destination | Daemon-side already? |
+|---|---|---|---|---|
+| Manual Extract (PDF/backends) | `SourceDetailView.runExtraction` `SourceDetailView.swift:1758` (enqueue `:1782`) | queue item; app-local engine when local active, daemon engine when daemon-active | daemon queue item (no change to the enqueue; daemon executes) | partially — daemon-active sessions already execute daemon-side |
+| Re-extract with chosen backend | `runReExtraction(with:)` `:2149` (enqueue `:2164`) | same | same | same |
+| Transcript (captions) | `runTranscription` `:1930` (enqueue `:1935`) | same | same | same |
+| On-device speech | `runOnDeviceTranscription` `:1966` (enqueue `:1973`) | same | same | same |
+| Sources-list extract | `SourcesContainerView.swift:344` | same | same | same |
+| Add-from-URL extraction enqueue | `AddFromURLSheet.swift:237` | same | same | same |
+| Manual Ingest | `ContentView.runIngest` `ContentView.swift:383` → `QueueIngestionHelper.enqueue` (`QueueIngestionHelper.swift:100,157`) | ingestion item; app-local engine runs `AppQueueIngestionProvider.runIngestion` (agent spawn IN-APP); daemon runs `DaemonQueueIngestionProvider` | daemon queue item | partially |
+| Page-list ingest | `PagesContainerView.swift:275` | same | same | partially |
+| Continuous ingest | `BackgroundIngestCoordinator.scanWiki` (`BackgroundIngestCoordinator.swift:172-234`) — decisions are client logic, enqueues through the hot-swap client | decisions in-app (fine to stay); execution as above | decisions stay client-side over the remote store; execution daemon-side | partially |
+
+### Workloads that execute IN-APP today and never touch the queue
+
+These are the P4.3 migration targets. Each must become a typed daemon
+operation or a daemon queue item (plan items P4.3; the format-job path of
+`FetchFormatJobRecovery` is the durable pattern to reuse).
+
+| Entry point | Site (file:line) | Execution today | P4 destination | Daemon-side already? |
+|---|---|---|---|---|
+| Import auto-extraction | `WikiStoreModel.autoExtractIfRegistered` `WikiStoreModel.swift:4459` → `runImportExtraction` `:4484` (docx `:4505`, html `:4513`) | IN-APP: `importExtractorProvider` (set by `SessionsPlugin.swift:192`) prepares through `ExtractionCoordinator.prepareImportExtractor` (`ExtractionCoordinator.swift:441`); conversion runs in the app process | daemon queue item (format-job path) or daemon op; progress over the sink | NO |
+| Manual HTML extract + re-extract | `runHtmlExtraction` `SourceDetailView.swift:1810`, `runHtmlReExtraction(with:)` `:1845` | IN-APP: `extractionCoordinator.prepareHTML` + `store.extractHtml` | daemon op | NO |
+| Manual DOCX extract + re-extract | `runDocxExtraction` `:1874`, `runDocxReExtraction` `:1916` | IN-APP: `prepareDOCX` + `store.extractDocx` | daemon op | NO |
+| Snapshot image-aware extraction | `WikiStoreModel.storeSnapshot` `WikiStoreModel.swift:3482` (`WebsiteSnapshotExtractor` + `appendExtractedMarkdown` `:3515` + `autoExtractIfRegistered` `:3522`) | IN-APP | daemon op chained to acquisition | NO |
+| URL acquisition / materialization | `addURL` `WikiStoreModel.swift:3078` → `addURLViaWebsite` `:3418` (`WebsiteMaterializer.materializeSnapshot` — network fetch + parse IN-APP); `refreshSource` `:3538` / `performRefresh` `:3549` (`SourceRefreshService.materialize` IN-APP). Store writes go through the (remote) store. | IN-APP fetch + materialize | daemon fetcher-queue items (the `FetchFormatJobRecovery` pattern); the plain `URLSessionFetcher` arms become daemon ops | NO |
+| Import-extractor preparation | `SessionsPlugin.swift:175-194` (`ExtractionCoordinator` + `importExtractorProvider` closure) | IN-APP process-services resolution | remote commands + the bootstrap payload's registered-inputs values (plan 2e) | NO |
+| Stranded format-job recovery | `SessionsPlugin.swift:198` casts the app extraction provider to `FetchFormatJobRecovering`; `AppQueueExtractionProvider.recoverStrandedFormatJobs` (`AppQueueExtractionProvider.swift:690-713`) OPENS `queue.sqlite` IN-APP at every wiki-session boot | IN-APP scan + enqueue | DELETE the app-side scan: the daemon runs the identical recovery (`DaemonQueueExtractionProvider.swift:587-599`) with shared dedupe keys | equivalent daemon-side run exists; the app copy is the removal target |
+| Launcher-backed agent ops | `AgentLauncher.run` is invoked ONLY from the queue providers (`AppQueueIngestionProvider.swift:576,618`; the daemon provider is its daemon twin). The Settings launcher (`RendererCompositionOwner.makeSettingsLauncher`, `RendererCompositionOwner.swift:352`) is a UI adapter over the same launcher state | via queue providers (see the crux) | daemon-side via `DaemonQueueIngestionProvider` | when daemon-active |
+| Chat turns | `ChatDaemonCoordinator` over `DaemonWorkloadClient` | daemon | stays | YES |
+
+### View-threaded provider reference (dead weight)
+
+`WikiFSApp.swift:101` holds an `AppQueueExtractionProvider` in `@State` and
+threads it through `RootView` → `ContentView`/`SidebarView` → `WikiDetailView`
+→ `SourceDetailView`/`SourcesContainerView`
+(`SourceDetailView.swift:50`, `SourcesContainerView.swift:23`,
+`WikiDetailView.swift:20`, `ContentView.swift:23`). No view ever calls a
+method on it. The remaining live consumers of the app provider instance are
+(a) the session-boot recovery scan above and (b) the (now removed) local
+queue assembly closures. P4.3 deletes the recovery consumer and the
+threading.
+
+### Slice-2 (P4.3) migration scope that follows
+
+1. Migrate the IN-APP workloads (table 2) to daemon ops / daemon queue items:
+   import auto-extraction first (it is the plan's named example), then the
+   manual HTML/DOCX inline paths, then URL acquisition arms.
+2. Delete the app-side stranded-format-job recovery and the app providers
+   with their construction sites; the session-boot
+   `extractionProvider:` parameter of `bootWikiSession`
+   (`SessionsPlugin.swift:134`) loses its app-side purpose once the recovery
+   scan is daemon-only — that signature change is slice-2 scope.
+3. Remove the dead view threading of `extractionProvider`.
+4. The provider-invocation counter (`WikiStorageSeam.queueProviderInvocation`,
+   recorded in the app providers' worker entry points) must read ZERO from
+   P4.3 onward; slice 1 already guarantees zero worker invocations by
+   removing the only caller (the local engine).

@@ -357,6 +357,16 @@ struct ClientLocalOpenBoundaryTests {
                 == "daemon-served")
         #expect(!FileManager.default.fileExists(atPath: databasePath))
 
+        // P4 tightening (plans/daemon-only-access.md, "App: local
+        // QueueEngine + queue.sqlite" row, slice 1): the app profile never
+        // assembles a local queue engine. The queue-store seam stays SILENT
+        // through session boot and every entry point above (the direct drive
+        // below proves the seam itself is still connected), and the
+        // provider-invocation seam records ZERO worker entries — the app
+        // providers' only caller (the local engine) is gone.
+        #expect(recorder.count(.queueStore) == 0)
+        #expect(recorder.count(.queueProviderInvocation) == 0)
+
         // Waived seams stay connected and record (P3 column):
         //
         // Read-only pool: the semantic-search leg still reads locally.
@@ -371,9 +381,10 @@ struct ClientLocalOpenBoundaryTests {
         #expect(recorder.count(.wikiReadOnlyStore) == 1)
         #expect(recorder.labels(.wikiReadOnlyStore) == [databasePath])
 
-        // Queue store: the local queue database stays app-local at P3 (the
-        // P4 row removes it) — the same direct drive as the positive
-        // control proves the recording seam stays connected.
+        // Queue store: the app no longer assembles the local queue runtime
+        // (P4 slice 1), so this direct drive is only the seam-connectivity
+        // positive control — the same shape as the P0 control — kept until
+        // the factory itself retires with the P4.3 workload migration.
         let queueURL = container.appendingPathComponent("queue.sqlite")
         let queueFactory = QueueRuntimeFactory(
             databaseURL: queueURL,
