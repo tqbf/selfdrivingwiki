@@ -200,9 +200,10 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         /// The daemon epoch cached from the handshake — the value every
         /// mutation stamp carries as `expectedEpoch`.
         var epoch: UInt64?
-        /// The in-flight handshake, so concurrent first callers join one
-        /// round trip instead of stampeding the daemon.
-        var handshakeTask: Task<DaemonSinkHandshakeReply, Error>?
+        /// The in-flight session establishment (handshake + 2e bootstrap,
+        /// ONE barrier task), so concurrent first callers join one round
+        /// trip pair instead of stampeding the daemon.
+        var handshakeTask: Task<SessionEstablishment, Error>?
         /// The sink registration id threaded into handshake requests (the
         /// XPC exporter correlates it; the domain-socket transport cannot).
         var sinkRegistrationID: UUID?
@@ -213,6 +214,10 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         var watermarks: [String: UInt64] = [:]
         /// Per-wiki cached change token (the reconciliation anchor).
         var changeTokens: [String: String] = [:]
+        /// Per-wiki committed strategy snapshot from the 2e bootstrap
+        /// (`nil` value = the wiki is at the Default strategy — the map
+        /// misses until a bootstrap reports it).
+        var strategySnapshots: [String: DaemonStrategySnapshot] = [:]
         /// Events that arrived before the handshake completed (bounded —
         /// the daemon's replay ring is the authoritative bound; this client
         /// buffer caps independently so a stalled handshake cannot grow it
@@ -239,11 +244,11 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
     /// local registry; the store only holds it.
     public var registeredExtractionInputs: RegisteredExtractionInputs = .none
 
-    /// See `WikiStore.registeredRendererSourceTypes`. Settable surface only
-    /// in this slice: the wire bootstrap carries the renderer claims as a
-    /// presentation SUBSET (`DaemonRendererSourceClaim`) whose full core
-    /// claims need the descriptor catalog, so composition stays in the
-    /// session wiring (slice 2e).
+    /// See `WikiStore.registeredRendererSourceTypes`. Composed by
+    /// ``applyBootstrap(_:)`` from the 2e bootstrap payload: the daemon's
+    /// mirror decides WHICH claims apply; the client's machine catalog
+    /// (the same `RendererCatalogResolution` the daemon projects) provides
+    /// the descriptor bodies.
     public var registeredRendererSourceTypes: RegisteredRendererSourceTypes = .none
 
     // MARK: Reconnect reconciliation hook
@@ -484,9 +489,12 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
     /// error structs; the transport-level pair and the epoch-mismatch
     /// contract case become ``RemoteStoreClientError`` (typed on the wire —
     /// both ends ship together, so there is no message-parse fallback).
-    /// Internal (not static-private) so the reconstruction tests pin every
-    /// case's associated values.
-    func reconstructStoreError(_ wire: DaemonStoreError) -> Error {
+    /// Internal (not private) so the reconstruction tests pin every case's
+    /// associated values. The mapping is PURE static — the static bootstrap
+    /// fetch shares it; the instance wrapper below is the test-facing
+    /// witness, and `sendStore` layers the epoch-mismatch cache-clearing on
+    /// top of its result.
+    static func reconstructStoreError(_ wire: DaemonStoreError) -> Error {
         switch wire {
         case .open(let message):
             return WikiStoreError.open(message)
@@ -590,6 +598,12 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         }
     }
 
+    /// The test-facing witness for the pure mapping above (the
+    /// reconstruction tests call it through an instance).
+    func reconstructStoreError(_ wire: DaemonStoreError) -> Error {
+        Self.reconstructStoreError(wire)
+    }
+
     // MARK: - Mutation stamps
 
     /// The stamp every INITIAL mutation submission carries: a fresh request
@@ -606,13 +620,18 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
 
     /// Every store operation awaits the acknowledged handshake first: it
     /// caches the daemon epoch (mutators stamp against it), arms the event
-    /// watermarks, and replays the client's pre-handshake event buffer.
-    /// Concurrent first callers join ONE round trip through the shared
-    /// handshake task; the whole barrier races the same per-call deadline.
+    /// watermarks, replays the client's pre-handshake event buffer, and —
+    /// plan 2e — fetches and applies the `sessionBootstrap` payload so the
+    /// client properties (registered extraction inputs, renderer claims) and
+    /// the reconciliation anchor (change token, strategy snapshot) are in
+    /// place before the first operation answers. Concurrent first callers
+    /// join ONE establishment (two reads: handshake, then bootstrap); the
+    /// whole barrier races the same per-call deadline.
     ///
     /// After a detected epoch change (``consume``) or an epoch-mismatch
     /// rejection (``handleEpochMismatch``) the cache clears and the next
-    /// operation re-handshakes against the restarted daemon.
+    /// operation re-establishes against the restarted daemon (fresh handshake
+    /// AND a fresh bootstrap — the new daemon's authoritative mirrors).
     ///
     /// Locking discipline: all `stateLock` usage lives in the synchronous
     /// helpers (`beginSessionAttempt`, `abortSessionAttempt`,
@@ -625,10 +644,10 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
             return epoch
         case .inFlight(let task):
             do {
-                let reply = try await withDeadline("sinkHandshake") {
+                let establishment = try await withDeadline("sinkHandshake") {
                     try await task.value
                 }
-                return try await applyHandshake(reply)
+                return try await applySession(establishment)
             } catch {
                 abortSessionAttempt()
                 throw error
@@ -636,13 +655,23 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         }
     }
 
+    /// One session establishment round: the acknowledged handshake reply
+    /// plus the 2e bootstrap payload fetched immediately after it. One
+    /// barrier task, two reads — the bootstrap rides the barrier so the
+    /// client properties and the reconciliation anchor are applied before
+    /// any caller observes the session as live.
+    private struct SessionEstablishment: Sendable {
+        let handshake: DaemonSinkHandshakeReply
+        let bootstrap: DaemonStoreSessionBootstrap
+    }
+
     private enum SessionAttempt {
         case have(UInt64)
-        case inFlight(Task<DaemonSinkHandshakeReply, Error>)
+        case inFlight(Task<SessionEstablishment, Error>)
     }
 
     /// Synchronous: snapshot the cached epoch, or join/adopt the single
-    /// in-flight handshake task (creating it when none exists).
+    /// in-flight establishment task (creating it when none exists).
     private func beginSessionAttempt() -> SessionAttempt {
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -656,9 +685,11 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         let transport = self.transport
         let registrationID = state.sinkRegistrationID
         let deadline = callDeadline
-        let task = Task<DaemonSinkHandshakeReply, Error> { @Sendable in
-            try await RemoteWikiStore.performHandshake(
+        let wikiID = self.wikiID
+        let task = Task<SessionEstablishment, Error> { @Sendable in
+            try await RemoteWikiStore.performSessionEstablishment(
                 transport: transport,
+                wikiID: wikiID,
                 sinkRegistrationID: registrationID,
                 deadline: deadline)
         }
@@ -742,13 +773,15 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         }
     }
 
-    /// Apply one handshake reply: cache the epoch, arm the per-wiki
-    /// watermarks (locked section), detect token advances (ONE reload
-    /// signal), then flush the pre-handshake buffer through the dedupe path.
-    private func applyHandshake(
-        _ reply: DaemonSinkHandshakeReply
+    /// Apply one establishment: cache the epoch, arm the per-wiki watermarks
+    /// (locked section), flush the pre-handshake buffer through the dedupe
+    /// path, apply the 2e bootstrap (client properties + reconciliation
+    /// anchor), then detect token advances (ONE reload signal).
+    private func applySession(
+        _ establishment: SessionEstablishment
     ) async throws -> UInt64 {
-        let (tokenAdvanced, buffered) = lockedApplyHandshake(reply)
+        let (tokenAdvanced, buffered) = lockedApplyHandshake(
+            establishment.handshake)
 
         // The daemon replays its ring to live sinks AFTER the reply with
         // `sequence > lastSequence`, so the watermark-armed dedupe accepts
@@ -756,10 +789,76 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         for event in buffered {
             consume(event)
         }
+        // The bootstrap mirrors land BEFORE any caller observes the session:
+        // extraction inputs + renderer claims into the client properties,
+        // the change token into the reconciliation anchor. A commit that
+        // lands between the handshake and this read is covered by the sink's
+        // watermark + the token checks, so no separate signal is needed for
+        // the bootstrap's own token.
+        await applyBootstrap(establishment.bootstrap)
         if tokenAdvanced {
             fireReloadSignalOnce()
         }
-        return reply.daemonEpoch
+        return establishment.handshake.daemonEpoch
+    }
+
+    /// The full establishment round trip (never dispatches a mutation): the
+    /// acknowledged handshake, then the 2e `sessionBootstrap` read. Static
+    /// so the barrier task captures no `self` (the established discipline).
+    private static func performSessionEstablishment(
+        transport: any RemoteWikiStoreTransport,
+        wikiID: WikiID,
+        sinkRegistrationID: UUID?,
+        deadline: TimeInterval
+    ) async throws -> SessionEstablishment {
+        let handshake = try await performHandshake(
+            transport: transport,
+            sinkRegistrationID: sinkRegistrationID,
+            deadline: deadline)
+        let bootstrap = try await performSessionBootstrap(
+            transport: transport, wikiID: wikiID, deadline: deadline)
+        return SessionEstablishment(handshake: handshake, bootstrap: bootstrap)
+    }
+
+    /// One `sessionBootstrap` round trip (plan 2e): an unstamped read — no
+    /// epoch dependency, so it rides the barrier right after the handshake.
+    private static func performSessionBootstrap(
+        transport: any RemoteWikiStoreTransport,
+        wikiID: WikiID,
+        deadline: TimeInterval
+    ) async throws -> DaemonStoreSessionBootstrap {
+        let storeRequest = DaemonStoreRequest(
+            wikiID: wikiID.rawValue,
+            operation: DaemonStoreOperation.sessionBootstrap.rawValue,
+            payload: nil)
+        let domainRequest = DaemonDomainRequest(
+            requestID: UUID().uuidString,
+            family: .store,
+            operation: storeRequest.operation,
+            payload: try DaemonStoreWire.encode(storeRequest))
+        let reply = try await raceDeadline(
+            deadline, operation: "sessionBootstrap") {
+            try await transport.send(domainRequest, sinkRegistrationID: nil)
+        }
+        if let domainError = reply.error {
+            throw RemoteStoreClientError.daemonUnavailable(
+                "domain rejection \(domainError.code.rawValue): "
+                    + domainError.message)
+        }
+        guard let payload = reply.payload else {
+            throw RemoteStoreClientError.malformedReply(
+                "sessionBootstrap reply carried no payload")
+        }
+        let storeReply = try DaemonStoreWire.decodeReply(payload)
+        if let wireError = storeReply.error {
+            throw reconstructStoreError(wireError)
+        }
+        guard let result = storeReply.result else {
+            throw RemoteStoreClientError.malformedReply(
+                "sessionBootstrap success reply carried no result")
+        }
+        return try decodeResult(
+            DaemonStoreSessionBootstrap.self, result, "sessionBootstrap")
     }
 
     /// Synchronous: the locked half of ``applyHandshake``.
@@ -1230,14 +1329,30 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         return try JSONSerialization.data(withJSONObject: object)
     }
 
-    // MARK: - Bootstrap payload stub (slice 2e seam)
+    // MARK: - Bootstrap payload (plan 2e)
 
-    /// Apply the 2e `sessionBootstrap` payload. Stub surface in this slice:
-    /// the extraction-input mirror maps fully (kind raw string + MIME set +
-    /// extension set + cleanup claim); the change token anchors
-    /// reconciliation; renderer claims need the descriptor catalog, so the
-    /// session wiring composes `registeredRendererSourceTypes` itself.
-    public func applyBootstrap(_ bootstrap: DaemonStoreSessionBootstrap) {
+    /// Apply the 2e `sessionBootstrap` payload — the daemon-authoritative
+    /// mirrors — into the client state:
+    ///
+    /// - `registeredExtractionInputs` maps fully from the wire mirror (kind
+    ///   raw string + MIME set + extension set + cleanup claim). Unknown
+    ///   kinds are skipped, never guessed.
+    /// - `registeredRendererSourceTypes` composes from the client-side
+    ///   machine catalog — the SAME `RendererCatalogResolution` projection
+    ///   the daemon's own composition installs on its store — intersected
+    ///   with the daemon's reported descriptor references. Rationale: full
+    ///   descriptors (matchers, artifact predicates) deliberately stay
+    ///   daemon-side, so the wire carries only the presentation subset; the
+    ///   catalog itself is machine config, not wiki data (a plan non-goal —
+    ///   it never moves onto the daemon wire). The daemon's mirror decides
+    ///   WHICH claims apply; the client's catalog provides the descriptor
+    ///   bodies. A mirror reference the local catalog lacks is logged and
+    ///   skipped — the client could not route it anyway.
+    /// - The change token anchors reconciliation (session state, locked).
+    ///
+    /// Async: the catalog projection reads the machine index. Called by the
+    /// session barrier (``applySession``) once per establishment.
+    public func applyBootstrap(_ bootstrap: DaemonStoreSessionBootstrap) async {
         let claims: Set<RegisteredExtractionInputs.Claim> = Set(
             bootstrap.registeredExtractionInputs.claims.compactMap { claim in
                 guard let kind = ExtractorKind(rawValue: claim.kind) else {
@@ -1250,11 +1365,70 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
                     wantsAgentCleanup: claim.wantsAgentCleanup)
             })
         registeredExtractionInputs = RegisteredExtractionInputs(claims: claims)
-        stateLock.lock()
-        if state.changeTokens[wikiID.rawValue] != bootstrap.changeToken {
-            state.changeTokens[wikiID.rawValue] = bootstrap.changeToken
+
+        let clientCatalog = await RendererCatalogResolution
+            .productionSourceTypes()
+        let mirrorReferences = Set(
+            bootstrap.registeredRendererSourceTypes
+                .map(\.descriptorReference))
+        var appliedReferences = Set<String>()
+        let rendererClaims = Set(clientCatalog.claims.filter { claim in
+            let reference = Self.canonicalRendererReference(claim.reference)
+            let mirrored = mirrorReferences.contains(reference)
+            if mirrored { appliedReferences.insert(reference) }
+            return mirrored
+        })
+        if appliedReferences.count < mirrorReferences.count {
+            DebugLog.store(
+                "sessionBootstrap: daemon reported "
+                    + "\(mirrorReferences.count) renderer claim(s) but the "
+                    + "local catalog provides \(appliedReferences.count); "
+                    + "unmatched references are skipped (the client could "
+                    + "not route them)")
         }
-        stateLock.unlock()
+        registeredRendererSourceTypes = RegisteredRendererSourceTypes(
+            claims: rendererClaims)
+
+        lockedAnchorChangeToken(
+            bootstrap.changeToken, strategy: bootstrap.strategySnapshot)
+    }
+
+    /// Synchronous: anchor the bootstrap's change token as the
+    /// reconciliation value and cache the committed strategy snapshot for
+    /// this wiki (locked section).
+    private func lockedAnchorChangeToken(
+        _ token: String, strategy: DaemonStrategySnapshot?
+    ) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if state.changeTokens[wikiID.rawValue] != token {
+            state.changeTokens[wikiID.rawValue] = token
+        }
+        if let strategy {
+            state.strategySnapshots[wikiID.rawValue] = strategy
+        } else {
+            state.strategySnapshots[wikiID.rawValue] = nil
+        }
+    }
+
+    /// The wiki's last-bootstrapped committed strategy snapshot (`nil` when
+    /// the wiki is at the Default strategy or no bootstrap has landed).
+    /// Diagnostics + session wiring introspection; authoritative reads go
+    /// through `getWikiStrategy`.
+    public func sessionStrategySnapshot() -> DaemonStrategySnapshot? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return state.strategySnapshots[wikiID.rawValue]
+    }
+
+    /// The canonical renderer reference string (packageID/version/
+    /// registrationID) — the same composition the executor's mirror and the
+    /// reader's installed-renderer signatures use.
+    static func canonicalRendererReference(_ reference: RendererReference)
+        -> String {
+        "\(reference.packageID.rawValue)/"
+            + "\(reference.version.rawValue)/"
+            + "\(reference.registrationID.rawValue)"
     }
 
     // MARK: - Wired: small family (reads unstamped; setMetadata stamped)

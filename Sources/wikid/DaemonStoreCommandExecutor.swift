@@ -103,14 +103,16 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
                 "unknown store operation: \(storeRequest.operation)")
         }
 
-        // Family gate: every manifest family is served. `sessionBootstrap`
-        // stays reserved for the bootstrap slice (2e); the events family is
-        // served by this build (2c handshake).
+        // Family gate: every manifest family is served. The mutation-semantics
+        // family serves both of its operations — `resolveOutcome` (below,
+        // resolve-only) and `sessionBootstrap` (2e, a store-scoped READ) —
+        // and the events family is served by this build (2c handshake).
         switch operation.family {
         case .small, .stagedPayload, .list, .blob, .eventProducer, .events:
             break
         case .mutationSemantics:
-            guard operation == .resolveOutcome else {
+            guard operation == .resolveOutcome || operation == .sessionBootstrap
+            else {
                 return Self.reservedReply(domainRequest, operation)
             }
         }
@@ -143,6 +145,13 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
         // outcome cache. It never resolves the store and never dispatches.
         if operation == .resolveOutcome {
             return await resolveOutcomeReply(domainRequest, storeRequest)
+        }
+
+        // SESSION BOOTSTRAP (2e): a store-scoped READ — unstamped, never a
+        // mutation, so the epoch gate above never applies. Resolves through
+        // the same admitted seam as every other per-wiki operation.
+        if operation == .sessionBootstrap {
+            return await sessionBootstrapReply(domainRequest, storeRequest)
         }
 
         // Staged-payload infra is daemon-scoped in-memory state; the wiki
@@ -366,6 +375,110 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
             }
             let reply = daemon.sinkHandshake(
                 sinkRegistrationID: sinkRegistrationID)
+            return Self.storeSuccessReply(
+                domainRequest, try Self.encodeResult(reply))
+        } catch {
+            return Self.storeErrorReply(
+                domainRequest, storeRequest, Self.wireError(error))
+        }
+    }
+
+    // MARK: - sessionBootstrap (mutation-semantics family, 2e)
+
+    /// Serve the store-scoped bootstrap READ (plan 2e): the daemon-
+    /// authoritative values the app previously set from local services.
+    /// Unstamped by contract — a stamp here is a client bug the epoch gate
+    /// already rejects.
+    ///
+    /// - ``DaemonStoreSessionBootstrap/registeredExtractionInputs`` mirrors
+    ///   the DAEMON's OWN extraction registration — the same daemon-side
+    ///   catalog its workload execution resolves through (the prepared
+    ///   services' ``ExtractionBackendRegistry``), never a client's view.
+    ///   Fixture-composed daemons (tests) admit an injected store whose own
+    ///   claims are that daemon's authority.
+    /// - ``DaemonStoreSessionBootstrap/registeredRendererSourceTypes``
+    ///   mirrors the prepared store's renderer claims (the daemon
+    ///   composition projects them from the machine index in `StorePlugin`)
+    ///   as the wire's presentation SUBSET, sorted by descriptor reference
+    ///   for wire stability.
+    /// - The change token anchors the client's reconciliation watermark; the
+    ///   strategy snapshot carries the committed document (`nil` = Default).
+    private func sessionBootstrapReply(
+        _ domainRequest: DaemonDomainRequest,
+        _ storeRequest: DaemonStoreRequest
+    ) async -> DaemonDomainReply {
+        guard let daemon else {
+            return Self.storeErrorReply(
+                domainRequest, storeRequest,
+                .daemonUnavailable("the wiki daemon has been released"))
+        }
+        do {
+            // The request DTO is empty today; a payload present is a
+            // contract violation, not forward-compatible extensibility.
+            if storeRequest.payload != nil {
+                throw DaemonStoreError.unexpected(
+                    "sessionBootstrap carries no request payload")
+            }
+            let wikiID = WikiID(rawValue: storeRequest.wikiID)
+            let store: WikiStore
+            let extractionInputs: RegisteredExtractionInputs
+            // The probe is deliberately fallible: a NO-profile daemon (the
+            // fixture composition) throws `notPrepared` here, and the
+            // injected store's own claims are then that daemon's authority
+            // — the fallback below is the contract, not an ignored error.
+            // swiftlint:disable:next silent_try_optional
+            if let services = try? await daemon.prepareAndResolveWikiServices(
+                wikiID: wikiID) {
+                store = services.store
+                extractionInputs = await services.extractionBackends
+                    .registeredExtractionInputs()
+            } else {
+                store = try await daemon.domainCommandStore(wikiID: wikiID)
+                extractionInputs = store.registeredExtractionInputs
+            }
+            let wireInputs = DaemonRegisteredExtractionInputs(claims: Set(
+                extractionInputs.claims.map { claim in
+                    DaemonRegisteredExtractionInputs.Claim(
+                        kind: claim.kind.rawValue,
+                        mimeTypes: claim.mimeTypes,
+                        filenameExtensions: claim.filenameExtensions,
+                        wantsAgentCleanup: claim.wantsAgentCleanup)
+                }))
+            // The established canonical reference string (the same
+            // packageID/version/registrationID composition the DOM embed
+            // plans and the reader's installed-renderer signatures use).
+            let rendererClaims = store.registeredRendererSourceTypes.claims
+                .map { claim in
+                    DaemonRendererSourceClaim(
+                        descriptorReference:
+                            "\(claim.reference.packageID.rawValue)/"
+                            + "\(claim.reference.version.rawValue)/"
+                            + "\(claim.reference.registrationID.rawValue)",
+                        displayName: claim.displayName,
+                        canonicalMIMEType: claim.canonicalMIMEType.rawValue,
+                        mimeAliases: Set(
+                            claim.mimeAliases.map(\.rawValue)),
+                        filenameExtensions: Set(
+                            claim.filenameExtensions.map(\.rawValue)))
+                }
+                .sorted { $0.descriptorReference < $1.descriptorReference }
+            let token = await daemon.changeToken(wikiID: wikiID)
+            guard !token.isEmpty, token != WikiDaemon.errorTokenSentinel else {
+                throw DaemonStoreError.unexpected(
+                    "sessionBootstrap could not read a change token for "
+                        + wikiID.rawValue)
+            }
+            let strategy = try await store.getWikiStrategy()
+            let reply = DaemonStoreSessionBootstrap(
+                registeredExtractionInputs: wireInputs,
+                registeredRendererSourceTypes: rendererClaims,
+                changeToken: token,
+                strategySnapshot: strategy.map {
+                    DaemonStrategySnapshot(
+                        name: $0.name, instructions: $0.instructions,
+                        revision: $0.revision.rawValue,
+                        updatedAt: $0.updatedAt)
+                })
             return Self.storeSuccessReply(
                 domainRequest, try Self.encodeResult(reply))
         } catch {

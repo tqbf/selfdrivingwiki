@@ -314,7 +314,7 @@ struct WikiFSApp: App {
                 guard let processProfileOwner else {
                     throw SessionLoadingError.processProfileUnavailable("app process profile owner was released")
                 }
-                return try await processProfileOwner.bootWikiSession(
+                let session = try await processProfileOwner.bootWikiSession(
                     wikiID: wikiID,
                     descriptor: descriptor,
                     containerDirectory: directory,
@@ -325,6 +325,15 @@ struct WikiFSApp: App {
                     interactiveUsageRecorder: { usage in
                         activityTracker?.recordInteractiveUsage(usage)
                     })
+                // Phase 2 seam (flag-gated, plans/daemon-only-access.md 2e):
+                // a REMOTE store session composes from the daemon's
+                // bootstrap payload + one coalesced reload hook. With the
+                // seam switch off (P2 default) and local stores, this is a
+                // no-op guard — the local bootstrap in SessionsPlugin stays
+                // the composition. A remote establishment failure throws:
+                // the session open fails explicitly, never silently local.
+                try await RemoteStoreSessionComposition.composeIfRemote(session)
+                return session
             }
         )
         _sessionManager = State(initialValue: sm)
