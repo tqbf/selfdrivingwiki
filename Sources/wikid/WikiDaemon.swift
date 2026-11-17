@@ -811,6 +811,10 @@ final class WikiDaemon: @unchecked Sendable {
     /// the bump fails at publish or at the install fence and never installs a
     /// chat host, so no zombie host can outlive a deletion.
     private func evictDeletedWiki(_ wikiID: WikiID) async {
+        // Cancel any in-flight search-upgrade backfill FIRST (it holds the
+        // store and writes chunk rows — the eviction below closes the store
+        // and deletes the database artifacts).
+        storeCommandExecutor().cancelSearchUpgrade(wikiID: wikiID)
         let chatHost = queue.sync { () -> DaemonChatHost? in
             preparationEpochs[wikiID, default: 0] &+= 1
             return chatHosts.removeValue(forKey: wikiID)
@@ -1879,20 +1883,16 @@ final class WikiDaemon: @unchecked Sendable {
 
     private func makeSearchRuntime(wikiID: WikiID) async throws -> DaemonSearchRuntime {
         if profileOwner != nil {
-            // Production: identity + content source come from the prepared
-            // profile's search factory; the closures read the admitted store.
-            let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
-            let store = try resolvePreparedStore(wikiID: wikiID)
-            return try DaemonSearchRuntime(
-                wikiID: wikiID,
-                indexDirectory: services.searchFactory.identity.indexDirectory,
-                contentSource: services.searchFactory.contentSource,
-                tokenReader: Self.storeTokenReader(store),
-                baselineReader: Self.storeBaselineReader(store),
-                baselineWriter: Self.storeBaselineWriter(store))
+            // Production: the coherence gate + store admission ride the
+            // profile preparation (unchanged). The identity + content source
+            // are built DIRECTLY from the admitted store below — the
+            // composition-supplied search factory left with the app's local
+            // Tantivy assembly (P5); the index-directory layout is unchanged
+            // (`SearchRuntimeIdentity` resolves the same
+            // `search-index/<wikiID>` path the factory's config used to
+            // carry: the daemon container directory).
+            try await prepareAndResolveWikiServices(wikiID: wikiID)
         }
-        // Compatibility fixture path (tests, `testFixtureMakeStore`): the
-        // injected store plays every role the profile would.
         let store = try resolvePreparedStore(wikiID: wikiID)
         return try DaemonSearchRuntime(
             wikiID: wikiID,
@@ -2071,6 +2071,22 @@ final class WikiDaemon: @unchecked Sendable {
             DaemonRegistryEvent(
                 kind: kind, wikiID: wikiID.rawValue, displayName: displayName),
             proxies: proxies)
+        #endif
+    }
+
+    // MARK: - Search-upgrade progress (P5.2)
+
+    /// Deliver one search-upgrade progress envelope to every LIVE sink (the
+    /// daemon-side embedding backfill's progress surface — see
+    /// ``DaemonSearchUpgradeRunner``). Delivery-only: no watermark, no
+    /// replay ring; the terminal event resolves the client's sheet state.
+    ///
+    /// MUST be called OUTSIDE any `queue.sync` block (same reason as
+    /// ``deliverRegistryEvent``).
+    func deliverSearchUpgradeEvent(_ event: DaemonSearchUpgradeEvent) {
+        #if os(macOS)
+        let proxies = eventSinkProxies()
+        _ = storeEvents.deliverSearchUpgradeEvent(event, proxies: proxies)
         #endif
     }
 

@@ -96,12 +96,13 @@ struct SessionOpenLatencyBudgetTests {
             #expect(selected)
         }
 
-        // -- Sidebar search (model search path; local cosine + BM25-resolved
-        //    leg is unavailable in tests, so this is the lower bound).
+        // -- Sidebar search (model search path; daemon-fused — in tests the
+        //    store answers locally without the BM25 leg, so this is the
+        //    lower bound).
         var searches: [Duration] = []
         for _ in 0..<Self.iterations {
             let start = clock.now
-            _ = await session.store.searchSimilarResolvingTantivy(query: "deterministic content")
+            _ = await session.store.searchSimilar(query: "deterministic content")
             searches.append(clock.now - start)
         }
 

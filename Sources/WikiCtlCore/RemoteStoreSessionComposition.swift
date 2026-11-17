@@ -28,14 +28,13 @@ import WikiFSEngine
 // bootstrap keeps setting the model from local services, unchanged.
 public enum RemoteStoreSessionComposition {
 
-    /// The seam switch, driven by the launch-fixed `allowLocalStore` mode
-    /// (plans/daemon-only-access.md Phase 3 item 1). `.remote` sessions
-    /// compose from the daemon's bootstrap payload + one coalesced reload
-    /// hook; `.local` (the DEBUG app override / test fixtures) keeps the
-    /// local bootstrap everywhere. Like the flag itself this is fixed at
-    /// process launch and NEVER a response to daemon failure — a down
-    /// daemon never selects the local path.
-    public static let enabled = StoreModeConfiguration.resolvedMode == .remote
+    /// The seam switch. P5: the app is REMOTE-ONLY — the `allowLocalStore`
+    /// override is deleted, so every app session composes from the daemon's
+    /// bootstrap payload + one coalesced reload hook + the search-upgrade
+    /// progress routing. Local sessions (test fixtures) still return
+    /// immediately from ``composeIfRemote`` because their store is not a
+    /// `RemoteWikiStore`.
+    public static let enabled = true
 
     /// Compose a booted session for a REMOTE store, when the seam is
     /// enabled and the session's underlying store is a `RemoteWikiStore`.
@@ -72,6 +71,42 @@ public enum RemoteStoreSessionComposition {
             Task { @MainActor in
                 model?.reloadFromStore()
             }
+        }
+        // 4. Search-upgrade progress (plan 5.2): the daemon's
+        //    `wikid.search-upgrade-event.v1` envelopes drive the model's
+        //    non-dismissible sheet, and the model's upgrade trigger starts
+        //    daemon runs. The wire event is projected into the module-neutral
+        //    `SearchUpgradeProgress` here (WikiFSCore does not import the
+        //    daemon contract); the delivery hop is the Task's main-actor hop.
+        remote.onSearchUpgradeEvent = { [weak model] event in
+            guard let model else { return }
+            let progress = SearchUpgradeProgress(
+                phase: SearchUpgradeState.Phase(
+                    rawValue: event.phase.rawValue) ?? .pages,
+                done: event.done,
+                total: event.total,
+                terminal: {
+                    switch event.state {
+                    case .running: return .none
+                    case .complete: return .complete
+                    case .failed: return .failed
+                    }
+                }())
+            Task { @MainActor in
+                model.applySearchUpgradeProgress(progress)
+            }
+        }
+        model.startSearchUpgradeBackfill = { [weak remote] in
+            guard let remote else { return false }
+            // The trigger answers `true` only when a run actually started;
+            // `notNeeded` / `embedderUnavailable` / transport failure are
+            // all "no sheet" answers (the daemon logs the transport case).
+            // swiftlint:disable:next silent_try_optional
+            if let outcome = try? await remote.startSearchUpgrade(),
+                outcome == .started {
+                return true
+            }
+            return false
         }
     }
 }

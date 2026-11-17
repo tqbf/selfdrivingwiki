@@ -262,6 +262,46 @@ final class DaemonStoreEventCoordinator: @unchecked Sendable {
         sink.deliverEvent(data)
     }
 
+    // MARK: - Search-upgrade progress (P5.2)
+
+    /// Deliver one search-upgrade progress envelope to every LIVE sink.
+    /// Progress is delivery-only (no watermark, no replay ring): the run's
+    /// terminal `complete`/`failed` event is what the client resolves on,
+    /// and a re-trigger re-reports the current totals.
+    func deliverSearchUpgradeEvent(
+        _ event: DaemonSearchUpgradeEvent,
+        proxies: [(id: UUID, sink: WikiDaemonEventSink)]
+    ) -> Int {
+        let envelope = DaemonSearchUpgradeEventEnvelope(event: event)
+        lock.lock()
+        defer { lock.unlock() }
+        var delivered = 0
+        for proxy in proxies where sinkPhases[proxy.id] == .live {
+            deliverSearchUpgrade(envelope, to: proxy.sink)
+            delivered += 1
+        }
+        return delivered
+    }
+
+    /// Fire-and-forget search-upgrade delivery. MUST hold `lock` (same
+    /// rationale as ``deliverRegistry``).
+    private func deliverSearchUpgrade(
+        _ envelope: DaemonSearchUpgradeEventEnvelope, to sink: WikiDaemonEventSink
+    ) {
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(envelope)
+        } catch {
+            // Encode of this fixed-shape value cannot fail; a failure loses
+            // one progress tick and the terminal state still resolves the
+            // client's sheet — but it must be visible.
+            DebugLog.store(
+                "wikid: search-upgrade envelope encode failed: \(error)")
+            return
+        }
+        sink.deliverEvent(data)
+    }
+
     // MARK: - Handshake (executor path)
 
     /// Complete one sink's handshake: snapshot every prepared wiki's

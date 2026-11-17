@@ -2,11 +2,11 @@ import WikiFSEngine
 
 func useWikiFacade(_ services: AppServices) async throws {
     _ = services.store
-    _ = services.readService
     _ = services.extractionBackends
-    _ = services.searchProviders
     _ = services.launcherFactory
-    _ = services.searchFactory
+    // P5: `readService` / `searchProviders` / `searchFactory` are gone from
+    // the facade — the read-only pool left app composition and the daemon
+    // builds its search runtime from the admitted store.
     try await services.shutdown()
 }
 

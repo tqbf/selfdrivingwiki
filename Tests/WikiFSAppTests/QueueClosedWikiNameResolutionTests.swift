@@ -511,7 +511,12 @@ struct QueueClosedWikiNameResolutionTests {
             attempt: 0,
             createdAt: 0)
 
-        let tracker = QueueActivityTracker()
+        // P5: the production reader is daemon-mediated; the seam injects a
+        // local-store-backed reader here (the store answers through the same
+        // `any WikiStore` protocol the daemon transport serves).
+        let tracker = QueueActivityTracker(loader: QueueClosedWikiNameLoader.daemonLoader { _ in
+            try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        })
         await tracker.refreshClosedWikiNames(
             for: [lintJob, ingestJob],
             sessions: [:], // the wiki's window is closed
@@ -548,6 +553,9 @@ struct QueueClosedWikiNameResolutionTests {
             orderingKey: 1,
             attempt: 0,
             createdAt: 0)
+        // P5: no local reader — an UNINJECTED tracker (no daemon reader) fails
+        // every load explicitly, which is the same unavailable surface a
+        // nonexistent database produces.
         let tracker = QueueActivityTracker()
         let missing = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-no-such-db-\(UUID().uuidString).sqlite")

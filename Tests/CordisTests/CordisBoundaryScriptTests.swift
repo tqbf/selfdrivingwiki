@@ -40,7 +40,6 @@ struct CordisBoundaryScriptTests {
         "let value = ProfileWikiSession(",
         "let value = GRDBWikiStore(",
         "let value = WikiStoreModel(",
-        "let value = SearchCompositionOwner(",
         "let value = GenerationGate(",
         "let value = AgentLauncher(",
     ])

@@ -36,33 +36,6 @@ public enum LauncherServiceKeys {
     public static let factory = ServiceKey<LauncherFactory>(label: "wiki.launcher-factory")
 }
 
-/// Sendable inputs for constructing one main-actor search owner outside Cordis.
-/// The service value contains no UI model, runtime owner, or Cordis context.
-public struct PerWikiSearchFactory: Sendable {
-    public let identity: SearchRuntimeIdentity
-    public let contentSource: any TantivyContentSource
-    public let changeStreamFactory: any SearchChangeStreamFactory
-
-    public init(
-        identity: SearchRuntimeIdentity,
-        contentSource: any TantivyContentSource,
-        changeStreamFactory: any SearchChangeStreamFactory
-    ) {
-        self.identity = identity
-        self.contentSource = contentSource
-        self.changeStreamFactory = changeStreamFactory
-    }
-
-    @MainActor
-    public func makeOwner(registry: SearchRuntimeRegistry) -> SearchCompositionOwner {
-        SearchCompositionOwner(
-            registry: registry,
-            identity: identity,
-            contentSource: contentSource,
-            changeStreamFactory: changeStreamFactory)
-    }
-}
-
 @MainActor
 extension ProfileWikiSession {
     /// Test-fixture compatibility only. Production sessions must use `boot(...)`.
@@ -74,6 +47,7 @@ extension ProfileWikiSession {
         queueEngine: any QueueEngineClient,
         providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         makeStore: (URL) throws -> any WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
+        searchServices: any SearchServices = UnavailableSearchServices(),
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         interactiveUsageRecorder: @escaping @MainActor (SessionUsage) -> Void = { _ in }
@@ -83,9 +57,6 @@ extension ProfileWikiSession {
         let bus = rawStore.eventBus ?? WikiEventBus(wikiID: wikiID)
         rawStore.eventBus = bus
         let model = WikiStoreModel(store: rawStore)
-        if FileManager.default.fileExists(atPath: databaseURL.path) {
-            model.readService = WikiReadService(databaseURL: databaseURL)
-        }
         // The package-driven fence validator resolves from the machine
         // renderer package store. An unresolvable layout skips validation
         // (nil semantics), matching the no-package contract.
@@ -93,13 +64,10 @@ extension ProfileWikiSession {
             FenceSyntaxValidationService(
                 layout: try RendererPackageStoreLayout(appGroupContainerRoot: containerDirectory))
         })
-        let searchOwner = SearchCompositionOwner(
-            registry: SearchRuntimeRegistry(),
-            identity: SearchRuntimeIdentity(wikiID: wikiID, containerDirectory: containerDirectory),
-            contentSource: StoreBackedTantivyContentSource(store: rawStore),
-            changeStreamFactory: BusSearchChangeStreamFactory(bus: bus))
-        model.searchServices = searchOwner.services
-        searchOwner.start()
+        // P5: no local search assembly — fixture sessions consume the
+        // injected (or unavailable) `SearchServices` facade, exactly like
+        // production sessions do.
+        model.searchServices = searchServices
         let gate = GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
         let launcher = AgentLauncher(
             generationGate: gate,
@@ -111,7 +79,7 @@ extension ProfileWikiSession {
             testFixtureWikiID: wikiID,
             descriptor: descriptor,
             store: model,
-            searchCompositionOwner: searchOwner,
+            searchServices: searchServices,
             generationGate: gate,
             agentLauncher: launcher,
             extractionCoordinator: extractionCoordinator,
@@ -142,7 +110,6 @@ extension AppProcessProfileOwner {
             layers: [PatchFile(entries: try ProductionProfiles.app(
                 databaseURL: databaseURL, wikiID: wikiID, homeDirectory: containerDirectory))])
         let model = WikiStoreModel(store: childServices.store)
-        model.readService = childServices.readService
         model.fenceSyntaxValidator = DebugLog.trying("resolve fence validation service", operation: {
             FenceSyntaxValidationService(
                 layout: try RendererPackageStoreLayout(appGroupContainerRoot: containerDirectory))
@@ -222,7 +189,10 @@ extension AppProcessProfileOwner {
 }
 
 public enum PerWikiRuntimeServiceKeys {
-    public static let searchFactory = ServiceKey<PerWikiSearchFactory>(label: "wiki.search-factory")
+    // P5: the `searchFactory` key is gone with the app's local Tantivy
+    // assembly. The daemon constructs its index runtime directly from the
+    // admitted store (WikiDaemon.makeSearchRuntime) — no composition-supplied
+    // factory exists anymore.
 }
 
 public struct PerWikiRuntimeConfig: PluginConfig, Equatable {
@@ -256,13 +226,11 @@ public enum PerWikiRuntimePlugin {
             id: id,
             dependencies: [
                 ServiceDependency(StoreServiceKeys.store),
-                ServiceDependency(StoreServiceKeys.readService),
                 ServiceDependency(ProcessServiceKeys.agentProvider),
                 ServiceDependency(ProcessServiceKeys.extraction),
                 ServiceDependency(AgentLoopServiceKeys.agentLoop),
             ],
             provisions: [
-                ServiceDependency(PerWikiRuntimeServiceKeys.searchFactory),
                 ServiceDependency(LauncherServiceKeys.factory),
             ],
             config: PerWikiRuntimeConfig.self
@@ -271,26 +239,23 @@ public enum PerWikiRuntimePlugin {
                 label: "wiki.runtime-services",
                 dependencies: [
                     ServiceDependency(StoreServiceKeys.store),
-                    ServiceDependency(StoreServiceKeys.readService),
                     ServiceDependency(ProcessServiceKeys.agentProvider),
                     ServiceDependency(ProcessServiceKeys.extraction),
                     ServiceDependency(AgentLoopServiceKeys.agentLoop),
                 ],
                 provisions: [
-                    ServiceDependency(PerWikiRuntimeServiceKeys.searchFactory),
                     ServiceDependency(LauncherServiceKeys.factory),
                 ]
             ) { activation in
                 let store = try await activation.require(StoreServiceKeys.store)
-                _ = try await activation.require(StoreServiceKeys.readService)
                 let providerServices = try await activation.require(ProcessServiceKeys.agentProvider)
                 let extractionServices = try await activation.require(ProcessServiceKeys.extraction)
                 let agentLoopService = try await activation.require(AgentLoopServiceKeys.agentLoop)
                 guard let eventBus = store.eventBus else {
                     throw PerWikiRuntimePluginError.missingEventBus
                 }
-                let wikiID = WikiID(rawValue: config.wikiID)
-                let containerDirectory = URL(fileURLWithPath: config.containerDirectory, isDirectory: true)
+                _ = eventBus // composition marker: the bus must exist for the
+                             // session's change stream (kept from the P4 shape)
                 let sharedGate = await MainActor.run {
                     GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
                 }
@@ -322,14 +287,11 @@ public enum PerWikiRuntimePlugin {
                     // package plugins). The launcher default `{ nil }` stands.
                     return LauncherPair(gate: sharedGate, launcher: launcher)
                 }
-                let changeStreamFactory = await MainActor.run {
-                    BusSearchChangeStreamFactory(bus: eventBus)
-                }
-                let searchFactory = PerWikiSearchFactory(
-                    identity: SearchRuntimeIdentity(wikiID: wikiID, containerDirectory: containerDirectory),
-                    contentSource: StoreBackedTantivyContentSource(store: store),
-                    changeStreamFactory: changeStreamFactory)
-                _ = try await activation.supply(PerWikiRuntimeServiceKeys.searchFactory, value: searchFactory)
+                // P5: no per-wiki search-factory supply. The app's sessions
+                // consume the daemon-backed `SearchServices` facade only, and
+                // the daemon constructs its search runtime from the admitted
+                // store — the composition-level local Tantivy assembly is
+                // gone (the index-build freedom-guard row is `none`).
                 _ = try await activation.supply(LauncherServiceKeys.factory, value: launcherFactory)
             }
         }

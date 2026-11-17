@@ -1364,38 +1364,14 @@ struct SourceDetailView: View {
 
     private func hydrateMetadata(sourceID: SourceID) async {
         await MetadataHydrator.hydrate(subject: .source(sourceID), operation: {
-            if MetadataHydrationReadPath.resolve(readServiceAvailable: store.readService != nil) == .readService,
-               let readService = store.readService {
-                return try await readService.asyncRead { database in
-                    try Self.sourceMetadataModel(sourceID: sourceID, store: database)
-                }
-            } else {
-                return try await Self.sourceMetadataModel(sourceID: sourceID, store: store.internalStore)
-            }
+            // P5: metadata hydrates through the session's store (the daemon
+            // executes each read over the wire; the local read-only pool is
+            // gone).
+            return try await Self.sourceMetadataModel(sourceID: sourceID, store: store.internalStore)
         }, publish: { state in
             metadataState = state
             updateRightSidebarRegistration()
         })
-    }
-
-    nonisolated private static func sourceMetadataModel(
-        sourceID: SourceID,
-        store: borrowing WikiReadAccess
-    ) throws -> MetadataPanelModel {
-        guard let source = try store.listSources().first(where: { $0.id == sourceID }) else {
-            throw MetadataProjectionError.missingSource(sourceID)
-        }
-        let history = try store.processedMarkdownHistory(sourceID: sourceID)
-        let markdown = try store.processedMarkdownHead(sourceID: sourceID)
-        let okfMetadata = try markdown.flatMap {
-            try store.sourceMarkdownOKFMetadata(versionID: $0.id, includeCorrected: false)?.metadata
-        } ?? OKFConceptMetadata()
-        return SourceMetadataProjection.make(input: .init(
-            source: source,
-            markdown: markdown,
-            extraction: try store.activeExtractionProvenance(sourceID: sourceID),
-            alternativeCount: history.count,
-            okfMetadata: okfMetadata))
     }
 
     nonisolated private static func sourceMetadataModel(sourceID: SourceID, store: WikiStore) async throws -> MetadataPanelModel {

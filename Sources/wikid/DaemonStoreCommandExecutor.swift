@@ -52,11 +52,23 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
         self.daemon = daemon
         self.ledger = DaemonStoreMutationLedger()
         self.staging = DaemonPayloadStagingStore()
+        self.upgradeRunner = DaemonSearchUpgradeRunner()
     }
+
+    /// The daemon-side search-upgrade backfill (P5.2). One per executor —
+    /// the executor's lifetime is the daemon's (see the weak daemon note).
+    private let upgradeRunner: DaemonSearchUpgradeRunner
 
     /// Test/next-slice access to the staged-payload table (the oversized-item
     /// promotion helper and the blob slice consume it).
     var payloadStaging: DaemonPayloadStagingStore { staging }
+
+    /// Cancel the wiki's in-flight search-upgrade run (wiki eviction/close
+    /// path). A cancelled run delivers its terminal `failed` event, so a
+    /// client's sheet state always resolves.
+    func cancelSearchUpgrade(wikiID: WikiID) {
+        upgradeRunner.cancel(wikiID: wikiID)
+    }
 
     // MARK: - Family entry
 
@@ -166,11 +178,15 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
                 connectionID: connectionID)
         }
 
-        // EVENTS family: the acknowledged `sinkHandshake` — daemon-scoped,
-        // NEVER a per-wiki store resolution (plan 2c). It carries no stamp
-        // and RETURNS the epoch, so the mutation epoch gate below does not
-        // apply.
+        // EVENTS family: daemon-scoped operations — NEVER a per-wiki store
+        // resolution for the handshake (plan 2c). `upgradeSearchIndex`
+        // (P5.2) DOES resolve the wiki's store: it starts the daemon-side
+        // embedding backfill against the admitted store and answers
+        // immediately; progress flows on the firehose.
         if operation.family == .events {
+            if operation == .upgradeSearchIndex {
+                return await upgradeSearchIndexReply(domainRequest, storeRequest)
+            }
             return await sinkHandshakeReply(
                 domainRequest, storeRequest,
                 sinkRegistrationID: sinkRegistrationID)
@@ -342,6 +358,158 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
                 throw DaemonStoreError.unexpected(
                     "\(operation.rawValue) is not a staged-payload operation")
             }
+        } catch {
+            return Self.storeErrorReply(
+                domainRequest, storeRequest, Self.wireError(error))
+        }
+    }
+
+    // MARK: - Daemon-side fused search legs (P5.1)
+
+    /// Instance dispatch for the three hybrid searches. The client-supplied
+    /// leg (legacy/CLI-fixture callers) wins; otherwise THIS daemon resolves
+    /// the BM25 leg from its own Tantivy runtime and the store fuses it with
+    /// the semantic cosine leg (its store embeds the query through the
+    /// WikiFSMLX-bootstrapped embedder). A runtime failure degrades to a nil
+    /// leg (semantic-only) — the documented degradation, never an error
+    /// surface.
+    private func dispatchFusedSearch(
+        _ operation: DaemonStoreOperation,
+        _ request: DaemonStoreRequest,
+        _ store: WikiStore
+    ) async throws -> Data {
+        switch operation {
+        case .searchSimilar:
+            let req = try Self.decodePayload(DaemonSearchSimilarRequest.self, request)
+            let leg: [WikiPageSummary]
+            if let supplied = req.bm25Leg {
+                leg = supplied.map(DaemonStoreMirrorMapping.corePageSummary)
+            } else {
+                leg = await resolveFusedLeg(
+                    request.wikiID, store: store, kind: .page,
+                    query: req.query, limit: req.limit,
+                    catalog: { try await store.listPages(sortBy: .lastUpdated) },
+                    id: PageID.init(rawValue:)) ?? []
+            }
+            let results = try await store.searchSimilar(
+                query: req.query, limit: req.limit, bm25Leg: leg.isEmpty ? nil : leg)
+            return try Self.encodeResult(DaemonSearchSimilarReply(
+                results: results.map(DaemonStoreMirrorMapping.mirror)))
+        case .searchSimilarChats:
+            let req = try Self.decodePayload(DaemonSearchSimilarChatsRequest.self, request)
+            let leg: [ChatSummary]
+            if let supplied = req.bm25Leg {
+                leg = supplied.map(DaemonStoreMirrorMapping.coreChatSummary)
+            } else {
+                leg = await resolveFusedLeg(
+                    request.wikiID, store: store, kind: .chat,
+                    query: req.query, limit: req.limit,
+                    catalog: { try await store.listChats() },
+                    id: ChatID.init(rawValue:)) ?? []
+            }
+            let results = try await store.searchSimilarChats(
+                query: req.query, limit: req.limit, bm25Leg: leg.isEmpty ? nil : leg)
+            return try Self.encodeResult(DaemonSearchSimilarChatsReply(
+                results: results.map(DaemonStoreMirrorMapping.mirror)))
+        case .searchSimilarSources:
+            let req = try Self.decodePayload(DaemonSearchSimilarSourcesRequest.self, request)
+            let leg: [SourceSummary]
+            if let supplied = req.bm25Leg {
+                leg = supplied.map(DaemonStoreMirrorMapping.coreSourceSummary)
+            } else {
+                leg = await resolveFusedLeg(
+                    request.wikiID, store: store, kind: .source,
+                    query: req.query, limit: req.limit,
+                    catalog: { try await store.listSources() },
+                    id: SourceID.init(rawValue:)) ?? []
+            }
+            let results = try await store.searchSimilarSources(
+                query: req.query, limit: req.limit, bm25Leg: leg.isEmpty ? nil : leg)
+            return try Self.encodeResult(DaemonSearchSimilarSourcesReply(
+                results: results.map(DaemonStoreMirrorMapping.mirror)))
+        default:
+            throw DaemonStoreError.unexpected(
+                "\(operation.rawValue) is not a fused-search operation")
+        }
+    }
+
+    /// Resolve the BM25 leg THIS daemon fuses into a search reply — the
+    /// `DaemonDomainCommands.searchLeg` shape applied to the store family.
+    /// Queries the wiki's Tantivy runtime, then maps the best-first hits to
+    /// typed summaries through the store's catalog. A runtime failure or an
+    /// empty resolution answers `nil` ("no BM25 leg"), so the store fuses
+    /// semantic-only — the documented degradation, never an error surface.
+    ///
+    /// `wikiID` is the RAW store-request wiki id; `catalog` resolves the
+    /// summary list (the daemon's own store is the catalog — the app's
+    /// client-side cached-catalog resolver is deleted with its leg).
+    private func resolveFusedLeg<Summary: Identifiable & Sendable>(
+        _ rawWikiID: String,
+        store: any WikiStore,
+        kind: TantivyDocumentKind,
+        query: String,
+        limit: Int,
+        catalog: () async throws -> [Summary],
+        id: (String) -> Summary.ID
+    ) async -> [Summary]? where Summary.ID: Hashable {
+        guard let daemon else { return nil }
+        do {
+            let runtime = try await daemon.ensureSearchRuntime(
+                wikiID: WikiID(rawValue: rawWikiID))
+            let hits = try await runtime.search(
+                query: query, kinds: [kind], limit: max(0, limit))
+            guard !hits.isEmpty else { return nil }
+            let catalogEntries = try await catalog()
+            let byID = Dictionary(
+                catalogEntries.map { ($0.id, $0) },
+                uniquingKeysWith: { a, _ in a })
+            let resolved = hits.compactMap { byID[id($0.ulid)] }
+            if resolved.isEmpty, !hits.isEmpty {
+                DebugLog.store(
+                    "wikid store: BM25 leg resolved \(hits.count) hit(s) "
+                        + "but none matched the catalog — fusing semantic-only")
+            }
+            return resolved.isEmpty ? nil : resolved
+        } catch {
+            DebugLog.store(
+                "wikid store: BM25 leg unavailable for query=\"\(query)\": \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - upgradeSearchIndex (events family, P5.2)
+
+    /// Start the daemon-side search-upgrade embedding backfill (plan 5.2).
+    /// The reply is immediate (`started` + scanned total, `notNeeded`, or
+    /// `embedderUnavailable`); the run's progress and its terminal state
+    /// arrive as `wikid.search-upgrade-event.v1` envelopes on the firehose,
+    /// delivered to every live sink through the daemon's coordinator. The
+    /// store resolution rides the SAME admitted seam as every other per-wiki
+    /// operation (no bypass of reconcileForOperation).
+    private func upgradeSearchIndexReply(
+        _ domainRequest: DaemonDomainRequest,
+        _ storeRequest: DaemonStoreRequest
+    ) async -> DaemonDomainReply {
+        guard let daemon else {
+            return Self.storeErrorReply(
+                domainRequest, storeRequest,
+                .daemonUnavailable("the wiki daemon has been released"))
+        }
+        do {
+            // The request DTO is empty today; decode it when present so a
+            // malformed payload is still a typed rejection.
+            if storeRequest.payload != nil {
+                _ = try Self.decodePayload(DaemonSearchUpgradeStartRequest.self, storeRequest)
+            }
+            let wikiID = WikiID(rawValue: storeRequest.wikiID)
+            let store = try await daemon.domainCommandStore(wikiID: wikiID)
+            let reply = await upgradeRunner.start(
+                wikiID: wikiID, store: store
+            ) { [weak daemon] event in
+                daemon?.deliverSearchUpgradeEvent(event)
+            }
+            return Self.storeSuccessReply(
+                domainRequest, try Self.encodeResult(reply))
         } catch {
             return Self.storeErrorReply(
                 domainRequest, storeRequest, Self.wireError(error))
@@ -813,27 +981,6 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
             let req = try decodePayload(DaemonResolveTitleToIDRequest.self, request)
             let pageID = try await store.resolveTitleToID(req.title)
             return try encodeResult(DaemonResolveTitleToIDReply(pageID: pageID?.rawValue))
-        case .searchSimilar:
-            let req = try decodePayload(DaemonSearchSimilarRequest.self, request)
-            let results = try await store.searchSimilar(
-                query: req.query, limit: req.limit,
-                bm25Leg: req.bm25Leg?.map(DaemonStoreMirrorMapping.corePageSummary))
-            return try encodeResult(DaemonSearchSimilarReply(
-                results: results.map(DaemonStoreMirrorMapping.mirror)))
-        case .searchSimilarChats:
-            let req = try decodePayload(DaemonSearchSimilarChatsRequest.self, request)
-            let results = try await store.searchSimilarChats(
-                query: req.query, limit: req.limit,
-                bm25Leg: req.bm25Leg?.map(DaemonStoreMirrorMapping.coreChatSummary))
-            return try encodeResult(DaemonSearchSimilarChatsReply(
-                results: results.map(DaemonStoreMirrorMapping.mirror)))
-        case .searchSimilarSources:
-            let req = try decodePayload(DaemonSearchSimilarSourcesRequest.self, request)
-            let results = try await store.searchSimilarSources(
-                query: req.query, limit: req.limit,
-                bm25Leg: req.bm25Leg?.map(DaemonStoreMirrorMapping.coreSourceSummary))
-            return try encodeResult(DaemonSearchSimilarSourcesReply(
-                results: results.map(DaemonStoreMirrorMapping.mirror)))
         case .sourceMarkdownOKFMetadata:
             let req = try decodePayload(DaemonSourceMarkdownOKFMetadataRequest.self, request)
             let metadata = try await store.sourceMarkdownOKFMetadata(
@@ -979,7 +1126,16 @@ final class DaemonStoreCommandExecutor: @unchecked Sendable {
                     "\(operation.rawValue) is a mutation and requires "
                         + "an admission stamp")
             }
-            return try await Self.dispatchSmall(operation, request, store)
+            // The three hybrid searches are INSTANCE-dispatched: the fused
+            // leg (P5.1) resolves through this executor's daemon reference
+            // (`ensureSearchRuntime`), which the static small dispatch has
+            // no access to.
+            switch operation {
+            case .searchSimilar, .searchSimilarChats, .searchSimilarSources:
+                return try await dispatchFusedSearch(operation, request, store)
+            default:
+                return try await Self.dispatchSmall(operation, request, store)
+            }
         case .list:
             return try await dispatchList(operation, request, store)
         case .blob:

@@ -287,7 +287,18 @@ struct WikiFSApp: App {
                 transportMonitor?.consume(event)
             })
 
-        let activityTracker = QueueActivityTracker()
+        let activityTracker = QueueActivityTracker(loader: QueueClosedWikiNameLoader.daemonLoader { wikiID in
+            // The closed-wiki name reader: the DAEMON answers each target
+            // read over the shared store transport (P5 — no local read
+            // pool). The transport is mandatory in remote mode (the
+            // fail-explicit contract above).
+            guard let storeTransport = storeModeComposition.transport else {
+                preconditionFailure(
+                    "Remote store composition failed at launch — "
+                        + "no local fallback exists")
+            }
+            return RemoteWikiStore(transport: storeTransport, wikiID: wikiID)
+        })
         let queueEngine = runtimeController.client
         activityTracker.attach(engine: queueEngine)
         Task { await activityTracker.rehydrate(from: queueEngine) }
@@ -482,18 +493,21 @@ struct WikiFSApp: App {
     /// `daemonInvokerUnavailable` lifecycle failures, no local write path),
     /// and the remote pieces stay nil so the catalog build fails the app at
     /// launch — the plan's fail-explicit contract.
-    ///
-    /// LOCAL (DEBUG override): the plain registry client, everything else
-    /// nil — exactly the pre-remote composition.
+    /// REMOTE-ONLY (P5): the registry client is a daemon-mediated read
+    /// cache — lifecycle ops cross the invoker, `wikis.json` is only ever
+    /// read, and firehose registry events refresh it — and every wiki
+    /// session boots a `RemoteWikiStore` over the shared transport. The
+    /// `allowLocalStore` override is DELETED (the sole-writer milestone):
+    /// there is no local branch, and this is never a response to daemon
+    /// failure — a daemon-down run stays remote and degrades through the
+    /// health surface. A connection failure here degrades explicitly: the
+    /// registry client keeps remote semantics with no invoker (typed
+    /// `daemonInvokerUnavailable` lifecycle failures, no local write path),
+    /// and the remote pieces stay nil so the catalog build fails the app at
+    /// launch — the plan's fail-explicit contract.
     private static func makeStoreModeComposition(
         containerDirectory: URL
     ) -> StoreModeComposition {
-        guard StoreModeConfiguration.resolvedMode == .remote else {
-            return StoreModeComposition(
-                registry: WikiRegistryClient(
-                    containerDirectory: containerDirectory),
-                transport: nil, invoker: nil, router: nil)
-        }
         let connection: WikiDaemonConnection
         let invoker: DaemonWikiRegistryInvoker
         do {

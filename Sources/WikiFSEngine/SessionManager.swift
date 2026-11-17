@@ -329,9 +329,12 @@ public final class SessionManager {
         searchReleaseTasks[wikiID] = SearchRelease(token: token, task: task)
     }
 
-    /// Release all live sessions, await owned teardown, then dispose the private
-    /// search root. App termination force-removes sessions regardless of how
-    /// many window leases remain. Safe to call repeatedly.
+    /// Release all live sessions and await their teardown. App termination
+    /// force-removes sessions regardless of how many window leases remain.
+    /// Safe to call repeatedly. P5: the daemon owns the search runtime
+    /// lifecycle — releasing the session closes the daemon-side wiki state,
+    /// which is where the per-wiki index runtime is released; this method
+    /// no longer disposes a client-side search root (there is none).
     public func shutdownSearchRuntimes() async {
         for wikiID in Array(sessions.keys) { await removeSession(for: wikiID) }
         let releases = Array(searchReleaseTasks.values)

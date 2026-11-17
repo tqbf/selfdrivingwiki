@@ -46,12 +46,20 @@ struct SearchCordisBoundaryPolicyTests {
         for path in [
             "Sources/WikiFSEngine/SearchRuntime.swift",
             "Sources/WikiFSEngine/SearchRuntimeRegistry.swift",
-            "Sources/WikiFSEngine/SearchCompositionOwner.swift",
             "Sources/WikiFSEngine/SearchChangeStreamFactory.swift",
         ] {
             let source = try read(path)
             #expect(!source.contains("Task.detached"))
         }
+    }
+
+    @Test("the deleted app search owner stays deleted")
+    func deletedSearchOwnerStaysDeleted() {
+        // P5: `SearchCompositionOwner.swift` is deleted — the app consumes
+        // only the daemon-backed facade. The deleted file must not return.
+        #expect(!FileManager.default.fileExists(
+            atPath: repositoryRoot().appendingPathComponent(
+                "Sources/WikiFSEngine/SearchCompositionOwner.swift").path))
     }
 
     private func read(_ path: String) throws -> String {

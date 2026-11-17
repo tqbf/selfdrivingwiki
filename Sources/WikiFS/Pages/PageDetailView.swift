@@ -465,43 +465,14 @@ struct PageDetailView: View {
 
     private func hydrateMetadata(pageID: PageID) async {
         await MetadataHydrator.hydrate(subject: .page(pageID), operation: {
-            if MetadataHydrationReadPath.resolve(readServiceAvailable: store.readService != nil) == .readService,
-               let readService = store.readService {
-                return try await readService.asyncRead { database in
-                    try Self.pageMetadataModel(pageID: pageID, store: database)
-                }
-            } else {
-                return try await Self.pageMetadataModel(pageID: pageID, store: store.internalStore)
-            }
+            // P5: metadata hydrates through the session's store (the daemon
+            // executes each read over the wire; the local read-only pool is
+            // gone). The projection is one bounded per-subject read set.
+            return try await Self.pageMetadataModel(pageID: pageID, store: store.internalStore)
         }, publish: { state in
             metadataState = state
             updateRightSidebarRegistration()
         })
-    }
-
-    nonisolated private static func pageMetadataModel(
-        pageID: PageID,
-        store: borrowing WikiReadAccess
-    ) throws -> MetadataPanelModel {
-        let page = try store.getPage(id: pageID)
-        let sourceSummaries = try store.listSources()
-        let sources = try store.pageHeadSources(pageID: pageID).map { relation in
-            guard let source = sourceSummaries.first(where: { $0.id == relation.sourceID }) else {
-                throw MetadataProjectionError.missingSource(relation.sourceID)
-            }
-            return MetadataPageSource(sourceID: source.id, displayName: source.effectiveName, role: relation.role)
-        }
-        let history = try store.pageVersionHistory(pageID: pageID)
-        let headID = try store.pageHeadVersionID(pageID: pageID)
-        let okfMetadata = try headID.flatMap {
-            try store.pageOKFMetadata(versionID: $0, includeCorrected: false)?.metadata
-        } ?? OKFConceptMetadata()
-        return PageMetadataProjection.make(input: .init(
-            page: page,
-            currentVersion: history.first { $0.id == headID },
-            origin: try store.pageOrigin(pageID: pageID),
-            sources: sources,
-            okfMetadata: okfMetadata))
     }
 
     nonisolated private static func pageMetadataModel(pageID: PageID, store: WikiStore) async throws -> MetadataPanelModel {

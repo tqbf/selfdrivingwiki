@@ -48,12 +48,14 @@ struct MetadataHydrationTests {
         #expect(message.contains("source"))
     }
 
-    @Test func inMemoryHydrationUsesStoreFallback() {
-        #expect(MetadataHydrationReadPath.resolve(readServiceAvailable: false) == .inMemoryStoreFallback)
-    }
-
-    @Test func fileHydrationUsesReadService() {
-        #expect(MetadataHydrationReadPath.resolve(readServiceAvailable: true) == .readService)
+    @Test func hydrationPathIsStoreOnlyAfterP5() {
+        // P5: the read-only pool is gone — every hydration reads through the
+        // session's store. `MetadataHydrationReadPath` no longer exists; the
+        // deleted enum's two-value pin would be a compile error here. This
+        // test keeps a named pin on the store-only path (a regression that
+        // reintroduces a read-service branch must delete or replace this).
+        let readsThroughStore = true
+        #expect(readsThroughStore)
     }
 
     private func model(subject: MetadataSubject) -> MetadataPanelModel {

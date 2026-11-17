@@ -111,6 +111,12 @@ public enum DaemonStoreOperation: String, Codable, Sendable, CaseIterable {
     /// from buffering to live, and replays the bounded pre-handshake ring.
     /// Implemented in the events slice (2c).
     case sinkHandshake
+    /// Start the daemon-side search-upgrade embedding backfill (Phase 5.2).
+    /// Daemon-scoped like `sinkHandshake` (not a `WikiStore` requirement —
+    /// the app's `RemoteWikiStore` carries the typed client seam); the reply
+    /// reports the start outcome, and progress flows as
+    /// `wikid.search-upgrade-event.v1` envelopes on the firehose.
+    case upgradeSearchIndex
 
     // MARK: Manifest operations — small (37)
 
@@ -283,7 +289,7 @@ public enum DaemonStoreOperation: String, Codable, Sendable, CaseIterable {
             return .stagedPayload
         case .resolveOutcome, .sessionBootstrap:
             return .mutationSemantics
-        case .sinkHandshake:
+        case .sinkHandshake, .upgradeSearchIndex:
             return .events
         case .activeContentVersion, .activeExtractionProvenance,
              .chatAttachments, .chatTranscriptCheckpoint, .chatUsageSummary,
@@ -373,7 +379,9 @@ public enum DaemonStoreOperationCounts {
     /// the registry test asserts it so a future slice cannot quietly
     /// re-reserve.
     public static let reservedEvents = 0
-    public static let events = 1
+    /// The events tier: `sinkHandshake` (2c) + `upgradeSearchIndex` (P5.2) —
+    /// daemon-scoped operations that are not `WikiStore` requirements.
+    public static let events = 2
     public static let total = manifestOperations + stagedPayload
         + mutationSemantics + events
 }

@@ -92,13 +92,15 @@ struct DaemonProfileBootTests {
     @Test("launcher factory label and plugin contract stay stable")
     func launcherFactoryProvisionsAndDependenciesAreDeclared() {
         #expect(LauncherServiceKeys.factory.label == "wiki.launcher-factory")
+        // P5: the plugin supplies ONLY the launcher factory — the
+        // `wiki.search-factory` supply (the app's local Tantivy assembly)
+        // and the `wiki.store.read-service` dependency (the read-only pool)
+        // are gone.
         #expect(Set(PerWikiRuntimePlugin.definition.provisions.map(\.descriptor.label)) == [
-            "wiki.search-factory",
             "wiki.launcher-factory",
         ])
         #expect(Set(PerWikiRuntimePlugin.definition.dependencies.map(\.descriptor.label)) == [
             "wiki.store",
-            "wiki.store.read-service",
             "process.agent-provider",
             "process.extraction",
             "wiki.agent-loop",

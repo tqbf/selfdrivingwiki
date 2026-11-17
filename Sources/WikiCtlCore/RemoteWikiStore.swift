@@ -271,6 +271,16 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
     /// wiring (the same convention as ``onReloadSignal``).
     public var onTransportDegraded: (@Sendable () -> Void)?
 
+    /// Fired when the firehose delivers a `wikid.search-upgrade-event.v1`
+    /// envelope for THIS wiki (the daemon-side search-upgrade backfill's
+    /// progress — plan 5.2). The session wiring installs ONE closure that
+    /// hops to the main actor and drives `WikiStoreModel.searchUpgrade` (the
+    /// non-dismissible sheet state). Progress is delivery-only: envelopes
+    /// carry no watermark, and the terminal `complete`/`failed` state is
+    /// what resolves the sheet. Set-once by the wiring (the same convention
+    /// as ``onReloadSignal``).
+    public var onSearchUpgradeEvent: (@Sendable (DaemonSearchUpgradeEvent) -> Void)?
+
     /// The symmetric recovery leg: fired on the first SUCCESSFUL call after
     /// a degradation was flagged, so the health surface can stand the
     /// reconnecting state back down even when the workload transport (whose
@@ -1058,12 +1068,23 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
 
     /// One pushed firehose payload. Queue/chat workload envelopes fail the
     /// store-envelope decode and are ignored here (the workload sink in the
-    /// app layer consumes those); only `wikid.store-event.v1` payloads flow.
+    /// app layer consumes those); `wikid.store-event.v1` payloads flow into
+    /// ``consume``, and `wikid.search-upgrade-event.v1` payloads (P5.2)
+    /// flow into ``onSearchUpgradeEvent`` — the three firehose grammars are
+    /// pairwise two-way disjoint, so each decode miss is deterministic.
     public func deliverEvent(_ payload: Data) {
         // The decode MISS is the two-way discrimination contract (the
         // envelope grammar is deliberately disjoint from `QueueEventEnvelope`
         // — see DaemonStoreEventsWire.swift): a non-store payload is a
         // no-op, not an error to surface.
+        // swiftlint:disable:next silent_try_optional
+        if let envelope = try? JSONDecoder().decode(
+            DaemonSearchUpgradeEventEnvelope.self, from: payload),
+            envelope.wire == DaemonSearchUpgradeEventWire.marker {
+            guard envelope.event.wikiID == wikiID.rawValue else { return }
+            onSearchUpgradeEvent?(envelope.event)
+            return
+        }
         // swiftlint:disable:next silent_try_optional
         guard let envelope = try? JSONDecoder().decode(
             DaemonStoreEventEnvelope.self, from: payload),

@@ -133,7 +133,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     /// layer never references the app-layer `WikiLinkRoute`). Same
     /// "set once / consume once" discipline as `pendingBlobVacuum`.
     public var pendingWikiLink: (url: URL, openInNewTab: Bool)?
-    @ObservationIgnored private let searchCompositionOwner: SearchCompositionOwner?
 
     // MARK: - Init
 
@@ -183,7 +182,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
         self.store = store
-        self.searchCompositionOwner = nil
         self.searchServices = searchServices
         self.generationGate = generationGate
         self.agentLauncher = agentLauncher
@@ -223,7 +221,7 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         testFixtureWikiID wikiID: WikiID,
         descriptor: WikiDescriptor,
         store: WikiStoreModel,
-        searchCompositionOwner: SearchCompositionOwner,
+        searchServices: any SearchServices,
         generationGate: GenerationGate,
         agentLauncher: AgentLauncher,
         extractionCoordinator: ExtractionCoordinator,
@@ -236,8 +234,7 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
         self.store = store
-        self.searchCompositionOwner = searchCompositionOwner
-        self.searchServices = searchCompositionOwner.services
+        self.searchServices = searchServices
         self.generationGate = generationGate
         self.agentLauncher = agentLauncher
 
@@ -326,12 +323,10 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         }
     }
 
-    public func shutdownSearchRuntime() async {
-        await searchCompositionOwner?.shutdown()
-    }
-
     public func shutdown() async {
-        await shutdownSearchRuntime()
+        // P5: no session-owned search runtime — the daemon releases its
+        // per-wiki index runtime when the wiki's store closes. Session
+        // teardown is the profile lifetime only.
         guard let profileLifetime else { return }
         do {
             try await profileLifetime.shutdown()

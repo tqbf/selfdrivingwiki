@@ -50,11 +50,12 @@ struct RemoteStoreSurfaceExhaustivenessTests {
     /// Unique protocol requirement names = 151 + 15 + 3.
     private static let pinnedProtocolRequirementCount =
         pinnedWiredCount + pinnedRemovedCount + pinnedClientPropertyCount
-    /// `DaemonStoreOperation` cases: the 151 manifest operations + 7
+    /// `DaemonStoreOperation` cases: the 151 manifest operations + 8
     /// infrastructure/events operations (payloadBegin, payloadChunk,
     /// payloadCommit, payloadRead, resolveOutcome, sessionBootstrap,
-    /// sinkHandshake).
-    private static let pinnedOperationCaseCount = pinnedWiredCount + 7
+    /// sinkHandshake, upgradeSearchIndex — the P5.2 daemon-scoped events
+    /// member beside `sinkHandshake`).
+    private static let pinnedOperationCaseCount = pinnedWiredCount + 8
 
     private static let clientProperties: Set<String> = [
         "eventBus", "registeredExtractionInputs",

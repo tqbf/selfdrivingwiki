@@ -626,14 +626,10 @@ struct ChatDetailView: View {
         metadataState = .loading(subject: .chat(chatID))
         do {
             let durable: ChatMetadataInput
-            if MetadataHydrationReadPath.resolve(readServiceAvailable: store.readService != nil) == .readService,
-               let readService = store.readService {
-                durable = try await readService.asyncRead { database in
-                    try Self.chatMetadataInput(chatID: chatID, store: database)
-                }
-            } else {
-                durable = try await Self.chatMetadataInput(chatID: chatID, store: store.internalStore)
-            }
+            // P5: metadata hydrates through the session's store (the daemon
+            // executes each read over the wire; the local read-only pool is
+            // gone).
+            durable = try await Self.chatMetadataInput(chatID: chatID, store: store.internalStore)
             guard !Task.isCancelled else { return }
             durableChatMetadata = durable
             metadataState = .loaded(ChatMetadataProjection.make(input: .init(
@@ -659,13 +655,6 @@ struct ChatDetailView: View {
             usageSummary: durable.usageSummary,
             live: liveMetadataSnapshot)))
         updateRightSidebarRegistration()
-    }
-
-    nonisolated private static func chatMetadataInput(
-        chatID: ChatID,
-        store: borrowing WikiReadAccess
-    ) throws -> ChatMetadataInput {
-        .init(chat: try store.getChat(id: chatID), usageSummary: try store.chatUsageSummary(chatID: chatID))
     }
 
     nonisolated private static func chatMetadataInput(chatID: ChatID, store: WikiStore) async throws -> ChatMetadataInput {

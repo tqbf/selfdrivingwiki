@@ -9,30 +9,34 @@ import WikiFSSearch
 @testable import WikiFSEngine
 @testable import wikid
 
-/// The daemon-only open-seam harness (plans/daemon-only-access.md Phase 0).
+/// The daemon-only open-seam harness (plans/daemon-only-access.md Phase 0,
+/// tightened to the P5 column).
 ///
 /// Attribution is BY INJECTION: the harness boots the production app
 /// composition with recording open factories (`AppPluginCatalogFactories
-/// .storeOpenFactories`, the recording Tantivy runtime factory, recording
-/// queue-store factories). Daemon-side fixture opens keep their plain
-/// factories and never reach `WikiOpenSeamRecorder.shared`, so a recorded
-/// open is by construction a CLIENT-side local storage open.
+/// .storeOpenFactories`, recording queue-store factories). Daemon-side
+/// fixture opens keep their plain factories and never reach
+/// `WikiOpenSeamRecorder.shared`, so a recorded open is by construction a
+/// CLIENT-side local storage open.
 ///
-/// Assertions match the plan's permitted-access column: the LOCAL-mode cases
-/// (positive control, P0 column, DEBUG-override path) prove the seams are
-/// CONNECTED — a disconnected seam cannot fake a zero — and the REMOTE-mode
-/// case pins the P3 column: the store seam records ZERO client opens while
-/// the daemon serves every read and write. Later phases tighten the waived
-/// seams; Phase 7 flips everything to zero with the daemon up and down.
+/// The P5 column (plans/daemon-only-access.md, permitted-access table):
+/// store, read-pool, queue, and index-build rows are ALL `none` — the
+/// session-level harness asserts ZERO client-side opens/builds across real
+/// entry-point runs with the daemon UP and with it DOWN. The positive
+/// control proves each seam is CONNECTED by driving its recording closure
+/// directly (a disconnected seam cannot fake a recorded label); the app
+/// composition itself no longer contains any of the five opens (the
+/// read-pool leg and the local Tantivy assembly are deleted; the
+/// `allowLocalStore` override is gone).
 @Suite("Client local open boundary", .serialized, .timeLimit(.minutes(8)))
 struct ClientLocalOpenBoundaryTests {
     // MARK: - Harness
 
     /// Boots the production app process composition + one real per-wiki
     /// session through `AppProcessProfileOwner.bootWikiSession` — the same
-    /// async session loader `WikiFSApp` wires — with every storage seam
+    /// async session loader `WikiFSApp` wires — with the store seam
     /// recording into `WikiOpenSeamRecorder.shared`. Pass `catalog:` for a
-    /// mode-specific catalog (the P3 remote case injects the daemon-backed
+    /// mode-specific catalog (the P5 remote case injects the daemon-backed
     /// store factory).
     @MainActor
     private func bootRecordingSession(
@@ -67,45 +71,53 @@ struct ClientLocalOpenBoundaryTests {
         return (session, owner)
     }
 
-    /// The app catalog with every storage seam recording.
+    /// The app catalog with the store seam recording. P5: the read-pool and
+    /// Tantivy-runtime legs no longer exist in app composition (deleted
+    /// with the pool and the local assembly); the only injectable storage
+    /// open left is the store itself.
     private static func recordingAppCatalog() throws -> PluginCatalog {
-        let recordingIndexer:
-            @Sendable (SearchRuntimeIdentity, any TantivyContentSource) throws -> TantivyIndexer
-            = { identity, contentSource in
-                try WikiOpenSeamRecorder.shared.recording(
-                    seam: .tantivyIndexerWriter,
-                    label: identity.indexDirectory.path) {
-                    try TantivyIndexer(
-                        indexDirectory: identity.indexDirectory,
-                        contentSource: contentSource)
-                }
-            }
-        let recordingRuntime: SearchRuntimeFactory.Factory = { identity, contentSource, changeStreamFactory in
-            SearchRuntimeCompositionFactory.runtimeFactory(
-                identity: identity,
-                contentSource: contentSource,
-                changeStreamFactory: changeStreamFactory,
-                makeIndexer: recordingIndexer)
-        }
         let recordingMakeStore: @Sendable (StorePlugin.StoreOpenContext) throws -> any WikiStore = { context in
             try WikiOpenSeamRecorder.shared.recording(
                 seam: .wikiStore, label: context.databaseURL.path) {
                 try StoreBackend.current.makeStore(databaseURL: context.databaseURL)
             }
         }
-        let recordingReadOnlyStore: @Sendable (URL) throws -> GRDBWikiStore = { url in
-            try WikiOpenSeamRecorder.shared.recording(seam: .wikiReadOnlyStore, label: url.path) {
-                try GRDBWikiStore(readOnlyURL: url)
-            }
-        }
         return try AppPluginCatalog.build(factories: AppPluginCatalogFactories(
             base: BasePluginCatalogFactories(
                 agentProviderServices: UnavailableAgentProviderServices()),
             makeDaemonTransport: { ProfileBootFixture.fixtureTransportServices() },
-            makeTantivyRuntime: recordingRuntime,
             storeOpenFactories: StorePlugin.StoreOpenFactories(
-                makeStore: recordingMakeStore,
-                makeReadOnlyStore: recordingReadOnlyStore)))
+                makeStore: recordingMakeStore)))
+    }
+
+    /// The remote-mode catalog: the store factory constructs the
+    /// daemon-backed client and records NOTHING — no local open exists on
+    /// this path. Every entry point below must keep all five seams at zero.
+    /// `gate` flips the daemon down: while down, the invoker never replies
+    /// and the transport's timeout backstop answers typed (the
+    /// `RemoteWikiStoreTests` daemon-down shape).
+    private static func remoteCatalog(
+        wikiID: WikiID,
+        exporter: WikiDaemonExporter,
+        gate: DaemonAvailabilityGate
+    ) throws -> PluginCatalog {
+        try AppPluginCatalog.build(factories: AppPluginCatalogFactories(
+            base: BasePluginCatalogFactories(
+                agentProviderServices: UnavailableAgentProviderServices()),
+            makeDaemonTransport: { ProfileBootFixture.fixtureTransportServices() },
+            storeOpenFactories: StorePlugin.StoreOpenFactories
+                .remoteStore { context in
+                    RemoteWikiStore(
+                        transport: XPCStoreTransport(
+                            invoker: { requestedWikiID, request, reply in
+                                gate.invoke(requestedWikiID, request, reply) {
+                                    exporter.storeOperation($0, request: $1, reply: $2)
+                                }
+                            },
+                            timeout: gate.timeout),
+                        wikiID: WikiID(rawValue: context.wikiID))
+                },
+            storeAccessMode: .remote))
     }
 
     private static func makeContainer() throws -> URL {
@@ -121,40 +133,43 @@ struct ClientLocalOpenBoundaryTests {
 
     // MARK: - Positive control (seams connected)
 
-    @Test("positive control: the local path records every storage seam")
+    /// Each recording seam is CONNECTED: driving its recording closure
+    /// directly records a label. A disconnected seam cannot fake a zero, so
+    /// this control is what makes the P5 zero assertions meaningful. (The
+    /// app composition no longer contains any of these opens — the local
+    /// session boot is gone; these are direct seam drives.)
+    @Test("positive control: every storage seam's recording closure is connected")
     @MainActor
     func positiveControlRecordsEverySeam() async throws {
         let recorder = WikiOpenSeamRecorder.shared
         recorder.reset()
         let container = try Self.makeContainer()
         defer { Self.removeContainer(container) }
-
         let wikiID = WikiID(rawValue: "open-boundary-control")
-        let (session, owner) = try await bootRecordingSession(
-            container: container,
-            wikiID: wikiID,
-            displayName: "Open Boundary Control")
-        defer { Task { await owner.shutdown() } }
 
+        // Wiki store seam: the recording closure records the open it wraps.
         let databasePath = container.appendingPathComponent("\(wikiID.rawValue).sqlite").path
-
-        // Wiki store: opened exactly once for this wiki during session boot.
-        #expect(recorder.count(.wikiStore) == 1)
+        let recordedStore = try WikiOpenSeamRecorder.shared.recording(
+            seam: .wikiStore,
+            label: databasePath) {
+            try StoreBackend.current.makeStore(databaseURL: URL(fileURLWithPath: databasePath))
+        }
+        _ = recordedStore
         #expect(recorder.labels(.wikiStore) == [databasePath])
 
-        // Read-only pool: driving one read through the session's read service
-        // checks out a fresh read-only connection (nothing idle yet).
-        let readService = try #require(session.store.readService)
-        _ = try await readService.asyncRead { access in
-            try access.listSources()
+        // Read-only pool seam: the pool left app composition (P5), but the
+        // recorder's seam stays defined for the P6 File Provider cutover —
+        // the recording closure still wraps the read-only constructor.
+        let recordedReadOnly = try WikiOpenSeamRecorder.shared.recording(
+            seam: .wikiReadOnlyStore,
+            label: databasePath) {
+            try GRDBWikiStore(readOnlyURL: URL(fileURLWithPath: databasePath))
         }
-        #expect(recorder.count(.wikiReadOnlyStore) == 1)
+        _ = recordedReadOnly
         #expect(recorder.labels(.wikiReadOnlyStore) == [databasePath])
 
-        // Queue store: the local runtime factory is retired (P4.3), so the
-        // positive control drives the queue-store recording closure DIRECTLY
-        // — the same shape as the Tantivy control below. A disconnected seam
-        // cannot fake a recorded label.
+        // Queue store seam: the app never opens queue.sqlite (P4); the
+        // recording closure still wraps the queue store constructor.
         let queueURL = container.appendingPathComponent("queue.sqlite")
         let recordedQueueStore = try WikiOpenSeamRecorder.shared.recording(
             seam: .queueStore,
@@ -164,10 +179,9 @@ struct ClientLocalOpenBoundaryTests {
         #expect(recorder.labels(.queueStore).contains(queueURL.path))
         recordedQueueStore.close()
 
-        // Tantivy writer: the app's P0 local index assembly is a DEAD PATH at
-        // session boot (sessions consume the daemon search facade), so the
-        // positive control exercises the search runtime factory directly to
-        // prove the seam stays connected.
+        // Tantivy writer seam: the app's local index assembly is REMOVED
+        // (P5). The CLI/fixture-owned factory is still the seam — drive it
+        // directly to prove the recording closure stays connected.
         let searchContainer = try Self.makeContainer()
         defer { Self.removeContainer(searchContainer) }
         let identity = SearchRuntimeIdentity(
@@ -194,75 +208,21 @@ struct ClientLocalOpenBoundaryTests {
         await lease.dispose()
     }
 
-    // MARK: - P0 column: real entry points across multiple sessions/wikis
+    // MARK: - P5 column: ZERO client opens across session-level runs (up + down)
 
-    /// The app's local storage opens happen exactly where the P0 waiver
-    /// column permits them: one wiki-store open per booted session, per-wiki
-    /// labels, and no opens for wikis that were never opened. This runs with
-    /// NO daemon — the daemon-down half of the P0 harness (with the local
-    /// path active, daemon availability cannot change client opens; from P3
-    /// the daemon-up/down pair asserts the tightening columns).
-    @Test("P0 column: session boot and entry points open only the waived local seams")
+    /// The P5 headline (plans/daemon-only-access.md gate): a REAL per-wiki
+    /// session boots over the fixture daemon's store transport and drives
+    /// every real entry point — navigation, source import, page/source/chat
+    /// search, the search-upgrade trigger, registry-mediated reads — with
+    /// the daemon UP; then the daemon goes DOWN mid-session and the same
+    /// entry points fail TYPED. Across both phases, every client-side seam
+    /// records ZERO opens: no wiki store, no read-only pool, no queue
+    /// store, no provider invocation, no Tantivy writer — and the app
+    /// container never even gains the wiki database file. There is no
+    /// read-only local mode.
+    @Test("P5 column: zero client-side store, read-pool, queue, and index opens with the daemon up and down")
     @MainActor
-    func entryPointsOpenOnlyWaivedSeams() async throws {
-        let recorder = WikiOpenSeamRecorder.shared
-        recorder.reset()
-        let container = try Self.makeContainer()
-        defer { Self.removeContainer(container) }
-
-        let first = WikiID(rawValue: "open-boundary-alpha")
-        let second = WikiID(rawValue: "open-boundary-beta")
-        let (alpha, owner) = try await bootRecordingSession(
-            container: container, wikiID: first, displayName: "Alpha")
-        defer { Task { await owner.shutdown() } }
-
-        let alphaDatabase = container.appendingPathComponent("\(first.rawValue).sqlite").path
-
-        // Navigation + source import through the session model (real entry
-        // points) — the wiki store seam stays at its single boot open: page
-        // reads and source writes reuse the composition's store, never a new
-        // local open.
-        #expect(alpha.store.selectPage(byTitle: "Home"))
-        _ = await alpha.store.addSource(filename: "boundary-notes.txt", data: Data("boundary".utf8))
-        alpha.store.reloadFromStore()
-        _ = await alpha.store.searchSimilar(query: "boundary")
-        _ = await alpha.store.searchSimilarResolvingTantivy(query: "boundary")
-        await alpha.upgradeSearchIndex()
-        #expect(recorder.count(.wikiStore) == 1)
-        #expect(recorder.labels(.wikiStore) == [alphaDatabase])
-
-        // A second session/wiki records its own open; labels never mix.
-        _ = try await bootRecordingSession(
-            container: container, wikiID: second, displayName: "Beta")
-        let betaDatabase = container.appendingPathComponent("\(second.rawValue).sqlite").path
-        #expect(recorder.count(.wikiStore) == 2)
-        #expect(Set(recorder.labels(.wikiStore)) == Set([alphaDatabase, betaDatabase]))
-
-        // Unopened wikis record nothing: the labels list IS the open set.
-        #expect(!recorder.labels(.wikiStore).contains(
-            container.appendingPathComponent("open-boundary-gamma.sqlite").path))
-    }
-
-    // MARK: - P3 column: remote default records ZERO client store opens
-
-    /// The P3 tightening (plans/daemon-only-access.md, permitted-access
-    /// table, "App: wiki DB" row): with the resolved mode REMOTE, the
-    /// session's store is the daemon-backed client, the store seam records
-    /// ZERO client opens, and the app container never even gains the wiki
-    /// database file — while the daemon serves every read and write (the
-    /// fixture daemon's own prepared store observes the committed write).
-    /// The waived seams (read-only pool, queue, Tantivy writer) stay
-    /// connected and still record: the harness drives them directly,
-    /// exactly like the positive control.
-    ///
-    /// Fixture mechanics reuse the `DaemonStoreCommandExecutorTests`
-    /// harness: a REAL in-process daemon serves the store family through
-    /// the same `WikiDaemonExporter.storeOperation` selector an XPC
-    /// connection vends (`XPCStoreTransport`'s invoker seam) — no local
-    /// socket, no subprocess.
-    @Test("P3 column: remote mode records zero client store opens; the daemon serves reads and writes")
-    @MainActor
-    func remoteModeRecordsZeroClientStoreOpens() async throws {
+    func remoteSessionsRecordZeroLocalOpensDaemonUpAndDown() async throws {
         let recorder = WikiOpenSeamRecorder.shared
         recorder.reset()
 
@@ -272,39 +232,13 @@ struct ClientLocalOpenBoundaryTests {
         // daemon share one registry).
         let daemonContainer = try Self.makeContainer()
         defer { Self.removeContainer(daemonContainer) }
+        let gate = DaemonAvailabilityGate()
         let daemon = WikiDaemon(containerDirectory: daemonContainer)
         let fixtureData = try #require(
             daemon.testFixtureCreateWiki(name: "Remote Boundary Fixture"))
         let wikiID = try JSONDecoder()
             .decode(WikiDescriptor.self, from: fixtureData).id
         let exporter = WikiDaemonExporter(daemon: daemon)
-        let transport = XPCStoreTransport(
-            invoker: { wikiID, request, reply in
-                exporter.storeOperation(wikiID, request: request, reply: reply)
-            },
-            timeout: 20)
-
-        // The remote-mode catalog: the store factory constructs the
-        // daemon-backed client and records NOTHING — no local open exists
-        // on this path. The read-only pool keeps its recording factory
-        // (the P3 waiver row: the semantic-search leg still reads locally).
-        let remoteCatalog = try AppPluginCatalog.build(factories: AppPluginCatalogFactories(
-            base: BasePluginCatalogFactories(
-                agentProviderServices: UnavailableAgentProviderServices()),
-            makeDaemonTransport: { ProfileBootFixture.fixtureTransportServices() },
-            storeOpenFactories: StorePlugin.StoreOpenFactories(
-                makeStore: { context in
-                    RemoteWikiStore(
-                        transport: transport,
-                        wikiID: WikiID(rawValue: context.wikiID))
-                },
-                makeReadOnlyStore: { url in
-                    try WikiOpenSeamRecorder.shared.recording(
-                        seam: .wikiReadOnlyStore, label: url.path) {
-                        try GRDBWikiStore(readOnlyURL: url)
-                    }
-                }),
-            storeAccessMode: .remote))
 
         let container = try Self.makeContainer()
         defer { Self.removeContainer(container) }
@@ -312,7 +246,7 @@ struct ClientLocalOpenBoundaryTests {
             container: container,
             wikiID: wikiID,
             displayName: "Remote Boundary",
-            catalog: remoteCatalog)
+            catalog: Self.remoteCatalog(wikiID: wikiID, exporter: exporter, gate: gate))
         defer { Task { await owner.shutdown() } }
 
         let databasePath = container
@@ -322,24 +256,34 @@ struct ClientLocalOpenBoundaryTests {
         // already exercised daemon-served reads/writes — recording nothing.
         #expect(recorder.count(.wikiStore) == 0)
         #expect(!FileManager.default.fileExists(atPath: databasePath))
-        // The read-only pool opens lazily: nothing drove it during boot.
         #expect(recorder.count(.wikiReadOnlyStore) == 0)
+        #expect(recorder.count(.queueStore) == 0)
+        #expect(recorder.count(.queueProviderInvocation) == 0)
+        #expect(recorder.count(.tantivyIndexerWriter) == 0)
 
         // Warm the session exactly the way the app's asyncSessionLoader
-        // does (handshake + bootstrap composition).
+        // does (handshake + bootstrap composition + the P5 search-upgrade
+        // progress wiring).
         try await RemoteStoreSessionComposition.composeIfRemote(session)
         #expect(recorder.count(.wikiStore) == 0)
 
-        // Real entry points through the session's store: daemon-served
-        // reads and writes, still zero client opens.
+        // Real entry points, daemon UP — every read/write is daemon-served.
         let remoteStore = session.store.internalStore
         let homeID = try await remoteStore.resolveTitleToID("Home")
         #expect(homeID != nil)
+        #expect(session.store.selectPage(byTitle: "Home"))
+        _ = await session.store.addSource(filename: "boundary-notes.txt", data: Data("boundary".utf8))
+        session.store.searchQuery = "boundary"
+        try await Task.sleep(for: .milliseconds(500))
+        session.store.sourceSearchQuery = "boundary"
+        try await Task.sleep(for: .milliseconds(500))
+        session.store.chatSearchQuery = "boundary"
+        try await Task.sleep(for: .milliseconds(500))
+        await session.store.upgradeSearchIndex()
         try await remoteStore.setMetadata("boundary-remote", value: "daemon-served")
         #expect(
             try await remoteStore.getMetadata("boundary-remote")
                 == "daemon-served")
-        #expect(recorder.count(.wikiStore) == 0)
 
         // The write landed on the DAEMON's side: the fixture daemon's own
         // prepared store reads it back — the client never owned a file.
@@ -349,83 +293,45 @@ struct ClientLocalOpenBoundaryTests {
                 == "daemon-served")
         #expect(!FileManager.default.fileExists(atPath: databasePath))
 
-        // P4 tightening (plans/daemon-only-access.md, "App: local
-        // QueueEngine + queue.sqlite" row, slice 1): the app profile never
-        // assembles a local queue engine. The queue-store seam stays SILENT
-        // through session boot and every entry point above (the direct drive
-        // below proves the seam itself is still connected), and the
-        // provider-invocation seam records ZERO worker entries — the app
-        // providers' only caller (the local engine) is gone.
+        // THE P5 COLUMN, daemon up: zero across all five seams.
+        #expect(recorder.count(.wikiStore) == 0)
+        #expect(recorder.count(.wikiReadOnlyStore) == 0)
         #expect(recorder.count(.queueStore) == 0)
         #expect(recorder.count(.queueProviderInvocation) == 0)
+        #expect(recorder.count(.tantivyIndexerWriter) == 0)
 
-        // Waived seams stay connected and record (P3 column):
-        //
-        // Read-only pool: the semantic-search leg still reads locally.
-        // The wiki DB it reads is seeded HERE because the daemon owns the
-        // real file and this container never had one (fixture setup — a
-        // direct constructor call, not a seam open).
-        _ = try GRDBWikiStore(databaseURL: URL(fileURLWithPath: databasePath))
-        let readService = try #require(session.store.readService)
-        _ = try await readService.asyncRead { access in
-            try access.listSources()
+        // Daemon DOWN: the same entry points fail TYPED (the transport
+        // never replies; the timeout backstop answers). No local revival —
+        // every seam still records zero, and nothing creates the file.
+        gate.takeDaemonDown()
+        await #expect(throws: RemoteStoreClientError.self) {
+            try await remoteStore.resolveTitleToID("Home")
         }
-        #expect(recorder.count(.wikiReadOnlyStore) == 1)
-        #expect(recorder.labels(.wikiReadOnlyStore) == [databasePath])
-
-        // Queue store: the app never opens queue.sqlite (P4). This direct
-        // drive is only the seam-connectivity positive control — the same
-        // shape as the Tantivy control below — proving the recording
-        // closure still wraps the queue store constructor.
-        let queueURL = container.appendingPathComponent("queue.sqlite")
-        let recordedQueueStore = try WikiOpenSeamRecorder.shared.recording(
-            seam: .queueStore,
-            label: queueURL.path) {
-            try QueueStore(databaseURL: queueURL)
+        session.store.searchQuery = "down-query"
+        try await Task.sleep(for: .milliseconds(gate.downSettleMilliseconds))
+        await session.store.upgradeSearchIndex()
+        do {
+            try await remoteStore.setMetadata("boundary-down", value: "must-fail")
+            Issue.record("the daemon-down write must fail typed")
+        } catch {
+            // Expected: explicit degradation, no silent fallback.
         }
-        _ = recordedQueueStore
-        #expect(recorder.labels(.queueStore).contains(queueURL.path))
 
-        // Tantivy writer: still waived at P3 (the local index assembly
-        // leaves at P5) — same direct drive as the positive control.
-        let searchContainer = try Self.makeContainer()
-        defer { Self.removeContainer(searchContainer) }
-        let identity = SearchRuntimeIdentity(
-            wikiID: wikiID,
-            containerDirectory: searchContainer)
-        let fixtureStore = try GRDBWikiStore(
-            databaseURL: URL(fileURLWithPath: ":memory:"))
-        let runtime = SearchRuntimeCompositionFactory.runtimeFactory(
-            identity: identity,
-            contentSource: StoreBackedTantivyContentSource(store: fixtureStore),
-            changeStreamFactory: BusSearchChangeStreamFactory(
-                bus: WikiEventBus(wikiID: wikiID)),
-            makeIndexer: { recordedIdentity, recordedSource in
-                try WikiOpenSeamRecorder.shared.recording(
-                    seam: .tantivyIndexerWriter,
-                    label: recordedIdentity.indexDirectory.path) {
-                    try TantivyIndexer(
-                        indexDirectory: recordedIdentity.indexDirectory,
-                        contentSource: recordedSource)
-                }
-            })
-        let registry = SearchRuntimeRegistry()
-        let lease = try await registry.assemble(runtime)
-        #expect(recorder.labels(.tantivyIndexerWriter)
-            .contains(identity.indexDirectory.path))
-        await lease.dispose()
-
-        // The headline column, restated: nothing on the remote path ever
-        // recorded a client-side wiki-store open.
+        // Still zero, daemon down. No read-only local mode exists.
         #expect(recorder.count(.wikiStore) == 0)
+        #expect(recorder.count(.wikiReadOnlyStore) == 0)
+        #expect(recorder.count(.queueStore) == 0)
+        #expect(recorder.count(.queueProviderInvocation) == 0)
+        #expect(recorder.count(.tantivyIndexerWriter) == 0)
+        #expect(!FileManager.default.fileExists(atPath: databasePath))
     }
 
     // MARK: - Failing seam (future phases)
 
     /// The harness's failing-seam contract, kept connected from day one: a
     /// seam factory that THROWS surfaces the open failure instead of
-    /// silently proceeding. Later phases swap the recording bodies for
-    /// failing ones to prove the client path never opens local storage.
+    /// silently proceeding — the session boot fails explicitly, never a
+    /// silent local revival and no half-booted session.
     @Test("a failing store seam surfaces the open failure from session boot")
     @MainActor
     func failingStoreSeamSurfacesError() async throws {
@@ -472,6 +378,35 @@ struct ClientLocalOpenBoundaryTests {
     }
 }
 
+/// The daemon availability gate for the P5 harness: UP routes every store
+/// call into the exporter; DOWN never replies, so the transport's timeout
+/// backstop answers typed — the same shape a dead daemon produces, without
+/// waiting on a real process.
+final class DaemonAvailabilityGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var up = true
+
+    /// The UP-phase transport timeout. The in-process exporter answers
+    /// synchronously; 5s is generous headroom for a loaded CI sandbox.
+    /// The DOWN-phase settle window matches it (every down-phase call must
+    /// fail typed within one timeout, plus scheduler slack).
+    let timeout: TimeInterval = 5
+    var downSettleMilliseconds: UInt64 { UInt64((timeout + 1) * 1000) }
+
+    func invoke(
+        _ wikiID: String, _ request: Data, _ reply: @escaping (Data) -> Void,
+        route: (String, Data, @escaping (Data) -> Void) -> Void
+    ) {
+        let isUp: Bool = lock.withLock { up }
+        guard isUp else { return } // never replies → typed deadlineExceeded
+        route(wikiID, request, reply)
+    }
+
+    func takeDaemonDown() {
+        lock.withLock { up = false }
+    }
+}
+
 /// The failing store seam used by the seamed-open-failure scenario. A top
 /// level function: Swift does not parse error type declarations inside
 /// closures.
@@ -490,50 +425,5 @@ extension WikiDaemon {
 
 private let failingStoreFactory: @Sendable (StorePlugin.StoreOpenContext) throws -> any WikiStore = { _ in
     throw SeamedOpenFailure()
-}
-
-/// Minimal ingestion provider for harness queue assemblies (nothing routes
-/// through it — the assembly only needs a provider value to construct).
-/// Same shape as `QueueRuntimeFactoryTests`'s private double.
-private struct HarnessIngestionProvider: QueueIngestionProvider {
-    func runIngestion(
-        wikiID: WikiID,
-        sourceIDs: [SourceID],
-        queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
-        onReport: (@Sendable (QueueReportMutation) -> Void)?
-    ) async throws {}
-
-    func runLint(
-        wikiID: WikiID,
-        queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
-        onReport: (@Sendable (QueueReportMutation) -> Void)?
-    ) async throws {}
-
-    func runLintPages(
-        wikiID: WikiID,
-        pageIDs: [PageID],
-        queueItemID: QueueItem.ID,
-        onProgress: @escaping @Sendable (String) -> Void,
-        onTranscript: (@Sendable (AgentEvent) -> Void)?,
-        onUsage: (@Sendable (SessionUsage?) -> Void)?,
-        onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
-        onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
-        onReport: (@Sendable (QueueReportMutation) -> Void)?
-    ) async throws {}
-
-    func readiness() async -> String? { nil }
 }
 #endif

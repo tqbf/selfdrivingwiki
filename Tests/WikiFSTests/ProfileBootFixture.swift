@@ -181,14 +181,12 @@ enum ProfileBootFixture {
             dependencies: [ServiceDependency(StoreServiceKeys.store)],
             provisions: [
                 ServiceDependency(LauncherServiceKeys.factory),
-                ServiceDependency(PerWikiRuntimeServiceKeys.searchFactory),
             ]) {
             try ComponentDefinition(
                 label: launcherFactoryPluginID.rawValue,
                 dependencies: [ServiceDependency(StoreServiceKeys.store)],
                 provisions: [
                     ServiceDependency(LauncherServiceKeys.factory),
-                    ServiceDependency(PerWikiRuntimeServiceKeys.searchFactory),
                 ]) { activation in
                 let store = try await activation.require(StoreServiceKeys.store)
                 let eventBus = try #require(store.eventBus)
@@ -198,16 +196,11 @@ enum ProfileBootFixture {
                         gate: gate,
                         launcher: AgentLauncher(generationGate: gate))
                 }
-                let searchFactory = await MainActor.run {
-                    PerWikiSearchFactory(
-                        identity: SearchRuntimeIdentity(
-                            wikiID: eventBus.wikiID,
-                            containerDirectory: FileManager.default.temporaryDirectory),
-                        contentSource: StoreBackedTantivyContentSource(store: store),
-                        changeStreamFactory: BusSearchChangeStreamFactory(bus: eventBus))
-                }
+                // P5: no PerWikiSearchFactory supply — the app's local
+                // Tantivy assembly is gone; the daemon builds its runtime
+                // from the admitted store.
+                _ = eventBus
                 _ = try await activation.supply(LauncherServiceKeys.factory, value: factory)
-                _ = try await activation.supply(PerWikiRuntimeServiceKeys.searchFactory, value: searchFactory)
             }
         }
     }

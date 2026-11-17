@@ -121,7 +121,8 @@ struct AppProfileBootTests {
 
         #expect(facade.wikiID == wikiID)
         #expect(facade.descriptor.displayName == "Profile Wiki")
-        #expect(facade.store.readService != nil)
+        // P5: no read service on the facade or the model — the read-only
+        // pool left app composition; reads are daemon-served store calls.
         // The app wiring injects the live-resolving package-driven fence
         // validator into the model so the editor's save warning is not dead
         // code. The service resolves from the machine renderer layout rooted

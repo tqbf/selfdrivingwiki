@@ -3295,28 +3295,17 @@ internal struct WikiReaderRep: NSViewRepresentable {
             let loadStart = DispatchTime.now()
             let rendererSourceTypes = store.registeredRendererSourceTypes
             do {
-                let result: TransclusionEmbedder.Result
-                if let readService = store.readService {
-                    result = try await readService.asyncRead { access in
-                        try TransclusionEmbedder.renderEmbedBody(
-                            access: access,
-                            target: target,
-                            context: context,
-                            options: renderOptions,
-                            rendererSourceTypes: rendererSourceTypes,
-                            ancestors: ancestors)
-                    }
-                } else if let grdb = store.internalStore as? GRDBWikiStore {
-                    // Main-actor fallback (in-memory tests; rare in prod).
-                    result = try TransclusionEmbedder.renderEmbedBody(
-                        testFixtureStore: grdb,
-                        target: target,
-                        context: context,
-                        options: renderOptions,
-                        ancestors: ancestors)
-                } else {
-                    result = .empty
-                }
+                // P5: the embed render reads through the session's store —
+                // the daemon executes each read over the wire (remote app)
+                // or the local store answers (tests). One bounded read set
+                // per embed, no local pool.
+                let result: TransclusionEmbedder.Result = try await TransclusionEmbedder.renderEmbedBody(
+                    store: store.internalStore,
+                    target: target,
+                    context: context,
+                    options: renderOptions,
+                    rendererSourceTypes: rendererSourceTypes,
+                    ancestors: ancestors)
                 guard generation == transclusionGeneration,
                       isDismantled == false,
                       Task.isCancelled == false else { return }

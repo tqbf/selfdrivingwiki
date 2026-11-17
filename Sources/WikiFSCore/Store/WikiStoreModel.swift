@@ -16,10 +16,34 @@ public struct SearchUpgradeState: Identifiable {
     public let total: Int
     public var done: Int
     public var phase: Phase
-    public enum Phase { case pages, sources, chats }
+    public enum Phase: String, Sendable { case pages, sources, chats }
 
     public init(total: Int, done: Int, phase: Phase) {
         self.total = total; self.done = done; self.phase = phase
+    }
+}
+
+/// One daemon progress step for the search-index upgrade (plan 5.2). The
+/// daemon-side backfill reports phase/done/total while it runs and exactly
+/// one terminal state at the end; the model's sheet state machine is a
+/// direct projection. Module-neutral: the session wiring projects the wire
+/// event (`DaemonSearchUpgradeEvent`, WikiDaemonContract) into this value,
+/// because WikiFSCore does not import the daemon contract.
+public struct SearchUpgradeProgress: Equatable, Sendable {
+    public enum Terminal: Equatable, Sendable { case none, complete, failed }
+    public let phase: SearchUpgradeState.Phase
+    public let done: Int
+    public let total: Int
+    public let terminal: Terminal
+
+    public init(
+        phase: SearchUpgradeState.Phase, done: Int, total: Int,
+        terminal: Terminal
+    ) {
+        self.phase = phase
+        self.done = done
+        self.total = total
+        self.terminal = terminal
     }
 }
 
@@ -64,13 +88,13 @@ public final class WikiStoreModel {
     public private(set) var searchResults: [WikiPageSummary] = []
     @ObservationIgnored private var searchTask: Task<Void, Never>?
 
-    /// Progress of the one-time, blocking search-index upgrade (nil when idle).
-    /// When non-nil the app shows a non-dismissible sheet that blocks all UX:
-    /// the upgrade is the SOLE owner of the store while it runs (SQLite is never
-    /// touched off-main), so there can be no concurrent-statement race. It only
-    /// runs when MiniLM is the selected embedder AND there is missing content
-    /// (first run, a legacy embedding cutover, or `wikictl`-written content);
-    /// the common launch is an instant no-op and shows nothing.
+    /// Progress of the one-time, blocking search-index upgrade (nil when
+    /// idle). When non-nil the app shows a non-dismissible sheet that blocks
+    /// all UX. P5: the upgrade RUNS IN THE DAEMON (plan 5.2) — this state is
+    /// a projection of the daemon's `wikid.search-upgrade-event.v1` progress
+    /// envelopes, applied through ``applySearchUpgradeProgress``. It only
+    /// appears when the daemon's embedder is loaded AND its missing-work
+    /// scan found content; the common launch is an instant no-op.
     /// A user-facing error from a store mutation (e.g. a delete that violated a
     /// foreign-key constraint, or files skipped as duplicates during ingest).
     /// Surfaced via an alert in `ContentView`, titled per-site so a duplicate
@@ -84,11 +108,19 @@ public final class WikiStoreModel {
 
     public private(set) var searchUpgrade: SearchUpgradeState?
     /// Synchronous single-flight guard for ``upgradeSearchIndex``. Set BEFORE any
-    /// `await` (unlike `searchUpgrade`, which is only set after `configure()`),
-    /// so a second trigger that fires during the configure() suspension window
-    /// sees it true and bails. The check-and-set is main-actor and contains no
-    /// suspension, so it is atomic against the scenePhase/activeWikiID hooks.
+    /// `await`, so a second trigger that fires during the daemon-start
+    /// suspension sees it true and bails.
     @ObservationIgnored private var isUpgrading = false
+
+    /// P5: the daemon-only backfill trigger. The session wiring injects ONE
+    /// closure that starts the daemon-side embedding backfill
+    /// (`RemoteWikiStore.startSearchUpgrade`) and answers whether a run
+    /// actually started (the sheet appears from the daemon's first progress
+    /// event, not from this answer). `nil` — local/test compositions — makes
+    /// ``upgradeSearchIndex`` a link-reconcile-only no-op. The closure is
+    /// main-actor-safe and returns false when the daemon cannot start a run
+    /// (unavailable, embedder missing, or nothing missing).
+    @ObservationIgnored public var startSearchUpgradeBackfill: (() async -> Bool)?
     @ObservationIgnored private var didReconcileLinksInThisSession = false
 
     /// Live SOURCES search query from the Sources search bar. Debounced 300ms.
@@ -482,19 +514,19 @@ public final class WikiStoreModel {
 
     private let store: WikiStore
 
-    /// The underlying concrete `WikiStore` (concretely `GRDBWikiStore` in
-    /// production). Exposed only for the explicit in-memory reader fallback.
-    /// Production file-backed sessions use `WikiReadService` and never pass the
-    /// concrete store through an off-main closure.
+    /// The underlying concrete `WikiStore` (concretely `RemoteWikiStore` in
+    /// the app, `GRDBWikiStore` in local/test compositions). Exposed for the
+    /// session wiring (remote composition + the daemon-only search-upgrade
+    /// trigger) and the explicit in-memory reader fallback.
     public var internalStore: WikiStore { store }
-    /// Narrow off-main read capability for search, metadata, and transclusion.
-    /// File-backed sessions inject this service. In-memory stores use the main
-    /// store because a second connection cannot access the same database.
-    @ObservationIgnored public var readService: WikiReadService?
 
     /// Stable Tantivy BM25 facade. It starts unavailable and is installed only
     /// after the per-wiki runtime finishes rebuild and buffered-event catch-up.
     /// Typed failures map to a missing BM25 leg; semantic search remains usable.
+    /// P5: the app injects the DAEMON-backed facade (`DaemonSearchServices`)
+    /// — autocomplete and the UI search-provider seams only; the sidebar
+    /// hybrid search itself is a single store-family round trip (the daemon
+    /// fuses BM25 + semantic and replies with final results).
     @ObservationIgnored public var searchServices: any SearchServices = UnavailableSearchServices()
 
     /// The configured HTML extraction backend (issue #799 PR2). Set at app
@@ -1134,47 +1166,16 @@ public final class WikiStoreModel {
     /// — fine for the one-shot callers (the "Find Similar…" link menu builds its
     /// submenu once per right-click, not per render). The old per-row sidebar caller that froze the UI was removed.
     ///
-    /// Routes through the no-BM25-leg path (`bm25Leg: nil`) — post-#634 this
-    /// means cosine-only (the FTS5 fallback it used to surface was dropped). Kept
-    /// as-is for one-shot callers that don't want the Tantivy index dependency
-    /// (the omnibox is debounced via a `Task` and benefits from the existing
-    /// path). The "Find Similar…" right-click menu should call
-    /// ``searchSimilarResolvingTantivy(query:limit:)`` instead — it resolves
-    /// the Tantivy BM25 leg (#637) so the menu surfaces fuzzy (edit-distance 1)
-    /// matches without regressing post-#634 (no FTS5).
+    /// One-shot hybrid page search (the "Find Similar…" right-click menu via
+    /// `WikiLinkMenuNSItems`, one submenu per right-click). P5: the DAEMON
+    /// resolves the Tantivy BM25 leg (#637) and fuses it with the semantic
+    /// cosine leg server-side, so this is a single store round trip that
+    /// lands the full fused ordering — the menu still surfaces fuzzy
+    /// (edit-distance 1) matches post-#634 (no FTS5). Cosine-only results
+    /// when the daemon's index is unavailable — the documented degradation.
     public func searchSimilar(query: String, limit: Int = 8) async -> [WikiPageSummary] {
-        await DebugLog.trying("searchSimilar", operation: { try await store.searchSimilar(query: query, limit: limit, bm25Leg: nil) }) ?? []
-    }
-
-    /// #637: one-shot page search that resolves a Tantivy BM25 leg before
-    /// calling the store's 3-arg `searchSimilar` — mirrors `scheduleSearch()`
-    /// without the debounce, for callers that search once per user gesture
-    /// rather than per keystroke (the "Suggest…" / "Find Similar…" link
-    /// submenu, via `WikiLinkMenuNSItems`).
-    ///
-    /// #925: this used to bridge the actor-isolated Tantivy query back to a
-    /// synchronous main-actor call with a blocking semaphore. That parked the
-    /// main thread *and* a cooperative-pool thread on every right-click, which
-    /// is one of the four starvation sites the issue tracks; the awaited leg
-    /// below is the whole fix. Callers that need a menu item synchronously must
-    /// render a placeholder and fill it in when this returns — see
-    /// `SimilarPagesMenuLoader`.
-    ///
-    /// Returns cosine-only results (`bm25Leg: nil`) when Tantivy is unavailable
-    /// or returns no hits — post-#634 that's the documented contract (FTS5 was
-    /// dropped; nil leg = no BM25 leg, cosine still answers when
-    /// MiniLM is loaded).
-    public func searchSimilarResolvingTantivy(query: String, limit: Int = 8) async -> [WikiPageSummary] {
         guard !query.isEmpty else { return [] }
-        let leg = await resolveTantivyLeg(
-            query: query, kind: .page, limit: limit, catalog: summaries,
-            id: PageID.init(rawValue:))
-        do {
-            return try await store.searchSimilar(query: query, limit: limit, bm25Leg: leg)
-        } catch {
-            DebugLog.store("WikiStoreModel.searchSimilarResolvingTantivy: store hit failed for query=\"\(query)\": \(error)")
-            return []
-        }
+        return await DebugLog.trying("searchSimilar", operation: { try await store.searchSimilar(query: query, limit: limit, bm25Leg: nil) }) ?? []
     }
 
     /// Semantic source search wrapper — same hybrid store search as
@@ -1203,30 +1204,21 @@ public final class WikiStoreModel {
         // 1. The "Ask" action row — always first, so Enter sends to chat.
         results.append(.ask(question: trimmed))
 
-        // 2. Pages (semantic + FTS).
-        let pageLeg = await resolveTantivyLeg(
-            query: trimmed, kind: .page, limit: 3, catalog: summaries,
-            id: PageID.init(rawValue:))
+        // 2. Pages (daemon-fused BM25 + semantic).
         let pages = (await DebugLog.trying("searchOmniboxPages", operation: {
-            try await store.searchSimilar(query: trimmed, limit: 3, bm25Leg: pageLeg)
+            try await store.searchSimilar(query: trimmed, limit: 3, bm25Leg: nil)
         }) ?? [])
         results.append(contentsOf: pages.map { .page($0) })
 
-        // 3. Sources (semantic + FTS).
-        let sourceLeg = await resolveTantivyLeg(
-            query: trimmed, kind: .source, limit: 2, catalog: sources,
-            id: SourceID.init(rawValue:))
+        // 3. Sources (daemon-fused BM25 + semantic).
         let sources = (await DebugLog.trying("searchOmniboxSources", operation: {
-            try await store.searchSimilarSources(query: trimmed, limit: 2, bm25Leg: sourceLeg)
+            try await store.searchSimilarSources(query: trimmed, limit: 2, bm25Leg: nil)
         }) ?? [])
         results.append(contentsOf: sources.map { .source($0) })
 
-        // 4. Chats (semantic + FTS).
-        let chatLeg = await resolveTantivyLeg(
-            query: trimmed, kind: .chat, limit: 2, catalog: chats,
-            id: ChatID.init(rawValue:))
+        // 4. Chats (daemon-fused BM25 + semantic).
         let chats = (await DebugLog.trying("searchOmniboxChats", operation: {
-            try await store.searchSimilarChats(query: trimmed, limit: 2, bm25Leg: chatLeg)
+            try await store.searchSimilarChats(query: trimmed, limit: 2, bm25Leg: nil)
         }) ?? [])
         results.append(contentsOf: chats.map { .chat($0) })
 
@@ -4479,39 +4471,37 @@ public final class WikiStoreModel {
 
     // MARK: - Search
 
-    /// One-time, blocking search-index upgrade. Replaces the old detached
-    /// background backfill, which raced the main thread on the store's cached,
-    /// non-thread-safe prepared statements (the launch `EXC_BREAKPOINT` in
-    /// `String(cString:)`).
-    ///
-    /// Invariant: **SQLite is never touched off-main.** All store reads/writes
-    /// happen here on the main actor; only the MLX/Metal inference hops to a
-    /// detached task (pure compute, no SQLite). While `searchUpgrade != nil` the
-    /// UI shows a non-dismissible sheet, so the upgrade is the sole owner of the
-    /// store — there is no second thread and no race.
-    ///
-    /// Only runs when MiniLM is the selected embedder (fast, ~ms/sentence) AND
-    /// there is missing content. On builds without the bundled model
-    /// (`selectedEmbedderIdentifier()` ≠ MiniLM) it is a no-op so we never block
-    /// launch without a model; search uses BM25. The common
-    /// warm-DB launch has no missing work → no sheet, instant.
+    /// One-time, blocking search-index upgrade (plan 5.2: DAEMON-SIDE). The
+    /// embedding backfill runs in the daemon — its store does the scan and
+    /// the chunk writes, and its MLX embedder (loaded through the
+    /// WikiFSMLX bootstrap) does the inference. This model method only:
+    /// 1. runs the once-per-model-lifetime link-graph self-heal (below — it
+    ///    must run even without an embedder), then
+    /// 2. fires the injected daemon trigger (``startSearchUpgradeBackfill``).
+    /// The non-dismissible sheet is driven ENTIRELY by the daemon's progress
+    /// envelopes (``applySearchUpgradeProgress``): it appears on the first
+    /// `running` event and dismisses on the terminal `complete`/`failed`
+    /// state. With no injected trigger (local/test compositions) or an
+    /// unstartable daemon run (no model / nothing missing) this is a no-op —
+    /// the app's local MiniLM upgrade code is deleted with P5.
     public func upgradeSearchIndex() async {
         // Single-flight: set BEFORE any `await`. The scenePhase `.active` and
         // `activeWikiID` hooks can both fire at launch; without this synchronous
-        // guard a second call enters during the configure() suspension and the
-        // upgrade runs twice (harmless to data, wasteful, and it confuses the
-        // progress counter). `searchUpgrade` itself is set too late to gate on.
+        // guard a second call enters during the trigger's suspension and
+        // double-fires (the daemon dedupes runs, but the reconcile counter
+        // below must stay once-per-model).
         guard !isUpgrading else { return }
         isUpgrading = true
         defer { isUpgrading = false }
 
-        // Link-graph self-heal, once per model lifetime, BEFORE the embedder
-        // gates below (it must run even on FTS-only builds). Main-actor SQLite
-        // like everything else here; re-resolves every page's `[[links]]` so
-        // citations that only resolve under newer rules (lookup-driven `#`
-        // splitting, lenient source-name matching) — or whose target was
-        // ingested after the page was last saved — get their link rows without
-        // waiting for the page's next edit.
+        // Link-graph self-heal, once per model lifetime, BEFORE the trigger
+        // (it must run even on model-less daemons). Store-mediated reads and
+        // writes over the session's store (remote in the app — the daemon
+        // executes them; local in tests) — re-resolves every page's
+        // `[[links]]` so citations that only resolve under newer rules
+        // (lookup-driven `#` splitting, lenient source-name matching) — or
+        // whose target was ingested after the page was last saved — get
+        // their link rows without waiting for the page's next edit.
         if !didReconcileLinksInThisSession {
             didReconcileLinksInThisSession = true
 
@@ -4534,147 +4524,53 @@ public final class WikiStoreModel {
             }
         }
 
-        guard EmbeddingService.selectedEmbedderIdentifier() == EmbeddingService.miniLMIdentifier else {
-            return                                            // no MiniLM model → FTS-only
+        // Fire the daemon-side backfill. The answer only logs; the sheet
+        // state comes from the daemon's progress envelopes.
+        guard let trigger = startSearchUpgradeBackfill else { return }
+        let started = await trigger()
+        if !started {
+            DebugLog.store(
+                "searchUpgrade: daemon did not start a backfill "
+                    + "(embedder unavailable or nothing missing)")
         }
-        await EmbeddingService.configure()
-        guard EmbeddingService.isAvailable else { return }
-
-        let pageWork: [(id: PageID, text: String)]
-        let sourceWork: [(id: SourceID, text: String)]
-        let chatWork: [(id: ChatID, text: String)]
-        do {
-            pageWork = try await store.missingPageEmbeddingWork()
-            sourceWork = try await store.missingSourceEmbeddingWork()
-            chatWork = try await store.missingChatEmbeddingWork()
-        } catch {
-            DebugLog.store("upgradeSearchIndex: missing-work scan failed: \(error)")
-            isUpgrading = false
-            return
-        }
-        let total = pageWork.count + sourceWork.count + chatWork.count
-        guard total > 0 else { return }                       // nothing missing → no sheet
-
-        searchUpgrade = SearchUpgradeState(total: total, done: 0, phase: .pages)
-        DebugLog.store("searchUpgrade: begin — \(pageWork.count) page(s), \(sourceWork.count) source(s), \(chatWork.count) chat(s)")
-
-        var done = 0
-        done = await embedAndStore(pageWork, into: { id, chunks in await DebugLog.trying("storePageChunks", operation: { try await store.storePageChunks(id: id, chunks: chunks) }) }, running: done)
-        searchUpgrade?.phase = .sources
-        done = await embedAndStore(sourceWork, into: { id, chunks in await DebugLog.trying("storeSourceChunks", operation: { try await store.storeSourceChunks(id: id, chunks: chunks) }) }, running: done)
-        searchUpgrade?.phase = .chats
-        done = await embedAndStore(chatWork, into: { id, chunks in await DebugLog.trying("storeChatChunks", operation: { try await store.storeChatChunks(id: id, chunks: chunks) }) }, running: done)
-
-        DebugLog.store("searchUpgrade: complete — \(done) of \(total)")
-        searchUpgrade = nil                                   // dismisses the sheet
-        await refreshProjectionsAfterOwnWrite()
     }
 
-    /// Shared body of the page + source embed loops. **Stays on `@MainActor`**:
-    /// only the `await embedChunksOffMain` suspension hops off-main (pure MLX,
-    /// no SQLite); the `store` closure runs the SQLite write on the main actor.
-    /// Do NOT parallelize this — two threads on the store's cached statements is
-    /// the race that crashed launch (`docs/skills/sqlite-concurrency/SKILL.md`).
-    /// Returns the updated running count (for `searchUpgrade.done`).
-    private func embedAndStore<ID: Hashable & Sendable>(
-        _ work: [(id: ID, text: String)],
-        into store: (ID, [Data]) async throws -> Void,
-        running done: Int
-    ) async -> Int {
-        var done = done
-        for (id, text) in work {
-            let blobs = await embedChunksOffMain(text)
-            if !blobs.isEmpty {
-                do {
-                    try await store(id, blobs)   // main-thread SQLite write
-                } catch {
-                    DebugLog.store("embedStoreWrite failed: \(error)")
-                }
+    /// P5: apply one daemon progress step to ``searchUpgrade`` (the
+    /// non-dismissible sheet). The session wiring hops to the main actor
+    /// before calling this. A `running` step creates the sheet state on
+    /// first sight and keeps it current; the terminal `complete`/`failed`
+    /// steps dismiss it (a `failed` run is logged, never silent — the
+    /// daemon already logged the underlying error).
+    public func applySearchUpgradeProgress(_ progress: SearchUpgradeProgress) {
+        switch progress.terminal {
+        case .complete:
+            DebugLog.store(
+                "searchUpgrade: complete — daemon backfill finished "
+                    + "(\(progress.total) item(s))")
+            searchUpgrade = nil
+        case .failed:
+            DebugLog.store(
+                "searchUpgrade: daemon backfill FAILED — sheet dismissed")
+            searchUpgrade = nil
+        case .none:
+            if searchUpgrade == nil {
+                searchUpgrade = SearchUpgradeState(
+                    total: progress.total, done: 0, phase: progress.phase)
             }
-            done += 1
-            searchUpgrade?.done = done
-            await Task.yield()                                // keep the sheet's spinner animating
+            searchUpgrade?.done = progress.done
+            searchUpgrade?.phase = progress.phase
         }
-        return done
     }
 
-    /// Chunk + embed a document's text on a background thread (MLX/Metal is
-    /// safe off-main and is pure compute — it touches NO SQLite). Returns one
-    /// Float32 BLOB per chunk. The surrounding `upgradeSearchIndex` does all
-    /// SQLite I/O on the main actor.
-    private nonisolated func embedChunksOffMain(_ text: String) async -> [Data] {
-        await Task.detached(priority: .utility) {
-            EmbeddingService.chunkedEmbeddings(for: text)
-        }.value
-    }
-
-    // MARK: - Phase 2: Tantivy BM25 leg (cutover)
+    // MARK: - Search (P5: fully daemon-fused)
     //
-    // Tantivy is now the PRIMARY lexical/BM25 leg of the hybrid search
-    // (plans/tantivy-search-sidecar.md §4.4). Flow:
-    //   1. `resolveTantivyLeg(...)` queries the Tantivy index (async, actor) and
-    //      maps hits to full typed summaries via the cached catalog, preserving
-    //      Tantivy's best-first rank order.
-    //   2. The leg is passed to `store.searchSimilar(query:limit:bm25Leg:)`.
-    //      The store uses the leg INSTEAD of FTS5, then fuses it with the
-    //      semantic cosine leg via `RankFusion.rrf` (unchanged, in-store).
-    //   3. `nil` leg → the store runs without a BM25 leg (Tantivy unavailable,
-    //      empty, or all hits resolved to nothing). wikictl/tests always pass
-    //      `nil`.
-    //
-    // FTS5 was retired in #634, so there is no lexical fallback path here.
-
-    /// Resolve Tantivy BM25 hits into full typed summaries from a cached
-    /// catalog, preserving Tantivy's best-first rank order. Returns `nil` when
-    /// Tantivy is unavailable, the index returned nothing, or every hit was
-    /// missing from the catalog (e.g. a resource deleted since the last Tantivy
-    /// sync). A `nil` return means "no BM25 leg" at the store call site.
-    ///
-    /// `catalog` is a value-type copy captured at the call site, so a main-actor
-    /// mutation during the `await svc.search` suspension can't race the lookup.
-    private func resolveTantivyLeg<T: Identifiable & Sendable>(
-        query: String,
-        kind: TantivyDocumentKind,
-        limit: Int,
-        catalog: [T],
-        id: (String) -> T.ID
-    ) async -> [T]? where T.ID: Hashable {
-        let hits: [TantivyShadowSearchResult]
-        do {
-            hits = try await searchServices.search(query: query, kinds: [kind], limit: limit)
-        } catch {
-            DebugLog.store("WikiStoreModel: Tantivy BM25 leg unavailable for query=\"\(query)\": \(error)")
-            return nil
-        }
-        guard !hits.isEmpty else { return nil }
-        let byID = Dictionary(catalog.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let resolved = hits.compactMap { hit -> T? in
-            return byID[id(hit.ulid)]
-        }
-        return resolved.isEmpty ? nil : resolved
-    }
-
-    /// Phase 2 shadow-comparison log. With Option B the FTS5 leg isn't run
-    /// separately when Tantivy succeeds, so the meaningful Phase 2 signal is: of
-    /// the Tantivy BM25 hits fed into RRF, how many survive into the final fused
-    /// output (a high overlap means Tantivy's lexical signal is well-represented;
-    /// a low overlap means the semantic leg dominated). Latency is total hybrid
-    /// time (Tantivy query + store semantic + RRF). Raw FTS5-vs-Tantivy BM25
-    /// parity was already validated in Phase 1 shadow tests
-    /// (`TantivyShadowIndexTests`).
-    private func logShadowComparison<T: Identifiable & Hashable & Sendable>(
-        kind: String,
-        query: String,
-        leg: [T]?,
-        fused: [T],
-        t0: DispatchTime
-    ) where T.ID: Hashable {
-        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000
-        let legIDs = Set((leg ?? []).map { $0.id })
-        let fusedIDs = Set(fused.map { $0.id })
-        let overlap = legIDs.intersection(fusedIDs).count
-        DebugLog.store("search[\(kind)]: query=\"\(query)\" Tantivy-BM25=\(leg?.count ?? 0) fused=\(fused.count) overlap=\(overlap) ms=\(String(format: "%.1f", ms))")
-    }
+    // Every hybrid search is ONE store-family round trip: the daemon's
+    // executor resolves the Tantivy BM25 leg from its own index runtime,
+    // its store computes the semantic cosine leg (the daemon loads MiniLM
+    // through the WikiFSMLX bootstrap), and the store's `RankFusion.rrf`
+    // fuses the legs. The app consumes the fused reply only — the client-side
+    // leg resolver, the shadow-comparison log, and the read-pool search
+    // branch are deleted with this phase.
 
     private func scheduleSearch() {
         searchTask?.cancel()
@@ -4687,25 +4583,14 @@ public final class WikiStoreModel {
             // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let self else { return }
-            // Prefer an off-main snapshot read (Phase 0 reader pool) so typing
-            // never contends with the main-actor write store; fall back to the
-            // main store when no pool exists (in-memory wiki, tests).
             let query = self.searchQuery
-            let t0 = DispatchTime.now()
-            let bm25Leg = await self.resolveTantivyLeg(
-                query: query, kind: .page, limit: 20, catalog: self.summaries,
-                id: PageID.init(rawValue:))
-            let results: [WikiPageSummary]
-            if let readService = self.readService {
-                let fetched = await DebugLog.trying("searchSimilarPages", operation: { try await readService.asyncRead { reader in
-                    try reader.searchSimilar(query: query, limit: 20, bm25Leg: bm25Leg)
-                } })
-                results = fetched ?? []
-            } else {
-                results = (await DebugLog.trying("searchSimilarPages", operation: { try await self.store.searchSimilar(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
-            }
+            let results: [WikiPageSummary] = await DebugLog.trying(
+                "searchSimilarPages",
+                operation: {
+                    try await self.store.searchSimilar(
+                        query: query, limit: 20, bm25Leg: nil)
+                }) ?? []
             guard !Task.isCancelled else { return }
-            self.logShadowComparison(kind: "pages", query: query, leg: bm25Leg, fused: results, t0: t0)
             self.searchResults = results
         }
     }
@@ -4722,21 +4607,13 @@ public final class WikiStoreModel {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let self else { return }
             let query = self.sourceSearchQuery
-            let t0 = DispatchTime.now()
-            let bm25Leg = await self.resolveTantivyLeg(
-                query: query, kind: .source, limit: 20, catalog: self.sources,
-                id: SourceID.init(rawValue:))
-            let results: [SourceSummary]
-            if let readService = self.readService {
-                let fetched = await DebugLog.trying("searchSimilarSources", operation: { try await readService.asyncRead { reader in
-                    try reader.searchSimilarSources(query: query, limit: 20, bm25Leg: bm25Leg)
-                } })
-                results = fetched ?? []
-            } else {
-                results = (await DebugLog.trying("searchSimilarSources", operation: { try await self.store.searchSimilarSources(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
-            }
+            let results: [SourceSummary] = await DebugLog.trying(
+                "searchSimilarSources",
+                operation: {
+                    try await self.store.searchSimilarSources(
+                        query: query, limit: 20, bm25Leg: nil)
+                }) ?? []
             guard !Task.isCancelled else { return }
-            self.logShadowComparison(kind: "sources", query: query, leg: bm25Leg, fused: results, t0: t0)
             self.sourceSearchResults = results
         }
     }
@@ -4753,18 +4630,16 @@ public final class WikiStoreModel {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let self else { return }
             let query = self.chatSearchQuery
-            let t0 = DispatchTime.now()
-            let bm25Leg = await self.resolveTantivyLeg(
-                query: query, kind: .chat, limit: 20, catalog: self.chats,
-                id: ChatID.init(rawValue:))
-            // Use the main store (same connection as chatMessages load) so the
-            // search results and the body load see the same WAL snapshot —
-            // eliminates cross-connection staleness where the read service could
-            // return a chat_id that's been renamed/reordered since the last
-            // checkpoint (issue #383).
-            let results = (await DebugLog.trying("searchSimilarChats", operation: { try await self.store.searchSimilarChats(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []
+            // The chat sidebar search is the same daemon-side execution the
+            // CLI's `chat.search` op performs: the daemon executor resolves
+            // the Tantivy leg and its store fuses with the semantic leg.
+            let results: [ChatSummary] = await DebugLog.trying(
+                "searchSimilarChats",
+                operation: {
+                    try await self.store.searchSimilarChats(
+                        query: query, limit: 20, bm25Leg: nil)
+                }) ?? []
             guard !Task.isCancelled else { return }
-            self.logShadowComparison(kind: "chats", query: query, leg: bm25Leg, fused: results, t0: t0)
             self.chatSearchResults = results
         }
     }

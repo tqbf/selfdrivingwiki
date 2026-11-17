@@ -36,6 +36,12 @@ enum DaemonStoreOpsLedger {
         // in DaemonStoreEventsWire.swift, outside this per-op ledger.
         case .sinkHandshake:
             return nil
+        // Events infrastructure (P5.2): the DaemonSearchUpgrade* start pair
+        // lives in DaemonSearchUpgradeWire.swift, outside this per-op
+        // ledger (same daemon-scoped tier as `sinkHandshake` — not a
+        // `WikiStore` requirement).
+        case .upgradeSearchIndex:
+            return nil
 
         // MARK: Small (37)
 

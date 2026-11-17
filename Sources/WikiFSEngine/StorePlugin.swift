@@ -79,15 +79,12 @@ public enum StorePlugin {
     /// unchanged, so catalogs built with it behave like the production one.
     ///
     /// - Parameters:
-    ///   - mode: the resolved `allowLocalStore` mode (plans/daemon-only-access.md,
-    ///     "Flag name and polarity"). `.remote` provisions the store through
-    ///     the injected factory (the app's daemon-backed client) and NEVER
-    ///     opens a local database; `.local` is today's local composition.
-    ///     The app catalog passes the launch-fixed resolved mode; daemon and
-    ///     CLI catalogs keep the plain `definition` (always `.local` — they
-    ///     own the file).
-    ///   - openFactories: injected open factories. `nil` legs keep the
-    ///     production constructors (`.local` only — see the gate below).
+    ///   - mode: the resolved store-access mode (plans/daemon-only-access.md).
+    ///     `.remote` provisions the store through the injected factory (the
+    ///     app's daemon-backed client) and NEVER opens a local database;
+    ///     `.local` is the daemon/CLI/test composition (they own the file).
+    ///   - openFactories: injected open factory. `nil` keeps the production
+    ///     constructor (`.local` only — see the gate below).
     public static func definition(
         mode: StoreAccessMode = .local,
         openFactories: StoreOpenFactories = .production
@@ -112,20 +109,18 @@ public enum StorePlugin {
     /// Injected storage-open factories for the open-seam harness and the
     /// app's remote-store injection (plans/daemon-only-access.md Phase 0
     /// harness, Phase 3 cutover). `nil` legs keep the production
-    /// constructors (the `StoreBackend` factory and the read-only pool's
-    /// read-only connection constructor) — available in `.local` mode only.
-    /// Recording legs let `ClientLocalOpenBoundaryTests` count client-side
-    /// opens; the daemon and CLI compositions never inject them.
+    /// constructor (the `StoreBackend` factory) — available in `.local`
+    /// mode only. Recording legs let `ClientLocalOpenBoundaryTests` count
+    /// client-side opens; the daemon and CLI compositions never inject
+    /// them. (P5: the read-only-pool leg is REMOVED — the pool no longer
+    /// exists in app composition; the read-pool freedom-guard row is `none`.)
     public struct StoreOpenFactories: Sendable {
         public let makeStore: (@Sendable (StoreOpenContext) throws -> any WikiStore)?
-        public let makeReadOnlyStore: WikiReadService.ReadOnlyStoreFactory?
 
         public init(
-            makeStore: (@Sendable (StoreOpenContext) throws -> any WikiStore)? = nil,
-            makeReadOnlyStore: WikiReadService.ReadOnlyStoreFactory? = nil
+            makeStore: (@Sendable (StoreOpenContext) throws -> any WikiStore)? = nil
         ) {
             self.makeStore = makeStore
-            self.makeReadOnlyStore = makeReadOnlyStore
         }
 
         /// The app-layer remote injection (plans/daemon-only-access.md
@@ -163,7 +158,6 @@ public enum StorePlugin {
         label: "Wiki store",
         provisions: [
             ServiceDependency(StoreServiceKeys.store),
-            ServiceDependency(StoreServiceKeys.readService),
         ],
         config: StoreConfig.self
     ) { config in
@@ -171,7 +165,6 @@ public enum StorePlugin {
             label: "wiki.store",
             provisions: [
                 ServiceDependency(StoreServiceKeys.store),
-                ServiceDependency(StoreServiceKeys.readService),
             ]
         ) { activation in
             let databaseURL = URL(fileURLWithPath: config.databasePath, isDirectory: false)
@@ -207,13 +200,12 @@ public enum StorePlugin {
             store.registeredRendererSourceTypes = await RendererCatalogResolution.productionSourceTypes()
             let bus = WikiEventBus(wikiID: WikiID(rawValue: config.wikiID))
             store.eventBus = bus
-            // The read-only pool stays in BOTH modes through P4 (the P3
-            // waiver row: the semantic-search leg still reads locally). Its
-            // connections open lazily and read-only; the wiki STORE open
-            // above is the seam this file's mode gate controls.
-            let readService = WikiReadService(
-                databaseURL: databaseURL,
-                makeReadOnlyStore: openFactories.makeReadOnlyStore)
+            // P5: no read-only pool. The read-pool freedom-guard row is
+            // `none` — the semantic-search leg moved to the daemon (its
+            // executor resolves the BM25 leg and its store computes the
+            // cosine leg), and the queue UI's closed-wiki names read through
+            // the daemon store family. Nothing in app composition reads a
+            // wiki database file directly anymore.
             let forwarder = StoreEventForwarder(
                 activation: activation,
                 beforeEmit: beforeForward)
@@ -222,10 +214,8 @@ public enum StorePlugin {
             }
             _ = try await activation.effect { _ in
                 await forwarder.shutdown { bus.unsubscribe(token) }
-                await readService.shutdown()
             }
             _ = try await activation.supply(StoreServiceKeys.store, value: store)
-            _ = try await activation.supply(StoreServiceKeys.readService, value: readService)
         }
     }
     }

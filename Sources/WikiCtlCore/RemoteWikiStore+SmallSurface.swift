@@ -310,6 +310,23 @@ extension RemoteWikiStore {
         return reply.results.map(Self.coreSourceSummary)
     }
 
+    /// Start the daemon-side search-upgrade embedding backfill (plan 5.2).
+    /// The reply is the typed start outcome (`started`/`notNeeded`/
+    /// `embedderUnavailable`); the run's progress arrives through
+    /// ``onSearchUpgradeEvent`` from the firehose. Never a `WikiStore`
+    /// requirement — the backfill is daemon-hosted by contract, so a local
+    /// store has no such surface (the app's model treats the seam's absence
+    /// as a no-op).
+    public func startSearchUpgrade() async throws -> DaemonSearchUpgradeStartOutcome {
+        _ = try await ensureSession()
+        let result = try await sendStore(
+            .upgradeSearchIndex,
+            payload: JSONEncoder().encode(DaemonSearchUpgradeStartRequest()))
+        let reply = try Self.decodeResult(
+            DaemonSearchUpgradeStartReply.self, result, "upgradeSearchIndex")
+        return reply.outcome
+    }
+
     public func sourceMatchingURLIdentity(
         _ identity: String
     ) async throws -> SourceSummary? {

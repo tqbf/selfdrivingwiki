@@ -1,31 +1,30 @@
 import Foundation
+import WikiCtlCore
 import WikiFSCore
 
-/// Read-only display-name resolution for a CLOSED wiki's queue targets.
+/// Display-name resolution for a CLOSED wiki's queue targets — DAEMON-ONLY
+/// (plans/daemon-only-access.md P5: the read-only pool left app composition,
+/// so this loader reads through the daemon's store family, never a database
+/// file).
 ///
 /// The queue workspace resolves a job's target names through the live
 /// session index first and the payload's enqueue-time recorded names second;
-/// legacy jobs have neither when their wiki's window is closed, so this
-/// loader reads the titles straight from that wiki's database. The read goes
-/// through `WikiReadService` — the same read-only-pool seam production
-/// sessions use — so a closed wiki is touched only through one bounded,
-/// query-only connection per load.
+/// legacy jobs have neither when their wiki's window is closed. The daemon
+/// answers each target's `getPage`/`getSource` over the shared store
+/// transport, bound to that job's wiki. A daemon-down load THROWS — the
+/// caller (``QueueActivityTracker``) marks the wiki unavailable and the rows
+/// fall through to the recorded name or the deletion fallback text, the same
+/// degradation the local reader had.
 ///
 /// Bounded by construction: exactly the payload's target IDs are fetched
 /// (one `getPage`/`getSource` per ID), never a whole-wiki listing. An ID the
-/// database no longer contains (`WikiStoreError.notFound`) is an expected
-/// miss — the ID is skipped so the row falls through to the recorded name
-/// or, ultimately, the deletion fallback text. Any other error fails the
-/// whole load; the caller logs it and marks the wiki unavailable.
+/// wiki no longer contains (`WikiStoreError.notFound`) is an expected miss —
+/// the ID is skipped. The `databaseURL` parameter stays in the seam
+/// signature (the tracker's per-wiki planning passes it) but is UNUSED here:
+/// the daemon owns the file and this reader never opens it.
 enum QueueClosedWikiNameLoader {
     /// The injectable read seam behind
     /// `QueueActivityTracker.refreshClosedWikiNames`.
-    ///
-    /// `wikiID` is seam-only (review F6): the production reader opens
-    /// `databaseURL` directly and never consults it. The parameter stays so
-    /// the seam mirrors the caller's per-wiki planning — test spies and
-    /// alternate readers can key their behavior (logs, per-wiki fakes) by
-    /// wiki without threading an extra channel.
     typealias Load = @Sendable (
         _ wikiID: WikiID,
         _ pageIDs: [PageID],
@@ -33,62 +32,38 @@ enum QueueClosedWikiNameLoader {
         _ databaseURL: URL
     ) async throws -> QueueTargetNameIndex
 
-    /// Resolve `pageIDs`' titles and `sourceIDs`' effective names from the
-    /// wiki database at `databaseURL`. Throws when the database cannot be
-    /// opened or a non-miss read fails.
-    ///
-    /// `wikiID` is seam-only here (see ``Load``): the database URL fully
-    /// determines the store this function reads.
-    static func load(
-        wikiID: WikiID,
-        pageIDs: [PageID],
-        sourceIDs: [SourceID],
-        databaseURL: URL
-    ) async throws -> QueueTargetNameIndex {
-        let service = WikiReadService(databaseURL: databaseURL)
-        do {
-            let resolved = try await service.asyncRead { access in
-                var pages: [(id: PageID, title: String)] = []
-                var sources: [(id: SourceID, name: String)] = []
-                for id in pageIDs {
-                    do {
-                        let page = try access.getPage(id: id)
-                        pages.append((id: page.id, title: page.title))
-                    } catch WikiStoreError.notFound {
-                        // Expected miss: the page is gone from the database.
-                        continue
-                    }
-                }
-                for id in sourceIDs {
-                    do {
-                        let source = try access.getSource(id: id)
-                        sources.append((id: source.id, name: source.effectiveName))
-                    } catch WikiStoreError.notFound {
-                        continue
-                    }
-                }
-                return ResolvedNames(pages: pages, sources: sources)
-            }
-            await service.shutdown()
+    /// The production reader factory: one `RemoteWikiStore` per load, bound
+    /// to the app's shared store transport and the job's wiki id. The wiki
+    /// id is now LOAD-BEARING (it scopes the daemon's wire operations); the
+    /// database URL is ignored.
+    static func daemonLoader(
+        makeRemoteStore: @escaping @Sendable (WikiID) -> any WikiStore
+    ) -> Load {
+        return { wikiID, pageIDs, sourceIDs, _ in
+            let store = makeRemoteStore(wikiID)
             var index = QueueTargetNameIndex()
-            for entry in resolved.pages {
-                index.recordPage(entry.id, title: entry.title)
+            for id in pageIDs {
+                do {
+                    let page = try await store.getPage(id: id)
+                    index.recordPage(page.id, title: page.title)
+                } catch WikiStoreError.notFound {
+                    // Expected miss: the page is gone from the wiki.
+                    continue
+                }
             }
-            for entry in resolved.sources {
-                index.recordSource(entry.id, name: entry.name)
+            // One daemon-served catalog read (the store family has no
+            // per-ID source summary op); the ID set bounds what gets
+            // recorded, never the listing size.
+            let sourceCatalog = try await store.listSources()
+            let sourceByID = Dictionary(
+                sourceCatalog.map { ($0.id, $0) },
+                uniquingKeysWith: { a, _ in a })
+            for id in sourceIDs {
+                if let source = sourceByID[id] {
+                    index.recordSource(source.id, name: source.effectiveName)
+                }
             }
             return index
-        } catch {
-            await service.shutdown()
-            throw error
         }
-    }
-
-    /// The Sendable carrier across the `asyncRead` boundary (mutable locals
-    /// cannot be captured by a `@Sendable` closure, so the reads collect
-    /// plain arrays).
-    private struct ResolvedNames: Sendable {
-        var pages: [(id: PageID, title: String)]
-        var sources: [(id: SourceID, name: String)]
     }
 }
