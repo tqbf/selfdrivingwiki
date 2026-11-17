@@ -123,6 +123,25 @@ public final class WikiDaemonConnection: @unchecked Sendable {
         return WikiDaemonConnection(connection: connection)
     }
 
+    /// Register an event sink on THIS connection. The daemon's per-connection
+    /// exporter captures the sink proxy and pushes firehose envelopes to it
+    /// (`deliverEvent(_:)`); the connection's own registration id is what the
+    /// daemon-scoped `sinkHandshake` correlates (the exporter threads it into
+    /// `storeOperation` — the client never invents one). Fire-and-forget like
+    /// `DaemonWorkloadClient.registerEventSink`: same-connection XPC messages
+    /// deliver in issue order, so a registration issued before the first
+    /// store operation is in the exporter's table before the handshake
+    /// reads it. The app calls this once per store connection, right after
+    /// connecting (Phase 3 slice 3 wiring).
+    public func registerEventSink(_ sink: WikiDaemonEventSink) {
+        do {
+            try daemonProxy().registerEventSink(sink)
+        } catch {
+            DebugLog.store(
+                "WikiDaemonConnection: registerEventSink failed: \(error)")
+        }
+    }
+
     // MARK: - Health & invalidation (#878)
 
     /// Probe the daemon with a real XPC message (a lightweight `queueSnapshot`

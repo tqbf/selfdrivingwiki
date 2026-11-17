@@ -50,6 +50,27 @@ struct DaemonHealthMonitorAdapterTests {
         #expect(monitor.state == .connected)
     }
 
+    /// Phase 3 item 4: a REMOTE store call's transport-level failure feeds
+    /// the SAME state machine as the transport events (the wiki-window
+    /// reconnecting banner), and the first successful call stands it back
+    /// down. No new UI state is introduced.
+    @Test func storeTransportDegradationFeedsTheExistingStateMachine() {
+        let monitor = DaemonHealthMonitor(services: ServiceRecorder().services)
+        monitor.start()
+        monitor.consume(.connected(DaemonTransportCandidateID()))
+        #expect(monitor.state == .connected)
+
+        monitor.noteStoreTransportDegraded()
+        #expect(monitor.state == .reconnecting)
+        // The episode latch lives in the store client; repeated degraded
+        // signals stay in the same state (setState dedupes).
+        monitor.noteStoreTransportDegraded()
+        #expect(monitor.state == .reconnecting)
+
+        monitor.noteStoreTransportRecovered()
+        #expect(monitor.state == .connected)
+    }
+
     @Test func stopPreventsLaterEventUpdates() {
         let monitor = DaemonHealthMonitor(services: ServiceRecorder().services)
         monitor.start()

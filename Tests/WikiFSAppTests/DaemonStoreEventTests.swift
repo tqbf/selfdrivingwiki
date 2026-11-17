@@ -308,8 +308,30 @@ struct DaemonStoreEventTests {
         async throws {
         let daemon = try makeDaemon()
         let wikiID = try fixtureWiki(daemon)
+
+        // DETERMINISM (the twoLiveSinks flake): the fixture's seeded Home
+        // event ingests ASYNCHRONOUSLY on the main actor's bus handler. If
+        // the ingest lands AFTER both handshakes (which happened once under
+        // parallel-suite load), both sinks are already live at ingest time
+        // and both receive the Home event LIVE — sink B then legitimately
+        // holds [1, 2, 3], not [2, 3], with no coordinator misbehavior (no
+        // replay, no double delivery). Waiting for the ingest BEFORE the
+        // first handshake pins the event to the replay path: A replays it
+        // (watermark 0 → 1), B skips it (watermark already 1). The ring
+        // test below uses the same poll for the same reason.
+        let ingestDeadline = ContinuousClock.now + .seconds(10)
+        while daemon.storeEvents.ingestedSequenceCount(
+            wikiID: wikiID.rawValue) < 1 {
+            if ContinuousClock.now >= ingestDeadline {
+                Issue.record(
+                    "timed out waiting for the seeded Home event ingest")
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
         let (sinkA, _, _) = try await registerAndHandshake(daemon, wikiID: wikiID)
-        let (sinkB, _, _) = try await registerAndHandshake(daemon, wikiID: wikiID)
+        let (sinkB, _, handshakeB) = try await registerAndHandshake(daemon, wikiID: wikiID)
 
         try await commitPage(daemon, wikiID: wikiID, title: "Fanout One")
         try await commitPage(daemon, wikiID: wikiID, title: "Fanout Two")
@@ -319,16 +341,62 @@ struct DaemonStoreEventTests {
         let envelopesB = try decodedEnvelopes(
             await waitForDeliveries(sinkB, count: 2))
 
-        // A handshook first (delivery watermark 0), so its replay includes
-        // the seeded Home event; B handshook after A was live — the Home
-        // commit was already DELIVERED (watermark 1), so B's replay is
-        // empty by design and B catches it through the handshake token.
+        // A handshook first with the Home event already IN THE RING
+        // (delivery watermark 0), so its replay includes it; B handshook
+        // after A was live — the Home commit was already DELIVERED
+        // (watermark 1), so B's replay is empty by design and B catches
+        // missed commits through its handshake change token.
         #expect(envelopesA.map(\.event.sequence) == [1, 2, 3])
         #expect(envelopesB.map(\.event.sequence) == [2, 3])
+        // B's handshake reported A's raised watermark — the daemon-level
+        // proof that B's replay filter skipped the delivered Home event.
+        #expect(
+            handshakeB.perWiki.first?.lastSequence == 1)
         // Every event emitted while both were live reached BOTH sinks.
         #expect(
             envelopesB.map(\.event.batch.first?.id)
                 == envelopesA.suffix(2).map(\.event.batch.first?.id))
+        // Per-sink EXACTLY-ONCE: no sequence repeats within either sink
+        // (replay and live delivery never overlap).
+        #expect(Set(envelopesA.map(\.event.sequence)).count == 3)
+        #expect(Set(envelopesB.map(\.event.sequence)).count == 2)
+    }
+
+    // MARK: - Two live sinks: late wiki preparation (flake interleaving)
+
+    /// The exact interleaving the twoLiveSinks flake observed: BOTH sinks
+    /// handshaked while the ring was empty (delivery watermark 0), and the
+    /// wiki's seeded event ingested afterwards — both LIVE sinks receive it
+    /// exactly once. This is contract-correct coordinator behavior (every
+    /// live sink sees every ingested event; no replay, no duplicates); the
+    /// regression pins it so a future coordinator change that re-delivers
+    /// or drops here fails immediately.
+    @Test func wikiPreparedAfterBothSinksLiveDeliversToBothExactlyOnce()
+        async throws {
+        let daemon = try makeDaemon()
+        // Both sinks live on a daemon with NO prepared wiki yet (the
+        // handshake answers an empty perWiki — the late-preparation test's
+        // shape).
+        let (sinkA, _, _) = try await registerAndHandshake(
+            daemon, wikiID: WikiID(rawValue: "01JWIKI0000000000000000AB"))
+        let (sinkB, _, _) = try await registerAndHandshake(
+            daemon, wikiID: WikiID(rawValue: "01JWIKI0000000000000000AB"))
+
+        // NOW the wiki prepares: its seeded Home event ingests with both
+        // sinks already live.
+        let wikiID = try fixtureWiki(daemon, name: "Late Both Live")
+        try await commitPage(daemon, wikiID: wikiID, title: "Late Both Commit")
+
+        let envelopesA = try decodedEnvelopes(
+            await waitForDeliveries(sinkA, count: 2))
+        let envelopesB = try decodedEnvelopes(
+            await waitForDeliveries(sinkB, count: 2))
+        #expect(envelopesA.map(\.event.sequence) == [1, 2])
+        #expect(envelopesB.map(\.event.sequence) == [1, 2])
+        for envelope in envelopesA + envelopesB {
+            #expect(envelope.event.wikiID == wikiID.rawValue)
+            #expect(envelope.event.epoch == daemon.daemonEpoch)
+        }
     }
 
     // MARK: - Late wiki preparation

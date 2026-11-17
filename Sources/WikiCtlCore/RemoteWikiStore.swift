@@ -261,6 +261,27 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
     /// reload signal; the store never fires it per event.
     public var onReloadSignal: (@Sendable () -> Void)?
 
+    /// Fired when a call fails with a transport-level (reachability) error:
+    /// ``RemoteStoreClientError/daemonUnavailable``,
+    /// ``deadlineExceeded``, ``epochMismatch``, or ``outcomeUnknown``. The
+    /// session wiring installs ONE closure that feeds the app's existing
+    /// daemon-health surface (Phase 3 degradation UX), so wiki windows show
+    /// the reconnecting state while the transport is down; writes still
+    /// fail explicitly through their normal throw path. Set-once by the
+    /// wiring (the same convention as ``onReloadSignal``).
+    public var onTransportDegraded: (@Sendable () -> Void)?
+
+    /// The symmetric recovery leg: fired on the first SUCCESSFUL call after
+    /// a degradation was flagged, so the health surface can stand the
+    /// reconnecting state back down even when the workload transport (whose
+    /// events normally restore `.connected`) had nothing to report. Set-once
+    /// by the wiring, beside ``onTransportDegraded``.
+    public var onTransportRecovered: (@Sendable () -> Void)?
+
+    /// The degradation latch (`stateLock`-guarded): one signal per failure
+    /// episode, one recovery signal at the first success after it.
+    private var degraded = false
+
     /// Task identities already used to fire ``onReloadSignal`` in this epoch
     /// lifecycle (lock-guarded): coalesces bursts into ONE signal.
     private var reloadSignalFired = false
@@ -428,12 +449,32 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
             operation: operation.rawValue,
             payload: try DaemonStoreWire.encode(storeRequest))
 
-        let reply = try await withDeadline(operation.rawValue) { [transport] in
-            try await transport.send(domainRequest, sinkRegistrationID: nil)
+        let reply: DaemonDomainReply
+        do {
+            reply = try await withDeadline(operation.rawValue) { [transport] in
+                try await transport.send(domainRequest, sinkRegistrationID: nil)
+            }
+        } catch {
+            // Transport-level failure. The transport contract does not pin
+            // the error type (the socket client throws its own connect/read
+            // errors; XPC maps to typed), so ANY non-cancellation throw from
+            // the round trip is a reachability fact: mark the degradation
+            // episode (Phase 3 degradation UX) and clear the cached session
+            // so the next operation re-handshakes against whatever restored
+            // endpoint answers (the reconnect reconciliation reads the
+            // change token and fires the reload signal if it advanced).
+            // Cancellation is NOT a reachability fact — a cancelled caller
+            // must not flip the health surface or drop the session.
+            guard !(error is CancellationError) else { throw error }
+            noteTransportDegraded()
+            handleEpochMismatch()
+            throw error
         }
 
         // Domain-level rejection (undecodable outer envelope, unknown
-        // operation): the established domain-command convention throws.
+        // operation): the established domain-command convention throws. The
+        // daemon ANSWERED, so this is a contract violation, not an
+        // availability fact — no degradation signal, no session clear.
         if let domainError = reply.error {
             throw RemoteStoreClientError.daemonUnavailable(
                 "domain rejection \(domainError.code.rawValue): "
@@ -453,6 +494,10 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         }
         if let wireError = storeReply.error {
             let reconstructed = reconstructStoreError(wireError)
+            // Degradation surface: epoch mismatch (a restarted daemon),
+            // outcome unknown (post-eviction continuity), and the wire's
+            // own unavailable verdict all say the session needs attention.
+            noteTransportDegradedIfNeeded(reconstructed)
             // A stamped mutation whose epoch moved means a daemon restart:
             // clear the cache so the next operation re-handshakes against
             // the fresh daemon (and the next stamp carries its epoch).
@@ -466,6 +511,9 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
             throw RemoteStoreClientError.malformedReply(
                 "\(operation.rawValue) success reply carried no result")
         }
+        // A clean round trip ends any degradation episode (the health
+        // surface stands the reconnecting state back down).
+        noteTransportRecoveredIfNeeded()
         return result
     }
 
@@ -649,6 +697,14 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
                 }
                 return try await applySession(establishment)
             } catch {
+                // The barrier round trip itself failed (daemon unreachable,
+                // deadline, or a transport-specific error): feed the
+                // degradation surface — the session open still fails
+                // explicitly, this never substitutes a local answer.
+                // Cancellation is not a reachability fact.
+                if !(error is CancellationError) {
+                    noteTransportDegraded()
+                }
                 abortSessionAttempt()
                 throw error
             }
@@ -799,6 +855,9 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         if tokenAdvanced {
             fireReloadSignalOnce()
         }
+        // A completed establishment also ends any degradation episode (the
+        // handshake answered — the daemon is back).
+        noteTransportRecoveredIfNeeded()
         return establishment.handshake.daemonEpoch
     }
 
@@ -884,13 +943,19 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         return (tokenAdvanced, buffered)
     }
 
-    /// Clear the cached epoch after a detected restart so the next operation
-    /// re-handshakes (and the next stamp carries the NEW epoch).
+    /// Clear the cached epoch after a detected restart or a transport-level
+    /// failure so the next operation re-handshakes (and the next stamp
+    /// carries the NEW epoch). Re-arms the one-signal coalescing: the
+    /// re-establishment is a fresh staleness story, so a reconnect-time
+    /// change-token advance earns its own reload signal even if one fired
+    /// earlier in this epoch lifecycle (without this, a missed commit
+    /// across a same-epoch reconnect would never reach the model).
     private func handleEpochMismatch() {
         stateLock.lock()
         state.epoch = nil
         state.phase = .idle
         state.handshakeTask = nil
+        reloadSignalFired = false
         stateLock.unlock()
     }
 
@@ -908,12 +973,47 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         hook?()
     }
 
-    /// Reset the one-signal coalescing at a NEW epoch (a fresh daemon is a
-    /// fresh staleness story; the wiring legitimately needs one more reload).
-    private func armReloadSignalForNewEpoch() {
+    // MARK: - Degradation classification (Phase 3 degradation UX)
+
+    /// Mark one degradation episode and fire ``onTransportDegraded`` (once
+    /// per episode — the latch resets at the first successful call).
+    private func noteTransportDegraded() {
         stateLock.lock()
-        reloadSignalFired = false
+        let newlyDegraded = !degraded
+        degraded = true
         stateLock.unlock()
+        if newlyDegraded {
+            onTransportDegraded?()
+        }
+    }
+
+    /// Classify a typed client error and mark the episode when it says the
+    /// daemon's reachability or continuity is in question. Store-level
+    /// errors (a rejected mutation, a typed not-found) say nothing about
+    /// reachability and must not flip the health surface.
+    private func noteTransportDegradedIfNeeded(_ error: Error) {
+        guard let clientError = error as? RemoteStoreClientError else {
+            return
+        }
+        switch clientError {
+        case .daemonUnavailable, .deadlineExceeded, .epochMismatch,
+            .outcomeUnknown:
+            noteTransportDegraded()
+        case .unsupportedRemote, .malformedReply:
+            break
+        }
+    }
+
+    /// The recovery leg: stand the degradation episode down at the first
+    /// successful call and fire ``onTransportRecovered`` once.
+    private func noteTransportRecoveredIfNeeded() {
+        stateLock.lock()
+        let wasDegraded = degraded
+        degraded = false
+        stateLock.unlock()
+        if wasDegraded {
+            onTransportRecovered?()
+        }
     }
 
     // MARK: - Event feed (WikiDaemonEventSink)
@@ -943,6 +1043,17 @@ public final class RemoteWikiStore: NSObject, WikiStore, WikiDaemonEventSink,
         stateLock.lock()
         defer { stateLock.unlock() }
         return state.epoch
+    }
+
+    /// The cached per-wiki change token (the reconciliation anchor), or nil
+    /// before a handshake/bootstrap has cached one. Diagnostics + tests:
+    /// the reconnect tests assert the anchor moved after a missed commit
+    /// (and held still when nothing committed), which is the whole
+    /// reload-signal contract.
+    func cachedChangeToken(forWikiID rawWikiID: String) -> String? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return state.changeTokens[rawWikiID]
     }
 
     /// One pushed firehose payload. Queue/chat workload envelopes fail the

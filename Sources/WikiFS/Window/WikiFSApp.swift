@@ -6,6 +6,47 @@ import WikiCtlCore
 import WikiDaemonContract
 import WikiFSMLX
 
+// MARK: - Store-mode composition (Phase 3 slice 3)
+
+/// What the app constructed for the launch-fixed
+/// `StoreModeConfiguration.resolvedMode`. REMOTE fills every field:
+/// `transport`/`invoker`/`router` share ONE daemon connection (the same
+/// live-object injection pattern as `makeDaemonTransport`). The DEBUG
+/// local override — and a failed remote connection — leave the remote
+/// pieces nil: the registry client degrades to typed lifecycle failures
+/// (`daemonInvokerUnavailable`, never a local write), and the catalog build
+/// fails explicitly in remote mode (no session can boot without the store
+/// transport; no local open is ever substituted).
+struct StoreModeComposition {
+    let registry: WikiRegistryClient
+    let transport: XPCStoreTransport?
+    let invoker: DaemonWikiRegistryInvoker?
+    let router: DaemonStoreEventRouter?
+}
+
+/// A weak, Sendable hop into the `@MainActor` health monitor. The remote
+/// store's degradation/recovery hooks fire from store call sites on
+/// arbitrary tasks; the monitor's state machine is main-actor bound.
+/// Sendable invariant: the only stored property is a `weak` reference,
+/// written once at init from the main actor and only read afterwards;
+/// every monitor touch happens inside the `@MainActor` task.
+// swiftlint:disable:next unchecked_sendable
+private final class WeakDaemonHealthBox: @unchecked Sendable {
+    private weak var monitor: DaemonHealthMonitor?
+
+    init(_ monitor: DaemonHealthMonitor) {
+        self.monitor = monitor
+    }
+
+    func callAsFunction(_ action: @MainActor @escaping (DaemonHealthMonitor) -> Void) {
+        Task { @MainActor [weak self] in
+            if let monitor = self?.monitor {
+                action(monitor)
+            }
+        }
+    }
+}
+
 /// Entry point for the WikiFS macOS app.
 ///
 /// Phase 0 (many wikis) + Phase 2b (multi-window): a `WikiRegistryClient` owns
@@ -197,6 +238,19 @@ struct WikiFSApp: App {
             }
         }
         containerDirectory = directory
+        // Store-mode composition (plans/daemon-only-access.md Phase 3
+        // slices 1+3): the launch-fixed mode composes the process ONCE.
+        // REMOTE (the default): the registry client is a daemon-mediated
+        // read cache — lifecycle ops cross the invoker, `wikis.json` is
+        // only ever read, and firehose registry events refresh it — and
+        // every wiki session boots a `RemoteWikiStore` over the shared
+        // transport. LOCAL (the DEBUG-only `WIKI_ALLOW_LOCAL_STORE`
+        // override): exactly the pre-remote composition. Never a response
+        // to daemon failure: a daemon-down run stays remote and degrades
+        // through the health surface.
+        let storeAccessMode = StoreModeConfiguration.resolvedMode
+        let storeModeComposition = Self.makeStoreModeComposition(
+            containerDirectory: directory)
         // Populate wikis BEFORE handing the registry to @State so SwiftUI's
         // first render sees a non-empty list.  activateNow: false means
         // activeWikiID stays nil for that render — NSTableView's initial
@@ -204,7 +258,7 @@ struct WikiFSApp: App {
         // activateMostRecent() in .task sets the selection AFTER the first
         // render; that update is selectRow-only (no concurrent reloadData),
         // avoiding an NSTableView reentrant-delegate warning on macOS 26.
-        let r = WikiRegistryClient(containerDirectory: directory)
+        let r = storeModeComposition.registry
         r.bootstrap(activateNow: false)
         _registry = State(initialValue: r)
         // The synchronous app initializer creates stable UI adapters and injects an
@@ -290,34 +344,57 @@ struct WikiFSApp: App {
         _fileProviderBox = State(initialValue: fileProviderBox)
         _activityTracker = State(initialValue: activityTracker)
 
-        // Store-mode cutover (plans/daemon-only-access.md Phase 3 item 1):
-        // the launch-fixed `allowLocalStore` flag resolves the composition
-        // ONCE per process. Remote (the default in every configuration):
-        // every wiki session's store is a `RemoteWikiStore` over one
-        // app-scoped XPC store transport — no local GRDBWikiStore is ever
-        // opened. Local (the DEBUG-only `WIKI_ALLOW_LOCAL_STORE` override):
-        // exactly today's composition, with StorePlugin's production local
-        // open. The mode is never a response to daemon failure.
-        let storeAccessMode = StoreModeConfiguration.resolvedMode
+        // Store-mode cutover (plans/daemon-only-access.md Phase 3 item 1 +
+        // slice 3): the launch-fixed mode resolved `storeModeComposition`
+        // above; the catalog consumes it here. Remote (the default in every
+        // configuration): every wiki session's store is a `RemoteWikiStore`
+        // over the shared app-scoped XPC store transport — no local
+        // GRDBWikiStore is ever opened. Local (the DEBUG-only
+        // `WIKI_ALLOW_LOCAL_STORE` override): nil factories keep
+        // StorePlugin's production local open. The mode is never a response
+        // to daemon failure.
         let appCatalog = {
             do {
                 let storeOpenFactories: StorePlugin.StoreOpenFactories?
                 if storeAccessMode == .remote {
-                    // The store transport rides its own daemon XPC
-                    // connection (the same shape DaemonSearchServices
-                    // uses); `WikiDaemonConnection` vends a fresh proxy per
-                    // call, so one connection + one transport serve every
-                    // wiki session. The factory constructs one
-                    // `RemoteWikiStore` per booted wiki — the wiki id comes
-                    // through the injected factory context, and the daemon
-                    // owns the database file the context's URL names.
-                    let storeTransport = XPCStoreTransport(
-                        connection: try WikiDaemonConnection.connect())
+                    // The plumbing bundle is MANDATORY in remote mode (the
+                    // fail-explicit contract): a missing transport fails the
+                    // catalog build — never a local open. (The invoker is
+                    // already injected INTO the registry client by the
+                    // composition builder; the catalog needs only the
+                    // transport and the firehose router.)
+                    guard let storeTransport = storeModeComposition.transport,
+                        let eventRouter = storeModeComposition.router
+                    else {
+                        preconditionFailure(
+                            "Remote store composition failed at launch — "
+                                + "no local fallback exists")
+                    }
+                    // Degradation UX (Phase 3 item 4): transport-level
+                    // store failures feed the EXISTING health state
+                    // machine (the wiki-window reconnecting banner); the
+                    // first successful call stands it back down. Writes
+                    // still fail explicitly through their normal throw
+                    // path — this only drives the surface.
+                    let healthFeed = WeakDaemonHealthBox(transportMonitor)
                     storeOpenFactories = StorePlugin.StoreOpenFactories
                         .remoteStore { context in
-                            RemoteWikiStore(
+                            let store = RemoteWikiStore(
                                 transport: storeTransport,
                                 wikiID: WikiID(rawValue: context.wikiID))
+                            store.onTransportDegraded = {
+                                healthFeed { $0.noteStoreTransportDegraded() }
+                            }
+                            store.onTransportRecovered = {
+                                healthFeed { $0.noteStoreTransportRecovered() }
+                            }
+                            // This connection's ONE firehose sink fans
+                            // store commits + registry events out to every
+                            // open session's store (the router registered
+                            // with the exporter before the first
+                            // handshake — see makeStoreModeComposition).
+                            eventRouter.register(store: store)
+                            return store
                         }
                 } else {
                     // Local store access: nil factories keep StorePlugin's
@@ -449,6 +526,58 @@ struct WikiFSApp: App {
             })
             connectToDaemon()
         }
+    }
+
+    /// Build the store-mode composition for the launch-fixed mode.
+    ///
+    /// REMOTE: one daemon connection shared by the store transport, the
+    /// mediated-registry invoker (injected INTO the registry client), and
+    /// the firehose router — registered with the exporter BEFORE any store
+    /// operation exists to send (same-connection XPC messages deliver in
+    /// issue order, so the handshake correlates the registered sink and
+    /// flips it live). A connection failure here degrades explicitly: the
+    /// registry client keeps remote semantics with no invoker (typed
+    /// `daemonInvokerUnavailable` lifecycle failures, no local write path),
+    /// and the remote pieces stay nil so the catalog build fails the app at
+    /// launch — the plan's fail-explicit contract.
+    ///
+    /// LOCAL (DEBUG override): the plain registry client, everything else
+    /// nil — exactly the pre-remote composition.
+    private static func makeStoreModeComposition(
+        containerDirectory: URL
+    ) -> StoreModeComposition {
+        guard StoreModeConfiguration.resolvedMode == .remote else {
+            return StoreModeComposition(
+                registry: WikiRegistryClient(
+                    containerDirectory: containerDirectory),
+                transport: nil, invoker: nil, router: nil)
+        }
+        let connection: WikiDaemonConnection
+        let invoker: DaemonWikiRegistryInvoker
+        do {
+            connection = try WikiDaemonConnection.connect()
+            invoker = DaemonWikiRegistryInvoker(connection: connection)
+        } catch {
+            DebugLog.store(
+                "WikiFSApp: store daemon connection failed at launch: \(error)")
+            return StoreModeComposition(
+                registry: WikiRegistryClient(
+                    containerDirectory: containerDirectory,
+                    accessMode: .remote,
+                    daemonInvoker: nil),
+                transport: nil, invoker: nil, router: nil)
+        }
+        let registry = WikiRegistryClient(
+            containerDirectory: containerDirectory,
+            accessMode: .remote,
+            daemonInvoker: invoker)
+        let router = DaemonStoreEventRouter(registryClient: registry)
+        connection.registerEventSink(router)
+        return StoreModeComposition(
+            registry: registry,
+            transport: XPCStoreTransport(connection: connection),
+            invoker: invoker,
+            router: router)
     }
 
     /// App-level bootstrap: activateMostRecent + file provider wiring. Called

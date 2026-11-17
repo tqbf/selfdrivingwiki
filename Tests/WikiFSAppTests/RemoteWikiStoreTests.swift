@@ -751,6 +751,124 @@ struct RemoteWikiStoreTests {
         #expect(try await remote.getMetadata("restart-key") == "after")
     }
 
+    // MARK: - Reconnect reconciliation (Phase 3 item 5)
+
+    /// Lock-guarded counters for the reload/degradation signals.
+    private final class SignalCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        func hit() { lock.withLock { count += 1 } }
+        var value: Int { lock.withLock { count } }
+    }
+
+    /// The SAME-epoch reconnect leg: the transport path dies (socket gone),
+    /// ANOTHER WRITER commits while this client is disconnected, the path is
+    /// restored. The failed call marks the degradation episode and clears
+    /// the session; the next operation re-handshakes, sees the advanced
+    /// change token, fires EXACTLY ONE reload signal, and caches the new
+    /// anchor (equal to the daemon's authoritative token). The degradation
+    /// surface sees exactly one degraded + one recovered signal; steady
+    /// state after the reload is silent.
+    @Test func reconnectAfterAnotherWriterCommitsFiresReloadOnceAndCachesTheToken()
+        async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+        let server = try makeSocketServer(container, daemon)
+        defer { server.stop() }
+
+        let store = RemoteWikiStore(
+            transport: try socketTransport(container), wikiID: wikiID)
+        let reloads = SignalCounter()
+        let degraded = SignalCounter()
+        let recovered = SignalCounter()
+        store.onReloadSignal = { reloads.hit() }
+        store.onTransportDegraded = { degraded.hit() }
+        store.onTransportRecovered = { recovered.hit() }
+
+        try await store.setMetadata("recon-key", value: "before")
+        let tokenBefore = try #require(
+            store.cachedChangeToken(forWikiID: wikiID.rawValue))
+
+        // The transport path dies (the DAEMON stays up — same epoch).
+        server.stop()
+        // Another writer commits while this client is disconnected.
+        let secondWriter = try await daemon.domainCommandStore(wikiID: wikiID)
+        _ = try await secondWriter.createPage(
+            title: "Missed While Away", body: "second writer",
+            createdBy: nil, provenance: [])
+
+        // A call against the dead path fails (any non-cancellation error —
+        // the transport contract does not pin the type) AND clears the
+        // session: the observable reconnect trigger.
+        do {
+            _ = try await store.resolveTitleToID("Home")
+            Issue.record("expected the disconnected call to throw")
+        } catch {
+            #expect(!(error is CancellationError))
+        }
+        #expect(store.sessionEpoch() == nil)
+        #expect(degraded.value == 1)
+        #expect(recovered.value == 0)
+
+        // The path is restored (SAME daemon, same epoch). The next
+        // operation re-handshakes and reconciles through the token.
+        let serverB = try makeSocketServer(container, daemon)
+        defer { serverB.stop() }
+        _ = try await store.resolveTitleToID("Home")
+
+        #expect(reloads.value == 1)
+        #expect(recovered.value == 1)
+        let tokenAfter = try #require(
+            store.cachedChangeToken(forWikiID: wikiID.rawValue))
+        #expect(tokenAfter != tokenBefore)
+        // The cached anchor IS the daemon's authoritative token.
+        let daemonToken = await daemon.changeToken(wikiID: wikiID)
+        #expect(tokenAfter == daemonToken)
+
+        // Steady state: further ops on the same anchor stay silent.
+        _ = try await store.getMetadata("recon-key")
+        #expect(reloads.value == 1)
+    }
+
+    /// The negative leg: the same reconnect flow with NO missed commit —
+    /// the re-handshake sees an UNCHANGED token (content-deterministic fold)
+    /// and fires NO reload signal.
+    @Test func reconnectWithNoMissedCommitsFiresNoReload() async throws {
+        let container = try makeContainer()
+        let daemon = makeDaemon(container)
+        let wikiID = try fixtureWiki(daemon)
+        let server = try makeSocketServer(container, daemon)
+        defer { server.stop() }
+
+        let store = RemoteWikiStore(
+            transport: try socketTransport(container), wikiID: wikiID)
+        let reloads = SignalCounter()
+        store.onReloadSignal = { reloads.hit() }
+
+        try await store.setMetadata("recon-key", value: "same")
+        let tokenBefore = try #require(
+            store.cachedChangeToken(forWikiID: wikiID.rawValue))
+
+        // Disconnect, clear, restore — no other writer in between.
+        server.stop()
+        do {
+            _ = try await store.resolveTitleToID("Home")
+            Issue.record("expected the disconnected call to throw")
+        } catch {
+            #expect(!(error is CancellationError))
+        }
+        #expect(store.sessionEpoch() == nil)
+
+        let serverB = try makeSocketServer(container, daemon)
+        defer { serverB.stop() }
+        _ = try await store.resolveTitleToID("Home")
+
+        #expect(reloads.value == 0)
+        #expect(
+            store.cachedChangeToken(forWikiID: wikiID.rawValue) == tokenBefore)
+    }
+
     // MARK: - Slice 2: small family round trips
 
     @Test func strategyStateReadsAndTheCASSaveRoundTrip() async throws {

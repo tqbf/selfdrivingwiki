@@ -186,7 +186,17 @@ final class DaemonStoreEventCoordinator: @unchecked Sendable {
             deliver(envelope, to: proxy.sink)
             delivered += 1
         }
-        if delivered > 0 {
+        // The watermark reflects ALL ingested events once ANY sink is live —
+        // read from `sinkPhases`, not from `delivered`. The caller's proxy
+        // list is a per-call snapshot; if a future caller ever passed a
+        // partial list while a sink is live, a delivery-count guard would
+        // leave the watermark below the stamp, and the next handshaking sink
+        // would REPLAY events a live sink already received. Liveness of any
+        // registered sink is exactly the "some client is streaming" fact the
+        // watermark encodes (the twoLiveSinks flake's invariant: a second
+        // handshaking sink never replays events already delivered to a live
+        // sink — they raise the watermark instead).
+        if sinkPhases.values.contains(.live) {
             state.deliveredWatermark = state.stampCounter
         }
         wikis[key] = state
