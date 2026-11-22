@@ -20,3 +20,7 @@ Use this guide to learn the Self Driving Wiki interface and its main workflows.
 
 - [Renderer packages](renderer-packages.md)
 - [Extractor packages](extractor-packages.md)
+
+## Troubleshoot
+
+- [Troubleshooting](troubleshooting.md)

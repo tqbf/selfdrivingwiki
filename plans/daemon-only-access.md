@@ -367,15 +367,25 @@ the test files):
 - Removed 1 File Provider entry at P6 (`GRDBWikiStore(readOnlyURL:)` × 2 in
   `Projection.swift` — the projection reads the daemon's `projection` family
   over the domain socket).
-- P7: app list EMPTY, File Provider list EMPTY, CLI list empty since day one.
+- P7: the app TARGET (`Sources/WikiFS`) is clean — zero forbidden tokens.
+  Three permanent tier-shared entries remain in the app-reachable
+  composition files (`StorePlugin`'s fixture-default makeStore,
+  `SessionsPlugin`'s fixture default, `SearchRuntimeCompositionFactory`'s
+  Tantivy writer × 2) because those files serve the daemon/CLI/test `.local`
+  compositions too; the runtime boundary harness
+  (`ClientLocalOpenBoundaryTests`) pins zero CLIENT opens with the daemon up
+  and down. File Provider list EMPTY; CLI list empty since day one.
   `wikictl-fixture` remains the sole documented carve-out (build-only).
 
 ## P7 verification record
 
-- Freedom guards: all three suites pass with empty waiver lists; the boundary
-  harness (`ClientLocalOpenBoundaryTests`) asserts zero client-side store,
+- Freedom guards: the app target (`Sources/WikiFS`) is clean and the File
+  Provider list is empty; three documented permanent tier-shared entries
+  remain in the app-reachable WikiFSEngine composition files (daemon/CLI/
+  test `.local` compositions). The boundary harness
+  (`ClientLocalOpenBoundaryTests`) asserts zero client-side store,
   read-pool, queue, provider, and index-build opens with the daemon up and
-  down.
+  down — the runtime proof behind the source-level claim.
 - Golden master: `GoldenMasterStoreStateTests` green against the committed
   P0 baseline artifact (state + event sequence) on the post-P6 build.
 - Performance budget (`SESSION_OPEN_BENCHMARK=1`, same machine class as the
@@ -387,6 +397,16 @@ the test files):
   `plans/multi-wiki-daemon.md` (sole-writer) and
   `plans/cordis-swift-components.md` §15 (queue handoff machine) — pinned by
   `DocumentationIndexContractTests`; per-phase notes in `progress/`.
+- Mutation testing (`Sources/WikiDaemonContract`, plan item 7.5): 56
+  mutants (47 schematizable, 9 incompatible), score 100.0% — killed 56,
+  survived 0, no-coverage 0 (42 min, 2026-11-22). Scope: `--target
+  WikiFSAppTests` with `WIKIFS_APP_TESTS=1` — the executor, RemoteWikiStore,
+  and domain-socket integration suites drive the codec and error mapping
+  end-to-end. Two environment notes for future runs, recorded in
+  `.swift-mutation-testing.yml`: the tool's reduced sandbox breaks
+  `repositoryRoot()`-based contract suites (they must not be in the
+  baseline target), and the result cache replays stale verdicts across
+  environment changes (use `--no-cache`).
 
 
 ## Workload entry-point inventory (P4.3 prerequisite)

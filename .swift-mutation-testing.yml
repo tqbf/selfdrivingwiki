@@ -19,6 +19,22 @@ test-target: WikiFSCoreTests
 # loop, not a slow test.
 timeout: 900
 
+# Sandbox baselines (verified 2026-11-22, Sources/WikiDaemonContract scope):
+# the tool runs its baseline in a REDUCED copy of the repo. Suites that read
+# repo-adjacent files through repositoryRoot()/#filePath — the documentation
+# contracts, the freedom guards, the reviewed-package and skill-validation
+# tests — find nothing there and fail the baseline before any mutant runs.
+# Keep such suites out of the effective baseline: for the daemon wire codec,
+# run with `--target WikiFSAppTests` and `WIKIFS_APP_TESTS=1` exported (the
+# opt-in app tier holds the executor / RemoteWikiStore / socket integration
+# suites that kill the codec mutants; the default target above fails the
+# sandbox baseline). Also pass `--no-cache` when the test environment
+# changes: verdicts cache by mutant fingerprint alone, so a changed
+# environment otherwise replays stale no-coverage results. Working command:
+#   WIKIFS_APP_TESTS=1 swift-mutation-testing --sources-path
+#   Sources/WikiDaemonContract --target WikiFSAppTests --no-cache
+#   --build-timeout 1800
+
 # Disable result cache (re-runs all mutants on every execution)
 # no-cache: true
 
