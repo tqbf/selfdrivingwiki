@@ -203,6 +203,18 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
+    /// The projection service (Phase 6, plans/daemon-only-access.md): the
+    /// daemon-side half of the READ-ONLY `projection` family the File
+    /// Provider extension reads its tree from over the domain socket. Shares
+    /// the store executor's daemon-scoped committed-handle table so an
+    /// oversized projection reply downloads through the same bounded,
+    /// TTL-swept `payloadRead` seam. No per-instance mutable state of its
+    /// own; one accessor keeps every dispatcher wiring the same instance.
+    func projectionService() -> DaemonProjectionService {
+        DaemonProjectionService(
+            daemon: self, staging: storeCommandExecutor().payloadStaging)
+    }
+
     /// One structured store operation over XPC (plan 2b slice 1): the JSON
     /// `DaemonStoreRequest` bytes in, the JSON `DaemonDomainReply` envelope
     /// bytes out (its `payload` carries the `DaemonStoreReply`) — the SAME

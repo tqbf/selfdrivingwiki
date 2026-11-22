@@ -17,7 +17,7 @@ import WikiFSLinks
 /// They rely on the `databaseURL` injection seam (Phase B.0) so the projection
 /// is exercisable without the App Group sandbox (`ProjectionTests` could only
 /// test pure functions before it).
-@Suite
+@Suite(.serialized, .timeLimit(.minutes(5)))
 struct ProjectionTreeTests {
 
     /// A seeded projection: two pages, a text source (no `.md` sibling), and a
@@ -28,12 +28,14 @@ struct ProjectionTreeTests {
         let pages: [WikiPage]
         let textSource: SourceSummary
         let pdfSource: SourceSummary
+        /// Owns the socket server for this seed; dropping Seeded tears the
+        /// fixture down (deinit stops the server + removes the temp dir).
+        let fixture: ProjectionSocketFixture
     }
 
     private func seed() throws -> Seeded {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-proj-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
         let alpha = try store.createPage(title: "Alpha")
         let pdfSource = try store.addSource(
             filename: "doc.pdf", data: Data("%PDF-1.4 fake".utf8), mimeType: "application/pdf")
@@ -50,9 +52,10 @@ struct ProjectionTreeTests {
         let textSource = try store.addSource(
             filename: "notes.txt", data: Data("plain text".utf8), mimeType: "text/plain")
         let pages = try store.listAllPagesOrderedByID()   // ULID order
-        let projection = Projection(wikiID: WikiID(rawValue: "proj-tree-\(UUID().uuidString)"), databaseURL: url)
+        let projection = fixture.projection
         return Seeded(projection: projection, store: store, pages: pages,
-                      textSource: textSource, pdfSource: pdfSource)
+                      textSource: textSource, pdfSource: pdfSource,
+                      fixture: fixture)
     }
 
     @Test func rootChildrenIncludePagesAndSourcesFolders() throws {
@@ -106,9 +109,8 @@ struct ProjectionTreeTests {
         // A page body linking to another page (canonical ULID) and a source
         // (canonical ULID). The by-title view must rewrite both AND report a
         // size equal to the rewritten bytes — a mismatch truncates `cat` (#216).
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-proj-links-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
         let target = try store.createPage(title: "Target Page")
         let pdf = try store.addSource(
             filename: "paper.pdf", data: Data("%PDF fake".utf8), mimeType: "application/pdf")
@@ -119,7 +121,7 @@ struct ProjectionTreeTests {
             id: src.id, title: "Home",
             body: "See [[page:\(target.id.rawValue)|the target]] and "
                 + "[[source:\(pdf.id.rawValue)|the paper]].")
-        let projection = Projection(wikiID: WikiID(rawValue: "links-\(UUID().uuidString)"), databaseURL: url)
+        let projection = fixture.projection
 
         let id = Projection.Identity.pageByTitle(src.id.rawValue)
         guard let node = projection.node(for: id),
@@ -195,9 +197,8 @@ struct ProjectionTreeTests {
 
     @Test func sourceIDSiblingImageProjectionResolves() throws {
         // Create a markdown-native source with an image that has a sibling.
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-image-snapshot-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
 
         // Create a fetch activity for the snapshot.
         let provenance = SourceProvenance(agentName: "test", activityKind: "website-snapshot")
@@ -215,7 +216,7 @@ struct ProjectionTreeTests {
             originalPath: "assets/pic.png", sourceURL: URL(string: "https://example.com/pic.png")!,
             activityID: activityID, role: .media)
 
-        let projection = Projection(wikiID: WikiID(rawValue: "snapshot-\(UUID().uuidString)"), databaseURL: url)
+        let projection = fixture.projection
 
         // Verify by-name view: node size must match served content.
         let id = Projection.Identity.sourceByName(mdSource.id.rawValue)
@@ -239,15 +240,14 @@ struct ProjectionTreeTests {
     @Test func sourceWithoutImageSiblingsIsUnaffected() throws {
         // A text source with NO image siblings should serve unmodified bytes,
         // and size should match byteSize, same as today (regression guard).
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-no-image-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
 
         let originalData = Data("This markdown has ![alt](missing.png) but no siblings.".utf8)
         let textSource = try store.addSource(
             filename: "lonely.md", data: originalData, mimeType: "text/markdown")
 
-        let projection = Projection(wikiID: WikiID(rawValue: "no-image-\(UUID().uuidString)"), databaseURL: url)
+        let projection = fixture.projection
 
         // By-name view.
         let id = Projection.Identity.sourceByName(textSource.id.rawValue)
@@ -403,12 +403,14 @@ struct ProjectionTreeTests {
         let bolt: WikiPage
         let pdf: SourceSummary
         let txt: SourceSummary
+        /// Owns the socket server for this seed; dropping Credentialed tears
+        /// the fixture down (deinit stops the server + removes the temp dir).
+        let fixture: ProjectionSocketFixture
     }
 
     private func seedCredibility() throws -> Credentialed {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-prov-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "Credibility Fixture")
+        let store = fixture.store
         let pdf = try store.addSource(
             filename: "paper.pdf", data: Data("%PDF-1.4 fake".utf8), mimeType: "application/pdf")
         // A tool producer WITH a version records agent (pdf2md, 1.2.0), so the
@@ -425,10 +427,10 @@ struct ProjectionTreeTests {
         try store.updatePage(id: atlas.id, title: "Atlas", body: atlasBody)
         try store.replaceLinks(from: atlas.id, parsedLinks: WikiLinkParser.parse(atlasBody))
         let bolt = try store.createPage(title: "Bolt")
-        let projection = Projection(
-            wikiID: WikiID(rawValue: "proj-prov-\(UUID().uuidString)"), databaseURL: url)
+        let projection = fixture.projection
         return Credentialed(projection: projection, store: store,
-                            atlas: atlas, bolt: bolt, pdf: pdf, txt: txt)
+                            atlas: atlas, bolt: bolt, pdf: pdf, txt: txt,
+                            fixture: fixture)
     }
 
     private func enumeratedNode(
@@ -608,12 +610,13 @@ struct ProjectionTreeTests {
         let nestedNode: BookmarkNode
         let pageRefNode: BookmarkNode
         let sourceRefNode: BookmarkNode
+        /// Owns the socket server; dropping Bookmarked tears the fixture down.
+        let fixture: ProjectionSocketFixture
     }
 
     private func seedBookmarks() throws -> Bookmarked {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-bm-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
         let alpha = try store.createPage(title: "Alpha")
         try store.updatePage(id: alpha.id, title: "Alpha", body: "Alpha body")
         let pdfSource = try store.addSource(
@@ -628,10 +631,11 @@ struct ProjectionTreeTests {
             parentID: nil, position: 2, content: .source(pdfSource.id))
         let nestedNode = try store.createBookmarkNode(
             parentID: folderNode.id, position: 0, content: .folder(label: "Papers"))
-        let projection = Projection(wikiID: WikiID(rawValue: "proj-bm-\(UUID().uuidString)"), databaseURL: url)
+        let projection = fixture.projection
         return Bookmarked(projection: projection, store: store, pages: pages,
                           pdfSource: pdfSource, folderNode: folderNode, nestedNode: nestedNode,
-                          pageRefNode: pageRefNode, sourceRefNode: sourceRefNode)
+                          pageRefNode: pageRefNode, sourceRefNode: sourceRefNode,
+                          fixture: fixture)
     }
 
     @Test func bookmarksFolderEnumeratesRootChildren() throws {
@@ -679,10 +683,14 @@ struct ProjectionTreeTests {
     }
 
     @Test func corruptPageOKFMetadataFailsAllPageAliasesIncludingBookmark() throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-corrupt-okf-\(UUID().uuidString).sqlite")
+        // Phase 6: the seeded DB rides the real daemon socket; the raw
+        // sqlite3 corruption commits against the same WAL file the daemon's
+        // prepared store reads (multi-process WAL), so the daemon's read hits
+        // the corrupted row exactly as the local read did.
+        let fixture = try ProjectionSocketFixture.make(displayName: "Corrupt OKF Fixture")
+        let url = fixture.container.appendingPathComponent(fixture.descriptor.dbFileName)
         do {
-            let store = try GRDBWikiStore(databaseURL: url)
+            let store = fixture.store
             let page = try store.createPage(title: "Corrupt OKF")
             let versionID = try #require(try store.pageHeadVersionID(pageID: page.id))
             _ = try store.recordPageOKFVerification(
@@ -702,11 +710,9 @@ struct ProjectionTreeTests {
             "UPDATE page_okf_verifications SET basis_json = '{\"version\":999}';",
             nil, nil, nil) == SQLITE_OK)
 
-        let projection = Projection(
-            wikiID: WikiID(rawValue: "corrupt-okf-\(UUID().uuidString)"),
-            databaseURL: url)
-        let page = try #require(try GRDBWikiStore(databaseURL: url).listAllPagesOrderedByID().first)
-        let bookmark = try #require(try GRDBWikiStore(databaseURL: url).listBookmarkNodes().first)
+        let projection = fixture.projection
+        let page = try #require(try fixture.store.listAllPagesOrderedByID().first)
+        let bookmark = try #require(try fixture.store.listBookmarkNodes().first)
         let aliases = [
             Projection.Identity.pageByID(page.id.rawValue),
             Projection.Identity.pageByTitle(page.id.rawValue),
@@ -774,9 +780,8 @@ struct ProjectionTreeTests {
         // A page body linking to another page (canonical ULID). The bookmark
         // pageRef must rewrite [[page:...]] → relative links and report a size
         // equal to the rewritten bytes — a mismatch truncates `cat` (#216).
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-bm-links-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
         let target = try store.createPage(title: "Target Page")
         let home = try store.createPage(title: "Home")
         try store.updatePage(
@@ -784,7 +789,7 @@ struct ProjectionTreeTests {
             body: "See [[page:\(target.id.rawValue)|t]].")
         let pageRefNode = try store.createBookmarkNode(
             parentID: nil, position: 0, content: .page(home.id))
-        let projection = Projection(wikiID: WikiID(rawValue: "bm-links-\(UUID().uuidString)"), databaseURL: url)
+        let projection = fixture.projection
 
         let id = Projection.Identity.bookmarkPageRef(pageRefNode.id.rawValue)
         guard let node = projection.node(for: id),
@@ -807,9 +812,8 @@ struct ProjectionTreeTests {
     @Test func nestedBookmarkPageRefClimbsCorrectDepth() throws {
         // A page ref nested one level deep (inside a folder) must climb with
         // two `../` to reach the root.
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-bm-nested-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
         let target = try store.createPage(title: "Target")
         let home = try store.createPage(title: "Home")
         try store.updatePage(
@@ -819,7 +823,7 @@ struct ProjectionTreeTests {
             parentID: nil, position: 0, content: .folder(label: "Research"))
         let pageRefNode = try store.createBookmarkNode(
             parentID: folder.id, position: 0, content: .page(home.id))
-        let projection = Projection(wikiID: WikiID(rawValue: "bm-nested-\(UUID().uuidString)"), databaseURL: url)
+        let projection = fixture.projection
 
         let id = Projection.Identity.bookmarkPageRef(pageRefNode.id.rawValue)
         guard let node = projection.node(for: id),
@@ -837,9 +841,8 @@ struct ProjectionTreeTests {
     @Test func bookmarkChatRefRewritesLinksAndSizeMatchesBytes() throws {
         // A chat transcript containing a [[page:...]] link, bookmarked as a
         // chatRef, must rewrite the link AND keep size == served bytes (#216).
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-bm-chat-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
         let target = try store.createPage(title: "Referenced Page")
         let chat = try store.createChat(kind: .edit, title: "Chat With Link")
         _ = try store.appendChatMessages(
@@ -848,7 +851,7 @@ struct ProjectionTreeTests {
                      .assistantText("Sure.")])
         let chatRefNode = try store.createBookmarkNode(
             parentID: nil, position: 0, content: .chat(chat.id))
-        let projection = Projection(wikiID: WikiID(rawValue: "bm-chat-\(UUID().uuidString)"), databaseURL: url)
+        let projection = fixture.projection
 
         let id = Projection.Identity.bookmarkChatRef(chatRefNode.id.rawValue)
         guard let node = projection.node(for: id),
@@ -866,15 +869,14 @@ struct ProjectionTreeTests {
     @Test func bookmarkSourceRefIsLeftVerbatimWithSizeMatch() throws {
         // A bookmark sourceRef must serve verbatim sourceContent bytes unchanged,
         // and node.size must equal the byte count (#216).
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-bm-source-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
         let pdfBytes = Data("%PDF-1.4 test content".utf8)
         let pdf = try store.addSource(
             filename: "doc.pdf", data: pdfBytes, mimeType: "application/pdf")
         let sourceRefNode = try store.createBookmarkNode(
             parentID: nil, position: 0, content: .source(pdf.id))
-        let projection = Projection(wikiID: WikiID(rawValue: "bm-source-\(UUID().uuidString)"), databaseURL: url)
+        let projection = fixture.projection
 
         let id = Projection.Identity.bookmarkSourceRef(sourceRefNode.id.rawValue)
         guard let node = projection.node(for: id),
@@ -896,22 +898,23 @@ struct ProjectionTreeTests {
         let projection: Projection
         let store: GRDBWikiStore
         let chats: [ChatSummary]
+        /// Owns the socket server; dropping Chatted tears the fixture down.
+        let fixture: ProjectionSocketFixture
     }
 
     /// Seed a wiki with two chats — the first with a two-message
     /// transcript, the second empty — so tree-shape and content tests have
     /// realistic rows.
     private func seedChats() throws -> Chatted {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-chat-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
         let first = try store.createChat(kind: .edit, title: "Test Chat")
         _ = try store.appendChatMessages(
             chatID: first.id, events: [.userText("Hello"), .assistantText("Hi there")])
         _ = try store.createChat(kind: .edit, title: "Second Chat")
         let chats = try store.listAllChatsOrderedByID()   // ULID (creation) order
-        let projection = Projection(wikiID: WikiID(rawValue: "proj-chat-\(UUID().uuidString)"), databaseURL: url)
-        return Chatted(projection: projection, store: store, chats: chats)
+        let projection = fixture.projection
+        return Chatted(projection: projection, store: store, chats: chats, fixture: fixture)
     }
 
     @Test func chatsFolderResolvesAtRoot() throws {
@@ -977,10 +980,9 @@ struct ProjectionTreeTests {
 
     @Test func emptyChatsFolderStillListedAtRoot() throws {
         // No chats at all, but the `chats` folder still appears at root.
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-chat-empty-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
-        let projection = Projection(wikiID: WikiID(rawValue: "proj-chat-empty-\(UUID().uuidString)"), databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "ProjectionTreeTests")
+        let store = fixture.store
+        let projection = fixture.projection
         _ = store  // seed nothing
         let names = projection.children(of: .rootContainer).map(\.name)
         #expect(names.contains("chats"))

@@ -513,9 +513,12 @@ struct QueueClosedWikiNameResolutionTests {
 
         // P5: the production reader is daemon-mediated; the seam injects a
         // local-store-backed reader here (the store answers through the same
-        // `any WikiStore` protocol the daemon transport serves).
+        // `any WikiStore` protocol the daemon transport serves). The store is
+        // built before the closure — the factory seam is non-throwing.
+        let localStore = try GRDBWikiStore(
+            databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
         let tracker = QueueActivityTracker(loader: QueueClosedWikiNameLoader.daemonLoader { _ in
-            try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+            localStore
         })
         await tracker.refreshClosedWikiNames(
             for: [lintJob, ingestJob],

@@ -3348,6 +3348,30 @@ final class DaemonPayloadStagingStore: @unchecked Sendable {
         return DaemonPayloadBeginReply(uploadID: uploadID)
     }
 
+    /// Register bytes ALREADY complete as a committed handle — the oversized
+    /// projection reply's download seam (Phase 6): the daemon computes the
+    /// handle's integrity (byte count + SHA-256) here, and the client fetches
+    /// the bytes through `payloadRead` one chunk at a time. No staging upload
+    /// is involved: the bytes never crossed the wire in the first place.
+    func stashCommitted(
+        _ bytes: Data, connectionID: String? = nil
+    ) -> DaemonPayloadHandle {
+        let now = clock()
+        let digest = SHA256.hash(data: bytes)
+            .map { String(format: "%02x", $0) }.joined()
+        let handle = DaemonPayloadHandle(
+            id: makeID(), declaredByteCount: bytes.count, sha256Hex: digest)
+        state.sync {
+            sweepExpiredLocked(now: now)
+            committed[handle.id] = Committed(
+                handle: handle, bytes: bytes,
+                expiresAt: now.addingTimeInterval(
+                    TimeInterval(DaemonStoreLimits.committedHandleTTLSeconds)),
+                connectionID: connectionID)
+        }
+        return handle
+    }
+
     /// Begin-time validation runs OUTSIDE the state queue (pure checks).
     private func validateBegin(_ request: DaemonPayloadBeginRequest) throws {
         guard request.declaredByteCount >= 0 else {

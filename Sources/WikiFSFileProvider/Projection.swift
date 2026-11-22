@@ -15,30 +15,53 @@ import WikiFSCore
 /// filename — filenames are derived for presentation (INITIAL §6).
 ///
 /// **Multi-wiki (Phase 0).** A `Projection` is bound to ONE wiki via `wikiID`
-/// (the ULID the File Provider domain identifier carries). `openReadStore()`
-/// resolves that wiki's `<ulid>.sqlite`, so the SAME projection logic serves any
-/// wiki — the only difference is which DB it opens. The extension constructs one
+/// (the ULID the File Provider domain identifier carries). Its data source
+/// (`ProjectionSource`) serves that wiki's reads — production resolves it to
+/// the daemon's App Group domain socket (`DaemonProjectionClient`, Phase 6),
+/// so the SAME projection logic serves any wiki — the only difference is
+/// which wiki the source reads. The extension constructs one
 /// `Projection(wikiID:)` from `init(domain:)` and threads it through the
-/// enumerator. `Identity`, the static README/version bytes, and the index byte
-/// cache stay static (they don't depend on which wiki).
+/// enumerator. `Identity`, the static README/version bytes, and the index
+/// byte cache stay static (they don't depend on which wiki).
 struct Projection {
 
     /// The wiki this projection serves: the ULID from the FP domain identifier.
-    /// `openReadStore()` maps it to `<ulid>.sqlite` in the App Group container.
+    /// The data source resolves it against the daemon's prepared store.
     let wikiID: WikiID
 
-    /// Optional override for the wiki DB URL. Production (the File Provider
-    /// extension) leaves this `nil` and resolves the wiki's DB via
-    /// `DatabaseLocation` (the App Group container — unavailable outside the
-    /// entitled sandbox). Tests inject a temp URL so the projection tree
-    /// (`node`/`children`/`contents`) is exercisable end-to-end. Slice 2b: the
-    /// projection previously had NO integration coverage for this reason.
-    let databaseURL: URL?
+    /// The read-only data source for THIS wiki's projection reads (the
+    /// daemon's projection family over the App Group domain socket in
+    /// production). Phase 6: the extension never opens the wiki database;
+    /// tests inject a fixture source (a real daemon socket) so the projection
+    /// tree (`node`/`children`/`contents`) is exercisable end-to-end.
+    let source: any ProjectionSource
 
-    /// `databaseURL` defaults to `nil` (production resolves via `DatabaseLocation`).
-    init(wikiID: WikiID, databaseURL: URL? = nil) {
+    /// Production entry point: a projection client bound to the daemon's
+    /// socket in THIS wiki's App Group container.
+    init(wikiID: WikiID) {
+        self.init(wikiID: wikiID, source: DaemonProjectionClient(
+            wikiID: wikiID,
+            containerDirectory: {
+                // Same resolution the DB read used — the container that held
+                // `<ulid>.sqlite` holds the daemon's socket file. An
+                // unresolvable container throws (fail-fast, like the DB path
+                // always did) and the reads surface it as unavailable.
+                guard let container = DatabaseLocation.extensionContainerURL(
+                    forWikiID: wikiID.rawValue) else {
+                    // Same fail-fast class the DB path surfaced: an
+                    // unconfigured App Group container is an open failure
+                    // the reads report as unavailable.
+                    throw WikiStoreError.open(
+                        "no App Group container for wiki \(wikiID.rawValue)")
+                }
+                return container.deletingLastPathComponent()
+            }))
+    }
+
+    /// Test/fixture entry point: an explicit data source.
+    init(wikiID: WikiID, source: any ProjectionSource) {
         self.wikiID = wikiID
-        self.databaseURL = databaseURL
+        self.source = source
     }
 
     /// Request-scoped read-store cache. The public entry points
@@ -392,22 +415,24 @@ struct Projection {
 
     // MARK: - Read store
 
-    /// A request-scoped cache for ONE read-only store + its change token. The
+    /// A request-scoped cache for ONE data source + its change token. The
     /// public entry points (`children`/`node`/`contents`) create one of these on
-    /// a scoped copy of the projection so every `openReadStore()` and
-    /// `changeToken()` call within that operation reuses the same connection,
-    /// instead of opening a fresh store (with pragma setup + WAL checkpoint on
-    /// close) for each leaf node (#291).
+    /// a scoped copy of the projection so every read within that operation
+    /// shares the SAME projection client and token snapshot, instead of
+    /// issuing independent wire operations for each leaf node (#291).
+    /// Phase 6: the "connection" is the projection client over the daemon
+    /// socket — one client per logical operation, plus the per-pass caches
+    /// below, bounds the wire operations an enumeration pass issues.
     ///
     /// Thread-safe (NSLock-guarded): the holder is a reference type shared
-    /// across value-type projection copies, so the lock guards the lazy open
-    /// and token cache even if two copies race (in practice each scope is
+    /// across value-type projection copies, so the lock guards the caches
+    /// even if two copies race (in practice each scope is
     /// single-threaded — one File Provider callback).
     final class ReadScope: @unchecked Sendable {
-        private let databaseURL: URL?
-        private let wikiID: WikiID
+        /// The ONE data source this scope shares for every read
+        /// (one connection-equivalent per logical operation, #291).
+        let source: any ProjectionSource
         private let lock = NSLock()
-        private var cachedStore: GRDBWikiStore?
         private var cachedToken: String?
         /// Token-invalidated `LinkMaps` cache (#490). Built once per scope
         /// (on the first `cachedLinkMaps()` call) and reused for every leaf
@@ -456,31 +481,14 @@ struct Projection {
         /// is never reported as an empty folder or a deleted item.
         private var failure: String?
 
-        init(databaseURL: URL?, wikiID: WikiID) {
-            self.databaseURL = databaseURL
-            self.wikiID = wikiID
+        init(source: any ProjectionSource) {
+            self.source = source
         }
 
-        /// Lazily open ONE store; subsequent calls return the same connection.
-        var store: GRDBWikiStore? {
-            lock.lock(); defer { lock.unlock() }
-            if cachedStore == nil {
-                let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID.rawValue)
-                if let url, FileManager.default.fileExists(atPath: url.path) {
-                    DebugLog.fileprovider("ReadScope opening cached read-only connection wikiID=\(wikiID.rawValue) thread=\(Thread.current)")
-                    do {
-                        cachedStore = try GRDBWikiStore(readOnlyURL: url)
-                    } catch {
-                        DebugLog.fileprovider("ReadScope open failed wikiID=\(wikiID.rawValue): \(error)")
-                        failure = failure ?? "open failed: \(error)"
-                    }
-                } else {
-                    DebugLog.fileprovider("ReadScope no database wikiID=\(wikiID.rawValue) url=\(url?.path ?? "nil")")
-                    failure = failure ?? "no database at \(url?.path ?? "nil")"
-                }
-            }
-            return cachedStore
-        }
+        /// The shared data source (the scope's ONE connection-equivalent).
+        /// Construction cannot fail — availability failures surface per read
+        /// and are recorded through `markFailed`.
+        var store: (any ProjectionSource)? { source }
 
         /// Why the scope could not read the store, or nil if it could.
         var failureReason: String? {
@@ -592,17 +600,13 @@ struct Projection {
         }
     }
 
-    /// Open a read-only store at THIS wiki's `<ulid>.sqlite` in the App Group
-    /// container. Within a read scope (`readStoreHolder` set) the SAME connection
-    /// is reused for every call; outside a scope a fresh, short-lived store is
-    /// opened each time (the historical behavior). Returns nil if the
-    /// container/DB is unavailable.
-    private func openReadStore() -> GRDBWikiStore? {
+    /// The read-only data source at THIS wiki's daemon-backed projection.
+    /// Within a read scope (`readStoreHolder` set) the SAME client is reused
+    /// for every call; outside a scope the projection's own source answers
+    /// each read (the historical per-call behavior, minus any local open).
+    private func openReadStore() -> (any ProjectionSource)? {
         if let scope = readStoreHolder { return scope.store }
-        let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID.rawValue)
-        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
-        DebugLog.fileprovider("openReadStore opening short-lived read-only connection wikiID=\(wikiID.rawValue) thread=\(Thread.current)")
-        return DebugLog.trying("GRDBWikiStore.init", operation: { try GRDBWikiStore(readOnlyURL: url) })
+        return source
     }
 
     /// Run a store read whose nil result means "this row or folder is gone".
@@ -826,15 +830,16 @@ struct Projection {
             return cached
         }
         guard let store = openReadStore() else { return "0:0" }
-        let token: ChangeToken
+        let raw: String
         do {
-            token = try store.changeToken()
+            // The data source serves the token's raw string directly (the
+            // wire carries the string, not the folded ChangeToken struct).
+            raw = try store.changeToken()
         } catch {
             DebugLog.fileprovider("changeToken failed wikiID=\(wikiID.rawValue): \(error)")
             readStoreHolder?.markFailed("changeToken: \(error)")
             return "0:0"
         }
-        let raw = token.rawString
         readStoreHolder?.cacheToken(raw)
         return raw
     }
@@ -846,7 +851,7 @@ struct Projection {
     /// fabricate `usage_count: 0`. Without a read scope the fresh fetch result
     /// is returned directly — the caller gets exactly the ids it asked about.
     private func credibilitySignals(
-        for ids: [SourceID], in store: GRDBWikiStore
+        for ids: [SourceID], in store: any ProjectionSource
     ) throws -> (signals: [String: GRDBWikiStore.SourceUsageSignal],
                  producers: [String: GRDBWikiStore.SourceHeadProducer]) {
         guard !ids.isEmpty else { return ([:], [:]) }
@@ -879,7 +884,7 @@ struct Projection {
     /// failure is logged, not thrown — the per-page fetches then surface the
     /// real error if the aggregate is broken.
     private func prefetchCredibilitySignals(
-        in store: GRDBWikiStore, sourceIDs allIDs: [SourceID]? = nil
+        in store: any ProjectionSource, sourceIDs allIDs: [SourceID]? = nil
     ) {
         guard readStoreHolder != nil else { return }
         let ids = allIDs ?? ((storeRead("listAllSources", { try store.listAllSourcesOrderedByID() })) ?? [])
@@ -976,7 +981,7 @@ struct Projection {
         )
     }
 
-    private func pageContent(for page: WikiPage, in store: GRDBWikiStore) throws -> (content: String, revision: Int64, provenanceDigest: String) {
+    private func pageContent(for page: WikiPage, in store: any ProjectionSource) throws -> (content: String, revision: Int64, provenanceDigest: String) {
         let links = (DebugLog.trying("sourceLinks", operation: { try store.sourceLinks(from: page.id) }) ?? [])
             .filter { $0.role == .cite }
         var citedIDs: [SourceID] = []
@@ -1029,7 +1034,7 @@ struct Projection {
     /// render, the trust projection revision, and the digest.
     private func sourceMarkdownContent(for source: SourceSummary,
                                        head: SourceMarkdownVersion,
-                                       in store: GRDBWikiStore) throws -> (content: String, revision: Int64, provenanceDigest: String) {
+                                       in store: any ProjectionSource) throws -> (content: String, revision: Int64, provenanceDigest: String) {
         let credibility = try credibilitySignals(for: [source.id], in: store)
         // Same head resolution as the signals fetch, so the producer here is
         // the one recorded on `head` — no separate per-leaf query needed.
@@ -1083,7 +1088,7 @@ struct Projection {
     private func cachedSiblingRender(
         for source: SourceSummary,
         head: SourceMarkdownVersion,
-        in store: GRDBWikiStore
+        in store: any ProjectionSource
     ) -> SiblingRender? {
         Self.siblingRenderCache.render(
             forKey: "\(wikiID.rawValue)/\(source.id.rawValue)",
@@ -1592,7 +1597,7 @@ struct Projection {
     /// the tree shape is preserved. All bookmark nodes are versioned by the
     /// change token so any mutation re-fetches them.
     private func bookmarkNodeItem(
-        for node: BookmarkNode, in store: GRDBWikiStore,
+        for node: BookmarkNode, in store: any ProjectionSource,
         maps: LinkMaps, allNodes: [BookmarkNode]
     ) -> ProjectedNode? {
         let id = Self.bookmarkID(for: node)
@@ -1735,7 +1740,7 @@ struct Projection {
     /// collapsing what was previously 1–3 independent store opens per call.
     func node(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
         var scoped = self
-        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        scoped.readStoreHolder = ReadScope(source: source)
         return scoped.nodeResolved(for: id)
     }
 
@@ -2304,7 +2309,7 @@ struct Projection {
     /// doc, plus one per `changeToken()` call).
     func children(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
         var scoped = self
-        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        scoped.readStoreHolder = ReadScope(source: source)
         return scoped.childrenResolved(of: container)
     }
 
@@ -2567,7 +2572,7 @@ struct Projection {
         byName: Bool,
         maps: LinkMaps?,
         signal: GRDBWikiStore.SourceUsageSignal?,
-        in store: GRDBWikiStore
+        in store: any ProjectionSource
     ) -> ProjectedNode? {
         guard let head, !MimeType.isText(source.mimeType) else { return nil }
         let markdownID = byName
@@ -2632,7 +2637,7 @@ struct Projection {
     private func cachedChatTranscript(
         for id: NSFileProviderItemIdentifier,
         chat: ChatSummary,
-        in store: GRDBWikiStore
+        in store: any ProjectionSource
     ) -> Data? {
         Self.chatContentCache.data(
             forKey: "\(wikiID.rawValue)/\(id.rawValue)", token: changeToken()
@@ -2654,7 +2659,7 @@ struct Projection {
     /// the node. Like `pageFileNode(for:page:)`.
     static func chatFileNode(for id: NSFileProviderItemIdentifier,
                              chat: ChatSummary,
-                             in store: GRDBWikiStore,
+                             in store: any ProjectionSource,
                              contentData: Data? = nil) -> ProjectedNode {
         let raw = id.rawValue
         let isByName = raw.hasPrefix(Identity.chatByNamePrefix)
@@ -2688,7 +2693,7 @@ struct Projection {
     /// store for the whole resolution (#291).
     func contents(for id: NSFileProviderItemIdentifier) -> Data? {
         var scoped = self
-        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        scoped.readStoreHolder = ReadScope(source: source)
         return scoped.contentsResolved(for: id)
     }
 
@@ -2730,7 +2735,7 @@ struct Projection {
     /// A copy of this projection with a fresh read scope.
     private func withReadScope() -> Projection {
         var scoped = self
-        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        scoped.readStoreHolder = ReadScope(source: source)
         return scoped
     }
 

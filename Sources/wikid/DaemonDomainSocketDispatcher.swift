@@ -247,6 +247,16 @@ final class DaemonDomainSocketDispatcher: @unchecked Sendable {
             return Self.encodedReply(
                 await daemon.storeCommandExecutor()
                     .handleStoreOperation(request))
+        case .projection:
+            // Phase 6 (plans/daemon-only-access.md): the READ-ONLY File
+            // Provider projection family. Served from the daemon's prepared
+            // store through the admitted seam; typed store errors ride
+            // inside the DaemonProjectionReply envelope; oversized results
+            // are promoted to payload handles (never truncated). Shares the
+            // store executor's staging store so `payloadRead` downloads land
+            // in the same bounded, TTL-swept committed-handle table.
+            return Self.encodedReply(
+                await daemon.projectionService().handleProjectionOperation(request))
         case .page, .source, .chat, .bookmark, .workspace,
              .strategy, .log, .admin, .extractor:
             // Phase 3+4 command families: the daemon executes the CLI's

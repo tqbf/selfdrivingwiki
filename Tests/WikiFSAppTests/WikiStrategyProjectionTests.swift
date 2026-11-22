@@ -36,25 +36,27 @@ import WikiFSCore
 ///
 /// The store-side strategy API (`getWikiStrategy()` / `saveWikiStrategy`)
 /// lives in `WikiStore`; the projection only reads through `getWikiStrategy`.
-@Suite
+@Suite(.serialized, .timeLimit(.minutes(5)))
 struct WikiStrategyProjectionTests {
 
     private struct Seeded {
+        /// Retained for the test's lifetime: the fixture's deinit stops the
+        /// server and removes the temp container.
+        let fixture: ProjectionSocketFixture
         let projection: Projection
         let store: GRDBWikiStore
         let databaseURL: URL
     }
 
-    /// A fresh temp wiki DB + projection bound to it (the `databaseURL`
-    /// injection seam, as in `ProjectionTreeTests`).
+    /// A fresh temp wiki DB + projection over the REAL daemon socket (the
+    /// Phase 6 fixture — same tree logic, remote data source).
     private func seed() throws -> Seeded {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-strategy-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
-        let projection = Projection(
-            wikiID: WikiID(rawValue: "proj-strategy-\(UUID().uuidString)"),
-            databaseURL: url)
-        return Seeded(projection: projection, store: store, databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "Strategy Fixture")
+        return Seeded(
+            fixture: fixture,
+            projection: fixture.projection, store: fixture.store,
+            databaseURL: fixture.container.appendingPathComponent(
+                fixture.descriptor.dbFileName))
     }
 
     /// Saves a strategy through the store's public write boundary
@@ -230,16 +232,14 @@ struct WikiStrategyProjectionTests {
     // MARK: - Failure is explicit absence, never a Default stand-in
 
     @Test func unreadableStrategyIsAbsentNotDefault() throws {
-        // A DB file that exists but carries no wiki schema (e.g. a read
-        // connection against a pre-v56 database): the strategy row cannot be
-        // read. The doc must be ABSENT — serving the Default description
-        // would authoritatively deny a custom strategy that may exist.
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-strategy-fail-\(UUID().uuidString).sqlite")
-        try Data().write(to: url)  // empty file = a valid empty SQLite database
-        let projection = Projection(
-            wikiID: WikiID(rawValue: "proj-strategy-fail-\(UUID().uuidString)"),
-            databaseURL: url)
+        // The store-open failure class (Phase 6: the daemon's prepared store
+        // cannot open the wiki's database — the fixture's removeDatabase
+        // shapes it under a LIVE server): the strategy row cannot be read.
+        // The doc must be ABSENT — serving the Default description would
+        // authoritatively deny a custom strategy that may exist.
+        let fixture = try ProjectionSocketFixture.make(displayName: "Strategy Fail")
+        try fixture.removeDatabase()
+        let projection = fixture.projection
 
         #expect(projection.node(for: Projection.Identity.wikiStrategyMD) == nil)
         #expect(projection.contents(for: Projection.Identity.wikiStrategyMD) == nil)
@@ -275,7 +275,6 @@ struct WikiStrategyProjectionTests {
         _ = s.projection.children(of: .rootContainer)
         _ = s.projection.contents(for: Projection.Identity.wikiStrategyMD)
         let before = try Data(contentsOf: s.databaseURL)
-
         _ = s.projection.children(of: .rootContainer)
         _ = s.projection.children(of: .workingSet)
         _ = s.projection.node(for: Projection.Identity.wikiStrategyMD)

@@ -111,6 +111,16 @@ public enum DaemonDomainFamily: String, Codable, Sendable, CaseIterable {
     /// typed errors (`daemonUnavailable` / `outcomeUnknown`), never a silent
     /// local fallback.
     case store
+    /// READ-ONLY File Provider projection reads (Phase 6 of
+    /// plans/daemon-only-access.md): the exact surface
+    /// `Projection.swift` reads from the wiki database today, served from the
+    /// daemon's prepared stores over the domain socket. Payload is the JSON
+    /// `DaemonProjectionRequest` / `DaemonProjectionReply` pair; operation
+    /// strings come from ``DaemonProjectionOperation``. The File Provider
+    /// extension is a separate process (no XPC), so the App Group domain
+    /// socket is the transport it can reach; the family declares no mutating
+    /// operation by construction.
+    case projection
 }
 
 public struct DaemonDomainRequest: Codable, Equatable, Sendable {

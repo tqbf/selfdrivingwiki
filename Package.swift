@@ -767,7 +767,14 @@ let package = Package(
         // pull unavailable frameworks or Cmlx CUDA code.
         .executableTarget(
             name: "WikiFSFileProvider",
-            dependencies: ["WikiFSCore", "WikiFSTypes"],
+            dependencies: [
+                "WikiFSCore",
+                "WikiFSTypes",
+                // Phase 6 (plans/daemon-only-access.md): the extension reads
+                // the wiki through the daemon's App Group domain socket — the
+                // projection wire family (DTOs + framing + limits) it speaks.
+                "WikiDaemonContract",
+            ],
             path: "Sources/WikiFSFileProvider",
             swiftSettings: [.unsafeFlags(["-warnings-as-errors"])],
             linkerSettings: [

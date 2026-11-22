@@ -15,24 +15,10 @@ import WikiFSLinks
 /// identity the old zero-byte verbatim node stays (mount identity and link
 /// targets never dangle). Covers enumeration (both views), single-item
 /// resolution, content serving, link-map targets, and the Share node rule.
-@Suite
+@Suite(.serialized, .timeLimit(.minutes(3)))
 struct ZeroByteSourceProjectionTests {
 
     private let originURL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-
-    /// The store owns the temp DB file; the URL is kept separately because the
-    /// Projection reads the database through its own read-only connection.
-    private func makeStore() throws -> (store: GRDBWikiStore, url: URL) {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-byteless-\(UUID().uuidString).sqlite")
-        return (try GRDBWikiStore(databaseURL: url), url)
-    }
-
-    private func makeProjection(_ fixture: (store: GRDBWikiStore, url: URL)) -> Projection {
-        Projection(
-            wikiID: WikiID(rawValue: "byteless-\(UUID().uuidString)"),
-            databaseURL: fixture.url)
-    }
 
     private func bytelessProvenance(externalIdentity: String?) -> SourceProvenance {
         SourceProvenance(
@@ -54,14 +40,14 @@ struct ZeroByteSourceProjectionTests {
     /// sibling] under BOTH views; the shortcut is non-empty and versioned
     /// with the webloc marker (so existing mounts refetch); no zero-byte node.
     @Test func bytelessWithHeadProjectsWeblocShortcutAndMarkdownSibling() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let source = try addBytelessSource(
             fixture.store, filename: "Warp Talk", mimeType: MimeType.videoYouTube,
             externalIdentity: originURL)
         _ = try fixture.store.appendProcessedMarkdown(
             sourceID: source.id, content: "---\ntype: \"Source\"\n---\n\nTranscript.",
             origin: .extraction, note: nil)
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         // Each view projects exactly this source's two nodes; the verbatim
         // slot holds the `.webloc` shortcut carrying the source's identifier.
         let views: [(container: NSFileProviderItemIdentifier,
@@ -87,11 +73,11 @@ struct ZeroByteSourceProjectionTests {
 
     /// Test 2: byteless + no head + URL present → [webloc shortcut] only.
     @Test func bytelessWithoutHeadProjectsWeblocShortcutOnly() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let source = try addBytelessSource(
             fixture.store, filename: "Remote Clip", mimeType: "video/mp4",
             externalIdentity: "https://example.com/clip.mp4")
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         let nodes = projection.children(of: Projection.Identity.sourcesByName)
         #expect(nodes.count == 1, "expected [webloc] only, got \(nodes.map(\.name))")
         let node = try #require(nodes.first)
@@ -105,14 +91,14 @@ struct ZeroByteSourceProjectionTests {
     /// provider-specific bare id) → the zero-byte verbatim node, unchanged
     /// (fallback preserved: mount identity and link targets never dangle).
     @Test func bytelessWithoutUsableIdentityKeepsVerbatimNode() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let noIdentity = try addBytelessSource(
             fixture.store, filename: "No Origin", mimeType: MimeType.videoYouTube,
             externalIdentity: nil)
         let bareID = try addBytelessSource(
             fixture.store, filename: "Bare Video Id", mimeType: MimeType.videoYouTube,
             externalIdentity: "dQw4w9WgXcQ")
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         let nodes = projection.children(of: Projection.Identity.sourcesByName)
         for source in [noIdentity, bareID] {
             let node = try #require(nodes.first {
@@ -131,14 +117,14 @@ struct ZeroByteSourceProjectionTests {
     /// verbatim identifier resolves to nothing (node + content nil) so
     /// single-item resolution matches enumeration.
     @Test func bytelessBareIdWithHeadDropsZeroByteVerbatimNode() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let source = try addBytelessSource(
             fixture.store, filename: "Warp Talk", mimeType: MimeType.videoYouTube,
             externalIdentity: "tUPPVhBBcoM")
         _ = try fixture.store.appendProcessedMarkdown(
             sourceID: source.id, content: "---\ntype: \"Source\"\n---\n\nTranscript.",
             origin: .extraction, note: nil)
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         let views: [(container: NSFileProviderItemIdentifier,
                      makeID: (String) -> NSFileProviderItemIdentifier)] = [
                 (Projection.Identity.sourcesByName, Projection.Identity.sourceByName),
@@ -167,7 +153,7 @@ struct ZeroByteSourceProjectionTests {
     /// carries the activity's plan URL (the identity alone would never
     /// resolve).
     @Test func bytelessBareIdWithActivityPlanURLProjectsWeblocAndCarriesOrigin() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let source = try fixture.store.addBytelessSource(
             filename: "Warp Talk", mimeType: MimeType.videoYouTube,
             provenance: SourceProvenance(
@@ -176,7 +162,7 @@ struct ZeroByteSourceProjectionTests {
                 externalIdentity: "tUPPVhBBcoM"))
         _ = try fixture.store.appendProcessedMarkdown(
             sourceID: source.id, content: "Transcript.", origin: .extraction, note: nil)
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         let nodes = projection.children(of: Projection.Identity.sourcesByName)
         #expect(nodes.count == 2, "expected [webloc, .md], got \(nodes.map(\.name))")
         #expect(nodes.contains { $0.name.hasSuffix(".webloc") && $0.size > 0 })
@@ -195,13 +181,13 @@ struct ZeroByteSourceProjectionTests {
     /// Test 4: source WITH bytes + head + non-text mime → [verbatim, sibling]
     /// — regression guard that the byteless rule leaves byteful sources alone.
     @Test func sourceWithBytesAndHeadKeepsVerbatimPlusSibling() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let pdf = try fixture.store.addSource(
             filename: "doc.pdf", data: Data("%PDF-1.4 fake".utf8),
             mimeType: "application/pdf")
         _ = try fixture.store.appendProcessedMarkdown(
             sourceID: pdf.id, content: "# Extracted", origin: .extraction, note: nil)
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         let nodes = projection.children(of: Projection.Identity.sourcesByName)
         #expect(nodes.count == 2)
         let verbatim = try #require(nodes.first { !$0.name.hasSuffix(".md") })
@@ -216,11 +202,11 @@ struct ZeroByteSourceProjectionTests {
     /// count matches the node's reported size exactly (size==content, or `cat`
     /// truncates).
     @Test func weblocContentServesPropertyListMatchingIdentityAndSize() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let source = try addBytelessSource(
             fixture.store, filename: "Warp Talk", mimeType: MimeType.videoYouTube,
             externalIdentity: originURL)
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         let views: [(String) -> NSFileProviderItemIdentifier] = [
             Projection.Identity.sourceByName, Projection.Identity.sourceByID]
         for makeID in views {
@@ -241,7 +227,7 @@ struct ZeroByteSourceProjectionTests {
     /// the `.webloc` filename, so `[[wikilinks]]` rewritten in the by-name
     /// view still resolve against the projected tree.
     @Test func linkMapTargetForBytelessNoHeadSourceIsWeblocFilename() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let source = try addBytelessSource(
             fixture.store, filename: "Remote Clip", mimeType: "video/mp4",
             externalIdentity: "https://example.com/clip.mp4")
@@ -249,7 +235,7 @@ struct ZeroByteSourceProjectionTests {
         let page = try fixture.store.createPage(title: "Citing Page")
         try fixture.store.updatePage(id: page.id, title: "Citing Page", body: body)
         try fixture.store.replaceLinks(from: page.id, parsedLinks: WikiLinkParser.parse(body))
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         let expectedName = FilenameEscaping.byNameSourceFilename(
             filename: source.filename, ext: Projection.weblocFileExtension,
             sourceID: source.id)
@@ -299,7 +285,7 @@ struct ZeroByteSourceProjectionTests {
     /// render prepends; the cached render makes size == served bytes. The
     /// enumerated and single-item versions must also agree (same cache).
     @Test func siblingNodeSizeMatchesServedBytesExactlyOnBothViews() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let source = try fixture.store.addSource(
             filename: "report.pdf", data: Data("%PDF-1.4 producer fixture".utf8),
             mimeType: "application/pdf",
@@ -307,7 +293,7 @@ struct ZeroByteSourceProjectionTests {
         let head = try fixture.store.appendProcessedMarkdown(
             sourceID: source.id, content: "# Extracted with producer",
             origin: .extraction, note: nil, technique: "pdf2md v1.2")
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         let views: [(container: NSFileProviderItemIdentifier,
                      makeID: (String) -> NSFileProviderItemIdentifier)] = [
                 (Projection.Identity.sourcesByName, Projection.Identity.sourceMarkdownByName),
@@ -335,7 +321,7 @@ struct ZeroByteSourceProjectionTests {
     /// the byteless+head+URL shape AND the with-bytes+head+URL shape (a
     /// website-snapshot-like fetched PDF).
     @Test func siblingFrontmatterCarriesOriginURLForURLShapedIdentities() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let byteless = try addBytelessSource(
             fixture.store, filename: "Warp Talk", mimeType: MimeType.videoYouTube,
             externalIdentity: originURL)
@@ -347,7 +333,7 @@ struct ZeroByteSourceProjectionTests {
             provenance: bytelessProvenance(externalIdentity: "https://example.com/report"))
         _ = try fixture.store.appendProcessedMarkdown(
             sourceID: snapshot.id, content: "# Extracted", origin: .extraction, note: nil)
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         for (source, origin) in [(byteless, originURL),
                                  (snapshot, "https://example.com/report")] {
             let content = String(
@@ -374,7 +360,7 @@ struct ZeroByteSourceProjectionTests {
     /// identity produce NO origin-URL line — the sibling carries only the
     /// id-carrying self-reference.
     @Test func siblingOmitsOriginURLForNonURLIdentities() throws {
-        let fixture = try makeStore()
+        let fixture = try ProjectionSocketFixture.make()
         let bareID = try addBytelessSource(
             fixture.store, filename: "Warp Talk", mimeType: MimeType.videoYouTube,
             externalIdentity: "tUPPVhBBcoM")
@@ -384,7 +370,7 @@ struct ZeroByteSourceProjectionTests {
             filename: "doc.pdf", data: Data("%PDF-1.4 x".utf8), mimeType: "application/pdf")
         _ = try fixture.store.appendProcessedMarkdown(
             sourceID: anonymous.id, content: "# Extracted", origin: .extraction, note: nil)
-        let projection = makeProjection(fixture)
+        let projection = fixture.projection
         for source in [bareID, anonymous] {
             let content = String(
                 decoding: projection.contents(
