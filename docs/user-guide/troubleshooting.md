@@ -44,8 +44,9 @@ unavailable.
 
 1. Quit the app and open it again. The first connection relaunches the
    daemon. This fixes most cases.
-2. Check the menu-bar status item. Its tooltip reports the daemon state and
-   per-lane facts, so you can see whether the app holds a live connection.
+2. Check the menu-bar status item. Its tooltip reports the daemon state,
+   and names the activity lanes that are active or paused, so you can see
+   whether the app holds a live connection.
 3. If the banner persists after a relaunch, a stale daemon process may be
    wedged. Stop it, then relaunch the app:
 

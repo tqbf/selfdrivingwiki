@@ -81,7 +81,11 @@ as `a1aefb98`).
   time — is unverified; (2) the PR's newest suites run only on
   developer machines (plain `make test` excludes `WikiFSAppTests`; CI
   runs three targeted opt-in suites, none of them the projection
-  suites).
+  suites); (3) the per-pass `ReadScope` source-byte cache has no byte
+  budget — a single projection operation that materializes many large
+  sources holds their aggregate verbatim bytes until the scope ends
+  (bounded lifetime, but unbounded peak); cap or evict if large-wiki
+  memory pressure shows.
 
 ## Verification
 

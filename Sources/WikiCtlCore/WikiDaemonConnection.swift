@@ -10,11 +10,11 @@ public enum DaemonConnectionState: String, Sendable, Equatable {
     /// The daemon responded to the last health probe (or the initial connect).
     case connected
     /// The daemon is unreachable — either the XPC connection was invalidated
-    /// (daemon died) or a health ping failed. The app falls back to a local
-    /// `QueueEngine`.
+    /// (daemon died) or a health ping failed. There is no local engine to
+    /// fall back to; queue activity surfaces its unavailable state.
     case disconnected
     /// A reconnect attempt is in flight (between a failed probe and the next
-    /// one). The app is still on the local fallback.
+    /// one). The app holds no local fallback while reconnecting.
     case reconnecting
 }
 

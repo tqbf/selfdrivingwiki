@@ -698,7 +698,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             return "Self Driving Wiki — " + lines.joined(separator: " · ")
         case .paused: return "Self Driving Wiki — " + activeLaneLines.joined(separator: " · ")
         case .attention: return "Self Driving Wiki — Attention needed"
-        case .daemonDown: return "Self Driving Wiki — wikid daemon not running (local fallback)"
+        case .daemonDown: return "Self Driving Wiki — wikid daemon unavailable (reconnecting; no local fallback)"
         }
     }
 
