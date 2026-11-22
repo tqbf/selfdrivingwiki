@@ -159,10 +159,12 @@ struct SearchUpgradeProgressEventTests {
     func startedRunEmitsProgressAndCompletes() async throws {
         // Claim the cross-suite embedder seam BEFORE installing — the
         // embedder is a process global shared with other suites.
-        await EmbedderSeamGate.shared.acquire()
-        defer { Task { await EmbedderSeamGate.shared.release() } }
+        let seam = await EmbedderSeamGate.shared.acquire()
         EmbeddingService.installTestEmbedder(KeywordEmbedder())
-        defer { EmbeddingService.resetTestEmbedder() }
+        defer {
+            EmbeddingService.resetTestEmbedder()
+            Task { await EmbedderSeamGate.shared.release(seam) }
+        }
         let fixture = try Fixture()
         defer { fixture.shutdown() }
 
@@ -224,10 +226,12 @@ struct SearchUpgradeProgressEventTests {
     func reTriggerIsSingleFlight() async throws {
         // Claim the cross-suite embedder seam BEFORE installing — the
         // embedder is a process global shared with other suites.
-        await EmbedderSeamGate.shared.acquire()
-        defer { Task { await EmbedderSeamGate.shared.release() } }
+        let seam = await EmbedderSeamGate.shared.acquire()
         EmbeddingService.installTestEmbedder(KeywordEmbedder())
-        defer { EmbeddingService.resetTestEmbedder() }
+        defer {
+            EmbeddingService.resetTestEmbedder()
+            Task { await EmbedderSeamGate.shared.release(seam) }
+        }
         let fixture = try Fixture()
         defer { fixture.shutdown() }
 
@@ -251,9 +255,9 @@ struct SearchUpgradeProgressEventTests {
         // no model (standard suites run model-less). CLAIM the seam while
         // asserting the absence: a parallel suite installing its own
         // embedder mid-test would otherwise flip this run's outcome.
-        await EmbedderSeamGate.shared.acquire()
-        defer { Task { await EmbedderSeamGate.shared.release() } }
+        let seam = await EmbedderSeamGate.shared.acquire()
         EmbeddingService.resetTestEmbedder()
+        defer { Task { await EmbedderSeamGate.shared.release(seam) } }
         let fixture = try Fixture()
         defer { fixture.shutdown() }
 
@@ -270,10 +274,12 @@ struct SearchUpgradeProgressEventTests {
     func nothingMissingIsTypedNoOp() async throws {
         // Claim the cross-suite embedder seam BEFORE installing — the
         // embedder is a process global shared with other suites.
-        await EmbedderSeamGate.shared.acquire()
-        defer { Task { await EmbedderSeamGate.shared.release() } }
+        let seam = await EmbedderSeamGate.shared.acquire()
         EmbeddingService.installTestEmbedder(KeywordEmbedder())
-        defer { EmbeddingService.resetTestEmbedder() }
+        defer {
+            EmbeddingService.resetTestEmbedder()
+            Task { await EmbedderSeamGate.shared.release(seam) }
+        }
         let fixture = try Fixture()
         defer { fixture.shutdown() }
 

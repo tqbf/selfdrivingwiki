@@ -358,7 +358,36 @@ Shrinking record of the freedom-guard waiver lists (initial P0 lists live in
 the test files):
 
 - P0: app 8 waiver entries, File Provider 1, CLI 0.
-- (later phases append "removed X at Pn" lines here)
+- Removed 2 app entries at P3 (store cutover: `StorePlugin`'s local
+  `GRDBWikiStore(databaseURL:)` open + the registry client's DB creation).
+- Removed 3 app entries at P4 (queue assembly: `QueueStore(` in
+  `QueueRuntimeFactory`/controller + the app providers' queue seams).
+- Removed 3 app entries at P5 (read pool: `WikiReadService(` pool +
+  constructor; index build: `TantivyIndexer(` assembly).
+- Removed 1 File Provider entry at P6 (`GRDBWikiStore(readOnlyURL:)` × 2 in
+  `Projection.swift` — the projection reads the daemon's `projection` family
+  over the domain socket).
+- P7: app list EMPTY, File Provider list EMPTY, CLI list empty since day one.
+  `wikictl-fixture` remains the sole documented carve-out (build-only).
+
+## P7 verification record
+
+- Freedom guards: all three suites pass with empty waiver lists; the boundary
+  harness (`ClientLocalOpenBoundaryTests`) asserts zero client-side store,
+  read-pool, queue, provider, and index-build opens with the daemon up and
+  down.
+- Golden master: `GoldenMasterStoreStateTests` green against the committed
+  P0 baseline artifact (state + event sequence) on the post-P6 build.
+- Performance budget (`SESSION_OPEN_BENCHMARK=1`, same machine class as the
+  P0 baseline, 2026-11-17): session open cold median 4.1 ms (baseline
+  4.3 ms), page open median 0.0 ms (baseline 0.2 ms), sidebar search median
+  0.0 ms (baseline ~0 ms), queue round trip median 0.1 ms (baseline
+  0.2 ms). All four at or under baseline — within the ≤ 1.25× budget.
+- Docs: `PLAN.md` index entry, superseded markers in
+  `plans/multi-wiki-daemon.md` (sole-writer) and
+  `plans/cordis-swift-components.md` §15 (queue handoff machine) — pinned by
+  `DocumentationIndexContractTests`; per-phase notes in `progress/`.
+
 
 ## Workload entry-point inventory (P4.3 prerequisite)
 

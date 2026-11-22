@@ -124,10 +124,12 @@ struct DaemonFusedSearchTests {
     func fusedOrderingPutsBothLegsFirst() async throws {
         // Claim the cross-suite embedder seam BEFORE installing — the
         // embedder is a process global shared with other suites.
-        await EmbedderSeamGate.shared.acquire()
-        defer { Task { await EmbedderSeamGate.shared.release() } }
+        let seam = await EmbedderSeamGate.shared.acquire()
         EmbeddingService.installTestEmbedder(KeywordEmbedder())
-        defer { EmbeddingService.resetTestEmbedder() }
+        defer {
+            EmbeddingService.resetTestEmbedder()
+            Task { await EmbedderSeamGate.shared.release(seam) }
+        }
         let fixture = try Fixture(wikiName: "Fused Ordering")
         defer { fixture.shutdown() }
 
@@ -173,10 +175,12 @@ struct DaemonFusedSearchTests {
     func committedPageAppearsInNextQuery() async throws {
         // Claim the cross-suite embedder seam BEFORE installing — the
         // embedder is a process global shared with other suites.
-        await EmbedderSeamGate.shared.acquire()
-        defer { Task { await EmbedderSeamGate.shared.release() } }
+        let seam = await EmbedderSeamGate.shared.acquire()
         EmbeddingService.installTestEmbedder(KeywordEmbedder())
-        defer { EmbeddingService.resetTestEmbedder() }
+        defer {
+            EmbeddingService.resetTestEmbedder()
+            Task { await EmbedderSeamGate.shared.release(seam) }
+        }
         let fixture = try Fixture(wikiName: "Fused Freshness")
         defer { fixture.shutdown() }
 
@@ -200,10 +204,18 @@ struct DaemonFusedSearchTests {
 
     @Test("failure propagation: embedder unavailable degrades to the BM25 leg alone, never an error")
     func embedderFailureDegradesToLexicalOnly() async throws {
+        // Claim the cross-suite embedder seam for the WHOLE test — including
+        // the mid-test reset below. This test deliberately flips the
+        // process-global embedder (installed → removed); ungated, that flip
+        // nils (or stomps) whatever embedder a parallel gated suite has
+        // installed, silently emptying its cosine leg. Holding the claim
+        // keeps the flip private to this test.
+        let seam = await EmbedderSeamGate.shared.acquire()
         EmbeddingService.installTestEmbedder(KeywordEmbedder())
         let fixture = try Fixture(wikiName: "Fused Degradation")
         defer {
             EmbeddingService.resetTestEmbedder()
+            Task { await EmbedderSeamGate.shared.release(seam) }
             fixture.shutdown()
         }
 
@@ -229,10 +241,12 @@ struct DaemonFusedSearchTests {
     func chatsAndSourcesFuseDaemonSide() async throws {
         // Claim the cross-suite embedder seam BEFORE installing — the
         // embedder is a process global shared with other suites.
-        await EmbedderSeamGate.shared.acquire()
-        defer { Task { await EmbedderSeamGate.shared.release() } }
+        let seam = await EmbedderSeamGate.shared.acquire()
         EmbeddingService.installTestEmbedder(KeywordEmbedder())
-        defer { EmbeddingService.resetTestEmbedder() }
+        defer {
+            EmbeddingService.resetTestEmbedder()
+            Task { await EmbedderSeamGate.shared.release(seam) }
+        }
         let fixture = try Fixture(wikiName: "Fused Chats Sources")
         defer { fixture.shutdown() }
 
