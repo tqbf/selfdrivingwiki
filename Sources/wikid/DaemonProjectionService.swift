@@ -73,13 +73,15 @@ final class DaemonProjectionService: @unchecked Sendable {
         }
 
         // Chunked download infrastructure: daemon-scoped handle-table reads,
-        // no store resolution (the handle already holds the bytes).
+        // no store resolution (the handle already holds the bytes). Chunk
+        // replies are served INLINE through `chunkedDownloadReply` — see its
+        // comment for why the ordinary inline budget must not apply here.
         if operation == .payloadRead {
             do {
                 let read = try Self.decodePayload(
                     DaemonPayloadReadRequest.self, request.payload)
                 let reply = try staging.read(read)
-                return successReply(
+                return try chunkedDownloadReply(
                     domainRequest, request,
                     try JSONEncoder().encode(reply))
             } catch {
@@ -389,6 +391,38 @@ final class DaemonProjectionService: @unchecked Sendable {
             family: .projection,
             operation: request.operation,
             payload: payload)
+    }
+
+    /// Serve one `payloadRead` chunk reply INLINE. Chunk replies are bounded
+    /// by ``DaemonStoreLimits/maxChunkBytes`` raw bytes — the same chunk
+    /// sizing the STORE family proves fits the shared 4 MiB frame cap after
+    /// the envelope layers — so they must NOT go through ``successReply``'s
+    /// conservative ``DaemonProjectionFrameSafety/maxInlineResultBytes``
+    /// promotion: that budget (256 KiB) is SMALLER than a full-size chunk,
+    /// so every chunk reply would be re-stashed as a NEW oversized handle of
+    /// the same size, and the client's download would recurse on oversized
+    /// handles until its operation deadline. The final framed size is
+    /// verified against the transport cap explicitly; a violation is a loud
+    /// typed error, never a re-stash.
+    private func chunkedDownloadReply(
+        _ domainRequest: DaemonDomainRequest,
+        _ request: DaemonProjectionRequest,
+        _ encodedChunkReply: Data
+    ) throws -> DaemonDomainReply {
+        let payload = try DaemonProjectionWire.encode(
+            DaemonProjectionReply(result: encodedChunkReply))
+        let domainReply = DaemonDomainReply.success(
+            requestID: domainRequest.requestID,
+            family: .projection,
+            operation: request.operation,
+            payload: payload)
+        let framed = try DaemonDomainWire.encode(domainReply)
+        guard framed.count <= Int(SearchSocketWire.maxFrameSize) else {
+            throw DaemonStoreError.unexpected(
+                "payloadRead chunk reply exceeds the frame cap: "
+                    + "\(framed.count) bytes")
+        }
+        return domainReply
     }
 
     /// A typed store-level rejection INSIDE the projection reply envelope.

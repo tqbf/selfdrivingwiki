@@ -61,7 +61,7 @@ model.processed-markdown-alternatives	surface	Sources/WikiFSCore/Store/WikiStore
 cli.source-command.cat-markdown-head	surface	Sources/WikiCtlCore/SourceCommand.swift	if markdown, let head = try await store.processedMarkdownHead(sourceID: id) {
 cli.source-command.export-markdown-head	surface	Sources/WikiCtlCore/SourceCommand.swift	if markdown, let head = try await store.processedMarkdownHead(sourceID: id) {
 file-provider.projection.cached-heads-by-source	surface	Sources/WikiFSFileProvider/Projection.swift	let heads = (DebugLog.trying("processedMarkdownHeads", operation: { try openReadStore()?.processedMarkdownHeadsBySource() })) ?? [:]
-file-provider.projection.make-link-maps-heads-by-source	surface	Sources/WikiFSFileProvider/Projection.swift	let heads = (DebugLog.trying("processedMarkdownHeads", operation: { try store?.processedMarkdownHeadsBySource() })) ?? [:]
+file-provider.projection.make-link-maps-heads-by-source	surface	Sources/WikiFSFileProvider/Projection.swift	let heads = cachedHeadsBySource()
 wikid.daemon-ingestion-provider.processed-markdown-head	surface	Sources/wikid/DaemonQueueIngestionProvider.swift	let head = DebugLog.trying("processedMarkdownHead", operation: { try store.processedMarkdownHead(sourceID: source.id) })
 extraction-compare.left-id	typed	Sources/WikiFS/Sources/ExtractionCompareSheet.swift	@State private var leftID: SourceMarkdownVersionID?
 extraction-compare.right-id	typed	Sources/WikiFS/Sources/ExtractionCompareSheet.swift	@State private var rightID: SourceMarkdownVersionID?
