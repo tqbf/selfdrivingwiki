@@ -62,6 +62,26 @@ as `a1aefb98`).
   as an oversized handle and the client download loop recursed to its
   10 s deadline. Chunks now return inline against the 4 MiB frame cap;
   the 5 MiB fetch returns exact bytes in ~0.2 s.
+- **Tamper incident, investigated and reverted.** Two files this session
+  did not author were found modified with deliberate tamper markers
+  during a full-suite run: `// tampered` appended twice to
+  `ExtractorPackages/Defuddle/bin/defuddle-extractor.js`, and
+  `disabled: true` (a honored Cordis key — it would silently unmount
+  renderer services) added to the `renderer-services` entry in
+  `bundles/wikifs-app/cordis.patch.yml`. No in-repo mechanism writes
+  those bytes: the only test producing that exact payload writes into a
+  UUID-named temp copy, the mutation tool runs in a reduced sandbox
+  copy, and no script writes the patch file. The reviewed-package
+  digest guard rejected the tampered bundle exactly as designed
+  (fail-closed). Both files were restored to committed bytes after the
+  exact diff was preserved at `tmp/tamper-evidence-2026-11-22.patch`
+  (gitignored — reapply from it if the experiment matters). Follow-ups
+  recorded for the operator: (1) the digest guard's post-install leg —
+  whether durable-catalog installed bytes are re-hashed at execution
+  time — is unverified; (2) the PR's newest suites run only on
+  developer machines (plain `make test` excludes `WikiFSAppTests`; CI
+  runs three targeted opt-in suites, none of them the projection
+  suites).
 
 ## Verification
 
@@ -78,5 +98,12 @@ as `a1aefb98`).
   fixture (`ProjectionTreeTests|EnumeratorStoreFailureTests|
   EnumeratorDeletionTests|ZeroByteSourceProjectionTests|
   FileProviderReimportCreateTests|WikiStrategyProjectionTests`): 93/93.
+- Final adversarial review pass (same-family, zai GLM — independent
+  codex follow-up dispatched; see the PR description's review-diversity
+  record) verdict findings remediated: the user-facing troubleshooting
+  guide rewritten around the real #887 daemon posture (bundled XPC
+  service, no launchctl), two stale daemon-lifecycle comments corrected,
+  the P7 record's AC.1 reading and manual perf-gate status made
+  explicit.
 - Per-phase progress notes: P1, P3, P4, P5 (in-repo); P2, P6 recorded
   in their commit messages.

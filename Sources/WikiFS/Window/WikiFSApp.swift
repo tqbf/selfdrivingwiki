@@ -1347,10 +1347,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationTask: Task<Void, Never>?
 
     /// Called on the terminate path to (optionally) stop the wikid daemon.
-    /// The daemon now survives app quit (launchd-managed LaunchAgent), so
-    /// this is a no-op — but the hook stays so the terminate flow doesn't
-    /// need to know about the daemon's lifecycle model. Wired in
-    /// `startStatusItem()`.
+    /// The daemon is a bundled XPC service the system starts on demand and
+    /// stops after idle, so quitting the app ends it naturally — this is a
+    /// no-op. The hook stays so the terminate flow doesn't need to know
+    /// about the daemon's lifecycle model. Wired in `startStatusItem()`.
     var unregisterDaemon: (() -> Void)?
 
     /// Called from `applicationShouldHandleReopen` (Dock click) to restore a

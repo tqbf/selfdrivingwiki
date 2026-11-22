@@ -382,7 +382,10 @@ the test files):
 - Freedom guards: the app target (`Sources/WikiFS`) is clean and the File
   Provider list is empty; three documented permanent tier-shared entries
   remain in the app-reachable WikiFSEngine composition files (daemon/CLI/
-  test `.local` compositions). The boundary harness
+  test `.local` compositions). AC.1's "empty waiver lists" therefore reads
+  as: empty for every CLIENT target (app, File Provider, CLI) — the
+  engine-composition carve-out is recorded here and pinned by exact-count
+  waivers, not silently absorbed. The boundary harness
   (`ClientLocalOpenBoundaryTests`) asserts zero client-side store,
   read-pool, queue, provider, and index-build opens with the daemon up and
   down — the runtime proof behind the source-level claim.
@@ -393,6 +396,8 @@ the test files):
   4.3 ms), page open median 0.0 ms (baseline 0.2 ms), sidebar search median
   0.0 ms (baseline ~0 ms), queue round trip median 0.1 ms (baseline
   0.2 ms). All four at or under baseline — within the ≤ 1.25× budget.
+  This suite is a MANUAL gate by design (opt-in, results recorded here);
+  no in-tree assertion fails on a future regression.
 - Docs: `PLAN.md` index entry, superseded markers in
   `plans/multi-wiki-daemon.md` (sole-writer) and
   `plans/cordis-swift-components.md` §15 (queue handoff machine) — pinned by

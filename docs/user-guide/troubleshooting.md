@@ -4,20 +4,19 @@ The `wikid` daemon owns all wiki data. The app, the `wikictl` command, and the
 Finder projection are clients. They read and write through the daemon. This
 page shows what happens when the daemon stops, and how to restore it.
 
-## What the daemon owns
+## How the daemon runs
 
-The daemon owns the wiki database, the queue database, the search index, and
-all workload execution: extraction, ingestion, chat turns, and index builds.
-No client opens a wiki file. This design has one writer, so the data stays
-consistent across the app, the CLI, and Finder.
+The daemon is an XPC service inside the app bundle
+(`Contents/XPCServices/wikid.xpc`). macOS launches it at the first connection
+and stops it after an idle period. It runs only while the app needs it. It
+does not survive quitting the app; the next launch of the app brings it back.
+There is no launchd agent and no `launchctl` job to manage.
 
 ## When the daemon is unavailable
 
-The daemon runs as a launchd agent. It starts on demand and exits after five
-idle minutes. A restart on your Mac also brings it back at the next connection.
-You rarely see an unavailable state. You see it when the daemon crashes twice
-in a row, when a build replaces the binary under it, or when you stop it on
-purpose.
+You rarely see an unavailable state, because macOS starts the service on
+demand. You see it when the daemon crashes twice in a row, when a build
+replaces the binary under the running service, or when you stop it on purpose.
 
 When the daemon is unavailable:
 
@@ -27,50 +26,48 @@ When the daemon is unavailable:
   back to in-app execution.
 - The Finder projection stops serving files. Finder shows the standard
   unavailable state for the extension.
+- `wikictl` commands fail fast with an explicit error while the daemon is
+  down.
 
 There is no local fallback and no read-only local mode. This is deliberate:
 a fallback would create a second writer and risk split data. Your data is
 safe on disk. Clients pick up where they left off when the daemon returns.
 
 On recovery, the app reconnects, compares change tokens, and reloads any
-changes it missed. You do not need to redo writes that failed; do them again
-after the banner clears.
+changes it missed. Writes that failed while the daemon was down were not
+queued. Do them again after the banner clears.
 
-## Restart the daemon
+## Restore the daemon
 
 Condition: the app shows the reconnecting banner, or the Finder projection is
 unavailable.
 
-1. Wait one minute. Most cases recover on their own, because launchd restarts
-   the daemon at the next connection.
-2. Check the daemon state:
+1. Quit the app and open it again. The first connection relaunches the
+   daemon. This fixes most cases.
+2. Check the menu-bar status item. Its tooltip reports the daemon state and
+   per-lane facts, so you can see whether the app holds a live connection.
+3. If the banner persists after a relaunch, a stale daemon process may be
+   wedged. Stop it, then relaunch the app:
 
    ```sh
-   launchctl print gui/$(id -u)/com.selfdrivingwiki.wikid | head -5
+   killall wikid
    ```
 
-3. Force a restart if the state shows a crash loop:
+   macOS starts a clean daemon at the app's next connection.
 
-   ```sh
-   launchctl kickstart -k gui/$(id -u)/com.selfdrivingwiki.wikid
-   ```
-
-4. Confirm recovery: the banner clears, and the activity window shows lanes
-   again.
-
-If the daemon stays down after a restart, rebuild and relaunch the app. The
-build installs the current daemon binary with the LaunchAgent plist.
+4. If the daemon still fails to come up, rebuild and relaunch the app. The
+   build installs the current daemon binary inside the app bundle.
 
 ## Stop the daemon on purpose (operator check)
 
 Use this check to see the degraded states before you rely on them. The
-daemon comes back at the next connection, so this check is safe.
+system relaunches the daemon at the next connection, so this check is safe.
 
 1. Note the page you have open in the app.
 2. Stop the daemon:
 
    ```sh
-   launchctl kill SIGTERM gui/$(id -u)/com.selfdrivingwiki.wikid
+   killall wikid
    ```
 
 3. Edit a page in the app. The write fails with an explicit error, and the
@@ -78,13 +75,17 @@ daemon comes back at the next connection, so this check is safe.
 4. Open the queue activity window. It shows the unavailable state.
 5. Open a Finder window on the projected wiki folder. Finder shows the
    unavailable state.
-6. Bring the daemon back:
+6. Run any `wikictl` command. It fails fast with an explicit error.
+7. Bring the daemon back: interact with the app (open a page), or run
 
    ```sh
-   launchctl kickstart -k gui/$(id -u)/com.selfdrivingwiki.wikid
+   killall wikid
    ```
 
-7. Confirm recovery: the banner clears, the edit works again, and a change
+   first if the dead process blocks a fresh launch. The next connection
+   starts a clean daemon.
+
+8. Confirm recovery: the banner clears, the edit works again, and a change
    made by `wikictl` while the app was disconnected appears in the app
    without a restart.
 
