@@ -68,7 +68,7 @@ final class DelayedStoreGate: @unchecked Sendable {
     ///   cancellation handler,
     /// - `open()` resumes through its own removal path; the lock guarantees
     ///   each waiter's continuation resumes at most once.
-    func wait(timeout: Duration = .seconds(5)) async throws {
+    func wait(timeout: Duration = delayedStoreHarnessPatience) async throws {
         let waiterID: Int? = {
             lock.lock()
             defer { lock.unlock() }
@@ -256,7 +256,7 @@ final class TestStoreController: @unchecked Sendable {
     /// Poll until `entryCount(key) >= minimum` (absolute count), raced against
     /// a timeout so a model task that never reaches the seam fails fast with
     /// context.
-    func waitForEntry(_ key: String, minimum: Int = 1, timeout: Duration = .seconds(5)) async throws {
+    func waitForEntry(_ key: String, minimum: Int = 1, timeout: Duration = delayedStoreHarnessPatience) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 while self.entryCount(key) < minimum {
@@ -272,6 +272,13 @@ final class TestStoreController: @unchecked Sendable {
         }
     }
 }
+
+/// Integration patience for the delayed-store harness. CI's 3-vCPU runner
+/// has starved continuation resumption ~40x a gate window, so the harness's
+/// seam-wait budgets derive from this one constant instead of scattered
+/// 5 s defaults. A genuine hang still fails fast relative to the
+/// choreography suite's 5-minute time limit.
+private let delayedStoreHarnessPatience: Duration = .seconds(30)
 
 /// Generated delaying proxy. `@unchecked Sendable`: the three mutable
 /// protocol properties are NSLock-guarded backing fields; `inner`, the
