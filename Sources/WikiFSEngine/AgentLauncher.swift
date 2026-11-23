@@ -2112,9 +2112,14 @@ public final class AgentLauncher {
         // unexpected throw from a future adding await between phases), ensure the
         // generation gate + agent-run lifecycle are released. finish() is
         // idempotent (guards isRunning), so this is a no-op when finish() was
-        // already called.
+        // already called. An async call cannot appear directly in a defer
+        // body (Swift 6.3 rejects it), so the check schedules the finish on
+        // the main actor; the deferred path only fires when finish() has not
+        // run, and the task retains self until it does.
         defer {
-            if isRunning { await finish(status: -1) }
+            if isRunning {
+                Task { await self.finish(status: -1) }
+            }
         }
 
         startCompletionWatchdog()
