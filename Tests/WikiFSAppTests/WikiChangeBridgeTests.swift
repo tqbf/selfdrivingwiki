@@ -51,6 +51,23 @@ struct WikiChangeBridgeTests {
             queueEngine: queueEngine)
     }
 
+    /// Bounded condition wait for async poke/reload effects (bus emit →
+    /// model reload → summaries rebuild). A fixed sleep assumed the whole
+    /// async chain lands in one tick; CI's 3-vCPU runner starved that wave
+    /// past 50 ms. Polls until the condition holds or the deadline passes.
+    /// Same shape as the poll loops already used in this file's receipt tests.
+    private func waitUntil(
+        timeout: Duration = .seconds(8),
+        _ condition: @MainActor () -> Bool
+    ) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while condition() == false {
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return true
+    }
+
     /// Write a second wiki's descriptor to the registry FILE on disk, bypassing
     /// this client's `wikis` property — exactly what `wikictl wiki create` and the
     /// daemon do, and the situation #1374 is about.
@@ -63,15 +80,26 @@ struct WikiChangeBridgeTests {
     }
 
     /// When the changed wiki matches an active session, the bridge pokes the
-    /// session's bus so the on-screen model reloads. We verify by checking that
-    /// the session's store received a `ResourceChangeEvent` — i.e. the store's
-    /// `summaries` get rebuilt (a side effect of the bus subscription's
-    /// reload path).
+    /// session's bus so the on-screen model reloads. We verify the poke by
+    /// probing the session's bus for a delivered `ResourceChangeEvent` —
+    /// the poke IS that event. (An earlier revision inferred the poke from
+    /// `summaries` rebuilding, which cannot distinguish a poke from the
+    /// initial bootstrap.)
     @Test func testFlushPokesSessionBusForMatchingWiki() async throws {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let descriptor = registry.wikis.first!
         let session = try makeSession(wikiID: descriptor.id, descriptor: descriptor, dir: dir)
+
+        // Plan P1.3: construction performs no store work — the session
+        // loader awaits `bootstrapFromStore()` before the UI sees the model.
+        // Mirror that here so the model is bus-subscribed and booted.
+        await session.store.bootstrapFromStore()
+
+        var pokedEvents = 0
+        let probe = session.store.eventBus?.subscribe(nil) { _ in
+            pokedEvents += 1
+        }
 
         let fileProvider = FileProviderFacade()
         let bridge = WikiChangeBridge(registry: registry, fileProvider: fileProvider)
@@ -81,17 +109,18 @@ struct WikiChangeBridgeTests {
         }
         bridge.start()
 
-        // Flush for the active wiki's id. The bus should receive a
-        // ResourceChangeEvent, which triggers the model's reload subscription.
+        // Flush for the active wiki's id. The poke lands as a
+        // ResourceChangeEvent on the session's bus; wait out the async emit
+        // instead of assuming a fixed tick (CI starvation measured the wave
+        // at ~6 s).
         bridge.flush(wikiID: descriptor.id)
 
-        // Give the async FP signal + bus emit a tick to land.
-        try? await Task.sleep(for: .milliseconds(50))
+        let delivered = await waitUntil { pokedEvents > 0 }
+        #expect(
+            delivered,
+            "the flush poke must deliver a ResourceChangeEvent to the session's bus")
 
-        // The flush emitted via the bus — the store's subscription rebuilds
-        // summaries. If the bus was NOT poked, summaries would still be
-        // populated from init, so this is a non-crash + presence check.
-        #expect(!session.store.summaries.isEmpty)
+        if let probe { session.store.eventBus?.unsubscribe(probe) }
     }
 
     /// Two sessions with the SAME wiki ID both get poked by flush (multi-window:
@@ -122,11 +151,9 @@ struct WikiChangeBridgeTests {
 
         bridge.flush(wikiID: descriptor.id)
 
-        // Give the async FP signal + bus emit a tick to land.
-        try? await Task.sleep(for: .milliseconds(50))
-
         // Both sessions' wikiIDs were returned by the lookup → both poked.
-        #expect(pokedSessions.count == 2)
+        let bothPoked = await waitUntil { pokedSessions.count == 2 }
+        #expect(bothPoked, "flush must poke every session the lookup returns")
     }
 
     /// The chat-tool-call hint (`noteSuspectedExternalWrite`) flows through the
@@ -190,11 +217,9 @@ struct WikiChangeBridgeTests {
         // Flush for wiki A — only session A should be poked.
         bridge.flush(wikiID: descriptorA.id)
 
-        // Give the async bus emit a tick to land.
-        try? await Task.sleep(for: .milliseconds(50))
-
         // Only sessionA was poked, not sessionB.
-        #expect(pokedWikiIDs == [descriptorA.id])
+        let pokedA = await waitUntil { pokedWikiIDs == [descriptorA.id] }
+        #expect(pokedA, "flush for wiki A must poke session A only")
     }
 
     /// The bridge always signals the File Provider, even for a wiki with no
