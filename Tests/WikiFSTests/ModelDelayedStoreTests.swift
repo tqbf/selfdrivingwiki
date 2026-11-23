@@ -330,11 +330,26 @@ struct ModelDelayedStoreTests {
 @Suite(.serialized, .timeLimit(.minutes(2)))
 struct DelayedStoreGateContractTests {
 
+    /// Integration patience: the largest scheduler slop a bounded operation
+    /// may consume before this suite calls it hung. CI's 3-vCPU runner has
+    /// starved continuation resumption ~40x the gate window (a 150 ms gate
+    /// surfaced at 6.1 s), so every budget in this suite derives from this
+    /// one constant instead of scattered magic seconds. Gate-internal
+    /// timeouts are the CONTRACT under test and are NOT scaled by this.
+    private static let integrationPatience: Duration = .seconds(30)
+
+    /// The watchdog fires strictly outside the patience ceiling, so a slow
+    /// scheduler can never misfire it before the assertion does; it exists
+    /// to turn a genuine hang into a fast diagnosed failure (repo rule
+    /// #664/#1051). The suite's `.timeLimit(.minutes(2))` stays the outer
+    /// wall.
+    private static let hangWatchdog: Duration = .seconds(40)
+
     /// Run `body` inside a task group next to a watchdog child that throws
     /// well after any legitimate completion, so a hung/deadlocked wait fails
     /// fast with a diagnosed error instead of hanging `swift test`.
     private func withWatchdog<T: Sendable>(
-        watchdogFor: Duration = .seconds(5),
+        watchdogFor: Duration = Self.hangWatchdog,
         _ body: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
@@ -367,7 +382,9 @@ struct DelayedStoreGateContractTests {
             // Any other error propagates and fails the test.
         }
         let elapsed = ContinuousClock.now - started
-        #expect(elapsed < .seconds(4), "the gate timeout must surface promptly, took \(elapsed)")
+        #expect(
+            elapsed < Self.integrationPatience,
+            "the gate timeout must surface within the integration-patience budget, took \(elapsed)")
     }
 
     /// External cancellation of a parked `wait()` must abort+resume the
@@ -432,7 +449,7 @@ struct DelayedStoreGateContractTests {
         for delayMs in [10, 30, 50, 70, 90, 99] {
             let gate = DelayedStoreGate(name: "race-h7-\(delayMs)")
             do {
-                try await withWatchdog(watchdogFor: .seconds(3)) {
+                try await withWatchdog(watchdogFor: Self.hangWatchdog) {
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         group.addTask {
                             do {
@@ -478,7 +495,7 @@ struct DelayedStoreGateContractTests {
         // deterministic under parallel-suite load.
         let openDelay = Duration.milliseconds(150)
         let gate = DelayedStoreGate(name: "open-after-timeout-h7")
-        let timedOut = try await withWatchdog(watchdogFor: .seconds(3)) {
+        let timedOut = try await withWatchdog(watchdogFor: Self.hangWatchdog) {
             () -> Bool in
             try await withThrowingTaskGroup(of: Bool?.self) { group in
                 group.addTask {
@@ -506,7 +523,7 @@ struct DelayedStoreGateContractTests {
         // (no crash, no double resume); a fresh wait() then passes straight
         // through the opened latch, proving the gate still works.
         gate.open()
-        try await withWatchdog(watchdogFor: .seconds(2)) {
+        try await withWatchdog(watchdogFor: Self.hangWatchdog) {
             try await gate.wait(timeout: .seconds(1))
         }
     }
