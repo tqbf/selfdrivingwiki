@@ -274,7 +274,9 @@ struct WikiAppWebViewTests {
             encoding: .utf8)
 
         #expect(source.contains("guard headVersion != nil else"))
-        #expect(source.contains("onRendererActivation: headVersion == nil ? nil : activateRendererPane(reference:input:)"))
+        // The activation closure stays nil without document identity (typed,
+        // inert); the handler factory is built only when a head exists.
+        #expect(source.contains("onRendererActivation: headVersion == nil ? nil : makeRendererActivationHandler()"))
     }
 
     @Test("page detail accepts an injected renderer sink and preserves the nil default")
@@ -328,6 +330,13 @@ struct WikiAppWebViewTests {
         model.openTab(.page(page.id))
 
         let head = try #require(try store.pageHeadVersionID(pageID: page.id))
+        // openTab's page load is async (P1 generation-checked loads); wait
+        // for the head identity to land instead of racing the scheduler.
+        let deadline = ContinuousClock.now + .seconds(8)
+        while model.loadedPageHeadVersionID(for: page.id) == nil,
+              ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
         #expect(model.loadedPageHeadVersionID(for: page.id) == head)
         #expect(model.loadedPageHeadVersionID(for: PageID(rawValue: "01JVERSIONMISSING000000000")) == nil)
     }
