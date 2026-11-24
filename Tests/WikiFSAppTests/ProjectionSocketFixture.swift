@@ -60,7 +60,11 @@ final class ProjectionSocketFixture: @unchecked Sendable {
         try server.start()
         let client = DaemonProjectionClient(
             wikiID: descriptor.id,
-            containerDirectory: { container })
+            containerDirectory: { container },
+            // CI's 3-vCPU runners boot the fixture daemon and open the wiki
+            // store well past the production 10 s budget on a cold run; the
+            // fixtures exercise projection semantics, not deadline timing.
+            operationTimeout: 60)
         return ProjectionSocketFixture(
             container: container, descriptor: descriptor, store: store,
             projection: Projection(wikiID: descriptor.id, source: client),

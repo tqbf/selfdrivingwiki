@@ -83,13 +83,20 @@ protocol ProjectionSource: Sendable {
 struct DaemonProjectionClient: ProjectionSource {
 
     /// Per-call deadlines. Short on purpose: an enumeration must fail
-    /// retryably, not hang the extension.
+    /// retryably, not hang the extension. Instances may override the
+    /// per-operation budget — the socket fixtures do, because CI's slow
+    /// runners can exceed the production budget while the fixture daemon
+    /// boots.
     enum Timeouts {
         static let operation: TimeInterval = 10
     }
 
     /// The wiki this client serves (the FP domain's ULID).
     let wikiID: WikiID
+
+    /// Per-operation deadline budget in seconds. Production default:
+    /// ``Timeouts/operation``.
+    let operationTimeout: TimeInterval
 
     /// Resolves the listening socket path at call time (the daemon may not
     /// be up when this client is constructed).
@@ -102,13 +109,15 @@ struct DaemonProjectionClient: ProjectionSource {
     init(
         wikiID: WikiID,
         containerDirectory: @escaping @Sendable () throws -> URL,
-        operationCounter: (@Sendable (String) -> Void)? = nil
+        operationCounter: (@Sendable (String) -> Void)? = nil,
+        operationTimeout: TimeInterval = Timeouts.operation
     ) {
         self.wikiID = wikiID
         self.socketPath = {
             try SearchSocketWire.socketPath(inContainerDirectory: try containerDirectory())
         }
         self.operationCounter = operationCounter
+        self.operationTimeout = operationTimeout
     }
 
     // MARK: Wire plumbing
@@ -132,7 +141,8 @@ struct DaemonProjectionClient: ProjectionSource {
             operation: operation.rawValue,
             payload: try envelope(operation: operation, wikiID: wikiID, payload: payload))
         do {
-            let envelopeData = try await Self.roundTrip(path: path, request: request)
+            let envelopeData = try await Self.roundTrip(
+                path: path, request: request, timeout: operationTimeout)
             let reply = try DaemonDomainWire.decodeReply(envelopeData)
             if let domainError = reply.error {
                 throw domainError
@@ -179,9 +189,9 @@ struct DaemonProjectionClient: ProjectionSource {
     /// detached bridge task's thread — the nonblocking I/O machinery parks
     /// only its own Dispatch-source queues.
     private static func roundTrip(
-        path: String, request: DaemonDomainRequest
+        path: String, request: DaemonDomainRequest, timeout: TimeInterval
     ) async throws -> Data {
-        let deadline = Date().addingTimeInterval(Timeouts.operation)
+        let deadline = Date().addingTimeInterval(timeout)
         let encoded = try DaemonDomainWire.encode(request)
         guard encoded.count <= Int(SearchSocketWire.maxFrameSize) else {
             throw WikiStoreError.open(
@@ -264,14 +274,14 @@ struct DaemonProjectionClient: ProjectionSource {
                 box.fulfill(.failure(error))
             }
         }
-        let deadline = Date().addingTimeInterval(Timeouts.operation)
+        let deadline = Date().addingTimeInterval(operationTimeout)
         while !box.isSettled, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.002)
         }
         guard box.isSettled else {
             throw WikiStoreError.open(
                 "projection operation exceeded its "
-                    + "\(Int(Timeouts.operation))s deadline")
+                    + "\(Int(operationTimeout))s deadline")
         }
         return try box.result()
     }
