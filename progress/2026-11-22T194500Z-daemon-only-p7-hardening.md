@@ -90,7 +90,13 @@ as `a1aefb98`).
   already — the container trust boundary is the control.
   (2) the PR's newest suites run only on developer machines (plain
   `make test` excludes `WikiFSAppTests`; CI runs three targeted opt-in
-  suites, none of them the projection suites); (3) the per-pass
+  suites, none of them the projection suites) — PARTIALLY RESOLVED: the
+  daemon store integration tier now runs on every push (its helper
+  crashes at teardown after passing, so the step is continue-on-error
+  with the result visible), and the File Provider projection suites
+  wedge at bundle startup on CI even using only suites that predate the
+  branch — both are the swiftpm-testing-helper wedge family needing a
+  root-cause pass; (3) the per-pass
   `ReadScope` source-byte cache has no byte budget — a single projection
   operation that materializes many large sources holds their aggregate
   verbatim bytes until the scope ends (bounded lifetime, but unbounded
