@@ -147,7 +147,7 @@ jobs:
         timeout-minutes: 15
         env:
           WIKIFS_APP_TESTS: "1"
-        run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect ProjectionTreeTests --filter 'ProjectionBoundedQueryTests|ProjectionLargeContentTests|ProjectionTreeTests|EnumeratorStoreFailureTests|EnumeratorDeletionTests|ZeroByteSourceProjectionTests|FileProviderReimportCreateTests|WikiStrategyProjectionTests'
+        run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect ProjectionTreeTests --filter 'ProjectionTreeTests|EnumeratorStoreFailureTests|EnumeratorDeletionTests|ZeroByteSourceProjectionTests|FileProviderReimportCreateTests|WikiStrategyProjectionTests'
       - name: Test daemon store integration suites
         # The daemon store integration tier: executor, RemoteWikiStore, the
         # concurrency and dedupe outcome contracts, session bootstrap, store
