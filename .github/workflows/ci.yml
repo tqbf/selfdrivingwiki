@@ -138,6 +138,18 @@ jobs:
         env:
           WIKIFS_APP_TESTS: "1"
         run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect 'configuration factory creates fresh ephemeral components' --filter 'RendererPackageSchemeHandlerTests|RendererContentWorldBridgeTests|RendererExternalLinkRedemptionGateTests|WikiAppWebViewSessionTests|WikiAppWebViewTests'
+      - name: Test daemon-only projection and store integration suites
+        # PR #1484's newest coverage otherwise runs only on developer
+        # machines: the File Provider socket-fixture suites (tree, deletion,
+        # store-failure, the bounded #291 query, chunked large-content fetch)
+        # and the daemon store integration tier (executor, RemoteWikiStore,
+        # concurrency and dedupe outcome contracts, session bootstrap, store
+        # events and the XPC sink — AC.2, AC.4, AC.10, AC.11). All are
+        # socket-fixture based; one worker matches the other opt-in steps.
+        timeout-minutes: 15
+        env:
+          WIKIFS_APP_TESTS: "1"
+        run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect ProjectionTreeTests --filter 'ProjectionBoundedQueryTests|ProjectionLargeContentTests|ProjectionTreeTests|EnumeratorStoreFailureTests|EnumeratorDeletionTests|ZeroByteSourceProjectionTests|FileProviderReimportCreateTests|WikiStrategyProjectionTests|DaemonStoreCommandExecutorTests|RemoteWikiStoreTests|RemoteStoreConcurrencyTests|RemoteStoreDedupeTests|RemoteStoreSessionBootstrapTests|DaemonStoreEventTests|WikiDaemonEventSinkTests'
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.0'
