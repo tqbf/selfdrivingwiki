@@ -527,15 +527,22 @@ public enum AgentOperationRunner {
             let sourceLinks = (preflight?.brokenSourceLinks ?? []).map { "[[source:\($0)]]" }
             let chatLinks = (preflight?.brokenChatLinks ?? []).map { "[[chat:\($0)]]" }
             let allBroken = pageLinks + sourceLinks + chatLinks
-            return (title: page.title, brokenLinks: allBroken)
+            let findings = LintPagePreflight(
+                brokenLinks: allBroken,
+                rawExternalURLs: preflight?.rawExternalURLs ?? [],
+                malformedTables: preflight?.malformedTables ?? [])
+            return (title: page.title, findings: findings)
         }
         let combinedTitle = pages.map(\.title).joined(separator: ", ")
-        let combinedBroken = preflights.flatMap(\.brokenLinks)
+        let combinedFindings = LintPagePreflight(
+            brokenLinks: preflights.flatMap { $0.findings.brokenLinks },
+            rawExternalURLs: preflights.flatMap { $0.findings.rawExternalURLs },
+            malformedTables: preflights.flatMap { $0.findings.malformedTables })
         guard let stateMarkdown = stateMarkdownForRequest(store: store, launcher: launcher) else { return }
         await run(
             request: .lintPage(
                 pageTitle: combinedTitle,
-                brokenLinks: combinedBroken,
+                brokenLinks: combinedFindings,
                 stateMarkdown: stateMarkdown),
             launcher: launcher,
             store: store,

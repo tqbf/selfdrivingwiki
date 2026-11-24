@@ -44,8 +44,9 @@ public enum OperationRequest: Sendable {
   case lint(stateMarkdown: String)
 
   /// Lint a single page. `brokenLinks` comes from `WikiStoreModel.preflightLint`
-  /// (pre-computed before the LLM run so the agent has concrete targets).
-  case lintPage(pageTitle: String, brokenLinks: [String], stateMarkdown: String)
+  /// (pre-computed before the LLM run so the agent has concrete targets:
+  /// broken links plus the factual raw-URL / malformed-table scans, #1461).
+  case lintPage(pageTitle: String, brokenLinks: LintPagePreflight, stateMarkdown: String)
 
   /// Which generation lane this request runs on (Phase 2: lane-aware gate).
   /// Ingest-class operations (ingest, lint, lintPage) serialize on `.ingest`;
