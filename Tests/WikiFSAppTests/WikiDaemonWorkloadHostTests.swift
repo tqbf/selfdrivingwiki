@@ -55,6 +55,31 @@ struct WikiDaemonWorkloadHostTests {
         return try envelope.requirePayload()
     }
 
+    // MARK: - Daemon restart epoch identity
+
+    /// Regression (the menu-bar flicker): the queue host's initial ownership
+    /// epoch was the constant 1 on every daemon boot. An app left in
+    /// `daemonOwnershipUnresolved(expectedEpoch: 1)` by a daemon restart asked
+    /// the restarted daemon for its status, got epoch 1 again, and retried
+    /// admission forever at hot-loop speed — the transport state machine
+    /// cycled `disconnected → reconnecting → disconnected` tens of times a
+    /// second and the menu-bar icon flickered on and off. A restarted daemon
+    /// must present an epoch no prior instance served, so the app's
+    /// `status.epoch != expectedEpoch` resolution guard can actually pass.
+    @Test func restartedDaemonPresentsANewQueueOwnershipEpoch() async throws {
+        let first = WikiDaemon(containerDirectory: makeTempDir())
+        let second = WikiDaemon(containerDirectory: makeTempDir())
+
+        let firstStatus = await first.daemonQueueHost.status()
+        let secondStatus = await second.daemonQueueHost.status()
+
+        #expect(firstStatus.hostState == .serving)
+        #expect(secondStatus.hostState == .serving)
+        #expect(
+            firstStatus.epoch != secondStatus.epoch,
+            "a restarted daemon must present a queue ownership epoch the surviving app has never seen")
+    }
+
     // MARK: - Workload host scaffold
 
     @Test func daemonCanConstructQueueEngine() async throws {

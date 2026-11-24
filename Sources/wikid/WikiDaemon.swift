@@ -330,7 +330,12 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     private func makeDaemonQueueHost() -> DaemonQueueHost {
-        DaemonQueueHost { [weak self] in
+        // Claim from the daemon epoch counter so a restarted daemon's queue
+        // ownership epoch differs from the one a surviving app still expects
+        // — the constant-1 default left that resolution impossible (the app
+        // retried admission forever; see DaemonTransportAppCoordinator).
+        let initialEpoch = QueueOwnershipEpoch(rawValue: Self.epochCounter.claimNext())
+        return DaemonQueueHost(initialEpoch: initialEpoch) { [weak self] in
             guard let self else {
                 throw QueueRPCError(code: .unavailable, message: "Daemon queue host was released")
             }

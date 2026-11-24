@@ -3065,8 +3065,18 @@ private struct StoreBox: @unchecked Sendable {
 // swiftlint:disable:next unchecked_sendable
 final class DaemonEpochCounter: @unchecked Sendable {
 
+    /// Boot-unique base: wall-clock milliseconds at first touch. A daemon
+    /// restart therefore claims epochs no prior instance ever served. This
+    /// is the precondition for two contracts: a store mutation stamped by
+    /// another daemon can never collide with this daemon's epoch, and the
+    /// app's queue-ownership resolution (accept the restarted daemon only
+    /// when its epoch differs from the one the app still expects) can
+    /// actually resolve — the earlier constant-1 start left an app in the
+    /// unresolved state retrying admission forever.
+    private static let bootBase: UInt64 = UInt64(Date().timeIntervalSince1970 * 1000)
+
     private let lock = NSLock()
-    private var current: UInt64 = 0
+    private var current: UInt64 = DaemonEpochCounter.bootBase
 
     func claimNext() -> UInt64 {
         lock.lock()

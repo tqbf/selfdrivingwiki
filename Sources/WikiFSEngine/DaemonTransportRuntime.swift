@@ -234,7 +234,25 @@ public actor DaemonTransportRuntime {
         state = .retrying
         if publishDisconnect { publish(.disconnected(disconnectedID)) }
         publish(.reconnecting)
+        let cooldown = configuration.retryInterval
         admissionTask = Task { [weak self] in
+            // Re-entering after an explicit rejection or teardown publishes
+            // the full state cycle again; without a cooldown a fast-rejecting
+            // daemon (or a mismatch that never resolves) republished the
+            // cycle at hot-loop speed — the menu-bar icon flickered. The
+            // initial startAdmission path (publishDisconnect == false) keeps
+            // its immediate first attempt.
+            if publishDisconnect {
+                do {
+                    try await Task.sleep(for: cooldown)
+                } catch is CancellationError {
+                    // A newer admission attempt cancelled this cooldown to
+                    // replace it — expected during manual reconnects.
+                } catch {
+                    DebugLog.store(
+                        "Daemon transport admission cooldown interrupted: \(error)")
+                }
+            }
             await self?.runAdmissionLoop()
         }
     }
