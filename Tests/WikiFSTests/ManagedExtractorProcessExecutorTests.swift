@@ -159,6 +159,49 @@ struct ManagedExtractorProcessExecutorTests {
         }
     }
 
+    /// Regression (post-install execution integrity): the executor's
+    /// manifest-vs-revision check compares the on-disk manifest against the
+    /// prep-anchored revision, and the launch identity pin is stat-based
+    /// (inode, mode, size) — so an in-place, same-size edit to a declared
+    /// CODE file after admission changed nothing either check could see, and
+    /// the tampered bytes would have spawned. The execution-time
+    /// revalidation re-hashes the declared files against the manifest and
+    /// recomputes the package digest against the same prep-anchored
+    /// revision, so a post-admission content edit fails closed.
+    @Test func postInstallCodeTamperingIsRejectedAtExecution() async throws {
+        let subprocessGate = try await SubprocessGate.shared.acquire() // #1412 family
+        defer { subprocessGate.release() }
+        let fixture = try Fixture(mode: "success")
+        defer { fixture.cleanup() }
+
+        let entryURL = fixture.packageRoot.appendingPathComponent(
+            fixture.operation.manifest.entryPoint.rawValue)
+        // Flip one byte in place, then restore the original mode: same inode,
+        // mode, and size — the stat-based identity pin cannot see it. Only
+        // the content hash can.
+        let originalPermissions = try FileManager.default.attributesOfItem(
+            atPath: entryURL.path)[.posixPermissions] as? Int
+        var bytes = try Data(contentsOf: entryURL)
+        bytes[0] ^= 0x20
+        guard chmod(entryURL.path, 0o644) == 0 else {
+            throw POSIXError(.EPERM)
+        }
+        let file = try FileHandle(forUpdating: entryURL)
+        defer { try? file.close() }
+        try file.seek(toOffset: 0)
+        try file.write(contentsOf: bytes)
+        try file.truncate(atOffset: UInt64(bytes.count))
+        if let originalPermissions {
+            guard chmod(entryURL.path, mode_t(originalPermissions)) == 0 else {
+                throw POSIXError(.EPERM)
+            }
+        }
+
+        await #expect(throws: ManagedExtractorProcessError.revisionMismatch) {
+            _ = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+        }
+    }
+
     /// A runtime entry point is data for the runtime: a readable regular
     /// file needs no execute permission.
     ///
@@ -635,6 +678,10 @@ private final class BunFixture: @unchecked Sendable {
                 maximumMarkdownOutputByteCount: 16 * 1_024,
                 maximumDurationMilliseconds: 60_000,
                 maximumProgressEventCount: 8))
+        // Production installs ship manifest.json inside the package root;
+        // write it so the execution-time revalidation sees the same layout.
+        try JSONEncoder().encode(manifest).write(
+            to: packageRoot.appendingPathComponent("manifest.json"))
         let revision = ExtractorPackageRevisionID(
             packageID: manifest.packageID,
             version: manifest.version,
@@ -942,6 +989,10 @@ final class ManagedExtractorOperationFixture: @unchecked Sendable {
                 maximumMarkdownOutputByteCount: 16 * 1_024,
                 maximumDurationMilliseconds: maximumDurationMilliseconds,
                 maximumProgressEventCount: 8))
+        // Production installs ship manifest.json inside the package root;
+        // write it so the execution-time revalidation sees the same layout.
+        try JSONEncoder().encode(manifest).write(
+            to: packageRoot.appendingPathComponent("manifest.json"))
         let revision = ExtractorPackageRevisionID(
             packageID: manifest.packageID,
             version: manifest.version,

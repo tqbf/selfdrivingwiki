@@ -76,16 +76,25 @@ as `a1aefb98`).
   (fail-closed). Both files were restored to committed bytes after the
   exact diff was preserved at `tmp/tamper-evidence-2026-11-22.patch`
   (gitignored — reapply from it if the experiment matters). Follow-ups
-  recorded for the operator: (1) the digest guard's post-install leg —
-  whether durable-catalog installed bytes are re-hashed at execution
-  time — is unverified; (2) the PR's newest suites run only on
-  developer machines (plain `make test` excludes `WikiFSAppTests`; CI
-  runs three targeted opt-in suites, none of them the projection
-  suites); (3) the per-pass `ReadScope` source-byte cache has no byte
-  budget — a single projection operation that materializes many large
-  sources holds their aggregate verbatim bytes until the scope ends
-  (bounded lifetime, but unbounded peak); cap or evict if large-wiki
-  memory pressure shows.
+  from the tamper investigation and the two review passes:
+  (1) RESOLVED — the reviewed-package digest guard's post-install leg was
+  indeed unguarded: execution trusted whatever bytes sat in the durable
+  catalog. The managed-executor now re-runs the admission validator
+  against the on-disk package immediately before spawn and compares the
+  recomputed revision identity against the prep-anchored revision, so a
+  post-install edit to any declared file (the executable entry point
+  included) fails closed (`postInstallCodeTamperingIsRejectedAtExecution`
+  pins it; fixtures now ship manifest.json like production installs).
+  Residual boundary, accepted: an attacker able to rewrite BOTH the
+  installed bytes and the durable catalog record owns the wiki store
+  already — the container trust boundary is the control.
+  (2) the PR's newest suites run only on developer machines (plain
+  `make test` excludes `WikiFSAppTests`; CI runs three targeted opt-in
+  suites, none of them the projection suites); (3) the per-pass
+  `ReadScope` source-byte cache has no byte budget — a single projection
+  operation that materializes many large sources holds their aggregate
+  verbatim bytes until the scope ends (bounded lifetime, but unbounded
+  peak); cap or evict if large-wiki memory pressure shows.
 
 ## Verification
 
