@@ -513,6 +513,18 @@ struct Projection {
         /// bytes at most once. Failures cache nothing.
         private var cachedSourceBytes: [SourceID: Data]?
 
+        /// Per-scope verbatim-byte cache budget. Holding every fetched byte
+        /// until the scope ends has bounded LIFETIME but unbounded PEAK: a
+        /// pass over many large sources could retain hundreds of megabytes.
+        /// Past this budget the scope stops caching — fetches still work,
+        /// they just repeat — trading repeat wire reads for a hard memory
+        /// ceiling. A single source larger than the budget is never cached
+        /// at all (P7 follow-up 3).
+        static let maxCachedSourceBytes = 64 * 1_024 * 1_024
+
+        /// Running total of the bytes currently held by `cachedSourceBytes`.
+        private var cachedSourceBytesTotal = 0
+
         /// Why this scope could not read the store, or nil when every read
         /// that decides existence succeeded. Set when the DB cannot be
         /// opened, the change token cannot be read, or a `storeRead` fails
@@ -578,6 +590,7 @@ struct Projection {
             cachedSiblingImages = nil
             cachedPageRenders = nil
             cachedSourceBytes = nil
+            cachedSourceBytesTotal = 0
         }
 
         /// The cached link maps, or nil if not yet computed for this scope.
@@ -748,12 +761,29 @@ struct Projection {
             return cachedSourceBytes?[id]
         }
 
-        /// Cache one source's verbatim bytes (grow-only).
+        /// Cache one source's verbatim bytes (grow-only, budget-capped).
+        /// Past the budget new fetches are not retained; already-cached
+        /// entries stay until the scope ends or the token changes.
         func cacheSourceBytes(_ data: Data, for id: SourceID) {
             lock.lock(); defer { lock.unlock() }
+            let byteCount = data.count
+            guard byteCount <= Self.maxCachedSourceBytes,
+                  cachedSourceBytesTotal + byteCount <= Self.maxCachedSourceBytes else {
+                return
+            }
             if cachedSourceBytes == nil { cachedSourceBytes = [:] }
             cachedSourceBytes?[id] = data
+            cachedSourceBytesTotal += byteCount
         }
+
+#if DEBUG
+        /// Test observation: the bytes the cache currently holds (0 when
+        /// empty). DEBUG-only — production reads no cache internals.
+        var debugCachedSourceBytesTotal: Int {
+            lock.lock(); defer { lock.unlock() }
+            return cachedSourceBytesTotal
+        }
+#endif
     }
 
     /// The read-only data source at THIS wiki's daemon-backed projection.

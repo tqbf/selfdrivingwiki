@@ -43,5 +43,45 @@ struct ProjectionLargeContentTests {
         let fetched: Data? = projection.contents(for: id)
         #expect(fetched == expected, "chunked download must return the exact bytes (count \(fetched?.count ?? 0) vs \(expected.count))")
     }
+
+    /// The per-scope verbatim-byte cache stops caching past its budget
+    /// (P7 follow-up 3): a source larger than the budget is never cached,
+    /// and once the running total would exceed the budget new fetches are
+    /// not retained — they still work, they just repeat — so a pass over
+    /// many large sources has a hard memory ceiling. The policy never reads
+    /// through the source, so a constructed (never-connected) client serves
+    /// as the scope's source.
+    @Test func sourceByteCacheStopsCachingPastItsBudget() throws {
+        let source = DaemonProjectionClient(
+            wikiID: WikiID(rawValue: "01JBUDGETFIXTUREWIKI000000"),
+            containerDirectory: { throw CancellationError() })
+        let scope = Projection.ReadScope(source: source)
+        let budget = Projection.ReadScope.maxCachedSourceBytes
+        let overBudgetID = SourceID(rawValue: "01JBUDGETSRC000000000000000A")
+        let halfID = SourceID(rawValue: "01JBUDGETSRC000000000000000B")
+        let spilloverID = SourceID(rawValue: "01JBUDGETSRC000000000000000C")
+        let fittingID = SourceID(rawValue: "01JBUDGETSRC000000000000000D")
+
+        // A single source larger than the whole budget: never cached.
+        scope.cacheSourceBytes(Data(count: budget + 1), for: overBudgetID)
+        #expect(scope.debugCachedSourceBytesTotal == 0)
+        #expect(scope.sourceBytes(for: overBudgetID) == nil)
+
+        // Half the budget caches; an insert that would exceed the budget is
+        // skipped, and the skipped source reads as uncached.
+        let half = Data(count: budget / 2)
+        scope.cacheSourceBytes(half, for: halfID)
+        #expect(scope.debugCachedSourceBytesTotal == budget / 2)
+        #expect(scope.sourceBytes(for: halfID) == half)
+        scope.cacheSourceBytes(Data(count: budget / 2 + 1), for: spilloverID)
+        #expect(scope.debugCachedSourceBytesTotal == budget / 2)
+        #expect(scope.sourceBytes(for: spilloverID) == nil)
+
+        // A source that fits the remaining budget still caches.
+        let fitting = Data(count: budget / 4)
+        scope.cacheSourceBytes(fitting, for: fittingID)
+        #expect(scope.debugCachedSourceBytesTotal == budget / 2 + budget / 4)
+        #expect(scope.sourceBytes(for: fittingID) == fitting)
+    }
 }
 #endif

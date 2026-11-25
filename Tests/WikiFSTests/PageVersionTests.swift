@@ -401,9 +401,13 @@ struct PageVersionTests {
         #expect(origin.agentKind == .chat)
         #expect(origin.activityKind == .import)
         #expect(origin.title == "Chat-Created")
-        // savedAt is "now" (within 5s — the test runs fast).
+        // savedAt is "now". The tolerance is a scheduler budget, not the
+        // contract: a wrong timestamp would be off by minutes or years, and
+        // CI's 3-vCPU runners have stretched the create→assert gap past 5 s
+        // under build contention (the same wave class as the
+        // integration-patience budgets).
         let drift = abs(origin.savedAt.timeIntervalSinceNow)
-        #expect(drift < 5.0, "savedAt should be ~now (drift \(drift)s)")
+        #expect(drift < 60.0, "savedAt should be ~now (drift \(drift)s)")
     }
 
     /// AC.1 (variant) — when the createPage author is `agent:<kind>`
