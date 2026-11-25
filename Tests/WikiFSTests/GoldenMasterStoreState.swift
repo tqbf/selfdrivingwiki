@@ -343,7 +343,16 @@ enum GoldenMasterStoreState {
         }
 
         out += "# queue\n"
-        for item in try queue.loadRecent(limit: 50) {
+        // The fixture's two queue items (ingestion, extraction) race their
+        // terminal transitions — independent queues, no scripted order — so
+        // loadRecent's recency order varies run to run. Sort by (queue, id)
+        // for a deterministic section; the golden master pins existence +
+        // state, not completion timing (same normalization philosophy as
+        // ULIDs/timestamps).
+        let recentQueueItems = try queue.loadRecent(limit: 50).sorted {
+            ($0.queue.rawValue, $0.id.rawValue) < ($1.queue.rawValue, $1.id.rawValue)
+        }
+        for item in recentQueueItems {
             out += "queue-item id=\(id(item.id.rawValue, normalizer)) queue=\(item.queue.rawValue) state=\(item.state.rawValue) sources=\(item.payload.sourceIDs.count) attempts=\(item.attempt)\n"
         }
         queue.close()
