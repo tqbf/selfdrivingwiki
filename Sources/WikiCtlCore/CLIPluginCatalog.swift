@@ -4,7 +4,7 @@ import WikiFSEngine
 
 public enum WikiCtlPluginCatalog {
     public static func build(
-        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
+        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.defaultRuntimeFactory
     ) throws -> PluginCatalog {
         try CLIPluginCatalog.build(makeTantivyRuntime: makeTantivyRuntime)
     }

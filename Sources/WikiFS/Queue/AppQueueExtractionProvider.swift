@@ -97,6 +97,9 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
     private let speechLocaleID: String
     /// The host-owned private stage root for speech jobs.
     private let speechStageRoot: URL
+    /// Open-seam harness injection (plans/daemon-only-access.md Phase 0):
+    /// replaces the two direct follow-on queue-database opens.
+    private let makeQueueStore: (@Sendable (URL) throws -> QueueStore)?
 
     init(
         extractionServices: any ExtractionServices,
@@ -105,7 +108,8 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         transcriptCleanupAgent: (any TranscriptCleanupAgent)? = nil,
         speechEngine: any SpeechTranscribing = SystemSpeechTranscriber(),
         speechLocaleID: String = Locale.current.identifier(.bcp47),
-        speechStageRoot: URL? = nil
+        speechStageRoot: URL? = nil,
+        makeQueueStore: (@Sendable (URL) throws -> QueueStore)? = nil
     ) {
         self.extractionServices = extractionServices
         self.sessionBox = sessionBox
@@ -113,6 +117,7 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         self.transcriptCleanupAgent = transcriptCleanupAgent
         self.speechEngine = speechEngine
         self.speechLocaleID = speechLocaleID
+        self.makeQueueStore = makeQueueStore
         // Default stage root: beside the queue database inside the app
         // group container (host-owned, private). Tests pass an explicit root.
         self.speechStageRoot = speechStageRoot
@@ -660,7 +665,8 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
         if let followOnQueueStore {
             store = followOnQueueStore
         } else if let queueDatabaseURL {
-            store = try QueueStore(databaseURL: queueDatabaseURL)
+            store = try makeQueueStore.map({ try $0(queueDatabaseURL) })
+                ?? QueueStore(databaseURL: queueDatabaseURL)
             followOnQueueStore = store
         } else {
             DebugLog.extraction("AppQueueExtractionProvider: no queue database URL; follow-on format route not enqueued (source=\(sourceID.rawValue))")
@@ -699,7 +705,8 @@ extension AppQueueExtractionProvider: FetchFormatJobRecovering {
         if let followOnQueueStore { return followOnQueueStore }
         guard let queueDatabaseURL else { return nil }
         do {
-            let store = try QueueStore(databaseURL: queueDatabaseURL)
+            let store = try makeQueueStore.map({ try $0(queueDatabaseURL) })
+                ?? QueueStore(databaseURL: queueDatabaseURL)
             followOnQueueStore = store
             return store
         } catch {

@@ -117,6 +117,12 @@ enum ProfileBootFixture {
         ProfileQueueExtractionProvider()
     }
 
+    /// Internal re-export for the open-seam harness (the free function below
+    /// is file-private).
+    static func fixtureTransportServices() -> DaemonTransportServices {
+        fixtureTransportServicesImpl()
+    }
+
     static func entries(
         databaseURL: URL,
         wikiID: String,
@@ -331,12 +337,18 @@ private struct ProfileQueueExtractionProvider: QueueExtractionProvider {
 }
 
 private func fixtureTransportServices() -> DaemonTransportServices {
-    DaemonTransportServices(
-        startAdmission: {},
-        acknowledge: { _ in },
-        requestManualReconnect: {},
-        events: { AsyncStream { $0.finish() } },
-        availability: { .idle },
-        stop: {})
+    ProfileBootFixture.fixtureTransportServicesImpl()
+}
+
+extension ProfileBootFixture {
+    static func fixtureTransportServicesImpl() -> DaemonTransportServices {
+        DaemonTransportServices(
+            startAdmission: {},
+            acknowledge: { _ in },
+            requestManualReconnect: {},
+            events: { AsyncStream { $0.finish() } },
+            availability: { .idle },
+            stop: {})
+    }
 }
 #endif
