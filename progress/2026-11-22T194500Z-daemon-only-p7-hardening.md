@@ -96,11 +96,13 @@ as `a1aefb98`).
   with the result visible), and the File Provider projection suites
   wedge at bundle startup on CI even using only suites that predate the
   branch — both are the swiftpm-testing-helper wedge family needing a
-  root-cause pass; (3) the per-pass
-  `ReadScope` source-byte cache has no byte budget — a single projection
-  operation that materializes many large sources holds their aggregate
-  verbatim bytes until the scope ends (bounded lifetime, but unbounded
-  peak); cap or evict if large-wiki memory pressure shows.
+  root-cause pass; (3) RESOLVED — the per-pass `ReadScope` source-byte
+  cache now has a 64 MiB budget: past it the scope stops caching new
+  fetches (they still work, they just repeat), and a single source
+  larger than the budget is never cached at all
+  (`sourceByteCacheStopsCachingPastItsBudget` pins the policy). A pass
+  over many large sources now has a hard memory ceiling instead of an
+  unbounded peak.
 
 ## Verification
 
