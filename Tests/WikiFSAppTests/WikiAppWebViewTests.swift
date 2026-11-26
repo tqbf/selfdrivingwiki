@@ -101,7 +101,7 @@ struct WikiAppWebViewTests {
     }
 
     @Test("a bridge-oversized pinned input preserves Source fallback before a session starts")
-    func oversizedPinnedInputReturnsNoView() throws {
+    func oversizedPinnedInputReturnsNoView() async throws {
         let store = try GRDBWikiStore()
         let source = try store.addSource(
             filename: "input.txt",
@@ -116,8 +116,8 @@ struct WikiAppWebViewTests {
         let authority = installedAuthority(
             descriptor: descriptor, configuration: configuration, inputReader: reader)
 
-        #expect(throws: RendererAuthorizedInputReader.ReaderError.oversizedInput) {
-            try reader.validateInput(
+        await #expect(throws: RendererAuthorizedInputReader.ReaderError.oversizedInput) {
+            try await reader.validateInput(
                 maximumInputByteCount: min(
                     descriptor.sizeLimits.maximumInputByteCount,
                     WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount),
@@ -274,12 +274,14 @@ struct WikiAppWebViewTests {
             encoding: .utf8)
 
         #expect(source.contains("guard headVersion != nil else"))
-        #expect(source.contains("onRendererActivation: headVersion == nil ? nil : activateRendererPane(reference:input:)"))
+        // The activation closure stays nil without document identity (typed,
+        // inert); the handler factory is built only when a head exists.
+        #expect(source.contains("onRendererActivation: headVersion == nil ? nil : makeRendererActivationHandler()"))
     }
 
     @Test("page detail accepts an injected renderer sink and preserves the nil default")
-    func pageDetailConstructsOptionalRendererSink() throws {
-        let store = try makePageDetailModel()
+    func pageDetailConstructsOptionalRendererSink() async throws {
+        let store = try await makePageDetailModel()
         let session = try makePageDetailSession()
         let nullView = PageDetailView(
             store: store,
@@ -312,22 +314,29 @@ struct WikiAppWebViewTests {
     }
 
     @Test("page detail keeps the loaded page version identity stable for reader renders")
-    func pageDetailUsesLoadedPageVersionIdentity() throws {
+    func pageDetailUsesLoadedPageVersionIdentity() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("page-detail-version-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
-        let page = try store.createPage(title: "Versioned Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Versioned Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id,
             title: "Versioned Page",
             body: "body one",
             expectedHeadVersionID: nil)
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
         model.openTab(.page(page.id))
 
         let head = try #require(try store.pageHeadVersionID(pageID: page.id))
+        // openTab's page load is async (P1 generation-checked loads); wait
+        // for the head identity to land instead of racing the scheduler.
+        let deadline = ContinuousClock.now + .seconds(8)
+        while model.loadedPageHeadVersionID(for: page.id) == nil,
+              ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
         #expect(model.loadedPageHeadVersionID(for: page.id) == head)
         #expect(model.loadedPageHeadVersionID(for: PageID(rawValue: "01JVERSIONMISSING000000000")) == nil)
     }
@@ -344,8 +353,8 @@ struct WikiAppWebViewTests {
         let descriptor = WikiDescriptor.make(displayName: "Test")
         let store = try GRDBWikiStore(
             databaseURL: dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite"))
-        let page = try store.createPage(title: "Renderer Route")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Renderer Route")
+        _ = try await store.appendPageVersion(
             pageID: page.id,
             title: "Renderer Route",
             body: """
@@ -363,8 +372,7 @@ struct WikiAppWebViewTests {
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
-            queueEngine: try makePageDetailQueueEngine(),
-            extractionProvider: StubExtractionProvider())
+            queueEngine: try makePageDetailQueueEngine())
         session.store.openTab(.page(page.id))
         let rendererLayout = try RendererPackageStoreLayout(
             appGroupContainerRoot: dir.appendingPathComponent("renderer-machine", isDirectory: true))
@@ -472,13 +480,13 @@ struct WikiAppWebViewTests {
 }
 
 @MainActor
-private func makePageDetailModel() throws -> WikiStoreModel {
+private func makePageDetailModel() async throws -> WikiStoreModel {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("page-detail-webview-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let store = try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
     let model = WikiStoreModel(store: store)
-    model.reloadFromStore()
+    await model.bootstrapFromStore()
     return model
 }
 
@@ -496,8 +504,7 @@ private func makePageDetailSession() throws -> ProfileWikiSession {
         descriptor: descriptor,
         containerDirectory: dir,
         extractionCoordinator: coordinator,
-        queueEngine: try makePageDetailQueueEngine(),
-        extractionProvider: StubExtractionProvider())
+        queueEngine: try makePageDetailQueueEngine())
 }
 
 @MainActor

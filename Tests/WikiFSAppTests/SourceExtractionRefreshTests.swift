@@ -22,7 +22,7 @@ struct SourceExtractionRefreshTests {
         let store = try TestStoreFactory.inMemory()
         store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "extraction-refresh"))
         let model = WikiStoreModel(store: store)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let source = try store.addSource(filename: "report.docx", data: Data("docx-bytes".utf8))
         try await waitUntil("source import reloads the model") {
@@ -50,7 +50,7 @@ struct SourceExtractionRefreshTests {
         // The reader's reload path resolves the new HEAD, so the view that
         // observes `sourcesVersion` shows the markdown, not the raw source.
         let summary = try #require(model.sources.first { $0.id == source.id })
-        #expect(model.processedMarkdownHead(for: summary)?.content == body)
+        await #expect(model.processedMarkdownHead(for: summary)?.content == body)
     }
 
     private func waitUntil(

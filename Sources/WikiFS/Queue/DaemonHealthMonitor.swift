@@ -41,6 +41,27 @@ final class DaemonHealthMonitor {
         }
     }
 
+    /// A REMOTE store call failed with a transport-level error
+    /// (`daemonUnavailable` / `deadlineExceeded` / `epochMismatch` /
+    /// `outcomeUnknown`). Feeds the SAME state machine the transport events
+    /// drive — the wiki-window reconnecting surface — without a new UI
+    /// state (plans/daemon-only-access.md Phase 3 item 4). Recovery needs no
+    /// signal here: a daemon that comes back emits the transport events that
+    /// set `.connected`, and a degraded-but-live transport never holds the
+    /// banner up on its own.
+    func noteStoreTransportDegraded() {
+        setState(.reconnecting)
+    }
+
+    /// The symmetric recovery leg: a REMOTE store call (or the re-handshake
+    /// barrier) SUCCEEDED after a degraded episode, which proves the daemon
+    /// is reachable again — stand the state back up even when the workload
+    /// transport had no event to report (its `.connected` says the same
+    /// thing; `setState` dedupes).
+    func noteStoreTransportRecovered() {
+        setState(.connected)
+    }
+
     func forceReconnect() async {
         guard !stopped else { return }
         DebugLog.store("wikid: forceReconnect requested")

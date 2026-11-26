@@ -162,19 +162,19 @@ struct IngestIsolationTests {
 
     // MARK: - WIKI_WORKSPACE env var: page get/upsert routing
 
-    @Test func pageGetWorkspaceReturnsStagedVersion() throws {
+    @Test func pageGetWorkspaceReturnsStagedVersion() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Overlay")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Overlay")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Overlay", body: "main",
             expectedHeadVersionID: nil)
 
         let wsID = try store.createWorkspace(name: nil, activityID: nil)
-        _ = try store.workspaceWritePage(
+        _ = try await store.workspaceWritePage(
             workspaceID: wsID, pageID: page.id, title: "Overlay", body: "staged")
 
         // page get with --workspace returns the staged version.
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .get(.id(page.id), json: false, workspace: wsID.rawValue),
             in: store)
         #expect(result.output == "staged")
@@ -182,17 +182,17 @@ struct IngestIsolationTests {
         #expect(result.stderrOutput?.hasPrefix("head_version_id: ") == true)
     }
 
-    @Test func pageUpsertWorkspaceWritesToWorkspaceNotMain() throws {
+    @Test func pageUpsertWorkspaceWritesToWorkspaceNotMain() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Target")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Target")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Target", body: "original",
             expectedHeadVersionID: nil)
 
         let wsID = try store.createWorkspace(name: nil, activityID: nil)
 
         // page add --workspace writes to the workspace, not main.
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: page.id, title: "Target", body: .inline("ws edit"), workspace: wsID.rawValue),
             in: store)
         #expect(result.didCommit == true)

@@ -312,20 +312,20 @@ struct CumulativeIngestContractTests {
         _ pages: [ACPIngestPageAssignment],
         staged: [String],
         resolver: RecorderResolver
-    ) -> [ACPIngestPlanValidation.Problem] {
-        ACPIngestPlanValidation.problems(
+    ) async -> [ACPIngestPlanValidation.Problem] {
+        await ACPIngestPlanValidation.problems(
             in: ACPIngestPlan(pages: pages, sourceIDs: []),
             stagedSourceFiles: staged,
             resolveTitleToPageID: resolver.resolve)
     }
 
-    @Test func duplicateResolvedTargetsRejected() {
+    @Test func duplicateResolvedTargetsRejected() async {
         let staged = ["Chapter-01--01AAA.md", "Chapter-02--01BBB.md"]
         let resolver = RecorderResolver()
 
         // Two NEW titles that differ only by ASCII case — SQLite
         // COLLATE NOCASE folds them, so both would create the same page.
-        let caseFolded = validate([
+        let caseFolded = await validate([
             ACPIngestPageAssignment(title: "Calvin Cycle", sourceFile: staged[0], sourceRanges: "1-10", outline: "a"),
             ACPIngestPageAssignment(title: "calvin cycle", sourceFile: staged[1], sourceRanges: "1-10", outline: "b"),
         ], staged: staged, resolver: resolver)
@@ -338,7 +338,7 @@ struct CumulativeIngestContractTests {
             "MCR Protocol": page,
             "mcr protocol (draft)": page,
         ])
-        let sameExisting = validate([
+        let sameExisting = await validate([
             ACPIngestPageAssignment(title: "MCR Protocol", sourceFile: staged[0], sourceRanges: "1-10", outline: "a"),
             ACPIngestPageAssignment(title: "mcr protocol (draft)", sourceFile: staged[1], sourceRanges: "1-10", outline: "b"),
         ], staged: staged, resolver: resolver2)
@@ -348,14 +348,14 @@ struct CumulativeIngestContractTests {
 
         // Unicode case pairs (Ä/ä) are DISTINCT titles under NOCASE —
         // flagging them would be a false positive.
-        let unicodeDistinct = validate([
+        let unicodeDistinct = await validate([
             ACPIngestPageAssignment(title: "Überwald", sourceFile: staged[0], sourceRanges: "1-10", outline: "a"),
             ACPIngestPageAssignment(title: "überwald", sourceFile: staged[1], sourceRanges: "1-10", outline: "b"),
         ], staged: staged, resolver: RecorderResolver())
         #expect(unicodeDistinct.isEmpty)
 
         // Genuinely distinct titles pass.
-        let distinct = validate([
+        let distinct = await validate([
             ACPIngestPageAssignment(title: "Alpha", sourceFile: staged[0], sourceRanges: "1-10", outline: "a"),
             ACPIngestPageAssignment(title: "Beta", sourceFile: staged[1], sourceRanges: "1-10", outline: "b"),
         ], staged: staged, resolver: RecorderResolver())
@@ -364,7 +364,7 @@ struct CumulativeIngestContractTests {
         // Titles are SANITIZED before resolution — the same WikiNameRules
         // pass PageUpsert applies — so the resolver sees linkable titles.
         let sanitizedResolver = RecorderResolver()
-        let sanitizedInput = validate([
+        let sanitizedInput = await validate([
             ACPIngestPageAssignment(title: "[Draft] Calvin | Cycle", sourceFile: staged[0], sourceRanges: "1-10", outline: "a"),
         ], staged: staged, resolver: sanitizedResolver)
         #expect(sanitizedInput.isEmpty)
@@ -375,9 +375,9 @@ struct CumulativeIngestContractTests {
         #expect(caseFolded.first!.description.contains("calvin cycle"))
     }
 
-    @Test func unknownSupportingSourceRejected() {
+    @Test func unknownSupportingSourceRejected() async {
         let staged = ["Chapter-01--01AAA.md"]
-        let problems = validate([
+        let problems = await validate([
             ACPIngestPageAssignment(
                 title: "Chapter One",
                 sourceFile: staged[0],
@@ -397,9 +397,9 @@ struct CumulativeIngestContractTests {
     /// The primary `sourceFile` gets the same staged-reference check as
     /// supporting sources — an executor must never be sent to read a file
     /// that does not exist.
-    @Test func unknownPrimarySourceRejected() {
+    @Test func unknownPrimarySourceRejected() async {
         let staged = ["Chapter-01--01AAA.md"]
-        let problems = validate([
+        let problems = await validate([
             ACPIngestPageAssignment(title: "Chapter One", sourceFile: "Also-Not-Staged--01YYY.md", sourceRanges: "1-10", outline: "a"),
         ], staged: staged, resolver: RecorderResolver())
 
@@ -413,7 +413,7 @@ struct CumulativeIngestContractTests {
     /// new-title folding. Production wires the resolver (LauncherFactory →
     /// the wiki's store), so its failure is load-bearing and the run must
     /// stop with the underlying reason, not launch executors unvalidated.
-    @Test func resolverFailureIsActionableNotSilent() {
+    @Test func resolverFailureIsActionableNotSilent() async {
         struct UnreadableWikiStore: Error {}
         let staged = ["Chapter-01--01AAA.md"]
         let plan = ACPIngestPlan(
@@ -421,7 +421,7 @@ struct CumulativeIngestContractTests {
                 ACPIngestPageAssignment(title: "Alpha", sourceFile: staged[0], sourceRanges: "1-10", outline: "a"),
             ],
             sourceIDs: [])
-        let problems = ACPIngestPlanValidation.problems(
+        let problems = await ACPIngestPlanValidation.problems(
             in: plan,
             stagedSourceFiles: staged,
             resolveTitleToPageID: { _ in throw UnreadableWikiStore() })
@@ -439,9 +439,9 @@ struct CumulativeIngestContractTests {
     /// The queue error string is short, so the summary names the FIRST problem
     /// verbatim and counts the rest. The full multi-line detail stays in the
     /// run log and the transcript event.
-    @Test func rejectionSummaryNamesFirstProblemOnly() throws {
+    @Test func rejectionSummaryNamesFirstProblemOnly() async throws {
         let staged = ["Chapter-01--01AAA.md"]
-        let problems = validate([
+        let problems = await validate([
             ACPIngestPageAssignment(
                 title: "Alpha", sourceFile: "Never-Staged--01MISSING.md",
                 sourceRanges: "1-10", outline: "a"),
@@ -464,8 +464,8 @@ struct CumulativeIngestContractTests {
     }
 
     /// One problem needs no counter suffix.
-    @Test func rejectionSummaryOmitsCounterForSingleProblem() throws {
-        let problems = validate([
+    @Test func rejectionSummaryOmitsCounterForSingleProblem() async throws {
+        let problems = await validate([
             ACPIngestPageAssignment(
                 title: "Alpha", sourceFile: "Never-Staged--01MISSING.md",
                 sourceRanges: "1-10", outline: "a"),

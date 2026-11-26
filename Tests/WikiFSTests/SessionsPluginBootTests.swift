@@ -42,16 +42,16 @@ struct SessionsPluginBootTests {
 
         let store = try #require(try await booted.context.find(StoreServiceKeys.store))
         let sessions = try #require(try await booted.context.find(SessionServiceKeys.sessions))
-        let chat = try store.createChat(kind: .edit, title: "Cordis session log")
+        let chat = try await store.createChat(kind: .edit, title: "Cordis session log")
 
         await sessions.append(
             chatID: chat.id,
             events: [.userText("persisted"), .messageStop])
-        #expect(try store.chatMessages(chatID: chat.id).map(\.event) == [.userText("persisted")])
+        #expect(try await store.chatMessages(chatID: chat.id).map(\.event) == [.userText("persisted")])
 
         try await booted.tree.update(to: [storeEntry, sessionsEntry])
         await sessions.append(chatID: chat.id, events: [.assistantText("after disposal")])
-        #expect(try store.chatMessages(chatID: chat.id).map(\.event) == [.userText("persisted")])
+        #expect(try await store.chatMessages(chatID: chat.id).map(\.event) == [.userText("persisted")])
 
         try await booted.shutdown()
     }

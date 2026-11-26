@@ -183,9 +183,9 @@ struct SidebarDropBuilderIntegrationTests {
     /// A page drop resolves the page's title via `store.resolveAttachmentName`
     /// and emits `[[page:<ULID>|<Title>]]`. Creates one page, then drops a
     /// payload pointing at it.
-    @Test func pageDrop_resolvesTitleAndEmitsCanonicalLink() throws {
+    @Test func pageDrop_resolvesTitleAndEmitsCanonicalLink() async throws {
         let (model, _) = try makeModel()
-        model.newPage(title: "Home Page")
+        await model.newPage(title: "Home Page")
         guard case .page(let pageID) = model.selection else {
             Issue.record("expected page selection after newPage")
             return
@@ -207,14 +207,14 @@ struct SidebarDropBuilderIntegrationTests {
     /// shape — `plans/drag-wikilinks.md` Step 3). The folder's leaf list is
     /// already flat when it arrives (no depth info survives the pasteboard),
     /// so each `- [[…]]` line is at depth 0.
-    @Test func multiPayloadDrop_emitsFlatDepth0MarkdownList() throws {
+    @Test func multiPayloadDrop_emitsFlatDepth0MarkdownList() async throws {
         let (model, _) = try makeModel()
-        model.newPage(title: "Alpha")
+        await model.newPage(title: "Alpha")
         guard case .page(let pageA) = model.selection else {
             Issue.record("expected page selection after newPage")
             return
         }
-        model.newPage(title: "Beta")
+        await model.newPage(title: "Beta")
         guard case .page(let pageB) = model.selection else {
             Issue.record("expected page selection after newPage (2)")
             return

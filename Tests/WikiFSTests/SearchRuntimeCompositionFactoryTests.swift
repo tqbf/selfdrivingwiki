@@ -76,30 +76,11 @@ struct SearchRuntimeCompositionFactoryTests {
         }
     }
 
-    @Test("owner waits for same-wiki predecessor before install")
-    @MainActor
-    func ownerWaitsForPredecessor() async throws {
-        let fixture = try Fixture()
-        await fixture.source.set([fixture.snapshot(id: "page-1", title: "Ready", body: "query")])
-        let gate = AsyncGate()
-        let prerequisite = Task { await gate.wait() }
-        let owner = SearchCompositionOwner(
-            registry: SearchRuntimeRegistry(),
-            identity: fixture.assembly.identity,
-            contentSource: fixture.source,
-            changeStreamFactory: FinishedSearchChangeStreamFactory(),
-            startupPrerequisite: prerequisite)
-        owner.start()
-
-        await #expect(throws: SearchServicesError.unavailable) {
-            try await owner.services.search(query: "query", kinds: [.page], limit: 5)
-        }
-        await gate.open()
-        await owner.awaitSettled()
-        let results = try await owner.services.search(query: "query", kinds: [.page], limit: 5)
-        #expect(results.map(\.ulid) == ["page-1"])
-        await owner.shutdown()
-    }
+    // P5: the "owner waits for same-wiki predecessor" test is removed with
+    // its subject — `SearchCompositionOwner` (the app's local assembly) is
+    // deleted, and the startup-prerequisite gate lived on that owner. The
+    // daemon's runtime lifecycle (singleflight admission + retirement
+    // barriers) is covered by the wikid suites.
 
     @Test("repeated handle disposal is safe")
     func repeatedHandleDisposalIsSafe() async throws {

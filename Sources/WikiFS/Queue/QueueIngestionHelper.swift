@@ -91,7 +91,7 @@ func enqueueIngestion(
         // condition is specifically "PDF extraction queue knows how to handle
         // this" — the content-type decision is below.
         if MimeType.isPDF(source.mimeType),
-           store.processedMarkdownHead(for: source) == nil {
+           await store.processedMarkdownHead(for: source) == nil {
             let request = QueueItemRequest(
                 queue: .extraction,
                 wikiID: wikiID,
@@ -131,11 +131,11 @@ func enqueueIngestion(
         //    passes; fromMIME alone would classify its synthetic
         //    `video/youtube` mime as `.binary` and incorrectly drop it (the
         //    §11-C1 regression the original §5.2 caught).
-        guard store.canIngest(source) else {
+        guard await store.canIngest(source) else {
             DebugLog.ingest("enqueueIngestion: dropped \(sourceID.rawValue) — no markdown or bytes to ingest")
             continue
         }
-        guard store.isIngestible(source) else {
+        guard await store.isIngestible(source) else {
             DebugLog.ingest("enqueueIngestion: dropped \(sourceID.rawValue) — content type has no markdown path and no extracted markdown head")
             continue
         }

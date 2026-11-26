@@ -4,6 +4,16 @@
 "hybrid approach" — this is daemon-first, app-in-process, multi-window UI
 deferred.
 
+> **Superseded in part (sole-writer milestone):** the daemon-only migration
+> (`plans/daemon-only-access.md`, P0–P7) has completed the sole-writer
+> milestone this plan anticipated. Since its P5 close, no client process
+> opens a wiki database, queue database, or search index, and the daemon
+> executes every workload (store writes, queue, extraction, chat, search).
+> The local-fallback and app-side composition sections below predate that
+> cutover and are preserved as history, not current architecture; see the
+> permitted-access table in `plans/daemon-only-access.md` for the
+> authoritative phase record.
+
 **Relationship to #358 and the roadmap.** The [#358 design
 doc](https://github.com/tqbf/selfdrivingwiki/issues/358) proposed a hybrid:
 extract a lightweight XPC daemon while simultaneously rewiring the app to be

@@ -15,30 +15,53 @@ import WikiFSCore
 /// filename — filenames are derived for presentation (INITIAL §6).
 ///
 /// **Multi-wiki (Phase 0).** A `Projection` is bound to ONE wiki via `wikiID`
-/// (the ULID the File Provider domain identifier carries). `openReadStore()`
-/// resolves that wiki's `<ulid>.sqlite`, so the SAME projection logic serves any
-/// wiki — the only difference is which DB it opens. The extension constructs one
+/// (the ULID the File Provider domain identifier carries). Its data source
+/// (`ProjectionSource`) serves that wiki's reads — production resolves it to
+/// the daemon's App Group domain socket (`DaemonProjectionClient`, Phase 6),
+/// so the SAME projection logic serves any wiki — the only difference is
+/// which wiki the source reads. The extension constructs one
 /// `Projection(wikiID:)` from `init(domain:)` and threads it through the
-/// enumerator. `Identity`, the static README/version bytes, and the index byte
-/// cache stay static (they don't depend on which wiki).
+/// enumerator. `Identity`, the static README/version bytes, and the index
+/// byte cache stay static (they don't depend on which wiki).
 struct Projection {
 
     /// The wiki this projection serves: the ULID from the FP domain identifier.
-    /// `openReadStore()` maps it to `<ulid>.sqlite` in the App Group container.
+    /// The data source resolves it against the daemon's prepared store.
     let wikiID: WikiID
 
-    /// Optional override for the wiki DB URL. Production (the File Provider
-    /// extension) leaves this `nil` and resolves the wiki's DB via
-    /// `DatabaseLocation` (the App Group container — unavailable outside the
-    /// entitled sandbox). Tests inject a temp URL so the projection tree
-    /// (`node`/`children`/`contents`) is exercisable end-to-end. Slice 2b: the
-    /// projection previously had NO integration coverage for this reason.
-    let databaseURL: URL?
+    /// The read-only data source for THIS wiki's projection reads (the
+    /// daemon's projection family over the App Group domain socket in
+    /// production). Phase 6: the extension never opens the wiki database;
+    /// tests inject a fixture source (a real daemon socket) so the projection
+    /// tree (`node`/`children`/`contents`) is exercisable end-to-end.
+    let source: any ProjectionSource
 
-    /// `databaseURL` defaults to `nil` (production resolves via `DatabaseLocation`).
-    init(wikiID: WikiID, databaseURL: URL? = nil) {
+    /// Production entry point: a projection client bound to the daemon's
+    /// socket in THIS wiki's App Group container.
+    init(wikiID: WikiID) {
+        self.init(wikiID: wikiID, source: DaemonProjectionClient(
+            wikiID: wikiID,
+            containerDirectory: {
+                // Same resolution the DB read used — the container that held
+                // `<ulid>.sqlite` holds the daemon's socket file. An
+                // unresolvable container throws (fail-fast, like the DB path
+                // always did) and the reads surface it as unavailable.
+                guard let container = DatabaseLocation.extensionContainerURL(
+                    forWikiID: wikiID.rawValue) else {
+                    // Same fail-fast class the DB path surfaced: an
+                    // unconfigured App Group container is an open failure
+                    // the reads report as unavailable.
+                    throw WikiStoreError.open(
+                        "no App Group container for wiki \(wikiID.rawValue)")
+                }
+                return container.deletingLastPathComponent()
+            }))
+    }
+
+    /// Test/fixture entry point: an explicit data source.
+    init(wikiID: WikiID, source: any ProjectionSource) {
         self.wikiID = wikiID
-        self.databaseURL = databaseURL
+        self.source = source
     }
 
     /// Request-scoped read-store cache. The public entry points
@@ -322,6 +345,17 @@ struct Projection {
         let provenanceDigest: String
     }
 
+    /// One page's DERIVED OKF projection: the wrapped content string from
+    /// `pageContent`, its trust projection revision, and the provenance
+    /// digest — the per-page triple the scope caches so the two views of one
+    /// enumeration pass (and every bookmark ref to the page) share ONE
+    /// derivation instead of re-running its per-page wire reads per view.
+    fileprivate struct PageRender {
+        let content: String
+        let revision: Int64
+        let provenanceDigest: String
+    }
+
     /// Token-keyed cache for rendered markdown siblings (#1375 follow-up).
     /// Same NSLock-guarded, token-keyed pattern as `IndexCache`, but holds
     /// the render triple instead of bare bytes: `markdownSiblingNode` (which
@@ -392,22 +426,24 @@ struct Projection {
 
     // MARK: - Read store
 
-    /// A request-scoped cache for ONE read-only store + its change token. The
+    /// A request-scoped cache for ONE data source + its change token. The
     /// public entry points (`children`/`node`/`contents`) create one of these on
-    /// a scoped copy of the projection so every `openReadStore()` and
-    /// `changeToken()` call within that operation reuses the same connection,
-    /// instead of opening a fresh store (with pragma setup + WAL checkpoint on
-    /// close) for each leaf node (#291).
+    /// a scoped copy of the projection so every read within that operation
+    /// shares the SAME projection client and token snapshot, instead of
+    /// issuing independent wire operations for each leaf node (#291).
+    /// Phase 6: the "connection" is the projection client over the daemon
+    /// socket — one client per logical operation, plus the per-pass caches
+    /// below, bounds the wire operations an enumeration pass issues.
     ///
     /// Thread-safe (NSLock-guarded): the holder is a reference type shared
-    /// across value-type projection copies, so the lock guards the lazy open
-    /// and token cache even if two copies race (in practice each scope is
+    /// across value-type projection copies, so the lock guards the caches
+    /// even if two copies race (in practice each scope is
     /// single-threaded — one File Provider callback).
     final class ReadScope: @unchecked Sendable {
-        private let databaseURL: URL?
-        private let wikiID: WikiID
+        /// The ONE data source this scope shares for every read
+        /// (one connection-equivalent per logical operation, #291).
+        let source: any ProjectionSource
         private let lock = NSLock()
-        private var cachedStore: GRDBWikiStore?
         private var cachedToken: String?
         /// Token-invalidated `LinkMaps` cache (#490). Built once per scope
         /// (on the first `cachedLinkMaps()` call) and reused for every leaf
@@ -447,6 +483,48 @@ struct Projection {
         private var cachedUsageSignals: [String: GRDBWikiStore.SourceUsageSignal]?
         private var cachedHeadProducers: [String: GRDBWikiStore.SourceHeadProducer]?
 
+        /// Per-scope batched LISTINGS (#291, Phase 6): the full-table scans
+        /// several subpaths of one enumeration pass each need (the two page
+        /// views, the link maps, `WIKI-STRUCTURE.md`/`TREE.md` counts, the
+        /// manifest/pages.jsonl generators, the credibility prefetch). One
+        /// wire op per DISTINCT listing per pass, not one per subpath.
+        /// Successful scans only — a failed scan is not cached, so a later
+        /// subpath in the same pass can still surface the failure.
+        private var cachedPages: [WikiPage]?
+        private var cachedSourceRows: [IndexGenerators.SourceIndexRow]?
+        private var cachedChats: [ChatSummary]?
+        private var cachedLogEntries: [LogEntry]?
+        private var cachedBookmarkNodes: [BookmarkNode]?
+        private var cachedSiblingImages: [SourceID: [String: SourceID]]?
+
+        /// Per-scope derived page renders (#291, Phase 6): the OKF render
+        /// triple (content, trust revision, provenance digest) for each page
+        /// whose `pageContent` derivation succeeded, keyed by page id. The
+        /// derivation issues per-page wire ops (`sourceLinks`,
+        /// `pageHeadVersionID`, `pageOKFMetadata`), so the by-id and by-title
+        /// views of one pass — and every bookmark ref to the same page —
+        /// MUST share the first derivation instead of re-running it per view.
+        /// Failures cache nothing, matching `SiblingRenderCache`.
+        private var cachedPageRenders: [PageID: PageRender]?
+
+        /// Per-scope verbatim source bytes (#291, Phase 6): `sourceContent`
+        /// fetches (the by-name view's image-rewritten verbatim content),
+        /// keyed by source id, so the two views of one pass fetch a source's
+        /// bytes at most once. Failures cache nothing.
+        private var cachedSourceBytes: [SourceID: Data]?
+
+        /// Per-scope verbatim-byte cache budget. Holding every fetched byte
+        /// until the scope ends has bounded LIFETIME but unbounded PEAK: a
+        /// pass over many large sources could retain hundreds of megabytes.
+        /// Past this budget the scope stops caching — fetches still work,
+        /// they just repeat — trading repeat wire reads for a hard memory
+        /// ceiling. A single source larger than the budget is never cached
+        /// at all (P7 follow-up 3).
+        static let maxCachedSourceBytes = 64 * 1_024 * 1_024
+
+        /// Running total of the bytes currently held by `cachedSourceBytes`.
+        private var cachedSourceBytesTotal = 0
+
         /// Why this scope could not read the store, or nil when every read
         /// that decides existence succeeded. Set when the DB cannot be
         /// opened, the change token cannot be read, or a `storeRead` fails
@@ -456,31 +534,14 @@ struct Projection {
         /// is never reported as an empty folder or a deleted item.
         private var failure: String?
 
-        init(databaseURL: URL?, wikiID: WikiID) {
-            self.databaseURL = databaseURL
-            self.wikiID = wikiID
+        init(source: any ProjectionSource) {
+            self.source = source
         }
 
-        /// Lazily open ONE store; subsequent calls return the same connection.
-        var store: GRDBWikiStore? {
-            lock.lock(); defer { lock.unlock() }
-            if cachedStore == nil {
-                let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID.rawValue)
-                if let url, FileManager.default.fileExists(atPath: url.path) {
-                    DebugLog.fileprovider("ReadScope opening cached read-only connection wikiID=\(wikiID.rawValue) thread=\(Thread.current)")
-                    do {
-                        cachedStore = try GRDBWikiStore(readOnlyURL: url)
-                    } catch {
-                        DebugLog.fileprovider("ReadScope open failed wikiID=\(wikiID.rawValue): \(error)")
-                        failure = failure ?? "open failed: \(error)"
-                    }
-                } else {
-                    DebugLog.fileprovider("ReadScope no database wikiID=\(wikiID.rawValue) url=\(url?.path ?? "nil")")
-                    failure = failure ?? "no database at \(url?.path ?? "nil")"
-                }
-            }
-            return cachedStore
-        }
+        /// The shared data source (the scope's ONE connection-equivalent).
+        /// Construction cannot fail — availability failures surface per read
+        /// and are recorded through `markFailed`.
+        var store: (any ProjectionSource)? { source }
 
         /// Why the scope could not read the store, or nil if it could.
         var failureReason: String? {
@@ -504,18 +565,32 @@ struct Projection {
         /// Cache the token (called once per scope, on first `changeToken()`).
         /// A token change invalidates any cached `LinkMaps` so a scope that
         /// initially saw `"0:0"` (store unavailable) rebuilds on the real
-        /// token once the store becomes reachable (#490).
+        /// token once the store becomes reachable (#490). Only a token that
+        /// was ALREADY snapshotted and then DIFFERS counts as a change: the
+        /// FIRST set (nil → T) must not drop caches subpaths of the same
+        /// pass already built (#291 — the mid-pass clear made the index
+        /// generators re-list and re-build the link maps after the page
+        /// views had populated them).
         func cacheToken(_ value: String) {
             lock.lock(); defer { lock.unlock() }
-            if cachedToken != value {
-                cachedToken = value
-                cachedLinkMaps = nil
-                cachedHeads = nil
-                cachedOriginCandidates = nil
-                cachedSignalIDs = nil
-                cachedUsageSignals = nil
-                cachedHeadProducers = nil
-            }
+            let tokenChanged = cachedToken.map { $0 != value } ?? false
+            cachedToken = value
+            guard tokenChanged else { return }
+            cachedLinkMaps = nil
+            cachedHeads = nil
+            cachedOriginCandidates = nil
+            cachedSignalIDs = nil
+            cachedUsageSignals = nil
+            cachedHeadProducers = nil
+            cachedPages = nil
+            cachedSourceRows = nil
+            cachedChats = nil
+            cachedLogEntries = nil
+            cachedBookmarkNodes = nil
+            cachedSiblingImages = nil
+            cachedPageRenders = nil
+            cachedSourceBytes = nil
+            cachedSourceBytesTotal = 0
         }
 
         /// The cached link maps, or nil if not yet computed for this scope.
@@ -590,19 +665,134 @@ struct Projection {
             for (id, producer) in producers { mergedProducers[id.rawValue] = producer }
             cachedHeadProducers = mergedProducers
         }
+
+        /// The cached page listing, or nil if not yet scanned this scope.
+        var pages: [WikiPage]? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedPages
+        }
+
+        /// Cache the page listing (one successful scan per scope).
+        func cachePages(_ pages: [WikiPage]) {
+            lock.lock(); defer { lock.unlock() }
+            cachedPages = pages
+        }
+
+        /// The cached source-row listing, or nil if not yet scanned this scope.
+        var sourceRows: [IndexGenerators.SourceIndexRow]? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedSourceRows
+        }
+
+        /// Cache the source-row listing (one successful scan per scope).
+        func cacheSourceRows(_ rows: [IndexGenerators.SourceIndexRow]) {
+            lock.lock(); defer { lock.unlock() }
+            cachedSourceRows = rows
+        }
+
+        /// The cached chat listing, or nil if not yet scanned this scope.
+        var chats: [ChatSummary]? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedChats
+        }
+
+        /// Cache the chat listing (one successful scan per scope).
+        func cacheChats(_ chats: [ChatSummary]) {
+            lock.lock(); defer { lock.unlock() }
+            cachedChats = chats
+        }
+
+        /// The cached log-entry listing, or nil if not yet scanned this scope.
+        var logEntries: [LogEntry]? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedLogEntries
+        }
+
+        /// Cache the log-entry listing (one successful scan per scope).
+        func cacheLogEntries(_ entries: [LogEntry]) {
+            lock.lock(); defer { lock.unlock() }
+            cachedLogEntries = entries
+        }
+
+        /// The cached bookmark-node listing, or nil if not yet scanned this scope.
+        var bookmarkNodes: [BookmarkNode]? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedBookmarkNodes
+        }
+
+        /// Cache the bookmark-node listing (one successful scan per scope).
+        func cacheBookmarkNodes(_ nodes: [BookmarkNode]) {
+            lock.lock(); defer { lock.unlock() }
+            cachedBookmarkNodes = nodes
+        }
+
+        /// The cached sibling-image resolver map, or nil if not yet fetched.
+        var siblingImages: [SourceID: [String: SourceID]]? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedSiblingImages
+        }
+
+        /// Cache the sibling-image resolver map (one successful fetch per scope).
+        func cacheSiblingImages(_ images: [SourceID: [String: SourceID]]) {
+            lock.lock(); defer { lock.unlock() }
+            cachedSiblingImages = images
+        }
+
+        /// The cached page render for `id`, or nil if not derived this scope.
+        fileprivate func pageRender(for id: PageID) -> PageRender? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedPageRenders?[id]
+        }
+
+        /// Cache one page's derived render (grow-only; first success wins).
+        fileprivate func cachePageRender(_ render: PageRender, for id: PageID) {
+            lock.lock(); defer { lock.unlock() }
+            if cachedPageRenders == nil { cachedPageRenders = [:] }
+            if cachedPageRenders?[id] == nil {
+                cachedPageRenders?[id] = render
+            }
+        }
+
+        /// The cached verbatim bytes for `id`, or nil if not fetched this
+        /// scope. Successful fetches only — a failed fetch caches nothing,
+        /// so a later subpath in the same pass can still surface it.
+        func sourceBytes(for id: SourceID) -> Data? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedSourceBytes?[id]
+        }
+
+        /// Cache one source's verbatim bytes (grow-only, budget-capped).
+        /// Past the budget new fetches are not retained; already-cached
+        /// entries stay until the scope ends or the token changes.
+        func cacheSourceBytes(_ data: Data, for id: SourceID) {
+            lock.lock(); defer { lock.unlock() }
+            let byteCount = data.count
+            guard byteCount <= Self.maxCachedSourceBytes,
+                  cachedSourceBytesTotal + byteCount <= Self.maxCachedSourceBytes else {
+                return
+            }
+            if cachedSourceBytes == nil { cachedSourceBytes = [:] }
+            cachedSourceBytes?[id] = data
+            cachedSourceBytesTotal += byteCount
+        }
+
+#if DEBUG
+        /// Test observation: the bytes the cache currently holds (0 when
+        /// empty). DEBUG-only — production reads no cache internals.
+        var debugCachedSourceBytesTotal: Int {
+            lock.lock(); defer { lock.unlock() }
+            return cachedSourceBytesTotal
+        }
+#endif
     }
 
-    /// Open a read-only store at THIS wiki's `<ulid>.sqlite` in the App Group
-    /// container. Within a read scope (`readStoreHolder` set) the SAME connection
-    /// is reused for every call; outside a scope a fresh, short-lived store is
-    /// opened each time (the historical behavior). Returns nil if the
-    /// container/DB is unavailable.
-    private func openReadStore() -> GRDBWikiStore? {
+    /// The read-only data source at THIS wiki's daemon-backed projection.
+    /// Within a read scope (`readStoreHolder` set) the SAME client is reused
+    /// for every call; outside a scope the projection's own source answers
+    /// each read (the historical per-call behavior, minus any local open).
+    private func openReadStore() -> (any ProjectionSource)? {
         if let scope = readStoreHolder { return scope.store }
-        let url = databaseURL ?? DatabaseLocation.extensionContainerURL(forWikiID: wikiID.rawValue)
-        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
-        DebugLog.fileprovider("openReadStore opening short-lived read-only connection wikiID=\(wikiID.rawValue) thread=\(Thread.current)")
-        return DebugLog.trying("GRDBWikiStore.init", operation: { try GRDBWikiStore(readOnlyURL: url) })
+        return source
     }
 
     /// Run a store read whose nil result means "this row or folder is gone".
@@ -699,7 +889,7 @@ struct Projection {
     /// change token rather than a row `version`.
     private func logBody() -> Data {
         guard let store = openReadStore(),
-              let entries = DebugLog.trying("listAllLogEntries", operation: { try store.listAllLogEntriesOrderedByID() }) else {
+              let entries = cachedLogEntries(in: store) else {
             return Data(LogRenderer.render([]).utf8)
         }
         return Data(LogRenderer.render(entries).utf8)
@@ -725,10 +915,13 @@ struct Projection {
     /// counts move, and they move with the same page/file folds the change token
     /// already tracks.
     private func treeBody() -> Data {
+        // The listings flow through the per-scope caches, so the SECOND alias
+        // entry (TREE.md after WIKI-STRUCTURE.md) and any other subpath of
+        // the same pass reuse the first scan (#291 Phase 6).
         let store = openReadStore()
-        let pageCount = (DebugLog.trying("listAllPages", operation: { try store?.listAllPagesOrderedByID() }))??.count ?? 0
-        let sourceCount = (DebugLog.trying("listAllSources", operation: { try store?.listAllSourcesOrderedByID() }))??.count ?? 0
-        let chatCount = (DebugLog.trying("listAllChats", operation: { try store?.listAllChatsOrderedByID() }))??.count ?? 0
+        let pageCount = cachedListAllPages(in: store)?.count ?? 0
+        let sourceCount = cachedListAllSourceRows(in: store)?.count ?? 0
+        let chatCount = cachedListAllChats(in: store)?.count ?? 0
         return Data(WikiTreeRenderer.render(pageCount: pageCount, sourceCount: sourceCount,
                                             chatCount: chatCount).utf8)
     }
@@ -826,15 +1019,16 @@ struct Projection {
             return cached
         }
         guard let store = openReadStore() else { return "0:0" }
-        let token: ChangeToken
+        let raw: String
         do {
-            token = try store.changeToken()
+            // The data source serves the token's raw string directly (the
+            // wire carries the string, not the folded ChangeToken struct).
+            raw = try store.changeToken()
         } catch {
             DebugLog.fileprovider("changeToken failed wikiID=\(wikiID.rawValue): \(error)")
             readStoreHolder?.markFailed("changeToken: \(error)")
             return "0:0"
         }
-        let raw = token.rawString
         readStoreHolder?.cacheToken(raw)
         return raw
     }
@@ -846,7 +1040,7 @@ struct Projection {
     /// fabricate `usage_count: 0`. Without a read scope the fresh fetch result
     /// is returned directly — the caller gets exactly the ids it asked about.
     private func credibilitySignals(
-        for ids: [SourceID], in store: GRDBWikiStore
+        for ids: [SourceID], in store: any ProjectionSource
     ) throws -> (signals: [String: GRDBWikiStore.SourceUsageSignal],
                  producers: [String: GRDBWikiStore.SourceHeadProducer]) {
         guard !ids.isEmpty else { return ([:], [:]) }
@@ -879,10 +1073,10 @@ struct Projection {
     /// failure is logged, not thrown — the per-page fetches then surface the
     /// real error if the aggregate is broken.
     private func prefetchCredibilitySignals(
-        in store: GRDBWikiStore, sourceIDs allIDs: [SourceID]? = nil
+        in store: any ProjectionSource, sourceIDs allIDs: [SourceID]? = nil
     ) {
         guard readStoreHolder != nil else { return }
-        let ids = allIDs ?? ((storeRead("listAllSources", { try store.listAllSourcesOrderedByID() })) ?? [])
+        let ids = allIDs ?? (cachedListAllSourceRows(in: store) ?? [])
             .map { SourceID(rawValue: $0.id) }
         do {
             _ = try credibilitySignals(for: ids, in: store)
@@ -976,7 +1170,7 @@ struct Projection {
         )
     }
 
-    private func pageContent(for page: WikiPage, in store: GRDBWikiStore) throws -> (content: String, revision: Int64, provenanceDigest: String) {
+    private func pageContent(for page: WikiPage, in store: any ProjectionSource) throws -> (content: String, revision: Int64, provenanceDigest: String) {
         let links = (DebugLog.trying("sourceLinks", operation: { try store.sourceLinks(from: page.id) }) ?? [])
             .filter { $0.role == .cite }
         var citedIDs: [SourceID] = []
@@ -1029,7 +1223,7 @@ struct Projection {
     /// render, the trust projection revision, and the digest.
     private func sourceMarkdownContent(for source: SourceSummary,
                                        head: SourceMarkdownVersion,
-                                       in store: GRDBWikiStore) throws -> (content: String, revision: Int64, provenanceDigest: String) {
+                                       in store: any ProjectionSource) throws -> (content: String, revision: Int64, provenanceDigest: String) {
         let credibility = try credibilitySignals(for: [source.id], in: store)
         // Same head resolution as the signals fetch, so the producer here is
         // the one recorded on `head` — no separate per-leaf query needed.
@@ -1083,7 +1277,7 @@ struct Projection {
     private func cachedSiblingRender(
         for source: SourceSummary,
         head: SourceMarkdownVersion,
-        in store: GRDBWikiStore
+        in store: any ProjectionSource
     ) -> SiblingRender? {
         Self.siblingRenderCache.render(
             forKey: "\(wikiID.rawValue)/\(source.id.rawValue)",
@@ -1138,9 +1332,7 @@ struct Projection {
             guard let ulid = Identity.pageULID(from: id),
                   let store = projection.openReadStore(),
                   let page = projection.storeRead("getPage", { try store.getPage(id: PageID(rawValue: ulid)) }) else { return nil }
-            guard let projected = DebugLog.trying("pageOKFContent", operation: {
-                try projection.pageContent(for: page, in: store)
-            }) else { return nil }
+            guard let projected = projection.cachedPageRender(for: page, in: store) else { return nil }
             // For by-title pages, size must match the rewritten bytes that
             // contents(for:) will serve — a mismatch truncates cat (#216).
             if id.rawValue.hasPrefix(Identity.byTitlePrefix) {
@@ -1160,9 +1352,7 @@ struct Projection {
             guard let ulid = Identity.pageULID(from: id),
                   let store = projection.openReadStore(),
                   let page = projection.storeRead("getPage", { try store.getPage(id: PageID(rawValue: ulid)) }) else { return nil }
-            guard let projected = DebugLog.trying("pageOKFContent", operation: {
-                try projection.pageContent(for: page, in: store)
-            }) else { return nil }
+            guard let projected = projection.cachedPageRender(for: page, in: store) else { return nil }
             // By-title view: rewrite [[wikilinks]] to relative Markdown links.
             if id.rawValue.hasPrefix(Identity.byTitlePrefix) {
                 return projection.rewriteLinks(projected.content, maps: projection.cachedLinkMaps(),
@@ -1438,11 +1628,11 @@ struct Projection {
         id: Identity.manifest, name: "manifest.json", parent: .rootContainer,
         generate: { projection in
             guard let store = projection.openReadStore(),
-                  let pages = projection.storeRead("listAllPages", { try store.listAllPagesOrderedByID() }) else { return nil }
+                  let pages = projection.cachedListAllPages(in: store) else { return nil }
             // file_count must be resilient to a pre-migration `ingested_files`:
             // a `nil` read → 0, so the manifest still generates.
-            let sourceCount = (projection.storeRead("listAllSources", { try store.listAllSourcesOrderedByID() }))?.count ?? 0
-            let chatCount = (projection.storeRead("listAllChats", { try store.listAllChatsOrderedByID() }))?.count ?? 0
+            let sourceCount = projection.cachedListAllSourceRows(in: store)?.count ?? 0
+            let chatCount = projection.cachedListAllChats(in: store)?.count ?? 0
             return IndexGenerators.manifest(pages: pages, sourceCount: sourceCount,
                                             chatCount: chatCount, generatedAt: Date())
         }
@@ -1452,7 +1642,7 @@ struct Projection {
         id: Identity.indexPagesJSONL, name: "pages.jsonl", parent: Identity.indexes,
         generate: { projection in
             guard let store = projection.openReadStore(),
-                  let pages = projection.storeRead("listAllPages", { try store.listAllPagesOrderedByID() }) else { return nil }
+                  let pages = projection.cachedListAllPages(in: store) else { return nil }
             return IndexGenerators.pagesJSONL(pages: pages)
         }
     )
@@ -1474,7 +1664,7 @@ struct Projection {
             guard let store = projection.openReadStore() else { return nil }
             // Resilient to the table not existing yet → empty index, never nil,
             // so enumeration of `indexes/` never errors pre-migration.
-            let files = (projection.storeRead("listAllSources", { try store.listAllSourcesOrderedByID() })) ?? []
+            let files = projection.cachedListAllSourceRows(in: store) ?? []
             return IndexGenerators.sourcesJSONL(sources: files)
         }
     )
@@ -1485,7 +1675,7 @@ struct Projection {
             guard let store = projection.openReadStore() else { return nil }
             // Resilient to the `chats` table not existing yet → empty index,
             // never nil, so enumeration of `indexes/` never errors pre-migration.
-            let chats = (projection.storeRead("listAllChats", { try store.listAllChatsOrderedByID() })) ?? []
+            let chats = projection.cachedListAllChats(in: store) ?? []
             return IndexGenerators.chatsJSONL(chats: chats)
         }
     )
@@ -1592,7 +1782,7 @@ struct Projection {
     /// the tree shape is preserved. All bookmark nodes are versioned by the
     /// change token so any mutation re-fetches them.
     private func bookmarkNodeItem(
-        for node: BookmarkNode, in store: GRDBWikiStore,
+        for node: BookmarkNode, in store: any ProjectionSource,
         maps: LinkMaps, allNodes: [BookmarkNode]
     ) -> ProjectedNode? {
         let id = Self.bookmarkID(for: node)
@@ -1605,7 +1795,7 @@ struct Projection {
             if let page = storeRead("getPage", { try store.getPage(id: targetID) }) {
                 let baseDir = bookmarkBaseDir(for: node, in: allNodes)
                 guard let projected = DebugLog.trying("bookmarkPageOKFContent", operation: {
-                    try pageContent(for: page, in: store)
+                    cachedPageRender(for: page, in: store)
                 }) else { return nil }
                 let body = rewriteLinks(projected.content, maps: maps, baseDir: baseDir)
                 let name = Self.sanitizeFilename(page.title) + ".md"
@@ -1660,7 +1850,7 @@ struct Projection {
     private func bookmarkNode(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
         guard let ulid = Identity.bookmarkULID(from: id),
               let store = openReadStore(),
-              let nodes = storeRead("listBookmarkNodes", { try store.listBookmarkNodes() }),
+              let nodes = cachedBookmarkNodeRows(in: store),
               let node = nodes.first(where: { $0.id.rawValue == ulid }) else { return nil }
         return bookmarkNodeItem(for: node, in: store, maps: cachedLinkMaps(), allNodes: nodes)
     }
@@ -1678,7 +1868,7 @@ struct Projection {
             return []
         }
         guard let store = openReadStore(),
-              let nodes = storeRead("listBookmarkNodes", { try store.listBookmarkNodes() }) else { return [] }
+              let nodes = cachedBookmarkNodeRows(in: store) else { return [] }
         let maps = cachedLinkMaps()
         return nodes
             .filter { $0.parentID == parentID }
@@ -1691,7 +1881,7 @@ struct Projection {
     private func bookmarkContent(for id: NSFileProviderItemIdentifier) -> Data? {
         guard let ulid = Identity.bookmarkULID(from: id),
               let store = openReadStore(),
-              let nodes = storeRead("listBookmarkNodes", { try store.listBookmarkNodes() }),
+              let nodes = cachedBookmarkNodeRows(in: store),
               let node = nodes.first(where: { $0.id.rawValue == ulid }) else { return nil }
         switch node.content {
         case .folder:
@@ -1701,7 +1891,7 @@ struct Projection {
                 return Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
             }
             guard let projected = DebugLog.trying("bookmarkPageOKFContent", operation: {
-                try pageContent(for: page, in: store)
+                cachedPageRender(for: page, in: store)
             }) else { return nil }
             return rewriteLinks(projected.content,
                                 maps: cachedLinkMaps(),
@@ -1723,7 +1913,7 @@ struct Projection {
     /// Emit ALL bookmark nodes at every depth (for the working set).
     private func allBookmarkNodes() -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let nodes = storeRead("listBookmarkNodes", { try store.listBookmarkNodes() }) else { return [] }
+              let nodes = cachedBookmarkNodeRows(in: store) else { return [] }
         let maps = cachedLinkMaps()
         return nodes.compactMap { bookmarkNodeItem(for: $0, in: store, maps: maps, allNodes: nodes) }
     }
@@ -1735,7 +1925,7 @@ struct Projection {
     /// collapsing what was previously 1–3 independent store opens per call.
     func node(for id: NSFileProviderItemIdentifier) -> ProjectedNode? {
         var scoped = self
-        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        scoped.readStoreHolder = ReadScope(source: source)
         return scoped.nodeResolved(for: id)
     }
 
@@ -2157,6 +2347,127 @@ struct Projection {
         return origins
     }
 
+    // MARK: - Per-scope batched listings (#291, Phase 6)
+    //
+    // One wire op per DISTINCT listing per enumeration pass. Several subpaths
+    // of one pass each need the same scans (the two page views, the link
+    // maps, the WIKI-STRUCTURE/TREE counts, the manifest/pages.jsonl
+    // generators, the credibility prefetch, the bookmark enumeration); these
+    // accessors make the FIRST successful scan serve them all. Failures cache
+    // nothing, so a later subpath can still surface the error.
+
+    /// The full page listing, scanned once per read scope.
+    private func cachedListAllPages(in store: (any ProjectionSource)?) -> [WikiPage]? {
+        if let scope = readStoreHolder, let cached = scope.pages {
+            return cached
+        }
+        guard let store,
+              let pages = storeRead("listAllPages", { try store.listAllPagesOrderedByID() }) else {
+            return nil
+        }
+        readStoreHolder?.cachePages(pages)
+        return pages
+    }
+
+    /// The full source-row listing, scanned once per read scope.
+    private func cachedListAllSourceRows(in store: (any ProjectionSource)?) -> [IndexGenerators.SourceIndexRow]? {
+        if let scope = readStoreHolder, let cached = scope.sourceRows {
+            return cached
+        }
+        guard let store,
+              let rows = storeRead("listAllSources", { try store.listAllSourcesOrderedByID() }) else {
+            return nil
+        }
+        readStoreHolder?.cacheSourceRows(rows)
+        return rows
+    }
+
+    /// The full chat listing, scanned once per read scope.
+    private func cachedListAllChats(in store: (any ProjectionSource)?) -> [ChatSummary]? {
+        if let scope = readStoreHolder, let cached = scope.chats {
+            return cached
+        }
+        guard let store,
+              let chats = storeRead("listAllChats", { try store.listAllChatsOrderedByID() }) else {
+            return nil
+        }
+        readStoreHolder?.cacheChats(chats)
+        return chats
+    }
+
+    /// The full log-entry listing, scanned once per read scope.
+    private func cachedLogEntries(in store: (any ProjectionSource)?) -> [LogEntry]? {
+        if let scope = readStoreHolder, let cached = scope.logEntries {
+            return cached
+        }
+        guard let store,
+              let entries = storeRead("listAllLogEntries", { try store.listAllLogEntriesOrderedByID() }) else {
+            return nil
+        }
+        readStoreHolder?.cacheLogEntries(entries)
+        return entries
+    }
+
+    /// The full bookmark-node listing, scanned once per read scope.
+    private func cachedBookmarkNodeRows(in store: (any ProjectionSource)?) -> [BookmarkNode]? {
+        if let scope = readStoreHolder, let cached = scope.bookmarkNodes {
+            return cached
+        }
+        guard let store,
+              let nodes = storeRead("listBookmarkNodes", { try store.listBookmarkNodes() }) else {
+            return nil
+        }
+        readStoreHolder?.cacheBookmarkNodes(nodes)
+        return nodes
+    }
+
+    /// The sibling-image resolver map, fetched once per read scope.
+    private func cachedSiblingImages(in store: (any ProjectionSource)?) -> [SourceID: [String: SourceID]] {
+        if let scope = readStoreHolder, let cached = scope.siblingImages {
+            return cached
+        }
+        let images = (DebugLog.trying("siblingImageResolvers", operation: { try store?.siblingImageResolvers() })) ?? [:]
+        readStoreHolder?.cacheSiblingImages(images)
+        return images
+    }
+
+    /// One page's derived OKF projection, derived at most once per read
+    /// scope. `pageContent` issues per-page wire reads (cite links, head
+    /// version id, trust metadata), so every consumer in one pass — the
+    /// by-id view, the by-title view, bookmark refs — shares the FIRST
+    /// derivation. A derivation failure caches nothing, so each consumer
+    /// keeps its own failure fallback (the enumerated row stays listed in
+    /// the pre-#927 shape; the single-item leaf resolves to nil), exactly
+    /// as before.
+    private func cachedPageRender(for page: WikiPage, in store: (any ProjectionSource)?) -> PageRender? {
+        if let scope = readStoreHolder, let cached = scope.pageRender(for: page.id) {
+            return cached
+        }
+        guard let store,
+              let projected = DebugLog.trying("pageOKFContent", operation: {
+                  try pageContent(for: page, in: store)
+              }) else { return nil }
+        let render = PageRender(content: projected.content, revision: projected.revision,
+                                provenanceDigest: projected.provenanceDigest)
+        readStoreHolder?.cachePageRender(render, for: page.id)
+        return render
+    }
+
+    /// One source's verbatim bytes, fetched at most once per read scope (the
+    /// by-name view's image-rewritten content is the only in-pass consumer;
+    /// a failed fetch caches nothing).
+    private func cachedVerbatimSourceBytes(id: SourceID, in store: (any ProjectionSource)?) -> Data? {
+        if let scope = readStoreHolder, let cached = scope.sourceBytes(for: id) {
+            return cached
+        }
+        guard let store,
+              let data = storeRead("sourceContent", { try store.sourceContent(id: id) }) else {
+            return nil
+        }
+        readStoreHolder?.cacheSourceBytes(data, for: id)
+        return data
+    }
+
     private func makeLinkMaps() -> LinkMaps {
         let store = openReadStore()
 
@@ -2166,23 +2477,25 @@ struct Projection {
         // a neutral intermediate; we adapt its entries to RelativeLinkRewriter
         // .Target below — the file-path logic is Projection-specific. Source
         // rows are fetched once and reused for the byteless (#1375) webloc
-        // target map below.
-        let siblingImages = (DebugLog.trying("siblingImageResolvers", operation: { try store?.siblingImageResolvers() })) ?? [:]
-        let sourceRows = (DebugLog.trying("listAllSources", operation: { try store?.listAllSourcesOrderedByID() })) ?? []
+        // target map below. Every listing flows through the per-scope caches
+        // so a pass that already scanned (page views, tree counts, manifest)
+        // does not re-issue the wire op (#291 Phase 6).
+        let siblingImages = cachedSiblingImages(in: store)
+        let sourceRows = cachedListAllSourceRows(in: store) ?? []
         let index = WikiLinkIndex.build(
-            pages: ((DebugLog.trying("listAllPages", operation: { try store?.listAllPagesOrderedByID() })) ?? []).map {
+            pages: (cachedListAllPages(in: store) ?? []).map {
                 WikiLinkIndex.PageEntry(id: $0.id.rawValue, title: $0.title) },
             sources: sourceRows.map {
                 WikiLinkIndex.SourceEntry(
                     id: $0.id, filename: $0.filename, ext: $0.ext,
                     mime: $0.mime, displayName: $0.displayName) },
-            chats: ((DebugLog.trying("listAllChats", operation: { try store?.listAllChatsOrderedByID() })) ?? []).map {
+            chats: (cachedListAllChats(in: store) ?? []).map {
                 WikiLinkIndex.ChatEntry(id: $0.id.rawValue, title: $0.title) },
             siblingImages: siblingImages)
 
         // Heads map — Projection-specific: determines whether each source
         // target points at the readable .md sibling or the raw verbatim file.
-        let heads = (DebugLog.trying("processedMarkdownHeads", operation: { try store?.processedMarkdownHeadsBySource() })) ?? [:]
+        let heads = cachedHeadsBySource()
 
         // Byteless sources with a RESOLVABLE origin (identity URL, else the
         // fetch activity's plan/external_ref URL) project as `.webloc` URL
@@ -2190,7 +2503,7 @@ struct Projection {
         // not a phantom zero-byte verbatim file. One bulk origin fetch; the
         // same `originURL` resolution rule the leaf paths use, so the target
         // set can never drift from the projected nodes.
-        let origins = (DebugLog.trying("sourceOriginsBySource", operation: { try store?.sourceOriginsBySource() })) ?? [:]
+        let origins = cachedOriginCandidates()
         var weblocFileNames: [String: String] = [:]
         for row in sourceRows where row.byteSize == 0 {
             guard Self.originURL(from: origins[SourceID(rawValue: row.id)]) != nil else { continue }
@@ -2269,9 +2582,7 @@ struct Projection {
         guard let store = openReadStore() else {
             return rewriteLinks(PageMarkdownFormat.fileContent(for: page), maps: maps, baseDir: Self.pagesByTitleDir)
         }
-        guard let projected = DebugLog.trying("pageOKFContent", operation: {
-            try pageContent(for: page, in: store)
-        }) else { return Data() }
+        guard let projected = cachedPageRender(for: page, in: store) else { return Data() }
         return rewriteLinks(projected.content, maps: maps, baseDir: Self.pagesByTitleDir)
     }
 
@@ -2289,7 +2600,7 @@ struct Projection {
         guard MimeType.isText(mimeType),
               let siblingMap = maps.siblingImages[id], !siblingMap.isEmpty,
               let store = openReadStore(),
-              let raw = storeRead("sourceContent", { try store.sourceContent(id: id) }),
+              let raw = cachedVerbatimSourceBytes(id: id, in: store),
               let text = String(data: raw, encoding: .utf8) else { return nil }
         let resolver = maps.imageResolver(forSource: id, baseDir: Self.sourcesByNameDir)
         let rewritten = SourceImageRewriter.rewrite(text, resolver: resolver)
@@ -2304,7 +2615,7 @@ struct Projection {
     /// doc, plus one per `changeToken()` call).
     func children(of container: NSFileProviderItemIdentifier) -> [ProjectedNode] {
         var scoped = self
-        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        scoped.readStoreHolder = ReadScope(source: source)
         return scoped.childrenResolved(of: container)
     }
 
@@ -2452,15 +2763,13 @@ struct Projection {
     /// derivation never re-queries them (#927).
     private func pageNodes(byTitle: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let pages = storeRead("listAllPages", { try store.listAllPagesOrderedByID() }) else { return [] }
+              let pages = cachedListAllPages(in: store) else { return [] }
         prefetchCredibilitySignals(in: store)
         let maps = byTitle ? cachedLinkMaps() : nil
         return pages.map { page in
             let id = byTitle ? Identity.pageByTitle(page.id.rawValue)
                              : Identity.pageByID(page.id.rawValue)
-            guard let projected = DebugLog.trying("pageOKFContent", operation: {
-                try pageContent(for: page, in: store)
-            }) else {
+            guard let projected = cachedPageRender(for: page, in: store) else {
                 // Failure fallback: keep the row listed (unlike the leaf path,
                 // which returns nil). `contents(for:)` runs the SAME queries,
                 // so a deterministic failure degrades both sides — there is no
@@ -2506,7 +2815,7 @@ struct Projection {
     ///   `[[wikilink]]` targets.
     private func sourceNodes(byName: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let files = storeRead("listAllSources", { try store.listAllSourcesOrderedByID() }) else { return [] }
+              let files = cachedListAllSourceRows(in: store) else { return [] }
         let heads = cachedHeadsBySource()
         let originCandidates = cachedOriginCandidates()
         prefetchCredibilitySignals(
@@ -2567,7 +2876,7 @@ struct Projection {
         byName: Bool,
         maps: LinkMaps?,
         signal: GRDBWikiStore.SourceUsageSignal?,
-        in store: GRDBWikiStore
+        in store: any ProjectionSource
     ) -> ProjectedNode? {
         guard let head, !MimeType.isText(source.mimeType) else { return nil }
         let markdownID = byName
@@ -2608,7 +2917,7 @@ struct Projection {
     /// enumeration never errors.
     private func chatNodes(byName: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
-              let chats = storeRead("listAllChats", { try store.listAllChatsOrderedByID() }) else { return [] }
+              let chats = cachedListAllChats(in: store) else { return [] }
         // `cachedChatTranscript` handles both by-id (raw) and by-name (rewritten)
         // paths, caching the bytes so `contentForLeaf` serves the same Data
         // instead of re-rendering (#503 P1). Link maps are built lazily inside
@@ -2632,7 +2941,7 @@ struct Projection {
     private func cachedChatTranscript(
         for id: NSFileProviderItemIdentifier,
         chat: ChatSummary,
-        in store: GRDBWikiStore
+        in store: any ProjectionSource
     ) -> Data? {
         Self.chatContentCache.data(
             forKey: "\(wikiID.rawValue)/\(id.rawValue)", token: changeToken()
@@ -2654,7 +2963,7 @@ struct Projection {
     /// the node. Like `pageFileNode(for:page:)`.
     static func chatFileNode(for id: NSFileProviderItemIdentifier,
                              chat: ChatSummary,
-                             in store: GRDBWikiStore,
+                             in store: any ProjectionSource,
                              contentData: Data? = nil) -> ProjectedNode {
         let raw = id.rawValue
         let isByName = raw.hasPrefix(Identity.chatByNamePrefix)
@@ -2687,8 +2996,7 @@ struct Projection {
     /// read the live body from SQLite. Folders return nil. Opens ONE shared read
     /// store for the whole resolution (#291).
     func contents(for id: NSFileProviderItemIdentifier) -> Data? {
-        var scoped = self
-        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        let scoped = withReadScope()
         return scoped.contentsResolved(for: id)
     }
 
@@ -2730,7 +3038,7 @@ struct Projection {
     /// A copy of this projection with a fresh read scope.
     private func withReadScope() -> Projection {
         var scoped = self
-        scoped.readStoreHolder = ReadScope(databaseURL: databaseURL, wikiID: wikiID)
+        scoped.readStoreHolder = ReadScope(source: source)
         return scoped
     }
 

@@ -20,7 +20,6 @@ struct SourcesContainerView: View {
     @Environment(\.openActivityWindow) private var openActivityWindow
     let launcher: AgentLauncher
     let queueEngine: any QueueEngineClient
-    let extractionProvider: any QueueExtractionProvider
     var ingestingSourceIDs: Set<SourceID> = []
 
     /// Display order backing the "Sort by" menu. Owned by `SidebarView` —
@@ -146,7 +145,7 @@ struct SourcesContainerView: View {
                     let sourceIDs = pending.sourceIDs
                     reingestConfirmation = nil
                     Task {
-                        store.flushPendingSaves()
+                        await store.flushPendingSaves()
                         await enqueueIngestion(
                             sourceIDs: sourceIDs,
                             store: store,
@@ -163,7 +162,7 @@ struct SourcesContainerView: View {
                 onConfirm: { parentID in
                     guard case .sources(let ids) = ctx.targets else { return }
                     for id in ids {
-                        store.addSourceRef(parentID: parentID, sourceID: id)
+                        Task { await store.addSourceRef(parentID: parentID, sourceID: id) }
                     }
                 }
             )
@@ -320,7 +319,7 @@ struct SourcesContainerView: View {
             },
             onIngest: { ids in
                 Task {
-                    store.flushPendingSaves()
+                    await store.flushPendingSaves()
                     await enqueueIngestion(
                         sourceIDs: ids,
                         store: store,
@@ -365,7 +364,7 @@ struct SourcesContainerView: View {
                 addToBookmarksContext = BookmarkTargetPickerContext(targets: .sources(ids))
             },
             onNewChat: { ids in
-                store.beginNewChat(attachments: ChatAttachmentTarget.sources(ids))
+                Task { await store.beginNewChat(attachments: ChatAttachmentTarget.sources(ids)) }
             })
     }
 
@@ -377,7 +376,7 @@ struct SourcesContainerView: View {
     private func commitRename() {
         if let target = renameTarget {
             let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { store.renameSource(id: target.id, to: trimmed) }
+            if !trimmed.isEmpty { Task { await store.renameSource(id: target.id, to: trimmed) } }
         }
         renameTarget = nil
     }
@@ -396,31 +395,37 @@ struct SourcesContainerView: View {
     /// immediately (nothing references them) or route to the typed state.
     private func requestSourceDeletion(_ ids: [SourceID]) {
         pendingDeletionIDs = ids
-        let coordinator = DeletionConfirmationCoordinator(
-            kind: .source,
-            loadImpacts: {
-                try ids.map { try store.deletionImpact(forSource: $0) }
-            },
-            onDelete: { decision in
-                performSourceDeletion(ids: ids, decision: decision)
-            },
-            pageTitle: { id in
-                store.summaries.first { $0.id == id }?.title
-            },
-            selectionCount: ids.count)
-        let outcome = coordinator.evaluate()
-        if case .deleteImmediately = outcome {
-            // No references, no blockers — delete without a dialog.
-            coordinator.perform(.delete)
-        } else {
-            deletionOutcome = outcome
+        Task {
+            let coordinator = DeletionConfirmationCoordinator(
+                kind: .source,
+                loadImpacts: {
+                    var impacts: [DeletionImpact] = []
+                    for id in ids {
+                        impacts.append(try await store.deletionImpact(forSource: id))
+                    }
+                    return impacts
+                },
+                onDelete: { decision in
+                    performSourceDeletion(ids: ids, decision: decision)
+                },
+                pageTitle: { id in
+                    store.summaries.first { $0.id == id }?.title
+                },
+                selectionCount: ids.count)
+            let outcome = await coordinator.evaluate()
+            if case .deleteImmediately = outcome {
+                // No references, no blockers — delete without a dialog.
+                coordinator.perform(.delete)
+            } else {
+                deletionOutcome = outcome
+            }
         }
     }
 
     private func performSourceDeletion(ids: [SourceID], decision: DeletionDecision) {
         // ONE protected transaction for the whole selection; on failure the
         // model surfaces the store error and returns nil (nothing changed).
-        _ = store.performSourceDeletion(ids, unlinkIncomingLinks: decision == .unlink)
+        Task { await store.performSourceDeletion(ids, unlinkIncomingLinks: decision == .unlink) }
     }
 
     private func handleDeletionAction(_ action: DeletionDialogAction) {

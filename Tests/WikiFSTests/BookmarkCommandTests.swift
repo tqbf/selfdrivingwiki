@@ -22,26 +22,26 @@ import Foundation
 
     // MARK: - list
 
-    @Test func listEmptyBookmarks() throws {
+    @Test func listEmptyBookmarks() async throws {
         let store = try tempStore()
-        let result = try BookmarkCommand.run(.list(json: false), in: store)
+        let result = try await BookmarkCommand.run(.list(json: false), in: store)
         #expect(result.didCommit == false)
         #expect(result.output.isEmpty)
     }
 
-    @Test func listOutputsTSV() throws {
+    @Test func listOutputsTSV() async throws {
         let store = try tempStore()
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Research"))
-        let result = try BookmarkCommand.run(.list(json: false), in: store)
+        let result = try await BookmarkCommand.run(.list(json: false), in: store)
         #expect(result.didCommit == false)
         #expect(result.output.contains("Research"))
         #expect(result.output.contains("folder"))
     }
 
-    @Test func listOutputsJSON() throws {
+    @Test func listOutputsJSON() async throws {
         let store = try tempStore()
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Research"))
-        let result = try BookmarkCommand.run(.list(json: true), in: store)
+        let result = try await BookmarkCommand.run(.list(json: true), in: store)
         #expect(result.didCommit == false)
         #expect(result.output.contains("\"label\":\"Research\""))
         #expect(result.output.contains("\"kind\":\"folder\""))
@@ -49,9 +49,9 @@ import Foundation
 
     // MARK: - create-folder
 
-    @Test func createFolderCommitsAndOutputsConfirmation() throws {
+    @Test func createFolderCommitsAndOutputsConfirmation() async throws {
         let store = try tempStore()
-        let result = try BookmarkCommand.run(
+        let result = try await BookmarkCommand.run(
             .createFolder(parentID: nil, name: "Research"), in: store
         )
         #expect(result.didCommit == true)
@@ -62,10 +62,10 @@ import Foundation
         #expect(nodes[0].label == "Research")
     }
 
-    @Test func createNestedFolder() throws {
+    @Test func createNestedFolder() async throws {
         let store = try tempStore()
         let parent = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Parent"))
-        let result = try BookmarkCommand.run(
+        let result = try await BookmarkCommand.run(
             .createFolder(parentID: parent.id.rawValue, name: "Child"), in: store
         )
         #expect(result.didCommit == true)
@@ -77,9 +77,9 @@ import Foundation
 
     // MARK: - add-ref
 
-    @Test func addPageRefCommits() throws {
+    @Test func addPageRefCommits() async throws {
         let store = try tempStore()
-        let result = try BookmarkCommand.run(
+        let result = try await BookmarkCommand.run(
             .addRef(parentID: nil, content: .page(PageID(rawValue: "01PAGE"))),
             in: store
         )
@@ -92,9 +92,9 @@ import Foundation
         #expect(nodes[0].content == .page(PageID(rawValue: "01PAGE")))
     }
 
-    @Test func addSourceRefCommits() throws {
+    @Test func addSourceRefCommits() async throws {
         let store = try tempStore()
-        let result = try BookmarkCommand.run(
+        let result = try await BookmarkCommand.run(
             .addRef(parentID: nil, content: .source(SourceID(rawValue: "01SRC"))),
             in: store
         )
@@ -102,9 +102,9 @@ import Foundation
         #expect(result.output.contains("source"))
     }
 
-    @Test func addChatRefCommits() throws {
+    @Test func addChatRefCommits() async throws {
         let store = try tempStore()
-        let result = try BookmarkCommand.run(
+        let result = try await BookmarkCommand.run(
             .addRef(parentID: nil, content: .chat(ChatID(rawValue: "01CHAT"))),
             in: store
         )
@@ -114,10 +114,10 @@ import Foundation
 
     // MARK: - rename
 
-    @Test func renameCommitsAndUpdateLabel() throws {
+    @Test func renameCommitsAndUpdateLabel() async throws {
         let store = try tempStore()
         let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Old"))
-        let result = try BookmarkCommand.run(
+        let result = try await BookmarkCommand.run(
             .rename(id: node.id.rawValue, to: "New"), in: store
         )
         #expect(result.didCommit == true)
@@ -128,10 +128,10 @@ import Foundation
 
     // MARK: - delete
 
-    @Test func deleteCommits() throws {
+    @Test func deleteCommits() async throws {
         let store = try tempStore()
         let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "ToDelete"))
-        let result = try BookmarkCommand.run(.delete(id: node.id.rawValue), in: store)
+        let result = try await BookmarkCommand.run(.delete(id: node.id.rawValue), in: store)
         #expect(result.didCommit == true)
         let nodes = try store.listBookmarkNodes()
         #expect(nodes.isEmpty)
@@ -139,10 +139,10 @@ import Foundation
 
     // MARK: - move
 
-    @Test func moveCommits() throws {
+    @Test func moveCommits() async throws {
         let store = try tempStore()
         let node = try store.createBookmarkNode(parentID: nil, position: 0, content: .folder(label: "Movable"))
-        let result = try BookmarkCommand.run(
+        let result = try await BookmarkCommand.run(
             .move(id: node.id.rawValue, toParentID: nil, position: 5), in: store
         )
         #expect(result.didCommit == true)
@@ -150,7 +150,7 @@ import Foundation
 
     // MARK: - argument parsing
 
-    @Test func parseListReturnsBookmarkList() throws {
+    @Test func parseListReturnsBookmarkList() async throws {
         let inv = try ArgumentParser.parse(["--wiki", "W", "bookmark", "list"], env: noEnv)
         guard case .bookmark(let action) = inv.command,
               case .list(let json) = action else {
@@ -159,7 +159,7 @@ import Foundation
         #expect(json == false)
     }
 
-    @Test func parseCreateFolder() throws {
+    @Test func parseCreateFolder() async throws {
         let inv = try ArgumentParser.parse([
             "--wiki", "W", "bookmark", "create-folder", "--name", "Research"
         ], env: noEnv)
@@ -171,7 +171,7 @@ import Foundation
         #expect(name == "Research")
     }
 
-    @Test func parseAddRef() throws {
+    @Test func parseAddRef() async throws {
         let inv = try ArgumentParser.parse([
             "--wiki", "W", "bookmark", "add-ref", "--kind", "page", "--target", "01PAGE"
         ], env: noEnv)
@@ -183,7 +183,7 @@ import Foundation
         #expect(content == .page(PageID(rawValue: "01PAGE")))
     }
 
-    @Test func parseRename() throws {
+    @Test func parseRename() async throws {
         let inv = try ArgumentParser.parse([
             "--wiki", "W", "bookmark", "rename", "--id", "abc", "--to", "NewName"
         ], env: noEnv)
@@ -195,7 +195,7 @@ import Foundation
         #expect(to == "NewName")
     }
 
-    @Test func parseDelete() throws {
+    @Test func parseDelete() async throws {
         let inv = try ArgumentParser.parse([
             "--wiki", "W", "bookmark", "delete", "--id", "abc"
         ], env: noEnv)
@@ -206,7 +206,7 @@ import Foundation
         #expect(id == "abc")
     }
 
-    @Test func parseMove() throws {
+    @Test func parseMove() async throws {
         let inv = try ArgumentParser.parse([
             "--wiki", "W", "bookmark", "move", "--id", "abc", "--position", "3"
         ], env: noEnv)
@@ -219,13 +219,13 @@ import Foundation
         #expect(pos == 3)
     }
 
-    @Test func parseCreateFolderRequiresName() throws {
+    @Test func parseCreateFolderRequiresName() async throws {
         #expect(throws: ArgumentParser.Failure.self) {
             _ = try ArgumentParser.parse(["--wiki", "W", "bookmark", "create-folder"], env: noEnv)
         }
     }
 
-    @Test func parseAddRefRequiresKind() throws {
+    @Test func parseAddRefRequiresKind() async throws {
         #expect(throws: ArgumentParser.Failure.self) {
             _ = try ArgumentParser.parse([
                 "--wiki", "W", "bookmark", "add-ref", "--target", "01PAGE"

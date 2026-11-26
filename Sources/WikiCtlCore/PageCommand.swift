@@ -109,28 +109,28 @@ public enum PageCommand {
         validator: (any FenceSyntaxValidating)? = nil,
         linter: MarkdownLinter? = MarkdownLinter.loadDefault(),
         bm25Leg: [WikiPageSummary]? = nil
-    ) throws -> Result {
+    ) async throws -> Result {
         switch action {
         case .list(let json):
-            return try list(in: store, json: json)
+            return try await list(in: store, json: json)
         case .get(let selector, let json, let workspace):
-            return try get(selector, in: store, json: json, workspace: workspace)
+            return try await get(selector, in: store, json: json, workspace: workspace)
         case .add(let id, let title, let bodySource, let expectHead, let createOnly, let workspace, let author, let provenance):
             let body = try resolveBodySource(bodySource)
-            return try upsert(id: id, title: title, body: body, expectHead: expectHead, createOnly: createOnly, workspace: workspace, author: author,
+            return try await upsert(id: id, title: title, body: body, expectHead: expectHead, createOnly: createOnly, workspace: workspace, author: author,
                               provenance: mergedAgentIngestProvenance(provenance), in: store, validator: validator, linter: linter)
         case .delete(let id, let unlinkIncoming):
-            return try delete(id: id, unlinkIncoming: unlinkIncoming, in: store)
+            return try await delete(id: id, unlinkIncoming: unlinkIncoming, in: store)
         case .search(let query, let limit):
-            return try search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
+            return try await search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
         case .history(let selector):
-            return try history(selector, in: store)
+            return try await history(selector, in: store)
         case .revert(let selector, let versionID):
-            return try revert(selector, versionID: versionID, in: store)
+            return try await revert(selector, versionID: versionID, in: store)
         case .info(let selector):
-            return try info(selector, in: store)
+            return try await info(selector, in: store)
         case .okfInspect(let versionID, let json):
-            guard let projection = try store.pageOKFMetadata(
+            guard let projection = try await store.pageOKFMetadata(
                 versionID: versionID, includeCorrected: true) else {
                 throw Failure.message("page version not found: \(versionID.rawValue)")
             }
@@ -141,19 +141,19 @@ public enum PageCommand {
                     metadata: projection.metadata, json: json),
                 didCommit: false)
         case .okfStatus(let versionID, let status):
-            try store.setPageOKFStatus(versionID: versionID, status: status)
+            try await store.setPageOKFStatus(versionID: versionID, status: status)
             return Result(output: status.map { "status\t\($0.rawValue)" } ?? "status\tunset", didCommit: true)
         case .okfFreshness(let versionID, let input):
-            try store.setPageOKFFreshness(versionID: versionID, policy: try input.policy)
+            try await store.setPageOKFFreshness(versionID: versionID, policy: try input.policy)
             return Result(output: "freshness\tupdated", didCommit: true)
         case .okfVerify(let versionID, let input):
-            let id = try store.recordPageOKFVerification(
+            let id = try await store.recordPageOKFVerification(
                 versionID: versionID, verifier: input.verifier,
                 verifiedAt: input.verifiedAt, basis: input.basis,
                 freshnessPolicy: try input.freshness?.policy)
             return Result(output: "verification_id\t\(id.rawValue)", didCommit: true)
         case .okfCorrect(let versionID, let input):
-            try store.correctPageOKFVerification(
+            try await store.correctPageOKFVerification(
                 versionID: versionID, verificationID: input.verificationID,
                 correctingVerifier: input.verifier, correctedAt: input.correctedAt,
                 reason: input.reason)
@@ -179,8 +179,8 @@ public enum PageCommand {
 
     // MARK: - list
 
-    private static func list(in store: WikiStore, json: Bool) throws -> Result {
-        let summaries = try store.listPages(sortBy: .lastUpdated)
+    private static func list(in store: WikiStore, json: Bool) async throws -> Result {
+        let summaries = try await store.listPages(sortBy: .lastUpdated)
         // #1230 (axi.md principle 5): a zero-row run says so on stderr while
         // stdout keeps its exact bytes (empty TSV, empty JSON-lines stream).
         let emptyNote = summaries.isEmpty ? ZeroResults.note("page list") : nil
@@ -235,7 +235,7 @@ public enum PageCommand {
         let head_version_id: String?
     }
 
-    private static func get(_ selector: Selector, in store: WikiStore, json: Bool = false, workspace: String? = nil) throws -> Result {
+    private static func get(_ selector: Selector, in store: WikiStore, json: Bool = false, workspace: String? = nil) async throws -> Result {
         // Phase 7: workspace overlay read. When --workspace is set, check
         // the workspace's staged version FIRST. A created page (staged as
         // blob_hash) has no `pages` row on main, so `getPage` would throw.
@@ -250,22 +250,22 @@ public enum PageCommand {
                 id = pageID
             case .title:
                 do {
-                    id = try resolve(selector, in: store)
+                    id = try await resolve(selector, in: store)
                 } catch {
                     DebugLog.store("page get: title resolve failed — \(error)")
                     id = nil
                 }
             }
-            if let id, let stagedBody = try store.workspacePageBody(workspaceID: WorkspaceID(rawValue: workspace), pageID: id) {
+            if let id, let stagedBody = try await store.workspacePageBody(workspaceID: WorkspaceID(rawValue: workspace), pageID: id) {
                 var headVersionID: PageVersionID?
                 do {
-                    headVersionID = try store.workspacePageVersion(workspaceID: WorkspaceID(rawValue: workspace), pageID: id)
+                    headVersionID = try await store.workspacePageVersion(workspaceID: WorkspaceID(rawValue: workspace), pageID: id)
                 } catch {
                     DebugLog.store("page get: workspacePageVersion failed — \(error)")
                 }
                 if headVersionID == nil {
                     do {
-                        headVersionID = try store.pageHeadVersionID(pageID: id)
+                        headVersionID = try await store.pageHeadVersionID(pageID: id)
                     } catch {
                         DebugLog.store("page get: pageHeadVersionID failed — \(error)")
                     }
@@ -286,9 +286,9 @@ public enum PageCommand {
             // Not staged in workspace, or no ID — fall through to main read.
         }
 
-        let id = try resolve(selector, in: store)
-        let page = try store.getPage(id: id)
-        let headVersionID = try store.pageHeadVersionID(pageID: id)
+        let id = try await resolve(selector, in: store)
+        let page = try await store.getPage(id: id)
+        let headVersionID = try await store.pageHeadVersionID(pageID: id)
 
         if json {
             // JSON mode: emit body_markdown + head_version_id as one JSON object.
@@ -325,7 +325,7 @@ public enum PageCommand {
         in store: WikiStore,
         validator: (any FenceSyntaxValidating)?,
         linter: MarkdownLinter?
-    ) throws -> Result {
+    ) async throws -> Result {
         guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw Failure.message(
                 "refusing to upsert an empty body for \(title.debugDescription) — nothing "
@@ -338,13 +338,13 @@ public enum PageCommand {
         //    when the linter is nil (no bundle → dev / swift test). If any
         //    finding can't be auto-fixed, abort (inert under the cosmetic-only
         //    config — every enabled rule is auto-fixable).
-        let fixed = try autoFixMarkdown(body, linter: linter)
+        let fixed = try await autoFixMarkdown(body, linter: linter)
         // 2. Validate claimed rich fences in the FIXED text (so the linter's
         //    whitespace fixes don't disturb a fence boundary). A nil validator
         //    skips; when a validator is present but no installed package
         //    declares the fence's alias, the save proceeds with a stderr
         //    notice instead of a silent pass.
-        let notice = try abortOnInvalidFence(fixed, validator: validator)
+        let notice = try await abortOnInvalidFence(fixed, validator: validator)
 
         // Expected-state gate (plan phase 4 §4), BEFORE the workspace routing
         // so a create-only write can never silently stage: `--create-only` and
@@ -384,13 +384,13 @@ public enum PageCommand {
                 // Resolve by title: if the page exists on main, use its ID;
                 // otherwise generate a new ULID (the workspace will stage it
                 // as a created page).
-                if let existingID = try store.resolveTitleToID(title) {
+                if let existingID = try await store.resolveTitleToID(title) {
                     pageID = existingID
                 } else {
                     pageID = PageID(rawValue: ULID.generate())
                 }
             }
-            let resultID = try store.workspaceWritePage(
+            let resultID = try await store.workspaceWritePage(
                 workspaceID: WorkspaceID(rawValue: workspace), pageID: pageID, title: title, body: fixed,
                 author: author, provenance: provenance)
             // #1228: resultID IS the staged version, so echo it directly —
@@ -411,14 +411,14 @@ public enum PageCommand {
         } else {
             expectation = .unrestricted
         }
-        let outcome = try PageUpsert.upsert(
+        let outcome = try await PageUpsert.upsert(
             in: store, id: id, title: title, body: fixed,
             expectation: expectation, author: author,
             provenance: provenance)
         // #1228: echo the new head so the agent's CAS loop can chain the next
         // --expect-head write without a separate `page get`. Same stderr
         // convention as `get`; stdout stays the page id (compatibility contract).
-        let head = try store.pageHeadVersionID(pageID: outcome.id)
+        let head = try await store.pageHeadVersionID(pageID: outcome.id)
         return Result(
             output: outcome.id.rawValue, didCommit: true,
             stderrOutput: joinedStderr(notice, headVersionDiagnostic(head)))
@@ -428,7 +428,7 @@ public enum PageCommand {
     /// `linter` is nil (unbundled / dev / `swift test`), returns `body` unchanged
     /// (no-op pass-through — the save proceeds unmodified). If `fix` returns
     /// unfixable findings, throws a `.message` with a report the agent can act on.
-    static func autoFixMarkdown(_ body: String, linter: MarkdownLinter?) throws -> String {
+    static func autoFixMarkdown(_ body: String, linter: MarkdownLinter?) async throws -> String {
         guard let linter else { return body }
         let outcome = linter.fix(markdown: body)
         if !outcome.unfixable.isEmpty {
@@ -446,7 +446,7 @@ public enum PageCommand {
     static func abortOnInvalidFence(
         _ body: String,
         validator: (any FenceSyntaxValidating)?
-    ) throws -> String? {
+    ) async throws -> String? {
         guard let validator else { return nil }
         if let warning = validator.fenceSaveWarning(for: body) {
             throw Failure.message(warning)
@@ -461,8 +461,8 @@ public enum PageCommand {
     /// bookmark cleanup and what happened to the incoming links. `didCommit`
     /// reflects actual committed change: a missing target with no stale
     /// bookmarks is an idempotent no-op and posts no change notification.
-    private static func delete(id: PageID, unlinkIncoming: Bool, in store: WikiStore) throws -> Result {
-        let result = try store.deleteResources(ResourceDeletionRequest(
+    private static func delete(id: PageID, unlinkIncoming: Bool, in store: WikiStore) async throws -> Result {
+        let result = try await store.deleteResources(ResourceDeletionRequest(
             target: .page(id),
             linkPolicy: unlinkIncoming ? .unlink : .preserve))
         let bookmarkCount = result.removedBookmarkIDs.count
@@ -480,8 +480,8 @@ public enum PageCommand {
 
     private static func search(
         query: String, limit: Int, bm25Leg: [WikiPageSummary]?, in store: WikiStore
-    ) throws -> Result {
-        let results = try store.searchSimilar(query: query, limit: limit, bm25Leg: bm25Leg)
+    ) async throws -> Result {
+        let results = try await store.searchSimilar(query: query, limit: limit, bm25Leg: bm25Leg)
         let output: String = results.map { summary in
             let title = summary.title.replacingOccurrences(of: "\t", with: " ")
             return "\(summary.id.rawValue)\t\(title)"
@@ -497,9 +497,9 @@ public enum PageCommand {
 
     // MARK: - history (W0, PR #312)
 
-    private static func history(_ selector: Selector, in store: WikiStore) throws -> Result {
-        let id = try resolve(selector, in: store)
-        let versions = try store.pageVersionHistory(pageID: id)
+    private static func history(_ selector: Selector, in store: WikiStore) async throws -> Result {
+        let id = try await resolve(selector, in: store)
+        let versions = try await store.pageVersionHistory(pageID: id)
         if versions.isEmpty {
             return Result(output: "(no version history)", didCommit: false)
         }
@@ -515,11 +515,11 @@ public enum PageCommand {
 
     private static func revert(
         _ selector: Selector, versionID: PageVersionID, in store: WikiStore
-    ) throws -> Result {
-        let id = try resolve(selector, in: store)
-        try store.revertPage(pageID: id, to: versionID)
+    ) async throws -> Result {
+        let id = try await resolve(selector, in: store)
+        try await store.revertPage(pageID: id, to: versionID)
         // #1228: the head moved; report it (axi.md action-result coupling).
-        let head = try store.pageHeadVersionID(pageID: id)
+        let head = try await store.pageHeadVersionID(pageID: id)
         return Result(
             output: "reverted \(id.rawValue) to \(versionID.rawValue)",
             didCommit: true,
@@ -534,11 +534,11 @@ public enum PageCommand {
     /// `agentName` reflects the writer — for a chat edit, `"chat:<id>"`;
     /// for an ingestion executor, `"agent:<kind>"`; for a manual app edit,
     /// `"user"`; for pre-v39 rows, `"legacy-import"`.
-    private static func info(_ selector: Selector, in store: WikiStore) throws -> Result {
-        let id = try resolve(selector, in: store)
-        let page = try store.getPage(id: id)
-        let headVersionID = try store.pageHeadVersionID(pageID: id)
-        let history = try store.pageVersionHistory(pageID: id)
+    private static func info(_ selector: Selector, in store: WikiStore) async throws -> Result {
+        let id = try await resolve(selector, in: store)
+        let page = try await store.getPage(id: id)
+        let headVersionID = try await store.pageHeadVersionID(pageID: id)
+        let history = try await store.pageVersionHistory(pageID: id)
 
         var lines: [String] = []
         lines.append("id\t\(page.id.rawValue)")
@@ -557,7 +557,7 @@ public enum PageCommand {
         }
 
         // HEAD origin (the active page-content ref → version → activity → agent).
-        if let origin = try store.pageOrigin(pageID: id) {
+        if let origin = try await store.pageOrigin(pageID: id) {
             lines.append("")
             lines.append("# origin (HEAD)")
             lines.append("activity\t\(origin.activityKind.rawValue)")
@@ -571,7 +571,7 @@ public enum PageCommand {
         }
 
         // Full edit history (every page_versions row joined to activity + agent).
-        let editHistory = try store.pageEditHistory(pageID: id)
+        let editHistory = try await store.pageEditHistory(pageID: id)
         if !editHistory.isEmpty {
             lines.append("")
             lines.append("# edit history (oldest-first)")
@@ -589,12 +589,12 @@ public enum PageCommand {
 
     // MARK: - Selector resolution
 
-    private static func resolve(_ selector: Selector, in store: WikiStore) throws -> PageID {
+    private static func resolve(_ selector: Selector, in store: WikiStore) async throws -> PageID {
         switch selector {
         case .id(let id):
             return id
         case .title(let title):
-            guard let id = try store.resolveTitleToID(title) else {
+            guard let id = try await store.resolveTitleToID(title) else {
                 throw Failure.message("no page titled \(title.debugDescription)")
             }
             return id

@@ -97,7 +97,7 @@ struct YouTubeEmbedWebViewTests {
         let videoID = "dQw4w9WgXcQ"
 
         // Seed the byteless YouTube source exactly as the URL recognizer would.
-        _ = try sqlite.addBytelessSource(
+        _ = try await sqlite.addBytelessSource(
             filename: "youtube-\(videoID)",
             mimeType: "video/youtube",
             provenance: SourceProvenance(

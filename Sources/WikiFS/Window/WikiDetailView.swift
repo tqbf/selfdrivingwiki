@@ -17,7 +17,6 @@ struct WikiDetailView: View {
     @Environment(QueueActivityTracker.self) private var tracker
     @Environment(\.chatDaemonCoordinator) private var chatDaemon
     let queueEngine: any QueueEngineClient
-    let extractionProvider: any QueueExtractionProvider
     let installedRendererHost: InstalledRendererHost
     /// Optional typed renderer activation sink for page detail routes.
     /// When absent, the reader stays static and emits no activation metadata.
@@ -33,7 +32,6 @@ struct WikiDetailView: View {
         fileProvider: FileProviderFacade,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
-        extractionProvider: any QueueExtractionProvider,
         installedRendererHost: InstalledRendererHost,
         onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil,
         runIngest: @escaping (SourceID) -> Void,
@@ -45,7 +43,6 @@ struct WikiDetailView: View {
         self.fileProvider = fileProvider
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
-        self.extractionProvider = extractionProvider
         self.installedRendererHost = installedRendererHost
         self.onRendererActivation = onRendererActivation
         self.runIngest = runIngest
@@ -223,7 +220,6 @@ struct WikiDetailView: View {
                     launcher: launcher,
                     extractionCoordinator: extractionCoordinator,
                     queueEngine: queueEngine,
-                    extractionProvider: extractionProvider,
                     fileProvider: fileProvider,
                     store: store,
                     installedRendererFactory: installedRendererHost.factory,
@@ -325,14 +321,14 @@ struct WikiDetailView: View {
     /// Create an untitled page and open it in a new tab (mirrors the Pages
     /// sidebar `+` and the window toolbar's New Page).
     private func addPage() {
-        store.newPageInNewTab()
+        Task { await store.newPageInNewTab() }
     }
 
     /// Start a new chat (mirrors the Chats sidebar `+`). The chat row is
     /// persisted first, so the tab opens straight to `.chat(id)` with the
     /// stored identity.
     private func addChat() {
-        store.beginNewChat()
+        Task { await store.beginNewChat() }
     }
 
     /// Pick a single file via the open panel and ingest it.

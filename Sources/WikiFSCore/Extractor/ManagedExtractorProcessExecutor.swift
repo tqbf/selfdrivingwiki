@@ -243,6 +243,30 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
     ) async throws -> ManagedExtractorProcessResult {
         try validate(operation)
         let launch = try resolveLaunch(operation)
+        // Execution-time package integrity: admission validated these bytes
+        // at install, and `validate(operation)` compares the on-disk
+        // manifest against the prep-anchored revision — but an edit to a
+        // declared CODE file (the executable entry point included) changes
+        // neither the manifest nor its self-declared digests. Re-run the
+        // admission validator against the bytes on disk: it re-hashes every
+        // declared file and recomputes the whole-package digest, so a
+        // post-install edit fails closed before spawn. The rehashed digest
+        // is compared against the same prep-anchored revision, not against
+        // the manifest, so rewriting the manifest alongside the files cannot
+        // launder the change. It runs AFTER the launch-identity checks so a
+        // symlinked or swapped entry point still reports its specific error.
+        let revalidated: ValidatedExtractorManifest
+        do {
+            revalidated = try ExtractorManifestValidator.validateStagedDirectory(
+                operation.paths.packageRoot)
+        } catch {
+            DebugLog.extraction(
+                "Execution-time package revalidation failed: \(error)")
+            throw ManagedExtractorProcessError.revisionMismatch
+        }
+        guard revalidated.revisionID == operation.revision else {
+            throw ManagedExtractorProcessError.revisionMismatch
+        }
         let environment = try makeEnvironment(operation)
         let input = try encodeRequest(operation.request)
         let cancellationSlot = ManagedProcessCancellationSlot(

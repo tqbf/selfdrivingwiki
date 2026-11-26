@@ -59,11 +59,11 @@ struct PageVersionSourceWriterTests {
         #expect(try store.pageVersionSources(versionID: versionID).map(\.sourceID) == [source.id])
     }
 
-    @Test func pageUpsertFirstVersionGetsSources() throws {
+    @Test func pageUpsertFirstVersionGetsSources() async throws {
         let store = try TestStoreFactory.inMemory()
         let source = try store.addSource(filename: "evidence.txt", data: Data("evidence".utf8))
 
-        let outcome = try PageUpsert.upsert(
+        let outcome = try await PageUpsert.upsert(
             in: store, id: nil, title: "Initial evidence", body: "Claim", author: "user",
             provenance: [.init(sourceID: source.id, role: .primary)])
 
@@ -304,13 +304,13 @@ struct PageVersionSourceWriterTests {
         #expect(Set(try store.pageVersionSources(versionID: resolved).map(\.sourceID)) == Set([main.id, workspaceSource.id]))
     }
 
-    @Test func agentIngestMarksPrimaryAndSupporting() throws {
+    @Test func agentIngestMarksPrimaryAndSupporting() async throws {
         let store = try TestStoreFactory.inMemory()
         let assigned = try store.addSource(filename: "assigned.txt", data: Data("a".utf8))
         let consulted = try store.addSource(filename: "consulted.txt", data: Data("c".utf8))
         let inputs = PageVersionSourceInput.agentIngest(sourceIDs: [assigned.id, consulted.id])
 
-        _ = try PageUpsert.upsert(in: store, id: nil, title: "Ingest", body: "claim", author: "agent:ingest", provenance: inputs)
+        _ = try await PageUpsert.upsert(in: store, id: nil, title: "Ingest", body: "claim", author: "agent:ingest", provenance: inputs)
         let pageID = try #require(try store.resolveTitleToID("Ingest"))
         let edges = try store.pageHeadSources(pageID: pageID)
         #expect(edges.map(\.sourceID) == [assigned.id, consulted.id])
@@ -329,9 +329,9 @@ struct PageVersionSourceWriterTests {
         ])
     }
 
-    @Test func transactionHelperSuccessWritesVersionActivityRefsAllEdgesAndReturnsEventPayload() throws {
+    @Test func transactionHelperSuccessWritesVersionActivityRefsAllEdgesAndReturnsEventPayload() async throws {
         let store = try TestStoreFactory.inMemory()
-        let page = try store.createPage(title: "Transaction")
+        let page = try await store.createPage(title: "Transaction")
         let source = try store.addSource(filename: "evidence.txt", data: Data("e".utf8))
         try store.updatePage(id: page.id, title: page.title, body: "claim", lastEditedBy: "user",
                              provenance: [.init(sourceID: source.id, role: .primary)])
@@ -344,7 +344,7 @@ struct PageVersionSourceWriterTests {
 
     @Test func transactionHelperSQLFailureRollsBackEveryEffectAndEmitsNothing() async throws {
         let store = try TestStoreFactory.inMemory()
-        let page = try store.createPage(title: "Rollback")
+        let page = try await store.createPage(title: "Rollback")
         let source = try store.addSource(filename: "evidence.txt", data: Data("e".utf8))
         let before = try #require(try store.pageHeadVersionID(pageID: page.id))
         let input = PageVersionSourceInput(sourceID: source.id, role: .primary)
@@ -361,7 +361,7 @@ struct PageVersionSourceWriterTests {
 
     @Test func missingSourceRollsBackVersionActivityMirrorRefHeadBlobAllEdgesAndEvent() async throws {
         let store = try TestStoreFactory.inMemory()
-        let page = try store.createPage(title: "Missing")
+        let page = try await store.createPage(title: "Missing")
         let before = try #require(try store.pageHeadVersionID(pageID: page.id))
         let events = recorder(for: store)
 
@@ -442,13 +442,13 @@ struct PageVersionSourceWriterTests {
         #expect(try store.pageHeadSources(pageID: page.id).map(\.role) == [.supporting, .quoted])
     }
 
-    @Test func wikictlCASWritesSources() throws {
+    @Test func wikictlCASWritesSources() async throws {
         let store = try TestStoreFactory.inMemory()
-        let page = try store.createPage(title: "CLI")
+        let page = try await store.createPage(title: "CLI")
         let source = try store.addSource(filename: "evidence.txt", data: Data("evidence".utf8))
         let head = try #require(try store.pageHeadVersionID(pageID: page.id))
 
-        _ = try PageCommand.run(
+        _ = try await PageCommand.run(
             .add(
                 id: page.id, title: page.title, body: .inline("new"),
                 expectHead: head, provenance: [.init(sourceID: source.id, role: .primary)]),

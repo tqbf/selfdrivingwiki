@@ -115,8 +115,10 @@ struct PagesContainerView: View {
                 targets: ctx.targets,
                 onConfirm: { parentID in
                     guard case .pages(let ids) = ctx.targets else { return }
-                    for id in ids {
-                        store.addPageRef(parentID: parentID, pageID: id)
+                    Task {
+                        for id in ids {
+                            await store.addPageRef(parentID: parentID, pageID: id)
+                        }
                     }
                 }
             )
@@ -299,7 +301,7 @@ struct PagesContainerView: View {
                 addToBookmarksContext = BookmarkTargetPickerContext(targets: .pages(ids))
             },
             onNewChat: { ids in
-                store.beginNewChat(attachments: ChatAttachmentTarget.pages(ids))
+                Task { await store.beginNewChat(attachments: ChatAttachmentTarget.pages(ids)) }
             })
     }
 
@@ -309,7 +311,9 @@ struct PagesContainerView: View {
     }
 
     private func commitRename() {
-        if let target = renameTarget { store.rename(target.id, to: renameText) }
+        if let target = renameTarget {
+            Task { await store.rename(target.id, to: renameText) }
+        }
         renameTarget = nil
     }
 
@@ -327,31 +331,37 @@ struct PagesContainerView: View {
     /// them) or route to the typed confirmation state.
     private func requestPageDeletion(_ ids: [PageID]) {
         pendingDeletionIDs = ids
-        let coordinator = DeletionConfirmationCoordinator(
-            kind: .page,
-            loadImpacts: {
-                try ids.map { try store.deletionImpact(forPage: $0) }
-            },
-            onDelete: { decision in
-                performPageDeletion(ids: ids, decision: decision)
-            },
-            pageTitle: { id in
-                store.summaries.first { $0.id == id }?.title
-            },
-            selectionCount: ids.count)
-        let outcome = coordinator.evaluate()
-        if case .deleteImmediately = outcome {
-            // No references, no blockers — delete without a dialog.
-            coordinator.perform(.delete)
-        } else {
-            deletionOutcome = outcome
+        Task {
+            let coordinator = DeletionConfirmationCoordinator(
+                kind: .page,
+                loadImpacts: {
+                    var impacts: [DeletionImpact] = []
+                    for id in ids {
+                        impacts.append(try await store.deletionImpact(forPage: id))
+                    }
+                    return impacts
+                },
+                onDelete: { decision in
+                    Task { await performPageDeletion(ids: ids, decision: decision) }
+                },
+                pageTitle: { id in
+                    store.summaries.first { $0.id == id }?.title
+                },
+                selectionCount: ids.count)
+            let outcome = await coordinator.evaluate()
+            if case .deleteImmediately = outcome {
+                // No references, no blockers — delete without a dialog.
+                coordinator.perform(.delete)
+            } else {
+                deletionOutcome = outcome
+            }
         }
     }
 
-    private func performPageDeletion(ids: [PageID], decision: DeletionDecision) {
+    private func performPageDeletion(ids: [PageID], decision: DeletionDecision) async {
         // ONE protected transaction for the whole selection; on failure the
         // model surfaces the store error and returns nil (nothing changed).
-        guard let result = store.performPageDeletion(
+        guard let result = await store.performPageDeletion(
             ids, unlinkIncomingLinks: decision == .unlink) else { return }
         // If a deleted page was the home page, clear the stale homePageID so
         // the Home button doesn't linger as dead UI. Runs only for pages the
@@ -368,8 +378,8 @@ struct PagesContainerView: View {
     private func handleDeletionAction(_ action: DeletionDialogAction) {
         let ids = pendingDeletionIDs
         switch action {
-        case .unlinkAndDelete: performPageDeletion(ids: ids, decision: .unlink)
-        case .delete: performPageDeletion(ids: ids, decision: .preserve)
+        case .unlinkAndDelete: Task { await performPageDeletion(ids: ids, decision: .unlink) }
+        case .delete: Task { await performPageDeletion(ids: ids, decision: .preserve) }
         case .cancel: break
         }
         pendingDeletionIDs = []

@@ -69,20 +69,20 @@ public enum StrategyCommand {
         }
     }
 
-    public static func run(_ action: Action, in store: WikiStore) throws -> Result {
+    public static func run(_ action: Action, in store: WikiStore) async throws -> Result {
         switch action {
         case .read(let json):
-            return try read(in: store, json: json)
+            return try await read(in: store, json: json)
         case .save(let name, let content, let expect, let json):
             let instructions = try resolveBodySource(content)
-            return try write(
+            return try await write(
                 name: name ?? "", instructions: instructions,
                 expect: expect, in: store, json: json)
         case .reset(let expect, let json):
             // The empty document is whitespace-only, which the write boundary
             // normalizes to a reset request: Default strategy, tombstone row,
             // revision stays monotonic. Same seam as the editor's reset.
-            return try write(
+            return try await write(
                 name: "", instructions: "",
                 expect: expect, in: store, json: json)
         }
@@ -90,8 +90,8 @@ public enum StrategyCommand {
 
     // MARK: - read
 
-    private static func read(in store: WikiStore, json: Bool) throws -> Result {
-        let state = try store.getWikiStrategyState()
+    private static func read(in store: WikiStore, json: Bool) async throws -> Result {
+        let state = try await store.getWikiStrategyState()
         if json {
             return Result(output: try renderStateJSON(state), didCommit: false)
         }
@@ -156,8 +156,8 @@ public enum StrategyCommand {
         expect: ExpectedRevision,
         in store: WikiStore,
         json: Bool
-    ) throws -> Result {
-        let outcome = try store.saveWikiStrategy(
+    ) async throws -> Result {
+        let outcome = try await store.saveWikiStrategy(
             name: name,
             instructions: instructions,
             expectedRevision: expect.storeExpectation)
@@ -196,7 +196,7 @@ public enum StrategyCommand {
             // (`wikiStrategyRevision()` then `getWikiStrategy()`) can straddle
             // a concurrent write and pair a stale revision with a fresh
             // strategy, the same incoherence the editor path avoids.
-            let state = try store.getWikiStrategyState()
+            let state = try await store.getWikiStrategyState()
             if json {
                 struct UnchangedJSON: Codable {
                     var outcome: String

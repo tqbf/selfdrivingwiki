@@ -58,16 +58,16 @@ final class BlobSchemeHandler: NSObject, WKURLSchemeHandler {
         }
         switch url.host {
         case Self.sourceHost:
-            serveCurrentHEAD(id: url, task: task)
+            Task { await serveCurrentHEAD(id: url, task: task) }
         case Self.sourceVersionHost:
-            serveExactVersion(url: url, task: task)
+            Task { await serveExactVersion(url: url, task: task) }
         default:
             respond404(task, url: url)
         }
     }
 
     /// Compatibility route: `wiki-blob://source/<SourceID>` resolves HEAD.
-    @MainActor private func serveCurrentHEAD(id url: URL, task: WKURLSchemeTask) {
+    @MainActor private func serveCurrentHEAD(id url: URL, task: WKURLSchemeTask) async {
         // Path is "/<ULID>" — strip the leading slash.
         let idStr = url.path.hasPrefix("/") ? String(url.path.dropFirst()) : url.path
         guard !idStr.isEmpty else {
@@ -76,7 +76,7 @@ final class BlobSchemeHandler: NSObject, WKURLSchemeHandler {
         }
         let id = SourceID(rawValue: idStr)
 
-        guard let store, let (data, mimeType) = store.sourceContentAndMIME(id: id) else {
+        guard let store, let (data, mimeType) = await store.sourceContentAndMIME(id: id) else {
             respond404(task, url: url)
             return
         }
@@ -86,7 +86,7 @@ final class BlobSchemeHandler: NSObject, WKURLSchemeHandler {
     /// Exact-version route: `wiki-blob://source-version/<SourceVersionID>`.
     /// Reads the immutable version row; a HEAD edit never changes the bytes
     /// served here. Returns the version's stored MIME, never a guess.
-    @MainActor private func serveExactVersion(url: URL, task: WKURLSchemeTask) {
+    @MainActor private func serveExactVersion(url: URL, task: WKURLSchemeTask) async {
         // Path is "/<ULID>" — strip the leading slash.
         let idStr = url.path.hasPrefix("/") ? String(url.path.dropFirst()) : url.path
         guard let store, idStr.isEmpty == false else {
@@ -94,16 +94,16 @@ final class BlobSchemeHandler: NSObject, WKURLSchemeHandler {
             return
         }
         let versionID = SourceVersionID(rawValue: idStr)
-        let version = DebugLog.trying(
+        let version = await DebugLog.trying(
             "sourceVersion(id:)",
-            operation: { try store.internalStore.sourceVersion(id: versionID) })
+            operation: { try await store.internalStore.sourceVersion(id: versionID) })
         guard let version else {
             respond404(task, url: url)
             return
         }
-        let data = DebugLog.trying(
+        let data = await DebugLog.trying(
             "sourceContent(versionID:)",
-            operation: { try store.internalStore.sourceContent(versionID: versionID) }) ?? Data()
+            operation: { try await store.internalStore.sourceContent(versionID: versionID) }) ?? Data()
         respond200(task, url: url, data: data, mimeType: version.mimeType)
     }
 

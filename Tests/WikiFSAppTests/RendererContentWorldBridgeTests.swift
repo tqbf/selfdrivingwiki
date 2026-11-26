@@ -31,7 +31,7 @@ struct RendererContentWorldBridgeTests {
     }
 
     @Test("isolated-world bridge replies only to bound main-frame package messages")
-    func repliesWithPinnedPayloadAfterProvenanceChecks() throws {
+    func repliesWithPinnedPayloadAfterProvenanceChecks() async throws {
         let store = try GRDBWikiStore()
         let source = try store.addSource(filename: "input.txt", data: Data("ok".utf8))
         let version = try #require(try store.activeContentVersion(sourceID: source.id))
@@ -56,7 +56,7 @@ struct RendererContentWorldBridgeTests {
             )
         )
 
-        let (reply, error) = handler.response(for: message)
+        let (reply, error) = await handler.response(for: message)
 
         #expect(error == nil)
         guard let replyText = reply as? String else {
@@ -69,7 +69,7 @@ struct RendererContentWorldBridgeTests {
     }
 
     @Test("bridge shell rejects wrong world and page provenance")
-    func rejectsWrongWorldAndProvenance() throws {
+    func rejectsWrongWorldAndProvenance() async throws {
         let store = try GRDBWikiStore()
         let source = try store.addSource(filename: "input.md", data: Data())
         let markdown = try store.appendProcessedMarkdown(
@@ -96,12 +96,14 @@ struct RendererContentWorldBridgeTests {
             provenance: .init(webViewID: ObjectIdentifier(expectedWebView), originScheme: "https", originHost: "package", isMainFrame: true)
         )
 
-        #expect(handler.response(for: wrongWorld).1 == "wrong content world")
-        #expect(handler.response(for: wrongOrigin).1 == "request denied")
+        let wrongWorldResponse = await handler.response(for: wrongWorld)
+        #expect(wrongWorldResponse.1 == "wrong content world")
+        let wrongOriginResponse = await handler.response(for: wrongOrigin)
+        #expect(wrongOriginResponse.1 == "request denied")
     }
 
     @Test("host navigation routes only a declared activated target and returns a uniform acknowledgement")
-    func hostNavigationRoutesActivatedTargetWithUniformAcknowledgement() throws {
+    func hostNavigationRoutesActivatedTargetWithUniformAcknowledgement() async throws {
         let store = try GRDBWikiStore()
         let source = try store.addSource(filename: "input.txt", data: Data("ok".utf8))
         let version = try #require(try store.activeContentVersion(sourceID: source.id))
@@ -130,19 +132,20 @@ struct RendererContentWorldBridgeTests {
                 webViewID: ObjectIdentifier(webView), originScheme: "renderer-package",
                 originHost: "package", isMainFrame: true))
 
-        let (reply, error) = handler.response(for: message)
+        let (reply, error) = await handler.response(for: message)
         #expect(error == nil)
         let replyText = try #require(reply as? String)
         let acknowledgement = try JSONDecoder().decode(
             RendererNavigationAcknowledgement.self, from: Data(replyText.utf8))
         #expect(acknowledgement == .init(id: .init(rawValue: "navigation-1")))
         #expect(routed == [target])
-        #expect(handler.response(for: message).1 == "request denied")
+        let deniedReply = await handler.response(for: message)
+        #expect(deniedReply.1 == "request denied")
         #expect(routed == [target])
     }
 
     @Test("denied host navigation never invokes the router")
-    func deniedHostNavigationNeverRoutes() throws {
+    func deniedHostNavigationNeverRoutes() async throws {
         let store = try GRDBWikiStore()
         let source = try store.addSource(filename: "input.txt", data: Data())
         let version = try #require(try store.activeContentVersion(sourceID: source.id))
@@ -168,39 +171,43 @@ struct RendererContentWorldBridgeTests {
                 webViewID: ObjectIdentifier(webView), originScheme: "renderer-package",
                 originHost: "package", isMainFrame: true))
 
-        #expect(handler.response(for: message).1 == "request denied")
+        let deniedBeforeClose = await handler.response(for: message)
+        #expect(deniedBeforeClose.1 == "request denied")
         #expect(routeCount == 0)
         broker.close()
-        #expect(handler.response(for: message).1 == "request denied")
+        let deniedAfterClose = await handler.response(for: message)
+        #expect(deniedAfterClose.1 == "request denied")
         #expect(routeCount == 0)
     }
 
     @Test("bridge rejects nil WebView provenance when no WebView is bound")
-    func rejectsNilWebViewProvenanceWithoutBinding() throws {
+    func rejectsNilWebViewProvenanceWithoutBinding() async throws {
         let (handler, message) = try makeHandlerAndMessage(binding: nil, observedWebViewID: nil)
 
-        #expect(handler.response(for: message).1 == "request denied")
+        let denial = await handler.response(for: message)
+        #expect(denial.1 == "request denied")
     }
 
     @Test("bridge rejects nil WebView provenance after binding")
-    func rejectsNilWebViewProvenanceAfterBinding() throws {
+    func rejectsNilWebViewProvenanceAfterBinding() async throws {
         let webView = NSObject()
         let (handler, message) = try makeHandlerAndMessage(
             binding: ObjectIdentifier(webView), observedWebViewID: nil
         )
 
-        #expect(handler.response(for: message).1 == "request denied")
+        let denial = await handler.response(for: message)
+        #expect(denial.1 == "request denied")
     }
 
     @Test("asset.read requires bound main-frame package provenance")
-    func assetReadRequiresBoundMainFramePackageProvenance() throws {
+    func assetReadRequiresBoundMainFramePackageProvenance() async throws {
         let (_, reference, handler, webViewID, _) = try makeAssetBrokerAndHandler()
         let request = RendererAssetPageRequest(
             id: .init(rawValue: "asset-1"), reference: reference)
         let body = try String(decoding: JSONEncoder().encode(RendererBridgePageEnvelope.asset(request)), as: UTF8.self)
 
         // Bound main-frame package provenance -> authorized asset read.
-        let bound = handler.response(for: .init(
+        let bound = await handler.response(for: .init(
             body: body, isExpectedContentWorld: true,
             provenance: .init(webViewID: webViewID, originScheme: "renderer-package", originHost: "package", isMainFrame: true)))
         #expect(bound.1 == nil)
@@ -214,20 +221,20 @@ struct RendererContentWorldBridgeTests {
         }
 
         // Wrong provenance -> asset denied (uniform "request denied").
-        let wrongOrigin = handler.response(for: .init(
+        let wrongOrigin = await handler.response(for: .init(
             body: body, isExpectedContentWorld: true,
             provenance: .init(webViewID: webViewID, originScheme: "https", originHost: "evil.com", isMainFrame: true)))
         #expect(wrongOrigin.1 == "request denied")
 
         // Non-main frame -> denied.
-        let subframe = handler.response(for: .init(
+        let subframe = await handler.response(for: .init(
             body: body, isExpectedContentWorld: true,
             provenance: .init(webViewID: webViewID, originScheme: "renderer-package", originHost: "package", isMainFrame: false)))
         #expect(subframe.1 == "request denied")
     }
 
     @Test("asset.read stops after teardown without a store read")
-    func assetReadStopsAfterTeardown() throws {
+    func assetReadStopsAfterTeardown() async throws {
         let (_, reference, handler, webViewID, broker) = try makeAssetBrokerAndHandler()
         let request = RendererAssetPageRequest(
             id: .init(rawValue: "asset-1"), reference: reference)
@@ -236,16 +243,18 @@ struct RendererContentWorldBridgeTests {
             webViewID: webViewID, originScheme: "renderer-package", originHost: "package", isMainFrame: true)
 
         // Authorized before close.
-        #expect(handler.response(for: .init(body: body, isExpectedContentWorld: true, provenance: provenance)).1 == nil)
+        let beforeClose = await handler.response(for: .init(body: body, isExpectedContentWorld: true, provenance: provenance))
+        #expect(beforeClose.1 == nil)
 
         broker.close()
         // After teardown the asset read is denied uniformly (the asset
         // reader is closed and the broker session is closed).
-        #expect(handler.response(for: .init(body: body, isExpectedContentWorld: true, provenance: provenance)).1 == "request denied")
+        let afterClose = await handler.response(for: .init(body: body, isExpectedContentWorld: true, provenance: provenance))
+        #expect(afterClose.1 == "request denied")
     }
 
     @Test("asset denials are uniform and disclose no existence details")
-    func assetDenialsAreUniform() throws {
+    func assetDenialsAreUniform() async throws {
         // A denied asset read must not disclose whether the reference exists.
         // No admitted assets -> every asset.read is denied with the same
         // uniform response and no body detail.
@@ -255,10 +264,10 @@ struct RendererContentWorldBridgeTests {
         let body = try String(decoding: JSONEncoder().encode(RendererBridgePageEnvelope.asset(request)), as: UTF8.self)
         let provenance = RendererBridgeMessageProvenance(
             webViewID: webViewID, originScheme: "renderer-package", originHost: "package", isMainFrame: true)
-        let response = handler.response(for: .init(body: body, isExpectedContentWorld: true, provenance: provenance))
+        let response = await handler.response(for: .init(body: body, isExpectedContentWorld: true, provenance: provenance))
         #expect(response.1 == "request denied")
         // Two denials look identical: same message, no body detail.
-        let second = handler.response(for: .init(body: body, isExpectedContentWorld: true, provenance: provenance))
+        let second = await handler.response(for: .init(body: body, isExpectedContentWorld: true, provenance: provenance))
         #expect(second.1 == response.1)
         #expect(second.0 == nil && response.0 == nil)
     }

@@ -8,7 +8,7 @@ import WikiFSCore
 /// Tests that `WikiFSEnumerator.enumerateChanges` reports deletions via
 /// `didDeleteItems(_:)` (issue #111). Without that call, rows removed from
 /// SQLite linger in the File Provider projection forever.
-@Suite
+@Suite(.serialized, .timeLimit(.minutes(3)))
 struct EnumeratorDeletionTests {
 
     // MARK: - Mock observers
@@ -52,17 +52,19 @@ struct EnumeratorDeletionTests {
         let projection: Projection
         let store: GRDBWikiStore
         let sources: [SourceSummary]
+        /// Owns the socket server; dropping Seeded tears the fixture down.
+        let fixture: ProjectionSocketFixture
     }
 
     private func seed() throws -> Seeded {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wikifs-enum-\(UUID().uuidString).sqlite")
-        let store = try GRDBWikiStore(databaseURL: url)
+        let fixture = try ProjectionSocketFixture.make(displayName: "EnumeratorDeletionTests")
+        let store = fixture.store
         let s1 = try store.addSource(filename: "a.txt", data: Data("aaa".utf8), mimeType: "text/plain")
         let s2 = try store.addSource(filename: "b.txt", data: Data("bbb".utf8), mimeType: "text/plain")
         let s3 = try store.addSource(filename: "c.txt", data: Data("ccc".utf8), mimeType: "text/plain")
-        let projection = Projection(wikiID: WikiID(rawValue: "enum-\(UUID().uuidString)"), databaseURL: url)
-        return Seeded(projection: projection, store: store, sources: [s1, s2, s3])
+        let projection = fixture.projection
+        return Seeded(projection: projection, store: store, sources: [s1, s2, s3],
+                      fixture: fixture)
     }
 
     // MARK: - Tests

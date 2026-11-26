@@ -116,7 +116,7 @@ struct PageUpsertAtomicityTests {
         let (bus, recorder) = makeBus("upsert-atomicity-events")
         store.eventBus = bus
 
-        let created = try PageUpsert.upsert(
+        let created = try await PageUpsert.upsert(
             in: store, id: nil, title: "Evented Page", body: "first body",
             expectation: .unrestricted, author: "user")
         try await awaitDeliveredTotal([recorder], expected: 1)
@@ -125,7 +125,7 @@ struct PageUpsertAtomicityTests {
         #expect(recorder.snapshot[0].id == created.id.rawValue)
         #expect(recorder.snapshot[0].change == .created)
 
-        _ = try PageUpsert.upsert(
+        _ = try await PageUpsert.upsert(
             in: store, id: nil, title: "Evented Page", body: "second body",
             expectation: .unrestricted, author: "agent:editor-b")
         try await awaitDeliveredTotal([recorder], expected: 2)
@@ -147,7 +147,7 @@ struct PageUpsertAtomicityTests {
         store.eventBus = bus
 
         // Absent title → create.
-        let created = try PageUpsert.upsert(
+        let created = try await PageUpsert.upsert(
             in: store, id: nil, title: "Claimed Title", body: "content",
             expectation: .expectedAbsence, author: "agent:creator")
         #expect(created.didCreate)
@@ -158,7 +158,7 @@ struct PageUpsertAtomicityTests {
         // Same title again → conflict, nothing written, no event.
         let head = try store.pageHeadVersionID(pageID: created.id)
         do {
-            _ = try PageUpsert.upsert(
+            _ = try await PageUpsert.upsert(
                 in: store, id: nil, title: "Claimed Title", body: "intruder",
                 expectation: .expectedAbsence, author: "agent:intruder")
             Issue.record("expected PageCreateConflictError")
@@ -174,7 +174,7 @@ struct PageUpsertAtomicityTests {
 
         // Explicit id + expectedAbsence is contradictory at the store seam too.
         do {
-            _ = try PageUpsert.upsert(
+            _ = try await PageUpsert.upsert(
                 in: store, id: created.id, title: "Claimed Title", body: "x",
                 expectation: .expectedAbsence, author: "agent:misconfigured")
             Issue.record("expected WikiStoreError.unexpected for expectedAbsence + explicit id")
@@ -197,10 +197,10 @@ struct PageUpsertAtomicityTests {
         let (bus, recorder) = makeBus("upsert-atomicity-link-failure")
         store.eventBus = bus
 
-        let target = try store.createPage(title: "Target", createdBy: "user")
+        let target = try await store.createPage(title: "Target", createdBy: "user")
         let evidence = try store.addSource(filename: "evidence.txt", data: Data("evidence".utf8))
         let provenance = [PageVersionSourceInput(sourceID: evidence.id, role: .primary)]
-        let linker = try store.createPage(
+        let linker = try await store.createPage(
             title: "Linker", createdBy: "user", provenance: provenance)
         // The target page, source, and linker each emit one setup event.
         try await awaitDeliveredTotal([recorder], expected: 3)
@@ -225,7 +225,7 @@ struct PageUpsertAtomicityTests {
         // row must be inserted), so the link write fails after the content
         // write — inside the same transaction.
         do {
-            _ = try PageUpsert.upsert(
+            _ = try await PageUpsert.upsert(
                 in: store, id: nil, title: "Linker", body: "updated body see [[Target]]",
                 expectation: .unrestricted, author: "agent:writer", provenance: provenance)
             Issue.record("expected the link-insert trigger to abort the upsert")
@@ -248,7 +248,7 @@ struct PageUpsertAtomicityTests {
         // Remove the trigger; the SAME upsert succeeds, appends exactly one
         // version, writes the resolved link row, and emits exactly one event.
         try executeRaw("DROP TRIGGER block_page_links_insert;", on: url)
-        _ = try PageUpsert.upsert(
+        _ = try await PageUpsert.upsert(
             in: store, id: nil, title: "Linker", body: "updated body see [[Target]]",
             expectation: .unrestricted, author: "agent:writer", provenance: provenance)
         try await awaitDeliveredTotal([recorder], expected: baselineEvents + 1)
@@ -279,14 +279,14 @@ struct PageUpsertAtomicityTests {
         storeB.eventBus = busB
 
         // Two pages on A: an anchor to link to, and the contended page.
-        let anchor = try storeA.createPage(title: "Anchor", createdBy: "user")
+        let anchor = try await storeA.createPage(title: "Anchor", createdBy: "user")
         let shared = try storeA.createPage(title: "Shared", body: "v0", createdBy: "user")
         try await awaitDeliveredTotal([recorderA], expected: 2)
         #expect(recorderA.count == 2)
 
         // B reads the head cross-connection, then commits a CAS write.
         let head0 = try #require(try storeB.pageHeadVersionID(pageID: shared.id))
-        _ = try PageUpsert.upsert(
+        _ = try await PageUpsert.upsert(
             in: storeB, id: nil, title: "Shared", body: "v1 see [[Anchor]]",
             expectation: .expectedHead(head0), author: "agent:writer-b")
         try await awaitDeliveredTotal([recorderB], expected: 1)
@@ -299,7 +299,7 @@ struct PageUpsertAtomicityTests {
         let head1 = try #require(try storeA.pageHeadVersionID(pageID: shared.id))
         #expect(head1 != head0)
         do {
-            _ = try PageUpsert.upsert(
+            _ = try await PageUpsert.upsert(
                 in: storeA, id: nil, title: "Shared", body: "stale see [[Anchor]]",
                 expectation: .expectedHead(head0), author: "agent:writer-a")
             Issue.record("expected PageConflictError for the stale head")
@@ -330,7 +330,7 @@ struct PageUpsertAtomicityTests {
                 group.addTask {
                     let store = i.isMultiple(of: 2) ? storeA : storeB
                     do {
-                        _ = try PageUpsert.upsert(
+                        _ = try await PageUpsert.upsert(
                             in: store, id: nil, title: "Shared", body: "hammer \(i) see [[Anchor]]",
                             expectation: .expectedHead(head1), author: "agent:hammer-\(i)")
                         return 1
@@ -369,7 +369,7 @@ struct PageUpsertAtomicityTests {
         let (bus, recorder) = makeBus("upsert-atomicity-missing-target")
         store.eventBus = bus
 
-        let doomed = try store.createPage(title: "Doomed", createdBy: "user")
+        let doomed = try await store.createPage(title: "Doomed", createdBy: "user")
         let head = try #require(try store.pageHeadVersionID(pageID: doomed.id))
         try store.deletePage(id: doomed.id)
         // Await BOTH delivered events (create's `.created` + delete's
@@ -381,7 +381,7 @@ struct PageUpsertAtomicityTests {
 
         // Title-selected: nothing resolves anymore.
         do {
-            _ = try PageUpsert.upsert(
+            _ = try await PageUpsert.upsert(
                 in: store, id: nil, title: "Doomed", body: "resurrected",
                 expectation: .expectedHead(head), author: "agent:late-writer")
             Issue.record("expected PageExpectedTargetMissingError (title path)")
@@ -395,7 +395,7 @@ struct PageUpsertAtomicityTests {
 
         // Id-selected: the pinned id no longer exists.
         do {
-            _ = try PageUpsert.upsert(
+            _ = try await PageUpsert.upsert(
                 in: store, id: doomed.id, title: "Doomed", body: "resurrected",
                 expectation: .expectedHead(head), author: "agent:late-writer")
             Issue.record("expected PageExpectedTargetMissingError (id path)")
@@ -410,7 +410,7 @@ struct PageUpsertAtomicityTests {
 
         // Control: unrestricted on the same missing title still creates
         // (legacy behavior preserved for flag-less callers).
-        let revived = try PageUpsert.upsert(
+        let revived = try await PageUpsert.upsert(
             in: store, id: nil, title: "Doomed", body: "fresh start",
             expectation: .unrestricted, author: "agent:legacy")
         #expect(revived.didCreate)
@@ -430,7 +430,7 @@ struct PageUpsertAtomicityTests {
         let (bus, recorder) = makeBus("upsert-atomicity-link-only")
         store.eventBus = bus
 
-        let anchor = try store.createPage(title: "Anchor", createdBy: "user")
+        let anchor = try await store.createPage(title: "Anchor", createdBy: "user")
         let host = try store.createPage(title: "Host", body: "plain body, no links", createdBy: "agent:sweeper")
         try await awaitDeliveredTotal([recorder], expected: 2)
         let baseline = recorder.count
@@ -446,7 +446,7 @@ struct PageUpsertAtomicityTests {
 
         // Same body, same title, distinct author (no amend): the version
         // write no-ops, the stale link row is swept — one event, no version.
-        _ = try PageUpsert.upsert(
+        _ = try await PageUpsert.upsert(
             in: store, id: nil, title: "Host", body: "plain body, no links",
             expectation: .unrestricted, author: "agent:sweeper")
         try await awaitDeliveredTotal([recorder], expected: baseline + 1)
@@ -457,7 +457,7 @@ struct PageUpsertAtomicityTests {
         #expect(try outgoingPageLinks(from: store, pageID: host.id).isEmpty)
 
         // And a fully identical follow-up (nothing stale left) emits nothing.
-        _ = try PageUpsert.upsert(
+        _ = try await PageUpsert.upsert(
             in: store, id: nil, title: "Host", body: "plain body, no links",
             expectation: .unrestricted, author: "agent:sweeper")
         await settleDeliveries()

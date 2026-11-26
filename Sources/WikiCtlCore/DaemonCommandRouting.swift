@@ -24,12 +24,12 @@ public struct DaemonCommandCall: Sendable {
     let family: DaemonDomainFamily
     let operation: String
     let timeout: TimeInterval
-    let payload: @Sendable (_ wikiID: String) throws -> Data
+    let payload: @Sendable (_ wikiID: String) async throws -> Data
 
     init(
         family: DaemonDomainFamily,
         operation: String,
-        payload: @escaping @Sendable (_ wikiID: String) throws -> Data
+        payload: @escaping @Sendable (_ wikiID: String) async throws -> Data
     ) {
         self.family = family
         self.operation = operation
@@ -300,7 +300,7 @@ public enum DaemonCommandRoute {
             // behavior.
             return DaemonCommandCall(
                 family: .source, operation: DaemonDomainOperation.Source.addFile) { wikiID in
-                let bytes = try SourceCommand.readSourceData(path)
+                let bytes = try await SourceCommand.readSourceData(path)
                 return try JSONEncoder().encode(DaemonSourceAddFileRequest(
                     wikiID: wikiID, path: path, name: name,
                     contentBase64: bytes.base64EncodedString()))
@@ -701,7 +701,7 @@ public struct DaemonCommandRouter: Sendable {
                 timeout: call.timeout)
             let registry = DaemonWikiRegistryClient(socket: scopedSocket)
             let descriptor = try await registry.resolveWiki(selector: selector)
-            let payload = try call.payload(descriptor.id.rawValue)
+            let payload = try await call.payload(descriptor.id.rawValue)
             let reply = try await scopedSocket.send(
                 family: call.family, operation: call.operation, payload: payload)
             let outcome = try DaemonCommandOutcome.decode(reply.payload)

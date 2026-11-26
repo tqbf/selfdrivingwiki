@@ -117,6 +117,7 @@ extension RendererBridgeContractsTests {
 // MARK: - RendererAuthorizedAssetReaderTests
 
 @Suite(.serialized, .timeLimit(.minutes(2)))
+@MainActor
 struct RendererAuthorizedAssetReaderTests {
     @Test("reads only pinned approved image versions from exact SourceVersionID")
     func readsOnlyPinnedApprovedImageVersions() async throws {
@@ -141,7 +142,7 @@ struct RendererAuthorizedAssetReaderTests {
             store: store)
         defer { reader.close() }
 
-        let payload = try reader.read(try RendererAssetReference(validating: "diagram.png"))
+        let payload = try await reader.read(try RendererAssetReference(validating: "diagram.png"))
         #expect(payload.mimeType == "image/png")
         #expect(payload.bytes == png)
         #expect(payload.contentDigest == digest)
@@ -170,8 +171,8 @@ struct RendererAuthorizedAssetReaderTests {
             maximumPerRequestReadCount: 4,
             store: store)
         defer { wrongReader.close() }
-        #expect(throws: RendererAuthorizedAssetReader.ReaderError.changedAsset) {
-            try wrongReader.read(try RendererAssetReference(validating: "diagram.png"))
+        await #expect(throws: RendererAuthorizedAssetReader.ReaderError.changedAsset) {
+            try await wrongReader.read(try RendererAssetReference(validating: "diagram.png"))
         }
 
         // Unadmitted reference -> uniform denial.
@@ -189,8 +190,8 @@ struct RendererAuthorizedAssetReaderTests {
             maximumPerRequestReadCount: 4,
             store: store)
         defer { reader.close() }
-        #expect(throws: RendererAuthorizedAssetReader.ReaderError.unadmittedReference) {
-            try reader.read(try RendererAssetReference(validating: "other.png"))
+        await #expect(throws: RendererAuthorizedAssetReader.ReaderError.unadmittedReference) {
+            try await reader.read(try RendererAssetReference(validating: "other.png"))
         }
 
         // Oversized (per-asset cap below actual byte count) -> denied.
@@ -201,8 +202,8 @@ struct RendererAuthorizedAssetReaderTests {
             maximumPerRequestReadCount: 4,
             store: store)
         defer { tinyCapReader.close() }
-        #expect(throws: RendererAuthorizedAssetReader.ReaderError.oversizedAsset) {
-            try tinyCapReader.read(try RendererAssetReference(validating: "diagram.png"))
+        await #expect(throws: RendererAuthorizedAssetReader.ReaderError.oversizedAsset) {
+            try await tinyCapReader.read(try RendererAssetReference(validating: "diagram.png"))
         }
 
         // Closed reader -> denied without a store read.
@@ -213,8 +214,8 @@ struct RendererAuthorizedAssetReaderTests {
             maximumPerRequestReadCount: 4,
             store: store)
         closedReader.close()
-        #expect(throws: RendererAuthorizedAssetReader.ReaderError.closed) {
-            try closedReader.read(try RendererAssetReference(validating: "diagram.png"))
+        await #expect(throws: RendererAuthorizedAssetReader.ReaderError.closed) {
+            try await closedReader.read(try RendererAssetReference(validating: "diagram.png"))
         }
 
         // Duplicate admission key -> construction fails.
@@ -250,9 +251,9 @@ struct RendererAuthorizedAssetReaderTests {
             maximumPerRequestReadCount: 4,
             store: store)
         defer { budgetReader.close() }
-        _ = try budgetReader.read(try RendererAssetReference(validating: "diagram.png"))
-        #expect(throws: RendererAuthorizedAssetReader.ReaderError.sessionBudgetExhausted) {
-            try budgetReader.read(try RendererAssetReference(validating: "diagram.png"))
+        _ = try await budgetReader.read(try RendererAssetReference(validating: "diagram.png"))
+        await #expect(throws: RendererAuthorizedAssetReader.ReaderError.sessionBudgetExhausted) {
+            try await budgetReader.read(try RendererAssetReference(validating: "diagram.png"))
         }
 
         // Per-request read count = 1, then exhausted.
@@ -263,9 +264,9 @@ struct RendererAuthorizedAssetReaderTests {
             maximumPerRequestReadCount: 1,
             store: store)
         defer { countReader.close() }
-        _ = try countReader.read(try RendererAssetReference(validating: "diagram.png"))
-        #expect(throws: RendererAuthorizedAssetReader.ReaderError.sessionBudgetExhausted) {
-            try countReader.read(try RendererAssetReference(validating: "diagram.png"))
+        _ = try await countReader.read(try RendererAssetReference(validating: "diagram.png"))
+        await #expect(throws: RendererAuthorizedAssetReader.ReaderError.sessionBudgetExhausted) {
+            try await countReader.read(try RendererAssetReference(validating: "diagram.png"))
         }
     }
 
@@ -334,8 +335,8 @@ struct RendererAuthorizedAssetReaderTests {
         defer { reader.close() }
         // sourceContent(versionID:) for the missing version throws, and even
         // if it did not, the MIME metadata lookup fails -> uniform denial.
-        #expect(throws: RendererAuthorizedAssetReader.ReaderError.self) {
-            try reader.read(try RendererAssetReference(validating: "diagram.png"))
+        await #expect(throws: RendererAuthorizedAssetReader.ReaderError.self) {
+            try await reader.read(try RendererAssetReference(validating: "diagram.png"))
         }
     }
 
@@ -384,7 +385,7 @@ struct RendererAssetAdmissionBuilderTests {
 
         let records = [RendererAssetReferenceExtractorClient.ExtractedRecord(
             role: .imageNode, reference: "diagram.png")]
-        let admissions = try RendererAssetAdmissionBuilder.buildAdmissions(
+        let admissions = try await RendererAssetAdmissionBuilder.buildAdmissions(
             records: records,
             resolveSourceFacts: { rawReference in
                 guard rawReference == "diagram.png" else { return nil }
@@ -418,7 +419,7 @@ struct RendererAssetAdmissionBuilderTests {
         // sibling scope is exact, never broadened.
         let records = [RendererAssetReferenceExtractorClient.ExtractedRecord(
             role: .imageNode, reference: "other-diagram.png")]
-        let admissions = try RendererAssetAdmissionBuilder.buildAdmissions(
+        let admissions = try await RendererAssetAdmissionBuilder.buildAdmissions(
             records: records,
             resolveSourceFacts: { rawReference in
                 guard rawReference == "diagram.png" else { return nil }
@@ -446,7 +447,7 @@ struct RendererAssetAdmissionBuilderTests {
             RendererAssetReferenceExtractorClient.ExtractedRecord(role: .groupBackground, reference: "diagram.png"),
         ]
         // Only imageNode is declared -> groupBackground record is skipped.
-        let admissions = try RendererAssetAdmissionBuilder.buildAdmissions(
+        let admissions = try await RendererAssetAdmissionBuilder.buildAdmissions(
             records: records,
             resolveSourceFacts: { _ in
                 let bytes = try store.sourceContent(versionID: version.id)

@@ -110,26 +110,28 @@ final class BackgroundIngestCoordinator {
     internal static func ingestionDecision(
         for source: SourceSummary,
         store: WikiStoreModel
-    ) -> IngestionDecision {
+    ) async -> IngestionDecision {
         // 1. Registry gate — PNG/XML/etc. are filtered HERE, before the
         //    byte guard runs. Claims-aware (registration-driven kinds like
         //    docx classify through their claims), and head-aware: a source
         //    that already has processed markdown (an extracted docx) is
         //    always ingestable — the head is what stages, never the raw
         //    bytes.
-        let origin = store.sourceOrigin(for: source.id)
+        let origin = await store.sourceOrigin(for: source.id)
         let kind = ContentKind.resolve(
             mimeType: source.mimeType,
             provider: origin?.provider,
             ext: source.ext,
             registeredInputs: store.registeredExtractionInputs)
-        if !kind.capabilities.shouldAutoIngest,
-           !store.hasProcessedMarkdown(for: source.id) {
-            return .skipNonIngestible(kind: kind)
+        if !kind.capabilities.shouldAutoIngest {
+            let hasMarkdown = await store.hasProcessedMarkdown(for: source.id)
+            if !hasMarkdown {
+                return .skipNonIngestible(kind: kind)
+            }
         }
         // 2. Byteless guard — a markdown-path kind with no content to stage
         //    (e.g. YouTube before the transcript arrives) stays skipped.
-        if !store.canIngest(source) {
+        if await store.canIngest(source) {
             return .skipByteless
         }
         return .enqueue
@@ -149,13 +151,14 @@ final class BackgroundIngestCoordinator {
     internal static func filterIngestibleSources(
         _ sources: [SourceSummary],
         store: WikiStoreModel
-    ) -> [SourceID] {
-        sources.compactMap { source in
-            if ingestionDecision(for: source, store: store) == .enqueue {
-                return source.id
+    ) async -> [SourceID] {
+        var ingestible: [SourceID] = []
+        for source in sources {
+            if await ingestionDecision(for: source, store: store) == .enqueue {
+                ingestible.append(source.id)
             }
-            return nil
         }
+        return ingestible
     }
 
     // MARK: - Per-wiki scan
@@ -197,7 +200,7 @@ final class BackgroundIngestCoordinator {
             // transcript). Extracted as `ingestionDecision(for:store:)` so
             // tests can exercise the registry-keyed filter directly without
             // standing up a scan task (§11-C2).
-            switch Self.ingestionDecision(for: source, store: store) {
+            switch await Self.ingestionDecision(for: source, store: store) {
             case .enqueue:
                 sourceIDsToEnqueue.append(source.id)
             case .skipNonIngestible(let kind):

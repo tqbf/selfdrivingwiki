@@ -437,8 +437,11 @@ struct WikiReaderView: View {
                 if let id, store.selectPage(byID: id, anchor: frag, openInNewTab: openInNewTab) { }
                 else { store.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
             case .source(let title, let id, let frag, let pin):
-                if let id, store.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) { }
-                else { store.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
+                if let id {
+                    Task { _ = await store.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) }
+                } else {
+                    Task { _ = await store.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
+                }
             case .chat(let title, let id, let frag):
                 if let id, store.selectChat(byID: id, anchor: frag, openInNewTab: openInNewTab) { }
                 else { store.selectChat(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
@@ -455,7 +458,7 @@ struct WikiReaderView: View {
                     case .page(let id):
                         _ = store.selectPage(byID: id, openInNewTab: openInNewTab)
                     case .source(let id):
-                        _ = store.selectSource(byID: id, openInNewTab: openInNewTab)
+                        Task { await _ = store.selectSource(byID: id, openInNewTab: openInNewTab) }
                     case .chat(let id):
                         _ = store.selectChat(byID: id, openInNewTab: openInNewTab)
                     default:
@@ -1637,11 +1640,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
         context.coordinator.attachmentContainer = container
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
-        context.coordinator.startLoad(
+        Task { await context.coordinator.startLoad(
             markdown: markdown,
             documentIdentity: documentIdentity,
             isLoading: $isLoading,
-            loadFailure: $loadFailure)
+            loadFailure: $loadFailure) }
         return container
     }
 
@@ -1663,11 +1666,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
         context.coordinator.currentSelection = currentSelection
         if context.coordinator.loadedMarkdown != markdown ||
             context.coordinator.loadedDocumentIdentity != documentIdentity {
-            context.coordinator.startLoad(
+            Task { await context.coordinator.startLoad(
                 markdown: markdown,
                 documentIdentity: documentIdentity,
                 isLoading: $isLoading,
-                loadFailure: $loadFailure)
+                loadFailure: $loadFailure) }
         }
         // Retry steering: no-op while the trigger is unchanged; a changed
         // trigger (Try Again) re-runs the load with the current props.
@@ -1826,12 +1829,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
             return fresh
         }
 
-        func startLoad(
+        @MainActor func startLoad(
             markdown: String,
             documentIdentity: MarkdownDocumentIdentity?,
             isLoading: Binding<Bool>,
             loadFailure: Binding<String?>
-        ) {
+        ) async {
             convertTask?.cancel()  // drop any in-flight conversion for stale markdown
             cancelTransclusionTasks()
             cancelInlineRetentionTasks()
@@ -1909,12 +1912,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     capability: RendererSessionCapability(rawValue: UUID().uuidString),
                     generation: generation)
             }()
-            let sourceRendererCandidates = Self.sourceRendererCandidates(
+            let sourceRendererCandidates = await Self.sourceRendererCandidates(
                 markdown: markdown,
                 context: context,
                 store: store?.internalStore,
                 installedDescriptors: inlineRendererDescriptors)
-            let markdownImageTargets = Self.markdownImageTargets(
+            let markdownImageTargets = await Self.markdownImageTargets(
                 siblingSourceMap: renderedSourceMap,
                 store: store?.internalStore,
                 sourceExtensions: context?.sourceIDToExtension ?? [:],
@@ -2028,7 +2031,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             context: WikiRenderContext?,
             store: WikiStore?,
             installedDescriptors: [RendererDescriptor]
-        ) -> [SourceID: RendererEmbedPlan] {
+        ) async -> [SourceID: RendererEmbedPlan] {
             guard let context, let store,
                   let registry = rendererRegistry(installedDescriptors: installedDescriptors)
             else { return [:] }
@@ -2043,13 +2046,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
             var sources: [SourceID: RendererEmbeddedContent.Source] = [:]
             for sourceID in sourceIDs {
                 do {
-                    guard let version = try store.activeContentVersion(sourceID: sourceID),
-                          let source = try pinnedImageSource(
+                    guard let version = try await store.activeContentVersion(sourceID: sourceID),
+                          let source = try await pinnedImageSource(
                               sourceID: sourceID,
                               version: version,
                               fileExtension: context.sourceIDToExtension[sourceID],
-                              inputByteCount: { input in try store.rendererInputByteCount(input) },
-                              readBytes: { versionID in try store.sourceContent(versionID: versionID) })
+                              inputByteCount: { input in try await store.rendererInputByteCount(input) },
+                              readBytes: { versionID in try await store.sourceContent(versionID: versionID) })
                     else { continue }
                     sources[sourceID] = source
                 } catch {
@@ -2127,7 +2130,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             store: WikiStore?,
             sourceExtensions: [SourceID: String] = [:],
             installedDescriptors: [RendererDescriptor]
-        ) -> [String: ResolvedMarkdownImageTarget] {
+        ) async -> [String: ResolvedMarkdownImageTarget] {
             guard let siblingSourceMap, siblingSourceMap.isEmpty == false else { return [:] }
             guard let store else {
                 return siblingSourceMap.reduce(into: [:]) { targets, entry in
@@ -2142,13 +2145,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
             var sources = [String: RendererEmbeddedContent.Source]()
             for (target, sourceID) in siblingSourceMap {
                 do {
-                    guard let version = try store.activeContentVersion(sourceID: sourceID),
-                          let source = try Self.pinnedImageSource(
+                    guard let version = try await store.activeContentVersion(sourceID: sourceID),
+                          let source = try await Self.pinnedImageSource(
                               sourceID: sourceID,
                               version: version,
                               fileExtension: sourceExtensions[sourceID],
-                              inputByteCount: { input in try store.rendererInputByteCount(input) },
-                              readBytes: { versionID in try store.sourceContent(versionID: versionID) })
+                              inputByteCount: { input in try await store.rendererInputByteCount(input) },
+                              readBytes: { versionID in try await store.sourceContent(versionID: versionID) })
                     else { continue }
                     sources[target] = source
                 } catch {
@@ -2198,20 +2201,20 @@ internal struct WikiReaderRep: NSViewRepresentable {
             sourceID: SourceID,
             version: SourceVersion,
             fileExtension: String? = nil,
-            inputByteCount: (RendererBridgeInput) throws -> Int?,
-            readBytes: (SourceVersionID) throws -> Data
-        ) throws -> RendererEmbeddedContent.Source? {
+            inputByteCount: (RendererBridgeInput) async throws -> Int?,
+            readBytes: (SourceVersionID) async throws -> Data
+        ) async throws -> RendererEmbeddedContent.Source? {
             guard version.sourceID == sourceID,
                   let mimeType = version.mimeType,
                   let blobHash = version.blobHash,
                   blobHash.isEmpty == false
             else { return nil }
             let input = RendererBridgeInput.source(versionID: version.id)
-            guard let byteCount = try inputByteCount(input),
+            guard let byteCount = try await inputByteCount(input),
                   byteCount >= 0,
                   byteCount <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
             else { return nil }
-            let bytes = try readBytes(version.id)
+            let bytes = try await readBytes(version.id)
             guard bytes.count == byteCount,
                   bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
             else { return nil }
@@ -2490,11 +2493,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
                   let isLoading = isLoadingBinding,
                   let loadFailure = loadFailureBinding else { return }
             appliedRetryTrigger = trigger
-            startLoad(
+            Task { await startLoad(
                 markdown: loadedMarkdown ?? "",
                 documentIdentity: loadedDocumentIdentity,
                 isLoading: isLoading,
-                loadFailure: loadFailure)
+                loadFailure: loadFailure) }
         }
 
         // WebKit's delegate protocol requires an implicitly unwrapped navigation argument.
@@ -2784,10 +2787,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
                               self.loadGeneration == context.generation,
                               self.domRendererCoordinator?.lifecycle(for: placeholderID) == .loading
                         else {
-                            authority.close()
+                            await authority.close()
                             return
                         }
-                        self.finishPackageEmbedMount(
+                        await self.finishPackageEmbedMount(
                             authority: authority,
                             plan: plan,
                             placeholderID: placeholderID,
@@ -2867,15 +2870,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
             plan: RendererDOMEmbedPlan,
             placeholderID: RendererAttachmentPlaceholderID,
             context: RendererEmbedActivationContext
-        ) {
+        ) async {
             guard let webView, let lifecycle = domRendererCoordinator else {
-                authority.close()
+                await authority.close()
                 return
             }
             guard case .packageFrame(let framePlan) = plan,
                   lifecycle.lifecycle(for: placeholderID) == .loading
             else {
-                authority.close()
+                await authority.close()
                 return
             }
             // Per-embed token: two embeds of the same package must NOT share
@@ -2889,7 +2892,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // A scheme+host component pair always yields a URL; a nil
                 // here would mean an invalid token slipped through.
                 DebugLog.reader("frame origin URL construction failed for \(placeholderID.rawValue)")
-                authority.close()
+                await authority.close()
                 return
             }
             let broker = RendererContentWorldBroker(
@@ -2918,7 +2921,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // swiftlint:disable:next silent_try_optional
             guard let frameEntry = try? RendererFramePackageURL.parse(framePlan.entryURL) else {
                 DebugLog.reader("embed[\(placeholderID.rawValue)]: entry URL parse failed for \(framePlan.entryURL)")
-                authority.close()
+                await authority.close()
                 return
             }
             // Admit the per-embed route and use the URL it returns as the
@@ -2940,7 +2943,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // Rollback: attach refusal means no session state was stored.
                 // Revoke the route and dispose the broker directly.
                 webView.rendererPackageRouter.revoke(token: embedToken)
-                authority.close()
+                await authority.close()
                 failAttachment(placeholderID)
                 surfaceRefusal(.resourcePressure, for: placeholderID)
                 return
@@ -2961,25 +2964,23 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 expansionID: "\(placeholderID.rawValue)-expansion")
             else {
                 DebugLog.reader("embed[\(placeholderID.rawValue)]: no injection script for \(plan)")
-                authority.close()
+                await authority.close()
                 return
             }
-            webView.evaluateJavaScript(script) { [weak self] result, error in
-                guard let self else { return }
-                if let error {
-                    DebugLog.reader("embed[\(placeholderID.rawValue)]: injection JS error \(error.localizedDescription)")
-                    self.teardownDOMEmbed(placeholderID)
-                    return
-                }
-                let acknowledgement = result as? String
+            do {
+                let acknowledgement = try await webView.evaluateJavaScript(script) as? String
                 guard acknowledgement == RendererDOMEmbedInjection.injectionAcknowledgement else {
                     DebugLog.reader("embed[\(placeholderID.rawValue)]: injection not acknowledged; rolling back")
                     self.teardownDOMEmbed(placeholderID)
                     return
                 }
-                // The registry load timeout stays armed: only the frame's
-                // real load event (frameDidLoad through the subframe bridge)
-                // releases the timeout slot.
+                // The registry load timeout stays armed: only the frame's real
+                // load event (frameDidLoad through the subframe bridge) releases
+                // the timeout slot.
+            } catch {
+                DebugLog.reader("embed[\(placeholderID.rawValue)]: injection JS error \(error.localizedDescription)")
+                self.teardownDOMEmbed(placeholderID)
+                return
             }
         }
 
@@ -3094,7 +3095,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     admission: (webView as? WikiReaderWebView)?.rendererActivationAdmission,
                     isMainFrame: navigationAction.targetFrame?.isMainFrame ?? false
                 ) {
-                    (webView as? WikiReaderWebView)?.onRendererActivation?(activation.reference, activation.input)
+                    Task { @MainActor in
+                        (webView as? WikiReaderWebView)?.onRendererActivation?(activation.reference, activation.input)
+                    }
                     decisionHandler(.cancel)
                     return
                 }
@@ -3122,7 +3125,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     if let store,
                        let id = store.sourceID(forDisplayName: targetName)
                                ?? store.sourceID(forDisplayName: (targetName as NSString).deletingPathExtension) {
-                        store.selectSource(byID: id, anchor: url.fragment, openInNewTab: openInNewTab)
+                        Task { await store.selectSource(byID: id, anchor: url.fragment, openInNewTab: openInNewTab) }
                     }
                     decisionHandler(.cancel)
                     return
@@ -3156,8 +3159,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 if let id, store?.selectPage(byID: id, anchor: frag, openInNewTab: openInNewTab) == true { }
                 else { store?.selectPage(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
             case .source(let title, let id, let frag, let pin):
-                if let id, store?.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) == true { }
-                else { store?.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
+                if let id {
+                    Task { _ = await store?.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) }
+                } else {
+                    Task { _ = await store?.selectSource(byDisplayName: title, anchor: frag, openInNewTab: openInNewTab) }
+                }
             case .chat(let title, let id, let frag):
                 if let id, store?.selectChat(byID: id, anchor: frag, openInNewTab: openInNewTab) == true { }
                 else { store?.selectChat(byTitle: title, anchor: frag, openInNewTab: openInNewTab) }
@@ -3289,28 +3295,17 @@ internal struct WikiReaderRep: NSViewRepresentable {
             let loadStart = DispatchTime.now()
             let rendererSourceTypes = store.registeredRendererSourceTypes
             do {
-                let result: TransclusionEmbedder.Result
-                if let readService = store.readService {
-                    result = try await readService.asyncRead { access in
-                        try TransclusionEmbedder.renderEmbedBody(
-                            access: access,
-                            target: target,
-                            context: context,
-                            options: renderOptions,
-                            rendererSourceTypes: rendererSourceTypes,
-                            ancestors: ancestors)
-                    }
-                } else if let grdb = store.internalStore as? GRDBWikiStore {
-                    // Main-actor fallback (in-memory tests; rare in prod).
-                    result = try TransclusionEmbedder.renderEmbedBody(
-                        testFixtureStore: grdb,
-                        target: target,
-                        context: context,
-                        options: renderOptions,
-                        ancestors: ancestors)
-                } else {
-                    result = .empty
-                }
+                // P5: the embed render reads through the session's store —
+                // the daemon executes each read over the wire (remote app)
+                // or the local store answers (tests). One bounded read set
+                // per embed, no local pool.
+                let result: TransclusionEmbedder.Result = try await TransclusionEmbedder.renderEmbedBody(
+                    store: store.internalStore,
+                    target: target,
+                    context: context,
+                    options: renderOptions,
+                    rendererSourceTypes: rendererSourceTypes,
+                    ancestors: ancestors)
                 guard generation == transclusionGeneration,
                       isDismantled == false,
                       Task.isCancelled == false else { return }

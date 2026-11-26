@@ -64,13 +64,13 @@ struct AgentToolsD4Tests {
 
     // MARK: - (b) Rename round-trip via the model (the path the context menu wires)
 
-    @Test func renameChat_updatesRowTitle() throws {
+    @Test func renameChat_updatesRowTitle() async throws {
         let (model, store) = try tempModel()
         let chat = try store.createChat(kind: .edit, title: "Original Title")
         model.reloadChats()
 
         // The context menu's Rename action commits through this exact call.
-        model.renameChat(id: chat.id, to: "Renamed Title")
+        await model.renameChat(id: chat.id, to: "Renamed Title")
         model.reloadChats()
 
         let row = model.chats.first { $0.id == chat.id }
@@ -80,27 +80,27 @@ struct AgentToolsD4Tests {
         #expect(persisted?.title == "Renamed Title")
     }
 
-    @Test func renameChat_isIdempotentForSameTitle() throws {
+    @Test func renameChat_isIdempotentForSameTitle() async throws {
         // Renaming to the current title should not error or drop the row.
         let (model, store) = try tempModel()
         let chat = try store.createChat(kind: .edit, title: "Keep Me")
         model.reloadChats()
 
-        model.renameChat(id: chat.id, to: "Keep Me")
+        await model.renameChat(id: chat.id, to: "Keep Me")
         model.reloadChats()
 
         let row = model.chats.first { $0.id == chat.id }
         #expect(row?.title == "Keep Me")
     }
 
-    @Test func renameChat_preservesOtherChats() throws {
+    @Test func renameChat_preservesOtherChats() async throws {
         // Behavior-preservation: renaming one chat must not disturb siblings.
         let (model, store) = try tempModel()
         let a = try store.createChat(kind: .edit, title: "A")
         let b = try store.createChat(kind: .edit, title: "B")
         model.reloadChats()
 
-        model.renameChat(id: a.id, to: "A2")
+        await model.renameChat(id: a.id, to: "A2")
         model.reloadChats()
 
         #expect(model.chats.first { $0.id == a.id }?.title == "A2")

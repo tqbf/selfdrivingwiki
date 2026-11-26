@@ -196,8 +196,7 @@ struct ChatStuckRunningBeachballReproTests {
             descriptor: descriptor,
             containerDirectory: directory,
             extractionCoordinator: extractionCoordinator,
-            queueEngine: try makeStubQueueEngine(),
-            extractionProvider: ChatStuckRunningStubExtractionProvider()
+            queueEngine: try makeStubQueueEngine()
         )
         let daemon = StubChatDaemonCommands()
         let coordinator = ChatDaemonCoordinator(
@@ -232,8 +231,8 @@ struct ChatStuckRunningBeachballReproTests {
             }
         }
         let store = session.store
-        let chat = try store.internalStore.createChat(kind: .edit, title: "Stuck Running Repro")
-        _ = try store.internalStore.appendChatTranscriptItems(chatID: chat.id, items: items)
+        let chat = try await store.internalStore.createChat(kind: .edit, title: "Stuck Running Repro")
+        _ = try await store.internalStore.appendChatTranscriptItems(chatID: chat.id, items: items)
         store.reloadChats()
         store.openTab(.chat(chat.id))
 

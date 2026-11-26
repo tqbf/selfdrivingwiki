@@ -121,9 +121,9 @@ final class DaemonTransportAppCoordinator {
                 return
             }
         case .retry, .localFallbackReady:
-            // The coordinator now returns `.connected` after safe queue
-            // relinquishment so chat remains available. Keep the shared
-            // outcome exhaustive for defensive handling of future callers.
+            // `.localFallbackReady` is no longer produced: the app never
+            // owns a local queue engine (Phase 4). The arm stays for the
+            // shared outcome enum's exhaustiveness.
             await bridge.remove(id, invalidate: false)
         }
         await services.acknowledge(.init(candidateID: id, outcome: outcome))
@@ -148,55 +148,24 @@ final class DaemonTransportAppCoordinator {
                     .init(client: proxy, epoch: epoch),
                     ChatDaemonCoordinator(client: workloadClient, eventSink: eventSink))
             }
-            let makeChatCoordinator: () -> ChatDaemonCoordinator = {
-                let eventSink = DaemonQueueEventSink()
-                workloadClient.registerEventSink(eventSink)
-                return ChatDaemonCoordinator(client: workloadClient, eventSink: eventSink)
-            }
-
-            if case .shutdownBlocked = queueController.state {
-                let status = try await workloadClient.queueOwnershipStatus()
-                guard isAdmitted(expectedGeneration),
-                      status.hostState == .serving else { return .retry }
-                let daemon = makeEndpoint(status.epoch)
-                guard isAdmitted(expectedGeneration) else { return .retry }
-                let accepted = await queueController.retryBlockedShutdownForDaemon(daemon.endpoint)
-                guard isAdmitted(expectedGeneration) else { return .retry }
-                if accepted { replaceChatCoordinator(daemon.chatCoordinator) }
-                return accepted ? .connected : .retry
-            }
 
             if case .daemonOwnershipUnresolved(let expectedEpoch, _) = queueController.state {
-                DebugLog.store("WikiFSApp: daemon reconnected — requesting queue relinquishment")
-                do {
-                    let success = try await workloadClient.relinquishQueue(expectedEpoch: expectedEpoch)
-                    guard isAdmitted(expectedGeneration) else { return .retry }
-                    let fellBack = await queueController.fallBackAfterRelinquishment(
-                        success,
-                        expectedEpoch: expectedEpoch)
-                    guard isAdmitted(expectedGeneration) else { return .retry }
-                    if fellBack {
-                        DebugLog.store("WikiFSApp: daemon relinquished queue ownership — local runtime ready")
-                        replaceChatCoordinator(makeChatCoordinator())
-                        return .connected
-                    }
-                    return .retry
-                } catch {
-                    let status = try await workloadClient.queueOwnershipStatus()
-                    guard isAdmitted(expectedGeneration),
-                          status.hostState == .serving,
-                          status.epoch != expectedEpoch else { throw error }
-                    let daemon = makeEndpoint(status.epoch)
-                    guard isAdmitted(expectedGeneration) else { return .retry }
-                    let accepted = await queueController.replaceUnresolvedDaemon(
-                        daemon.endpoint,
-                        expectedEpoch: expectedEpoch)
-                    guard isAdmitted(expectedGeneration) else { return .retry }
-                    if accepted {
-                        replaceChatCoordinator(daemon.chatCoordinator)
-                    }
-                    return accepted ? .connected : .retry
+                // The app cannot fall back to a local runtime (Phase 4):
+                // only a fresh daemon epoch resolves the unresolved state.
+                let status = try await workloadClient.queueOwnershipStatus()
+                guard isAdmitted(expectedGeneration),
+                      status.hostState == .serving,
+                      status.epoch != expectedEpoch else { return .retry }
+                let daemon = makeEndpoint(status.epoch)
+                guard isAdmitted(expectedGeneration) else { return .retry }
+                let accepted = await queueController.replaceUnresolvedDaemon(
+                    daemon.endpoint,
+                    expectedEpoch: expectedEpoch)
+                guard isAdmitted(expectedGeneration) else { return .retry }
+                if accepted {
+                    replaceChatCoordinator(daemon.chatCoordinator)
                 }
+                return accepted ? .connected : .retry
             }
 
             let status = try await workloadClient.queueOwnershipStatus()

@@ -138,6 +138,38 @@ jobs:
         env:
           WIKIFS_APP_TESTS: "1"
         run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect 'configuration factory creates fresh ephemeral components' --filter 'RendererPackageSchemeHandlerTests|RendererContentWorldBridgeTests|RendererExternalLinkRedemptionGateTests|WikiAppWebViewSessionTests|WikiAppWebViewTests'
+      - name: Test daemon store integration suites
+        # The daemon store integration tier: executor, RemoteWikiStore, the
+        # concurrency and dedupe outcome contracts, session bootstrap, store
+        # events, and the XPC sink (AC.2, AC.4, AC.10).
+        #
+        # Deliberately EXCLUDED: the File Provider projection socket-fixture
+        # suites (ProjectionTreeTests, EnumeratorStoreFailureTests,
+        # EnumeratorDeletionTests, ZeroByteSourceProjectionTests,
+        # FileProviderReimportCreateTests, WikiStrategyProjectionTests) and
+        # the two new projection suites (ProjectionBoundedQueryTests,
+        # ProjectionLargeContentTests). All of them wedge this step at test
+        # bundle startup on CI with zero output — reproduced with ONLY the
+        # six suites that predate PR #1484 (run 45364281147), so the
+        # CI-hostility predates the branch; it is the same
+        # swiftpm-testing-helper wedge family as #1051/#1422 and needs its
+        # own root-cause pass. They stay developer-machine-gated via
+        # scripts/test-optin-app-tests-reconciled.sh (see the P7 progress
+        # note).
+        #
+        # The store tier itself runs and passes (~98 tests), but the
+        # swiftpm-testing-helper crashes at TEARDOWN (signal 5 after all
+        # tests pass — run 45374149667), failing the swift test exit even
+        # though every test passed and the reconciled runner's captured
+        # summary proves it. continue-on-error keeps this coverage running
+        # on every push without blocking the job on the SwiftPM teardown
+        # crash; the step's result stays visible in the job summary. Needs
+        # the same root-cause pass as the projection wedge above.
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          WIKIFS_APP_TESTS: "1"
+        run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect RemoteWikiStoreTests --filter 'DaemonStoreCommandExecutorTests|RemoteWikiStoreTests|RemoteStoreConcurrencyTests|RemoteStoreDedupeTests|RemoteStoreSessionBootstrapTests|DaemonStoreEventTests|WikiDaemonEventSinkTests'
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.0'

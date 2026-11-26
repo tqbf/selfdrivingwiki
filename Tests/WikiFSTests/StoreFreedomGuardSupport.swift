@@ -6,7 +6,12 @@ import Testing
 /// assert every occurrence of a forbidden token is covered by an explicit
 /// waiver whose count matches exactly — a new violation, a stale waiver, or
 /// a count drift all fail. Waivers shrink phase by phase per the plan's
-/// permitted-access table; the P7 end state is every list empty.
+/// permitted-access table. The recorded P7 end state (plans/daemon-only-access.md,
+/// "P7 verification record"): the app target (`Sources/WikiFS`) and the
+/// File Provider lists are empty; three permanent tier-shared entries remain
+/// in the app-reachable WikiFSEngine composition files that also serve the
+/// daemon/CLI/test `.local` compositions, each pinned by an exact-count
+/// waiver; the runtime zero-open proof is `ClientLocalOpenBoundaryTests`.
 enum StoreFreedomGuardSupport {
     struct Waiver: Sendable {
         /// Repo-root-relative file path, `/` separators.

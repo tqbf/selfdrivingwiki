@@ -251,6 +251,10 @@ struct RuntimeCommandLocatorIntegrationTests {
                 maximumMarkdownOutputByteCount: 16 * 1_024,
                 maximumDurationMilliseconds: 10_000,
                 maximumProgressEventCount: 8))
+        // Production installs ship manifest.json inside the package root;
+        // write it so the execution-time revalidation sees the same layout.
+        try JSONEncoder().encode(manifest).write(
+            to: packageRoot.appendingPathComponent("manifest.json"))
         let revision = ExtractorPackageRevisionID(
             packageID: manifest.packageID,
             version: manifest.version,

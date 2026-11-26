@@ -182,8 +182,8 @@ public struct WikiObservationRecorder: Sendable {
     public func capture(
         from store: any WikiStore,
         fixtureKeysBySourceID: [SourceID: String] = [:]
-    ) throws -> WikiObservation {
-        let sourceSummaries = try store.listSources()
+    ) async throws -> WikiObservation {
+        let sourceSummaries = try await store.listSources()
         let sourcesByID: [SourceID: SourceSummary] = Dictionary(
             sourceSummaries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
@@ -192,16 +192,16 @@ public struct WikiObservationRecorder: Sendable {
         // maps page → the specific sources it cites.
         var pageLinkSources: [PageID: [(SourceID, String)]] = [:]
         for summary in sourceSummaries {
-            let cited = try store.pagesCitingSources(sourceIDs: [summary.id], limit: 10_000)
+            let cited = try await store.pagesCitingSources(sourceIDs: [summary.id], limit: 10_000)
             for page in cited {
                 pageLinkSources[page.pageID, default: []].append((summary.id, summary.effectiveName))
             }
         }
 
         var pages: [ObservedPage] = []
-        for summary in try store.listPages(sortBy: .lastUpdated) {
-            let page = try store.getPage(id: summary.id)
-            let history = try store.pageVersionHistory(pageID: summary.id)
+        for summary in try await store.listPages(sortBy: .lastUpdated) {
+            let page = try await store.getPage(id: summary.id)
+            let history = try await store.pageVersionHistory(pageID: summary.id)
             var provenanceNames: [String] = []
             var provenanceIDs: [SourceID] = []
             // The current head is whatever the `page-content` ref points at
@@ -213,12 +213,12 @@ public struct WikiObservationRecorder: Sendable {
             // can be a stale tip. Ask the store for the actual head and fall
             // back to the final row only when no ref exists (pre-migration
             // data). Never evaluate provenance from the oldest version.
-            let headVersionID = try store.pageHeadVersionID(pageID: summary.id)
+            let headVersionID = try await store.pageHeadVersionID(pageID: summary.id)
             let head = headVersionID
                 .flatMap { ref in history.first { $0.id == ref } }
                 ?? history.last
             if let latest = head {
-                let sources = try store.pageVersionSources(versionID: latest.id)
+                let sources = try await store.pageVersionSources(versionID: latest.id)
                 var names: [String] = []
                 for provenance in sources {
                     provenanceIDs.append(provenance.sourceID)

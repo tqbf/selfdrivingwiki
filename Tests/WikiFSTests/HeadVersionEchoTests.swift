@@ -22,9 +22,9 @@ struct HeadVersionEchoTests {
 
     // MARK: - page add
 
-    @Test func pageAddCreateEchoesHeadOnStderrAndKeepsStdout() throws {
+    @Test func pageAddCreateEchoesHeadOnStderrAndKeepsStdout() async throws {
         let store = try tempStore()
-        let result = try PageCommand.run(.add(id: nil, title: "CAS Doc", body: .inline("v1")), in: store)
+        let result = try await PageCommand.run(.add(id: nil, title: "CAS Doc", body: .inline("v1")), in: store)
         let head = try store.pageHeadVersionID(pageID: PageID(rawValue: result.output))
         #expect(result.didCommit)
         #expect(result.stderrOutput == headLine(head?.rawValue))
@@ -34,24 +34,24 @@ struct HeadVersionEchoTests {
         #expect(!result.output.contains("head_version_id"))
     }
 
-    @Test func pageAddUpdateEchoesTheNewHead() throws {
+    @Test func pageAddUpdateEchoesTheNewHead() async throws {
         let store = try tempStore()
-        let create = try PageCommand.run(.add(id: nil, title: "CAS Doc", body: .inline("v1")), in: store)
+        let create = try await PageCommand.run(.add(id: nil, title: "CAS Doc", body: .inline("v1")), in: store)
         let pageID = PageID(rawValue: create.output)
-        let update = try PageCommand.run(
+        let update = try await PageCommand.run(
             .add(id: pageID, title: "CAS Doc", body: .inline("v2")), in: store)
         let head = try store.pageHeadVersionID(pageID: pageID)
         #expect(update.stderrOutput == headLine(head?.rawValue))
         #expect(update.stderrOutput != create.stderrOutput, "the update reports the NEW head")
     }
 
-    @Test func workspacePageAddEchoesTheStagedHead() throws {
+    @Test func workspacePageAddEchoesTheStagedHead() async throws {
         let store = try tempStore()
         // The page must exist on main for a version to stage against.
-        let create = try PageCommand.run(.add(id: nil, title: "WS Doc", body: .inline("main v1")), in: store)
+        let create = try await PageCommand.run(.add(id: nil, title: "WS Doc", body: .inline("main v1")), in: store)
         let pageID = PageID(rawValue: create.output)
         let wsID = try store.createWorkspace(name: nil, activityID: nil)
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: pageID, title: "WS Doc", body: .inline("staged v2"), workspace: wsID.rawValue), in: store)
         let staged = try store.workspacePageVersion(workspaceID: wsID, pageID: pageID)
         #expect(staged != nil, "a staged update records a workspace version")
@@ -60,25 +60,25 @@ struct HeadVersionEchoTests {
         #expect(result.output == staged?.rawValue)
     }
 
-    @Test func workspaceCreatedPageEchoesNoHead() throws {
+    @Test func workspaceCreatedPageEchoesNoHead() async throws {
         let store = try tempStore()
         let wsID = try store.createWorkspace(name: nil, activityID: nil)
         // A workspace-CREATED page has no version row until merge, so there
         // is no head to echo — stderr stays empty rather than lying.
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: PageID(rawValue: ULID.generate()), title: "Fresh WS", body: .inline("v1"),
                  workspace: wsID.rawValue), in: store)
         #expect(result.didCommit)
         #expect(result.stderrOutput == nil)
     }
 
-    @Test func casConflictProducesNoHeadLine() throws {
+    @Test func casConflictProducesNoHeadLine() async throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.add(id: nil, title: "C", body: .inline("v1")), in: store)
+        _ = try await PageCommand.run(.add(id: nil, title: "C", body: .inline("v1")), in: store)
         // A stale --expect-head throws before any Result exists, so no stderr
         // head line can leak from a failed write.
-        #expect(throws: PageConflictError.self) {
-            try PageCommand.run(
+        await #expect(throws: PageConflictError.self) {
+            try await PageCommand.run(
                 .add(id: nil, title: "C", body: .inline("v2"),
                      expectHead: PageVersionID(rawValue: "01STALEVERSIONID")), in: store)
         }
@@ -86,14 +86,14 @@ struct HeadVersionEchoTests {
 
     // MARK: - page revert
 
-    @Test func pageRevertEchoesTheRepointedHead() throws {
+    @Test func pageRevertEchoesTheRepointedHead() async throws {
         let store = try tempStore()
-        let create = try PageCommand.run(.add(id: nil, title: "R", body: .inline("v1")), in: store)
+        let create = try await PageCommand.run(.add(id: nil, title: "R", body: .inline("v1")), in: store)
         let pageID = PageID(rawValue: create.output)
         let v1 = try #require(try store.pageVersionHistory(pageID: pageID).first)
-        _ = try PageCommand.run(.add(id: pageID, title: "R", body: .inline("v2")), in: store)
+        _ = try await PageCommand.run(.add(id: pageID, title: "R", body: .inline("v2")), in: store)
 
-        let revert = try PageCommand.run(
+        let revert = try await PageCommand.run(
             .revert(.id(pageID), versionID: PageVersionID(rawValue: v1.id.rawValue)), in: store)
         #expect(revert.stderrOutput == headLine(v1.id.rawValue))
         #expect(revert.output == "reverted \(pageID.rawValue) to \(v1.id.rawValue)")
@@ -103,13 +103,13 @@ struct HeadVersionEchoTests {
 
     // MARK: - source edit-markdown / set-active
 
-    @Test func sourceEditMarkdownEchoesNewHead() throws {
+    @Test func sourceEditMarkdownEchoesNewHead() async throws {
         let store = try tempStore()
         let src = try store.addSource(filename: "doc.md", data: Data("bytes".utf8))
         _ = try store.appendProcessedMarkdown(sourceID: src.id, content: "# v1", origin: .extraction, note: nil)
         let headBefore = try #require(try store.processedMarkdownHead(sourceID: src.id))
 
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .editMarkdown(.id(src.id), content: .inline("# v2"), expectedHead: headBefore.id),
             in: store, cwd: "/tmp")
         let head = try store.processedMarkdownHead(sourceID: src.id)
@@ -118,7 +118,7 @@ struct HeadVersionEchoTests {
         #expect(head?.id != headBefore.id, "the echoed head is the NEW head, not the expected one")
     }
 
-    @Test func sourceMarkdownCASConflictProducesNoHeadLine() throws {
+    @Test func sourceMarkdownCASConflictProducesNoHeadLine() async throws {
         let store = try tempStore()
         let src = try store.addSource(filename: "doc3.md", data: Data("bytes".utf8))
         _ = try store.appendProcessedMarkdown(sourceID: src.id, content: "# v1", origin: .extraction, note: nil)
@@ -130,21 +130,21 @@ struct HeadVersionEchoTests {
         let stale = SourceMarkdownConflictError(
             sourceID: src.id, expectedHead: headBefore.id,
             currentHead: try store.processedMarkdownHead(sourceID: src.id)?.id)
-        #expect(throws: stale) {
-            try SourceCommand.run(
+        await #expect(throws: stale) {
+            try await SourceCommand.run(
                 .editMarkdown(.id(src.id), content: .inline("# late"), expectedHead: headBefore.id),
                 in: store, cwd: "/tmp")
         }
     }
 
-    @Test func sourceSetActiveEchoesTheNominatedHead() throws {
+    @Test func sourceSetActiveEchoesTheNominatedHead() async throws {
         let store = try tempStore()
         let src = try store.addSource(filename: "doc2.md", data: Data("bytes".utf8))
         let v1 = try store.appendProcessedMarkdown(sourceID: src.id, content: "# v1", origin: .extraction, note: nil)
         _ = try store.appendProcessedMarkdown(sourceID: src.id, content: "# v2", origin: .user, note: nil)
 
         // Nominate the OLDER version; the echo must report it, not the latest.
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .setActive(.id(src.id), versionID: v1.id), in: store, cwd: "/tmp")
         let head = try store.processedMarkdownHead(sourceID: src.id)
         #expect(head?.id == v1.id)

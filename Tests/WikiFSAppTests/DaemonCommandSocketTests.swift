@@ -71,19 +71,19 @@ struct DaemonCommandSocketTests {
 
     private func seed(
         _ daemon: WikiDaemon, wikiID: WikiID,
-        _ mutate: (WikiStore) throws -> Void
+        _ mutate: (WikiStore) async throws -> Void
     ) async throws {
         let store = try await daemon.domainCommandStore(wikiID: wikiID)
-        try mutate(store)
+        try await mutate(store)
     }
 
     /// Seed through the daemon store seam and return a value.
     private func seedValue<Value>(
         _ daemon: WikiDaemon, wikiID: WikiID,
-        _ mutate: (WikiStore) throws -> Value
+        _ mutate: (WikiStore) async throws -> Value
     ) async throws -> Value {
         let store = try await daemon.domainCommandStore(wikiID: wikiID)
-        return try mutate(store)
+        return try await mutate(store)
     }
 
     /// Look up the single source's id through the store read seam.
@@ -91,7 +91,7 @@ struct DaemonCommandSocketTests {
         daemon: WikiDaemon, wikiID: WikiID
     ) async throws -> SourceID {
         let store = try await daemon.domainCommandStore(wikiID: wikiID)
-        let summaries = try store.listSources()
+        let summaries = try await store.listSources()
         guard let first = summaries.first else {
             Issue.record("expected the seeded source")
             return SourceID(rawValue: "missing")
@@ -106,7 +106,7 @@ struct DaemonCommandSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         try await seed(daemon, wikiID: fixture.id) { store in
-            _ = try store.createPage(title: "Meeting Notes", body: "decisions go here", createdBy: nil, provenance: [])
+            _ = try await store.createPage(title: "Meeting Notes", body: "decisions go here", createdBy: nil, provenance: [])
         }
 
         let client = try makeSocketClient(container: container)
@@ -146,7 +146,7 @@ struct DaemonCommandSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         try await seed(daemon, wikiID: fixture.id) { store in
-            _ = try store.createPage(title: "Versioned Page", body: "v1 body", createdBy: nil, provenance: [])
+            _ = try await store.createPage(title: "Versioned Page", body: "v1 body", createdBy: nil, provenance: [])
         }
 
         let client = try makeSocketClient(container: container)
@@ -176,7 +176,7 @@ struct DaemonCommandSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         try await seed(daemon, wikiID: fixture.id) { store in
-            _ = try store.createPage(title: "OKF Page", body: "checked content", createdBy: nil, provenance: [])
+            _ = try await store.createPage(title: "OKF Page", body: "checked content", createdBy: nil, provenance: [])
         }
 
         // The head version id comes from `page get --json` — the same read an
@@ -264,7 +264,7 @@ struct DaemonCommandSocketTests {
         defer { server.stop() }
         let payload = Data("hello source bytes".utf8)
         try await seed(daemon, wikiID: fixture.id) { store in
-            _ = try store.addSource(filename: "notes.md", data: payload)
+            _ = try await store.addSource(filename: "notes.md", data: payload)
         }
 
         let client = try makeSocketClient(container: container)
@@ -365,7 +365,7 @@ struct DaemonCommandSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         try await seed(daemon, wikiID: fixture.id) { store in
-            _ = try store.createBookmarkNode(
+            _ = try await store.createBookmarkNode(
                 parentID: nil, position: 0, content: .folder(label: "Reading"))
         }
 
@@ -395,7 +395,7 @@ struct DaemonCommandSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         let workspaceID: WorkspaceID = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.createWorkspace(name: "speculative", activityID: nil)
+            try await store.createWorkspace(name: "speculative", activityID: nil)
         }
 
         let client = try makeSocketClient(container: container)
@@ -478,7 +478,7 @@ struct DaemonCommandSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         try await seed(daemon, wikiID: fixture.id) { store in
-            _ = try store.createPage(title: "Ironworkers Hall", body: "union hall minutes", createdBy: nil, provenance: [])
+            _ = try await store.createPage(title: "Ironworkers Hall", body: "union hall minutes", createdBy: nil, provenance: [])
         }
 
         let client = try makeSocketClient(container: container)
@@ -510,7 +510,7 @@ struct DaemonCommandSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         try await seed(daemon, wikiID: fixture.id) { store in
-            _ = try store.createPage(title: "Ironworkers Hall", body: "union minutes", createdBy: nil, provenance: [])
+            _ = try await store.createPage(title: "Ironworkers Hall", body: "union minutes", createdBy: nil, provenance: [])
         }
 
         let runner = WikiCtlRunner(
@@ -607,7 +607,7 @@ struct DaemonCommandSocketTests {
         let (server, fixture, daemon) = try await makeSeededWiki(container: container)
         defer { server.stop() }
         try await seed(daemon, wikiID: fixture.id) { store in
-            _ = try store.createPage(title: "Routed Page", body: "socket body", createdBy: nil, provenance: [])
+            _ = try await store.createPage(title: "Routed Page", body: "socket body", createdBy: nil, provenance: [])
         }
 
         let runner = WikiCtlRunner(
@@ -649,7 +649,7 @@ struct DaemonCommandSocketTests {
             environment: [:])
         #expect(output.changedWikiID == fixture.id)
         let titles = try await seedValue(daemon, wikiID: fixture.id) { store in
-            try store.listPages(sortBy: .lastUpdated).map(\.title)
+            try await store.listPages(sortBy: .lastUpdated).map(\.title)
         }
         #expect(titles.contains("Routed Write"))
     }

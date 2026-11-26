@@ -83,7 +83,7 @@ struct SplitDiffSnapshotTests {
     @Test func renderFullSheetBothModesAndNominate() async throws {
         let lease = try await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
-        let store = try makeTwoBackendStore()
+        let store = try await makeTwoBackendStore()
         let sourceID = store.sources.first { $0.filename.hasSuffix(".pdf") }!.id
 
         // Rendered mode (default): verifies toolbar Base/Compare pickers, sidebar
@@ -103,10 +103,10 @@ struct SplitDiffSnapshotTests {
 
         // AC.3: nominate the non-active alternative, then re-render — the Active
         // badge must move. Drive the same model seam the sidebar button uses.
-        let alts = store.processedMarkdownAlternatives(for: sourceID)
+        let alts = await store.processedMarkdownAlternatives(for: sourceID)
         let inactive = try #require(alts.first { !$0.isActive })
-        store.setActiveMarkdown(for: sourceID, to: inactive.id)
-        let after = store.processedMarkdownAlternatives(for: sourceID)
+        await store.setActiveMarkdown(for: sourceID, to: inactive.id)
+        let after = await store.processedMarkdownAlternatives(for: sourceID)
         #expect(after.first { $0.isActive }?.id == inactive.id)   // HEAD moved
 
         let renominated = ExtractionCompareSheet(store: store, sourceID: sourceID,
@@ -119,19 +119,19 @@ struct SplitDiffSnapshotTests {
 
     /// A store with one PDF source carrying two extraction alternatives
     /// (anthropic + gemini), mirroring `ProcessedMarkdownTests`' setup.
-    private func makeTwoBackendStore() throws -> WikiStoreModel {
+    private func makeTwoBackendStore() async throws -> WikiStoreModel {
         let dir = Self.snapshotsDirectory
             .appendingPathComponent("wikifs-diff-snap-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
-        let file = try store.addSource(filename: "Thinking+is+Believing.pdf",
+        let file = try await store.addSource(filename: "Thinking+is+Believing.pdf",
                                        data: Data("%PDF-1.4".utf8))
-        _ = try store.recordMarkdownExtraction(
+        _ = try await store.recordMarkdownExtraction(
             sourceID: file.id, content: SampleDiff.left,
             backend: .anthropic, sourceVersionID: nil, note: nil,
             modelVersion: "claude-opus-4")
         usleep(2000)
-        _ = try store.recordMarkdownExtraction(
+        _ = try await store.recordMarkdownExtraction(
             sourceID: file.id, content: SampleDiff.right,
             backend: .gemini, sourceVersionID: nil, note: nil,
             modelVersion: "gemini-2.0")

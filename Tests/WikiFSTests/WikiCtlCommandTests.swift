@@ -18,7 +18,7 @@ struct WikiCtlCommandTests {
 
     // MARK: - Argument parsing
 
-    @Test func parsesTopLevelHelpWithoutWikiSelector() throws {
+    @Test func parsesTopLevelHelpWithoutWikiSelector() async throws {
         let invocation = try ArgumentParser.parse(["--help"], env: noEnv)
         #expect(invocation.wikiSelector.isEmpty)
         #expect(invocation.command == .help(.topLevel))
@@ -30,13 +30,13 @@ struct WikiCtlCommandTests {
         #expect(ArgumentParser.usageText.contains("with a pipe or heredoc"))
     }
 
-    @Test func parsesWikiFromFlag() throws {
+    @Test func parsesWikiFromFlag() async throws {
         let invocation = try ArgumentParser.parse(["--wiki", "WIKI1", "page", "list"], env: noEnv)
         #expect(invocation.wikiSelector == "WIKI1")
         #expect(invocation.command == .page(.list(json: false)))
     }
 
-    @Test func parsesWikiFromEqualsFlag() throws {
+    @Test func parsesWikiFromEqualsFlag() async throws {
         let invocation = try ArgumentParser.parse(["--wiki=WIKI1", "page", "list"], env: noEnv)
         #expect(invocation.wikiSelector == "WIKI1")
         #expect(invocation.command == .page(.list(json: false)))
@@ -48,7 +48,7 @@ struct WikiCtlCommandTests {
         }
     }
 
-    @Test func parsesWikiFromEnvWhenFlagAbsent() throws {
+    @Test func parsesWikiFromEnvWhenFlagAbsent() async throws {
         let invocation = try ArgumentParser.parse(
             ["page", "list", "--json"],
             env: { $0 == "WIKI_DB" ? "ENVWIKI" : nil }
@@ -57,7 +57,7 @@ struct WikiCtlCommandTests {
         #expect(invocation.command == .page(.list(json: true)))
     }
 
-    @Test func flagBeatsEnvForWikiSelector() throws {
+    @Test func flagBeatsEnvForWikiSelector() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "FLAG", "page", "list"],
             env: { $0 == "WIKI_DB" ? "ENV" : nil }
@@ -71,7 +71,7 @@ struct WikiCtlCommandTests {
         }
     }
 
-    @Test func parsesGetByTitleAndByID() throws {
+    @Test func parsesGetByTitleAndByID() async throws {
         let byTitle = try ArgumentParser.parse(
             ["--wiki", "W", "page", "get", "--title", "Home"], env: noEnv)
         #expect(byTitle.command == .page(.get(.title("Home"), json: false)))
@@ -91,7 +91,7 @@ struct WikiCtlCommandTests {
         }
     }
 
-    @Test func parsesUpsertWithAndWithoutID() throws {
+    @Test func parsesUpsertWithAndWithoutID() async throws {
         let create = try ArgumentParser.parse(
             ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-"], env: noEnv)
         #expect(create.command == .page(.add(id: nil, title: "T", body: .file("-"), expectHead: nil, workspace: nil, author: nil)))
@@ -102,7 +102,7 @@ struct WikiCtlCommandTests {
         #expect(update.command == .page(.add(id: PageID(rawValue: "01X"), title: "T", body: .file("body.md"), expectHead: nil, workspace: nil, author: nil)))
     }
 
-    @Test func parsesRevertWithTypedVersionID() throws {
+    @Test func parsesRevertWithTypedVersionID() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "page", "revert", "--id", "01X", "--version", "01V"],
             env: noEnv)
@@ -120,7 +120,7 @@ struct WikiCtlCommandTests {
         }
     }
 
-    @Test func parsesUpsertAuthorFlag() throws {
+    @Test func parsesUpsertAuthorFlag() async throws {
         let inv = try ArgumentParser.parse(
             ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-",
              "--author", "chat:01ABC"],
@@ -134,7 +134,7 @@ struct WikiCtlCommandTests {
 
     // MARK: - WIKI_AUTHOR env var routing (#397)
 
-    @Test func wikiAuthorEnvStampsProvenanceWhenFlagAbsent() throws {
+    @Test func wikiAuthorEnvStampsProvenanceWhenFlagAbsent() async throws {
         let inv = try ArgumentParser.parse(
             ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-"],
             env: { _ in nil })
@@ -147,7 +147,7 @@ struct WikiCtlCommandTests {
         #expect(author == "chat:01DEF")
     }
 
-    @Test func explicitAuthorFlagWinsOverEnv() throws {
+    @Test func explicitAuthorFlagWinsOverEnv() async throws {
         let inv = try ArgumentParser.parse(
             ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-",
              "--author", "agent:ingest"],
@@ -161,7 +161,7 @@ struct WikiCtlCommandTests {
         #expect(author == "agent:ingest")
     }
 
-    @Test func wikiAuthorEnvIgnoredWhenAbsent() throws {
+    @Test func wikiAuthorEnvIgnoredWhenAbsent() async throws {
         let inv = try ArgumentParser.parse(
             ["--wiki", "W", "page", "add", "--title", "T", "--body-file", "-"],
             env: { _ in nil })
@@ -177,7 +177,7 @@ struct WikiCtlCommandTests {
     /// author's only source — `applyEnv` routes it onto the command so the
     /// stamp gate in `LogIndexCommand` can tell an agent-authored run from
     /// the ad-hoc chat/shell path.
-    @Test func wikiAuthorEnvRoutesOntoLogAppend() throws {
+    @Test func wikiAuthorEnvRoutesOntoLogAppend() async throws {
         let inv = try ArgumentParser.parse(
             ["--wiki", "W", "log", "append", "--kind", "ingest", "--title", "T"],
             env: { _ in nil })
@@ -190,7 +190,7 @@ struct WikiCtlCommandTests {
         #expect(author == "agent:ingest")
     }
 
-    @Test func wikiAuthorEnvLeavesLogAppendAloneWhenAbsent() throws {
+    @Test func wikiAuthorEnvLeavesLogAppendAloneWhenAbsent() async throws {
         let inv = try ArgumentParser.parse(
             ["--wiki", "W", "log", "append", "--kind", "ingest", "--title", "T"],
             env: { _ in nil })
@@ -202,19 +202,19 @@ struct WikiCtlCommandTests {
         #expect(author == nil)
     }
 
-    @Test func parsesDelete() throws {
+    @Test func parsesDelete() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "page", "delete", "--id", "01Z"], env: noEnv)
         #expect(invocation.command == .page(.delete(id: PageID(rawValue: "01Z"), unlinkIncoming: false)))
     }
 
-    @Test func parsesPageDeleteWithUnlinkFlag() throws {
+    @Test func parsesPageDeleteWithUnlinkFlag() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "page", "delete", "--id", "01Z", "--unlink-incoming"], env: noEnv)
         #expect(invocation.command == .page(.delete(id: PageID(rawValue: "01Z"), unlinkIncoming: true)))
     }
 
-    @Test func parsesPageDeleteWithoutUnlinkFlag() throws {
+    @Test func parsesPageDeleteWithoutUnlinkFlag() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "page", "delete", "--id", "01Z"], env: noEnv)
         guard case .page(.delete(_, let unlinkIncoming)) = invocation.command else {
@@ -233,13 +233,13 @@ struct WikiCtlCommandTests {
 
     // MARK: - Search parsing
 
-    @Test func parsesSearchWithQueryAndDefaultLimit() throws {
+    @Test func parsesSearchWithQueryAndDefaultLimit() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "page", "search", "--query", "electric cars"], env: noEnv)
         #expect(invocation.command == .page(.search(query: "electric cars", limit: 10)))
     }
 
-    @Test func parsesSearchWithCustomLimit() throws {
+    @Test func parsesSearchWithCustomLimit() async throws {
         let invocation = try ArgumentParser.parse(
             ["page", "search", "--query", "ai", "--limit", "5"],
             env: { $0 == "WIKI_DB" ? "W" : nil })
@@ -266,9 +266,9 @@ struct WikiCtlCommandTests {
 
     // MARK: - Command dispatch (against a temp DB)
 
-    @Test func upsertCommitsAndReturnsID() throws {
+    @Test func upsertCommitsAndReturnsID() async throws {
         let store = try tempStore()
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: nil, title: "Created", body: .inline("hello")), in: store)
         #expect(result.didCommit)
         let resolvedID = try store.resolveTitleToID("Created")?.rawValue
@@ -276,18 +276,18 @@ struct WikiCtlCommandTests {
         #expect(try store.getPage(id: PageID(rawValue: result.output)).bodyMarkdown == "hello")
     }
 
-    @Test func upsertWithoutAuthorLeavesProvenanceNil() throws {
+    @Test func upsertWithoutAuthorLeavesProvenanceNil() async throws {
         let store = try tempStore()
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: nil, title: "NoProv", body: .inline("hi")), in: store)
         let page = try store.getPage(id: PageID(rawValue: result.output))
         #expect(page.createdBy == nil)
         #expect(page.lastEditedBy == nil)
     }
 
-    @Test func upsertWithAuthorStampsCreatedAndLastEditedBy() throws {
+    @Test func upsertWithAuthorStampsCreatedAndLastEditedBy() async throws {
         let store = try tempStore()
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: nil, title: "Prov", body: .inline("v1"),
                      author: "chat:01ABC"), in: store)
         let page = try store.getPage(id: PageID(rawValue: result.output))
@@ -295,12 +295,12 @@ struct WikiCtlCommandTests {
         #expect(page.lastEditedBy == "chat:01ABC")
     }
 
-    @Test func upsertWithAuthorOnUpdateSetsLastEditedByOnly() throws {
+    @Test func upsertWithAuthorOnUpdateSetsLastEditedByOnly() async throws {
         let store = try tempStore()
-        let created = try PageCommand.run(
+        let created = try await PageCommand.run(
             .add(id: nil, title: "Edit", body: .inline("v1"),
                      author: "user"), in: store)
-        _ = try PageCommand.run(
+        _ = try await PageCommand.run(
             .add(id: PageID(rawValue: created.output), title: "Edit",
                      body: .inline("v2"), author: "chat:01DEF"), in: store)
         let page = try store.getPage(id: PageID(rawValue: created.output))
@@ -308,26 +308,26 @@ struct WikiCtlCommandTests {
         #expect(page.lastEditedBy == "chat:01DEF")
     }
 
-    @Test func getReturnsBodyAndDoesNotCommit() throws {
+    @Test func getReturnsBodyAndDoesNotCommit() async throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.add(id: nil, title: "Doc", body: .inline("the body")), in: store)
-        let result = try PageCommand.run(.get(.title("Doc"), json: false), in: store)
+        _ = try await PageCommand.run(.add(id: nil, title: "Doc", body: .inline("the body")), in: store)
+        let result = try await PageCommand.run(.get(.title("Doc"), json: false), in: store)
         #expect(result.output == "the body")
         #expect(!result.didCommit)
         #expect(result.stderrOutput?.hasPrefix("head_version_id: ") == true)
     }
 
-    @Test func getByMissingTitleThrows() throws {
+    @Test func getByMissingTitleThrows() async throws {
         let store = try tempStore()
-        #expect(throws: PageCommand.Failure.self) {
-            try PageCommand.run(.get(.title("Nope"), json: false), in: store)
+        await #expect(throws: PageCommand.Failure.self) {
+            try await PageCommand.run(.get(.title("Nope"), json: false), in: store)
         }
     }
 
-    @Test func listTSVHasIDTitlePathPerLine() throws {
+    @Test func listTSVHasIDTitlePathPerLine() async throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.add(id: nil, title: "Alpha", body: .inline("stub")), in: store)
-        let result = try PageCommand.run(.list(json: false), in: store)
+        _ = try await PageCommand.run(.add(id: nil, title: "Alpha", body: .inline("stub")), in: store)
+        let result = try await PageCommand.run(.list(json: false), in: store)
         #expect(!result.didCommit)
         let columns = result.output.split(separator: "\t")
         #expect(columns.count == 3)
@@ -335,11 +335,11 @@ struct WikiCtlCommandTests {
         #expect(columns[2].hasPrefix("pages/by-title/Alpha--"))
     }
 
-    @Test func listJSONIsOneObjectPerLine() throws {
+    @Test func listJSONIsOneObjectPerLine() async throws {
         let store = try tempStore()
-        _ = try PageCommand.run(.add(id: nil, title: "One", body: .inline("stub")), in: store)
-        _ = try PageCommand.run(.add(id: nil, title: "Two", body: .inline("stub")), in: store)
-        let result = try PageCommand.run(.list(json: true), in: store)
+        _ = try await PageCommand.run(.add(id: nil, title: "One", body: .inline("stub")), in: store)
+        _ = try await PageCommand.run(.add(id: nil, title: "Two", body: .inline("stub")), in: store)
+        let result = try await PageCommand.run(.list(json: true), in: store)
         let lines = result.output.split(separator: "\n")
         #expect(lines.count == 2)
         for line in lines {
@@ -350,11 +350,11 @@ struct WikiCtlCommandTests {
         }
     }
 
-    @Test func deleteCommitsAndRemovesPage() throws {
+    @Test func deleteCommitsAndRemovesPage() async throws {
         let store = try tempStore()
-        let created = try PageCommand.run(.add(id: nil, title: "Doomed", body: .inline("stub")), in: store)
+        let created = try await PageCommand.run(.add(id: nil, title: "Doomed", body: .inline("stub")), in: store)
         let id = PageID(rawValue: created.output)
-        let result = try PageCommand.run(.delete(id: id), in: store)
+        let result = try await PageCommand.run(.delete(id: id), in: store)
         #expect(result.didCommit)
         #expect(try store.listPages(sortBy: .lastUpdated).isEmpty)
     }
@@ -364,14 +364,14 @@ struct WikiCtlCommandTests {
     /// AC.11: the no-flag delete keeps the stdout contract (the page id),
     /// removes bookmarks targeting the page, and preserves incoming Markdown
     /// as ghost links. The stderr notice reports the cleanup counts.
-    @Test func wikictlPageDeletePreservesStdoutAndGhostLinks() throws {
+    @Test func wikictlPageDeletePreservesStdoutAndGhostLinks() async throws {
         let store = try tempStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]]", author: "user")
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
 
-        let result = try PageCommand.run(.delete(id: b.id, unlinkIncoming: false), in: store)
+        let result = try await PageCommand.run(.delete(id: b.id, unlinkIncoming: false), in: store)
 
         // Stdout contract: the deleted page id.
         #expect(result.output == b.id.rawValue)
@@ -390,12 +390,12 @@ struct WikiCtlCommandTests {
 
     /// AC.1: the CLI delete (through the shared protected contract) removes
     /// bookmarks targeting the deleted page even when no links exist.
-    @Test func wikictlPageDeleteRemovesTargetBookmarks() throws {
+    @Test func wikictlPageDeleteRemovesTargetBookmarks() async throws {
         let store = try tempStore()
-        let b = try store.createPage(title: "B")
+        let b = try await store.createPage(title: "B")
         _ = try store.createBookmarkNode(parentID: nil, position: 0, content: .page(b.id))
 
-        let result = try PageCommand.run(.delete(id: b.id, unlinkIncoming: false), in: store)
+        let result = try await PageCommand.run(.delete(id: b.id, unlinkIncoming: false), in: store)
 
         #expect(result.output == b.id.rawValue)
         #expect(try store.listBookmarkNodes().isEmpty)
@@ -403,15 +403,15 @@ struct WikiCtlCommandTests {
 
     /// AC.12: `--unlink-incoming` converts inbound links to plain display
     /// text, keeps the stdout contract, and reports the unlinked count.
-    @Test func wikictlPageDeleteUnlinksIncomingMarkdown() throws {
+    @Test func wikictlPageDeleteUnlinksIncomingMarkdown() async throws {
         let store = try tempStore()
-        let a = try store.createPage(title: "A")
-        let b = try store.createPage(title: "B")
-        try PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]] end", author: "user")
-        let alias = try store.createPage(title: "C")
-        try PageUpsert.upsert(in: store, id: alias.id, title: "C", body: "see [[B|bee]] too", author: "user")
+        let a = try await store.createPage(title: "A")
+        let b = try await store.createPage(title: "B")
+        try await PageUpsert.upsert(in: store, id: a.id, title: "A", body: "see [[B]] end", author: "user")
+        let alias = try await store.createPage(title: "C")
+        try await PageUpsert.upsert(in: store, id: alias.id, title: "C", body: "see [[B|bee]] too", author: "user")
 
-        let result = try PageCommand.run(.delete(id: b.id, unlinkIncoming: true), in: store)
+        let result = try await PageCommand.run(.delete(id: b.id, unlinkIncoming: true), in: store)
 
         // Stdout contract unchanged.
         #expect(result.output == b.id.rawValue)
@@ -427,11 +427,11 @@ struct WikiCtlCommandTests {
     /// Review fix (didCommit semantics): a missing target with no stale
     /// bookmarks is an idempotent no-op — stdout keeps the id contract but NO
     /// change notification posts.
-    @Test func wikictlPageDeleteMissingTargetIsIdempotentNoCommit() throws {
+    @Test func wikictlPageDeleteMissingTargetIsIdempotentNoCommit() async throws {
         let store = try tempStore()
         let ghost = PageID(rawValue: "01GHOSTPAGE0000000000000000")
 
-        let result = try PageCommand.run(.delete(id: ghost, unlinkIncoming: false), in: store)
+        let result = try await PageCommand.run(.delete(id: ghost, unlinkIncoming: false), in: store)
 
         #expect(result.output == ghost.rawValue)
         #expect(!result.didCommit)
@@ -443,14 +443,14 @@ struct WikiCtlCommandTests {
     /// `wikictl page info --title X` round-trip: creates a page with a chat
     /// author via `add --author`, then `page info` prints the identity +
     /// origin provenance for the HEAD. Mirrors `source info`'s smoke test.
-    @Test func pageInfoPrintsChatOrigin() throws {
+    @Test func pageInfoPrintsChatOrigin() async throws {
         let store = try tempStore()
-        let created = try PageCommand.run(
+        let created = try await PageCommand.run(
             .add(id: nil, title: "Provenance Doc", body: .inline("hello"),
                  author: "chat:01JTESTCHAT00000004"),
             in: store)
         let id = PageID(rawValue: created.output)
-        let result = try PageCommand.run(.info(.id(id)), in: store)
+        let result = try await PageCommand.run(.info(.id(id)), in: store)
         #expect(!result.didCommit, "page info is a read; must not commit")
         // Identity header.
         #expect(result.output.contains("id\t\(id.rawValue)"))
@@ -468,19 +468,19 @@ struct WikiCtlCommandTests {
     /// `page info --title X` after a chat edit shows the edit activity on the
     /// HEAD, with the chat agent. Mirrors `pageEditHistoryCountsCreateAndEdit`
     /// (PageVersionTests) but via the CLI surface.
-    @Test func pageInfoAfterEditShowsEditOrigin() throws {
+    @Test func pageInfoAfterEditShowsEditOrigin() async throws {
         let store = try tempStore()
-        let created = try PageCommand.run(
+        let created = try await PageCommand.run(
             .add(id: nil, title: "Edit Doc", body: .inline("v1"),
                  author: "agent:ingest"),
             in: store)
         let id = PageID(rawValue: created.output)
         // Chat edit (different author — amend won't fire).
-        _ = try PageCommand.run(
+        _ = try await PageCommand.run(
             .add(id: id, title: "Edit Doc", body: .inline("v2"),
                  author: "chat:01JTESTCHAT00000005"),
             in: store)
-        let result = try PageCommand.run(.info(.title("Edit Doc")), in: store)
+        let result = try await PageCommand.run(.info(.title("Edit Doc")), in: store)
         #expect(!result.didCommit)
         #expect(result.output.contains("# origin (HEAD)"))
         #expect(result.output.contains("activity\tedit"))
@@ -493,22 +493,22 @@ struct WikiCtlCommandTests {
         #expect(historyLines.count == 2, "create + edit yields 2 history rows")
     }
 
-    @Test func parsesPageInfoByID() throws {
+    @Test func parsesPageInfoByID() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "page", "info", "--id", "01ABC"], env: noEnv)
         #expect(invocation.command == .page(.info(.id(PageID(rawValue: "01ABC")))))
     }
 
-    @Test func parsesPageInfoByTitle() throws {
+    @Test func parsesPageInfoByTitle() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "page", "info", "--title", "X"], env: noEnv)
         #expect(invocation.command == .page(.info(.title("X"))))
     }
 
-    @Test func pageInfoOnMissingPageThrows() throws {
+    @Test func pageInfoOnMissingPageThrows() async throws {
         let store = try tempStore()
-        #expect(throws: PageCommand.Failure.self) {
-            try PageCommand.run(.info(.title("Nope")), in: store)
+        await #expect(throws: PageCommand.Failure.self) {
+            try await PageCommand.run(.info(.title("Nope")), in: store)
         }
     }
 
@@ -520,10 +520,10 @@ struct WikiCtlCommandTests {
     // fabricate one from the seeded pages so they exercise the TSV formatting
     // contract without depending on a search index.
 
-    @Test func searchReturnsTSVAndDoesNotCommit() throws {
+    @Test func searchReturnsTSVAndDoesNotCommit() async throws {
         let store = try tempStore()
-        let carsUpsert = try PageCommand.run(.add(id: nil, title: "Cars", body: .inline("electric vehicles")), in: store)
-        _ = try PageCommand.run(.add(id: nil, title: "Recipes", body: .inline("baking bread")), in: store)
+        let carsUpsert = try await PageCommand.run(.add(id: nil, title: "Cars", body: .inline("electric vehicles")), in: store)
+        _ = try await PageCommand.run(.add(id: nil, title: "Recipes", body: .inline("baking bread")), in: store)
         // Fabricate a Tantivy-style leg that targets only the Cars page (what
         // a real Tantivy "car" query would surface). The store treats the leg
         // as the pre-ranked BM25 signal; with no page_chunks the cosine leg is
@@ -533,7 +533,7 @@ struct WikiCtlCommandTests {
             id: carsID, title: "Cars",
             updatedAt: Date(timeIntervalSince1970: 0),
             createdAt: Date(timeIntervalSince1970: 0))
-        let result = try PageCommand.run(.search(query: "car", limit: 10), in: store, bm25Leg: [carsLeg])
+        let result = try await PageCommand.run(.search(query: "car", limit: 10), in: store, bm25Leg: [carsLeg])
         #expect(!result.didCommit)
         let lines = result.output.split(separator: "\n")
         #expect(!lines.isEmpty)
@@ -548,13 +548,13 @@ struct WikiCtlCommandTests {
 
     // MARK: - File command parsing
 
-    @Test func parsesSourceAddFromURL() throws {
+    @Test func parsesSourceAddFromURL() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "add", "--url", "https://example.com"], env: noEnv)
         #expect(invocation.command == .source(.addURL("https://example.com", allowDuplicateURL: false)))
     }
 
-    @Test func parsesSourceAddFromBodyFileAndStdin() throws {
+    @Test func parsesSourceAddFromBodyFileAndStdin() async throws {
         let file = try ArgumentParser.parse(
             ["--wiki", "W", "source", "add", "--body-file", "notes.md"], env: noEnv)
         #expect(file.command == .source(.addFile(path: "notes.md", name: nil)))
@@ -579,37 +579,37 @@ struct WikiCtlCommandTests {
         }
     }
 
-    @Test func parsesFileList() throws {
+    @Test func parsesFileList() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "list"], env: noEnv)
         #expect(invocation.command == .source(.list(json: false)))
     }
 
-    @Test func parsesFileListJSON() throws {
+    @Test func parsesFileListJSON() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "list", "--json"], env: noEnv)
         #expect(invocation.command == .source(.list(json: true)))
     }
 
-    @Test func parsesFileCatByID() throws {
+    @Test func parsesFileCatByID() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "cat", "--id", "01ABC"], env: noEnv)
         #expect(invocation.command == .source(.cat(.id(SourceID(rawValue: "01ABC")), markdown: false)))
     }
 
-    @Test func parsesFileCatByName() throws {
+    @Test func parsesFileCatByName() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "cat", "--name", "report.pdf"], env: noEnv)
         #expect(invocation.command == .source(.cat(.name("report.pdf"), markdown: false)))
     }
 
-    @Test func parsesFileExportByID() throws {
+    @Test func parsesFileExportByID() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "export", "--id", "01Z"], env: noEnv)
         #expect(invocation.command == .source(.export(.id(SourceID(rawValue: "01Z")), out: nil, markdown: false)))
     }
 
-    @Test func parsesFileExportWithOut() throws {
+    @Test func parsesFileExportWithOut() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "export", "--id", "01Z", "--out", "/tmp/out.pdf"], env: noEnv)
         #expect(invocation.command == .source(.export(.id(SourceID(rawValue: "01Z")), out: "/tmp/out.pdf", markdown: false)))
@@ -642,7 +642,7 @@ struct WikiCtlCommandTests {
 
     // MARK: - File command dispatch (against a temp DB)
 
-    @Test func sourceAddBodyFilePreservesBytesAndDerivesName() throws {
+    @Test func sourceAddBodyFilePreservesBytesAndDerivesName() async throws {
         let store = try tempStore()
         let input = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikictl-source-\(UUID().uuidString).bin")
@@ -656,7 +656,7 @@ struct WikiCtlCommandTests {
             }
         }
 
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .addFile(path: input.path, name: nil), in: store, cwd: "/tmp")
         #expect(result.didCommit)
         let source = try #require(try store.listSources().first)
@@ -664,11 +664,11 @@ struct WikiCtlCommandTests {
         #expect(try store.sourceContent(id: source.id) == bytes)
     }
 
-    @Test func sourceAddStdinUsesSuppliedNameAndPreservesBytes() throws {
+    @Test func sourceAddStdinUsesSuppliedNameAndPreservesBytes() async throws {
         let store = try tempStore()
         let bytes = Data("# From stdin\n\nPipe and heredoc body.\n".utf8)
 
-        let result = try SourceCommand.addFile(
+        let result = try await SourceCommand.addFile(
             path: "-", name: "piped-notes.md", data: bytes, in: store)
         #expect(result.didCommit)
         let source = try #require(try store.listSources().first)
@@ -676,11 +676,11 @@ struct WikiCtlCommandTests {
         #expect(try store.sourceContent(id: source.id) == bytes)
     }
 
-    @Test func fileListTSV() throws {
+    @Test func fileListTSV() async throws {
         let store = try tempStore()
         _ = try store.addSource(filename: "alpha.txt", data: Data("hello".utf8))
         _ = try store.addSource(filename: "beta.pdf", data: Data([0x00, 0xFF, 0x42]))
-        let result = try SourceCommand.run(.list(json: false), in: store, cwd: "/tmp")
+        let result = try await SourceCommand.run(.list(json: false), in: store, cwd: "/tmp")
         #expect(!result.didCommit)
         guard case .text(let output) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
@@ -698,11 +698,11 @@ struct WikiCtlCommandTests {
         #expect(lines[1].contains("alpha.txt"))
     }
 
-    @Test func fileListShowsDisplayNameAfterRename() throws {
+    @Test func fileListShowsDisplayNameAfterRename() async throws {
         let store = try tempStore()
         let src = try store.addSource(filename: "User Guide.md", data: Data("# Guide".utf8))
         try store.renameSource(id: src.id, to: "Self-Driving Wiki — User Guide")
-        let result = try SourceCommand.run(.list(json: false), in: store, cwd: "/tmp")
+        let result = try await SourceCommand.run(.list(json: false), in: store, cwd: "/tmp")
         guard case .text(let output) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
         }
@@ -711,11 +711,11 @@ struct WikiCtlCommandTests {
         #expect(!output.contains("User Guide.md"))
     }
 
-    @Test func fileListJSONMatchesFilesJSONL() throws {
+    @Test func fileListJSONMatchesFilesJSONL() async throws {
         let store = try tempStore()
         _ = try store.addSource(filename: "one.txt", data: Data("aaa".utf8))
         _ = try store.addSource(filename: "two.bin", data: Data([0x00, 0x01]))
-        let result = try SourceCommand.run(.list(json: true), in: store, cwd: "/tmp")
+        let result = try await SourceCommand.run(.list(json: true), in: store, cwd: "/tmp")
         guard case .text(let output) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
         }
@@ -746,24 +746,24 @@ struct WikiCtlCommandTests {
         }
     }
 
-    @Test func fileCatReturnsExactBytes() throws {
+    @Test func fileCatReturnsExactBytes() async throws {
         let store = try tempStore()
         // Binary fixture with non-UTF-8 bytes to prove the byte path works.
         let binary = Data([0x00, 0xFF, 0x89, 0x50, 0x4E, 0x47]) // includes PNG magic
         let ingested = try store.addSource(filename: "icon.png", data: binary)
-        let result = try SourceCommand.run(.cat(.id(ingested.id), markdown: false), in: store, cwd: "/tmp")
+        let result = try await SourceCommand.run(.cat(.id(ingested.id), markdown: false), in: store, cwd: "/tmp")
         #expect(!result.didCommit)
         #expect(result.payload == .bytes(binary))
     }
 
-    @Test func fileCatWithUnknownIDFails() throws {
+    @Test func fileCatWithUnknownIDFails() async throws {
         let store = try tempStore()
-        #expect(throws: SourceCommand.Failure.self) {
-            try SourceCommand.run(.cat(.id(SourceID(rawValue: "01NOPE")), markdown: false), in: store, cwd: "/tmp")
+        await #expect(throws: SourceCommand.Failure.self) {
+            try await SourceCommand.run(.cat(.id(SourceID(rawValue: "01NOPE")), markdown: false), in: store, cwd: "/tmp")
         }
     }
 
-    @Test func fileExportWritesToDefaultPath() throws {
+    @Test func fileExportWritesToDefaultPath() async throws {
         let store = try tempStore()
         let tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-export-test-\(UUID().uuidString)", isDirectory: true)
@@ -772,7 +772,7 @@ struct WikiCtlCommandTests {
 
         let data = Data("pdf content".utf8)
         let ingested = try store.addSource(filename: "doc.pdf", data: data)
-        let result = try SourceCommand.run(.export(.id(ingested.id), out: nil, markdown: false), in: store, cwd: tmpDir.path)
+        let result = try await SourceCommand.run(.export(.id(ingested.id), out: nil, markdown: false), in: store, cwd: tmpDir.path)
         #expect(!result.didCommit)
         guard case .text(let path) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
@@ -785,7 +785,7 @@ struct WikiCtlCommandTests {
         #expect(written == data)
     }
 
-    @Test func fileExportWritesToCustomOutPath() throws {
+    @Test func fileExportWritesToCustomOutPath() async throws {
         let store = try tempStore()
         let tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wikifs-export-test-\(UUID().uuidString)", isDirectory: true)
@@ -795,7 +795,7 @@ struct WikiCtlCommandTests {
         let data = Data("hello".utf8)
         let ingested = try store.addSource(filename: "notes.txt", data: data)
         let customPath = tmpDir.appendingPathComponent("custom-out.txt").path
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .export(.id(ingested.id), out: customPath, markdown: false), in: store, cwd: tmpDir.path)
         guard case .text(let path) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
@@ -805,64 +805,64 @@ struct WikiCtlCommandTests {
         #expect(written == data)
     }
 
-    @Test func fileExportWithUnknownIDFails() throws {
+    @Test func fileExportWithUnknownIDFails() async throws {
         let store = try tempStore()
-        #expect(throws: SourceCommand.Failure.self) {
-            try SourceCommand.run(
+        await #expect(throws: SourceCommand.Failure.self) {
+            try await SourceCommand.run(
                 .export(.id(SourceID(rawValue: "01NOPE")), out: nil, markdown: false), in: store, cwd: "/tmp")
         }
     }
 
-    @Test func fileNameResolutionResolvesUnambiguous() throws {
+    @Test func fileNameResolutionResolvesUnambiguous() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "unique.md", data: Data("text".utf8))
-        let result = try SourceCommand.run(.cat(.name("unique.md"), markdown: false), in: store, cwd: "/tmp")
+        let result = try await SourceCommand.run(.cat(.name("unique.md"), markdown: false), in: store, cwd: "/tmp")
         #expect(result.payload == .bytes(Data("text".utf8)))
         _ = ingested
     }
 
-    @Test func fileNameResolutionFailsWhenMissing() throws {
+    @Test func fileNameResolutionFailsWhenMissing() async throws {
         let store = try tempStore()
-        #expect(throws: SourceCommand.Failure.self) {
-            try SourceCommand.run(.cat(.name("ghost.pdf"), markdown: false), in: store, cwd: "/tmp")
+        await #expect(throws: SourceCommand.Failure.self) {
+            try await SourceCommand.run(.cat(.name("ghost.pdf"), markdown: false), in: store, cwd: "/tmp")
         }
     }
 
-    @Test func fileNameResolutionFailsWhenAmbiguous() throws {
+    @Test func fileNameResolutionFailsWhenAmbiguous() async throws {
         let store = try tempStore()
         _ = try store.addSource(filename: "same.txt", data: Data("v1".utf8))
         _ = try store.addSource(filename: "same.txt", data: Data("v2".utf8))
-        #expect(throws: SourceCommand.Failure.self) {
-            try SourceCommand.run(.cat(.name("same.txt"), markdown: false), in: store, cwd: "/tmp")
+        await #expect(throws: SourceCommand.Failure.self) {
+            try await SourceCommand.run(.cat(.name("same.txt"), markdown: false), in: store, cwd: "/tmp")
         }
     }
 
     // MARK: - cat --markdown (#553)
 
-    @Test func parsesFileCatWithMarkdownFlag() throws {
+    @Test func parsesFileCatWithMarkdownFlag() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "cat", "--id", "01ABC", "--markdown"], env: noEnv)
         #expect(invocation.command == .source(.cat(.id(SourceID(rawValue: "01ABC")), markdown: true)))
     }
 
-    @Test func parsesFileCatByNameWithMarkdownFlag() throws {
+    @Test func parsesFileCatByNameWithMarkdownFlag() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "cat", "--name", "report.pdf", "--markdown"], env: noEnv)
         #expect(invocation.command == .source(.cat(.name("report.pdf"), markdown: true)))
     }
 
-    @Test func parsesFileExportWithMarkdownFlag() throws {
+    @Test func parsesFileExportWithMarkdownFlag() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "export", "--id", "01Z", "--markdown"], env: noEnv)
         #expect(invocation.command == .source(.export(.id(SourceID(rawValue: "01Z")), out: nil, markdown: true)))
     }
 
-    @Test func catMarkdownReturnsExtractedMarkdown() throws {
+    @Test func catMarkdownReturnsExtractedMarkdown() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "paper.pdf", data: Data("%PDF-1.4".utf8))
         _ = try store.appendProcessedMarkdown(
             sourceID: ingested.id, content: "# Extracted Title\n\nBody text.", origin: .extraction, note: nil)
-        let result = try SourceCommand.run(.cat(.id(ingested.id), markdown: true), in: store, cwd: "/tmp")
+        let result = try await SourceCommand.run(.cat(.id(ingested.id), markdown: true), in: store, cwd: "/tmp")
         #expect(!result.didCommit)
         guard case .text(let output) = result.payload else {
             #expect(Bool(false), "expected .text payload for --markdown"); return
@@ -870,28 +870,28 @@ struct WikiCtlCommandTests {
         #expect(output == "# Extracted Title\n\nBody text.")
     }
 
-    @Test func catMarkdownFallsBackToRawBytesWhenNoExtraction() throws {
+    @Test func catMarkdownFallsBackToRawBytesWhenNoExtraction() async throws {
         let store = try tempStore()
         let binary = Data([0x25, 0x50, 0x44, 0x46]) // %PDF
         let ingested = try store.addSource(filename: "raw.pdf", data: binary)
         // No appendProcessedMarkdown — no markdown chain exists.
-        let result = try SourceCommand.run(.cat(.id(ingested.id), markdown: true), in: store, cwd: "/tmp")
+        let result = try await SourceCommand.run(.cat(.id(ingested.id), markdown: true), in: store, cwd: "/tmp")
         #expect(result.payload == .bytes(binary))
     }
 
-    @Test func catMarkdownResolvesByName() throws {
+    @Test func catMarkdownResolvesByName() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
         _ = try store.appendProcessedMarkdown(
             sourceID: ingested.id, content: "markdown body", origin: .extraction, note: nil)
-        let result = try SourceCommand.run(.cat(.name("doc.pdf"), markdown: true), in: store, cwd: "/tmp")
+        let result = try await SourceCommand.run(.cat(.name("doc.pdf"), markdown: true), in: store, cwd: "/tmp")
         guard case .text(let output) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
         }
         #expect(output == "markdown body")
     }
 
-    @Test func exportMarkdownWritesExtractedMarkdown() throws {
+    @Test func exportMarkdownWritesExtractedMarkdown() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
         _ = try store.appendProcessedMarkdown(
@@ -901,7 +901,7 @@ struct WikiCtlCommandTests {
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .export(.id(ingested.id), out: nil, markdown: true), in: store, cwd: tmpDir.path)
         guard case .text(let path) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
@@ -911,7 +911,7 @@ struct WikiCtlCommandTests {
         #expect(written == "# Title\n\nContent.")
     }
 
-    @Test func exportMarkdownFallsBackToRawBytesWhenNoExtraction() throws {
+    @Test func exportMarkdownFallsBackToRawBytesWhenNoExtraction() async throws {
         let store = try tempStore()
         let binary = Data("%PDF".utf8)
         let ingested = try store.addSource(filename: "raw.pdf", data: binary)
@@ -920,7 +920,7 @@ struct WikiCtlCommandTests {
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .export(.id(ingested.id), out: nil, markdown: true), in: store, cwd: tmpDir.path)
         guard case .text(let path) = result.payload else {
             #expect(Bool(false), "expected .text payload"); return
@@ -933,39 +933,39 @@ struct WikiCtlCommandTests {
 
     // MARK: - resolve by display name (#554)
 
-    @Test func resolveByDisplayName() throws {
+    @Test func resolveByDisplayName() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "Matthews1999.pdf", data: Data("raw".utf8))
         try store.renameSource(id: ingested.id, to: "Cognitive Ethology: A Review")
         // Agent sees display name in `source list`, should be able to use it.
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .cat(.name("Cognitive Ethology: A Review"), markdown: false), in: store, cwd: "/tmp")
         #expect(result.payload == .bytes(Data("raw".utf8)))
     }
 
-    @Test func resolveFallsBackToFilenameWhenDisplayNameNotSet() throws {
+    @Test func resolveFallsBackToFilenameWhenDisplayNameNotSet() async throws {
         let store = try tempStore()
         _ = try store.addSource(filename: "plain.txt", data: Data("data".utf8))
         // No display name set — effectiveName falls back to filename.
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .cat(.name("plain.txt"), markdown: false), in: store, cwd: "/tmp")
         #expect(result.payload == .bytes(Data("data".utf8)))
     }
 
-    @Test func resolveByDisplayNameAmbiguityFails() throws {
+    @Test func resolveByDisplayNameAmbiguityFails() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.pdf", data: Data("v1".utf8))
         let b = try store.addSource(filename: "b.pdf", data: Data("v2".utf8))
         try store.renameSource(id: a.id, to: "Same Display Name")
         try store.renameSource(id: b.id, to: "Same Display Name")
-        #expect(throws: SourceCommand.Failure.self) {
-            try SourceCommand.run(.cat(.name("Same Display Name"), markdown: false), in: store, cwd: "/tmp")
+        await #expect(throws: SourceCommand.Failure.self) {
+            try await SourceCommand.run(.cat(.name("Same Display Name"), markdown: false), in: store, cwd: "/tmp")
         }
     }
 
     // MARK: - edit-markdown parsing
 
-    @Test func parsesEditMarkdownWithContent() throws {
+    @Test func parsesEditMarkdownWithContent() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--content", "new body",
              "--expect-head", "01HEAD"], env: noEnv)
@@ -974,7 +974,7 @@ struct WikiCtlCommandTests {
             expectedHead: SourceMarkdownVersionID(rawValue: "01HEAD"))))
     }
 
-    @Test func parsesEditMarkdownWithFile() throws {
+    @Test func parsesEditMarkdownWithFile() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "edit-markdown", "--id", "01ABC", "--file", "edit.md",
              "--expect-head", "01HEAD"], env: noEnv)
@@ -983,7 +983,7 @@ struct WikiCtlCommandTests {
             expectedHead: SourceMarkdownVersionID(rawValue: "01HEAD"))))
     }
 
-    @Test func parsesEditMarkdownByName() throws {
+    @Test func parsesEditMarkdownByName() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "edit-markdown", "--name", "report.md", "--content", "updated",
              "--expect-head", "01HEAD"], env: noEnv)
@@ -992,7 +992,7 @@ struct WikiCtlCommandTests {
             expectedHead: SourceMarkdownVersionID(rawValue: "01HEAD"))))
     }
 
-    @Test func editMarkdownRequiresExpectHead() throws {
+    @Test func editMarkdownRequiresExpectHead() async throws {
         // CAS is mandatory on the CLI: a blind rewrite is a usage error, and
         // the message must be actionable (name the flag + how to read a head).
         #expect(throws: ArgumentParser.Failure.self) {
@@ -1037,7 +1037,7 @@ struct WikiCtlCommandTests {
 
     // MARK: - edit-markdown dispatch (CAS)
 
-    @Test func editMarkdownWithMatchingHeadAppendsUserVersion() throws {
+    @Test func editMarkdownWithMatchingHeadAppendsUserVersion() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         // Append first version (extraction).
@@ -1048,7 +1048,7 @@ struct WikiCtlCommandTests {
         usleep(2000)
         // Run edit-markdown with the CURRENT head — the CAS match appends a
         // "user" version whose parent is the expected head.
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .editMarkdown(.id(ingested.id), content: .inline("edited"), expectedHead: headBefore.id),
             in: store, cwd: "/tmp")
         #expect(result.didCommit)
@@ -1068,7 +1068,7 @@ struct WikiCtlCommandTests {
         #expect(history[1].parentID == nil)
     }
 
-    @Test func editMarkdownRejectsStaleHeadWithoutMutation() throws {
+    @Test func editMarkdownRejectsStaleHeadWithoutMutation() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
@@ -1081,8 +1081,8 @@ struct WikiCtlCommandTests {
         let conflict = SourceMarkdownConflictError(
             sourceID: ingested.id, expectedHead: staleHead.id,
             currentHead: try store.processedMarkdownHead(sourceID: ingested.id)?.id)
-        #expect(throws: conflict) {
-            try SourceCommand.run(
+        await #expect(throws: conflict) {
+            try await SourceCommand.run(
                 .editMarkdown(.id(ingested.id), content: .inline("stale edit"),
                               expectedHead: staleHead.id),
                 in: store, cwd: "/tmp")
@@ -1094,7 +1094,7 @@ struct WikiCtlCommandTests {
         #expect(try store.processedMarkdownHead(sourceID: ingested.id)?.content == "v2 (raced)")
     }
 
-    @Test func onlyOneWriterCanAppendFromTheSameHead() throws {
+    @Test func onlyOneWriterCanAppendFromTheSameHead() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
@@ -1102,13 +1102,13 @@ struct WikiCtlCommandTests {
         let sharedHead = try #require(try store.processedMarkdownHead(sourceID: ingested.id))
 
         // Two writers read the same head, then both write.
-        _ = try? SourceCommand.run(
+        _ = try? await SourceCommand.run(
             .editMarkdown(.id(ingested.id), content: .inline("writer A"),
                           expectedHead: sharedHead.id),
             in: store, cwd: "/tmp")
         // Writer B still expects the SHARED head — it must lose the race.
         do {
-            _ = try SourceCommand.run(
+            _ = try await SourceCommand.run(
                 .editMarkdown(.id(ingested.id), content: .inline("writer B"),
                               expectedHead: sharedHead.id),
                 in: store, cwd: "/tmp")
@@ -1124,7 +1124,7 @@ struct WikiCtlCommandTests {
         #expect(userVersions.count == 1)
     }
 
-    @Test func editMarkdownCommitsAndAppends() throws {
+    @Test func editMarkdownCommitsAndAppends() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
@@ -1132,7 +1132,7 @@ struct WikiCtlCommandTests {
         let headBefore = try #require(try store.processedMarkdownHead(sourceID: ingested.id))
         // Small delay ensures the next ULID is strictly later.
         usleep(2000)
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .editMarkdown(.id(ingested.id), content: .inline("edited"), expectedHead: headBefore.id),
             in: store, cwd: "/tmp")
         #expect(result.didCommit)
@@ -1141,11 +1141,11 @@ struct WikiCtlCommandTests {
         #expect(head?.origin == .user)
     }
 
-    @Test func editMarkdownFailsWhenNoChainExists() throws {
+    @Test func editMarkdownFailsWhenNoChainExists() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.pdf", data: Data("%PDF".utf8))
         do {
-            _ = try SourceCommand.run(
+            _ = try await SourceCommand.run(
                 .editMarkdown(.id(ingested.id), content: .inline("edited"),
                               expectedHead: SourceMarkdownVersionID(rawValue: "01NOCHAIN")),
                 in: store, cwd: "/tmp")
@@ -1157,7 +1157,7 @@ struct WikiCtlCommandTests {
         }
     }
 
-    @Test func editMarkdownAcceptsFileInputFromScratchStylePath() throws {
+    @Test func editMarkdownAcceptsFileInputFromScratchStylePath() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         _ = try store.appendProcessedMarkdown(
@@ -1173,18 +1173,18 @@ struct WikiCtlCommandTests {
         let bodyPath = scratch.appendingPathComponent("cleaned.md")
         try Data("cleaned via file".utf8).write(to: bodyPath)
 
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .editMarkdown(.id(ingested.id), content: .file(bodyPath.path), expectedHead: headBefore.id),
             in: store, cwd: "/tmp")
         #expect(result.didCommit)
         #expect(try store.processedMarkdownHead(sourceID: ingested.id)?.content == "cleaned via file")
     }
 
-    @Test func sourceInfoPrintsHeadVersionIDForCasReads() throws {
+    @Test func sourceInfoPrintsHeadVersionIDForCasReads() async throws {
         let store = try tempStore()
         let ingested = try store.addSource(filename: "doc.md", data: Data("hello".utf8))
         // No chain yet — no head line.
-        let before = try SourceCommand.run(.info(.id(ingested.id)), in: store, cwd: "/tmp")
+        let before = try await SourceCommand.run(.info(.id(ingested.id)), in: store, cwd: "/tmp")
         guard case .text(let infoBefore) = before.payload else {
             Issue.record("expected text payload"); return
         }
@@ -1193,7 +1193,7 @@ struct WikiCtlCommandTests {
         _ = try store.appendProcessedMarkdown(
             sourceID: ingested.id, content: "v1", origin: .extraction, note: nil)
         let head = try #require(try store.processedMarkdownHead(sourceID: ingested.id))
-        let after = try SourceCommand.run(.info(.id(ingested.id)), in: store, cwd: "/tmp")
+        let after = try await SourceCommand.run(.info(.id(ingested.id)), in: store, cwd: "/tmp")
         guard case .text(let infoAfter) = after.payload else {
             Issue.record("expected text payload"); return
         }
@@ -1212,7 +1212,7 @@ struct WikiCtlCommandTests {
         #expect(!WikiChangeNotification.baseName.hasSuffix("."))
     }
 
-    @Test func rendererWakeNamesCarryOnlyScopeIdentity() throws {
+    @Test func rendererWakeNamesCarryOnlyScopeIdentity() async throws {
         let wikiID = WikiID(rawValue: "01ABCDEF")
         let machineID = try RendererMachineScopeID(validating: "machine.example")
         #expect(RendererChangeNotification.wikiName(forWikiID: wikiID) == "org.sockpuppet.wiki.renderers.wiki.changed.01ABCDEF")
@@ -1263,18 +1263,18 @@ struct WikiCtlCommandTests {
     }
     private struct Failure: Error { let msg: String; init(_ s: String) { msg = s } }
 
-    @Test func autoFixMarkdownPassesThroughWhenLinterIsNil() throws {
+    @Test func autoFixMarkdownPassesThroughWhenLinterIsNil() async throws {
         // Nil linter = no-op pass-through (the unbundled / dev / swift test path).
         let body = "#No space\ntrailing   \n"
-        let fixed = try PageCommand.autoFixMarkdown(body, linter: nil)
+        let fixed = try await PageCommand.autoFixMarkdown(body, linter: nil)
         #expect(fixed == body)
     }
 
-    @Test func upsertAutoFixesMarkdownAndStoresNormalized() throws {
+    @Test func upsertAutoFixesMarkdownAndStoresNormalized() async throws {
         let l = try repoMarkdownLinter()
         let store = try tempStore()
         let messy = "#No space\ntrailing   \n\n\n\ntext"
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: nil, title: "Messy", body: .inline(messy)),
             in: store, linter: l)
         #expect(result.didCommit)
@@ -1286,17 +1286,17 @@ struct WikiCtlCommandTests {
         #expect(stored.hasSuffix("\n"))               // single trailing newline
     }
 
-    @Test func upsertWithNilLinterStoresBodyUnchanged() throws {
+    @Test func upsertWithNilLinterStoresBodyUnchanged() async throws {
         let store = try tempStore()
         let messy = "#No space\ntrailing   \n"
-        _ = try PageCommand.run(
+        _ = try await PageCommand.run(
             .add(id: nil, title: "Raw", body: .inline(messy)),
             in: store, linter: nil)
         let stored = try store.getPage(id: try store.resolveTitleToID("Raw")!).bodyMarkdown
         #expect(stored == messy)
     }
 
-    @Test func compositionFixThenMermaidValidateThenUpsert() throws {
+    @Test func compositionFixThenMermaidValidateThenUpsert() async throws {
         // AC.2 proof: upsert a body with BOTH cosmetic issues AND a valid
         // ```mermaid block. Assert (a) stored body is normalized, (b) mermaid
         // content is byte-for-byte intact, (c) save succeeded (no abort).
@@ -1306,7 +1306,7 @@ struct WikiCtlCommandTests {
         let fence = String(repeating: "`", count: 3)
         // Trailing spaces on the heading + no blank line before the fence.
         let body = "# Title   \n\(fence)mermaid\nflowchart LR\nA-->B\n\(fence)\nmore text"
-        let result = try PageCommand.run(
+        let result = try await PageCommand.run(
             .add(id: nil, title: "Composition", body: .inline(body)),
             in: store, validator: v, linter: l)
         #expect(result.didCommit)
@@ -1320,7 +1320,7 @@ struct WikiCtlCommandTests {
         // (c) Save succeeded (didCommit == true, already asserted).
     }
 
-    @Test func upsertStillBlocksOnInvalidMermaidWithLinter() throws {
+    @Test func upsertStillBlocksOnInvalidMermaidWithLinter() async throws {
         // Regression: markdown fix runs first, but an invalid mermaid block
         // still hard-blocks the save.
         let l = try repoMarkdownLinter()
@@ -1330,7 +1330,7 @@ struct WikiCtlCommandTests {
         // `A B` is now VALID under mermaid v11; use a genuinely-invalid block.
         let body = "# Title\n\n\(fence)mermaid\nflowchart LR\nA[unclosed\n\(fence)\n"
         do {
-            _ = try PageCommand.run(
+            _ = try await PageCommand.run(
                 .add(id: nil, title: "Bad Mermaid", body: .inline(body)),
                 in: store, validator: v, linter: l)
             Issue.record("expected upsert to abort on invalid mermaid")
@@ -1344,24 +1344,24 @@ struct WikiCtlCommandTests {
 
     // MARK: - Empty-body refusal at the CLI boundary
 
-    @Test func testPageUpssertRefusesEmptyBody() throws {
+    @Test func testPageUpssertRefusesEmptyBody() async throws {
         let store = try tempStore()
         // 1. Empty body is refused at the CLI boundary.
         do {
-            _ = try PageCommand.run(.add(id: nil, title: "X", body: .inline("")), in: store)
+            _ = try await PageCommand.run(.add(id: nil, title: "X", body: .inline("")), in: store)
             Issue.record("expected empty-body upsert to throw")
         } catch let PageCommand.Failure.message(text) {
             #expect(text.contains("empty body"))
         }
         // 2. Whitespace-only body is also refused.
         do {
-            _ = try PageCommand.run(.add(id: nil, title: "X", body: .inline("  \n\t ")), in: store)
+            _ = try await PageCommand.run(.add(id: nil, title: "X", body: .inline("  \n\t ")), in: store)
             Issue.record("expected whitespace-only upsert to throw")
         } catch let PageCommand.Failure.message(text) {
             #expect(text.contains("empty body"))
         }
         // 3. A non-empty body succeeds, commits, and returns a non-empty id.
-        let result = try PageCommand.run(.add(id: nil, title: "Y", body: .inline("hello")), in: store)
+        let result = try await PageCommand.run(.add(id: nil, title: "Y", body: .inline("hello")), in: store)
         #expect(result.didCommit)
         #expect(!result.output.isEmpty)
     }
@@ -1371,7 +1371,7 @@ struct WikiCtlCommandTests {
     /// AC.8 (wikictl) — `source set-active` nominates an existing markdown
     /// version as the active HEAD (repoints the `source-derived` ref), commits,
     /// and `processedMarkdownHead` follows it.
-    @Test func sourceIDInputAndOutputRemainRawStrings() throws {
+    @Test func sourceIDInputAndOutputRemainRawStrings() async throws {
         let store = try tempStore()
         let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
         let first = try store.recordMarkdownExtraction(
@@ -1384,7 +1384,7 @@ struct WikiCtlCommandTests {
         // Default-active HEAD is the second (MAX id).
         #expect(try store.processedMarkdownHead(sourceID: pdf.id)?.content == "second version")
 
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .setActive(.id(pdf.id), versionID: first.id), in: store, cwd: "/tmp")
         #expect(result.didCommit)
         guard case .text(let output) = result.payload else {
@@ -1396,17 +1396,17 @@ struct WikiCtlCommandTests {
         #expect(try store.processedMarkdownHead(sourceID: pdf.id)?.content == "first version")
     }
 
-    @Test func sourceSetActiveFailsWithoutMarkdown() throws {
+    @Test func sourceSetActiveFailsWithoutMarkdown() async throws {
         let store = try tempStore()
         let pdf = try store.addSource(filename: "doc.pdf", data: Data("%PDF-1.4".utf8))
-        #expect(throws: SourceCommand.Failure.self) {
-            try SourceCommand.run(
+        await #expect(throws: SourceCommand.Failure.self) {
+            try await SourceCommand.run(
                 .setActive(.id(pdf.id), versionID: SourceMarkdownVersionID(rawValue: "01NOPE")),
                 in: store, cwd: "/tmp")
         }
     }
 
-    @Test func parsesSourceSetActiveVersionIDAsExactRawString() throws {
+    @Test func parsesSourceSetActiveVersionIDAsExactRawString() async throws {
         let rawVersionID = "01JSMVMDVER00000000000042"
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "set-active", "--id", "01ABC", "--version", rawVersionID],
@@ -1436,7 +1436,7 @@ struct WikiCtlCommandTests {
             externalItemKey: nil, externalItemTitle: nil, mimeType: nil,
             provenance: prov)
 
-        let byID = try SourceCommand.run(.info(.id(summary.id)), in: store, cwd: "/tmp")
+        let byID = try await SourceCommand.run(.info(.id(summary.id)), in: store, cwd: "/tmp")
         guard case .text(let textByID) = byID.payload else {
             Issue.record("expected text payload"); return
         }
@@ -1444,7 +1444,7 @@ struct WikiCtlCommandTests {
         #expect(textByID.contains("plan\thttps://example.com/article"))
         #expect(textByID.contains("external_identity\thttps://example.com/article"))
 
-        let byName = try SourceCommand.run(.info(.name("Article.md")), in: store, cwd: "/tmp")
+        let byName = try await SourceCommand.run(.info(.name("Article.md")), in: store, cwd: "/tmp")
         guard case .text(let textByName) = byName.payload else {
             Issue.record("expected text payload"); return
         }
@@ -1453,11 +1453,11 @@ struct WikiCtlCommandTests {
     }
 
     /// AC.7 — a local (legacy) source shows the legacy-import provider.
-    @Test func sourceInfoPrintsLegacyOrigin() throws {
+    @Test func sourceInfoPrintsLegacyOrigin() async throws {
         let store = try tempStore()
         let summary = try store.addSource(filename: "plain.txt", data: Data("hi".utf8))
 
-        let result = try SourceCommand.run(.info(.id(summary.id)), in: store, cwd: "/tmp")
+        let result = try await SourceCommand.run(.info(.id(summary.id)), in: store, cwd: "/tmp")
         guard case .text(let text) = result.payload else {
             Issue.record("expected text payload"); return
         }
@@ -1466,7 +1466,7 @@ struct WikiCtlCommandTests {
         #expect(text.contains("size\t2"))
     }
 
-    @Test func parsesSourceRefresh() throws {
+    @Test func parsesSourceRefresh() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "refresh", "--id", "01ABC"], env: noEnv)
         #expect(invocation.command == .source(.refresh(.id(SourceID(rawValue: "01ABC")))))
@@ -1519,19 +1519,19 @@ struct WikiCtlCommandTests {
 
     // MARK: - admin vacuum-blobs parsing (issue #253)
 
-    @Test func adminVacuumBlobsDefaultsToDryRunNoJSON() throws {
+    @Test func adminVacuumBlobsDefaultsToDryRunNoJSON() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "admin", "vacuum-blobs"], env: noEnv)
         #expect(invocation.command == .admin(.vacuumBlobs(dryRun: true, json: false)))
     }
 
-    @Test func adminVacuumBlobsApplyOptsIntoDelete() throws {
+    @Test func adminVacuumBlobsApplyOptsIntoDelete() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "admin", "vacuum-blobs", "--apply"], env: noEnv)
         #expect(invocation.command == .admin(.vacuumBlobs(dryRun: false, json: false)))
     }
 
-    @Test func adminVacuumBlobsJSONFlag() throws {
+    @Test func adminVacuumBlobsJSONFlag() async throws {
         let dry = try ArgumentParser.parse(
             ["--wiki", "W", "admin", "vacuum-blobs", "--json"], env: noEnv)
         #expect(dry.command == .admin(.vacuumBlobs(dryRun: true, json: true)))
@@ -1543,13 +1543,13 @@ struct WikiCtlCommandTests {
 
     // MARK: - admin vacuum-activities parsing (issue #257)
 
-    @Test func adminVacuumActivitiesDefaultsToDryRunNoJSON() throws {
+    @Test func adminVacuumActivitiesDefaultsToDryRunNoJSON() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "admin", "vacuum-activities"], env: noEnv)
         #expect(invocation.command == .admin(.vacuumActivities(dryRun: true, json: false)))
     }
 
-    @Test func adminVacuumActivitiesApplyAndJSON() throws {
+    @Test func adminVacuumActivitiesApplyAndJSON() async throws {
         let applied = try ArgumentParser.parse(
             ["--wiki", "W", "admin", "vacuum-activities", "--apply"], env: noEnv)
         #expect(applied.command == .admin(.vacuumActivities(dryRun: false, json: false)))
@@ -1561,13 +1561,13 @@ struct WikiCtlCommandTests {
 
     // MARK: - admin vacuum-all parsing (issue #257)
 
-    @Test func adminVacuumAllDefaultsToDryRunNoJSON() throws {
+    @Test func adminVacuumAllDefaultsToDryRunNoJSON() async throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "admin", "vacuum-all"], env: noEnv)
         #expect(invocation.command == .admin(.vacuumAll(dryRun: true, json: false)))
     }
 
-    @Test func adminVacuumAllApplyAndJSON() throws {
+    @Test func adminVacuumAllApplyAndJSON() async throws {
         let applied = try ArgumentParser.parse(
             ["--wiki", "W", "admin", "vacuum-all", "--apply"], env: noEnv)
         #expect(applied.command == .admin(.vacuumAll(dryRun: false, json: false)))
@@ -1596,7 +1596,7 @@ struct WikiCtlCommandTests {
     /// version row but leaves the blob behind — exactly the leak the GC reclaims.
     /// No private table access needed: the report's own counts prove deletion, and
     /// `sourceContent` proves a referenced blob survives.
-    @Test func vacuumDryRunReportsOrphanFromDeletedSource() throws {
+    @Test func vacuumDryRunReportsOrphanFromDeletedSource() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45])) // 5 B
         _ = try store.addSource(filename: "b.bin", data: Data([0x01, 0x02, 0x03]))                // 3 B
@@ -1614,7 +1614,7 @@ struct WikiCtlCommandTests {
         #expect(report2.orphanCount == 1)
     }
 
-    @Test func vacuumApplyReclaimsOrphanAndPreservesReferencedBlob() throws {
+    @Test func vacuumApplyReclaimsOrphanAndPreservesReferencedBlob() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45])) // 5 B
         let b = try store.addSource(filename: "b.bin", data: Data([0x01, 0x02, 0x03]))            // 3 B
@@ -1631,7 +1631,7 @@ struct WikiCtlCommandTests {
         #expect(try store.vacuumBlobs(dryRun: true).orphanCount == 0)
     }
 
-    @Test func vacuumIsNoOpWhenEverythingIsReferenced() throws {
+    @Test func vacuumIsNoOpWhenEverythingIsReferenced() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data("hello".utf8))
         let b = try store.addSource(filename: "b.bin", data: Data("world!".utf8))
@@ -1646,7 +1646,7 @@ struct WikiCtlCommandTests {
 
     // MARK: - admin vacuum-blobs dispatch (issue #253)
 
-    @Test func adminVacuumBlobsDryRunDoesNotCommit() throws {
+    @Test func adminVacuumBlobsDryRunDoesNotCommit() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45]))
         try store.deleteSource(id: a.id)
@@ -1663,7 +1663,7 @@ struct WikiCtlCommandTests {
         #expect(try store.vacuumBlobs(dryRun: true).orphanCount == 1)
     }
 
-    @Test func adminVacuumBlobsApplyCommits() throws {
+    @Test func adminVacuumBlobsApplyCommits() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45]))
         try store.deleteSource(id: a.id)
@@ -1679,7 +1679,7 @@ struct WikiCtlCommandTests {
         #expect(try store.vacuumBlobs(dryRun: true).orphanCount == 0)
     }
 
-    @Test func adminVacuumBlobsJSONPayloadMatchesReport() throws {
+    @Test func adminVacuumBlobsJSONPayloadMatchesReport() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45]))
         try store.deleteSource(id: a.id)
@@ -1701,7 +1701,7 @@ struct WikiCtlCommandTests {
     /// a source's import activity lives in `activities`; deleting the source
     /// cascades the version row that referenced it but leaves the activity
     /// behind — exactly the leak the GC reclaims.
-    @Test func activityVacuumDryRunReportsOrphanFromDeletedSource() throws {
+    @Test func activityVacuumDryRunReportsOrphanFromDeletedSource() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43]))
         _ = try store.addSource(filename: "b.bin", data: Data([0x01, 0x02, 0x03]))
@@ -1719,7 +1719,7 @@ struct WikiCtlCommandTests {
         #expect(report2.orphanCount == 1)
     }
 
-    @Test func activityVacuumApplyReclaimsOrphanAndPreservesReferencedActivity() throws {
+    @Test func activityVacuumApplyReclaimsOrphanAndPreservesReferencedActivity() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43]))
         let b = try store.addSource(filename: "b.bin", data: Data([0x01, 0x02, 0x03]))
@@ -1736,7 +1736,7 @@ struct WikiCtlCommandTests {
         #expect(try store.vacuumActivities(dryRun: true).orphanCount == 0)
     }
 
-    @Test func activityVacuumIsNoOpWhenEverythingIsReferenced() throws {
+    @Test func activityVacuumIsNoOpWhenEverythingIsReferenced() async throws {
         let store = try tempStore()
         _ = try store.addSource(filename: "a.bin", data: Data("hello".utf8))
         _ = try store.addSource(filename: "b.bin", data: Data("world!".utf8))
@@ -1747,7 +1747,7 @@ struct WikiCtlCommandTests {
 
     // MARK: - admin vacuum-activities dispatch (issue #257)
 
-    @Test func adminVacuumActivitiesDryRunDoesNotCommit() throws {
+    @Test func adminVacuumActivitiesDryRunDoesNotCommit() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43]))
         try store.deleteSource(id: a.id)
@@ -1763,7 +1763,7 @@ struct WikiCtlCommandTests {
         #expect(try store.vacuumActivities(dryRun: true).orphanCount == 1)
     }
 
-    @Test func adminVacuumActivitiesApplyCommits() throws {
+    @Test func adminVacuumActivitiesApplyCommits() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43]))
         try store.deleteSource(id: a.id)
@@ -1774,7 +1774,7 @@ struct WikiCtlCommandTests {
         #expect(try store.vacuumActivities(dryRun: true).orphanCount == 0)
     }
 
-    @Test func adminVacuumActivitiesJSONPayloadMatchesReport() throws {
+    @Test func adminVacuumActivitiesJSONPayloadMatchesReport() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43]))
         try store.deleteSource(id: a.id)
@@ -1791,7 +1791,7 @@ struct WikiCtlCommandTests {
 
     // MARK: - admin vacuum-all dispatch (issue #257)
 
-    @Test func adminVacuumAllDryRunReportsBoth() throws {
+    @Test func adminVacuumAllDryRunReportsBoth() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45]))
         try store.deleteSource(id: a.id)
@@ -1809,7 +1809,7 @@ struct WikiCtlCommandTests {
         #expect(try store.vacuumActivities(dryRun: true).orphanCount == 1)
     }
 
-    @Test func adminVacuumAllApplyCommitsAndReclaimsBoth() throws {
+    @Test func adminVacuumAllApplyCommitsAndReclaimsBoth() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45]))
         try store.deleteSource(id: a.id)
@@ -1821,7 +1821,7 @@ struct WikiCtlCommandTests {
         #expect(try store.vacuumActivities(dryRun: true).orphanCount == 0)
     }
 
-    @Test func adminVacuumAllJSONPayloadHasBothSections() throws {
+    @Test func adminVacuumAllJSONPayloadHasBothSections() async throws {
         let store = try tempStore()
         let a = try store.addSource(filename: "a.bin", data: Data([0x41, 0x42, 0x43, 0x44, 0x45]))
         try store.deleteSource(id: a.id)

@@ -94,7 +94,11 @@ struct CordisDocumentationContractTests {
         #expect(searchPlan.contains("SQLite and GRDB connections, statements, transactions, and read pools"))
         #expect(searchPlan.contains("`WikiStoreModel`, `WikiSession`, and `SessionManager`"))
         #expect(searchProgress.contains("SearchRuntimeAssembly"))
-        #expect(searchProgress.contains("SearchCompositionOwner"))
+        // P5: `SearchCompositionOwner` is deleted (the app's local Tantivy
+        // assembly is gone; sessions consume the daemon-backed facade). The
+        // historical note still names it, so the assertion flips to a
+        // removal pin rather than a presence pin.
+        #expect(!searchProgress.contains("SearchCompositionOwner.start()"))
 
         let transportPlanPath = "plans/cordis-daemon-transport-services.md"
         let transportProgressPath = "progress/2026-08-19T221500Z-cordis-daemon-transport-services.md"

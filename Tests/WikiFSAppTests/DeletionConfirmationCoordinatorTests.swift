@@ -67,16 +67,16 @@ struct DeletionConfirmationCoordinatorTests {
 
     // MARK: - Page coordinator routes every impact state (AC.9)
 
-    @Test func pageDeletionCoordinatorRoutesEveryImpactState() {
+    @Test func pageDeletionCoordinatorRoutesEveryImpactState() async {
         let sink = DecisionSink()
         let linkingPage = PageID(rawValue: "01LINKINGPAGE0000000000000")
 
         // 1. No inbound references: delete immediately, no dialog.
-        let immediate = makeCoordinator(kind: .page, impacts: [impact()], sink: sink).evaluate()
+        let immediate = await makeCoordinator(kind: .page, impacts: [impact()], sink: sink).evaluate()
         #expect(immediate == .deleteImmediately)
 
         // 2. Inbound links: confirm with Unlink and Delete / Delete / Cancel.
-        let withLinks = makeCoordinator(
+        let withLinks = await makeCoordinator(
             kind: .page, impacts: [impact(linking: [linkingPage], linkEdges: 2)], sink: sink).evaluate()
         guard case .confirm(let linksPresentation) = withLinks else {
             Issue.record("expected .confirm for inbound links")
@@ -88,7 +88,7 @@ struct DeletionConfirmationCoordinatorTests {
         #expect(linksPresentation.message.contains("Linked from 1 page"))
 
         // 3. Bookmarks only: explain mandatory removal, Delete / Cancel.
-        let bookmarksOnly = makeCoordinator(
+        let bookmarksOnly = await makeCoordinator(
             kind: .page, impacts: [impact(bookmarkCount: 2)], sink: sink).evaluate()
         guard case .confirm(let bmPresentation) = bookmarksOnly else {
             Issue.record("expected .confirm for bookmarks only")
@@ -107,7 +107,7 @@ struct DeletionConfirmationCoordinatorTests {
             onDelete: { sink.record($0) },
             pageTitle: { _ in "Claim" },
             selectionCount: 1)
-        guard case .blocked(let blockedPresentation) = withResolver.evaluate() else {
+        guard case .blocked(let blockedPresentation) = await withResolver.evaluate() else {
             Issue.record("expected .blocked for provenance blockers")
             return
         }
@@ -119,7 +119,7 @@ struct DeletionConfirmationCoordinatorTests {
         ])
         // The outcome exposes the same pages for the dialog's Open actions,
         // and still offers NO destructive actions in the blocked state.
-        let blockedOutcome = withResolver.evaluate()
+        let blockedOutcome = await withResolver.evaluate()
         if case .blocked = blockedOutcome {
             #expect(blockedOutcome.blockingPages.count == 1)
             #expect(blockedOutcome.availableActions.isEmpty)
@@ -131,7 +131,7 @@ struct DeletionConfirmationCoordinatorTests {
             loadImpacts: { throw StubError.bang },
             onDelete: { sink.record($0) },
             selectionCount: 1)
-        guard case .failed = failing.evaluate() else {
+        guard case .failed = await failing.evaluate() else {
             Issue.record("expected .failed for a throwing loader")
             return
         }
@@ -141,12 +141,12 @@ struct DeletionConfirmationCoordinatorTests {
 
     // MARK: - Source coordinator routes every impact state (AC.9)
 
-    @Test func sourceDeletionCoordinatorRoutesEveryImpactState() {
+    @Test func sourceDeletionCoordinatorRoutesEveryImpactState() async {
         let sink = DecisionSink()
         let citingPage = PageID(rawValue: "01CITINGPAGE0000000000000")
 
         // Citations wording differs; the action set does not.
-        let withCitations = makeCoordinator(
+        let withCitations = await makeCoordinator(
             kind: .source, impacts: [impact(linking: [citingPage], linkEdges: 1)], sink: sink).evaluate()
         guard case .confirm(let presentation) = withCitations else {
             Issue.record("expected .confirm for citations")
@@ -157,7 +157,7 @@ struct DeletionConfirmationCoordinatorTests {
         #expect(presentation.actions == [.unlinkAndDelete, .delete, .cancel])
 
         // Blockers on a source → blocked with the named page.
-        let blocked = makeCoordinator(
+        let blocked = await makeCoordinator(
             kind: .source,
             impacts: [impact(blockers: [blocker()])],
             sink: sink).evaluate()
@@ -172,7 +172,7 @@ struct DeletionConfirmationCoordinatorTests {
         #expect(blockedPresentation.blockingPages.isEmpty)
 
         // Immediate when nothing references the source.
-        #expect(makeCoordinator(kind: .source, impacts: [impact()], sink: sink).evaluate()
+        #expect(await makeCoordinator(kind: .source, impacts: [impact()], sink: sink).evaluate()
             == .deleteImmediately)
         #expect(sink.count == 0)
     }
@@ -195,7 +195,7 @@ struct DeletionConfirmationCoordinatorTests {
 
     // MARK: - Batch presentation (AC.9: distinct pages, totals, paths)
 
-    @Test func batchCoordinatorAggregatesDistinctReferences() {
+    @Test func batchCoordinatorAggregatesDistinctReferences() async {
         let sink = DecisionSink()
         let p1 = PageID(rawValue: "01LINKINGPAGE0000000000000")
         let p2 = PageID(rawValue: "01OTHERLINKER00000000000000")
@@ -212,7 +212,7 @@ struct DeletionConfirmationCoordinatorTests {
             onDelete: { sink.record($0) },
             selectionCount: 2)
 
-        guard case .confirm(let presentation) = coordinator.evaluate() else {
+        guard case .confirm(let presentation) = await coordinator.evaluate() else {
             Issue.record("expected .confirm")
             return
         }
@@ -229,7 +229,7 @@ struct DeletionConfirmationCoordinatorTests {
 
     private enum StubError: Error { case bang }
 
-    @Test func impactReadFailureBlocksPageDeletion() {
+    @Test func impactReadFailureBlocksPageDeletion() async {
         let sink = DecisionSink()
         let coordinator = DeletionConfirmationCoordinator(
             kind: .page,
@@ -237,7 +237,7 @@ struct DeletionConfirmationCoordinatorTests {
             onDelete: { sink.record($0) },
             selectionCount: 1)
 
-        let outcome = coordinator.evaluate()
+        let outcome = await coordinator.evaluate()
         guard case .failed(let presentation) = outcome else {
             Issue.record("expected .failed")
             return
@@ -249,7 +249,7 @@ struct DeletionConfirmationCoordinatorTests {
         #expect(sink.count == 0)
     }
 
-    @Test func impactReadFailureBlocksSourceDeletion() {
+    @Test func impactReadFailureBlocksSourceDeletion() async {
         let sink = DecisionSink()
         let coordinator = DeletionConfirmationCoordinator(
             kind: .source,
@@ -257,7 +257,7 @@ struct DeletionConfirmationCoordinatorTests {
             onDelete: { sink.record($0) },
             selectionCount: 1)
 
-        guard case .failed(let presentation) = coordinator.evaluate() else {
+        guard case .failed(let presentation) = await coordinator.evaluate() else {
             Issue.record("expected .failed")
             return
         }
@@ -265,7 +265,7 @@ struct DeletionConfirmationCoordinatorTests {
         #expect(sink.count == 0)
     }
 
-    @Test func failedCoordinatorStateNeverInvokesDeletion() {
+    @Test func failedCoordinatorStateNeverInvokesDeletion() async {
         let sink = DecisionSink()
         let failing = DeletionConfirmationCoordinator(
             kind: .page,
@@ -273,7 +273,7 @@ struct DeletionConfirmationCoordinatorTests {
             onDelete: { sink.record($0) },
             selectionCount: 1)
 
-        let outcome = failing.evaluate()
+        let outcome = await failing.evaluate()
         guard case .failed = outcome else {
             Issue.record("expected .failed")
             return

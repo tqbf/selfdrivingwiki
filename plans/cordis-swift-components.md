@@ -270,6 +270,22 @@ UI owners catch failures, log them with `DebugLog`, and expose unavailable or st
 
 ## 15. Daemon queue ownership
 
+**Superseded (Phase 4 slice 1, plans/daemon-only-access.md):** this section's
+DAEMON-side host machine (serving → relinquishing → relinquished, the
+`DaemonQueueHost` actor's exclusive ownership) remains accurate — the daemon
+is unchanged. The APP-side half it described — the handoff states
+`startingLocal` / `localReady` / `shuttingDownForDaemon` /
+`shutdownBlocked` / `fallingBack` on `LocalQueueRuntimeController`, the
+local `QueueRuntimeHandle` disposal handshake, and the relinquishment-driven
+local fallback — is deleted. The app can never own a local queue engine, so
+its controller is now the reduced machine `unavailable` / `daemonActive` /
+`daemonOwnershipUnresolved` / `disposing`: activation swaps the hot-swap
+client to the daemon endpoint, daemon loss moves to
+`daemonOwnershipUnresolved`, a fresh daemon epoch replaces it, and shutdown
+is a client-swap to `UnavailableQueueEngine`. The daemon keeps
+`relinquishQueue` for any remaining callers; the app no longer drives a
+local fallback after it.
+
 A dedicated `DaemonQueueHost` actor exclusively owns these values:
 
 - the queue ownership epoch;

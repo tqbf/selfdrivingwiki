@@ -39,6 +39,28 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         // backend the worker will actually use.
         guard let sourceID = item.payload.sourceIDs.first else { return nil }
 
+        // The refresh intent dispatches BEFORE the generic resolution —
+        // the item carries its own workload, exactly like the speech intent.
+        if item.payload.workloadIntent == .refreshSource {
+            do {
+                guard let resolved = try await provider.resolveSourceRefresh(
+                    wikiID: item.wikiID,
+                    sourceID: sourceID) else {
+                    return nil
+                }
+                if case .refresh(let refresh) = resolved {
+                    return ProviderID(rawValue: refresh.capacityID)
+                }
+                return ProviderID(rawValue: SourceRefreshResolution.defaultCapacityID)
+            } catch {
+                // An unsupported/failed refresh resolution routes into the
+                // neutral capacity bucket so dispatch claims it and the
+                // worker surfaces the typed error on the item.
+                DebugLog.store("QueueExtractionWorker.refresh resolution blocked: \(error)")
+                return ProviderID(rawValue: "blocked-extraction")
+            }
+        }
+
         let override = item.payload.stageRouting?[StageRoutingKey.backend.rawValue].flatMap {
             ExtractionBackend(rawValue: $0)
         }
@@ -46,6 +68,32 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         // The normalized intent flows from the payload exactly like the
         // worker's later resolution — a speech item resolves the speech arm.
         let intent = item.payload.transcriptionIntent
+
+        // Format-route dispatch FIRST (parity with the worker's execute): a
+        // registration-claimed HTML or DOCX source converts through the
+        // package route and never reaches the generic resolution.
+        let htmlBackendOverride = item.payload.stageRouting?[StageRoutingKey.htmlBackend.rawValue].flatMap {
+            HtmlExtractionBackend(rawValue: $0)
+        }
+        do {
+            if let formatResolved = try await provider.resolveFormatRoute(
+                wikiID: item.wikiID,
+                sourceID: sourceID,
+                htmlBackendOverride: htmlBackendOverride
+            ) {
+                switch formatResolved {
+                case .html(let html):
+                    return ProviderID(rawValue: html.capacityID)
+                case .docx:
+                    return ProviderID(rawValue: DocxExtractionResolution.defaultCapacityID)
+                default:
+                    return ProviderID(rawValue: "blocked-extraction")
+                }
+            }
+        } catch {
+            DebugLog.store("QueueExtractionWorker.resolveFormatRoute blocked: \(error)")
+            return ProviderID(rawValue: "blocked-extraction")
+        }
 
         // Ask the provider to resolve — if it returns nil (no bytes, no
         // route), the item stays queued and is never dispatched.
@@ -91,6 +139,13 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         case .speech(let speech):
             // One speech job at a time: its own single-job bucket.
             return ProviderID(rawValue: speech.capacityID)
+        case .html(let html):
+            // Package format conversions share one non-PDF bucket.
+            return ProviderID(rawValue: html.capacityID)
+        case .docx:
+            return ProviderID(rawValue: DocxExtractionResolution.defaultCapacityID)
+        case .refresh:
+            return ProviderID(rawValue: SourceRefreshResolution.defaultCapacityID)
         case .bytes(let bytes):
             // Map the backend to a provider ID that the engine's capacity
             // config can route: local → "local-pdf2md", remote → backend-specific.
@@ -162,8 +217,7 @@ struct QueueExtractionWorker: QueueWorker {
         // Every progress line carries its elapsed time ([mm:ss]) so a silent
         // stretch is visible in the Activity trail without a debugger.
         @Sendable func stamp(_ line: String) -> String {
-            let seconds = Int((ContinuousClock.now - startedAt).components.seconds)
-            return String(format: "[%02d:%02d] %@", (seconds / 60) % 100, seconds % 60, line)
+            Self.stamp(startedAt, line)
         }
 
         // Begin the report with the FULL payload inventory before any
@@ -179,9 +233,20 @@ struct QueueExtractionWorker: QueueWorker {
             throw QueueExtractionError.missingSourceID
         }
 
+        // The refresh intent dispatches BEFORE the generic resolution: the
+        // item's workload is the URL re-acquisition, not a conversion.
+        if item.payload.workloadIntent == .refreshSource {
+            return try await executeRefresh(item: item, sourceID: sourceID)
+        }
+
         // Resolve the backend override from the payload (re-extraction).
         let backendOverride = item.payload.stageRouting?[StageRoutingKey.backend.rawValue].flatMap {
             ExtractionBackend(rawValue: $0)
+        }
+        // The HTML format route's backend override — the "Re-extract with"
+        // menu's HTML branch rides its own routing key.
+        let htmlBackendOverride = item.payload.stageRouting?[StageRoutingKey.htmlBackend.rawValue].flatMap {
+            HtmlExtractionBackend(rawValue: $0)
         }
 
         emitReport?(QueueReportMutation(
@@ -189,6 +254,28 @@ struct QueueExtractionWorker: QueueWorker {
             targetUpserts: [QueueReportTargetRecord(
                 target: .source(sourceID),
                 state: .processing)]))
+
+        // Format-route dispatch comes FIRST: a registration-claimed HTML or
+        // DOCX source converts through the package route — it never reaches
+        // the generic arms (whose bytes fallback would feed a PDF extractor).
+        // A claimed kind whose package is inactive throws here and fails the
+        // item visibly; `nil` means no claim recognizes the source and the
+        // generic resolution proceeds unchanged.
+        if let formatResolved = try await provider.resolveFormatRoute(
+            wikiID: item.wikiID,
+            sourceID: sourceID,
+            htmlBackendOverride: htmlBackendOverride
+        ) {
+            switch formatResolved {
+            case .html(let html):
+                return try await executeHtmlArm(item: item, sourceID: sourceID, html: html)
+            case .docx(let docx):
+                return try await executeDocxArm(item: item, sourceID: sourceID, docx: docx)
+            default:
+                throw QueueExtractionError.notReady(
+                    "the format route resolved a non-conversion workload")
+            }
+        }
 
         // Resolve the extraction (main-actor hop in the app impl). The
         // payload's normalized intent rides along: an explicit speech item
@@ -402,6 +489,161 @@ struct QueueExtractionWorker: QueueWorker {
                     target: .source(sourceID),
                     state: .succeeded,
                     result: outputReference.map { QueueTargetResult.outputReference($0) })]))
+
+        case .html(let html):
+            try await executeHtmlArm(item: item, sourceID: sourceID, html: html)
+
+        case .docx(let docx):
+            try await executeDocxArm(item: item, sourceID: sourceID, docx: docx)
+
+        case .refresh(let refresh):
+            try await executeRefreshArm(item: item, sourceID: sourceID, refresh: refresh)
         }
+    }
+
+    // MARK: - Shared arm execution
+
+    /// The elapsed-time progress stamp shared by every arm (and by the
+    /// early-dispatch refresh/format-route arms).
+    private static func stamp(_ startedAt: ContinuousClock.Instant, _ line: String) -> String {
+        let seconds = Int((ContinuousClock.now - startedAt).components.seconds)
+        return String(format: "[%02d:%02d] %@", (seconds / 60) % 100, seconds % 60, line)
+    }
+
+    /// The HTML format-route arm: convert, persist, report. Reached from the
+    /// format-route dispatch and from the (defensive) exhaustive-switch arm.
+    private func executeHtmlArm(
+        item: QueueItem,
+        sourceID: SourceID,
+        html: HtmlExtractionResolution
+    ) async throws {
+        let startedAt = ContinuousClock.now
+        @Sendable func stamp(_ line: String) -> String { Self.stamp(startedAt, line) }
+
+        emitReport?(QueueReportMutation(phase: .running))
+        emitProgress(item.id, stamp("Extracting markdown…"))
+        let markdown = try await html.extract()
+
+        emitReport?(QueueReportMutation(phase: .persisting))
+        // Import conversions nominate the new version active when a head
+        // already exists (issue #1380); manual runs append alternatives only.
+        let nominateActive = item.payload.workloadIntent == .importConversion
+        let outputReference = try await provider.persistHtmlExtraction(
+            wikiID: item.wikiID,
+            sourceID: sourceID,
+            resolution: html,
+            markdown: markdown,
+            nominateActive: nominateActive)
+
+        emitReport?(QueueReportMutation(
+            phase: .finished,
+            availability: .available,
+            resultSummary: "Extraction persisted",
+            targetUpserts: [QueueReportTargetRecord(
+                target: .source(sourceID),
+                state: .succeeded,
+                result: outputReference.map { QueueTargetResult.outputReference($0) })]))
+    }
+
+    /// The DOCX format-route arm — the package-only sibling.
+    private func executeDocxArm(
+        item: QueueItem,
+        sourceID: SourceID,
+        docx: DocxExtractionResolution
+    ) async throws {
+        let startedAt = ContinuousClock.now
+        @Sendable func stamp(_ line: String) -> String { Self.stamp(startedAt, line) }
+
+        emitReport?(QueueReportMutation(phase: .running))
+        emitProgress(item.id, stamp("Extracting markdown…"))
+        let markdown = try await docx.extract()
+
+        emitReport?(QueueReportMutation(phase: .persisting))
+        let outputReference = try await provider.persistDocxExtraction(
+            wikiID: item.wikiID,
+            sourceID: sourceID,
+            resolution: docx,
+            markdown: markdown)
+
+        emitReport?(QueueReportMutation(
+            phase: .finished,
+            availability: .available,
+            resultSummary: "Extraction persisted",
+            targetUpserts: [QueueReportTargetRecord(
+                target: .source(sourceID),
+                state: .succeeded,
+                result: outputReference.map { QueueTargetResult.outputReference($0) })]))
+    }
+
+    /// The daemon refresh arm: re-fetch the source's recorded URL off-host
+    /// and append a content version. Typed refresh failures (notRefreshable,
+    /// missing plan, snapshot-with-images) surface on the item.
+    private func executeRefresh(
+        item: QueueItem,
+        sourceID: SourceID
+    ) async throws {
+        let startedAt = ContinuousClock.now
+        @Sendable func stamp(_ line: String) -> String { Self.stamp(startedAt, line) }
+
+        emitReportBegin?(
+            .extract,
+            .targets(item.payload.sourceIDs.map { sourceID in
+                QueueReportTargetRecord(target: .source(sourceID), state: .planned)
+            }))
+        emitReport?(QueueReportMutation(
+            phase: .staging,
+            targetUpserts: [QueueReportTargetRecord(
+                target: .source(sourceID),
+                state: .processing)]))
+
+        guard let resolved = try await provider.resolveSourceRefresh(
+            wikiID: item.wikiID,
+            sourceID: sourceID
+        ) else {
+            emitReport?(QueueReportMutation(
+                phase: .finished,
+                availability: .available,
+                resultSummary: "Skipped: no refresh route for this source",
+                targetUpserts: [QueueReportTargetRecord(
+                    target: .source(sourceID),
+                    state: .skipped(reason: "No refresh route for this source"))]))
+            return
+        }
+        guard case .refresh(let refresh) = resolved else {
+            throw QueueExtractionError.notReady(
+                "the refresh arm resolved a non-refresh workload")
+        }
+        try await executeRefreshArm(item: item, sourceID: sourceID, refresh: refresh)
+    }
+
+    /// Shared refresh execution (dispatch + exhaustive-switch paths).
+    private func executeRefreshArm(
+        item: QueueItem,
+        sourceID: SourceID,
+        refresh: SourceRefreshResolution
+    ) async throws {
+        let startedAt = ContinuousClock.now
+        @Sendable func stamp(_ line: String) -> String { Self.stamp(startedAt, line) }
+
+        emitProgress(item.id, stamp("Refreshing source…"))
+        emitReport?(QueueReportMutation(phase: .running))
+        let outcome = try await refresh.fetch { [itemID = item.id] line in
+            emitProgress(itemID, stamp(line))
+        }
+
+        emitReport?(QueueReportMutation(phase: .persisting))
+        let outputReference = try await provider.persistSourceRefresh(
+            wikiID: item.wikiID,
+            sourceID: sourceID,
+            outcome: outcome)
+
+        emitReport?(QueueReportMutation(
+            phase: .finished,
+            availability: .available,
+            resultSummary: "Source refreshed",
+            targetUpserts: [QueueReportTargetRecord(
+                target: .source(sourceID),
+                state: .succeeded,
+                result: outputReference.map { QueueTargetResult.outputReference($0) })]))
     }
 }

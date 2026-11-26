@@ -35,7 +35,6 @@ public protocol WikiSessionProtocol: AnyObject, Observable, Sendable {
     var agentLauncher: AgentLauncher { get }
     var extractionCoordinator: ExtractionCoordinator { get }
     var queueEngine: any QueueEngineClient { get }
-    var extractionProvider: any QueueExtractionProvider { get }
     var generationGate: GenerationGate { get }
     var searchServices: any SearchServices { get }
     var pendingBlobVacuum: BlobVacuumReport? { get set }
@@ -43,10 +42,12 @@ public protocol WikiSessionProtocol: AnyObject, Observable, Sendable {
     var pendingWikiLink: (url: URL, openInNewTab: Bool)? { get set }
 
     func updateDescriptor(_ descriptor: WikiDescriptor)
-    func previewBlobVacuum()
-    func applyBlobVacuum()
-    func previewVacuumAll()
-    func applyVacuumAll()
+    /// `async` since the WikiStore async flip (plan P1): the sweeps run
+    /// through the store now.
+    func previewBlobVacuum() async
+    func applyBlobVacuum() async
+    func previewVacuumAll() async
+    func applyVacuumAll() async
     func upgradeSearchIndex() async
     func searchTantivy(query: String, kinds: [TantivyDocumentKind], limit: Int) async -> [TantivyShadowSearchResult]?
     func shutdown() async
@@ -98,11 +99,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     /// rewriting call sites. See `plans/daemon-workloads.md` Phase 0 §4.
     public let queueEngine: any QueueEngineClient
 
-    /// Shared, app-wide extraction provider. The app-layer bridge from the
-    /// headless queue engine to the `@MainActor` `ExtractionCoordinator` +
-    /// `WikiStoreModel`. One instance serves every session.
-    public let extractionProvider: any QueueExtractionProvider
-
     /// Per-session generation gate. Each `WikiSession` owns its own so
     /// cross-wiki isolation is structural: a held gate on session A does not
     /// block session B. Lane limits match the app-wide gate the launchers
@@ -137,7 +133,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     /// layer never references the app-layer `WikiLinkRoute`). Same
     /// "set once / consume once" discipline as `pendingBlobVacuum`.
     public var pendingWikiLink: (url: URL, openInNewTab: Bool)?
-    @ObservationIgnored private let searchCompositionOwner: SearchCompositionOwner?
 
     // MARK: - Init
 
@@ -178,7 +173,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         agentLauncher: AgentLauncher,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
-        extractionProvider: any QueueExtractionProvider,
         htmlBackend: HtmlExtractionBackend? = nil,
         profileLifetime: ProfileLifetime
     ) {
@@ -187,22 +181,25 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         self.databaseWikiID = wikiID
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
-        self.extractionProvider = extractionProvider
         self.store = store
-        self.searchCompositionOwner = nil
         self.searchServices = searchServices
         self.generationGate = generationGate
         self.agentLauncher = agentLauncher
 
-        var sessionDescriptor = descriptor
-        if store.summaries.isEmpty, let homeID = store.newPage(title: "Home"), sessionDescriptor.homePageID == nil {
-            sessionDescriptor.homePageID = homeID
-        }
-        self.descriptor = sessionDescriptor
-
-        // UI adaptation only: the child profile has already constructed all
-        // per-wiki domain services before this observable facade is initialized.
+        self.descriptor = descriptor
+        // Plan P1.3: the Home-seed check runs on the async bootstrap path
+        // (`seedHomeIfNeeded`), awaited by the session loader — construction
+        // performs no store work.
         store.htmlBackend = htmlBackend
+    }
+
+    /// Seeds a Home page when this wiki has no pages yet, wiring the seeded
+    /// id into the session descriptor. Awaited by the session loader after
+    /// `bootstrapFromStore` (plan P1.3).
+    public func seedHomeIfNeeded() async {
+        if store.summaries.isEmpty, let homeID = await store.newPage(title: "Home"), descriptor.homePageID == nil {
+            descriptor.homePageID = homeID
+        }
     }
 
     internal func scopeIdentitySnapshot(
@@ -224,12 +221,11 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         testFixtureWikiID wikiID: WikiID,
         descriptor: WikiDescriptor,
         store: WikiStoreModel,
-        searchCompositionOwner: SearchCompositionOwner,
+        searchServices: any SearchServices,
         generationGate: GenerationGate,
         agentLauncher: AgentLauncher,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
-        extractionProvider: any QueueExtractionProvider,
         htmlBackend: HtmlExtractionBackend? = nil
     ) {
         self.profileLifetime = nil
@@ -237,18 +233,12 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         self.databaseWikiID = nil
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
-        self.extractionProvider = extractionProvider
         self.store = store
-        self.searchCompositionOwner = searchCompositionOwner
-        self.searchServices = searchCompositionOwner.services
+        self.searchServices = searchServices
         self.generationGate = generationGate
         self.agentLauncher = agentLauncher
 
-        var sessionDescriptor = descriptor
-        if store.summaries.isEmpty, let homeID = store.newPage(title: "Home"), sessionDescriptor.homePageID == nil {
-            sessionDescriptor.homePageID = homeID
-        }
-        self.descriptor = sessionDescriptor
+        self.descriptor = descriptor
         store.htmlBackend = htmlBackend
     }
 
@@ -267,14 +257,14 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     /// Preview orphaned blob storage for this wiki (Help menu). Runs a
     /// read-only dry run, then sets `pendingBlobVacuum` so the app-scene
     /// confirm alert appears.
-    public func previewBlobVacuum() {
-        pendingBlobVacuum = store.performBlobVacuum(dryRun: true)
+    public func previewBlobVacuum() async {
+        pendingBlobVacuum = await store.performBlobVacuum(dryRun: true)
     }
 
     /// Delete the orphaned blobs (the alert's Vacuum button), then clear the
     /// pending report.
-    public func applyBlobVacuum() {
-        _ = store.performBlobVacuum(dryRun: false)
+    public func applyBlobVacuum() async {
+        _ = await store.performBlobVacuum(dryRun: false)
         pendingBlobVacuum = nil
     }
 
@@ -283,14 +273,14 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     /// Preview all reclaimable orphans (blobs + activities) for this wiki
     /// (Help menu). Runs a read-only dry run, then sets `pendingVacuumAll` so
     /// the app-scene confirm alert appears.
-    public func previewVacuumAll() {
-        pendingVacuumAll = store.performVacuumAll(dryRun: true)
+    public func previewVacuumAll() async {
+        pendingVacuumAll = await store.performVacuumAll(dryRun: true)
     }
 
     /// Delete all orphaned blobs + activities (the alert's Vacuum button),
     /// then clear the pending report.
-    public func applyVacuumAll() {
-        _ = store.performVacuumAll(dryRun: false)
+    public func applyVacuumAll() async {
+        _ = await store.performVacuumAll(dryRun: false)
         pendingVacuumAll = nil
     }
 
@@ -333,12 +323,10 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         }
     }
 
-    public func shutdownSearchRuntime() async {
-        await searchCompositionOwner?.shutdown()
-    }
-
     public func shutdown() async {
-        await shutdownSearchRuntime()
+        // P5: no session-owned search runtime — the daemon releases its
+        // per-wiki index runtime when the wiki's store closes. Session
+        // teardown is the profile lifetime only.
         guard let profileLifetime else { return }
         do {
             try await profileLifetime.shutdown()

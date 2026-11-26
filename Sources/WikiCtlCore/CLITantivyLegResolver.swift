@@ -289,7 +289,7 @@ public enum CLITantivyLegResolver {
             kind: .page,
             limit: limit))
         guard !hits.isEmpty else { return nil }
-        let catalog = try store.listPages(sortBy: .lastUpdated)
+        let catalog = try await store.listPages(sortBy: .lastUpdated)
         return resolveHits(hits, catalog: catalog, idFromRawValue: { PageID(rawValue: $0) })
     }
 
@@ -307,7 +307,7 @@ public enum CLITantivyLegResolver {
             kind: .source,
             limit: limit))
         guard !hits.isEmpty else { return nil }
-        let catalog = try store.listSources()
+        let catalog = try await store.listSources()
         return resolveHits(hits, catalog: catalog, idFromRawValue: SourceID.init(rawValue:))
     }
 
@@ -325,7 +325,7 @@ public enum CLITantivyLegResolver {
             kind: .chat,
             limit: limit))
         guard !hits.isEmpty else { return nil }
-        let catalog = try store.listChats()
+        let catalog = try await store.listChats()
         return resolveHits(hits, catalog: catalog, idFromRawValue: { ChatID(rawValue: $0) })
     }
 

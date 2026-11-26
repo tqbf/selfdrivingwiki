@@ -684,6 +684,13 @@ let package = Package(
                            // are #if os(macOS)-guarded (#754, #780).
                            .target(name: "WikiFSEngine",
                                    condition: .when(platforms: [.macOS])),
+                           // The daemon-only open-seam harness's REMOTE-mode
+                           // case boots the fixture daemon in-process
+                           // (WikiDaemon + WikiDaemonExporter, the
+                           // DaemonStoreCommandExecutorTests harness shape);
+                           // macOS-only like wikid itself.
+                           .target(name: "wikid",
+                                   condition: .when(platforms: [.macOS])),
                            // On Linux, several test files do `import SQLite3`
                            // to call sqlite3_* directly. The SDK's Swift module
                            // map isn't auto-available there — link the CSQLite
@@ -760,7 +767,14 @@ let package = Package(
         // pull unavailable frameworks or Cmlx CUDA code.
         .executableTarget(
             name: "WikiFSFileProvider",
-            dependencies: ["WikiFSCore", "WikiFSTypes"],
+            dependencies: [
+                "WikiFSCore",
+                "WikiFSTypes",
+                // Phase 6 (plans/daemon-only-access.md): the extension reads
+                // the wiki through the daemon's App Group domain socket — the
+                // projection wire family (DTOs + framing + limits) it speaks.
+                "WikiDaemonContract",
+            ],
             path: "Sources/WikiFSFileProvider",
             swiftSettings: [.unsafeFlags(["-warnings-as-errors"])],
             linkerSettings: [

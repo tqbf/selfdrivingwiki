@@ -255,7 +255,7 @@ actor FakeAgentBackend: AgentBackend {
         // store (phase 5.1). No-op for sessions without actions or when no
         // store was injected.
         if let behavior, !behavior.actions.isEmpty {
-            runScriptedActions(behavior, sessionID: session.id)
+            await runScriptedActions(behavior, sessionID: session.id)
         }
 
         return AsyncStream { continuation in
@@ -280,7 +280,7 @@ actor FakeAgentBackend: AgentBackend {
     /// `getPage` earlier in the SAME action list is visible to a later
     /// `.fromLastRead` write / reconcile composition — the intra-turn
     /// read→compose→CAS-thread sequence the conflict scenarios depend on.
-    private func runScriptedActions(_ behavior: FakeSessionBehavior, sessionID: String) {
+    private func runScriptedActions(_ behavior: FakeSessionBehavior, sessionID: String) async {
         guard let store = scriptStore else { return }
         if sessionReads[sessionID] == nil {
             sessionReads[sessionID] = (body: nil, head: nil)
@@ -296,7 +296,7 @@ actor FakeAgentBackend: AgentBackend {
                     stderr: "scripted action bound exceeded"))
                 return
             }
-            perform(action, sessionID: sessionID, store: store)
+            await perform(action, sessionID: sessionID, store: store)
         }
     }
 
@@ -304,7 +304,7 @@ actor FakeAgentBackend: AgentBackend {
         _ action: FakeAgentAction,
         sessionID: String,
         store: GRDBWikiStore
-    ) {
+    ) async {
         let scratch = sessionScratchDirectories[sessionID] ?? nil
         switch action {
         case .readStateFile:
@@ -340,7 +340,7 @@ actor FakeAgentBackend: AgentBackend {
             }
 
         case .getPage(let title):
-            let outcome = ScriptedWikiCtl.dispatch(
+            let outcome = await ScriptedWikiCtl.dispatch(
                 ["--wiki", ScriptedWikiCtl.wikiSelector,
                  "page", "get", "--title", title, "--json"],
                 in: store)
@@ -353,7 +353,7 @@ actor FakeAgentBackend: AgentBackend {
                 exitCode: outcome.exitCode, stdout: outcome.stdout, stderr: outcome.stderr))
 
         case .listPages:
-            let outcome = ScriptedWikiCtl.dispatch(
+            let outcome = await ScriptedWikiCtl.dispatch(
                 ["--wiki", ScriptedWikiCtl.wikiSelector, "page", "list", "--json"],
                 in: store)
             actionRecords.append(FakeScriptActionRecord(
@@ -361,20 +361,20 @@ actor FakeAgentBackend: AgentBackend {
                 exitCode: outcome.exitCode, stdout: outcome.stdout, stderr: outcome.stderr))
 
         case .writePage(let title, let body, let head, let createOnly, let sources):
-            dispatchAdd(
+            await dispatchAdd(
                 title: title, body: body, head: head, createOnly: createOnly,
                 sources: sources, label: "writePage(\(title))",
                 sessionID: sessionID, scratch: scratch, store: store)
 
         case .reconcileWrite(let title, let compose, let head, let createOnly, let sources):
             let body = compose(sessionReads[sessionID]?.body)
-            dispatchAdd(
+            await dispatchAdd(
                 title: title, body: body, head: head, createOnly: createOnly,
                 sources: sources, label: "reconcileWrite(\(title))",
                 sessionID: sessionID, scratch: scratch, store: store)
 
         case .racingWrite(let title, let body, let sources):
-            dispatchAdd(
+            await dispatchAdd(
                 title: title, body: body, head: .blind, createOnly: false,
                 sources: sources, label: "racingWrite(\(title))",
                 sessionID: sessionID, scratch: scratch, store: store)
@@ -385,7 +385,7 @@ actor FakeAgentBackend: AgentBackend {
             if let source {
                 argv += ["--source", source]
             }
-            let outcome = ScriptedWikiCtl.dispatch(argv, in: store)
+            let outcome = await ScriptedWikiCtl.dispatch(argv, in: store)
             actionRecords.append(FakeScriptActionRecord(
                 sessionID: sessionID, label: "logAppend(\(kind), \(title))",
                 exitCode: outcome.exitCode, stdout: outcome.stdout, stderr: outcome.stderr))
@@ -405,7 +405,7 @@ actor FakeAgentBackend: AgentBackend {
         sessionID: String,
         scratch: URL?,
         store: GRDBWikiStore
-    ) {
+    ) async {
         let directory = scratch ?? FileManager.default.temporaryDirectory
         let bodyFile = directory.appendingPathComponent(
             "script-body-\(sessionID)-\(actionRecords.count).md", isDirectory: false)
@@ -438,7 +438,7 @@ actor FakeAgentBackend: AgentBackend {
         for source in sources {
             argv += ["--source", source]
         }
-        let outcome = ScriptedWikiCtl.dispatch(argv, in: store)
+        let outcome = await ScriptedWikiCtl.dispatch(argv, in: store)
         actionRecords.append(FakeScriptActionRecord(
             sessionID: sessionID, label: label,
             exitCode: outcome.exitCode, stdout: outcome.stdout, stderr: outcome.stderr))

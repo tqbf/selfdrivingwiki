@@ -799,7 +799,7 @@ struct WikiStrategyEvaluationHarnessTests {
     // MARK: - Store-backed capture (current-head provenance)
 
     @Test("provenance is read from the store's current head, not history's final row")
-    func provenanceFollowsActualHeadWhenHistoryBranches() throws {
+    func provenanceFollowsActualHeadWhenHistoryBranches() async throws {
         let store = try TestStoreFactory.inMemory()
         let ch03 = try store.addSource(
             filename: "meridian-chapter-03.md",
@@ -808,12 +808,12 @@ struct WikiStrategyEvaluationHarnessTests {
             filename: "meridian-chapter-07.md",
             data: Data("# Chapter 7\nIlya confessed.".utf8)).id
 
-        let pageID = try store.upsertPage(
+        let pageID = try await store.upsertPage(
             id: nil, title: "Mara Voss", rawBody: "v1 — accusation",
             expectation: .unrestricted, author: nil,
             provenance: [PageVersionSourceInput(sourceID: ch03, role: .primary)]).id
         let v1 = try #require(try store.pageHeadVersionID(pageID: pageID))
-        _ = try store.upsertPage(
+        _ = try await store.upsertPage(
             id: pageID, title: "Mara Voss", rawBody: "v2 — correction",
             expectation: .expectedHead(v1), author: nil,
             provenance: [
@@ -821,7 +821,7 @@ struct WikiStrategyEvaluationHarnessTests {
                 PageVersionSourceInput(sourceID: ch07, role: .supporting),
             ])
         let v2 = try #require(try store.pageHeadVersionID(pageID: pageID))
-        _ = try store.upsertPage(
+        _ = try await store.upsertPage(
             id: pageID, title: "Mara Voss", rawBody: "v3 — rewrite that dropped chapter 3",
             expectation: .expectedHead(v2), author: nil,
             provenance: [PageVersionSourceInput(sourceID: ch07, role: .primary)])
@@ -837,7 +837,7 @@ struct WikiStrategyEvaluationHarnessTests {
         #expect(try #require(history.last).id == v3)
         #expect(v2 != v3, "the premise: with branches possible, history's final row is not the head")
 
-        let observation = try WikiObservationRecorder().capture(
+        let observation = try await WikiObservationRecorder().capture(
             from: store,
             fixtureKeysBySourceID: [ch03: "meridian-chapter-03", ch07: "meridian-chapter-07"])
         let page = try #require(observation.page(titled: "Mara Voss").page)

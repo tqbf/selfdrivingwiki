@@ -24,6 +24,27 @@ import WikiFSEngine
 @Observable
 final class QueueActivityTracker {
 
+    /// The load failure when no closed-wiki name reader was injected (tests
+    /// that never resolve closed-wiki names). The tracker marks the wiki
+    /// unavailable — the same surface a daemon-down load produces.
+    private struct QueueClosedWikiNameLoaderUnavailable: Error {}
+
+    // MARK: - Closed-wiki name loader (P5: daemon-mediated)
+
+    /// The production read seam for closed-wiki queue-target names. The app
+    /// injects ``QueueClosedWikiNameLoader/daemonLoader(makeRemoteStore:)``
+    /// bound to the shared store transport; tests inject local or fake
+    /// readers. nil (bare `QueueActivityTracker()` in tests that never load
+    /// closed-wiki names) makes every load fail explicitly — the wiki is
+    /// marked unavailable and rows fall through to their recorded names.
+    /// The `refreshClosedWikiNames` `loader:` parameter overrides this per
+    /// call (nil = use the stored loader).
+    private let closedWikiNameLoader: QueueClosedWikiNameLoader.Load?
+
+    init(loader: QueueClosedWikiNameLoader.Load? = nil) {
+        self.closedWikiNameLoader = loader
+    }
+
     // MARK: - Observable state (drives SwiftUI)
 
     /// Source IDs currently being extracted (any extraction queue item in
@@ -372,13 +393,16 @@ final class QueueActivityTracker {
     /// - Parameters:
     ///   - databaseURL: the wiki database URL provider (production passes
     ///     the App Group container location). Returning `nil` marks the load
-    ///     unavailable.
-    ///   - loader: the read seam, injectable for tests.
+    ///     unavailable. UNUSED by the P5 daemon reader (the daemon owns the
+    ///     file); kept for the per-wiki planning shape.
+    ///   - loader: the read seam, injectable for tests. nil = the tracker's
+    ///     stored loader (the app's daemon-mediated reader; nil too when no
+    ///     loader was injected — those loads fail explicitly).
     func refreshClosedWikiNames(
         for items: [QueueItem],
         sessions: [WikiID: any WikiSessionProtocol],
         databaseURL: @escaping @Sendable (WikiID) -> URL?,
-        loader: @escaping QueueClosedWikiNameLoader.Load = QueueClosedWikiNameLoader.load
+        loader: QueueClosedWikiNameLoader.Load? = nil
     ) async {
         await refreshClosedWikiNames(
             for: items,
@@ -394,8 +418,16 @@ final class QueueActivityTracker {
         for items: [QueueItem],
         openWikiIDs: Set<WikiID>,
         databaseURL: @escaping @Sendable (WikiID) -> URL?,
-        loader: @escaping QueueClosedWikiNameLoader.Load = QueueClosedWikiNameLoader.load
+        loader: QueueClosedWikiNameLoader.Load? = nil
     ) async {
+        // P5: the effective loader is the per-call override, else the
+        // injected daemon reader. No loader anywhere → every load THROWS
+        // (explicitly unavailable, never silently resolved) — the existing
+        // catch marks the wiki unavailable and rows fall through to their
+        // recorded names.
+        let load = loader ?? closedWikiNameLoader ?? { _, _, _, _ in
+            throw QueueClosedWikiNameLoaderUnavailable()
+        }
         var batch = items
         while batch.isEmpty == false {
             // Plan the per-wiki work: closed wikis' payload target IDs that
@@ -474,7 +506,7 @@ final class QueueActivityTracker {
                     continue
                 }
                 do {
-                    let index = try await loader(
+                    let index = try await load(
                         wikiID,
                         targets.pages.sorted { $0.rawValue < $1.rawValue },
                         targets.sources.sorted { $0.rawValue < $1.rawValue },

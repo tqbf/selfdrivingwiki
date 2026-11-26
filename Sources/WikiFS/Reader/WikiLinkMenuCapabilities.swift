@@ -76,7 +76,10 @@ struct WikiLinkMenuCapabilities {
             selection: { WikiLinkMenuNSItems.selection(for: $0, store: store) },
             openInBackground: { store.openTabInBackground($0) },
             similarPages: { query, limit in
-                await store.searchSimilarResolvingTantivy(query: query, limit: limit)
+                // P5: the daemon fuses BM25 + semantic server-side — the
+                // merged one-shot search (the client-side leg resolver is
+                // gone with the app's local index assembly).
+                await store.searchSimilar(query: query, limit: limit)
             },
             navigateToPage: { page in
                 // Rename-stable first, title fallback — the same discipline

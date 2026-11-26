@@ -253,7 +253,7 @@ struct AddressBarView: View {
             // Open a durable new chat with the question pre-filled (#288).
             // beginNewChat persists the row first and installs the prefill
             // only on success, so a failed creation never leaks the question.
-            store.beginNewChat(prefill: question)
+            Task { await store.beginNewChat(prefill: question) }
         default:
             store.select(result.selection)
         }

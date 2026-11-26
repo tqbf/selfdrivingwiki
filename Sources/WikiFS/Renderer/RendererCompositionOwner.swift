@@ -187,39 +187,17 @@ final class AppProcessPluginCatalog {
     let transportOwner: DaemonTransportCompositionOwner
     let rendererOwner: RendererCompositionOwner
 
-    init(
-        containerDirectory: URL,
-        transportBridge: DaemonTransportAppBridge,
-        extractionProvider: @escaping @MainActor (
-            any ExtractionServices,
-            any AgentProviderServices,
-            URL
-        ) -> any QueueExtractionProvider,
-        makeIngestionProvider: @escaping @MainActor (
-            QueueStore,
-            any AgentProviderServices
-        ) -> any QueueIngestionProvider
-    ) {
+    init(containerDirectory: URL, transportBridge: DaemonTransportAppBridge) {
         let providerServices = MutableAgentProviderServices()
         let extractionServices = MutableExtractionServices()
         let extractionCredentialStore = KeychainExtractionCredentialStore()
         let acpCredentialStore = KeychainACPCredentialStore()
 
-        let queueDBURL = DebugLog.trying(
-            "resolve queue database URL",
-            operation: { try DatabaseLocation.queueDatabaseURL() })
-            ?? containerDirectory.appendingPathComponent("queue.sqlite", isDirectory: false)
-        let queueController = LocalQueueRuntimeController {
-            try await QueueRuntimeFactory(
-                databaseURL: queueDBURL,
-                extractionProvider: await MainActor.run {
-                    extractionProvider(extractionServices, providerServices, queueDBURL)
-                },
-                makeIngestionProvider: { store in
-                    await MainActor.run { makeIngestionProvider(store, providerServices) }
-                })
-                .assemble()
-        }
+        // Phase 4 (plans/daemon-only-access.md): the app never assembles a
+        // local queue engine. The controller owns only the hot-swap daemon
+        // client — unavailable until the transport connects, swapped to the
+        // daemon endpoint on activation, degraded on daemon loss.
+        let queueController = LocalQueueRuntimeController()
         let transportOwner = DaemonTransportCompositionOwner {
             try await DaemonTransportRuntimeFactory(
                 connectionFactory: transportBridge.connectionFactory,
@@ -305,11 +283,10 @@ final class AppProcessPluginCatalog {
                                 appGroupContainerRoot: containerDirectory)
                         }),
                     queueAssembly: {
-                        await MainActor.run { queueController.start() }
-                        await queueController.awaitSettled()
-                        if let failure = await MainActor.run(body: { queueController.startupError }) {
-                            throw AppProcessPluginCatalogError.runtimeUnavailable("queue: \(failure)")
-                        }
+                        // No local startup: the client is the hot-swap
+                        // daemon client, unavailable until the daemon
+                        // endpoint activates. Disposal is the controller's
+                        // own client swap.
                         return ProcessRuntimeLease(service: queueController.client) {
                             _ = await queueController.dispose()
                         }

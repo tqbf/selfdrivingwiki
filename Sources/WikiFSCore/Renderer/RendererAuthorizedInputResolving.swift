@@ -7,5 +7,7 @@ import WikiFSTypes
 // lookup typed without introducing another storage or bridge path.
 @MainActor
 public protocol RendererAuthorizedInputResolving {
-    func rendererAuthorizedInputReader(for sourceID: SourceID) -> RendererAuthorizedInputReader?
+    /// `async` since the WikiStore async flip (plan P1): the model resolves
+    /// the active content version through the store to pin the reader.
+    func rendererAuthorizedInputReader(for sourceID: SourceID) async -> RendererAuthorizedInputReader?
 }

@@ -374,7 +374,7 @@ public final class AgentLauncher {
     /// inside the validator. An INJECTED resolver that throws is an
     /// actionable plan-validation failure, never a silent degrade;
     /// staged-source reference checks always run.
-    @ObservationIgnored public var planValidationResolveTitle: ((String) throws -> PageID?)?
+    @ObservationIgnored public var planValidationResolveTitle: (@Sendable (String) async throws -> PageID?)?
 
     /// The user-environment `PATH` for run contexts, resolved through the
     /// account's configured login shell (shell-NEUTRAL — `$SHELL`/passwd
@@ -1041,7 +1041,7 @@ public final class AgentLauncher {
     /// the run counter even when the process's `terminationHandler` never fires.
     /// Without this, a process that dies unreconciled strands the sidebar
     /// without its final reload.
-    @ObservationIgnored private var onUnlockHandler: (@MainActor @Sendable () -> Void)?
+    @ObservationIgnored private var onUnlockHandler: (@MainActor @Sendable () async -> Void)?
     /// Persistence callback for an interactive query chat (issue #119).
     /// Receives the not-yet-persisted TAIL of `events` at each turn boundary and
     /// once more at `finish()` — never the full array, so repeated flushes stay
@@ -1049,14 +1049,14 @@ public final class AgentLauncher {
     /// the store; the launcher only knows "hand this slice somewhere." `nil` for
     /// one-shot runs and whenever no chat has been created for the session (e.g.
     /// `store.startChat` failed). Cleared in `finish()` and `resetRunArtifacts()`.
-    @ObservationIgnored private var transcriptSink: (@MainActor ([AgentEvent]) -> Void)?
+    @ObservationIgnored private var transcriptSink: (@MainActor ([AgentEvent]) async -> Void)?
     /// Per-message summary sink (chat-summary plan §6.1). Fired once in
     /// `finish()` with the active chat id so the wired callback can summarize
     /// the assistant messages from this turn + persist via
     /// `updateMessageSummary`. nil when the session has no chatID (one-shot
     /// runs) or the caller didn't wire the sink. Cleared in `finish()` and
     /// `resetRunArtifacts()` for hygiene.
-    @ObservationIgnored private var messageSummarySink: (@MainActor (ChatID) -> Void)?
+    @ObservationIgnored private var messageSummarySink: (@MainActor (ChatID) async -> Void)?
     /// Mid-generation streaming-checkpoint sink (#826). Called by the periodic
     /// checkpoint timer and at turn-end finalize with (chatID, draftHandle,
     /// event, isDraft). Returns `true` on success so the launcher advances its
@@ -1065,7 +1065,7 @@ public final class AgentLauncher {
     /// loss). `nil` for one-shot runs and when no chat is active (one-shot runs
     /// don't persist). Cleared in `finish()` and `resetRunArtifacts()`.
     @ObservationIgnored private var streamingCheckpointSink:
-        (@MainActor (ChatID, String, AgentEvent, Bool) -> Bool)?
+        (@MainActor (ChatID, String, AgentEvent, Bool) async -> Bool)?
     /// Cursor into `events`: the count already handed to `transcriptSink`. Makes
     /// `flushTranscript()` incremental — each call only sends events appended since
     /// the last flush — and idempotent when nothing new arrived since the last call.
@@ -1555,8 +1555,8 @@ public final class AgentLauncher {
         onLiveUsage: (@Sendable (SessionUsage) -> Void)? = nil,
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)? = nil,
         providerLabel: String? = nil,
-        onLock: @escaping @MainActor () -> Void,
-        onUnlock: @escaping @MainActor @Sendable () -> Void
+        onLock: @escaping @MainActor () async -> Void,
+        onUnlock: @escaping @MainActor @Sendable () async -> Void
     ) async {
         // Serialize on the shared generation gate (Phase 2: lane-aware).
         // The lane is derived from the request kind: ingest-class (ingest,
@@ -1757,7 +1757,7 @@ public final class AgentLauncher {
             scopedRunLease = try await issueScopedRunIfConfigured(wikiID: wikiID)
         } catch {
             preflightError = error.localizedDescription
-            finish(status: -1)
+            await finish(status: -1)
             return
         }
         // Resolve the seatbelt confinement BEFORE the resume attempt: the
@@ -1775,7 +1775,7 @@ public final class AgentLauncher {
             // cannot fit a socket address) must fail the launch, never fall
             // back to an unscoped profile.
             preflightError = "Could not build the sandbox profile: \(error.localizedDescription)"
-            finish(status: -1)
+            await finish(status: -1)
             return
         }
 
@@ -1866,7 +1866,7 @@ public final class AgentLauncher {
         // which clears any stale flag. See `extractingSourceIDs` for the separate
         // extraction-phase flag, which the runner manages around the pdf2md block.
         self.ingestingSourceIDs = ingestingSourceIDs
-        onLock()
+        await onLock()
         onUnlockHandler = onUnlock
 
         // Multi-phase ACP ingest: for large sources, sub-agents (the Sonnet
@@ -1958,7 +1958,7 @@ public final class AgentLauncher {
                             // onExit (a prior session terminating after a new one
                             // started) must not tear down the new session.
                             guard let self, self.currentRunToken == runToken else { return }
-                            self.finish(status: Int32(status))
+                            await self.finish(status: Int32(status))
                         }
                     })
             }
@@ -2014,7 +2014,7 @@ public final class AgentLauncher {
                 self.mergeOrAppend(event)
                 if AgentEvent.endsGeneration(event) {
                     self.setGenerating(false)
-                    self.flushTranscript()
+                    await self.flushTranscript()
                     if generationGateReleasesPerTurn {
                         self.releaseGenerationSlot()
                     }
@@ -2036,7 +2036,7 @@ public final class AgentLauncher {
                 // #765: if the turn ceiling was exceeded (or any .turnFailed
                 // event was observed), report failure so the queue item
                 // transitions to .failed instead of .completed.
-                finish(status: runHadTurnFailure ? -1 : (exitStatus ?? 0))
+                await finish(status: runHadTurnFailure ? -1 : (exitStatus ?? 0))
             }
         } catch {
             DebugLog.agent("run: spawn FAILED: \(error.localizedDescription)")
@@ -2057,7 +2057,7 @@ public final class AgentLauncher {
             // §5: spawn failure revokes the scoped lease (this path bypasses
             // finish(), so the teardown is explicit).
             teardownScopedRun()
-            releaseRunLifecycle()
+            await releaseRunLifecycle()
             // Release the generation gate so a queued peer isn't stranded.
             // Also clear isRunning (set above at gate acquire; spawn failed).
             isRunning = false
@@ -2112,16 +2112,21 @@ public final class AgentLauncher {
         // unexpected throw from a future adding await between phases), ensure the
         // generation gate + agent-run lifecycle are released. finish() is
         // idempotent (guards isRunning), so this is a no-op when finish() was
-        // already called.
+        // already called. An async call cannot appear directly in a defer
+        // body (Swift 6.3 rejects it), so the check schedules the finish on
+        // the main actor; the deferred path only fires when finish() has not
+        // run, and the task retains self until it does.
         defer {
-            if isRunning { finish(status: -1) }
+            if isRunning {
+                Task { await self.finish(status: -1) }
+            }
         }
 
         startCompletionWatchdog()
 
         guard case .ingest(let sourcePaths, let stagedSourcePaths, let stateFilePath, _) = operation else {
             DebugLog.agent("runACPIngest: not an ingest operation — aborting")
-            finish(status: -1)
+            await finish(status: -1)
             return
         }
         let sourceIDs = sourcePaths.map { WikiOperation.sourceID(fromPath: $0) }
@@ -2197,19 +2202,19 @@ public final class AgentLauncher {
                 self.backend = planner.1.backend
             } catch {
                 preflightError = error.localizedDescription
-                finish(status: -1)
+                await finish(status: -1)
                 return
             }
         } else {
             guard let config else {
                 preflightError = AgentProviderRuntimeError.unavailable.description
-                finish(status: -1)
+                await finish(status: -1)
                 return
             }
             let legacyPlannerChain = config.providerChain(forStage: ACPIngestStage.planner.rawValue)
             guard let firstProvider = quotaFallback.firstLive(in: legacyPlannerChain) else {
                 preflightError = "All configured providers are exhausted. Try again later."
-                finish(status: -1)
+                await finish(status: -1)
                 return
             }
             provider = firstProvider
@@ -2219,7 +2224,7 @@ public final class AgentLauncher {
             guard let spawn = await resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
                 DebugLog.agent("runACPIngest: ACP exe missing for provider=\(provider.id) — aborting")
                 preflightError = "The agent executable for ‘\(provider.label)’ was not found on your PATH."
-                finish(status: -1)
+                await finish(status: -1)
                 return
             }
             baseHints = AgentBackendFactory.providerHints(
@@ -2247,7 +2252,7 @@ public final class AgentLauncher {
         for (stage, stageModelId) in stageValidations {
             if let msg = SpawnModelGuard.validate(provider: provider, modelId: stageModelId, stageName: stage.label) {
                 preflightError = msg
-                finish(status: -1)
+                await finish(status: -1)
                 return
             }
         }
@@ -2391,10 +2396,14 @@ public final class AgentLauncher {
         // seam (production wires the wiki's store in the LauncherFactory); a
         // resolver FAILURE is itself an actionable problem inside
         // `ACPIngestPlanValidation`, never a silent degrade.
-        let validationProblems = ACPIngestPlanValidation.problems(
+        let titleResolver = planValidationResolveTitle
+        let validationProblems = await ACPIngestPlanValidation.problems(
             in: plan,
             stagedSourceFiles: sourceFileNames,
-            resolveTitleToPageID: planValidationResolveTitle ?? { _ in nil })
+            resolveTitleToPageID: { @Sendable title in
+                guard let titleResolver else { return nil }
+                return try await titleResolver(title)
+            })
         guard validationProblems.isEmpty else {
             let details = validationProblems.map(\.description).joined(separator: "\n")
             DebugLog.agent("runACPIngest: plan rejected by validation — launching no executors:\n\(details)")
@@ -2408,7 +2417,7 @@ public final class AgentLauncher {
             events.append(.result(
                 isError: true,
                 text: "Ingest plan rejected before executor launch — no pages were written. Fix the plan:\n\(details)"))
-            finish(status: -1)
+            await finish(status: -1)
             return
         }
 
@@ -2476,7 +2485,7 @@ public final class AgentLauncher {
                         executorChain = prepared.2
                     } catch {
                         DebugLog.agent("runACPIngest: executor frozen chain failed: \(error.localizedDescription)")
-                        finish(status: -1)
+                        await finish(status: -1)
                         return
                     }
                 } else {
@@ -2570,7 +2579,7 @@ public final class AgentLauncher {
                 finalizerChain = prepared.2
             } catch {
                 DebugLog.agent("runACPIngest: finalizer frozen chain failed: \(error.localizedDescription)")
-                finish(status: -1)
+                await finish(status: -1)
                 return
             }
         } else {
@@ -2627,7 +2636,7 @@ public final class AgentLauncher {
 
         // #765: if any phase hit the turn ceiling (or any .turnFailed event),
         // report failure so the queue item transitions to .failed.
-        finish(status: runHadTurnFailure ? -1 : 0)
+        await finish(status: runHadTurnFailure ? -1 : 0)
     }
 
     // MARK: - Phase 4: Parallel executor dispatch
@@ -2854,7 +2863,7 @@ public final class AgentLauncher {
             onAgentEvent?(event)
             mergeOrAppend(event)
         }
-        flushTranscript()
+        Task { await self.flushTranscript() }
     }
 
     /// Run one ACP phase on the given `backend`: start a session, send the
@@ -3196,7 +3205,7 @@ public final class AgentLauncher {
                 }
                 if AgentEvent.endsGeneration(event) {
                     setGenerating(false)
-                    flushTranscript()
+                    await flushTranscript()
                     // One-shot runs do NOT release the generation gate per turn —
                     // the gate is held across all phases and released by finish().
                 }
@@ -3272,7 +3281,7 @@ public final class AgentLauncher {
             await capturePhaseUsage(backend: backend, session: session, providerLabel: provider.label)
             await backend.cancel(session)
             // #765: respect turn-ceiling failures from the fallback session.
-            finish(status: runHadTurnFailure ? -1 : 0)
+            await finish(status: runHadTurnFailure ? -1 : 0)
         } else {
             // #1354: both the planner phase AND the single-session fallback
             // failed to launch. Record the captured phase diagnostic (e.g.
@@ -3283,7 +3292,7 @@ public final class AgentLauncher {
             // success.
             preflightError = lastPhaseFailureMessage
                 ?? "The agent failed to launch. Check the run log for details."
-            finish(status: -1)
+            await finish(status: -1)
         }
     }
 
@@ -3721,15 +3730,15 @@ public final class AgentLauncher {
         preparedInteractiveOperation: AgentOperationPreparation? = nil,
         thinkingConfiguration: ResolvedThinkingConfiguration? = nil,
         onThinkingConfirmed: (@MainActor (ChatConfigurationValueID?) -> Void)? = nil,
-        onAcpSessionId: (@MainActor (AcpSessionID?) -> Void)? = nil,
+        onAcpSessionId: (@MainActor (AcpSessionID?) async -> Void)? = nil,
         onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)? = nil,
         onPendingPermission: (@Sendable (PendingPermission?) -> Void)? = nil,
-        onLock: @escaping @MainActor () -> Void,
-        onUnlock: @escaping @MainActor @Sendable () -> Void,
-        onTranscript: (@MainActor ([AgentEvent]) -> Void)? = nil,
-        onMessageSummary: (@MainActor (ChatID) -> Void)? = nil,
-        onStreamingCheckpoint: (@MainActor (ChatID, String, AgentEvent, Bool) -> Bool)? = nil
+        onLock: @escaping @MainActor () async -> Void,
+        onUnlock: @escaping @MainActor @Sendable () async -> Void,
+        onTranscript: (@MainActor ([AgentEvent]) async -> Void)? = nil,
+        onMessageSummary: (@MainActor (ChatID) async -> Void)? = nil,
+        onStreamingCheckpoint: (@MainActor (ChatID, String, AgentEvent, Bool) async -> Bool)? = nil
     ) async {
         // No gate acquisition here — the interactive session does NOT hold the gate
         // for its lifetime, only per-turn (via sendInteractiveMessage). Two sessions
@@ -3944,7 +3953,7 @@ public final class AgentLauncher {
         // SPAWN COMMIT: a query chat never ingests, so the agent-phase flag
         // is empty — clearing any stale value (mirrors `run`'s spawn-commit).
         self.ingestingSourceIDs = []
-        onLock()
+        await onLock()
         onUnlockHandler = onUnlock
         // Install the transcript sink alongside the per-turn callback (issue #119):
         // both are per-session callbacks assigned once resetRunArtifacts() has run
@@ -4096,7 +4105,7 @@ public final class AgentLauncher {
             // If we had a prior session ID but resume failed, clear it so
             // future continues don't keep retrying a dead session.
             if resumedSession == nil {
-                onAcpSessionId?(nil)
+                await onAcpSessionId?(nil)
                 DebugLog.agent("startInteractiveQuery: clearing stale ACP session ID (resume failed)")
             }
         }
@@ -4120,7 +4129,7 @@ public final class AgentLauncher {
                             // stopAgent → startInteractiveQuery) must not tear down
                             // the new session.
                             guard let self, self.currentRunToken == runToken else { return }
-                            self.finish(status: Int32(status))
+                            await self.finish(status: Int32(status))
                         }
                     })
                 // #830: Persist the ACP session ID for chat resume. Mirrors the
@@ -4131,7 +4140,7 @@ public final class AgentLauncher {
                 // re-seeding a preamble.
                 if let acpBackend = backend as? ACPBackend {
                     if let sessionId = await acpBackend.currentResumableSessionId() {
-                        onAcpSessionId?(AcpSessionID(rawValue: sessionId.value))
+                        await onAcpSessionId?(AcpSessionID(rawValue: sessionId.value))
                         DebugLog.agent("startInteractiveQuery: persisted ACP session ID \(sessionId.value) for chat \(chatID?.rawValue ?? "?")")
                     }
                 }
@@ -4235,7 +4244,7 @@ public final class AgentLauncher {
             runningKind = nil
             currentProcessID = nil
             lastActivityAt = Date()
-            releaseRunLifecycle()
+            await releaseRunLifecycle()
             // Clean up the pre-displayed user text (backend never started).
             firstMessagePreDisplayed = false
             // Cancel any queued send task (shouldn't exist yet, but guard for safety).
@@ -4338,12 +4347,12 @@ public final class AgentLauncher {
                     // (the turn is over). On failure the draft row stays
                     // is_draft=1 and is cleaned up by finalizeStaleDrafts on
                     // reopen (C8).
-                    self.checkpointStreamingRow(finalize: true)
+                    await self.checkpointStreamingRow(finalize: true)
                     self.streamingDraftHandle = nil
                     self.streamingRowIndex = nil
                     self.checkpointTimer?.cancel()
                     self.checkpointTimer = nil
-                    self.flushTranscript()
+                    await self.flushTranscript()
                     // Fire per-message summarization on the turn boundary — not
                     // just in finish(). Interactive chats stay alive across many
                     // turns without ever reaching finish(), so the sink must run
@@ -4355,7 +4364,7 @@ public final class AgentLauncher {
                     // model mode dispatches the actual LLM call off-main, so it
                     // doesn't block this turn. The finish()
                     // call remains as a safety net for the one-shot run() path.
-                    self.fireMessageSummarySink()
+                    await self.fireMessageSummarySink()
                     // Capture the per-turn usage delta and forward it to the
                     // menu bar tracker (if wired). Reads the backend's
                     // cumulative session snapshot and emits the delta vs the
@@ -4402,7 +4411,7 @@ public final class AgentLauncher {
     /// Stop ONLY the agent process. Does NOT touch a running pdf2md
     /// conversion — a standalone extract running alongside a query continues.
     /// Also cancels any in-flight send task (generation gate wait).
-    public func stopAgent() {
+    public func stopAgent() async {
         DebugLog.agent(
             "stopAgent() requested: isRunning=\(isRunning) "
             + "session=\(sessionHandle != nil) "
@@ -4425,7 +4434,7 @@ public final class AgentLauncher {
         // but this prevents the plannerSessionHandle from dangling after teardown.
         plannerSessionHandle = nil
         if isRunning {
-            finish(status: -1)  // -1 sentinel = user-cancelled / forced teardown
+            await finish(status: -1)  // -1 sentinel = user-cancelled / forced teardown
         }
     }
 
@@ -4437,7 +4446,7 @@ public final class AgentLauncher {
     /// expires and cooperative cancellation alone would leave the drain
     /// waiting on an unresponsive subprocess.
     public func stop() {
-        stopAgent()
+        Task { await stopAgent() }
     }
 
     /// End the interactive query session (if any) and clear the visible
@@ -4452,7 +4461,7 @@ public final class AgentLauncher {
         if isRunning {
             // stopAgent() is a safe no-op when idle (PR #198); here it terminates
             // the live query process and triggers finish() → final flush + sink clear.
-            stopAgent()
+            Task { await stopAgent() }
         }
         events = []
         eventTimestamps = []
@@ -4492,13 +4501,13 @@ public final class AgentLauncher {
     /// before `activeChatID = nil`. No-op when no sink/chatID is set. The sink
     /// owns the mode dispatch + the off-main Task for model mode; this method
     /// just hands it the chat id.
-    private func fireMessageSummarySink() {
+    private func fireMessageSummarySink() async {
         guard let chatID = activeChatID else {
             DebugLog.ingest("fireMessageSummarySink: no activeChatID, skipping")
             return
         }
         DebugLog.ingest("fireMessageSummarySink: activeChatID=\(chatID.rawValue)")
-        messageSummarySink?(chatID)
+        await messageSummarySink?(chatID)
     }
 
     /// Hand the not-yet-persisted tail of `events` to `transcriptSink`, if any, and
@@ -4506,7 +4515,7 @@ public final class AgentLauncher {
     /// (`WikiStoreModel.appendChatEvents` filters via `AgentEvent.isPersistable`) —
     /// the tail is passed whole. No-op when nothing new has arrived or no sink is
     /// installed.
-    private func flushTranscript() {
+    private func flushTranscript() async {
         guard persistedEventCount < events.count else { return }
         let tail = Self.unflushedTail(events: events, persistedCount: persistedEventCount)
         persistedEventCount = events.count
@@ -4536,7 +4545,7 @@ public final class AgentLauncher {
             kinds[k, default: 0] += 1
         }
         DebugLog.agent("flushTranscript: tail=\(tail.count) assistantChars=\(assistantChars) kinds=\(kinds)")
-        transcriptSink?(tail)
+        await transcriptSink?(tail)
     }
 
     // MARK: - In-flight checkpoint (#826)
@@ -4552,7 +4561,7 @@ public final class AgentLauncher {
             // swiftlint:disable:next silent_try_optional
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled, let self else { return }
-            self.checkpointStreamingRow(finalize: false)
+            await self.checkpointStreamingRow(finalize: false)
             if self.isGenerating { self.scheduleCheckpoint() }
         }
     }
@@ -4570,7 +4579,7 @@ public final class AgentLauncher {
     /// `events.count`) marks ONLY the streamed row as persisted. Any
     /// post-streaming events (tool calls, results) remain in the `flushTranscript`
     /// tail and append normally at turn end.
-    private func checkpointStreamingRow(finalize: Bool) {
+    private func checkpointStreamingRow(finalize: Bool) async {
         guard let chatID = activeChatID,
               let sink = streamingCheckpointSink,
               let handle = streamingDraftHandle,
@@ -4579,7 +4588,7 @@ public final class AgentLauncher {
               case .assistantText = events[idx],
               streamingRowDirty || finalize else { return }
         let isDraft = !finalize
-        let ok = sink(chatID, handle, events[idx], isDraft)
+        let ok = await sink(chatID, handle, events[idx], isDraft)
         if ok {
             streamingRowDirty = false
             persistedEventCount = max(persistedEventCount, idx + 1)
@@ -4638,7 +4647,7 @@ public final class AgentLauncher {
                 // new one. The old row may not be `events.last` (a tool-use can
                 // land between blocks), so we rely on `streamingRowIndex`.
                 if streamingDraftHandle != nil {
-                    checkpointStreamingRow(finalize: true)
+                    Task { await self.checkpointStreamingRow(finalize: true) }
                 }
                 events.append(.assistantText(delta))
                 eventTimestamps.append(now)
@@ -4746,7 +4755,7 @@ public final class AgentLauncher {
     /// race to call it. The backend drains any trailing partial line before the
     /// stream finishes, so no line-buffer drain is needed here (the old
     /// `stdoutLineBuffer` drain moved to the backend's terminationHandler).
-    private func finish(status: Int32) {
+    private func finish(status: Int32) async {
         guard isRunning else {
             DebugLog.agent("finish: ignored (already torn down) status=\(status)")
             return
@@ -4763,21 +4772,21 @@ public final class AgentLauncher {
         // flushTranscript so the final streamed text survives even when the
         // session ends without a clean `.messageStop` (process died, killed by
         // watchdog). Always clear the handle/index + cancel the timer.
-        checkpointStreamingRow(finalize: true)
+        await checkpointStreamingRow(finalize: true)
         streamingDraftHandle = nil
         streamingRowIndex = nil
         checkpointTimer?.cancel()
         checkpointTimer = nil
         // Session over: flush any remaining tail (a killed/died session still
         // persists its last events) THEN detach the sink — no further writes.
-        flushTranscript()
+        await flushTranscript()
         // Fire the per-message summary sink (chat-summary plan §6.1). Runs
         // AFTER flushTranscript() so the turn's messages are committed (the
         // sink queries `chatMessages(chatID:)` for unsummarized rows), and
         // BEFORE activeChatID = nil so the chat ID is still available. The sink
         // dispatches per the configured mode: default-truncation runs inline;
         // model mode spawns an off-main Task (the sink closure owns that hop).
-        fireMessageSummarySink()
+        await fireMessageSummarySink()
         transcriptSink = nil
         messageSummarySink = nil
         streamingCheckpointSink = nil
@@ -4863,7 +4872,7 @@ public final class AgentLauncher {
         // Release the agent-run lifecycle (decrement `store.agentRunCount`)
         // from here — NOT from the `onExit` callback — so EVERY completion
         // path decrements it.
-        releaseRunLifecycle()
+        await releaseRunLifecycle()
         // Release the generation gate if still held. For one-shot runs this is the
         // primary release path (they hold the gate through finish). For interactive
         // sessions this covers the edge case where the process died MID-TURN (the
@@ -4889,8 +4898,8 @@ public final class AgentLauncher {
     /// Release the agent-run lifecycle closure exactly once. Idempotent: clearing the stored
     /// handler makes repeated calls (from `finish()`, a spawn-failure teardown, or
     /// the watchdog) a no-op.
-    private func releaseRunLifecycle() {
-        onUnlockHandler?()
+    private func releaseRunLifecycle() async {
+        await onUnlockHandler?()
         onUnlockHandler = nil
     }
 

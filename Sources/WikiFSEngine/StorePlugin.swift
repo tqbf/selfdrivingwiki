@@ -73,29 +73,76 @@ public enum StorePlugin {
 
     public static let definition = makeDefinition()
 
-    /// The open-seam harness variant: mounts the plugin with injected
-    /// storage-open factories. Composition identity (id, provisions, config)
-    /// is unchanged, so catalogs built with it behave like the production one.
-    public static func definition(openFactories: StoreOpenFactories) -> PluginDefinition {
-        makeDefinition(openFactories: openFactories)
+    /// The open-seam harness / injected-store variant: mounts the plugin
+    /// with a resolved store-access mode and injected storage-open
+    /// factories. Composition identity (id, provisions, config) is
+    /// unchanged, so catalogs built with it behave like the production one.
+    ///
+    /// - Parameters:
+    ///   - mode: the resolved store-access mode (plans/daemon-only-access.md).
+    ///     `.remote` provisions the store through the injected factory (the
+    ///     app's daemon-backed client) and NEVER opens a local database;
+    ///     `.local` is the daemon/CLI/test composition (they own the file).
+    ///   - openFactories: injected open factory. `nil` keeps the production
+    ///     constructor (`.local` only — see the gate below).
+    public static func definition(
+        mode: StoreAccessMode = .local,
+        openFactories: StoreOpenFactories = .production
+    ) -> PluginDefinition {
+        makeDefinition(mode: mode, openFactories: openFactories)
     }
 
-    /// Injected storage-open factories for the open-seam harness
-    /// (plans/daemon-only-access.md Phase 0). `nil` legs keep the production
-    /// constructors (the `StoreBackend` factory and the read-only pool's
-    /// read-only connection constructor). Recording
-    /// legs let `ClientLocalOpenBoundaryTests` count client-side opens; the
-    /// daemon and CLI compositions never inject them.
+    /// Per-wiki identity + location handed to an injected `makeStore`
+    /// factory. The remote factory ignores `databaseURL` (the daemon owns
+    /// the file) and needs `wikiID` to scope its wire operations; the local
+    /// recording factories use the URL as the attribution label.
+    public struct StoreOpenContext: Sendable {
+        public let databaseURL: URL
+        public let wikiID: String
+
+        public init(databaseURL: URL, wikiID: String) {
+            self.databaseURL = databaseURL
+            self.wikiID = wikiID
+        }
+    }
+
+    /// Injected storage-open factories for the open-seam harness and the
+    /// app's remote-store injection (plans/daemon-only-access.md Phase 0
+    /// harness, Phase 3 cutover). `nil` legs keep the production
+    /// constructor (the `StoreBackend` factory) — available in `.local`
+    /// mode only. Recording legs let `ClientLocalOpenBoundaryTests` count
+    /// client-side opens; the daemon and CLI compositions never inject
+    /// them. (P5: the read-only-pool leg is REMOVED — the pool no longer
+    /// exists in app composition; the read-pool freedom-guard row is `none`.)
     public struct StoreOpenFactories: Sendable {
-        public let makeStore: (@Sendable (URL) throws -> any WikiStore)?
-        public let makeReadOnlyStore: WikiReadService.ReadOnlyStoreFactory?
+        public let makeStore: (@Sendable (StoreOpenContext) throws -> any WikiStore)?
 
         public init(
-            makeStore: (@Sendable (URL) throws -> any WikiStore)? = nil,
-            makeReadOnlyStore: WikiReadService.ReadOnlyStoreFactory? = nil
+            makeStore: (@Sendable (StoreOpenContext) throws -> any WikiStore)? = nil
         ) {
             self.makeStore = makeStore
-            self.makeReadOnlyStore = makeReadOnlyStore
+        }
+
+        /// The app-layer remote injection (plans/daemon-only-access.md
+        /// Placement — the `makeDaemonTransport` pattern): one factory
+        /// producing the daemon-backed store per booted wiki session. The
+        /// wiki id arrives through the per-wiki context; the context's
+        /// database URL is ignored (the daemon owns that file).
+        public static func remoteStore(
+            _ store: @escaping @Sendable (StoreOpenContext) -> any WikiStore
+        ) -> StoreOpenFactories {
+            StoreOpenFactories(makeStore: store)
+        }
+
+        /// Whether the injected factories satisfy `mode`'s provisioning
+        /// contract. `.remote` REQUIRES a store factory: the catalog
+        /// build consults this and fails explicitly rather than letting a
+        /// session boot fall back to a local store.
+        public func satisfies(_ mode: StoreAccessMode) -> Bool {
+            switch mode {
+            case .remote: return makeStore != nil
+            case .local: return true
+            }
         }
 
         public static let production = StoreOpenFactories()
@@ -103,6 +150,7 @@ public enum StorePlugin {
 
     static func makeDefinition(
         beforeForward: @escaping StoreEventForwarder.BeforeEmit = { _ in },
+        mode: StoreAccessMode = .local,
         openFactories: StoreOpenFactories = .production
     ) -> PluginDefinition {
         PluginDefinition(
@@ -110,7 +158,6 @@ public enum StorePlugin {
         label: "Wiki store",
         provisions: [
             ServiceDependency(StoreServiceKeys.store),
-            ServiceDependency(StoreServiceKeys.readService),
         ],
         config: StoreConfig.self
     ) { config in
@@ -118,24 +165,47 @@ public enum StorePlugin {
             label: "wiki.store",
             provisions: [
                 ServiceDependency(StoreServiceKeys.store),
-                ServiceDependency(StoreServiceKeys.readService),
             ]
         ) { activation in
             let databaseURL = URL(fileURLWithPath: config.databasePath, isDirectory: false)
+            // The mode gate (plans/daemon-only-access.md Placement + the P3
+            // column): the injected factory decides WHAT is constructed;
+            // the resolved mode decides whether a LOCAL open may happen at
+            // all.
+            //
+            // - factory present + `.remote`: the factory provisions the
+            //   daemon-backed store (the app's RemoteWikiStore). No local
+            //   GRDBWikiStore is opened — the daemon owns the file. This is
+            //   the shipping composition.
+            // - factory present + `.local`: the recording/harness factory
+            //   opens (and records) the local store — the open-seam
+            //   harness's P0/P2 behavior, unchanged.
+            // - factory absent + `.local`: the production local open,
+            //   unchanged (daemon, CLI, and the DEBUG app override).
+            // - factory absent + `.remote`: FAIL EXPLICITLY. Falling back
+            //   to a local open here would silently revive a second writer.
             let store: any WikiStore
             if let makeStore = openFactories.makeStore {
-                store = try makeStore(databaseURL)
-            } else {
+                store = try makeStore(StoreOpenContext(
+                    databaseURL: databaseURL,
+                    wikiID: config.wikiID))
+            } else if mode == .local {
                 store = try StoreBackend.current.makeStore(databaseURL: databaseURL)
+            } else {
+                throw StoreModeError.remoteModeRefusesLocalStoreOpen(
+                    wikiID: config.wikiID)
             }
             // Headless daemon profile: project renderer source-type claims
             // from the authoritative machine index (WebKit-free, best-effort).
             store.registeredRendererSourceTypes = await RendererCatalogResolution.productionSourceTypes()
             let bus = WikiEventBus(wikiID: WikiID(rawValue: config.wikiID))
             store.eventBus = bus
-            let readService = WikiReadService(
-                databaseURL: databaseURL,
-                makeReadOnlyStore: openFactories.makeReadOnlyStore)
+            // P5: no read-only pool. The read-pool freedom-guard row is
+            // `none` — the semantic-search leg moved to the daemon (its
+            // executor resolves the BM25 leg and its store computes the
+            // cosine leg), and the queue UI's closed-wiki names read through
+            // the daemon store family. Nothing in app composition reads a
+            // wiki database file directly anymore.
             let forwarder = StoreEventForwarder(
                 activation: activation,
                 beforeEmit: beforeForward)
@@ -144,10 +214,8 @@ public enum StorePlugin {
             }
             _ = try await activation.effect { _ in
                 await forwarder.shutdown { bus.unsubscribe(token) }
-                await readService.shutdown()
             }
             _ = try await activation.supply(StoreServiceKeys.store, value: store)
-            _ = try await activation.supply(StoreServiceKeys.readService, value: readService)
         }
     }
     }

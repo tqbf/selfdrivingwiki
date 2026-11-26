@@ -37,7 +37,7 @@ struct GhostLinkResolutionTests {
 
     // MARK: - selection(for:store:)
 
-    @Test func ghostSourceLinkResolvesOnceTheSourceExists() throws {
+    @Test func ghostSourceLinkResolvesOnceTheSourceExists() async throws {
         let (model, store) = try makeModel()
         let summary = try store.addSource(
             filename: "The higher order approach",
@@ -48,7 +48,7 @@ struct GhostLinkResolutionTests {
         #expect(selection == .source(summary.id))
     }
 
-    @Test func ghostPageLinkResolvesOnceThePageExists() throws {
+    @Test func ghostPageLinkResolvesOnceThePageExists() async throws {
         let (model, store) = try makeModel()
         let page = try store.createPage(title: "Signal Detection Theory")
 
@@ -57,14 +57,14 @@ struct GhostLinkResolutionTests {
         #expect(selection == .page(page.id))
     }
 
-    @Test func deadGhostStaysUnresolved() throws {
+    @Test func deadGhostStaysUnresolved() async throws {
         let (model, _) = try makeModel()
         let selection = WikiLinkMenuNSItems.selection(
             for: ghostURL("No Such Target Anywhere"), store: model)
         #expect(selection == nil)
     }
 
-    @Test func nonWikiURLsNeverTakeTheGhostPath() throws {
+    @Test func nonWikiURLsNeverTakeTheGhostPath() async throws {
         let (model, store) = try makeModel()
         _ = try store.addSource(filename: "A Paper", data: Data("x".utf8))
         // An external http(s) link (and anything else non-wiki) must not be
@@ -77,7 +77,7 @@ struct GhostLinkResolutionTests {
 
     // MARK: - The invalidation chain the heal pass depends on
 
-    @Test func renderContextGenerationAdvancesAfterExternalWrite() throws {
+    @Test func renderContextGenerationAdvancesAfterExternalWrite() async throws {
         let (model, store) = try makeModel()
         let before = model.renderContext().generation
 
@@ -86,7 +86,7 @@ struct GhostLinkResolutionTests {
         // reload path (what the Darwin-notification bridge triggers).
         _ = try store.addSource(
             filename: "External Import", data: Data("x".utf8))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let after = model.renderContext().generation
         #expect(after != before)

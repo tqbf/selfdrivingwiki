@@ -53,24 +53,37 @@ struct SemanticSearchSwiftCosineTests {
 
     // MARK: - Setup / teardown
 
-    private func installStub() {
+    /// Claim the cross-suite embedder seam, install the stub, and hand back
+    /// the claim token. Every embedder-using test in this suite awaits this
+    /// FIRST — `EmbeddingService` is a process global, so parallel suites
+    /// (`DaemonFusedSearchTests` etc.) would otherwise swap the embedder
+    /// mid-run. Pair with ``resetEmbedder(_:)`` in the test's `defer`.
+    @discardableResult
+    private func installStub() async -> EmbedderSeamGate.Token {
+        let seam = await EmbedderSeamGate.shared.acquire()
         EmbeddingService.installTestEmbedder(StubEmbedder())
+        return seam
     }
 
-    private func resetEmbedder() {
+    /// Reset the process-global embedder, then hand the seam to the next
+    /// claimant. The reset runs FIRST, while this test still holds the claim;
+    /// the release is an ownership-checked actor hop, so a delayed release
+    /// task cannot free a baton a later claimant holds.
+    private func resetEmbedder(_ seam: EmbedderSeamGate.Token) {
         EmbeddingService.resetTestEmbedder()
+        Task { await EmbedderSeamGate.shared.release(seam) }
     }
 
     // MARK: - Pages: searchSimilar
 
-    @Test func searchSimilarPagesReturnsClosestMatchFirst() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarPagesReturnsClosestMatchFirst() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
-        let pageAlpha = try store.createPage(title: "Alpha Page")
+        let pageAlpha = try await store.createPage(title: "Alpha Page")
         try store.storePageChunks(id: pageAlpha.id, chunks: [blob([1.0, 0.0])])
-        let pageBeta = try store.createPage(title: "Beta Page")
+        let pageBeta = try await store.createPage(title: "Beta Page")
         try store.storePageChunks(id: pageBeta.id, chunks: [blob([0.0, 1.0])])
 
         let hits = try store.searchSimilar(query: "alpha", limit: 10, bm25Leg: nil)
@@ -78,48 +91,48 @@ struct SemanticSearchSwiftCosineTests {
         #expect(hits.first?.id == pageAlpha.id)
     }
 
-    @Test func searchSimilarPagesBestChunkPerDoc() throws {
+    @Test func searchSimilarPagesBestChunkPerDoc() async throws {
         // Doc "A" has two chunks: a near-miss (sim=0.7071) and an exact match
         // (sim=1.0). The exact chunk must win — best-chunk-per-doc.
-        installStub()
-        defer { resetEmbedder() }
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
-        let pageA = try store.createPage(title: "A")
+        let pageA = try await store.createPage(title: "A")
         try store.storePageChunks(id: pageA.id, chunks: [
             blob([0.7071, 0.7071]),   // sim with [1,0] ≈ 0.7071
             blob([1.0, 0.0]),          // sim = 1.0 (exact)
         ])
-        let pageB = try store.createPage(title: "B")
+        let pageB = try await store.createPage(title: "B")
         try store.storePageChunks(id: pageB.id, chunks: [blob([0.0, 1.0])])
 
         let hits = try store.searchSimilar(query: "alpha", limit: 10, bm25Leg: nil)
         #expect(hits.first?.id == pageA.id)
     }
 
-    @Test func searchSimilarPagesRespectsLimit() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarPagesRespectsLimit() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
         for i in 0..<5 {
-            let p = try store.createPage(title: "Page \(i)")
+            let p = try await store.createPage(title: "Page \(i)")
             try store.storePageChunks(id: p.id, chunks: [blob([1.0, 0.0])])
         }
         let hits = try store.searchSimilar(query: "alpha", limit: 2, bm25Leg: nil)
         #expect(hits.count == 2)
     }
 
-    @Test func searchSimilarPagesFusesWithBM25Leg() throws {
+    @Test func searchSimilarPagesFusesWithBM25Leg() async throws {
         // RRF fuses the semantic leg with a fabricated BM25 leg. A doc that
         // appears in both legs should rank higher than one in only one leg.
-        installStub()
-        defer { resetEmbedder() }
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
-        let pageA = try store.createPage(title: "Alpha")
+        let pageA = try await store.createPage(title: "Alpha")
         try store.storePageChunks(id: pageA.id, chunks: [blob([1.0, 0.0])])
-        let pageB = try store.createPage(title: "Beta")
+        let pageB = try await store.createPage(title: "Beta")
         try store.storePageChunks(id: pageB.id, chunks: [blob([0.0, 1.0])])
 
         // pageB appears in BOTH legs (cosine + fabricated BM25), so it should
@@ -135,12 +148,12 @@ struct SemanticSearchSwiftCosineTests {
         #expect(hits.first?.id == pageB.id)
     }
 
-    @Test func searchSimilarPagesNoChunksReturnsBM25Only() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarPagesNoChunksReturnsBM25Only() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
-        let page = try store.createPage(title: "Empty")
+        let page = try await store.createPage(title: "Empty")
         // No chunks seeded → cosine leg is empty → output equals BM25 leg.
         let bm25Leg = [WikiPageSummary(
             id: page.id, title: page.title,
@@ -150,21 +163,27 @@ struct SemanticSearchSwiftCosineTests {
         #expect(hits.first?.id == page.id)
     }
 
-    @Test func searchSimilarPagesEmptyWhenNoChunksAndNoBM25() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarPagesEmptyWhenNoChunksAndNoBM25() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
-        _ = try store.createPage(title: "Page")
+        _ = try await store.createPage(title: "Page")
         let hits = try store.searchSimilar(query: "alpha", limit: 10, bm25Leg: nil)
         #expect(hits.isEmpty)
     }
 
-    @Test func searchSimilarPagesEmptyWhenEmbedderNotLoaded() throws {
-        // Do NOT install the stub — embedder stays nil → cosine leg gated off.
-        // No BM25 leg → empty result.
+    @Test func searchSimilarPagesEmptyWhenEmbedderNotLoaded() async throws {
+        // No stub installed — the embedder stays nil → cosine leg gated off.
+        // CLAIM the seam for the whole test anyway: this test depends on the
+        // slot being nil, and a parallel suite installing its own embedder
+        // mid-test would flip the outcome. The reset at claim time makes the
+        // nil state explicit while this test holds the claim.
+        let seam = await EmbedderSeamGate.shared.acquire()
+        EmbeddingService.resetTestEmbedder()
+        defer { Task { await EmbedderSeamGate.shared.release(seam) } }
         let store = try TestStoreFactory.inMemory()
-        let page = try store.createPage(title: "Alpha")
+        let page = try await store.createPage(title: "Alpha")
         try store.storePageChunks(id: page.id, chunks: [blob([1.0, 0.0])])
         let hits = try store.searchSimilar(query: "alpha", limit: 10, bm25Leg: nil)
         #expect(hits.isEmpty)
@@ -172,9 +191,9 @@ struct SemanticSearchSwiftCosineTests {
 
     // MARK: - Sources: searchSimilarSources
 
-    @Test func searchSimilarSourcesReturnsClosestMatchFirst() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarSourcesReturnsClosestMatchFirst() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
         let srcAlpha = try store.addSource(filename: "alpha.pdf", data: Data("%PDF alpha".utf8))
@@ -187,9 +206,9 @@ struct SemanticSearchSwiftCosineTests {
         #expect(hits.first?.id == srcAlpha.id)
     }
 
-    @Test func searchSimilarSourcesBestChunkPerDoc() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarSourcesBestChunkPerDoc() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
         let srcA = try store.addSource(filename: "a.pdf", data: Data("%PDF aaa".utf8))
@@ -204,9 +223,9 @@ struct SemanticSearchSwiftCosineTests {
         #expect(hits.first?.id == srcA.id)
     }
 
-    @Test func searchSimilarSourcesEmptyWhenNoChunksAndNoBM25() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarSourcesEmptyWhenNoChunksAndNoBM25() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
         _ = try store.addSource(filename: "x.pdf", data: Data("%PDF".utf8))
@@ -216,9 +235,9 @@ struct SemanticSearchSwiftCosineTests {
 
     // MARK: - Chats: searchSimilarChats
 
-    @Test func searchSimilarChatsReturnsClosestMatchFirst() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarChatsReturnsClosestMatchFirst() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
         let chatA = try store.createChat(kind: .edit, title: "Chat Alpha")
@@ -231,9 +250,9 @@ struct SemanticSearchSwiftCosineTests {
         #expect(hits.first?.id == chatA.id)
     }
 
-    @Test func searchSimilarChatsBestChunkPerDoc() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarChatsBestChunkPerDoc() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
         let chatA = try store.createChat(kind: .edit, title: "A")
@@ -248,9 +267,9 @@ struct SemanticSearchSwiftCosineTests {
         #expect(hits.first?.id == chatA.id)
     }
 
-    @Test func searchSimilarChatsEmptyWhenNoChunksAndNoBM25() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarChatsEmptyWhenNoChunksAndNoBM25() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
         _ = try store.createChat(kind: .edit, title: "Chat")
@@ -258,9 +277,9 @@ struct SemanticSearchSwiftCosineTests {
         #expect(hits.isEmpty)
     }
 
-    @Test func searchSimilarChatsFusesWithBM25Leg() throws {
-        installStub()
-        defer { resetEmbedder() }
+    @Test func searchSimilarChatsFusesWithBM25Leg() async throws {
+        let seam = await installStub()
+        defer { resetEmbedder(seam) }
 
         let store = try TestStoreFactory.inMemory()
         let chatA = try store.createChat(kind: .edit, title: "Alpha")

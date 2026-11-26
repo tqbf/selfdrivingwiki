@@ -150,24 +150,28 @@ struct ChatAttachmentPersistenceTests {
     // MARK: - Rename keeps target identity (AC.10, identity half)
 
     @Test("renames do not disturb the persisted target identities")
-    func renamesKeepTargetIdentity() throws {
+    func renamesKeepTargetIdentity() async throws {
         let store = try makeStore()
         store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
-        let page = try store.createPage(title: "Before")
+        let page = try await store.createPage(title: "Before")
         let source = try store.addSource(filename: "before.pdf", data: Data("b".utf8))
         let chat = try store.createChat(kind: .edit, title: "Chat Before")
+        // P1-FLIP-REVIEW: reloadFromStore() now only enqueues a coalesced async
+        // reload; bootstrapFromStore() awaits the same drain so the attachment
+        // projections below are populated.
+        await model.bootstrapFromStore()
         let targets: [ChatAttachmentTarget] = [
             .page(page.id), .source(source.id), .chat(chat.id),
         ]
         try store.setChatAttachments(chatID: chat.id, targets: targets)
 
         // Rename all three through the model (cache-refreshing paths).
-        model.reloadFromStore()
-        model.rename(page.id, to: "After")
-        model.renameSource(id: source.id, to: "after.pdf")
-        model.renameChat(id: chat.id, to: "Chat After")
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
+        await model.rename(page.id, to: "After")
+        await model.renameSource(id: source.id, to: "after.pdf")
+        await model.renameChat(id: chat.id, to: "Chat After")
+        await model.bootstrapFromStore()
 
         // The persisted identities are unchanged.
         #expect(try store.chatAttachments(chatID: chat.id) == targets)

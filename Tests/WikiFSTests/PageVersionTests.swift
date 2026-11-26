@@ -18,52 +18,52 @@ struct PageVersionTests {
 
     // MARK: - CAS conflict detection
 
-    @Test func casConflictWhenHeadMoved() throws {
+    @Test func casConflictWhenHeadMoved() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Test Page")
+        let page = try await store.createPage(title: "Test Page")
         // First versioned save (blind — no CAS expectation, backward-compatible).
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Test Page", body: "v1 body",
             expectedHeadVersionID: nil)
         let head = try store.pageHeadVersionID(pageID: page.id)
         #expect(head != nil)
 
         // Simulate a concurrent write: another writer commits a new version.
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Test Page", body: "v2 body (concurrent)",
             expectedHeadVersionID: head)  // passes CAS — head matches
 
         // Now the original editor tries to save with the STALE head → conflict.
-        #expect(throws: PageConflictError.self) {
-            _ = try store.appendPageVersion(
+        await #expect(throws: PageConflictError.self) {
+            _ = try await store.appendPageVersion(
                 pageID: page.id, title: "Test Page", body: "v2 body (original editor)",
                 expectedHeadVersionID: head)  // stale — head moved to v2
         }
     }
 
-    @Test func casPassesWhenHeadUnchanged() throws {
+    @Test func casPassesWhenHeadUnchanged() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Stable Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Stable Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Stable Page", body: "v1",
             expectedHeadVersionID: nil)
         let head = try store.pageHeadVersionID(pageID: page.id)
 
         // Second save with the correct head → succeeds.
-        let v2 = try store.appendPageVersion(
+        let v2 = try await store.appendPageVersion(
             pageID: page.id, title: "Stable Page", body: "v2",
             expectedHeadVersionID: head)
         #expect(v2 != head)
     }
 
-    @Test func blindWriteWhenExpectedHeadIsNil() throws {
+    @Test func blindWriteWhenExpectedHeadIsNil() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Blind Page")
+        let page = try await store.createPage(title: "Blind Page")
         // nil = no CAS check, backward-compatible.
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Blind Page", body: "v1",
             expectedHeadVersionID: nil)
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Blind Page", body: "v2",
             expectedHeadVersionID: nil)
         let history = try store.pageVersionHistory(pageID: page.id)
@@ -73,11 +73,11 @@ struct PageVersionTests {
 
     // MARK: - Version chain ordering
 
-    @Test func historyIsOrderedByULID() throws {
+    @Test func historyIsOrderedByULID() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Chain Page")
+        let page = try await store.createPage(title: "Chain Page")
         for i in 0..<5 {
-            _ = try store.appendPageVersion(
+            _ = try await store.appendPageVersion(
                 pageID: page.id, title: "Chain Page", body: "v\(i)",
                 expectedHeadVersionID: nil)
         }
@@ -90,14 +90,14 @@ struct PageVersionTests {
         }
     }
 
-    @Test func parentIDLinksChain() throws {
+    @Test func parentIDLinksChain() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Parent Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Parent Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Parent Page", body: "v1",
             expectedHeadVersionID: nil)
         let v1Head = try store.pageHeadVersionID(pageID: page.id)
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Parent Page", body: "v2",
             expectedHeadVersionID: v1Head)
         let history = try store.pageVersionHistory(pageID: page.id)
@@ -108,14 +108,14 @@ struct PageVersionTests {
 
     // MARK: - Revert
 
-    @Test func revertRestoresBodyFromVersion() throws {
+    @Test func revertRestoresBodyFromVersion() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Revert Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Revert Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Revert Page", body: "original body",
             expectedHeadVersionID: nil)
         let v1Head = try store.pageHeadVersionID(pageID: page.id)
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Revert Page", body: "modified body",
             expectedHeadVersionID: v1Head)
 
@@ -125,14 +125,14 @@ struct PageVersionTests {
         #expect(page2.bodyMarkdown == "original body")
     }
 
-    @Test func revertRepointsActiveVersion() throws {
+    @Test func revertRepointsActiveVersion() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Revert Head Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Revert Head Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Revert Head Page", body: "v1",
             expectedHeadVersionID: nil)
         let v1 = try store.pageHeadVersionID(pageID: page.id)!
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Revert Head Page", body: "v2",
             expectedHeadVersionID: v1)
 
@@ -148,12 +148,12 @@ struct PageVersionTests {
 
     // MARK: - Default-active rule
 
-    @Test func defaultActiveIsMaxID() throws {
+    @Test func defaultActiveIsMaxID() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Default Page")
+        let page = try await store.createPage(title: "Default Page")
         // Phase 3: createPage seeds a root version + ref atomically.
         // The first versioned save writes a new version + updates the ref.
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Default Page", body: "v1",
             expectedHeadVersionID: nil)
         // Head should be the last version (the ref points at it).
@@ -164,10 +164,10 @@ struct PageVersionTests {
 
     // MARK: - Body mirror + FTS
 
-    @Test func bodyMirrorUpdatedAfterVersionedSave() throws {
+    @Test func bodyMirrorUpdatedAfterVersionedSave() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Mirror Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Mirror Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Mirror Page", body: "versioned body",
             expectedHeadVersionID: nil)
         let readBack = try store.getPage(id: page.id)
@@ -176,9 +176,9 @@ struct PageVersionTests {
 
     // MARK: - Phase 3: head-ref invariant (AC3)
 
-    @Test func createPageSeedsRootVersionAndRef() throws {
+    @Test func createPageSeedsRootVersionAndRef() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Ref Page")
+        let page = try await store.createPage(title: "Ref Page")
 
         // createPage should seed a root version + page-content ref.
         let head = try store.pageHeadVersionID(pageID: page.id)
@@ -191,15 +191,15 @@ struct PageVersionTests {
         #expect(head == history[0].id, "ref points at the root version")
     }
 
-    @Test func v34BackfillEveryPageHasRef() throws {
+    @Test func v34BackfillEveryPageHasRef() async throws {
         let store = try tempStore()
         // Create pages and append versions (which write refs).
-        let page1 = try store.createPage(title: "Page One")
-        _ = try store.appendPageVersion(
+        let page1 = try await store.createPage(title: "Page One")
+        _ = try await store.appendPageVersion(
             pageID: page1.id, title: "Page One", body: "body 1",
             expectedHeadVersionID: nil)
-        let page2 = try store.createPage(title: "Page Two")
-        _ = try store.appendPageVersion(
+        let page2 = try await store.createPage(title: "Page Two")
+        _ = try await store.appendPageVersion(
             pageID: page2.id, title: "Page Two", body: "body 2",
             expectedHeadVersionID: nil)
 
@@ -210,15 +210,15 @@ struct PageVersionTests {
         }
     }
 
-    @Test func v34Idempotent() throws {
+    @Test func v34Idempotent() async throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("v34-idem-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let dbURL = dir.appendingPathComponent("WikiFS.sqlite")
 
         let store1 = try GRDBWikiStore(databaseURL: dbURL)
-        let page = try store1.createPage(title: "Idempotent Page")
-        _ = try store1.appendPageVersion(
+        let page = try await store1.createPage(title: "Idempotent Page")
+        _ = try await store1.appendPageVersion(
             pageID: page.id, title: "Idempotent Page", body: "body",
             expectedHeadVersionID: nil)
         let headBefore = try store1.pageHeadVersionID(pageID: page.id)
@@ -235,17 +235,17 @@ struct PageVersionTests {
 
     // MARK: - Phase 4: amend + GC (AC4)
 
-    @Test func sameActorSavesCoalesceIntoOneVersion() throws {
+    @Test func sameActorSavesCoalesceIntoOneVersion() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Amend Page")
+        let page = try await store.createPage(title: "Amend Page")
 
         // First versioned save (with actor identity).
-        let v1 = try store.appendPageVersion(
+        let v1 = try await store.appendPageVersion(
             pageID: page.id, title: "Amend Page", body: "initial body",
             expectedHeadVersionID: nil, lastEditedBy: "agent-A")
 
         // Second save by the SAME actor, immediately (within the 5s window).
-        let v2 = try store.appendPageVersion(
+        let v2 = try await store.appendPageVersion(
             pageID: page.id, title: "Amend Page", body: "amended body",
             expectedHeadVersionID: v1, lastEditedBy: "agent-A")
 
@@ -265,24 +265,24 @@ struct PageVersionTests {
         #expect(head == v1)
     }
 
-    @Test func guardedHeadNotAmended() throws {
+    @Test func guardedHeadNotAmended() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Guarded Page")
+        let page = try await store.createPage(title: "Guarded Page")
 
         // v1 — first save by agent-A (amend fails: root's actor is nil → append)
-        let v1 = try store.appendPageVersion(
+        let v1 = try await store.appendPageVersion(
             pageID: page.id, title: "Guarded Page", body: "v1 body",
             expectedHeadVersionID: nil, lastEditedBy: "agent-A")
 
         // v2 — save by agent-B (amend fails: different actor → append)
         // This makes v1 have a child (v2).
-        let v2 = try store.appendPageVersion(
+        let v2 = try await store.appendPageVersion(
             pageID: page.id, title: "Guarded Page", body: "v2 body",
             expectedHeadVersionID: v1, lastEditedBy: "agent-B")
 
         // v3 — save by agent-A (amend fails: different actor → append)
         // This makes v2 have a child (v3).
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Guarded Page", body: "v3 body",
             expectedHeadVersionID: v2, lastEditedBy: "agent-A")
 
@@ -291,7 +291,7 @@ struct PageVersionTests {
 
         // Now save by agent-A — same actor as pages.last_edited_by (still
         // "agent-A" from v3's append). BUT v2 has a child → amend guard fails → append.
-        let v4 = try store.appendPageVersion(
+        let v4 = try await store.appendPageVersion(
             pageID: page.id, title: "Guarded Page", body: "v4 body",
             expectedHeadVersionID: v2, lastEditedBy: "agent-A")
 
@@ -299,39 +299,39 @@ struct PageVersionTests {
 
         // Also test the workspace_refs guard: if a workspace references the head,
         // the save should append.
-        let page2 = try store.createPage(title: "Workspace Guarded Page")
+        let page2 = try await store.createPage(title: "Workspace Guarded Page")
         // wv1 — first save by agent-B (amend fails: root's actor is nil → append)
-        let wv1 = try store.appendPageVersion(
+        let wv1 = try await store.appendPageVersion(
             pageID: page2.id, title: "Workspace Guarded Page", body: "ws v1",
             expectedHeadVersionID: nil, lastEditedBy: "agent-B")
 
         // Create a workspace and stage a write to page2 (this creates a
         // workspace_refs row referencing wv1 as base_version_id).
         let wsID = try store.createWorkspace(name: "test-ws", activityID: nil)
-        _ = try store.workspaceWritePage(
+        _ = try await store.workspaceWritePage(
             workspaceID: wsID, pageID: page2.id,
             title: "Workspace Guarded Page", body: "ws staged")
 
         // Save again by agent-B — same actor, within window, no children,
         // BUT a workspace_refs row references wv1 → amend guard fails → append.
-        let wv2 = try store.appendPageVersion(
+        let wv2 = try await store.appendPageVersion(
             pageID: page2.id, title: "Workspace Guarded Page", body: "ws v2",
             expectedHeadVersionID: wv1, lastEditedBy: "agent-B")
 
         #expect(wv2 != wv1, "head referenced by workspace_refs should NOT be amended")
     }
 
-    @Test func vacuumPageVersionsDeletesOnlyUnreachable() throws {
+    @Test func vacuumPageVersionsDeletesOnlyUnreachable() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Vacuum Page")
+        let page = try await store.createPage(title: "Vacuum Page")
 
         // Root version (from createPage) + 2 appends (different actors to
         // prevent amend coalescing, ensuring distinct version rows).
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Vacuum Page", body: "v1",
             expectedHeadVersionID: nil, lastEditedBy: "agent-A")
         let head = try store.pageHeadVersionID(pageID: page.id)!
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Vacuum Page", body: "v2",
             expectedHeadVersionID: head, lastEditedBy: "agent-B")
 
@@ -354,10 +354,10 @@ struct PageVersionTests {
 
     @Test func amendAfterWindowExpiresAppends() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Window Page")
+        let page = try await store.createPage(title: "Window Page")
 
         // First versioned save.
-        let v1 = try store.appendPageVersion(
+        let v1 = try await store.appendPageVersion(
             pageID: page.id, title: "Window Page", body: "v1 body",
             expectedHeadVersionID: nil, lastEditedBy: "agent-A")
 
@@ -368,7 +368,7 @@ struct PageVersionTests {
         try await Task.sleep(for: .seconds(6))
 
         // Second save by same actor — but window expired, so should append.
-        let v2 = try store.appendPageVersion(
+        let v2 = try await store.appendPageVersion(
             pageID: page.id, title: "Window Page", body: "v2 body",
             expectedHeadVersionID: v1, lastEditedBy: "agent-A")
 
@@ -388,10 +388,10 @@ struct PageVersionTests {
     /// and `savedAt` is approximately now. The agent row was deduped via
     /// `ensureAgent(name:kind:)` — NOT the shared `legacy-import` — so the
     /// activity's `agent_id` points at the real chat identity.
-    @Test func pageOriginReflectsChatAuthorOnCreate() throws {
+    @Test func pageOriginReflectsChatAuthorOnCreate() async throws {
         let store = try tempStore()
         let chatID = "chat:01JTESTCHAT00000000"
-        let page = try store.createPage(title: "Chat-Created", createdBy: chatID)
+        let page = try await store.createPage(title: "Chat-Created", createdBy: chatID)
 
         guard let origin = try store.pageOrigin(pageID: page.id) else {
             Issue.record("pageOrigin returned nil for a freshly created page")
@@ -401,18 +401,22 @@ struct PageVersionTests {
         #expect(origin.agentKind == .chat)
         #expect(origin.activityKind == .import)
         #expect(origin.title == "Chat-Created")
-        // savedAt is "now" (within 5s — the test runs fast).
+        // savedAt is "now". The tolerance is a scheduler budget, not the
+        // contract: a wrong timestamp would be off by minutes or years, and
+        // CI's 3-vCPU runners have stretched the create→assert gap past 5 s
+        // under build contention (the same wave class as the
+        // integration-patience budgets).
         let drift = abs(origin.savedAt.timeIntervalSinceNow)
-        #expect(drift < 5.0, "savedAt should be ~now (drift \(drift)s)")
+        #expect(drift < 60.0, "savedAt should be ~now (drift \(drift)s)")
     }
 
     /// AC.1 (variant) — when the createPage author is `agent:<kind>`
     /// (e.g. an ingestion executor), `agentKind` is `"agent"` and `agentName`
     /// is `agent:<kind>`.
-    @Test func pageOriginReflectsAgentKindOnCreate() throws {
+    @Test func pageOriginReflectsAgentKindOnCreate() async throws {
         let store = try tempStore()
         let agentLabel = "agent:ingest"
-        let page = try store.createPage(title: "Ingest Page", createdBy: agentLabel)
+        let page = try await store.createPage(title: "Ingest Page", createdBy: agentLabel)
 
         let origin = try store.pageOrigin(pageID: page.id)
         #expect(origin?.agentName == .agent("ingest"))
@@ -425,9 +429,9 @@ struct PageVersionTests {
     /// stamp `agent:ingest`, NOT degrade to `legacy-import`. `PageUpsert` does
     /// create+update back-to-back with the same author, so the amend coalescing
     /// path fires — the root activity's agent must survive the amend.
-    @Test func pageOriginReflectsAgentIngestAfterUpsertAmend() throws {
+    @Test func pageOriginReflectsAgentIngestAfterUpsertAmend() async throws {
         let store = try tempStore()
-        let outcome = try PageUpsert.upsert(
+        let outcome = try await PageUpsert.upsert(
             in: store, id: nil, title: "Ingested Page",
             body: "# Ingested Page\n\nSome content from ingestion.",
             author: "agent:ingest")
@@ -444,14 +448,14 @@ struct PageVersionTests {
     /// preserve the old `legacy-import`/`user` agent via amend coalescing.
     /// The amend fires when same-actor, but here the actor CHANGES (user →
     /// agent:ingest), so a new version + activity is appended.
-    @Test func reIngestExistingPageStampsAgentIngest() throws {
+    @Test func reIngestExistingPageStampsAgentIngest() async throws {
         let store = try tempStore()
         // Create with "user" first (simulates a pre-existing page).
-        let page = try store.createPage(title: "Re-ingest", createdBy: "user")
+        let page = try await store.createPage(title: "Re-ingest", createdBy: "user")
         _ = page
 
         // Now the agent re-ingests: title resolves to existing → updatePage.
-        let outcome = try PageUpsert.upsert(
+        let outcome = try await PageUpsert.upsert(
             in: store, id: nil, title: "Re-ingest",
             body: "# Re-ingest\n\nUpdated by ingestion.",
             author: "agent:ingest")
@@ -466,17 +470,17 @@ struct PageVersionTests {
     /// `appendPageVersionLocked` bumps only `pages.last_edited_by` without
     /// creating a new version/activity — so the page-content ref still points
     /// at the OLD version whose activity may have `legacy-import` (pre-#713).
-    @Test func reIngestIdenticalContentPreservesOldAgent() throws {
+    @Test func reIngestIdenticalContentPreservesOldAgent() async throws {
         let store = try tempStore()
         // Simulate a pre-#713 page: created with no author → legacy-import.
-        let page = try store.createPage(title: "Same Content", createdBy: nil)
-        try store.updatePage(id: page.id, title: "Same Content",
+        let page = try await store.createPage(title: "Same Content", createdBy: nil)
+        try await store.updatePage(id: page.id, title: "Same Content",
                              body: "identical body", lastEditedBy: nil)
         let beforeOrigin = try store.pageOrigin(pageID: page.id)
         #expect(beforeOrigin?.agentName == .legacyImport)
 
         // Now re-ingest the SAME content with agent:ingest.
-        _ = try PageUpsert.upsert(
+        _ = try await PageUpsert.upsert(
             in: store, id: nil, title: "Same Content",
             body: "identical body", author: "agent:ingest")
 
@@ -493,9 +497,9 @@ struct PageVersionTests {
     /// to the shared `legacy-import` agent. `pageOrigin` reports `agentName
     /// == "legacy-import"` and `agentKind == "software"`. No crash, no data
     /// loss. (Pre-v39 rows look the same — they degraded identically.)
-    @Test func pageOriginDegradesToLegacyImportWhenNoAuthor() throws {
+    @Test func pageOriginDegradesToLegacyImportWhenNoAuthor() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "No-Author Page", createdBy: nil)
+        let page = try await store.createPage(title: "No-Author Page", createdBy: nil)
 
         let origin = try store.pageOrigin(pageID: page.id)
         #expect(origin?.agentName == .legacyImport)
@@ -508,15 +512,15 @@ struct PageVersionTests {
     /// returns EXACTLY 2 entries (the empty-root `'import'` + the `'edit'`),
     /// and `entry.last` pins the chat author + edited body — so it cannot
     /// pass trivially off the create-double-row artifact.
-    @Test func pageEditHistoryCountsCreateAndEdit() throws {
+    @Test func pageEditHistoryCountsCreateAndEdit() async throws {
         let store = try tempStore()
         // Create with one author (an ingestion agent)…
         let createAuthor = "agent:ingest"
-        let page = try store.createPage(title: "Edit Chain", createdBy: createAuthor)
+        let page = try await store.createPage(title: "Edit Chain", createdBy: createAuthor)
         // …then edit with a DISTINCT author (a chat) so the amend-coalescer
         // returns nil (different actor) and the version-append actually runs.
         let editAuthor = "chat:01JTESTCHAT00000001"
-        try store.updatePage(
+        try await store.updatePage(
             id: page.id, title: "Edit Chain", body: "edited body",
             lastEditedBy: editAuthor)
 
@@ -548,10 +552,10 @@ struct PageVersionTests {
     /// row, closing the pre-v39 "records nothing" hole. Verified by row count
     /// before/after. Uses DISTINCT authors (per §5.3 LOW note) so the amend
     /// short-circuit does not suppress the new version row.
-    @Test func updatePageCASOffAppendsVersionAndActivity() throws {
+    @Test func updatePageCASOffAppendsVersionAndActivity() async throws {
         let store = try tempStore()
         let createAuthor = "agent:create"
-        let page = try store.createPage(title: "CAS-Off", createdBy: createAuthor)
+        let page = try await store.createPage(title: "CAS-Off", createdBy: createAuthor)
 
         // Before: 1 page_versions row (the empty root), 1 activity (create's
         // 'import').
@@ -564,7 +568,7 @@ struct PageVersionTests {
         #expect(beforeCount == 1, "createPage seeds one 'import' activity")
 
         // CAS-off update with a DISTINCT author (so amend can't coalesce).
-        try store.updatePage(
+        try await store.updatePage(
             id: page.id, title: "CAS-Off", body: "first edit",
             lastEditedBy: "chat:01JTESTCHAT00000002")
 
@@ -581,10 +585,10 @@ struct PageVersionTests {
     /// AC.4 — page activities' `agent_id` resolves via `ensureAgent` to a REAL
     /// named agent (not the shared `legacy-import`) when `lastEditedBy` is
     /// non-null. Verified by querying the activity's agent row directly.
-    @Test func pageEditActivityPointsAtRealNamedAgent() throws {
+    @Test func pageEditActivityPointsAtRealNamedAgent() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Real Agent", createdBy: "agent:ingest")
-        try store.updatePage(
+        let page = try await store.createPage(title: "Real Agent", createdBy: "agent:ingest")
+        try await store.updatePage(
             id: page.id, title: "Real Agent", body: "edited",
             lastEditedBy: "chat:01JTESTCHAT00000003")
 
@@ -616,14 +620,14 @@ struct PageVersionTests {
     /// AC.4 (degraded) — when `lastEditedBy` is nil/empty, the activity's
     /// `agent_id` falls back to the legacy-import shared agent. No crash, no
     /// data loss.
-    @Test func pageEditNilAuthorDegradesToLegacyImport() throws {
+    @Test func pageEditNilAuthorDegradesToLegacyImport() async throws {
         let store = try tempStore()
         // Create with a chat author so the root activity has a real agent.
-        let page = try store.createPage(title: "Degrade", createdBy: "chat:01JDEGRADE000000001")
+        let page = try await store.createPage(title: "Degrade", createdBy: "chat:01JDEGRADE000000001")
         // UpdatePage with lastEditedBy=nil — the append (CAS-off, no
         // amend-can-fire because pages.last_edited_by="chat:…" ≠ nil) lands a
         // new activity pointing at legacy-import.
-        try store.updatePage(
+        try await store.updatePage(
             id: page.id, title: "Degrade", body: "v2", lastEditedBy: nil)
 
         guard let head = try store.pageHeadVersionID(pageID: page.id) else {
@@ -642,7 +646,7 @@ struct PageVersionTests {
 
     /// Migration ladder sanity: a fresh DB reports the current schema after
     /// adding durable configured/effective chat thinking selection.
-    @Test func freshDBStampsCurrentSchemaVersion() throws {
+    @Test func freshDBStampsCurrentSchemaVersion() async throws {
         #expect(GRDBWikiStore.schemaVersion >= 53,
                 "schemaVersion must report the current migration version")
         let store = try tempStore()
@@ -653,10 +657,10 @@ struct PageVersionTests {
     // MARK: - #817: pageVersionBody (read arbitrary version body)
 
     /// AC.1 — `pageVersionBody` reads the full blob-decoded body of the HEAD.
-    @Test func pageVersionBodyReadsFullBodyOfHead() throws {
+    @Test func pageVersionBodyReadsFullBodyOfHead() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Body Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Body Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Body Page", body: "head body content",
             expectedHeadVersionID: nil)
         let head = try store.pageHeadVersionID(pageID: page.id)
@@ -667,14 +671,14 @@ struct PageVersionTests {
     /// AC.1 — `pageVersionBody` reads an ARBITRARY (non-head) historical version,
     /// not just the current HEAD. This is the read that powers read-only
     /// time-travel viewing + diffing in the Versions window.
-    @Test func pageVersionBodyReadsArbitraryOldVersion() throws {
+    @Test func pageVersionBodyReadsArbitraryOldVersion() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Old Body Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Old Body Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Old Body Page", body: "v1 original",
             expectedHeadVersionID: nil)
         let v1 = try store.pageHeadVersionID(pageID: page.id)!
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Old Body Page", body: "v2 changed",
             expectedHeadVersionID: v1)
         // v1 is no longer HEAD, but its body must still be readable.
@@ -686,7 +690,7 @@ struct PageVersionTests {
     }
 
     /// AC.1 — `pageVersionBody` returns nil for an unknown version id (no row).
-    @Test func pageVersionBodyReturnsNilForUnknownID() throws {
+    @Test func pageVersionBodyReturnsNilForUnknownID() async throws {
         let store = try tempStore()
         #expect(try store.pageVersionBody(versionID: PageVersionID(rawValue: "01JNONEXISTENT00000")) == nil)
     }
@@ -694,16 +698,16 @@ struct PageVersionTests {
     /// AC.2 — the `WikiStoreModel.pageVersionBody(for:)` wrapper returns the
     /// resolved body (swallows errors → nil on failure). Proves the model-level
     /// read the Versions window binds to.
-    @Test func pageVersionBodyModelWrapperReturnsBody() throws {
+    @Test func pageVersionBodyModelWrapperReturnsBody() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
-        let page = try store.createPage(title: "Model Body Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Model Body Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Model Body Page", body: "via model",
             expectedHeadVersionID: nil)
         let head = try store.pageHeadVersionID(pageID: page.id)!
-        #expect(model.pageVersionBody(for: head) == "via model")
-        #expect(model.pageVersionBody(for: PageVersionID(rawValue: "01JBOGUS00000000000")) == nil)
+        #expect(await model.pageVersionBody(for: head) == "via model")
+        #expect(await model.pageVersionBody(for: PageVersionID(rawValue: "01JBOGUS00000000000")) == nil)
     }
 
     // MARK: - #817: restorePage (append-only restore)
@@ -711,14 +715,14 @@ struct PageVersionTests {
     /// AC.3 — `restorePage` APPENDS a new version node (history count +1), the
     /// new node's content matches the target, and the existing v1/v2 nodes are
     /// left untouched (history is never mutated).
-    @Test func restorePageAppendsNewNodeMatchingTarget() throws {
+    @Test func restorePageAppendsNewNodeMatchingTarget() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Restore Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Restore Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Restore Page", body: "v1 original",
             expectedHeadVersionID: nil)
         let v1 = try store.pageHeadVersionID(pageID: page.id)!
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Restore Page", body: "v2 changed",
             expectedHeadVersionID: v1)
         let v2 = try store.pageHeadVersionID(pageID: page.id)!
@@ -739,14 +743,14 @@ struct PageVersionTests {
     /// AC.3 — after restore, HEAD points at the NEW node (not the target), the
     /// denormalized `pages` mirror reflects the restored body, and the new
     /// node's activity is badged `'restore'`.
-    @Test func restorePageHeadPointsAtNewNodeAndBadgesRestore() throws {
+    @Test func restorePageHeadPointsAtNewNodeAndBadgesRestore() async throws {
         let store = try tempStore()
-        let page = try store.createPage(title: "Head Restore Page")
-        _ = try store.appendPageVersion(
+        let page = try await store.createPage(title: "Head Restore Page")
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Head Restore Page", body: "v1",
             expectedHeadVersionID: nil)
         let v1 = try store.pageHeadVersionID(pageID: page.id)!
-        _ = try store.appendPageVersion(
+        _ = try await store.appendPageVersion(
             pageID: page.id, title: "Head Restore Page", body: "v2",
             expectedHeadVersionID: v1)
 

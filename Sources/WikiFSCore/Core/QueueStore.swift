@@ -970,7 +970,7 @@ public final class QueueStore: @unchecked Sendable {
                     SELECT \(Self.selectColumns)
                     FROM queue_items
                     WHERE state IN ('completed', 'failed', 'cancelled')
-                    ORDER BY finished_at DESC
+                    ORDER BY finished_at DESC, queue ASC, id DESC
                     LIMIT ?;
                     """,
                     arguments: [Int64(limit)])

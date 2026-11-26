@@ -89,18 +89,18 @@ struct FTS5DesyncMigrationTests {
     /// `pages_fts`. Reopening must run the ladder from `version` upward with the
     /// broken index in place — the exact shape of the wikis found in the field
     /// (stamped v17 and v22, all with `pages_fts` present).
-    private func buildDesyncedDB(rewoundTo version: Int) throws -> (url: URL, linkerID: PageID, targetID: PageID) {
+    private func buildDesyncedDB(rewoundTo version: Int) async throws -> (url: URL, linkerID: PageID, targetID: PageID) {
         let url = tempDatabaseURL()
         let targetID: PageID
         let linkerID: PageID
         do {
             let store = try GRDBWikiStore(databaseURL: url)
-            targetID = try PageUpsert.upsert(in: store, id: nil, title: "Target", body: "").id
-            let linker = try store.createPage(title: "Linker")
+            targetID = try await PageUpsert.upsert(in: store, id: nil, title: "Target", body: "").id
+            let linker = try await store.createPage(title: "Linker")
             // Raw updatePage (no canonicalization) plants a legacy body, so the
             // v22→v23 sweep has real work to do and actually issues the
             // `UPDATE pages` that trips the trigger.
-            try store.updatePage(id: linker.id, title: "Linker", body: "See [[Target]].")
+            try await store.updatePage(id: linker.id, title: "Linker", body: "See [[Target]].")
             linkerID = linker.id
         } // store deinit closes the connection
         try executeRaw(Self.legacyPagesFTSSQL + "\nPRAGMA user_version=\(version);", at: url)
@@ -109,8 +109,8 @@ struct FTS5DesyncMigrationTests {
 
     /// The headline repro: a v22 DB with a desynced index opens and finishes the
     /// ladder instead of dying with "database disk image is malformed".
-    @Test func desyncedPagesFTSAtV22StillMigrates() throws {
-        let (url, linkerID, targetID) = try buildDesyncedDB(rewoundTo: 22)
+    @Test func desyncedPagesFTSAtV22StillMigrates() async throws {
+        let (url, linkerID, targetID) = try await buildDesyncedDB(rewoundTo: 22)
 
         let reopened = try GRDBWikiStore(databaseURL: url)
 
@@ -124,8 +124,8 @@ struct FTS5DesyncMigrationTests {
     /// The v17 DBs found in the field die earlier in the ladder (the v17→v18
     /// name sanitize writes rows before v22→v23 ever runs), so pin that entry
     /// point too — a fix that only guarded the v23 step would leave these broken.
-    @Test func desyncedPagesFTSAtV17StillMigrates() throws {
-        let (url, linkerID, targetID) = try buildDesyncedDB(rewoundTo: 17)
+    @Test func desyncedPagesFTSAtV17StillMigrates() async throws {
+        let (url, linkerID, targetID) = try await buildDesyncedDB(rewoundTo: 17)
 
         let reopened = try GRDBWikiStore(databaseURL: url)
 
@@ -136,8 +136,8 @@ struct FTS5DesyncMigrationTests {
 
     /// Page content was never damaged — the fault was confined to the derived
     /// index. Migrating must not drop or truncate any page.
-    @Test func migrationPreservesPageContent() throws {
-        let (url, linkerID, targetID) = try buildDesyncedDB(rewoundTo: 22)
+    @Test func migrationPreservesPageContent() async throws {
+        let (url, linkerID, targetID) = try await buildDesyncedDB(rewoundTo: 22)
 
         let reopened = try GRDBWikiStore(databaseURL: url)
 
@@ -149,8 +149,8 @@ struct FTS5DesyncMigrationTests {
     /// After migrating, no FTS5 virtual table or sync trigger survives. This is
     /// what makes the wiki stay fixed: a leftover trigger would re-break the
     /// next `UPDATE pages`.
-    @Test func migrationLeavesNoFTS5ObjectsBehind() throws {
-        let (url, _, _) = try buildDesyncedDB(rewoundTo: 22)
+    @Test func migrationLeavesNoFTS5ObjectsBehind() async throws {
+        let (url, _, _) = try await buildDesyncedDB(rewoundTo: 22)
 
         _ = try GRDBWikiStore(databaseURL: url)
 
@@ -195,8 +195,8 @@ struct FTS5DesyncMigrationTests {
     /// `source_search` is NOT derived FTS state — it is an ordinary content
     /// sidecar still written by `upsertSourceSearch`/`renameSource`, so trimming
     /// the FTS5 half of the v12→v13 step must leave the sidecar in place.
-    @Test func sourceSearchSidecarSurvivesTheFTS5Trim() throws {
-        let (url, _, _) = try buildDesyncedDB(rewoundTo: 22)
+    @Test func sourceSearchSidecarSurvivesTheFTS5Trim() async throws {
+        let (url, _, _) = try await buildDesyncedDB(rewoundTo: 22)
 
         _ = try GRDBWikiStore(databaseURL: url)
 
@@ -206,8 +206,8 @@ struct FTS5DesyncMigrationTests {
     }
 
     /// Reopening a repaired DB is a no-op, not a second migration.
-    @Test func reopenAfterRepairIsIdempotent() throws {
-        let (url, linkerID, _) = try buildDesyncedDB(rewoundTo: 22)
+    @Test func reopenAfterRepairIsIdempotent() async throws {
+        let (url, linkerID, _) = try await buildDesyncedDB(rewoundTo: 22)
 
         let first = try GRDBWikiStore(databaseURL: url)
         let bodyAfterFirst = try first.getPage(id: linkerID).bodyMarkdown

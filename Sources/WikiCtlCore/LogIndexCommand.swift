@@ -27,7 +27,7 @@ public enum LogIndexCommand {
     /// one-line notice on stdout when an agent-authored run's `--source`
     /// stamp was refused (#1367); `indexSet` produces no output (the body is
     /// wholesale-replaced).
-    public static func run(_ action: Action, in store: WikiStore) throws -> PageCommand.Result {
+    public static func run(_ action: Action, in store: WikiStore) async throws -> PageCommand.Result {
         switch action {
         case .logAppend(let kind, let title, let note, let source, let author):
             // The Ingested stamp is agent-asserted, and this CLI flag is the
@@ -62,7 +62,7 @@ public enum LogIndexCommand {
                 // reaches a human reading the run logs.
                 DebugLog.ingest(
                     "log append: refused agent-authored (\(author.rawValue)) Ingested stamp for source \(source.rawValue) — the app records completion at job success")
-                let entry = try store.appendLog(kind: kind, title: title, note: note)
+                let entry = try await store.appendLog(kind: kind, title: title, note: note)
                 return PageCommand.Result(
                     output: entry.id.rawValue + "\n" + Self.agentStampRefusalNotice(source: source),
                     didCommit: true)
@@ -75,7 +75,7 @@ public enum LogIndexCommand {
             // believed-it-worked failure this command exists to prevent.
             // Validation runs BEFORE the append so nothing commits on failure.
             if kind == .ingest, let source {
-                let exists = try store.listSources().contains { $0.id == source }
+                let exists = try await store.listSources().contains { $0.id == source }
                 guard !source.rawValue.isEmpty, exists else {
                     throw PageCommand.Failure.message(
                         "log append: --source \(source.rawValue) does not name a source in this wiki — "
@@ -83,9 +83,9 @@ public enum LogIndexCommand {
                         + "Pass the id from `wikictl source list`.")
                 }
             }
-            let entry = try store.appendLog(kind: kind, title: title, note: note)
+            let entry = try await store.appendLog(kind: kind, title: title, note: note)
             if kind == .ingest, let source {
-                try store.markSourceIngested(id: source)
+                try await store.markSourceIngested(id: source)
             }
             return PageCommand.Result(output: entry.id.rawValue, didCommit: true)
         case .indexSet(let body, let workspace):
@@ -104,16 +104,16 @@ public enum LogIndexCommand {
                 // the original base via the UPDATE).
                 let baseVersion: String
                 do {
-                    baseVersion = try store.getWikiIndex().body
+                    baseVersion = try await store.getWikiIndex().body
                 } catch {
                     DebugLog.store("log-index: getWikiIndex failed, using default body — \(error)")
                     baseVersion = WikiIndex.defaultBody
                 }
-                try store.setWorkspaceIndexBody(
+                try await store.setWorkspaceIndexBody(
                     workspaceID: WorkspaceID(rawValue: workspace), indexBody: body, indexBaseVersion: baseVersion)
                 return PageCommand.Result(output: "", didCommit: true)
             }
-            try store.updateWikiIndex(body: body)
+            try await store.updateWikiIndex(body: body)
             return PageCommand.Result(output: "", didCommit: true)
         }
     }

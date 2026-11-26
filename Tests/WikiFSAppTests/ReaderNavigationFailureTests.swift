@@ -79,7 +79,7 @@ struct ReaderNavigationFailureTests {
         spinner: ValueBox<Bool>,
         failure: ValueBox<String?>
     ) async throws {
-        coordinator.startLoad(
+        await coordinator.startLoad(
             markdown: "",
             documentIdentity: nil,
             isLoading: binding(spinner),

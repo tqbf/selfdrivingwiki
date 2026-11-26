@@ -96,7 +96,7 @@ struct FPIfSubscriberDebounceTests {
         var flushes: [WikiID] = []
         let (store, _, box) = try wireSeam(scheduler: scheduler) { flushes.append($0) }
 
-        _ = try store.createPage(title: "One")
+        _ = try await store.createPage(title: "One")
         try await awaitDeliveries(box, expected: 1)
         scheduler.fireAll()
         #expect(flushes == [WikiID(rawValue: "W")])
@@ -109,7 +109,7 @@ struct FPIfSubscriberDebounceTests {
         var flushes: [WikiID] = []
         let (store, _, box) = try wireSeam(scheduler: scheduler) { flushes.append($0) }
 
-        for i in 0..<6 { _ = try store.createPage(title: "P\(i)") }
+        for i in 0..<6 { _ = try await store.createPage(title: "P\(i)") }
         try await awaitDeliveries(box, expected: 6)
         // Only the last-scheduled timer survives; the prior 5 were cancelled.
         #expect(scheduler.cancelledIDs.count == 5)
@@ -124,12 +124,12 @@ struct FPIfSubscriberDebounceTests {
         let scheduler = ManualScheduler()
         var flushes: [WikiID] = []
         let (store, _, box) = try wireSeam(scheduler: scheduler) { flushes.append($0) }
-        _ = try store.createPage(title: "A")
+        _ = try await store.createPage(title: "A")
         try await awaitDeliveries(box, expected: 1)
         scheduler.fireAll()
         #expect(flushes == [WikiID(rawValue: "W")])
 
-        _ = try store.createPage(title: "B")
+        _ = try await store.createPage(title: "B")
         try await awaitDeliveries(box, expected: 2)
         scheduler.fireAll()
         #expect(flushes == [WikiID(rawValue: "W"), WikiID(rawValue: "W")])

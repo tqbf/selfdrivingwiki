@@ -13,15 +13,9 @@ enum MetadataHydrationKey: Hashable {
     case source(SourceID, Int)
     case chat(ChatID, Int)
 }
-
-enum MetadataHydrationReadPath: Equatable, Sendable {
-    case readService
-    case inMemoryStoreFallback
-
-    static func resolve(readServiceAvailable: Bool) -> MetadataHydrationReadPath {
-        readServiceAvailable ? .readService : .inMemoryStoreFallback
-    }
-}
+// P5: `MetadataHydrationReadPath` is gone with the read-only pool — every
+// detail view hydrates through the session's store (the daemon executes the
+// reads).
 
 /// The common structured-task transition guard for detail-owned metadata.
 /// Detail views still own their `@State`; this helper only guarantees that a

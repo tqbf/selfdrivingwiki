@@ -177,22 +177,33 @@ public struct BasePluginCatalogFactories: Sendable {
 public struct AppPluginCatalogFactories: Sendable {
     public let base: BasePluginCatalogFactories
     public let makeDaemonTransport: RegisteredTransportProvider.Factory
-    public let makeTantivyRuntime: SearchRuntimeFactory.Factory
     /// Open-seam harness injection (plans/daemon-only-access.md Phase 0):
     /// when non-nil, the app wiki profile mounts a recording `StorePlugin`
     /// instead of the production one. nil keeps `StorePlugin.definition`.
     public let storeOpenFactories: StorePlugin.StoreOpenFactories?
+    /// The resolved store-access mode for the app wiki profile
+    /// (plans/daemon-only-access.md Phase 3 item 1). The production app
+    /// passes `.remote` unconditionally — the `allowLocalStore` override is
+    /// DELETED at P5 and the app never branches; test fixtures pass `.local`
+    /// — the unit-test tier keeps booting local sessions where no daemon is
+    /// under test.
+    ///
+    /// `.remote` REQUIRES an injected store factory:
+    /// `AppPluginCatalog.build` consults `StoreOpenFactories.satisfies(_:)`
+    /// and fails at construction time rather than letting a session boot
+    /// fall back to a local store.
+    public let storeAccessMode: StoreAccessMode
 
     public init(
         base: BasePluginCatalogFactories,
         makeDaemonTransport: @escaping RegisteredTransportProvider.Factory,
-        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.defaultRuntimeFactory,
-        storeOpenFactories: StorePlugin.StoreOpenFactories? = nil
+        storeOpenFactories: StorePlugin.StoreOpenFactories? = nil,
+        storeAccessMode: StoreAccessMode = .local
     ) {
         self.base = base
         self.makeDaemonTransport = makeDaemonTransport
-        self.makeTantivyRuntime = makeTantivyRuntime
         self.storeOpenFactories = storeOpenFactories
+        self.storeAccessMode = storeAccessMode
     }
 }
 
@@ -713,14 +724,14 @@ public actor DaemonProcessProfileOwner {
 
 /// Typed services resolved once from a booted profile. Consumers receive this
 /// facade rather than a Cordis context or a legacy runtime assembly.
+/// P5: `readService` and `searchFactory` are gone — the read-only pool left
+/// app composition and the daemon builds its search runtime directly from the
+/// admitted store (`WikiDaemon.makeSearchRuntime`).
 public struct AppServices: Sendable {
     public let lifetime: ProfileLifetime
     public let store: any WikiStore
-    public let readService: WikiReadService
     public let extractionBackends: ExtractionBackendRegistry
-    public let searchProviders: SearchProviderRegistry
     public let launcherFactory: LauncherFactory
-    public let searchFactory: PerWikiSearchFactory
 
     internal static func resolve(from profile: BootedProfile) async throws -> AppServices {
         let extractionBackends: ExtractionBackendRegistry
@@ -735,11 +746,8 @@ public struct AppServices: Sendable {
         return AppServices(
             lifetime: ProfileLifetime(profile: profile),
             store: try await profile.context.require(StoreServiceKeys.store),
-            readService: try await profile.context.require(StoreServiceKeys.readService),
             extractionBackends: extractionBackends,
-            searchProviders: try await profile.context.require(SearchServiceKeys.providers),
-            launcherFactory: try await profile.context.require(LauncherServiceKeys.factory),
-            searchFactory: try await profile.context.require(PerWikiRuntimeServiceKeys.searchFactory))
+            launcherFactory: try await profile.context.require(LauncherServiceKeys.factory))
     }
 
     public func shutdown() async throws {
@@ -1007,10 +1015,21 @@ public enum AppPluginCatalog {
         additionalDefinitions: [PluginDefinition] = []
     ) throws -> PluginCatalog {
         let storeDefinition: PluginDefinition
+        // The P3 cutover gate (plans/daemon-only-access.md Placement): a
+        // remote app catalog without an injected store factory fails AT
+        // BUILD TIME — the session boot must never discover the hole by
+        // falling back to a local open.
+        if factories.storeAccessMode == .remote,
+           factories.storeOpenFactories?.satisfies(.remote) != true {
+            throw StoreModeError.remoteModeRequiresInjectedStoreFactory
+        }
         if let openFactories = factories.storeOpenFactories {
-            storeDefinition = StorePlugin.definition(openFactories: openFactories)
+            storeDefinition = StorePlugin.definition(
+                mode: factories.storeAccessMode,
+                openFactories: openFactories)
         } else {
-            storeDefinition = StorePlugin.definition
+            storeDefinition = StorePlugin.definition(
+                mode: factories.storeAccessMode)
         }
         var definitions = baseDefinitions(factories.base, storeDefinition: storeDefinition)
         definitions.append(contentsOf: [
@@ -1018,7 +1037,11 @@ public enum AppPluginCatalog {
             DaemonTransportPlugin.definition(makeServices: factories.makeDaemonTransport),
             URLFetchIntegrationPlugin.definition,
         ])
-        definitions.append(TantivySearchPlugin.definition(makeRuntime: factories.makeTantivyRuntime))
+        // P5: no TantivySearchPlugin in the app catalog — the app's local
+        // search runtime assembly is REMOVED (the index-build freedom-guard
+        // row is `none`). App sessions consume only the daemon-backed
+        // `SearchServices` facade; the CLI/fixture catalogs keep their
+        // intentional local search runtime.
         definitions.append(contentsOf: additionalDefinitions)
         return try PluginCatalog(definitions)
     }

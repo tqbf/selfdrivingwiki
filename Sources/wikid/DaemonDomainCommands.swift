@@ -217,9 +217,9 @@ final class DaemonDomainCommands: @unchecked Sendable {
             let leg = try await searchLeg(
                 kind: .page, query: payload.query, limit: payload.limit,
                 wikiID: wikiID, store: store,
-                catalog: { try store.listPages(sortBy: .lastUpdated) },
+                catalog: { try await store.listPages(sortBy: .lastUpdated) },
                 id: { PageID(rawValue: $0) })
-            return Self.outcome(try PageCommand.run(
+            return Self.outcome(try await PageCommand.run(
                 .search(query: payload.query, limit: payload.limit),
                 in: store, linter: nil, bm25Leg: leg))
         case DaemonDomainOperation.Page.add:
@@ -272,12 +272,12 @@ final class DaemonDomainCommands: @unchecked Sendable {
         // tooling the in-process CLI path runs — nil here would silently
         // change what gets stored.
         if case .add = action {
-            return Self.outcome(try PageCommand.run(
+            return Self.outcome(try await PageCommand.run(
                 action, in: store,
                 validator: fenceValidator(),
                 linter: MarkdownLinter.loadDefault()))
         }
-        return Self.outcome(try PageCommand.run(action, in: store, linter: nil))
+        return Self.outcome(try await PageCommand.run(action, in: store, linter: nil))
     }
 
     // MARK: - source
@@ -320,9 +320,9 @@ final class DaemonDomainCommands: @unchecked Sendable {
             let leg = try await searchLeg(
                 kind: .source, query: payload.query, limit: payload.limit,
                 wikiID: wikiID, store: store,
-                catalog: { try store.listSources() },
+                catalog: { try await store.listSources() },
                 id: { SourceID(rawValue: $0) })
-            return try Self.outcome(SourceCommand.run(
+            return try Self.outcome(await SourceCommand.run(
                 .search(query: payload.query, limit: payload.limit),
                 in: store,
                 cwd: FileManager.default.currentDirectoryPath,
@@ -347,7 +347,7 @@ final class DaemonDomainCommands: @unchecked Sendable {
                     code: .invalidRequest,
                     message: "source addFile content is not valid base64")
             }
-            return try Self.outcome(try SourceCommand.addFile(
+            return try Self.outcome(try await SourceCommand.addFile(
                 path: payload.path, name: payload.name, data: bytes, in: store))
         case DaemonDomainOperation.Source.editMarkdown:
             // Phase 4 write with the CAS expectation RIDING the request: the
@@ -445,7 +445,7 @@ final class DaemonDomainCommands: @unchecked Sendable {
                 code: .invalidRequest,
                 message: "unknown source operation: \(request.operation)")
         }
-        return try Self.outcome(SourceCommand.run(action, in: store, cwd: cwd))
+        return try Self.outcome(await SourceCommand.run(action, in: store, cwd: cwd))
     }
 
     // MARK: - chat
@@ -474,9 +474,9 @@ final class DaemonDomainCommands: @unchecked Sendable {
             let leg = try await searchLeg(
                 kind: .chat, query: payload.query, limit: payload.limit,
                 wikiID: wikiID, store: store,
-                catalog: { try store.listChats() },
+                catalog: { try await store.listChats() },
                 id: { ChatID(rawValue: $0) })
-            return Self.outcome(try ChatCommand.run(
+            return Self.outcome(try await ChatCommand.run(
                 .search(query: payload.query, limit: payload.limit),
                 in: store, bm25Leg: leg))
         default:
@@ -484,7 +484,7 @@ final class DaemonDomainCommands: @unchecked Sendable {
                 code: .invalidRequest,
                 message: "unknown chat operation: \(request.operation)")
         }
-        return Self.outcome(try ChatCommand.run(action, in: store))
+        return Self.outcome(try await ChatCommand.run(action, in: store))
     }
 
     // MARK: - bookmark
@@ -517,7 +517,7 @@ final class DaemonDomainCommands: @unchecked Sendable {
         }
         let wikiID = try wikiIDFromPayload(request)
         let store = try await storeForWikiID(wikiID)
-        return Self.outcome(try BookmarkCommand.run(action, in: store))
+        return Self.outcome(try await BookmarkCommand.run(action, in: store))
     }
 
     /// Rebuild the typed `BookmarkNode.Content` from its wire form: exactly
@@ -585,7 +585,7 @@ final class DaemonDomainCommands: @unchecked Sendable {
         // `wikiID`; resolve + admit before the run.
         let wikiID = try wikiIDFromPayload(request)
         let store = try await storeForWikiID(wikiID)
-        return Self.outcome(try WorkspaceCommand.run(action, in: store))
+        return Self.outcome(try await WorkspaceCommand.run(action, in: store))
     }
 
     // MARK: - strategy (Phase 4)
@@ -618,7 +618,7 @@ final class DaemonDomainCommands: @unchecked Sendable {
         }
         let wikiID = try wikiIDFromPayload(request)
         let store = try await storeForWikiID(wikiID)
-        return Self.outcome(try StrategyCommand.run(action, in: store))
+        return Self.outcome(try await StrategyCommand.run(action, in: store))
     }
 
     private func strategyExpectation(
@@ -664,7 +664,7 @@ final class DaemonDomainCommands: @unchecked Sendable {
         }
         let wikiID = try wikiIDFromPayload(request)
         let store = try await storeForWikiID(wikiID)
-        return Self.outcome(try LogIndexCommand.run(action, in: store))
+        return Self.outcome(try await LogIndexCommand.run(action, in: store))
     }
 
     // MARK: - admin family (Phase 4): vacuums + MIME repair
@@ -832,10 +832,10 @@ final class DaemonDomainCommands: @unchecked Sendable {
         // source answers inScope=false — the CLI renders one typed failure for
         // missing and non-YouTube alike — never an error.
         let sourceID = SourceID(rawValue: payload.sourceID)
-        let summaries = try store.listSources()
+        let summaries = try await store.listSources()
         var inScope = false
         if summaries.contains(where: { $0.id == sourceID }) {
-            let origin = try store.sourceOrigin(sourceID: sourceID)
+            let origin = try await store.sourceOrigin(sourceID: sourceID)
             inScope = origin?.provider == SourceProvider.youtube
         }
         return try JSONEncoder().encode(DaemonTranscribePreflightReply(inScope: inScope))
@@ -872,13 +872,14 @@ final class DaemonDomainCommands: @unchecked Sendable {
         limit: Int,
         wikiID: WikiID,
         store: WikiStore,
-        catalog: () throws -> [Summary],
+        catalog: () async throws -> [Summary],
         id: (String) -> Summary.ID
     ) async throws -> [Summary]? {
         let runtime = try await daemon.ensureSearchRuntime(wikiID: wikiID)
         let hits = try await runtime.search(query: query, kinds: [kind], limit: max(0, limit))
         guard !hits.isEmpty else { return nil }
-        let byID = Dictionary(try catalog().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let catalogEntries = try await catalog()
+        let byID = Dictionary(catalogEntries.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let resolved = hits.compactMap { byID[id($0.ulid)] }
         return resolved.isEmpty ? nil : resolved
     }

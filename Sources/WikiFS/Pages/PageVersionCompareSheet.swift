@@ -115,8 +115,8 @@ struct PageVersionCompareSheet: View {
         }
         .frame(minWidth: 900, minHeight: 580)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear { refresh(assignDefaults: true) }
-        .task(id: neededBodyKey) { ensureNeededBodies() }
+        .onAppear { Task { await refresh(assignDefaults: true) } }
+        .task(id: neededBodyKey) { await ensureNeededBodies() }
         .alert(
             "Restore this version?",
             isPresented: Binding(
@@ -125,7 +125,9 @@ struct PageVersionCompareSheet: View {
             )
         ) {
             Button("Restore", role: .destructive) {
-                if let target = restoreTarget { confirmRestore(target) }
+                Task {
+                    if let target = restoreTarget { await confirmRestore(target) }
+                }
             }
             Button("Cancel", role: .cancel) { restoreTarget = nil }
         } message: {
@@ -417,12 +419,12 @@ struct PageVersionCompareSheet: View {
 
     /// Reload history + HEAD from the store; on first load assign sensible
     /// defaults (Base = HEAD, Compare = the previous version).
-    private func refresh(assignDefaults: Bool) {
-        let fresh = store.pageEditHistory(for: pageID) // newest-first
+    private func refresh(assignDefaults: Bool) async {
+        let fresh = await store.pageEditHistory(for: pageID) // newest-first
         history = fresh
         // The active HEAD's version id (the "Current" marker). `pageOrigin`
         // returns exactly the HEAD's origin (ref → version, else MAX(id)).
-        headID = store.pageOrigin(for: pageID)?.versionID
+        headID = await store.pageOrigin(for: pageID)?.versionID
         if assignDefaults {
             let head = fresh.first { $0.versionID == headID } ?? fresh.first
             leftID = head?.versionID
@@ -433,21 +435,21 @@ struct PageVersionCompareSheet: View {
     /// Fetch any not-yet-cached bodies for the current Base/Compare selections.
     /// Runs off the `.task(id:)` so a body read never blocks the main render
     /// pass (the read itself is `dbWriter.read`-backed — method-atomic).
-    private func ensureNeededBodies() {
+    private func ensureNeededBodies() async {
         for id in [leftID, rightID] {
             guard let id, bodies[id] == nil else { continue }
-            if let fetched = store.pageVersionBody(for: id) {
+            if let fetched = await store.pageVersionBody(for: id) {
                 bodies[id] = fetched
             }
         }
     }
 
-    private func confirmRestore(_ versionID: PageVersionID) {
-        store.restorePage(for: pageID, to: versionID)
+    private func confirmRestore(_ versionID: PageVersionID) async {
+        await store.restorePage(for: pageID, to: versionID)
         // Reload so the new restore node appears at the top of the list with the
         // "Current" marker, and the head-derived Base default updates. Bodies
         // stay cached (blob-dedup means the restored body already exists in the
         // cache if its source version was viewed).
-        refresh(assignDefaults: false)
+        await refresh(assignDefaults: false)
     }
 }

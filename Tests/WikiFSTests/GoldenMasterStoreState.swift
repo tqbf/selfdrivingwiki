@@ -17,6 +17,19 @@ import WikiFSSearch
 enum GoldenMasterStoreState {
     static let wikiID = WikiID(rawValue: "golden-master")
 
+    // MARK: - Settle pump tuning (M10)
+
+    /// Consecutive no-event yields required before the event stream counts as
+    /// settled — wide enough that a mid-stream scheduling stall under
+    /// `--parallel` contention cannot be mistaken for the end of the stream.
+    /// Counted per single yield: any new event resets the counter.
+    fileprivate static let settleStableYieldWindow = 25
+    /// Total single-yield budget for the settle loop — 200 full stable
+    /// windows of headroom (25 stable yields each, worst case 25×25 = 625
+    /// yields to settle a quiet stream); exhausting it leaves the stream
+    /// unsettled and surfaces the WARNING line in the dump.
+    fileprivate static let settleYieldBudget = 5000
+
     // MARK: - Normalization
 
     /// Maps ULID-shaped tokens and ISO-8601 timestamps to encounter-order
@@ -112,14 +125,32 @@ enum GoldenMasterStoreState {
 
         let state = try runOperations(store: store, queueURL: queueURL, notes: &notes, normalizer: normalizer)
 
-        // The bus dispatches handlers via main-actor tasks; pump until the
-        // event stream settles (bounded, content-independent).
-        var settledCount = -1
-        var iterations = 0
-        while events.count != settledCount, iterations < 20 {
-            settledCount = events.count
-            try await Task.sleep(for: .milliseconds(20))
-            iterations += 1
+        // The bus dispatches handlers via main-actor tasks; pump the main
+        // actor until the event stream settles. Yields, not sleeps: the exit
+        // condition is count stability across 25 CONSECUTIVE single yields —
+        // each yield with no new event advances the counter, any new event
+        // resets it — so the wait is scheduler-driven and has no wall-clock
+        // budget to overrun under `--parallel` MainActor contention (a
+        // truncated settle made two otherwise-identical fixture runs capture
+        // different event lists; M10: a 3-yield window still settled early
+        // under contention — 25 consecutive stable yields make a mid-stream
+        // stall indistinguishable from settled by a wide margin).
+        var yieldBudget = Self.settleYieldBudget
+        var stableYields = 0
+        var settled = false
+        while !settled, yieldBudget > 0 {
+            let before = events.count
+            await Task.yield()
+            yieldBudget -= 1
+            if events.count == before {
+                stableYields += 1
+                settled = stableYields >= Self.settleStableYieldWindow
+            } else {
+                stableYields = 0
+            }
+        }
+        if !settled {
+            DebugLog.store("GoldenMaster: event stream never settled within the yield budget")
         }
 
         let eventLines = events.map { event in
@@ -127,6 +158,12 @@ enum GoldenMasterStoreState {
         }
         var dump = "# state\n"
         dump += state
+        if !settled {
+            // Visible-in-the-diff signal instead of a Testing macro (this
+            // exporter is a plain helper): an unsettled event stream makes
+            // the determinism comparison fail loudly.
+            dump += "# WARNING event stream unsettled\n"
+        }
         dump += "# script notes\n"
         dump += notes.map { "note \($0)" }.joined(separator: "\n") + "\n"
         dump += "# events\n"
@@ -343,12 +380,12 @@ enum GoldenMasterStoreState {
         }
 
         out += "# queue\n"
-        // The fixture's two queue items (ingestion, extraction) race their
-        // terminal transitions — independent queues, no scripted order — so
-        // loadRecent's recency order varies run to run. Sort by (queue, id)
-        // for a deterministic section; the golden master pins existence +
-        // state, not completion timing (same normalization philosophy as
-        // ULIDs/timestamps).
+        // Recency order (loadRecent: finished_at DESC) races for jobs that
+        // complete concurrently — the fixture's extraction and ingestion jobs
+        // are independent and their terminal transitions have no scripted
+        // order. The golden master pins existence + state, not incidental
+        // completion timing, so the section is dumped in a script-derived
+        // order instead (same normalization philosophy as ULIDs/timestamps).
         let recentQueueItems = try queue.loadRecent(limit: 50).sorted {
             ($0.queue.rawValue, $0.id.rawValue) < ($1.queue.rawValue, $1.id.rawValue)
         }

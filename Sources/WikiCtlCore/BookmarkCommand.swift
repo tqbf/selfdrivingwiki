@@ -46,27 +46,27 @@ public enum BookmarkCommand {
     }
 
     /// Run one action against `store`. Reads never commit; mutations do.
-    public static func run(_ action: Action, in store: WikiStore) throws -> Result {
+    public static func run(_ action: Action, in store: WikiStore) async throws -> Result {
         switch action {
         case .list(let json):
-            return try list(in: store, json: json)
+            return try await list(in: store, json: json)
         case .createFolder(let parentID, let name):
-            return try createFolder(parentID: parentID, name: name, in: store)
+            return try await createFolder(parentID: parentID, name: name, in: store)
         case .addRef(let parentID, let content):
-            return try addRef(parentID: parentID, content: content, in: store)
+            return try await addRef(parentID: parentID, content: content, in: store)
         case .rename(let id, let newName):
-            return try rename(id: id, to: newName, in: store)
+            return try await rename(id: id, to: newName, in: store)
         case .delete(let id):
-            return try delete(id: id, in: store)
+            return try await delete(id: id, in: store)
         case .move(let id, let toParentID, let position):
-            return try move(id: id, toParentID: toParentID, position: position, in: store)
+            return try await move(id: id, toParentID: toParentID, position: position, in: store)
         }
     }
 
     // MARK: - list
 
-    private static func list(in store: WikiStore, json: Bool) throws -> Result {
-        let nodes = try store.listBookmarkNodes()
+    private static func list(in store: WikiStore, json: Bool) async throws -> Result {
+        let nodes = try await store.listBookmarkNodes()
         // #1230 (axi.md principle 5): a zero-row run says so on stderr while
         // stdout keeps its exact bytes (empty TSV, empty JSON-lines stream).
         let emptyNote = nodes.isEmpty ? ZeroResults.note("bookmark list") : nil
@@ -105,8 +105,8 @@ public enum BookmarkCommand {
 
     // MARK: - create-folder
 
-    private static func createFolder(parentID: String?, name: String, in store: WikiStore) throws -> Result {
-        let node = try store.createBookmarkNode(
+    private static func createFolder(parentID: String?, name: String, in store: WikiStore) async throws -> Result {
+        let node = try await store.createBookmarkNode(
             parentID: parentID.map(BookmarkID.init(rawValue:)), position: -1, content: .folder(label: name)
         )
         return Result(output: "Created folder \"\(name)\" (id: \(node.id.rawValue)).", didCommit: true)
@@ -116,11 +116,11 @@ public enum BookmarkCommand {
 
     private static func addRef(
         parentID: String?, content: BookmarkNode.Content, in store: WikiStore
-    ) throws -> Result {
+    ) async throws -> Result {
         guard content.kind != .folder else {
             throw Failure.message("folder is not a reference")
         }
-        let node = try store.createBookmarkNode(
+        let node = try await store.createBookmarkNode(
             parentID: parentID.map(BookmarkID.init(rawValue:)), position: -1, content: content
         )
         let kindLabel: String
@@ -138,22 +138,22 @@ public enum BookmarkCommand {
 
     // MARK: - rename
 
-    private static func rename(id: String, to newName: String, in store: WikiStore) throws -> Result {
-        try store.renameBookmarkFolder(id: BookmarkID(rawValue: id), to: newName)
+    private static func rename(id: String, to newName: String, in store: WikiStore) async throws -> Result {
+        try await store.renameBookmarkFolder(id: BookmarkID(rawValue: id), to: newName)
         return Result(output: "Renamed bookmark node \(id) to \"\(newName)\".", didCommit: true)
     }
 
     // MARK: - delete
 
-    private static func delete(id: String, in store: WikiStore) throws -> Result {
-        try store.deleteBookmarkNode(id: BookmarkID(rawValue: id))
+    private static func delete(id: String, in store: WikiStore) async throws -> Result {
+        try await store.deleteBookmarkNode(id: BookmarkID(rawValue: id))
         return Result(output: "Deleted bookmark node \(id) (and descendants).", didCommit: true)
     }
 
     // MARK: - move
 
-    private static func move(id: String, toParentID: String?, position: Int, in store: WikiStore) throws -> Result {
-        try store.moveBookmarkNode(
+    private static func move(id: String, toParentID: String?, position: Int, in store: WikiStore) async throws -> Result {
+        try await store.moveBookmarkNode(
             id: BookmarkID(rawValue: id), toParentID: toParentID.map(BookmarkID.init(rawValue:)), position: position
         )
         return Result(output: "Moved bookmark node \(id).", didCommit: true)

@@ -37,7 +37,10 @@ struct WikiCtlDumpConfigTests {
         let app = try DumpConfigCommand.run(
             kind: .app, scope: .wiki, homeDirectory: nil, ambient: ambient)
         #expect(app.output.contains("id: renderer-services"))
-        #expect(app.output.contains("id: tantivy"))
+        // P5: the app's local Tantivy assembly is REMOVED — the app wiki
+        // profile mounts no `wiki.search.tantivy` entry (sessions consume
+        // the daemon-backed search facade).
+        #expect(!app.output.contains("id: tantivy"))
         #expect(app.output.contains("databasePath: /fixture/wiki.sqlite"))
         let daemon = try DumpConfigCommand.run(
             kind: .daemon, scope: .wiki, homeDirectory: nil, ambient: ambient)

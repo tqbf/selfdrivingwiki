@@ -266,7 +266,7 @@ func execute(
             try FenceSyntaxValidationService(
                 layout: RendererPackageStoreLayout(appGroupContainerRoot: containerDirectory))
         })
-        let r = try PageCommand.run(action, in: store, validator: fenceValidator, bm25Leg: leg)
+        let r = try await PageCommand.run(action, in: store, validator: fenceValidator, bm25Leg: leg)
         return SourceCommand.Result(
             payload: .text(r.output),
             didCommit: r.didCommit,
@@ -276,14 +276,14 @@ func execute(
         // The author arrived resolved (flag > env) via `applyEnv`. Parse it
         // through the typed `PageAuthor` seam HERE — the single boundary
         // between parse-land strings and command-land types.
-        let r = try LogIndexCommand.run(
+        let r = try await LogIndexCommand.run(
             .logAppend(kind: kind, title: title, note: note, source: source,
                        author: PageAuthor(rawValue: author)),
             in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .indexSet(let bodyFile, let workspace):
         let body = try readBodyFile(from: bodyFile)
-        let r = try LogIndexCommand.run(.indexSet(body: body, workspace: workspace), in: store)
+        let r = try await LogIndexCommand.run(.indexSet(body: body, workspace: workspace), in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
     case .transcribe:
         // Rejected before execution by the daemon-family guard in `run()`.
@@ -300,7 +300,7 @@ func execute(
                 in: store,
                 fetcher: URLSessionFetcher())
         }
-        return try SourceCommand.run(
+        return try await SourceCommand.run(
             action, in: store,
             cwd: FileManager.default.currentDirectoryPath,
             bm25Leg: try await cliSourceLegIfSearch(
@@ -329,17 +329,17 @@ func execute(
             in: store,
             wikiID: wikiID)
     case .bookmark(let action):
-        let r = try BookmarkCommand.run(action, in: store)
+        let r = try await BookmarkCommand.run(action, in: store)
         return SourceCommand.Result(
             payload: .text(r.output), didCommit: r.didCommit,
             stderrOutput: r.stderrOutput)
     case .workspace(let action):
-        let r = try WorkspaceCommand.run(action, in: store)
+        let r = try await WorkspaceCommand.run(action, in: store)
         return SourceCommand.Result(
             payload: .text(r.output), didCommit: r.didCommit,
             stderrOutput: r.stderrOutput)
     case .strategy(let action):
-        let r = try StrategyCommand.run(action, in: store)
+        let r = try await StrategyCommand.run(action, in: store)
         return SourceCommand.Result(
             payload: .text(r.output),
             didCommit: r.didCommit,
@@ -370,7 +370,7 @@ private func runChatCommand(
     } else {
         leg = nil
     }
-    let r = try ChatCommand.run(action, in: store, bm25Leg: leg)
+    let r = try await ChatCommand.run(action, in: store, bm25Leg: leg)
     return SourceCommand.Result(
         payload: .text(r.output), didCommit: r.didCommit,
         stderrOutput: r.stderrOutput)

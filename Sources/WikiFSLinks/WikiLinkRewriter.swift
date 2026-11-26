@@ -172,4 +172,115 @@ public enum WikiLinkRewriter {
 
         return changed ? result : nil
     }
+
+    /// Async mirror of ``canonicalize(in:resolvePage:resolveSource:resolveChat:)``
+    /// for callers whose resolvers suspend — the store-sequential upsert
+    /// fallback (`PageUpsert.upsertSequential`), which resolves through an
+    /// `any WikiStore` existential whose requirements are `async`. The walk
+    /// logic is byte-for-byte the sync version with `try await` at the six
+    /// resolver call sites; keep the two in sync when editing either.
+    /// Production canonicalization (`GRDBWikiStore`) resolves in-transaction
+    /// through the sync overload and never uses this path.
+    public static func canonicalize(
+        in body: String,
+        resolvePage: (String) async throws -> PageID?,
+        resolveSource: (String) async throws -> SourceID?,
+        resolveChat: (String) async throws -> ChatID?
+    ) async throws -> String? {
+        let ns = body as NSString
+        let codeRanges = WikiLinkSpan.protectedCodeRanges(in: body)
+        let matches = WikiLinkSpan.matches(in: body)
+
+        var result = body
+        var changed = false
+
+        // Walk right-to-left so byte offsets stay valid across splices.
+        for match in matches.reversed() {
+            let fullRange = match.range
+            guard !WikiLinkSpan.isProtected(fullRange, by: codeRanges) else { continue }
+
+            let targetRange = match.range(at: 1)
+            let aliasRange = match.range(at: 2)
+            let rawTarget = ns.substring(with: targetRange)
+            let rawAlias = aliasRange.location != NSNotFound ? ns.substring(with: aliasRange) : nil
+
+            let fixed = WikiLinkFixer.fix(target: rawTarget, alias: rawAlias)
+            let collapsed = WikiText.normalized(fixed.target)
+            guard !collapsed.isEmpty else { continue }
+
+            let (base, fragment) = WikiLinkParser.splitFragment(collapsed)
+            guard !base.isEmpty else { continue } // same-page anchor → skip
+
+            let (bareBase, pin) = WikiLinkParser.splitVersionPin(base)
+            let (kind, bareTarget) = WikiLinkParser.classify(bareBase)
+            guard !bareTarget.isEmpty, !WikiLinkParser.isEmptyPrefix(bareBase) else { continue }
+            if WikiLinkParser.isCanonicalULID(bareTarget) { continue }
+
+            if rawAlias != nil, fragment == nil, pin == nil,
+               let rawAliasValue = fixed.alias {
+                let candidates = WikiLinkResolver.pipeReconstructionCandidates(
+                    bare: bareTarget, alias: rawAliasValue)
+                var resolved: (id: String, name: String, fragment: String?)? = nil
+                candidateLoop: for candidate in candidates {
+                    for split in WikiLinkResolver.candidateSplits(of: candidate) {
+                        let id: String?
+                        switch kind {
+                        case .source: id = try await resolveSource(split.base)?.rawValue
+                        case .chat:   id = try await resolveChat(split.base)?.rawValue
+                        case .page:   id = try await resolvePage(split.base)?.rawValue
+                        }
+                        if let id {
+                            resolved = (id, split.base, split.fragment)
+                            break candidateLoop
+                        }
+                    }
+                }
+                if let (resolvedID, resolvedName, resolvedFragment) = resolved {
+                    let canonicalTarget = kind.linkPrefix + resolvedID
+                        + (resolvedFragment.map { "#\($0)" } ?? "")
+                    let replacement = "[[\(canonicalTarget)|\(resolvedName)]]"
+                    let mutable = NSMutableString(string: result)
+                    mutable.replaceCharacters(in: fullRange, with: replacement)
+                    result = mutable as String
+                    changed = true
+                    continue
+                }
+            }
+
+            let raw = fragment.map { "\(bareTarget)#\($0)" } ?? bareTarget
+            var resolved: (id: String, fragment: String?)?
+            for split in WikiLinkResolver.candidateSplits(of: raw) {
+                let id: String?
+                switch kind {
+                case .source: id = try await resolveSource(split.base)?.rawValue
+                case .chat:   id = try await resolveChat(split.base)?.rawValue
+                case .page:   id = try await resolvePage(split.base)?.rawValue
+                }
+                if let id {
+                    resolved = (id, split.fragment)
+                    break
+                }
+            }
+            guard let (resolvedID, resolvedFragment) = resolved else { continue }
+
+            let prefix = kind.linkPrefix
+            let canonicalTarget = prefix + resolvedID
+                + (pin.map { "@v\($0)" } ?? "")
+                + (resolvedFragment.map { "#\($0)" } ?? "")
+
+            if rawAlias != nil {
+                let mutable = NSMutableString(string: result)
+                mutable.replaceCharacters(in: targetRange, with: canonicalTarget)
+                result = mutable as String
+            } else {
+                let replacement = "[[\(canonicalTarget)|\(bareTarget)]]"
+                let mutable = NSMutableString(string: result)
+                mutable.replaceCharacters(in: fullRange, with: replacement)
+                result = mutable as String
+            }
+            changed = true
+        }
+
+        return changed ? result : nil
+    }
 }

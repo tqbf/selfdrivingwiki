@@ -52,58 +52,58 @@ struct FenceEditorWarningTests {
         func validationSkipNotice(for markdown: String) -> String? { nil }
     }
 
-    @Test func saveSetsWarningForBrokenDiagram() throws {
+    @Test func saveSetsWarningForBrokenDiagram() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.fenceSyntaxValidator = try repoValidator()
-        model.newPage(title: "Diagrams")
+        await model.newPage(title: "Diagrams")
         model.draftBody = "```mermaid\nflowchart LR\n  A[unclosed\n```"
-        model.save()
+        await model.save()
         // Non-blocking: the save still happened, but the warning is surfaced.
         #expect(model.fenceSaveWarning != nil)
         #expect(model.fenceSaveWarning?.contains("PARSE_ERROR") == true)
     }
 
-    @Test func saveClearsWarningOnceFixed() throws {
+    @Test func saveClearsWarningOnceFixed() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.fenceSyntaxValidator = try repoValidator()
-        model.newPage(title: "Diagrams")
+        await model.newPage(title: "Diagrams")
         model.draftBody = "```mermaid\nflowchart LR\n  A[unclosed\n```"
-        model.save()
+        await model.save()
         #expect(model.fenceSaveWarning != nil)
         // Fix the block and re-save → warning clears.
         model.draftBody = "```mermaid\nflowchart LR\n  A[\"X\"] --> B[\"Y\"]\n```"
-        model.save()
+        await model.save()
         #expect(model.fenceSaveWarning == nil)
     }
 
-    @Test func pageSwitchClearsStaleWarning() throws {
+    @Test func pageSwitchClearsStaleWarning() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.fenceSyntaxValidator = try repoValidator()
-        model.newPage(title: "Bad")
+        await model.newPage(title: "Bad")
         model.draftBody = "```mermaid\nflowchart LR\n  A[unclosed\n```"
-        model.save()
+        await model.save()
         #expect(model.fenceSaveWarning != nil)
         // Selecting another page reloads drafts, which must clear the stale banner.
-        model.newPage(title: "Other")
+        await model.newPage(title: "Other")
         #expect(model.fenceSaveWarning == nil)
     }
 
-    @Test func noWarningForPageWithoutClaimedFence() throws {
+    @Test func noWarningForPageWithoutClaimedFence() async throws {
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
         model.fenceSyntaxValidator = try repoValidator()
-        model.newPage(title: "Prose")
+        await model.newPage(title: "Prose")
         model.draftBody = "# Just a heading\n\nNo diagrams here."
-        model.save()
+        await model.save()
         #expect(model.fenceSaveWarning == nil)
     }
 
-    @Test func nilValidatorSkipsWarning() throws {
+    @Test func nilValidatorSkipsWarning() async throws {
         // The no-package path: no injected validator → the save proceeds and
         // no banner appears, exactly like the old nil-validator contract.
         let model = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: tempURL()))
-        model.newPage(title: "Diagrams")
+        await model.newPage(title: "Diagrams")
         model.draftBody = "```mermaid\nflowchart LR\n  A[unclosed\n```"
-        model.save()
+        await model.save()
         #expect(model.fenceSaveWarning == nil)
     }
 }

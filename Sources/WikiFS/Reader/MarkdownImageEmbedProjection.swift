@@ -337,7 +337,7 @@ enum RendererAssetAdmissionProjection {
         sourceExtensions: [SourceID: String],
         allowedRoles: Set<RendererAssetRole>,
         maximumBytesPerAsset: Int
-    ) throws -> [RendererAuthorizedAssetReader.Admission] {
+    ) async throws -> [RendererAuthorizedAssetReader.Admission] {
         // Normalize the comparison key ONCE at admission. Package requests
         // must match this exact key; no basename-only or extension-stripped
         // fallback for byte reads.
@@ -346,7 +346,7 @@ enum RendererAssetAdmissionProjection {
                 (key.trimmingCharacters(in: .whitespacesAndNewlines), sourceID)
             })
 
-        func resolveFacts(_ rawReference: String) throws -> (
+        func resolveFacts(_ rawReference: String) async throws -> (
             sourceID: SourceID,
             sourceVersionID: SourceVersionID,
             mimeType: String,
@@ -354,13 +354,13 @@ enum RendererAssetAdmissionProjection {
             digest: String
         )? {
             guard let sourceID = normalized[rawReference],
-                  let version = try store.activeContentVersion(sourceID: sourceID)
+                  let version = try await store.activeContentVersion(sourceID: sourceID)
             else { return nil }
             // A failed source read means the admission is simply unavailable
             // (the reference falls back) — it is not a crash. `try?` is
             // intentional; the caller does not need a typed denial here.
             // swiftlint:disable:next silent_try_optional
-            guard let bytes = try? store.sourceContent(versionID: version.id) else { return nil }
+            guard let bytes = try? await store.sourceContent(versionID: version.id) else { return nil }
             let extensionKey = sourceExtensions[sourceID]
             let mime = version.mimeType ?? Self.mimeType(for: extensionKey)
             return (
@@ -371,7 +371,7 @@ enum RendererAssetAdmissionProjection {
                 digest: RendererSHA256.digest(bytes).hex)
         }
 
-        return try RendererAssetAdmissionBuilder.buildAdmissions(
+        return try await RendererAssetAdmissionBuilder.buildAdmissions(
             records: records,
             resolveSourceFacts: resolveFacts,
             allowedRoles: allowedRoles,

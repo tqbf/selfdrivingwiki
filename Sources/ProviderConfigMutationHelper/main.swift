@@ -40,8 +40,14 @@ struct ProviderConfigMutationHelper {
         let modelID = ModelID(rawValue: arguments[6])
 
         try Data().write(to: readyURL, options: .atomic)
+        // The go-wait budget must comfortably exceed the parent's readiness
+        // wait plus CI scheduling slop: on a 3-vCPU runner the parent writes
+        // the go file after observing BOTH children's ready files, which can
+        // land well past this child's own start. A 15 s budget raced that
+        // window and the child exited 1 before the go signal — the cross-
+        // process test then failed with missing result files.
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(15))
+        let deadline = clock.now.advanced(by: .seconds(60))
         while !FileManager.default.fileExists(atPath: goURL.path) {
             guard clock.now < deadline else {
                 throw AgentProvidersConfigStoreError.lockAcquisitionTimedOut

@@ -181,11 +181,11 @@ struct RendererSessionPreparationTests {
         let descriptor = try RendererPreparationFixtures.descriptor(assetRead: nil)
         let authority = try await Self.makeAuthority(descriptor, input: input, store: store)
 
-        defer { authority.close() }
-        let payload = try authority.inputReader.read(input)
+        let payload = try await authority.inputReader.read(input)
         #expect(payload.bytes == png)
         #expect(authority.assetReader == nil)
         #expect(authority.isClosed == false)
+        await authority.close()
     }
 
     @Test("extractor fetch failure keeps primary rendering with nil asset reader")
@@ -202,10 +202,10 @@ struct RendererSessionPreparationTests {
             assetRead: RendererPreparationFixtures.assetReadDeclaration())
         let authority = try await Self.makeAuthority(descriptor, input: input, store: store)
 
-        defer { authority.close() }
-        let payload = try authority.inputReader.read(input)
+        let payload = try await authority.inputReader.read(input)
         #expect(payload.bytes == png)
         #expect(authority.assetReader == nil)
+        await authority.close()
     }
 
     @Test("prepared authority close is idempotent and revokes the input reader")
@@ -219,12 +219,12 @@ struct RendererSessionPreparationTests {
         let descriptor = try RendererPreparationFixtures.descriptor(assetRead: nil)
         let authority = try await Self.makeAuthority(descriptor, input: input, store: store)
 
-        authority.close()
+        await authority.close()
         #expect(authority.isClosed)
-        #expect(throws: RendererAuthorizedInputReader.ReaderError.closed) {
-            _ = try authority.inputReader.read(input)
+        await #expect(throws: RendererAuthorizedInputReader.ReaderError.closed) {
+            _ = try await authority.inputReader.read(input)
         }
-        authority.close()  // idempotent
+        await authority.close()  // idempotent
         #expect(authority.isClosed)
     }
 
@@ -244,10 +244,10 @@ struct RendererSessionPreparationTests {
 
         // Simulate the owner's stale gate: the authority is valid but the
         // owning presentation has moved on, so it must close instead of mount.
-        authority.close()
+        await authority.close()
         #expect(authority.isClosed)
-        #expect(throws: RendererAuthorizedInputReader.ReaderError.closed) {
-            _ = try authority.inputReader.read(input)
+        await #expect(throws: RendererAuthorizedInputReader.ReaderError.closed) {
+            _ = try await authority.inputReader.read(input)
         }
     }
 }
@@ -281,17 +281,16 @@ struct RendererPreparedAssetReadTests {
             maximumAggregateSessionBytes: 8192,
             maximumPerRequestReadCount: 4,
             store: store)
-        defer { reader.close() }
-
         // Exact read succeeds and returns the pinned bytes.
-        let payload = try reader.read(reference)
+        let payload = try await reader.read(reference)
         #expect(payload.bytes == png)
         #expect(payload.mimeType == "image/png")
 
         // An unadmitted reference fails closed.
-        #expect(throws: RendererAuthorizedAssetReader.ReaderError.unadmittedReference) {
-            _ = try reader.read(try RendererAssetReference(validating: "stranger.png"))
+        await #expect(throws: RendererAuthorizedAssetReader.ReaderError.unadmittedReference) {
+            _ = try await reader.read(try RendererAssetReference(validating: "stranger.png"))
         }
+        reader.close()
     }
 }
 
@@ -370,7 +369,7 @@ struct RendererSessionPreparationOwnerPhaseTests {
         #expect(owner.phase == .idle)
         #expect(owner.isPending)
 
-        owner.prepare(request)
+        await owner.prepare(request)
         #expect(owner.phase == .preparing)
         #expect(owner.isPending)
 
@@ -384,7 +383,7 @@ struct RendererSessionPreparationOwnerPhaseTests {
         #expect(owner.identity == request.identity)
         #expect(owner.isPending == false)
 
-        owner.cancel()
+        await owner.cancel()
     }
 
     @Test("a thrown preparation publishes failed with no authority")
@@ -397,7 +396,7 @@ struct RendererSessionPreparationOwnerPhaseTests {
             descriptor: descriptor, input: input, store: store)
         let owner = RendererSessionPreparationOwner { _ in throw Boom() }
 
-        owner.prepare(request)
+        await owner.prepare(request)
         try await waitUntil { owner.phase == .failed }
         #expect(owner.prepared == nil)
         #expect(owner.identity == request.identity)
@@ -418,11 +417,11 @@ struct RendererSessionPreparationOwnerPhaseTests {
             throw Late()
         }
 
-        owner.prepare(request)
+        await owner.prepare(request)
         #expect(owner.phase == .preparing)
 
         try await waitUntil { gate.isSuspended }
-        owner.cancel()
+        await owner.cancel()
         #expect(owner.phase == .idle)
         #expect(owner.prepared == nil)
         #expect(owner.isPending)
@@ -444,11 +443,11 @@ struct RendererSessionPreparationOwnerPhaseTests {
             try await self.succeedingPreparation(request)
         }
 
-        owner.prepare(request)
+        await owner.prepare(request)
         try await waitUntil { owner.phase == .prepared }
         let authority = try #require(owner.prepared)
 
-        owner.cancel()
+        await owner.cancel()
         #expect(owner.phase == .idle)
         #expect(owner.prepared == nil)
         #expect(owner.identity == nil)
@@ -466,11 +465,11 @@ struct RendererSessionPreparationOwnerPhaseTests {
             try await self.succeedingPreparation(request)
         }
 
-        owner.prepare(request)
+        await owner.prepare(request)
         try await waitUntil { owner.phase == .prepared }
         let authority = try #require(owner.prepared)
 
-        owner.markUnavailable()
+        await owner.markUnavailable()
         #expect(owner.phase == .failed)
         #expect(owner.prepared == nil)
         #expect(owner.isPending == false)
@@ -498,14 +497,14 @@ struct RendererSessionPreparationOwnerPhaseTests {
             return try await self.succeedingPreparation(request)
         }
 
-        owner.prepare(requestA)
+        await owner.prepare(requestA)
         #expect(owner.phase == .preparing)
         #expect(owner.identity == requestA.identity)
 
         try await waitUntil { gate.isSuspended }
 
         // The newer request owns the phase; the older task is cancelled.
-        owner.prepare(requestB)
+        await owner.prepare(requestB)
         #expect(owner.phase == .preparing)
         #expect(owner.identity == requestB.identity)
 
@@ -515,7 +514,7 @@ struct RendererSessionPreparationOwnerPhaseTests {
         #expect(owner.identity == requestB.identity)
         #expect(owner.isPending == false)
 
-        owner.cancel()
+        await owner.cancel()
     }
 }
 #endif

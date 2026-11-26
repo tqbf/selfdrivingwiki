@@ -51,8 +51,10 @@ final class ChatComposerAttachmentModel {
     /// by design: persistence is disarmed until `armPersistence()`.
     func restoreFromStore() {
         guard !isPersistenceArmed, let store = boundStore, let chatID = boundChatID else { return }
-        let targets = store.chatAttachments(chatID: chatID)
-        applyTargets(targets, store: store)
+        Task {
+            let targets = await store.chatAttachments(chatID: chatID)
+            applyTargets(targets, store: store)
+        }
     }
 
     /// Arm write-through. A no-op for the unbound or draft-surface model.
@@ -105,9 +107,11 @@ final class ChatComposerAttachmentModel {
     /// authoritative and the next mutation retries the write.
     private func persistCurrentState() {
         guard isPersistenceArmed, let store = boundStore, let chatID = boundChatID else { return }
-        store.setChatAttachments(
-            chatID: chatID,
-            targets: attachments.map(\.attachmentTarget))
+        Task {
+            await store.setChatAttachments(
+                chatID: chatID,
+                targets: attachments.map(\.attachmentTarget))
+        }
     }
 }
 

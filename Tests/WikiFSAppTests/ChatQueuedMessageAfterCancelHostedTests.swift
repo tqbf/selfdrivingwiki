@@ -183,8 +183,7 @@ struct ChatQueuedMessageAfterCancelHostedTests {
                 extractionCoordinator: ExtractionCoordinator(
                     containerDirectory: dir,
                     localExtractorFactory: { QueuedAfterCancelStubExtractor() }),
-                queueEngine: try makeQueuedAfterCancelQueueEngine(),
-                extractionProvider: QueuedAfterCancelStubExtractionProvider())
+                queueEngine: try makeQueuedAfterCancelQueueEngine())
 
             // A configured provider, so the view's chat-operation gate is open.
             let providersDirectory = dir.appendingPathComponent("providers", isDirectory: true)
@@ -196,7 +195,7 @@ struct ChatQueuedMessageAfterCancelHostedTests {
             ).save(to: providersDirectory)
 
             // The durable chat the view opens; the daemon reads the same file.
-            session.store.beginNewChat()
+            await session.store.beginNewChat()
             guard case .chat(let chatID) = session.store.selection else {
                 throw FixtureError.noChatRoute
             }

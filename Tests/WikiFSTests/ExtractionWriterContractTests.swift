@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import WikiCtlCore
 @testable import WikiFSCore
+@testable import WikiFSEngine
 
 @MainActor
 struct ExtractionWriterContractTests {
@@ -51,11 +52,11 @@ struct ExtractionWriterContractTests {
         #expect(value.modelID == nil)
     }
 
-    @Test func pdfSeedUsesCanonicalExtraction() throws {
+    @Test func pdfSeedUsesCanonicalExtraction() async throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
         let model = WikiStoreModel(store: store)
-        _ = try #require(model.seedPdfMarkdown(
+        _ = try await #require(model.seedPdfMarkdown(
             for: summary.id, content: "seed", backend: .doclingServe, modelVersion: "1.2"))
         let value = try provenance(store, sourceID: summary.id)
         #expect(value.producer == .tool(.docling))
@@ -119,18 +120,29 @@ struct ExtractionWriterContractTests {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(
             store, filename: "page.html", data: Data("<h1>Heading</h1><p>Body</p>".utf8))
-        let model = WikiStoreModel(store: store)
-        _ = try #require(await model.extractHtml(for: summary.id, backend: .tagBased))
+        // The daemon format route's tag-based floor: a resolution with a nil
+        // package producer writes `.tool(.html)` provenance — the same
+        // contract the inline pipeline this replaced asserted (P4.3).
+        let resolution = HtmlExtractionResolution(
+            extract: { "tag-extracted" },
+            filename: summary.filename,
+            backend: .tagBased,
+            producer: nil,
+            technique: QueueFormatRoute.htmlToMarkdownTechnique)
+        let reference = try QueueFormatRoute.persistHtml(
+            store: store, sourceID: summary.id, resolution: resolution,
+            markdown: "tag-extracted", nominateActive: false)
+        _ = try #require(reference)
         let value = try provenance(store, sourceID: summary.id)
         #expect(value.producer == .tool(.html))
         #expect(value.providerID == nil)
         #expect(value.modelID == nil)
     }
 
-    @Test func materializerSidecarUsesTypedTool() throws {
+    @Test func materializerSidecarUsesTypedTool() async throws {
         let store = try TestStoreFactory.inMemory()
         let model = WikiStoreModel(store: store)
-        let summary = try model.storeMaterialized(.init(
+        let summary = try await model.storeMaterialized(.init(
             filename: "sidecar.html", data: Data("<p>raw</p>".utf8),
             mimeType: "text/html", extractedMarkdown: "sidecar",
             extractionTechnique: "legacy-sidecar"))
@@ -138,36 +150,36 @@ struct ExtractionWriterContractTests {
         #expect(value.producer == .tool(.materializerSidecar))
     }
 
-    @Test func appleTranscriptUsesTypedTool() throws {
-        try assertTranscript(technique: ExtractionTool.appleTTML.rawValue, expected: .appleTTML)
+    @Test func appleTranscriptUsesTypedTool() async throws {
+        try await assertTranscript(technique: ExtractionTool.appleTTML.rawValue, expected: .appleTTML)
     }
 
-    @Test func youtubeTranscriptUsesTypedTool() throws {
-        try assertTranscript(technique: ExtractionTool.youtubeCaptions.rawValue, expected: .youtubeCaptions)
+    @Test func youtubeTranscriptUsesTypedTool() async throws {
+        try await assertTranscript(technique: ExtractionTool.youtubeCaptions.rawValue, expected: .youtubeCaptions)
     }
 
-    @Test func rssTranscriptUsesTypedTool() throws {
-        try assertTranscript(technique: ExtractionTool.rssPodcastTranscript.rawValue, expected: .rssPodcastTranscript)
+    @Test func rssTranscriptUsesTypedTool() async throws {
+        try await assertTranscript(technique: ExtractionTool.rssPodcastTranscript.rawValue, expected: .rssPodcastTranscript)
     }
 
-    @Test func vimeoTranscriptUsesTypedTool() throws {
-        try assertTranscript(technique: ExtractionTool.vimeoTranscript.rawValue, expected: .vimeoTranscript)
+    @Test func vimeoTranscriptUsesTypedTool() async throws {
+        try await assertTranscript(technique: ExtractionTool.vimeoTranscript.rawValue, expected: .vimeoTranscript)
     }
 
-    @Test func wikictlTranscriptUsesTypedTool() throws {
+    @Test func wikictlTranscriptUsesTypedTool() async throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
-        try SourceCommand.persistRefreshMaterial(
+        try await SourceCommand.persistRefreshMaterial(
             .derivedMarkdown(content: "refreshed transcript"), sourceID: summary.id, in: store)
         let value = try provenance(store, sourceID: summary.id)
         #expect(value.producer == .tool(.transcript))
     }
 
-    private func assertTranscript(technique: String, expected: ExtractionTool) throws {
+    private func assertTranscript(technique: String, expected: ExtractionTool) async throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
         let model = WikiStoreModel(store: store)
-        _ = try #require(model.appendTranscriptMarkdown(
+        _ = try await #require(model.appendTranscriptMarkdown(
             for: summary.id, content: "transcript", technique: technique))
         let value = try provenance(store, sourceID: summary.id)
         #expect(value.origin == .transcript)

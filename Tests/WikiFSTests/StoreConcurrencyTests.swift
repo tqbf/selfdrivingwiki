@@ -32,8 +32,8 @@ struct StoreConcurrencyTests {
         let (store, _) = try makeStore()
         var created: [PageID] = []
         for i in 0..<20 {
-            let page = try store.createPage(title: "Page \(i)")
-            try store.updatePage(id: page.id, title: "Page \(i)", body: "body \(i) [[Page 0]]")
+            let page = try await store.createPage(title: "Page \(i)")
+            try await store.updatePage(id: page.id, title: "Page \(i)", body: "body \(i) [[Page 0]]")
             created.append(page.id)
         }
         let ids = created   // immutable snapshot for the @Sendable task closures
@@ -143,77 +143,6 @@ struct StoreConcurrencyTests {
         }
         // Link rows are intact.
         #expect(try store.sourceLinkingPages(to: source.id).count == 3)
-    }
-
-    // MARK: - WikiReadService
-
-    @Test func readServiceSeesWriterCommits() async throws {
-        let (store, url) = try makeStore()
-        let service = WikiReadService(databaseURL: url)
-
-        _ = try store.addSource(filename: "visible.txt", data: Data("one".utf8))
-        let names = try await service.asyncRead { try $0.listSources().map(\.filename) }
-        #expect(names == ["visible.txt"])
-
-        _ = try store.addSource(filename: "also-visible.txt", data: Data("two".utf8))
-        let namesAfterWrite = try await service.asyncRead { try $0.listSources().map(\.filename).sorted() }
-        #expect(namesAfterWrite == ["also-visible.txt", "visible.txt"])
-    }
-
-    @Test func readServiceReusesIdleConnections() async throws {
-        let (store, url) = try makeStore()
-        _ = try store.addSource(filename: "seed.txt", data: Data("seed".utf8))
-        let service = WikiReadService(databaseURL: url, maxIdle: 2)
-        #expect(await service.idleConnectionCountForTesting() == 0)
-        _ = try await service.asyncRead { try $0.listSources().count }
-        #expect(await service.idleConnectionCountForTesting() == 1)
-        _ = try await service.asyncRead { try $0.listSources().count }
-        #expect(await service.idleConnectionCountForTesting() == 1)
-    }
-
-    @Test func readServiceRejectsReadsAfterShutdown() async throws {
-        let (_, url) = try makeStore()
-        let service = WikiReadService(databaseURL: url)
-        await service.shutdown()
-        await service.shutdown()
-
-        #expect(await service.lifecycleStateForTesting() == .stopped)
-        await #expect(throws: WikiReadServiceError.unavailable) {
-            try await service.asyncRead { try $0.listSources().count }
-        }
-    }
-
-    /// Concurrent service reads while the writer changes the WAL head.
-    @Test func concurrentReadServiceReadsWithLiveWriter() async throws {
-        let (store, url) = try makeStore()
-        for i in 0..<10 {
-            _ = try store.addSource(filename: "P\(i).txt", data: Data("P\(i)".utf8))
-        }
-        let service = WikiReadService(databaseURL: url)
-
-        await withTaskGroup(of: Void.self) { group in
-            for _ in 0..<6 {
-                group.addTask {
-                    for _ in 0..<50 {
-                        do {
-                            _ = try await service.asyncRead { try $0.listSources().count }
-                        } catch {
-                            Issue.record(error)
-                        }
-                    }
-                }
-            }
-            group.addTask {
-                for i in 0..<50 {
-                    do {
-                        _ = try store.addSource(filename: "W\(i).txt", data: Data("W\(i)".utf8))
-                    } catch {
-                        Issue.record(error)
-                    }
-                }
-            }
-        }
-        #expect(try store.listSources().count == 60)
     }
 }
 
@@ -381,7 +310,7 @@ extension StoreConcurrencyTests {
 
         // Nesting + commit: the nested replacement and a sibling write both
         // commit together.
-        let sibling = try store.createPage(title: "Sibling")
+        let sibling = try await store.createPage(title: "Sibling")
         try store.withTransaction {
             try store.setChatAttachments(chatID: chat.id, targets: [
                 .page(sibling.id),

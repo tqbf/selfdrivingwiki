@@ -17,7 +17,7 @@ import WikiFSTypes
 /// `[[…]]` cite link inside works identically.
 ///
 /// **Threading / SQLite discipline.** Both helpers are pure given a read-only
-/// store view (`GRDBWikiStore(readOnlyURL:)`, `query_only=ON`) and the
+/// store view (query-only, migration-free) and the
 /// pure-data `WikiRenderContext` snapshot — they never touch the main actor,
 /// the WebView, or `evaluateJavaScript`, and they run no transaction /
 /// inference / extraction. Unit-testable against the `:memory:` fixtures
@@ -63,30 +63,88 @@ enum TransclusionEmbedder {
     /// Returns `.empty` when there is no body to render. This includes a missing
     /// page or a binary source without extracted Markdown. The caller renders a
     /// muted typed placeholder instead of injecting content.
+
+    /// P5: the async store read — the ONLY production path. Every read is a
+    /// `WikiStore` protocol call: remote in the app (the daemon executes it
+    /// over the wire), local in tests. The read set is the same bounded
+    /// per-embed set the deleted read-pool variant had.
     static func renderEmbedBody(
-        access: borrowing WikiReadAccess,
+        store: any WikiStore,
         target: TargetID,
         context: WikiRenderContext,
         options: MarkdownRenderOptions,
         rendererSourceTypes: RegisteredRendererSourceTypes = .none,
         policy: RenderPolicy = .nestedStatic,
         ancestors: Set<TargetID> = []
-    ) throws -> Result {
+    ) async throws -> Result {
         let raw: String?
         let contentKind: ReaderMarkdown.ContentKind
         switch target {
         case .page(let id):
-            let page = try access.getPage(id: id)
+            let page = try await store.getPage(id: id)
             raw = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             contentKind = .document
         case .source(let id):
-            raw = try sourceEmbedBody(
-                access: access,
-                id: id,
-                rendererSourceTypes: rendererSourceTypes)
+            if let head = try await store.processedMarkdownHead(sourceID: id) {
+                raw = head.content
+            } else {
+                raw = try await sourceEmbedBody(
+                    store: store, id: id, rendererSourceTypes: rendererSourceTypes)
+            }
             contentKind = .source
         }
         guard let raw, !raw.isEmpty else { return .empty }
+        return renderPrepared(
+            raw, contentKind: contentKind, target: target, context: context,
+            options: options, ancestors: ancestors)
+    }
+
+    /// The async twin of ``sourceEmbedBody(testFixtureStore:id:…)``: source
+    /// markdown HEAD if present, else raw UTF-8 bytes for native-text
+    /// sources, else `nil` (binary/PDF — the caller renders the "Source not
+    /// yet extracted" placeholder, **no extraction is triggered**).
+    static func sourceEmbedBody(
+        store: any WikiStore,
+        id: SourceID,
+        rendererSourceTypes: RegisteredRendererSourceTypes = .none
+    ) async throws -> String? {
+        // The protocol has no per-ID source summary op — one catalog read,
+        // then the ID lookup (the wiki's catalog is bounded; the embed's
+        // real byte read is the single `sourceContent` below).
+        guard let source = try await store.listSources().first(where: { $0.id == id }) else {
+            return nil
+        }
+        let maybeTextual = MimeType.isText(source.mimeType)
+            || rendererSourceTypes.mightPresentAsText(
+                mimeType: source.mimeType,
+                filenameExtension: source.ext)
+        guard maybeTextual else { return nil }
+        do {
+            let data = try await store.sourceContent(id: id)
+            let effectiveMIME = rendererSourceTypes.resolve(
+                mimeType: source.mimeType,
+                filenameExtension: source.ext,
+                boundedBytes: data,
+                bytesAreComplete: source.byteSize == data.count,
+                artifactKind: .source).resolution?.canonicalMIMEType.rawValue ?? source.mimeType
+            guard MimeType.isText(effectiveMIME) else { return nil }
+            return String(data: data, encoding: .utf8)
+        } catch {
+            DebugLog.reader("sourceEmbedBody sourceContent failed id=\(id.rawValue): \(error)")
+            return nil
+        }
+    }
+
+    /// The shared pure-render tail (no store access): prepare → project →
+    /// render.
+    private static func renderPrepared(
+        _ raw: String,
+        contentKind: ReaderMarkdown.ContentKind,
+        target: TargetID,
+        context: WikiRenderContext,
+        options: MarkdownRenderOptions,
+        ancestors: Set<TargetID>
+    ) -> Result {
         let prepared = ReaderMarkdown.preparedDocument(raw, contentKind: contentKind)
         let nestedAncestors = ancestors.union([target])
         let projection = context.documentEmbedResolver().projection(
@@ -101,47 +159,6 @@ enum TransclusionEmbedder {
             prepared,
             projection: projection,
             options: nestedOptions))
-    }
-
-    /// Pure read against a read-only store: source-derived markdown HEAD if
-    /// present, else raw UTF-8 bytes for native-text sources, else `nil`
-    /// (binary/PDF — caller renders the "Source not yet extracted" placeholder,
-    /// **no extraction is triggered** — hard read-path invariant, Plan v2 §4.2).
-    ///
-    /// Mirrors `WikiStoreModel.processedMarkdownHead(for:)`'s native-text
-    /// fallback but **never writes** (no v1 seeding from verbatim bytes — that
-    /// is a write and belongs on the main actor, not the read path).
-    static func sourceEmbedBody(
-        access: borrowing WikiReadAccess,
-        id: SourceID,
-        rendererSourceTypes: RegisteredRendererSourceTypes = .none
-    ) throws -> String? {
-        if let head = try access.processedMarkdownHead(sourceID: id) {
-            return head.content
-        }
-        let source = try access.getSource(id: id)
-        // Cheap metadata pre-filter: never load bytes for a source no active
-        // claim and no text MIME can present.
-        let maybeTextual = MimeType.isText(source.mimeType)
-            || rendererSourceTypes.mightPresentAsText(
-                mimeType: source.mimeType,
-                filenameExtension: source.ext)
-        guard maybeTextual else { return nil }
-        let data: Data
-        do {
-            data = try access.sourceContent(id: id)
-        } catch {
-            DebugLog.reader("sourceEmbedBody sourceContent failed id=\(id.rawValue): \(error)")
-            return nil
-        }
-        let effectiveMIME = rendererSourceTypes.resolve(
-            mimeType: source.mimeType,
-            filenameExtension: source.ext,
-            boundedBytes: data,
-            bytesAreComplete: source.byteSize == data.count,
-            artifactKind: .source).resolution?.canonicalMIMEType.rawValue ?? source.mimeType
-        guard MimeType.isText(effectiveMIME) else { return nil }
-        return String(data: data, encoding: .utf8)
     }
 
     /// Explicit in-memory fixture fallback. Production reads use

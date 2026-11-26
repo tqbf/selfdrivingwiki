@@ -275,11 +275,11 @@ struct SourceEmbeddingSearchTests {
     // output — the store no longer has an FTS5 fallback. The CLI resolves a
     // Tantivy leg in production; tests fabricate one from the seeded sources.
 
-    @Test func sourceSearchReturnsTSVAndDoesNotCommit() throws {
+    @Test func sourceSearchReturnsTSVAndDoesNotCommit() async throws {
         let store = try tempStore()
         let s = try store.addSource(filename: "self-driving-cars.pdf", data: Data("%PDF".utf8))
 
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .search(query: "driving", limit: 10), in: store, cwd: "/tmp", bm25Leg: [s])
         #expect(result.didCommit == false)
         guard case .text(let output) = result.payload else {
@@ -289,7 +289,7 @@ struct SourceEmbeddingSearchTests {
         #expect(output == "\(s.id.rawValue)\tself-driving-cars.pdf")
     }
 
-    @Test func sourceSearchOutputsDisplayNameWhenPresent() throws {
+    @Test func sourceSearchOutputsDisplayNameWhenPresent() async throws {
         let store = try tempStore()
         let s = try store.addSource(filename: "data.bin", data: Data("x".utf8))
         try store.renameSource(id: s.id, to: "Renamed Source")
@@ -297,7 +297,7 @@ struct SourceEmbeddingSearchTests {
         // Fetch the post-rename summary so the fabricated leg reflects the
         // display name Tantivy would surface.
         let renamed = try store.getSource(id: s.id)
-        let result = try SourceCommand.run(
+        let result = try await SourceCommand.run(
             .search(query: "renamed", limit: 10), in: store, cwd: "/tmp", bm25Leg: [renamed])
         guard case .text(let output) = result.payload else {
             Issue.record("expected text payload"); return

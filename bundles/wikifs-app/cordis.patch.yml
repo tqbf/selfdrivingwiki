@@ -43,7 +43,3 @@ entries:
     _scope: wiki
   id: url-fetch
   plugin: wiki.integration.url-fetch
-- config:
-    _scope: wiki
-  id: tantivy
-  plugin: wiki.search.tantivy

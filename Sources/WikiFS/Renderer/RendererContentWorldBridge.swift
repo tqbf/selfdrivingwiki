@@ -80,7 +80,7 @@ final class RendererContentWorldBroker {
         _ envelope: Data,
         provenance: RendererBridgeMessageProvenance,
         sessionIsReady: Bool
-    ) throws -> Data {
+    ) async throws -> Data {
         guard let expectedWebViewID,
               let observedWebViewID = provenance.webViewID,
               observedWebViewID == expectedWebViewID
@@ -91,7 +91,7 @@ final class RendererContentWorldBroker {
               provenance.originHost == expectedOrigin.host
         else { throw RendererBridgeAuthorizationError.wrongWindow }
         guard provenance.isMainFrame else { throw RendererBridgeAuthorizationError.nonMainFrame }
-        return try handleEnvelope(envelope, sessionIsReady: sessionIsReady)
+        return try await handleEnvelope(envelope, sessionIsReady: sessionIsReady)
     }
 
     /// Frame-scoped entry for reader DOM embeds: identical authorization to
@@ -101,14 +101,14 @@ final class RendererContentWorldBroker {
     func handleSubframeEnvelope(
         _ envelope: Data,
         sessionIsReady: Bool
-    ) throws -> Data {
-        try handleEnvelope(envelope, sessionIsReady: sessionIsReady)
+    ) async throws -> Data {
+        try await handleEnvelope(envelope, sessionIsReady: sessionIsReady)
     }
 
     private func handleEnvelope(
         _ envelope: Data,
         sessionIsReady: Bool
-    ) throws -> Data {
+    ) async throws -> Data {
         guard envelope.count <= WikiAppWebViewPolicy.maximumBridgeMessageByteCount else {
             throw RendererBridgeAuthorizationError.oversizedEnvelope
         }
@@ -141,7 +141,7 @@ final class RendererContentWorldBroker {
                 context: context,
                 sessionIsReady: sessionIsReady,
                 sessionIsClosed: isClosed)
-            let payload = try inputReader.read(request.input)
+            let payload = try await inputReader.read(request.input)
             response = try RendererBridgeEnvelope.encode(.init(id: request.id, payload: payload))
         case let .navigation(pageRequest):
             let request = RendererNavigationRequest(
@@ -177,7 +177,7 @@ final class RendererContentWorldBroker {
                 context: context,
                 sessionIsReady: sessionIsReady,
                 sessionIsClosed: isClosed)
-            let payload = try assetReader.read(request.reference)
+            let payload = try await assetReader.read(request.reference)
             response = try RendererBridgeEnvelope.encode(RendererAssetResponse(id: request.id, payload: payload))
         }
         guard response.count <= WikiAppWebViewPolicy.maximumBridgeMessageByteCount else {
@@ -279,7 +279,7 @@ final class RendererScriptMessageHandler: NSObject, WKScriptMessageHandlerWithRe
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) async -> (Any?, String?) {
-        response(for: .init(
+        await response(for: .init(
             body: message.body,
             isExpectedContentWorld: message.world === expectedContentWorld,
             provenance: .init(
@@ -291,7 +291,7 @@ final class RendererScriptMessageHandler: NSObject, WKScriptMessageHandlerWithRe
         ))
     }
 
-    func response(for message: RendererBridgeScriptMessage) -> (Any?, String?) {
+    func response(for message: RendererBridgeScriptMessage) async -> (Any?, String?) {
         guard message.isExpectedContentWorld else {
             return (nil, "wrong content world")
         }
@@ -299,7 +299,7 @@ final class RendererScriptMessageHandler: NSObject, WKScriptMessageHandlerWithRe
             return (nil, "malformed envelope")
         }
         do {
-            let response = try broker.handlePageEnvelope(
+            let response = try await broker.handlePageEnvelope(
                 Data(text.utf8),
                 provenance: message.provenance,
                 sessionIsReady: sessionIsReady()
@@ -463,7 +463,7 @@ extension RendererContentWorldBroker {
                 return (nil, "request denied")
             }
             do {
-                let response = try broker.handleSubframeEnvelope(
+                let response = try await broker.handleSubframeEnvelope(
                     Data(text.utf8), sessionIsReady: true)
                 guard let responseText = String(data: response, encoding: .utf8) else {
                     return (nil, "invalid response")

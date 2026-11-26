@@ -93,6 +93,11 @@ final class WikiDaemon: @unchecked Sendable {
     /// injects a catalog double so a socket round trip can drive a REAL
     /// sync→enqueue without an installed package. Nil = production.
     let testExtractorCatalog: (any ExtractorPackageCatalogReading)?
+    /// Test-only workload invocation recording (P4 gate): fires inside the
+    /// daemon's own `DaemonQueueExtractionProvider` so a fixture-daemon test
+    /// can prove the provider executed IN THE DAEMON COMPOSITION. `nil` in
+    /// every production construction site.
+    let testWorkloadInvocationHook: (@Sendable (String, WikiID, SourceID) -> Void)?
     private let daemonChatDiagnostics = DaemonChatDiagnostics()
     #if canImport(WikiFSEngine)
     /// Production owns provider, extraction, and per-wiki store lifetimes here.
@@ -160,6 +165,121 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     private var registry: WikiRegistry
+
+    // MARK: - Daemon epoch + store-family executor (Phase 2b)
+
+    /// The process-global monotonic counter behind ``daemonEpoch``. Each
+    /// WikiDaemon instance claims the next value at init, so a restarted
+    /// daemon always presents an epoch greater than any previously served
+    /// epoch: a stamped store mutation naming an older epoch is a typed
+    /// rejection, never a silent replay (plan 2a mutation outcome semantics).
+    private static let epochCounter = DaemonEpochCounter()
+
+    /// The epoch this daemon instance serves. Store mutation submissions pin
+    /// it (`DaemonMutationStamp.expectedEpoch`); a mismatch is a typed
+    /// rejection. Read after the counter claim in both initializers, so it
+    /// never aliases a previous instance's value.
+    let daemonEpoch: UInt64
+
+    /// The Phase 2b store-family executor, created lazily under `queue`. The
+    /// daemon owns it (its outcome ledger and staged-payload table live as
+    /// long as the daemon); the executor holds the daemon WEAKLY, so there is
+    /// no retain cycle and ownership stays test-friendly.
+    private var storeExecutorStorage: DaemonStoreCommandExecutor?
+
+    /// The executor for the structured store family (`family: .store`), the
+    /// daemon-side half of plans/daemon-only-access.md Phase 2b. One instance
+    /// per daemon: its mutation-outcome ledger and staged-payload table are
+    /// daemon-scoped state.
+    func storeCommandExecutor() -> DaemonStoreCommandExecutor {
+        if let executor = queue.sync(execute: { storeExecutorStorage }) {
+            return executor
+        }
+        return queue.sync {
+            if let executor = storeExecutorStorage { return executor }
+            let executor = DaemonStoreCommandExecutor(daemon: self)
+            storeExecutorStorage = executor
+            return executor
+        }
+    }
+
+    /// The projection service (Phase 6, plans/daemon-only-access.md): the
+    /// daemon-side half of the READ-ONLY `projection` family the File
+    /// Provider extension reads its tree from over the domain socket. Shares
+    /// the store executor's daemon-scoped committed-handle table so an
+    /// oversized projection reply downloads through the same bounded,
+    /// TTL-swept `payloadRead` seam. No per-instance mutable state of its
+    /// own; one accessor keeps every dispatcher wiring the same instance.
+    func projectionService() -> DaemonProjectionService {
+        DaemonProjectionService(
+            daemon: self, staging: storeCommandExecutor().payloadStaging)
+    }
+
+    /// One structured store operation over XPC (plan 2b slice 1): the JSON
+    /// `DaemonStoreRequest` bytes in, the JSON `DaemonDomainReply` envelope
+    /// bytes out (its `payload` carries the `DaemonStoreReply`) — the SAME
+    /// shape the domain-socket path returns, so the client shim decodes one
+    /// reply shape on both transports. Typed failures ride INSIDE the store
+    /// reply, and the final envelope is frame-size pre-flighted (an
+    /// oversized reply is a typed error, never a truncation).
+    ///
+    /// `sinkRegistrationID` carries the calling XPC connection's event-sink
+    /// registration id so the daemon-scoped `sinkHandshake` can correlate
+    /// with the sink that connection exported (Phase 2c); the domain-socket
+    /// path passes nil.
+    ///
+    /// `connectionID` (slice 2) keys the staged-payload table to the calling
+    /// XPC connection so its invalidation handler can sweep that
+    /// connection's uploads
+    /// (``dropStoreUploads(connectionID:)``); nil = unkeyed (domain socket).
+    func storeOperationData(
+        wikiID: String, request: Data, sinkRegistrationID: UUID? = nil,
+        connectionID: String? = nil
+    ) async -> Data {
+        let domainRequest = DaemonDomainRequest(
+            requestID: "xpc-\(ULID.generate())", family: .store,
+            operation: "store", payload: request)
+        let domainReply = await storeCommandExecutor()
+            .handleStoreOperation(
+                domainRequest, expectedWikiID: wikiID,
+                sinkRegistrationID: sinkRegistrationID,
+                connectionID: connectionID)
+        do {
+            return try DaemonStoreFrameSizing.encodeValidatedReply(domainReply)
+        } catch {
+            DebugLog.store(
+                "wikid: store reply exceeded the frame cap: \(error)")
+            let rejected = DaemonStoreReply(
+                result: nil,
+                error: .unexpected(
+                    "the encoded reply exceeded the transport frame cap — "
+                        + "narrow the read or read the bulk through "
+                        + "payloadRead"))
+            let fallback: Data
+            do {
+                fallback = try DaemonStoreWire.encode(rejected)
+            } catch {
+                // Encode of this fixed-shape value cannot fail; an empty body
+                // is the honest "no reply" and the client surfaces it.
+                DebugLog.store("wikid: frame-cap rejection encode failed: \(error)")
+                fallback = Data()
+            }
+            return fallback
+        }
+    }
+
+    /// The disconnect sweep for one XPC connection's staged store uploads
+    /// (slice 2): drops every staged upload AND committed handle the
+    /// connection keyed at `payloadBegin`, exactly as
+    /// ``DaemonPayloadStagingStore/dropUploads(connectionID:)`` defines.
+    /// The exporter's invalidation handler calls this beside its sink
+    /// unregister so a dead client's partial uploads never ride out the
+    /// TTL.
+    func dropStoreUploads(connectionID: String) {
+        storeCommandExecutor().payloadStaging.dropUploads(
+            connectionID: connectionID)
+    }
+
     #if canImport(WikiFSEngine)
     private var preparedServices: [WikiID: AppServices] = [:]
     private var preparationEpochs: [WikiID: UInt64] = [:]
@@ -189,6 +309,14 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     private var eventSinks: [RegisteredEventSink] = []
+
+    /// The Phase 2c store-event coordinator (``DaemonStoreEventCoordinator``):
+    /// per-(epoch, wiki) delivery counters, the bounded replay ring, and the
+    /// sink handshake phases behind the store EVENT CONTRACT. Created with
+    /// the daemon's claimed epoch in both inits; lock-guarded internally, so
+    /// the daemon queue, the bus's main-actor handlers, and the store
+    /// executor path all touch it directly.
+    let storeEvents: DaemonStoreEventCoordinator
     #endif
 
     // MARK: - Workload host scaffold (Phase 0)
@@ -202,7 +330,12 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     private func makeDaemonQueueHost() -> DaemonQueueHost {
-        DaemonQueueHost { [weak self] in
+        // Claim from the daemon epoch counter so a restarted daemon's queue
+        // ownership epoch differs from the one a surviving app still expects
+        // — the constant-1 default left that resolution impossible (the app
+        // retried admission forever; see DaemonTransportAppCoordinator).
+        let initialEpoch = QueueOwnershipEpoch(rawValue: Self.epochCounter.claimNext())
+        return DaemonQueueHost(initialEpoch: initialEpoch) { [weak self] in
             guard let self else {
                 throw QueueRPCError(code: .unavailable, message: "Daemon queue host was released")
             }
@@ -348,13 +481,31 @@ final class WikiDaemon: @unchecked Sendable {
         containerDirectory: URL,
         testFixtureMakeStore: @escaping (URL) throws -> WikiStore,
         extractionAssembly: ExtractionCompositionOwner.AssemblyFactory? = nil,
-        testExtractorCatalog: (any ExtractorPackageCatalogReading)? = nil
+        testExtractorCatalog: (any ExtractorPackageCatalogReading)? = nil,
+        testWorkloadInvocationHook: (@Sendable (String, WikiID, SourceID) -> Void)? = nil
     ) {
+        let claimedEpoch = Self.epochCounter.claimNext()
+        self.daemonEpoch = claimedEpoch
+        #if os(macOS)
+        self.storeEvents = DaemonStoreEventCoordinator(epoch: claimedEpoch)
+        #endif
         self.containerDirectory = containerDirectory
         self.registryPersistence = nil
         self.testFixtureMakeStore = testFixtureMakeStore
         self.testExtractorCatalog = testExtractorCatalog
+        self.testWorkloadInvocationHook = testWorkloadInvocationHook
         self.registry = WikiRegistry.load(from: containerDirectory)
+        // P3.3: the legacy v0 import is daemon-owned — one shot at daemon
+        // start when the registry view is empty (the app's first-run branch
+        // is a no-op in remote mode). Init is the pre-serving serialized
+        // boundary: nothing serves until it returns, and every later registry
+        // mutation runs on `queue`, so no concurrent writer can interleave.
+        // Idempotent: the empty-registry gate plus the target-absent guard
+        // make re-runs no-ops.
+        if registry.isEmpty {
+            DaemonLegacyWikiImporter.migrateLegacyWikiIfNeeded(
+                into: &registry, containerDirectory: containerDirectory)
+        }
         #if canImport(WikiFSEngine)
         self.profileOwner = nil
         let providerServices = MutableAgentProviderServices()
@@ -406,11 +557,23 @@ final class WikiDaemon: @unchecked Sendable {
         storeBootstrap: StoreBootstrap = StoreBootstrap(),
         registryPersistence: DaemonRegistryPersistence = DaemonRegistryPersistence()
     ) {
+        let claimedEpoch = Self.epochCounter.claimNext()
+        self.daemonEpoch = claimedEpoch
+        #if os(macOS)
+        self.storeEvents = DaemonStoreEventCoordinator(epoch: claimedEpoch)
+        #endif
         self.containerDirectory = containerDirectory
         self.registryPersistence = registryPersistence
         self.testFixtureMakeStore = nil
         self.testExtractorCatalog = nil
+        self.testWorkloadInvocationHook = nil
         self.registry = WikiRegistry.load(from: containerDirectory)
+        // P3.3: same daemon-owned legacy v0 import as the fixture init —
+        // one shot at daemon start, empty-registry gated, pre-serving.
+        if registry.isEmpty {
+            DaemonLegacyWikiImporter.migrateLegacyWikiIfNeeded(
+                into: &registry, containerDirectory: containerDirectory)
+        }
         self.profileOwner = profileOwner
         self.legacyAgentProviderServices = nil
         self.legacyExtractionCompositionOwner = nil
@@ -665,6 +828,10 @@ final class WikiDaemon: @unchecked Sendable {
     /// the bump fails at publish or at the install fence and never installs a
     /// chat host, so no zombie host can outlive a deletion.
     private func evictDeletedWiki(_ wikiID: WikiID) async {
+        // Cancel any in-flight search-upgrade backfill FIRST (it holds the
+        // store and writes chunk rows — the eviction below closes the store
+        // and deletes the database artifacts).
+        storeCommandExecutor().cancelSearchUpgrade(wikiID: wikiID)
         let chatHost = queue.sync { () -> DaemonChatHost? in
             preparationEpochs[wikiID, default: 0] &+= 1
             return chatHosts.removeValue(forKey: wikiID)
@@ -674,6 +841,11 @@ final class WikiDaemon: @unchecked Sendable {
             preparationEpochs[wikiID, default: 0] &+= 1
             preparedServices.removeValue(forKey: wikiID)
             openStores.removeValue(forKey: wikiID)
+            #if os(macOS)
+            // Deletion detach: stop delivery and drop the per-wiki event
+            // state (Phase 2c).
+            storeEvents.forgetWikiDelivery(wikiID)
+            #endif
             registry.remove(id: wikiID)
             return searchRuntimes.removeValue(forKey: wikiID)
         }
@@ -740,6 +912,12 @@ final class WikiDaemon: @unchecked Sendable {
         let retirement: Task<Void, Never> = queue.sync { () -> Task<Void, Never> in
             preparedServices.removeValue(forKey: wikiID)
             openStores.removeValue(forKey: wikiID)
+            #if os(macOS)
+            // Deletion detach (remove-profile path of the delete
+            // coordinator): stop delivery and drop the per-wiki event state
+            // (Phase 2c).
+            storeEvents.forgetWikiDelivery(wikiID)
+            #endif
             let runtime = searchRuntimes[wikiID]
             let pendingTask = searchRuntimeTasks[wikiID]
             let priorRetirement = searchRetirements[wikiID]
@@ -993,6 +1171,12 @@ final class WikiDaemon: @unchecked Sendable {
         }
         do {
             let descriptor = try await creationCoordinator.createWiki(name: name)
+            // Registry event (Phase 3 slice 2): the daemon's wikis.json
+            // mutation answers with a wikid.registry-event.v1 payload. Called
+            // OUTSIDE any queue.sync block (the helper snapshots the sink
+            // table on the queue).
+            deliverRegistryEvent(
+                .created, wikiID: descriptor.id, displayName: descriptor.displayName)
             return try JSONEncoder().encode(descriptor)
         } catch {
             DebugLog.store("wikid: createWiki failed: \(error)")
@@ -1004,7 +1188,11 @@ final class WikiDaemon: @unchecked Sendable {
     /// Synchronous test/Linux compatibility boundary. Production uses
     /// `createWiki(name:) async` with `StoreBootstrap` and child profiles.
     func testFixtureCreateWiki(name: String) -> Data? {
-        queue.sync { () -> Data? in
+        // The registry mutation + its event stay split: the queue.sync block
+        // performs the mutation, the event is delivered AFTER the block
+        // returns (the emit helper snapshots the sink table on the queue —
+        // nesting would deadlock).
+        let created: (data: Data?, descriptor: WikiDescriptor?) = queue.sync { () -> (Data?, WikiDescriptor?) in
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             let displayName = trimmed.isEmpty ? "Untitled Wiki" : trimmed
             let descriptor = WikiDescriptor.make(displayName: displayName)
@@ -1012,7 +1200,7 @@ final class WikiDaemon: @unchecked Sendable {
             // Open + seed the DB (runs the bootstrap ladder — pages, system prompt, search tables)
             let dbURL = databaseURL(forWikiID: descriptor.id)
             do {
-                guard let testFixtureMakeStore else { return nil }
+                guard let testFixtureMakeStore else { return (nil, nil) }
                 let store = try testFixtureMakeStore(dbURL) as? GRDBWikiStore
                 if let store {
                     wireEventBus(on: store, wikiID: descriptor.id)
@@ -1022,7 +1210,7 @@ final class WikiDaemon: @unchecked Sendable {
                 }
             } catch {
                 DebugLog.store("wikid: createWiki failed for \(descriptor.id): \(error)")
-                return nil
+                return (nil, nil)
             }
 
             // Seed a Home page if the store is empty (mirrors WikiRegistryClient.createWiki)
@@ -1053,10 +1241,16 @@ final class WikiDaemon: @unchecked Sendable {
             }
 
             DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })
-            return (DebugLog.trying("JSONEncoder.encode", operation: {
+            let data = DebugLog.trying("JSONEncoder.encode", operation: {
                 try JSONEncoder().encode(registry.descriptor(id: descriptor.id) ?? descriptor)
-            }))
+            })
+            return (data, registry.descriptor(id: descriptor.id) ?? descriptor)
         }
+        if let descriptor = created.descriptor {
+            deliverRegistryEvent(
+                .created, wikiID: descriptor.id, displayName: descriptor.displayName)
+        }
+        return created.data
     }
 
     #if canImport(WikiFSEngine)
@@ -1071,6 +1265,8 @@ final class WikiDaemon: @unchecked Sendable {
             guard let registryPersistence else { return false }
             try removePersistedDescriptor(wikiID, persistence: registryPersistence)
             try deleteDatabaseArtifacts(wikiID: wikiID)
+            // Registry event (Phase 3 slice 2) — outside any queue.sync block.
+            deliverRegistryEvent(.deleted, wikiID: wikiID, displayName: nil)
             return true
         } catch {
             DebugLog.store("wikid: deleteWiki failed for \(wikiID.rawValue): \(error)")
@@ -1080,9 +1276,16 @@ final class WikiDaemon: @unchecked Sendable {
     #endif
 
     func testFixtureDeleteWiki(id wikiID: WikiID) -> Bool {
-        queue.sync { () -> Bool in
+        // Same mutation/event split as testFixtureCreateWiki: the event goes
+        // out AFTER the queue.sync block (no nested queue.sync deadlock).
+        let deleted: Bool = queue.sync { () -> Bool in
             // Close the held store if open
             openStores.removeValue(forKey: wikiID)
+            #if os(macOS)
+            // Deletion detach: stop delivery and drop the per-wiki event
+            // state (Phase 2c).
+            storeEvents.forgetWikiDelivery(wikiID)
+            #endif
 
             // Remove from registry
             registry.remove(id: wikiID)
@@ -1097,11 +1300,16 @@ final class WikiDaemon: @unchecked Sendable {
             }
             return true
         }
+        if deleted {
+            deliverRegistryEvent(.deleted, wikiID: wikiID, displayName: nil)
+        }
+        return deleted
     }
 
     func renameWiki(id wikiID: WikiID, name: String) -> Bool {
-        queue.sync { () -> Bool in
-            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Same mutation/event split as the fixture create/delete above.
+        let renamed: Bool = queue.sync { () -> Bool in
             guard !trimmed.isEmpty else { return false }
             switch reconcileRegistry(wikiID) {
             case .missing, .deleted:
@@ -1120,6 +1328,10 @@ final class WikiDaemon: @unchecked Sendable {
             DebugLog.trying("registry.save", operation: { try registry.save(to: containerDirectory) })
             return true
         }
+        if renamed {
+            deliverRegistryEvent(.renamed, wikiID: wikiID, displayName: trimmed)
+        }
+        return renamed
     }
 
     func resolveWiki(selector: String) -> Data? {
@@ -1200,6 +1412,12 @@ final class WikiDaemon: @unchecked Sendable {
             preparationEpochs[wikiID, default: 0] &+= 1
             if preparedServices[wikiID] == nil {
                 openStores.removeValue(forKey: wikiID)
+                #if os(macOS)
+                // Close-only detach: stop delivery but KEEP the per-wiki
+                // counters/ring — a re-prepared wiki continues this epoch's
+                // sequence (Phase 2c).
+                storeEvents.closeWikiDelivery(wikiID)
+                #endif
             }
             let runtime = searchRuntimes[wikiID]
             let pendingTask = searchRuntimeTasks[wikiID]
@@ -1299,7 +1517,7 @@ final class WikiDaemon: @unchecked Sendable {
         if !selected.isEmpty {
             let store = try await domainCommandStore(wikiID: wikiID)
             for sourceID in Set(selected.flatMap(\.payload.sourceIDs)) {
-                if try store.processedMarkdownHead(sourceID: sourceID) != nil {
+                if try await store.processedMarkdownHead(sourceID: sourceID) != nil {
                     completedSourceIDs.insert(sourceID)
                 }
             }
@@ -1445,6 +1663,11 @@ final class WikiDaemon: @unchecked Sendable {
             }
             preparedServices.removeValue(forKey: wikiID)
             openStores.removeValue(forKey: wikiID)
+            #if os(macOS)
+            // Deletion detach: stop delivery and drop the per-wiki event
+            // state (Phase 2c).
+            storeEvents.forgetWikiDelivery(wikiID)
+            #endif
         }
     }
     #endif
@@ -1493,10 +1716,41 @@ final class WikiDaemon: @unchecked Sendable {
     private func wireEventBus(on store: GRDBWikiStore, wikiID: WikiID) {
         if store.eventBus == nil {
             let bus = WikiEventBus(wikiID: wikiID)
+            #if os(macOS)
+            // The store EVENT CONTRACT tap (Phase 2c): every committed
+            // mutation ALSO becomes a stamped deliverEvent envelope. The
+            // change token is read at DELIVERY time (post-commit, cheap
+            // bounded fold — never inside the write); a failed read ships
+            // the sentinel (#487 rule: never matches a cached anchor). The
+            // store is captured weakly — an emit whose handler lands after
+            // an eviction skips the token read instead of resurrecting the
+            // store, and that window's delivery is covered by the client's
+            // change-token reconciliation.
+            let token = bus.subscribe(nil) { [weak self, weak store] event in
+                DarwinNotifier.postChange()
+                guard let self, let store else { return }
+                let deliveredToken: String
+                do {
+                    deliveredToken = try store.changeToken().rawString
+                } catch {
+                    DebugLog.store(
+                        "wikid: store-event token read failed for "
+                            + "\(wikiID.rawValue): \(error)")
+                    deliveredToken = Self.errorTokenSentinel
+                }
+                let proxies = self.eventSinkProxies()
+                _ = self.storeEvents.ingest(
+                    event: event, changeToken: deliveredToken,
+                    proxies: proxies)
+            }
+            store.eventBus = bus
+            storeEvents.attach(wikiID: wikiID, bus: bus, token: token)
+            #else
             bus.subscribe(nil) { event in
                 DarwinNotifier.postChange()
             }
             store.eventBus = bus
+            #endif
         }
         assert(
             store.eventBus != nil,
@@ -1646,20 +1900,16 @@ final class WikiDaemon: @unchecked Sendable {
 
     private func makeSearchRuntime(wikiID: WikiID) async throws -> DaemonSearchRuntime {
         if profileOwner != nil {
-            // Production: identity + content source come from the prepared
-            // profile's search factory; the closures read the admitted store.
-            let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
-            let store = try resolvePreparedStore(wikiID: wikiID)
-            return try DaemonSearchRuntime(
-                wikiID: wikiID,
-                indexDirectory: services.searchFactory.identity.indexDirectory,
-                contentSource: services.searchFactory.contentSource,
-                tokenReader: Self.storeTokenReader(store),
-                baselineReader: Self.storeBaselineReader(store),
-                baselineWriter: Self.storeBaselineWriter(store))
+            // Production: the coherence gate + store admission ride the
+            // profile preparation (unchanged). The identity + content source
+            // are built DIRECTLY from the admitted store below — the
+            // composition-supplied search factory left with the app's local
+            // Tantivy assembly (P5); the index-directory layout is unchanged
+            // (`SearchRuntimeIdentity` resolves the same
+            // `search-index/<wikiID>` path the factory's config used to
+            // carry: the daemon container directory).
+            try await prepareAndResolveWikiServices(wikiID: wikiID)
         }
-        // Compatibility fixture path (tests, `testFixtureMakeStore`): the
-        // injected store plays every role the profile would.
         let store = try resolvePreparedStore(wikiID: wikiID)
         return try DaemonSearchRuntime(
             wikiID: wikiID,
@@ -1784,6 +2034,9 @@ final class WikiDaemon: @unchecked Sendable {
         let registration = RegisteredEventSink(sink: sink)
         let total = queue.sync { () -> Int in
             eventSinks.append(registration)
+            // The coordinator buffers this sink's events until its
+            // acknowledged `sinkHandshake` completes (Phase 2c).
+            storeEvents.sinkRegistered(registration.id)
             return eventSinks.count
         }
         DebugLog.store("wikid: event sink registered, total=\(total)")
@@ -1795,15 +2048,117 @@ final class WikiDaemon: @unchecked Sendable {
     func unregisterEventSink(id: UUID) {
         let total = queue.sync { () -> Int in
             eventSinks.removeAll { $0.id == id }
+            storeEvents.sinkUnregistered(id)
             return eventSinks.count
         }
         DebugLog.store("wikid: event sink unregistered, remaining=\(total)")
     }
 
-    /// All currently-registered event-sink proxies. Used by future phases to
-    /// push live workload events; Phase 0 exposes it for testing.
+    /// All currently-registered event-sink proxies. Used by the workload
+    /// host's completion-polling pattern (registration readiness).
     var registeredEventSinks: [WikiDaemonEventSink] {
         queue.sync { eventSinks.map(\.sink) }
+    }
+
+    /// All currently-registered event-sink proxies with their registration
+    /// ids. The store-event coordinator paths decide per-id delivery
+    /// (handshake phase), so they need the id paired with the proxy.
+    func eventSinkProxies() -> [(id: UUID, sink: WikiDaemonEventSink)] {
+        queue.sync { eventSinks.map { (id: $0.id, sink: $0.sink) } }
+    }
+
+    // MARK: - Registry events (Phase 3 slice 2)
+
+    /// Deliver one registry-event envelope to every LIVE sink: the daemon's
+    /// `wikis.json` mutations answer with a `wikid.registry-event.v1` payload
+    /// that the app's registry client answers by re-reading the file (its
+    /// read-cache refresh). Delivery rides the store-event coordinator's
+    /// live-phase gating (post-handshake sinks); changes landing before a
+    /// handshake are reconciled by the client's bootstrap read and the reload
+    /// after every lifecycle reply.
+    ///
+    /// MUST be called OUTSIDE any `queue.sync` block — this helper snapshots
+    /// the sink table on the queue itself, and nesting would deadlock.
+    private func deliverRegistryEvent(
+        _ kind: DaemonRegistryEventKind, wikiID: WikiID, displayName: String?
+    ) {
+        #if os(macOS)
+        let proxies = eventSinkProxies()
+        _ = storeEvents.deliverRegistryEvent(
+            DaemonRegistryEvent(
+                kind: kind, wikiID: wikiID.rawValue, displayName: displayName),
+            proxies: proxies)
+        #endif
+    }
+
+    // MARK: - Search-upgrade progress (P5.2)
+
+    /// Deliver one search-upgrade progress envelope to every LIVE sink (the
+    /// daemon-side embedding backfill's progress surface — see
+    /// ``DaemonSearchUpgradeRunner``). Delivery-only: no watermark, no
+    /// replay ring; the terminal event resolves the client's sheet state.
+    ///
+    /// MUST be called OUTSIDE any `queue.sync` block (same reason as
+    /// ``deliverRegistryEvent``).
+    func deliverSearchUpgradeEvent(_ event: DaemonSearchUpgradeEvent) {
+        #if os(macOS)
+        let proxies = eventSinkProxies()
+        _ = storeEvents.deliverSearchUpgradeEvent(event, proxies: proxies)
+        #endif
+    }
+
+    // MARK: - Store event contract (Phase 2c)
+
+    /// Serve the daemon-scoped `sinkHandshake` (plan 2c): one watermark per
+    /// PREPARED wiki `{wikiID, changeToken, lastSequence}` plus this
+    /// daemon's epoch, then complete the requesting sink's handshake —
+    /// replay its bounded pre-handshake ring (`sequence > lastSequence`) and
+    /// flip it live.
+    ///
+    /// `sinkRegistrationID` is the event-sink registration id of the XPC
+    /// connection that issued the handshake (threaded from the exporter);
+    /// `nil` means no sink correlation (the domain-socket path has no
+    /// reverse-push channel yet) — the watermarks are still answered, but
+    /// nothing flips and nothing replays.
+    ///
+    /// The handshake NEVER resolves a store: the token fold is a cheap
+    /// bounded read over the already-prepared stores, snapshot under the
+    /// daemon queue and executed outside it.
+    func sinkHandshake(sinkRegistrationID: UUID?) -> DaemonSinkHandshakeReply {
+        let prepared: [(wikiID: String, store: GRDBWikiStore)] = queue.sync {
+            openStores
+                .sorted { $0.key.rawValue < $1.key.rawValue }
+                .map { ($0.key.rawValue, $0.value) }
+        }
+        var tokens: [String: String] = [:]
+        var preparedIDs: [String] = []
+        for entry in prepared {
+            preparedIDs.append(entry.wikiID)
+            do {
+                tokens[entry.wikiID] = try entry.store.changeToken().rawString
+            } catch {
+                DebugLog.store(
+                    "wikid: sink handshake token read failed for "
+                        + "\(entry.wikiID): \(error)")
+                tokens[entry.wikiID] = Self.errorTokenSentinel
+            }
+        }
+        let handshake = storeEvents.completeHandshake(
+            sinkID: sinkRegistrationID,
+            preparedWikiIDs: preparedIDs,
+            proxies: eventSinkProxies())
+        // The reply reports the PRE-FLUSH watermark (the delivery counter at
+        // handshake time): replayed ring entries carry sequence > this
+        // value, so the client's "drop sequence <= watermark" rule accepts
+        // exactly the replay and nothing else.
+        let perWiki = preparedIDs.map { wikiID in
+            DaemonSinkHandshakeWatermark(
+                wikiID: wikiID,
+                changeToken: tokens[wikiID] ?? Self.errorTokenSentinel,
+                lastSequence: handshake[wikiID] ?? 0)
+        }
+        return DaemonSinkHandshakeReply(
+            daemonEpoch: daemonEpoch, perWiki: perWiki)
     }
     #endif
 
@@ -1865,7 +2220,9 @@ final class WikiDaemon: @unchecked Sendable {
                 return try await self.performQueueOperation { engine in
                     try await engine.enqueue(request)
                 }.value
-            })
+            },
+            // P4 gate: test-only invocation recording (nil in production).
+            recordWorkloadInvocation: self.testWorkloadInvocationHook)
         let dir = containerDirectory
         let ingestionProvider = DaemonQueueIngestionProvider(
             containerDirectory: dir,

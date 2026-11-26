@@ -1,10 +1,14 @@
 import Testing
 import Foundation
 @testable import WikiFSCore
+@testable import WikiFSEngine
+@testable import wikid
 
-/// Phase 4 refresh guard tests (AC.8). A snapshot source with image siblings
-/// throws `RefreshError.snapshotWithImages` and does NOT append a version; a
-/// website source without image siblings refreshes as today.
+/// Phase 4 refresh guard tests (AC.8), now through the DAEMON refresh arm
+/// (P4.3 workload migration). A snapshot source with image siblings fails
+/// the refresh resolution with `RefreshError.snapshotWithImages` and does
+/// NOT append a version; a website source without image siblings refreshes
+/// through the daemon (resolve → persist).
 @MainActor
 struct SnapshotRefreshGuardTests {
 
@@ -26,6 +30,17 @@ struct SnapshotRefreshGuardTests {
             .appendingPathComponent("wikifs-refresh-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+    }
+
+    /// The daemon refresh arm under test.
+    private func makeRefreshProvider(
+        store: GRDBWikiStore,
+        fetcher: URLFetchService.URLResourceFetcher
+    ) -> DaemonQueueExtractionProvider {
+        DaemonQueueExtractionProvider(
+            extractionServices: UnavailableExtractionServices(),
+            storeResolver: { _ in store },
+            refreshFetcher: fetcher)
     }
 
     private func pngResponse(url: String) -> URLFetchService.FetchResponse {
@@ -56,15 +71,19 @@ struct SnapshotRefreshGuardTests {
         let verBefore = try store.activeContentVersion(sourceID: pageID)
         let versionBefore = try #require(verBefore)
 
-        // Refresh must throw snapshotWithImages — no version appended.
+        // Refresh must fail with snapshotWithImages — no version appended.
+        // The DAEMON guard runs BEFORE materializing (parity with the inline
+        // pipeline's D3 guard).
         let refreshFetcher = MultiURLFetcher(responses: [
             "https://example.com/g": URLFetchService.FetchResponse(
                 data: Data("<title>Guarded</title><body>v2</body>".utf8),
                 contentType: "text/html",
                 finalURL: URL(string: "https://example.com/g")!),
         ])
+        let provider = makeRefreshProvider(store: store, fetcher: refreshFetcher)
         await #expect(throws: SourceRefreshService.RefreshError.snapshotWithImages) {
-            _ = try await model.refreshSource(pageID, fetcher: refreshFetcher)
+            _ = try await provider.resolveSourceRefresh(
+                wikiID: WikiID(rawValue: "w"), sourceID: pageID)
         }
 
         // The active version is unchanged (no new version appended).
@@ -90,14 +109,24 @@ struct SnapshotRefreshGuardTests {
         let verBefore = try store.activeContentVersion(sourceID: pageID)
         let versionBefore = try #require(verBefore)
 
-        // Refresh succeeds — a new version is appended.
+        // Refresh succeeds — a new version is appended (through the DAEMON
+        // arm: resolve → fetch → persist).
         let refreshFetcher = MultiURLFetcher(responses: [
             "https://example.com/p": URLFetchService.FetchResponse(
                 data: Data("<title>Plain</title><body>v2 updated</body>".utf8),
                 contentType: "text/html",
                 finalURL: URL(string: "https://example.com/p")!),
         ])
-        _ = try await model.refreshSource(pageID, fetcher: refreshFetcher)
+        let provider = makeRefreshProvider(store: store, fetcher: refreshFetcher)
+        let resolution = try #require(await provider.resolveSourceRefresh(
+            wikiID: WikiID(rawValue: "w"), sourceID: pageID))
+        guard case .refresh(let refresh) = resolution else {
+            Issue.record("expected a refresh resolution")
+            return
+        }
+        let outcome = try await refresh.fetch { _ in }
+        _ = try await provider.persistSourceRefresh(
+            wikiID: WikiID(rawValue: "w"), sourceID: pageID, outcome: outcome)
 
         let verAfter = try store.activeContentVersion(sourceID: pageID)
         let versionAfter = try #require(verAfter)
@@ -126,7 +155,7 @@ struct SnapshotRefreshGuardTests {
         _ = try await model.addURL("https://example.com/g", fetcher: fetcher)
 
         let pageID = try store.listSources().first { $0.role == .primary }!.id
-        #expect(model.isSourceRefreshable(for: pageID) == false)
+        #expect(await model.isSourceRefreshable(for: pageID) == false)
     }
 
     @Test func imagelessWebsiteSourceIsRefreshableGate() async throws {
@@ -142,6 +171,6 @@ struct SnapshotRefreshGuardTests {
         _ = try await model.addURL("https://example.com/p", fetcher: fetcher)
 
         let pageID = try store.listSources().first { $0.role == .primary }!.id
-        #expect(model.isSourceRefreshable(for: pageID) == true)
+        #expect(await model.isSourceRefreshable(for: pageID) == true)
     }
 }

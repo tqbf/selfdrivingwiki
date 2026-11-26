@@ -68,7 +68,7 @@ struct AgentToolsView: View {
             Button("Rename") {
                 let trimmed = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let chat = renamingChat, !trimmed.isEmpty {
-                    store.renameChat(id: chat.id, to: trimmed)
+                    Task { await store.renameChat(id: chat.id, to: trimmed) }
                 }
                 renamingChat = nil
             }
@@ -122,7 +122,7 @@ struct AgentToolsView: View {
                 .foregroundStyle(.primary)
             Spacer()
             headerButton(systemImage: "plus", help: "New Chat") {
-                store.beginNewChat()
+                Task { await store.beginNewChat() }
             }
             filterMenu
             sortMenu
@@ -243,7 +243,9 @@ struct AgentToolsView: View {
             },
             onRename: { chat in beginRename(chat) },
             onDelete: { ids in
-                for id in ids { store.deleteChat(id: id) }
+                Task {
+                    for id in ids { await store.deleteChat(id: id) }
+                }
             })
     }
 

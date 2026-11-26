@@ -58,7 +58,7 @@ struct WikiStoreModelDropRoutingTests {
             finalURL: URL(string: "https://example.com/article")!))
 
         await model.addDroppedURLs([webloc], fetcher: fetcher)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         // Issue #599 + #799 PR3: routed through `addURL` → HTML bytes preserved
         // as the source blob (filename `Article.html`). The extracted-markdown
@@ -90,7 +90,7 @@ struct WikiStoreModelDropRoutingTests {
         await model.addDroppedURLs(
             [URL(string: "https://example.com/page")!],
             fetcher: fetcher)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         #expect(model.sources.count == 1)
         // Issue #599: HTML bytes preserved, filename ends in `.html` (not `.md`).
@@ -109,7 +109,7 @@ struct WikiStoreModelDropRoutingTests {
 
         await model.addDroppedURLs([file], fetcher: FakeFetcher(response: URLFetchService.FetchResponse(
             data: Data(), contentType: nil, finalURL: URL(string: "https://unused.example")!)))
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         #expect(model.sources.count == 1)
         #expect(model.sources.first?.filename == "notes.txt")
@@ -136,7 +136,7 @@ struct WikiStoreModelDropRoutingTests {
             finalURL: URL(string: "https://example.com/web")!))
 
         await model.addDroppedURLs([webloc, txt], fetcher: fetcher)
-        model.reloadFromStore()
+        await model.bootstrapFromStore()
 
         let names = model.sources.map(\.filename).sorted()
         // Issue #599 + #799 PR3: HTML routed through `addURL` → filename ends

@@ -67,13 +67,13 @@ struct BookmarksContainerView: View {
                     },
                     onEdit: { onEdit($0) },
                     onDelete: { ids in
-                        for id in ids { store.deleteBookmarkNode(id: id) }
+                        Task { for id in ids { await store.deleteBookmarkNode(id: id) } }
                     },
                     onAddPage: { onShowPicker(PickerContext(id: UUID(), parentID: $0, kind: .pages)) },
                     onAddSource: { onShowPicker(PickerContext(id: UUID(), parentID: $0, kind: .sources)) },
                     onNewFolder: { onNewFolder() },
                     onNewSubfolder: { id in
-                        store.createFolder(parentID: id, name: "New Folder")
+                        Task { _ = await store.createFolder(parentID: id, name: "New Folder") }
                     }
                 )
                 if filteredNodes.isEmpty && (!searchText.isEmpty || kindFilter != .all) {

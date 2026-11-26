@@ -71,7 +71,7 @@ struct AgentLoopPluginBootTests {
 
         let store = try #require(try await booted.context.find(StoreServiceKeys.store))
         let agentLoop = try #require(try await booted.context.find(AgentLoopServiceKeys.agentLoop))
-        let chat = try store.createChat(kind: .edit, title: "Cordis agent loop")
+        let chat = try await store.createChat(kind: .edit, title: "Cordis agent loop")
         let turn = AgentTurnRequest(
             chatID: chat.id,
             turnID: ChatTurnID(rawValue: "turn-1"),
@@ -79,7 +79,7 @@ struct AgentLoopPluginBootTests {
 
         let events = try await agentLoop.enqueue(turn)
         #expect(events == [.assistantText("stub response")])
-        #expect(try store.chatMessages(chatID: chat.id).map(\.event) == [
+        #expect(try await store.chatMessages(chatID: chat.id).map(\.event) == [
             .userText("hello"),
             .assistantText("stub response"),
         ])

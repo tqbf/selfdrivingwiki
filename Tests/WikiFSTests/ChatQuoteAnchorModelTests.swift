@@ -15,16 +15,19 @@ struct ChatQuoteAnchorModelTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    private func makeModel() throws -> (WikiStoreModel, ChatID) {
+    private func makeModel() async throws -> (WikiStoreModel, ChatID) {
         let store = try StoreBackend.current.makeStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
-        let chat = try store.createChat(kind: .edit, title: "Debugging the FP bug")
-        model.reloadFromStore()
+        let chat = try await store.createChat(kind: .edit, title: "Debugging the FP bug")
+        // P1-FLIP-REVIEW: reloadFromStore() now only enqueues a coalesced async
+        // reload; bootstrapFromStore() awaits the same drain so `selectChat`'s
+        // chats guard sees the seeded row.
+        await model.bootstrapFromStore()
         return (model, chat.id)
     }
 
-    @Test func selectChatByIDStashesAnchorTaggedToChat() throws {
-        let (model, chatID) = try makeModel()
+    @Test func selectChatByIDStashesAnchorTaggedToChat() async throws {
+        let (model, chatID) = try await makeModel()
         let beforeVersion = model.pendingScrollAnchorVersion
 
         _ = model.selectChat(byID: chatID, anchor: #""the fix was in didDeleteItems""#)
@@ -34,8 +37,8 @@ struct ChatQuoteAnchorModelTests {
         #expect(model.pendingScrollAnchorVersion == beforeVersion + 1)
     }
 
-    @Test func selectChatByTitleStashesAnchor() throws {
-        let (model, chatID) = try makeModel()
+    @Test func selectChatByTitleStashesAnchor() async throws {
+        let (model, chatID) = try await makeModel()
 
         _ = model.selectChat(byTitle: "Debugging the FP bug", anchor: #""the fix""#)
 
@@ -43,8 +46,8 @@ struct ChatQuoteAnchorModelTests {
         #expect(model.pendingScrollAnchor?.fragment == #""the fix""#)
     }
 
-    @Test func consumeReturnsFragmentOnceForMatchingChat() throws {
-        let (model, chatID) = try makeModel()
+    @Test func consumeReturnsFragmentOnceForMatchingChat() async throws {
+        let (model, chatID) = try await makeModel()
         _ = model.selectChat(byID: chatID, anchor: #""the fix""#)
 
         #expect(model.consumePendingScrollAnchor(for: .chat(chatID)) == #""the fix""#)
@@ -53,8 +56,8 @@ struct ChatQuoteAnchorModelTests {
         #expect(model.consumePendingScrollAnchor(for: .chat(chatID)) == nil)
     }
 
-    @Test func consumeReturnsNilForMismatchedSelection() throws {
-        let (model, chatID) = try makeModel()
+    @Test func consumeReturnsNilForMismatchedSelection() async throws {
+        let (model, chatID) = try await makeModel()
         _ = model.selectChat(byID: chatID, anchor: #""the fix""#)
         let otherID = ChatID(rawValue: "01JAAAAAAAAAAAAAAAAAAAAAAA")
 
@@ -69,8 +72,8 @@ struct ChatQuoteAnchorModelTests {
         #expect(model.pendingScrollAnchor?.selection == .chat(chatID))
     }
 
-    @Test func nilAnchorLeavesNoPendingAnchor() throws {
-        let (model, chatID) = try makeModel()
+    @Test func nilAnchorLeavesNoPendingAnchor() async throws {
+        let (model, chatID) = try await makeModel()
 
         _ = model.selectChat(byID: chatID, anchor: nil)
 

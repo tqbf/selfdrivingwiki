@@ -363,12 +363,28 @@ public struct PageOKFTrustMetadata: Equatable, Sendable {
     public let pageID: PageID
     public let versionID: PageVersionID
     public let metadata: OKFConceptMetadata
+
+    /// Cross-module construction (the daemon wire client reconstructs this
+    /// wrapper from its contract mirror).
+    public init(pageID: PageID, versionID: PageVersionID, metadata: OKFConceptMetadata) {
+        self.pageID = pageID
+        self.versionID = versionID
+        self.metadata = metadata
+    }
 }
 
 public struct SourceMarkdownOKFTrustMetadata: Equatable, Sendable {
     public let sourceID: SourceID
     public let versionID: SourceMarkdownVersionID
     public let metadata: OKFConceptMetadata
+
+    /// Cross-module construction (the daemon wire client reconstructs this
+    /// wrapper from its contract mirror).
+    public init(sourceID: SourceID, versionID: SourceMarkdownVersionID, metadata: OKFConceptMetadata) {
+        self.sourceID = sourceID
+        self.versionID = versionID
+        self.metadata = metadata
+    }
 }
 
 public struct OKFGenerated: Equatable, Sendable {

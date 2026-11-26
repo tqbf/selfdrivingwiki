@@ -91,10 +91,6 @@ public final class SessionManager {
     /// rewriting call sites.
     public let queueEngine: any QueueEngineClient
 
-    /// Shared, app-wide extraction provider. The app-layer bridge from the
-    /// headless queue engine to `@MainActor` types.
-    public let extractionProvider: any QueueExtractionProvider
-
     private struct SearchRelease: Sendable {
         let token: UUID
         let task: Task<Void, Never>
@@ -149,7 +145,6 @@ public final class SessionManager {
         containerDirectory: URL,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
-        extractionProvider: any QueueExtractionProvider,
         providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
@@ -162,7 +157,6 @@ public final class SessionManager {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
-        self.extractionProvider = extractionProvider
         self.providerServices = providerServices
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         self.htmlMarkdownExtractorFactory = htmlMarkdownExtractorFactory
@@ -310,20 +304,22 @@ public final class SessionManager {
     /// only after its last `RootScene` closes, so another window showing the
     /// same wiki can still resolve renderer and comparison windows through the
     /// shared manager.
-    public func releaseSession(for wikiID: WikiID) {
+    public func releaseSession(for wikiID: WikiID) async {
         guard sessions[wikiID] != nil else { return }
         let remainingLeases = max(0, sessionLeaseCounts[wikiID, default: 1] - 1)
         guard remainingLeases == 0 else {
             sessionLeaseCounts[wikiID] = remainingLeases
             return
         }
-        removeSession(for: wikiID)
+        await removeSession(for: wikiID)
     }
 
-    private func removeSession(for wikiID: WikiID) {
+    private func removeSession(for wikiID: WikiID) async {
         sessionLeaseCounts.removeValue(forKey: wikiID)
         guard let session = sessions.removeValue(forKey: wikiID) else { return }
-        session.store.flushPendingSaves()
+        // Plan P1.3: the flush is awaited — pending edits MUST land before
+        // the session teardown task starts.
+        await session.store.flushPendingSaves()
         let token = UUID()
         let task = Task { @MainActor [weak self] in
             await session.shutdown()
@@ -333,11 +329,14 @@ public final class SessionManager {
         searchReleaseTasks[wikiID] = SearchRelease(token: token, task: task)
     }
 
-    /// Release all live sessions, await owned teardown, then dispose the private
-    /// search root. App termination force-removes sessions regardless of how
-    /// many window leases remain. Safe to call repeatedly.
+    /// Release all live sessions and await their teardown. App termination
+    /// force-removes sessions regardless of how many window leases remain.
+    /// Safe to call repeatedly. P5: the daemon owns the search runtime
+    /// lifecycle — releasing the session closes the daemon-side wiki state,
+    /// which is where the per-wiki index runtime is released; this method
+    /// no longer disposes a client-side search root (there is none).
     public func shutdownSearchRuntimes() async {
-        for wikiID in Array(sessions.keys) { removeSession(for: wikiID) }
+        for wikiID in Array(sessions.keys) { await removeSession(for: wikiID) }
         let releases = Array(searchReleaseTasks.values)
         for release in releases { await release.task.value }
         searchReleaseTasks.removeAll()
@@ -345,14 +344,14 @@ public final class SessionManager {
 
     /// Flush pending saves for ONE session (used by the registry's
     /// `flushActiveStore` closure before export/delete of a specific wiki).
-    public func flushSession(for wikiID: WikiID) {
-        sessions[wikiID]?.store.flushPendingSaves()
+    public func flushSession(for wikiID: WikiID) async {
+        await sessions[wikiID]?.store.flushPendingSaves()
     }
 
     /// Flush pending saves for ALL active sessions (app background / quit).
-    public func flushAllSessions() {
+    public func flushAllSessions() async {
         for session in sessions.values {
-            session.store.flushPendingSaves()
+            await session.store.flushPendingSaves()
         }
     }
 
