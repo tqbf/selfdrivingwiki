@@ -63,6 +63,9 @@ jobs:
           xcrun --show-sdk-path
           which swift || echo "swift not in PATH"
           swift --version || xcrun swift --version
+          # Failure-window marker for the crash-diagnostics capture steps at
+          # the end of this job: only .ips files newer than this are collected.
+          touch "$RUNNER_TEMP/crash-window-start"
       - name: Generate codegen files (version + prompts + keychain)
         run: make version prompts keychain
       - name: Cache Swift build
@@ -157,14 +160,18 @@ jobs:
         # scripts/test-optin-app-tests-reconciled.sh (see the P7 progress
         # note).
         #
-        # The store tier itself runs and passes (~98 tests), but the
-        # swiftpm-testing-helper crashes at TEARDOWN (signal 5 after all
-        # tests pass — run 45374149667), failing the swift test exit even
-        # though every test passed and the reconciled runner's captured
-        # summary proves it. continue-on-error keeps this coverage running
-        # on every push without blocking the job on the SwiftPM teardown
-        # crash; the step's result stays visible in the job summary. Needs
-        # the same root-cause pass as the projection wedge above.
+        # The store tier passes (~98 tests), but the swiftpm-testing-helper
+        # traps with SIGTRAP MID-RUN — 2026-11-26 forensics on run
+        # 45374149667: 75 tests started, 72 passed, 4 of 7 suites finished
+        # when the helper exited. The earlier "teardown after all tests
+        # pass" reading came from buffered output, not evidence. No stack
+        # was captured (the run has zero artifacts) and three local runs of
+        # this exact filter are green on an older toolchain, so the trap is
+        # unreproduced. continue-on-error keeps this coverage running on
+        # every push; the crash-diagnostics steps at the end of this job
+        # collect .ips reports, runner logs, and a dSYM so the next trap
+        # ships a symbolication-ready bundle. No evidence connects this
+        # trap to the projection wedge above.
         continue-on-error: true
         timeout-minutes: 15
         env:
@@ -201,6 +208,70 @@ jobs:
           make d2-renderer-package
           make d2-renderer-package-check
           xcrun swift test --parallel --num-workers 1 --filter 'D2RendererPackageMatchingTests|D2ViewerTemplateTests|D2GeneratedPackageValidationTests|D2PackageLockTests|D2SourceNeutralityTests|RendererCapabilityBoundaryPolicyTests'
+
+      - name: Collect crash diagnostics
+        # Failure forensics for the swiftpm-testing-helper traps (the
+        # #1051/#1422 wedge family and the store-tier SIGTRAP, run
+        # 45374149667). Runs even on cancellation. Collects: .ips crash
+        # reports written during this job, the opt-in runner's tee'd logs,
+        # a unified-log window for the helper and the crash reporter, and
+        # a dSYM for the package test bundle, so an .ips stack can be
+        # symbolicated without a local rebuild.
+        if: always()
+        run: |
+          set -u
+          DIR="$RUNNER_TEMP/crash-diagnostics"
+          mkdir -p "$DIR/crash-reports" "$DIR/logs" "$DIR/unified-log"
+          MARKER="$RUNNER_TEMP/crash-window-start"
+          [ -f "$MARKER" ] || touch "$MARKER"
+          START="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$MARKER")"
+
+          find "$HOME/Library/Logs/DiagnosticReports" \
+            -type f -name '*.ips' -newer "$MARKER" -print 2>/dev/null | \
+            while IFS= read -r f; do cp "$f" "$DIR/crash-reports/"; done
+          echo "crash reports collected: $(ls "$DIR/crash-reports" | wc -l | tr -d ' ')"
+
+          cp tmp/test-logs/*.log "$DIR/logs/" 2>/dev/null || echo "no opt-in runner logs"
+
+          log show --start "$START" --style compact \
+            --predicate 'process == "swiftpm-testing-helper" OR process == "swift" OR eventMessage CONTAINS[c] "crash"' \
+            > "$DIR/unified-log/window.log" 2>&1 || true
+          tail -c 20000000 "$DIR/unified-log/window.log" \
+            > "$DIR/unified-log/window.tmp" \
+            && mv "$DIR/unified-log/window.tmp" "$DIR/unified-log/window.log"
+          gzip -f "$DIR/unified-log/window.log" || true
+
+          BUNDLE="$(find .build -maxdepth 5 -name '*.xctest' 2>/dev/null | head -1)"
+          if [ -n "$BUNDLE" ]; then
+            BIN="$(ls "$BUNDLE/Contents/MacOS/"* 2>/dev/null | head -1)"
+            {
+              file "$BIN"
+              dwarfdump --uuid "$BIN"
+            } > "$DIR/test-bundle-identity.txt" 2>&1 || true
+            dsymutil "$BIN" -o "$DIR/$(basename "$BUNDLE" .xctest).dSYM" \
+              || echo "dsymutil failed (non-fatal)" >> "$DIR/test-bundle-identity.txt"
+          else
+            echo "no .xctest bundle under .build" > "$DIR/test-bundle-identity.txt"
+          fi
+
+          {
+            echo "### Crash diagnostics"
+            echo ""
+            echo "Crash reports collected: $(ls "$DIR/crash-reports" | wc -l | tr -d ' ')"
+            echo "Runner logs collected: $(ls "$DIR/logs" | wc -l | tr -d ' ')"
+            echo "Download the crash-diagnostics artifact for .ips stacks, the unified-log window, and the dSYM."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          tar -czf "$RUNNER_TEMP/crash-diagnostics.tgz" -C "$RUNNER_TEMP" crash-diagnostics
+
+      - name: Upload crash diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crash-diagnostics.tgz
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Linux is not a supported product platform. The retained opt-in diagnostic
   # is `make test-linux`; it is not a pull-request or release gate. Keep this
