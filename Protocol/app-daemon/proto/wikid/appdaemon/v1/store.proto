@@ -1,0 +1,3148 @@
+// Store family (step 2, plans/app-daemon-wire-contract.md §"Store family
+// design"). The full workload envelope set replacing the legacy
+// storeOperation JSON dispatch: dedicated hot-path RPCs (GetPage/
+// ListPages/UpsertPage — service methods added separately), four typed
+// envelopes with exhaustive oneof dispatch (StoreSmall/StoreList/
+// StoreBlob/StoreMutation), staged payload handles, mutation outcome
+// resolution, session bootstrap, and store lifecycle.
+//
+// Envelope tag layout: operation arms occupy their canonical ledger tags;
+// WikiId wiki_id takes the tag after the arm range (request and reply);
+// request envelopes take MutationStamp stamp after that. Operation
+// payloads never repeat the wiki scope.
+syntax = "proto3";
+
+package wikid.appdaemon.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "wikid/appdaemon/v1/common.proto";
+
+option swift_prefix = "AppDaemon";
+
+// ============================================================================
+// Shared value types (referenced by multiple envelopes; grounded in
+// Sources/WikiDaemonContract/DaemonStoreOps*.swift + WikiFSTypes).
+// ============================================================================
+
+// A committed staged-payload reference. Opaque bytes; the daemon binds it
+// to session/instance/wiki/purpose.
+message PayloadHandleRef {
+  bytes id = 1;
+}
+
+// Mutation identity + optimistic epoch for ambiguous-write reconciliation.
+message MutationStamp {
+  bytes request_id = 1;
+  uint64 expected_epoch = 2;
+}
+
+// === Chat identifiers & session values ===
+message ChatTurnId { string value = 1; }
+message ChatClaimId { string value = 1; }
+message ChatTurnClaimId { string value = 1; }
+message ChatCommandId { string value = 1; }
+message ProviderSessionId { string value = 1; }
+message AcpSessionId { string value = 1; }
+message ThinkingOptionId { string value = 1; }
+message ProviderId { string value = 1; }
+message ModelId { string value = 1; }
+
+message ChatAttachmentTarget {
+  oneof target {
+    PageId page = 1;
+    SourceId source = 2;
+    ChatId chat = 3;
+  }
+}
+
+enum ChatKind {
+  CHAT_KIND_UNSPECIFIED = 0;
+  CHAT_KIND_EDIT = 1;
+}
+
+enum ChatMessageSummaryKind {
+  CHAT_MESSAGE_SUMMARY_KIND_UNSPECIFIED = 0;
+  CHAT_MESSAGE_SUMMARY_KIND_DEFAULT = 1;
+  CHAT_MESSAGE_SUMMARY_KIND_MODEL = 2;
+}
+
+enum ChatTurnPersistenceState {
+  CHAT_TURN_PERSISTENCE_STATE_UNSPECIFIED = 0;
+  CHAT_TURN_PERSISTENCE_STATE_QUEUED = 1;
+  CHAT_TURN_PERSISTENCE_STATE_CLAIMED = 2;
+  CHAT_TURN_PERSISTENCE_STATE_PROVIDER_SUBMITTED = 3;
+  CHAT_TURN_PERSISTENCE_STATE_COMPLETED = 4;
+  CHAT_TURN_PERSISTENCE_STATE_CANCELLED = 5;
+  CHAT_TURN_PERSISTENCE_STATE_FAILED = 6;
+}
+
+message ChatSummary {
+  ChatId id = 1;
+  ChatKind kind = 2;
+  string title = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  int32 message_count = 6;
+  optional AcpSessionId acp_session_id = 7;
+  optional ProviderId model_provider_id = 8;
+  optional ModelId model_id = 9;
+  optional ThinkingOptionId configured_thinking_option_id = 10;
+  optional ThinkingOptionId effective_thinking_option_id = 11;
+}
+
+message ChatContextReference {
+  oneof reference {
+    PageId page = 1;
+    SourceId source = 2;
+    ChatId chat = 3;
+  }
+}
+message StoreChatTurnSubmission {
+  ChatCommandId command_id = 1;
+  ChatTurnId turn_id = 2;
+  string user_text = 3;
+  repeated ChatContextReference context_references = 4;
+  google.protobuf.Timestamp submitted_at = 5;
+}
+message ChatTranscriptCursor { int64 raw_value = 1; }
+message ChatTurnUsageValues {
+  optional int32 input_tokens = 1;
+  optional int32 output_tokens = 2;
+  optional int32 thought_tokens = 3;
+  optional int32 cache_read_tokens = 4;
+  optional int32 cache_write_tokens = 5;
+  optional double cost = 6;
+  optional string currency = 7;
+}
+message ChatTurnUsage {
+  ChatTurnId turn_id = 1;
+  optional ProviderId provider_id = 2;
+  optional ModelId model_id = 3;
+  optional google.protobuf.Timestamp started_at = 4;
+  optional google.protobuf.Timestamp finished_at = 5;
+  ChatTurnPersistenceState state = 6;
+  optional int32 input_tokens = 7;
+  optional int32 output_tokens = 8;
+  optional int32 thought_tokens = 9;
+  optional int32 cache_read_tokens = 10;
+  optional int32 cache_write_tokens = 11;
+  optional double cost = 12;
+  optional string currency = 13;
+}
+message ChatUsageSummary {
+  optional ChatTurnUsage latest_turn = 1;
+  int32 input_tokens = 2;
+  int32 output_tokens = 3;
+  int32 thought_tokens = 4;
+  int32 cache_read_tokens = 5;
+  int32 cache_write_tokens = 6;
+  optional double cost = 7;
+  optional string currency = 8;
+}
+message PersistedChatTurn {
+  ChatId chat_id = 1;
+  int32 ordinal = 2;
+  StoreChatTurnSubmission submission = 3;
+  optional google.protobuf.Timestamp edited_at = 4;
+  ChatTurnPersistenceState state = 5;
+  optional ChatTurnClaimId claim_id = 6;
+  optional google.protobuf.Timestamp claimed_at = 7;
+  optional google.protobuf.Timestamp provider_submitted_at = 8;
+  optional AcpSessionId provider_session_id = 9;
+  optional string terminal_message = 10;
+  optional ProviderId provider_id = 11;
+  optional ModelId model_id = 12;
+  optional google.protobuf.Timestamp finished_at = 13;
+  ChatTurnUsageValues usage = 14;
+}
+message PersistedChatTranscriptItem {
+  ChatTranscriptCursor cursor = 1;
+  ChatTranscriptItem item = 2;
+  optional string projected_event_json = 3;
+  string projected_plain_text = 4;
+  google.protobuf.Timestamp created_at = 5;
+  optional string summary = 6;
+}
+message ChatTranscriptPage {
+  repeated PersistedChatTranscriptItem items = 1;
+  ChatTranscriptCursor checkpoint = 2;
+  optional ChatTranscriptCursor next_cursor = 3;
+}
+message ChatMessage {
+  PageId id = 1;
+  ChatId chat_id = 2;
+  int32 seq = 3;
+  AgentEvent event = 4;
+  google.protobuf.Timestamp created_at = 5;
+  bool is_draft = 6;
+}
+
+// === Source values ===
+enum SourceRole {
+  SOURCE_ROLE_UNSPECIFIED = 0;
+  SOURCE_ROLE_PRIMARY = 1;
+  SOURCE_ROLE_MEDIA = 2;
+}
+enum SourceFetchState {
+  SOURCE_FETCH_STATE_UNSPECIFIED = 0;
+  SOURCE_FETCH_STATE_PENDING = 1;
+  SOURCE_FETCH_STATE_FORMAT_JOB_PENDING = 2;
+  SOURCE_FETCH_STATE_COMPLETE = 3;
+}
+enum SourceMarkdownOrigin {
+  SOURCE_MARKDOWN_ORIGIN_UNSPECIFIED = 0;
+  SOURCE_MARKDOWN_ORIGIN_EXTRACTION = 1;
+  SOURCE_MARKDOWN_ORIGIN_USER = 2;
+  SOURCE_MARKDOWN_ORIGIN_REVERT = 3;
+  SOURCE_MARKDOWN_ORIGIN_SOURCE = 4;
+  SOURCE_MARKDOWN_ORIGIN_TRANSCRIPT = 5;
+}
+message SourceSummary {
+  SourceId id = 1;
+  string filename = 2;
+  string ext = 3;
+  optional string mime_type = 4;
+  int64 byte_size = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  int32 version = 8;
+  optional string external_item_key = 9;
+  optional string external_item_title = 10;
+  optional string display_name = 11;
+  SourceRole role = 12;
+}
+message SourceProvenance {
+  string agent_name = 1;
+  string agent_kind = 2;
+  optional string agent_version = 3;
+  string activity_kind = 4;
+  optional string plan = 5;
+  optional string external_ref = 6;
+  optional string external_identity = 7;
+}
+message SourceIngestMetadata {
+  optional string external_item_id = 1;
+  optional string external_item_title = 2;
+}
+message SourceOrigin {
+  string version_id = 1;
+  string agent_name = 2;
+  string agent_kind = 3;
+  string activity_kind = 4;
+  optional string plan = 5;
+  optional string external_ref = 6;
+  optional string external_identity = 7;
+  optional string run_title = 8;
+  google.protobuf.Timestamp fetched_at = 9;
+}
+message SourceEmbedDescriptor {
+  SourceId id = 1;
+  optional string mime_type = 2;
+  optional string external_identity = 3;
+  optional string agent_name = 4;
+  optional string plan_url = 5;
+}
+
+// === Renderer preferences and source presentation ===
+message RendererBridgeInput {
+  oneof input {
+    SourceVersionId source = 1;
+    SourceMarkdownVersionId markdown = 2;
+    RendererInlineArtifact inline_artifact = 3;
+  }
+  message RendererInlineArtifact { bytes data = 1; optional string mime_type = 2; }
+}
+message RendererPreferenceReference {
+  oneof reference {
+    RendererReference exact = 1;
+    LogicalRendererReference logical = 2;
+  }
+}
+message RendererReference {
+  string package_id = 1;
+  string version = 2;
+  string registration_id = 3;
+}
+message LogicalRendererReference {
+  string package_id = 1;
+  string registration_id = 2;
+}
+message RendererSourcePreference {
+  SourceId source_id = 1;
+  RendererPreferenceReference preference = 2;
+  string updated_at = 3;
+}
+enum RendererSourcePresentationMode {
+  RENDERER_SOURCE_PRESENTATION_MODE_UNSPECIFIED = 0;
+  RENDERER_SOURCE_PRESENTATION_MODE_SOURCE = 1;
+  RENDERER_SOURCE_PRESENTATION_MODE_RENDERED = 2;
+  RENDERER_SOURCE_PRESENTATION_MODE_SPLIT = 3;
+}
+message RendererSourcePresentation {
+  SourceId source_id = 1;
+  RendererSourcePresentationMode presentation = 2;
+  string updated_at = 3;
+}
+
+// === Extraction provenance and content detection ===
+message ExtractionAlternative {
+  SourceMarkdownVersion version = 1;
+  string backend_display_name = 2;
+  string agent_name = 3;
+  optional string model_version = 4;
+  int32 char_count = 5;
+  optional ExtractorPackageProducer package = 6;
+  bool is_active = 7;
+}
+message ExtractionHostSpeechProducer {
+  string engine = 1;
+  string locale_id = 2;
+  ExtractorPackageProducer acquisition_fetcher = 3;
+}
+enum ExtractionProducerKind {
+  EXTRACTION_PRODUCER_KIND_UNSPECIFIED = 0;
+  EXTRACTION_PRODUCER_KIND_BACKEND = 1;
+  EXTRACTION_PRODUCER_KIND_TOOL = 2;
+  EXTRACTION_PRODUCER_KIND_LEGACY = 3;
+  EXTRACTION_PRODUCER_KIND_INSTALLED_PACKAGE = 4;
+  EXTRACTION_PRODUCER_KIND_HOST_SPEECH = 5;
+}
+message ExtractionProducer {
+  ExtractionProducerKind kind = 1;
+  optional string backend = 2;
+  optional string tool = 3;
+  optional string raw_technique = 4;
+  optional ExtractorPackageProducer installed_package = 5;
+  optional ExtractionHostSpeechProducer host_speech = 6;
+}
+message ExtractionProvenance {
+  SourceMarkdownVersionId markdown_version_id = 1;
+  SourceId source_id = 2;
+  SourceMarkdownOrigin origin = 3;
+  optional ExtractionProducer producer = 4;
+  optional ProviderId provider_id = 5;
+  optional ModelId model_id = 6;
+  optional string tool_version = 7;
+  google.protobuf.Timestamp created_at = 8;
+  optional SourceVersionId source_version_id = 9;
+}
+message ExtractorPackageProducer {
+  string package_id = 1;
+  string version = 2;
+  string digest = 3;
+  string registration_id = 4;
+  int32 protocol_revision = 5;
+  ExtractorReportedMetadata reported_metadata = 6;
+}
+message ExtractorReportedMetadata {
+  optional string tool_name = 1;
+  optional string tool_version = 2;
+  optional string model_name = 3;
+  optional string model_version = 4;
+  optional string language = 5;
+  optional bool transcript_generated = 6;
+}
+message DeclaredMIME { string value = 1; DeclaredMIMEOrigin origin = 2; }
+enum DeclaredMIMEOrigin {
+  DECLARED_MIME_ORIGIN_UNSPECIFIED = 0;
+  DECLARED_MIME_ORIGIN_HTTP_RESPONSE = 1;
+  DECLARED_MIME_ORIGIN_SOURCE_METADATA = 2;
+}
+message ContentTypeDetectionHints {
+  optional DeclaredMIME declared_mime = 1;
+  optional string filename_extension = 2;
+  optional string uti_mime = 3;
+}
+message ContentTypeEvidence {
+  ContentTypeEvidenceOrigin origin = 1;
+  string mime_type = 2;
+  ContentTypeConfidence confidence = 3;
+  optional string detail = 4;
+}
+enum ContentTypeEvidenceOrigin {
+  CONTENT_TYPE_EVIDENCE_ORIGIN_UNSPECIFIED = 0;
+  CONTENT_TYPE_EVIDENCE_ORIGIN_BINARY_SIGNATURE = 1;
+  CONTENT_TYPE_EVIDENCE_ORIGIN_STRUCTURED_BYTES = 2;
+  CONTENT_TYPE_EVIDENCE_ORIGIN_UTF8_TEXT = 3;
+  CONTENT_TYPE_EVIDENCE_ORIGIN_HTTP_RESPONSE = 4;
+  CONTENT_TYPE_EVIDENCE_ORIGIN_TRUSTED_GENERATED = 5;
+  CONTENT_TYPE_EVIDENCE_ORIGIN_UTI = 6;
+  CONTENT_TYPE_EVIDENCE_ORIGIN_FILENAME_EXTENSION = 7;
+}
+enum ContentTypeConfidence {
+  CONTENT_TYPE_CONFIDENCE_UNSPECIFIED = 0;
+  CONTENT_TYPE_CONFIDENCE_FALLBACK = 1;
+  CONTENT_TYPE_CONFIDENCE_DECLARED = 2;
+  CONTENT_TYPE_CONFIDENCE_PROBABLE = 3;
+  CONTENT_TYPE_CONFIDENCE_HIGH = 4;
+}
+message ContentTypeConflict {
+  ContentTypeConflictKind kind = 1;
+  string chosen_mime_type = 2;
+  ContentTypeEvidence conflicting_evidence = 3;
+}
+enum ContentTypeConflictKind {
+  CONTENT_TYPE_CONFLICT_KIND_UNSPECIFIED = 0;
+  CONTENT_TYPE_CONFLICT_KIND_DISAGREEMENT = 1;
+  CONTENT_TYPE_CONFLICT_KIND_TRUSTED_GENERATED_MISMATCH = 2;
+}
+message ContentTypeDetectionResult {
+  optional string normalized_mime_type = 1;
+  repeated ContentTypeEvidence evidence = 2;
+  optional ContentTypeConfidence confidence = 3;
+  repeated ContentTypeConflict conflicts = 4;
+  optional string structured_artifact_kind = 5;
+}
+enum MIMERepairNullState {
+  MIME_REPAIR_NULL_STATE_UNSPECIFIED = 0;
+  MIME_REPAIR_NULL_STATE_SOURCE_ONLY = 1;
+  MIME_REPAIR_NULL_STATE_VERSION_ONLY = 2;
+  MIME_REPAIR_NULL_STATE_BOTH = 3;
+  MIME_REPAIR_NULL_STATE_NEITHER = 4;
+}
+enum MIMERepairStatus {
+  MIME_REPAIR_STATUS_UNSPECIFIED = 0;
+  MIME_REPAIR_STATUS_DETECTOR_REPAIR = 1;
+  MIME_REPAIR_STATUS_PACKAGE_ALIAS_NORMALIZATION = 2;
+  MIME_REPAIR_STATUS_CANONICAL_NO_OP = 3;
+  MIME_REPAIR_STATUS_CONFLICT = 4;
+  MIME_REPAIR_STATUS_AMBIGUITY = 5;
+  MIME_REPAIR_STATUS_BYTELESS = 6;
+  MIME_REPAIR_STATUS_INCONCLUSIVE = 7;
+}
+message MIMERepairItem {
+  SourceId source_id = 1;
+  SourceVersionId source_version_id = 2;
+  string filename = 3;
+  MIMERepairNullState null_state = 4;
+  optional string old_source_mime_type = 5;
+  optional string old_version_mime_type = 6;
+  optional string new_mime_type = 7;
+  ContentTypeDetectionResult detection = 8;
+  MIMERepairStatus status = 9;
+  bool updated = 10;
+}
+message MIMERepairReport {
+  int32 scanned_count = 1;
+  int32 repairable_count = 2;
+  int32 updated_count = 3;
+  int32 skipped_byteless_count = 4;
+  int32 skipped_inconclusive_count = 5;
+  bool applied = 6;
+  repeated MIMERepairItem items = 7;
+}
+
+// === Log, parsed-link, and change values ===
+message LogEntry {
+  PageId id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  Kind kind = 3;
+  string title = 4;
+  optional string note = 5;
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_INGEST = 1;
+    KIND_QUERY = 2;
+    KIND_LINT = 3;
+  }
+}
+// TODO(step-2-review): Existing operation contracts use this transport ID wrapper; Swift LogEntry.id is PageID.
+message LogEntryId { string value = 1; }
+message ParsedLink {
+  LinkType link_type = 1;
+  string target = 2;
+  optional string fragment = 3;
+  string link_text = 4;
+  bool is_embed = 5;
+  optional string version_pin = 6;
+  enum LinkType {
+    LINK_TYPE_UNSPECIFIED = 0;
+    LINK_TYPE_PAGE = 1;
+    LINK_TYPE_SOURCE = 2;
+    LINK_TYPE_CHAT = 3;
+  }
+}
+message ResourceChangeEvent {
+  WikiId wiki_id = 1;
+  optional ResourceKind kind = 2;
+  string id = 3;
+  ChangeKind change = 4;
+  uint64 seq = 5;
+}
+enum ResourceKind {
+  RESOURCE_KIND_UNSPECIFIED = 0;
+  RESOURCE_KIND_PAGE = 1;
+  RESOURCE_KIND_SOURCE = 2;
+  RESOURCE_KIND_SYSTEM_PROMPT = 3;
+  RESOURCE_KIND_WIKI_INDEX = 4;
+  RESOURCE_KIND_LOG = 5;
+  RESOURCE_KIND_BOOKMARK = 6;
+  RESOURCE_KIND_CHAT = 7;
+  RESOURCE_KIND_STRATEGY = 8;
+}
+enum ChangeKind {
+  CHANGE_KIND_UNSPECIFIED = 0;
+  CHANGE_KIND_CREATED = 1;
+  CHANGE_KIND_UPDATED = 2;
+  CHANGE_KIND_DELETED = 3;
+}
+
+// === Bookmark tree and wiki strategy values ===
+message BookmarkId { string value = 1; }
+message BookmarkContent {
+  oneof content {
+    string folder_label = 1;
+    PageId page = 2;
+    SourceId source = 3;
+    ChatId chat = 4;
+  }
+}
+message BookmarkNode {
+  BookmarkId id = 1;
+  optional BookmarkId parent_id = 2;
+  int64 position = 3;
+  BookmarkContent content = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+message WikiStrategyRevision { int64 raw_value = 1; }
+message WikiStrategy {
+  string name = 1;
+  string instructions = 2;
+  WikiStrategyRevision revision = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+message StrategySnapshot {
+  optional WikiStrategy strategy = 1;
+  optional WikiStrategyRevision revision = 2;
+}
+enum WikiStrategySaveOutcomeKind {
+  WIKI_STRATEGY_SAVE_OUTCOME_KIND_UNSPECIFIED = 0;
+  WIKI_STRATEGY_SAVE_OUTCOME_KIND_SAVED = 1;
+  WIKI_STRATEGY_SAVE_OUTCOME_KIND_UNCHANGED = 2;
+}
+message WikiStrategySaveOutcome {
+  WikiStrategySaveOutcomeKind kind = 1;
+  optional WikiStrategyRevision revision = 2;
+  optional WikiStrategy strategy = 3;
+}
+message WikiStrategyState {
+  optional WikiStrategy strategy = 1;
+  optional WikiStrategyRevision revision = 2;
+}
+message SourceVersionId { string raw_value = 1; }
+message SourceMarkdownVersionId { string raw_value = 1; }
+message SourceVersion {
+  string id = 1;
+  SourceId source_id = 2;
+  optional string parent_id = 3;
+  optional string blob_hash = 4;
+  optional string mime_type = 5;
+  optional string activity_id = 6;
+  optional string external_identity = 7;
+  google.protobuf.Timestamp fetched_at = 8;
+}
+message SourceMarkdownVersion {
+  SourceMarkdownVersionId id = 1;
+  SourceId source_id = 2;
+  optional SourceMarkdownVersionId parent_id = 3;
+  string content = 4;
+  SourceMarkdownOrigin origin = 5;
+  optional string note = 6;
+  google.protobuf.Timestamp created_at = 7;
+  optional string activity_id = 8;
+  optional SourceVersionId source_version_id = 9;
+  optional string blob_hash = 10;
+  string mime_type = 11;
+  optional string technique = 12;
+}
+message SourceMarkdownVersionHeader {
+  string id = 1;
+  string source_id = 2;
+  optional string parent_id = 3;
+  SourceMarkdownOrigin origin = 4;
+  optional string note = 5;
+  google.protobuf.Timestamp created_at = 6;
+  optional string activity_id = 7;
+  optional string source_version_id = 8;
+  optional string blob_hash = 9;
+  string mime_type = 10;
+  optional string technique = 11;
+}
+
+// === Page versions, page metadata, and workspaces ===
+message PageVersionId { string value = 1; }
+message WorkspaceId { string value = 1; }
+message ActivityId { string value = 1; }
+message PageVersionSource {
+  PageVersionId page_version_id = 1;
+  SourceId source_id = 2;
+  PageVersionSourceRole role = 3;
+}
+enum PageVersionSourceRole {
+  PAGE_VERSION_SOURCE_ROLE_UNSPECIFIED = 0;
+  PAGE_VERSION_SOURCE_ROLE_PRIMARY = 1;
+  PAGE_VERSION_SOURCE_ROLE_SUPPORTING = 2;
+}
+message PageVersionSourceInput {
+  SourceId source_id = 1;
+  PageVersionSourceRole role = 2;
+}
+message CitedPage { PageId page_id = 1; optional string title = 2; }
+message PageVersionSummary {
+  PageVersionId id = 1;
+  PageId page_id = 2;
+  optional PageVersionId parent_id = 3;
+  optional PageVersionId merge_parent_id = 4;
+  string blob_hash = 5;
+  string title = 6;
+  optional string activity_id = 7;
+  google.protobuf.Timestamp saved_at = 8;
+}
+message PageVersionVacuumReport { int32 deleted_count = 1; bool applied = 2; }
+message WorkspaceSummary {
+  WorkspaceId id = 1;
+  optional string name = 2;
+  WorkspaceStatus status = 3;
+  optional string activity_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+enum WorkspaceStatus {
+  WORKSPACE_STATUS_UNSPECIFIED = 0;
+  WORKSPACE_STATUS_OPEN = 1;
+  WORKSPACE_STATUS_MERGING = 2;
+  WORKSPACE_STATUS_MERGED = 3;
+  WORKSPACE_STATUS_CONFLICTED = 4;
+  WORKSPACE_STATUS_ABANDONED = 5;
+}
+message WorkspaceRef {
+  WorkspaceId workspace_id = 1;
+  PageId owner_id = 2;
+  optional PageVersionId base_version_id = 3;
+  optional PageVersionId version_id = 4;
+  optional string blob_hash = 5;
+  optional string title = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+message WorkspaceConflict {
+  message Target {
+    oneof value {
+      PageVersionId page_version = 1;
+      string staged_blob = 2;
+    }
+  }
+  WorkspaceId workspace_id = 1;
+  PageId page_id = 2;
+  optional PageVersionId base_version_id = 3;
+  optional PageVersionId main_version_id = 4;
+  Target workspace_target = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+message PageOrigin {
+  PageVersionId version_id = 1;
+  string title = 2;
+  optional string blob_hash = 3;
+  string agent_name = 4;
+  string agent_kind = 5;
+  string activity_kind = 6;
+  optional string plan = 7;
+  optional string external_ref = 8;
+  optional string run_title = 9;
+  google.protobuf.Timestamp saved_at = 10;
+}
+message PageSummary {
+  PageId id = 1;
+  string title = 2;
+  google.protobuf.Timestamp updated_at = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+message PageMetadata {
+  PageId id = 1;
+  string title = 2;
+  string slug = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  int32 version = 6;
+  optional string created_by = 7;
+  optional string last_edited_by = 8;
+}
+message WikiIndexMetadata { google.protobuf.Timestamp updated_at = 1; int32 version = 2; }
+message BlobVacuumReport { int32 orphan_count = 1; int32 bytes_reclaimed = 2; bool applied = 3; }
+message ActivityVacuumReport { int32 orphan_count = 1; bool applied = 2; }
+
+// === OKF verification and trust metadata ===
+message OKFVerificationId { string value = 1; }
+enum OKFConceptStatus {
+  OKF_CONCEPT_STATUS_UNSPECIFIED = 0;
+  OKF_CONCEPT_STATUS_DRAFT = 1;
+  OKF_CONCEPT_STATUS_STABLE = 2;
+  OKF_CONCEPT_STATUS_DEPRECATED = 3;
+}
+enum OKFVerificationBasisKind {
+  OKF_VERIFICATION_BASIS_KIND_UNSPECIFIED = 0;
+  OKF_VERIFICATION_BASIS_KIND_HUMAN_REVIEW = 1;
+  OKF_VERIFICATION_BASIS_KIND_SOURCE_CHECKED = 2;
+  OKF_VERIFICATION_BASIS_KIND_EXTERNAL_REVALIDATION = 3;
+}
+message OKFVerificationBasis {
+  int32 version = 1;
+  OKFVerificationBasisKind kind = 2;
+  repeated EvidenceReference evidence = 3;
+  optional string note = 4;
+  message EvidenceReference {
+    oneof reference {
+      SourceId source = 1;
+      string external_url = 2;
+    }
+  }
+}
+message OKFVerificationCorrectionReason { int32 version = 1; string reason = 2; }
+message OKFVerifierIdentity {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_HUMAN = 1;
+    KIND_PROCESS = 2;
+    KIND_PRODUCER = 3;
+  }
+  string raw_value = 1;
+  Kind kind = 2;
+  string name = 3;
+  optional string version = 4;
+}
+message OKFFreshnessAnchor {
+  oneof value {
+    bool generated = 1;
+    OKFVerificationId verification = 2;
+    bool recorded_verification = 3;
+  }
+}
+message OKFFreshnessPolicy {
+  oneof policy {
+    google.protobuf.Timestamp fixed = 1;
+    Ttl ttl = 2;
+  }
+  message Ttl { int64 seconds = 1; OKFFreshnessAnchor anchor = 2; }
+}
+message OKFVerificationEvent {
+  OKFVerificationId id = 1;
+  OKFVerifierIdentity by = 2;
+  google.protobuf.Timestamp verified_at = 3;
+  OKFVerificationBasis basis = 4;
+  optional google.protobuf.Timestamp removed_at = 5;
+  optional ActivityId correction_activity_id = 6;
+  optional OKFVerifierIdentity corrected_by = 7;
+  optional OKFVerificationCorrectionReason correction_reason = 8;
+}
+message OKFConceptMetadata {
+  optional OKFConceptStatus status = 1;
+  optional google.protobuf.Timestamp stale_after = 2;
+  optional OKFFreshnessPolicy freshness_policy = 3;
+  repeated OKFVerificationEvent verifications = 4;
+  int64 projection_revision = 5;
+}
+message PageOKFTrustMetadata {
+  PageId page_id = 1;
+  PageVersionId version_id = 2;
+  OKFConceptMetadata metadata = 3;
+}
+message SourceMarkdownOKFTrustMetadata {
+  SourceId source_id = 1;
+  string version_id = 2;
+  OKFConceptMetadata metadata = 3;
+}
+
+// === Protected resource deletion ===
+enum ResourceDeletionLinkPolicy {
+  RESOURCE_DELETION_LINK_POLICY_UNSPECIFIED = 0;
+  RESOURCE_DELETION_LINK_POLICY_PRESERVE = 1;
+  RESOURCE_DELETION_LINK_POLICY_UNLINK = 2;
+}
+message ResourceDeletionTarget {
+  oneof target {
+    PageId page = 1;
+    SourceId source = 2;
+  }
+}
+message ResourceDeletionRequest {
+  repeated ResourceDeletionTarget targets = 1;
+  ResourceDeletionLinkPolicy link_policy = 2;
+}
+message DeletionLinkingPage { PageId page_id = 1; optional string title = 2; }
+message DeletionBookmarkImpact { string node_id = 1; string folder_path = 2; }
+message ProvenanceDeletionBlocker {
+  SourceId source_id = 1;
+  PageVersionId page_version_id = 2;
+  PageId page_id = 3;
+}
+message DeletionImpact {
+  repeated DeletionLinkingPage linking_pages = 1;
+  repeated DeletionBookmarkImpact bookmarks = 2;
+  repeated ProvenanceDeletionBlocker provenance_blockers = 3;
+  int32 incoming_link_count = 4;
+}
+message ResourceDeletionResult {
+  repeated ResourceDeletionTarget deleted_targets = 1;
+  repeated PageId rewritten_page_ids = 2;
+  repeated string removed_bookmark_ids = 3;
+  int32 incoming_link_count = 4;
+}
+
+// === Payload handles and durable transcript values ===
+// TODO(step-2-review): The transport mirror currently specifies only these three handle fields.
+message PayloadHandle {
+  string id = 1;
+  int32 declared_byte_count = 2;
+  string sha256_hex = 3;
+}
+message AgentEvent {
+  oneof event {
+    string user_text = 1;
+    string system_init_model = 2;
+    string assistant_text = 3;
+    string thinking = 4;
+    string thinking_delta = 5;
+    string assistant_text_delta = 6;
+    ToolUse tool_use = 7;
+    ToolResult tool_result = 8;
+    Subagent subagent = 9;
+    Result result = 10;
+    bool message_stop = 11;
+    TurnFailed turn_failed = 12;
+    string raw = 13;
+  }
+  message ToolUse { string name = 1; string input_summary = 2; }
+  message ToolResult { bool is_error = 1; optional string summary = 2; }
+  message Subagent { string subagent_type = 1; string description = 2; bool is_completion = 3; }
+  message Result { bool is_error = 1; string text = 2; }
+  message TurnFailed { string reason = 1; }
+}
+message ChatTranscriptMessageItem {
+  string message_id = 1;
+  ChatTurnId turn_id = 2;
+  ChatTranscriptMessageRole role = 3;
+  string text = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+enum ChatTranscriptMessageRole {
+  CHAT_TRANSCRIPT_MESSAGE_ROLE_UNSPECIFIED = 0;
+  CHAT_TRANSCRIPT_MESSAGE_ROLE_USER = 1;
+  CHAT_TRANSCRIPT_MESSAGE_ROLE_ASSISTANT = 2;
+  CHAT_TRANSCRIPT_MESSAGE_ROLE_REASONING = 3;
+}
+message ChatTranscriptToolCallItem {
+  string tool_call_id = 1;
+  ChatTurnId turn_id = 2;
+  string tool_name = 3;
+  ChatToolCallStatus status = 4;
+  optional string detail = 5;
+  optional string output = 6;
+  optional string permission_request_id = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+message ChatTranscriptSystemNoticeItem {
+  string notice_id = 1;
+  optional ChatTurnId turn_id = 2;
+  ChatSystemNoticeKind kind = 3;
+  string title = 4;
+  string message = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+message ChatTranscriptTurnFailureItem {
+  string failure_id = 1;
+  ChatTurnId turn_id = 2;
+  ChatTurnFailureCategory category = 3;
+  string message = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+enum ChatToolCallStatus {
+  CHAT_TOOL_CALL_STATUS_UNSPECIFIED = 0;
+  CHAT_TOOL_CALL_STATUS_PENDING = 1;
+  CHAT_TOOL_CALL_STATUS_RUNNING = 2;
+  CHAT_TOOL_CALL_STATUS_COMPLETED = 3;
+  CHAT_TOOL_CALL_STATUS_FAILED = 4;
+  CHAT_TOOL_CALL_STATUS_CANCELLED = 5;
+}
+enum ChatSystemNoticeKind {
+  CHAT_SYSTEM_NOTICE_KIND_UNSPECIFIED = 0;
+  CHAT_SYSTEM_NOTICE_KIND_SESSION = 1;
+  CHAT_SYSTEM_NOTICE_KIND_RECOVERY = 2;
+  CHAT_SYSTEM_NOTICE_KIND_QUEUE = 3;
+  CHAT_SYSTEM_NOTICE_KIND_DIAGNOSTICS = 4;
+}
+enum ChatTurnFailureCategory {
+  CHAT_TURN_FAILURE_CATEGORY_UNSPECIFIED = 0;
+  CHAT_TURN_FAILURE_CATEGORY_CANCELLED = 1;
+  CHAT_TURN_FAILURE_CATEGORY_INTERRUPTED = 2;
+  CHAT_TURN_FAILURE_CATEGORY_RUNTIME_ERROR = 3;
+  CHAT_TURN_FAILURE_CATEGORY_PERMISSION_DENIED = 4;
+  CHAT_TURN_FAILURE_CATEGORY_TRANSPORT_ERROR = 5;
+}
+message ChatTranscriptItem {
+  oneof item {
+    ChatTranscriptMessageItem message = 1;
+    ChatTranscriptToolCallItem tool_call = 2;
+    ChatTranscriptSystemNoticeItem system_notice = 3;
+    ChatTranscriptTurnFailureItem turn_failure = 4;
+  }
+}
+
+// ==== BEGIN FRAGMENT: store-small.frag ====
+
+// ARM LEDGER (StoreSmall): arm 1 = activeContentVersion → ActiveContentVersionRequest/ActiveContentVersionReply
+// ARM LEDGER (StoreSmall): arm 2 = activeExtractionProvenance → ActiveExtractionProvenanceRequest/ActiveExtractionProvenanceReply
+// ARM LEDGER (StoreSmall): arm 3 = chatAttachments → ChatAttachmentsRequest/ChatAttachmentsReply
+// ARM LEDGER (StoreSmall): arm 4 = chatTranscriptCheckpoint → ChatTranscriptCheckpointRequest/ChatTranscriptCheckpointReply
+// ARM LEDGER (StoreSmall): arm 5 = chatUsageSummary → ChatUsageSummaryRequest/ChatUsageSummaryReply
+// ARM LEDGER (StoreSmall): arm 6 = fetchState → FetchStateRequest/FetchStateReply
+// ARM LEDGER (StoreSmall): arm 7 = getChat → GetChatRequest/GetChatReply
+// ARM LEDGER (StoreSmall): arm 8 = getMetadata → GetMetadataRequest/GetMetadataReply
+// ARM LEDGER (StoreSmall): arm 9 = getWikiStrategyState → GetWikiStrategyStateRequest/GetWikiStrategyStateReply
+// ARM LEDGER (StoreSmall): arm 10 = hasImageSiblings → HasImageSiblingsRequest/HasImageSiblingsReply
+// ARM LEDGER (StoreSmall): arm 11 = hasProcessedMarkdown → HasProcessedMarkdownRequest/HasProcessedMarkdownReply
+// ARM LEDGER (StoreSmall): arm 12 = initialContentVersion → InitialContentVersionRequest/InitialContentVersionReply
+// ARM LEDGER (StoreSmall): arm 13 = pageHeadSources → PageHeadSourcesRequest/PageHeadSourcesReply
+// ARM LEDGER (StoreSmall): arm 14 = pageHeadVersionID → PageHeadVersionIDRequest/PageHeadVersionIDReply
+// ARM LEDGER (StoreSmall): arm 15 = pageOKFMetadata → PageOKFMetadataRequest/PageOKFMetadataReply
+// ARM LEDGER (StoreSmall): arm 16 = pageOrigin → PageOriginRequest/PageOriginReply
+// ARM LEDGER (StoreSmall): arm 17 = pageVersionSources → PageVersionSourcesRequest/PageVersionSourcesReply
+// ARM LEDGER (StoreSmall): arm 18 = rendererInputByteCount → RendererInputByteCountRequest/RendererInputByteCountReply
+// ARM LEDGER (StoreSmall): arm 19 = rendererSourcePreference → RendererSourcePreferenceRequest/RendererSourcePreferenceReply
+// ARM LEDGER (StoreSmall): arm 20 = rendererSourcePresentation → RendererSourcePresentationRequest/RendererSourcePresentationReply
+// ARM LEDGER (StoreSmall): arm 21 = resolveChatByTitle → ResolveChatByTitleRequest/ResolveChatByTitleReply
+// ARM LEDGER (StoreSmall): arm 22 = resolveSourceByName → ResolveSourceByNameRequest/ResolveSourceByNameReply
+// ARM LEDGER (StoreSmall): arm 23 = resolveTitleToID → ResolveTitleToIDRequest/ResolveTitleToIDReply
+// ARM LEDGER (StoreSmall): arm 24 = searchSimilar → SearchSimilarRequest/SearchSimilarReply
+// ARM LEDGER (StoreSmall): arm 25 = searchSimilarChats → SearchSimilarChatsRequest/SearchSimilarChatsReply
+// ARM LEDGER (StoreSmall): arm 26 = searchSimilarSources → SearchSimilarSourcesRequest/SearchSimilarSourcesReply
+// ARM LEDGER (StoreSmall): arm 27 = setMetadata → SetMetadataRequest/SetMetadataReply
+// ARM LEDGER (StoreSmall): arm 28 = sourceMarkdownOKFMetadata → SourceMarkdownOKFMetadataRequest/SourceMarkdownOKFMetadataReply
+// ARM LEDGER (StoreSmall): arm 29 = sourceMatchingURLIdentity → SourceMatchingURLIdentityRequest/SourceMatchingURLIdentityReply
+// ARM LEDGER (StoreSmall): arm 30 = sourceOrigin → SourceOriginRequest/SourceOriginReply
+// ARM LEDGER (StoreSmall): arm 31 = sourceVersion → SourceVersionRequest/SourceVersionReply
+// ARM LEDGER (StoreSmall): arm 32 = vacuumActivities → VacuumActivitiesRequest/VacuumActivitiesReply
+// ARM LEDGER (StoreSmall): arm 33 = vacuumBlobs → VacuumBlobsRequest/VacuumBlobsReply
+// ARM LEDGER (StoreSmall): arm 34 = vacuumPageVersions → VacuumPageVersionsRequest/VacuumPageVersionsReply
+// ARM LEDGER (StoreSmall): arm 35 = wikiStrategyRevision → WikiStrategyRevisionRequest/WikiStrategyRevisionReply
+// ARM LEDGER (StoreSmall): arm 36 = workspacePageVersion → WorkspacePageVersionRequest/WorkspacePageVersionReply
+// ARM LEDGER (StoreSmall): arm 37 = workspaceSummary → WorkspaceSummaryRequest/WorkspaceSummaryReply
+
+// Part 1: Operation messages.
+
+message ActiveContentVersionRequest {
+  SourceId source_id = 1;
+}
+
+message ActiveContentVersionReply {
+  optional SourceVersion version = 1;
+}
+
+message ActiveExtractionProvenanceRequest {
+  SourceId source_id = 1;
+}
+
+message ActiveExtractionProvenanceReply {
+  optional ExtractionProvenance provenance = 1;
+}
+
+message ChatAttachmentsRequest {
+  ChatId chat_id = 1;
+}
+
+message ChatAttachmentsReply {
+  repeated ChatAttachmentTarget targets = 1;
+}
+
+message ChatTranscriptCheckpointRequest {
+  ChatId chat_id = 1;
+}
+
+message ChatTranscriptCheckpointReply {
+  ChatTranscriptCursor checkpoint = 1;
+}
+
+message ChatUsageSummaryRequest {
+  ChatId chat_id = 1;
+}
+
+message ChatUsageSummaryReply {
+  ChatUsageSummary summary = 1;
+}
+
+message FetchStateRequest {
+  SourceId source_id = 1;
+}
+
+message FetchStateReply {
+  optional SourceFetchState state = 1;
+}
+
+message GetChatRequest {
+  ChatId id = 1;
+}
+
+message GetChatReply {
+  ChatSummary chat = 1;
+}
+
+message GetMetadataRequest {
+  string key = 1;
+}
+
+message GetMetadataReply {
+  optional string value = 1;
+}
+
+message GetWikiStrategyStateRequest {}
+
+message GetWikiStrategyStateReply {
+  WikiStrategyState state = 1;
+}
+
+message HasImageSiblingsRequest {
+  SourceId source_id = 1;
+}
+
+message HasImageSiblingsReply {
+  bool has_siblings = 1;
+}
+
+message HasProcessedMarkdownRequest {
+  SourceId source_id = 1;
+}
+
+message HasProcessedMarkdownReply {
+  bool has_any = 1;
+}
+
+message InitialContentVersionRequest {
+  SourceId source_id = 1;
+}
+
+message InitialContentVersionReply {
+  optional SourceVersion version = 1;
+}
+
+message PageHeadSourcesRequest {
+  PageId page_id = 1;
+}
+
+message PageHeadSourcesReply {
+  repeated PageVersionSource sources = 1;
+}
+
+message PageHeadVersionIDRequest {
+  PageId page_id = 1;
+}
+
+message PageHeadVersionIDReply {
+  optional string version_id = 1;
+}
+
+message PageOKFMetadataRequest {
+  string version_id = 1;
+  bool include_corrected = 2;
+}
+
+message PageOKFMetadataReply {
+  optional PageOKFTrustMetadata metadata = 1;
+}
+
+message PageOriginRequest {
+  PageId page_id = 1;
+}
+
+message PageOriginReply {
+  optional PageOrigin origin = 1;
+}
+
+message PageVersionSourcesRequest {
+  string version_id = 1;
+}
+
+message PageVersionSourcesReply {
+  repeated PageVersionSource sources = 1;
+}
+
+message RendererInputByteCountRequest {
+  RendererBridgeInput input = 1;
+}
+
+message RendererInputByteCountReply {
+  optional int64 byte_count = 1;
+}
+
+message RendererSourcePreferenceRequest {
+  SourceId source_id = 1;
+}
+
+message RendererSourcePreferenceReply {
+  optional RendererSourcePreference preference = 1;
+}
+
+message RendererSourcePresentationRequest {
+  SourceId source_id = 1;
+}
+
+message RendererSourcePresentationReply {
+  optional RendererSourcePresentation presentation = 1;
+}
+
+message ResolveChatByTitleRequest {
+  string title = 1;
+}
+
+message ResolveChatByTitleReply {
+  optional ChatId chat_id = 1;
+}
+
+message ResolveSourceByNameRequest {
+  string display_name = 1;
+}
+
+message ResolveSourceByNameReply {
+  optional SourceId source_id = 1;
+}
+
+message ResolveTitleToIDRequest {
+  string title = 1;
+}
+
+message ResolveTitleToIDReply {
+  optional PageId page_id = 1;
+}
+
+message SearchSimilarRequest {
+  message Bm25Leg {
+    repeated PageSummary items = 1;
+  }
+
+  string query = 1;
+  int64 limit = 2;
+  // Absent selects cosine-only search. Present with no items is an empty BM25 leg.
+  optional Bm25Leg bm25_leg = 3;
+}
+
+message SearchSimilarReply {
+  repeated PageSummary results = 1;
+}
+
+message SearchSimilarChatsRequest {
+  message Bm25Leg {
+    repeated ChatSummary items = 1;
+  }
+
+  string query = 1;
+  int64 limit = 2;
+  optional Bm25Leg bm25_leg = 3;
+}
+
+message SearchSimilarChatsReply {
+  repeated ChatSummary results = 1;
+}
+
+message SearchSimilarSourcesRequest {
+  message Bm25Leg {
+    repeated SourceSummary items = 1;
+  }
+
+  string query = 1;
+  int64 limit = 2;
+  optional Bm25Leg bm25_leg = 3;
+}
+
+message SearchSimilarSourcesReply {
+  repeated SourceSummary results = 1;
+}
+
+message SetMetadataRequest {
+  string key = 1;
+  string value = 2;
+}
+
+message SetMetadataReply {
+  MutationOutcome outcome = 1;
+}
+
+message SourceMarkdownOKFMetadataRequest {
+  // TODO(step-2-review): The DTO uses a raw SourceMarkdownVersionID, not a page ID.
+  string version_id = 1;
+  bool include_corrected = 2;
+}
+
+message SourceMarkdownOKFMetadataReply {
+  optional SourceMarkdownOKFTrustMetadata metadata = 1;
+}
+
+message SourceMatchingURLIdentityRequest {
+  string identity = 1;
+}
+
+message SourceMatchingURLIdentityReply {
+  optional SourceSummary source = 1;
+}
+
+message SourceOriginRequest {
+  SourceId source_id = 1;
+}
+
+message SourceOriginReply {
+  optional SourceOrigin origin = 1;
+}
+
+message SourceVersionRequest {
+  // TODO(step-2-review): The DTO uses a raw SourceVersionID, not a page ID.
+  string version_id = 1;
+}
+
+message SourceVersionReply {
+  optional SourceVersion version = 1;
+}
+
+message VacuumActivitiesRequest {
+  bool dry_run = 1;
+}
+
+message VacuumActivitiesReply {
+  ActivityVacuumReport report = 1;
+  MutationOutcome outcome = 2;
+}
+
+message VacuumBlobsRequest {
+  bool dry_run = 1;
+}
+
+message VacuumBlobsReply {
+  BlobVacuumReport report = 1;
+  MutationOutcome outcome = 2;
+}
+
+message VacuumPageVersionsRequest {
+  bool dry_run = 1;
+}
+
+message VacuumPageVersionsReply {
+  PageVersionVacuumReport report = 1;
+  MutationOutcome outcome = 2;
+}
+
+message WikiStrategyRevisionRequest {}
+
+message WikiStrategyRevisionReply {
+  optional int64 revision = 1;
+}
+
+message WorkspacePageVersionRequest {
+  string workspace_id = 1;
+  PageId page_id = 2;
+}
+
+message WorkspacePageVersionReply {
+  optional string version_id = 1;
+}
+
+message WorkspaceSummaryRequest {
+  string id = 1;
+}
+
+message WorkspaceSummaryReply {
+  optional WorkspaceSummary summary = 1;
+}
+
+// Part 2: Envelope oneofs.
+
+message StoreSmallRequest {
+  WikiId wiki_id = 38;
+  oneof operation {
+  ActiveContentVersionRequest active_content_version = 1; // arm 1: activeContentVersion
+  ActiveExtractionProvenanceRequest active_extraction_provenance = 2; // arm 2: activeExtractionProvenance
+  ChatAttachmentsRequest chat_attachments = 3; // arm 3: chatAttachments
+  ChatTranscriptCheckpointRequest chat_transcript_checkpoint = 4; // arm 4: chatTranscriptCheckpoint
+  ChatUsageSummaryRequest chat_usage_summary = 5; // arm 5: chatUsageSummary
+  FetchStateRequest fetch_state = 6; // arm 6: fetchState
+  GetChatRequest get_chat = 7; // arm 7: getChat
+  GetMetadataRequest get_metadata = 8; // arm 8: getMetadata
+  GetWikiStrategyStateRequest get_wiki_strategy_state = 9; // arm 9: getWikiStrategyState
+  HasImageSiblingsRequest has_image_siblings = 10; // arm 10: hasImageSiblings
+  HasProcessedMarkdownRequest has_processed_markdown = 11; // arm 11: hasProcessedMarkdown
+  InitialContentVersionRequest initial_content_version = 12; // arm 12: initialContentVersion
+  PageHeadSourcesRequest page_head_sources = 13; // arm 13: pageHeadSources
+  PageHeadVersionIDRequest page_head_version_id = 14; // arm 14: pageHeadVersionID
+  PageOKFMetadataRequest page_okf_metadata = 15; // arm 15: pageOKFMetadata
+  PageOriginRequest page_origin = 16; // arm 16: pageOrigin
+  PageVersionSourcesRequest page_version_sources = 17; // arm 17: pageVersionSources
+  RendererInputByteCountRequest renderer_input_byte_count = 18; // arm 18: rendererInputByteCount
+  RendererSourcePreferenceRequest renderer_source_preference = 19; // arm 19: rendererSourcePreference
+  RendererSourcePresentationRequest renderer_source_presentation = 20; // arm 20: rendererSourcePresentation
+  ResolveChatByTitleRequest resolve_chat_by_title = 21; // arm 21: resolveChatByTitle
+  ResolveSourceByNameRequest resolve_source_by_name = 22; // arm 22: resolveSourceByName
+  ResolveTitleToIDRequest resolve_title_to_id = 23; // arm 23: resolveTitleToID
+  SearchSimilarRequest search_similar = 24; // arm 24: searchSimilar
+  SearchSimilarChatsRequest search_similar_chats = 25; // arm 25: searchSimilarChats
+  SearchSimilarSourcesRequest search_similar_sources = 26; // arm 26: searchSimilarSources
+  SetMetadataRequest set_metadata = 27; // arm 27: setMetadata
+  SourceMarkdownOKFMetadataRequest source_markdown_okf_metadata = 28; // arm 28: sourceMarkdownOKFMetadata
+  SourceMatchingURLIdentityRequest source_matching_url_identity = 29; // arm 29: sourceMatchingURLIdentity
+  SourceOriginRequest source_origin = 30; // arm 30: sourceOrigin
+  SourceVersionRequest source_version = 31; // arm 31: sourceVersion
+  VacuumActivitiesRequest vacuum_activities = 32; // arm 32: vacuumActivities
+  VacuumBlobsRequest vacuum_blobs = 33; // arm 33: vacuumBlobs
+  VacuumPageVersionsRequest vacuum_page_versions = 34; // arm 34: vacuumPageVersions
+  WikiStrategyRevisionRequest wiki_strategy_revision = 35; // arm 35: wikiStrategyRevision
+  WorkspacePageVersionRequest workspace_page_version = 36; // arm 36: workspacePageVersion
+  WorkspaceSummaryRequest workspace_summary = 37; // arm 37: workspaceSummary
+}
+}
+
+message StoreSmallReply {
+  WikiId wiki_id = 38;
+  oneof operation {
+  ActiveContentVersionReply active_content_version = 1; // arm 1: activeContentVersion
+  ActiveExtractionProvenanceReply active_extraction_provenance = 2; // arm 2: activeExtractionProvenance
+  ChatAttachmentsReply chat_attachments = 3; // arm 3: chatAttachments
+  ChatTranscriptCheckpointReply chat_transcript_checkpoint = 4; // arm 4: chatTranscriptCheckpoint
+  ChatUsageSummaryReply chat_usage_summary = 5; // arm 5: chatUsageSummary
+  FetchStateReply fetch_state = 6; // arm 6: fetchState
+  GetChatReply get_chat = 7; // arm 7: getChat
+  GetMetadataReply get_metadata = 8; // arm 8: getMetadata
+  GetWikiStrategyStateReply get_wiki_strategy_state = 9; // arm 9: getWikiStrategyState
+  HasImageSiblingsReply has_image_siblings = 10; // arm 10: hasImageSiblings
+  HasProcessedMarkdownReply has_processed_markdown = 11; // arm 11: hasProcessedMarkdown
+  InitialContentVersionReply initial_content_version = 12; // arm 12: initialContentVersion
+  PageHeadSourcesReply page_head_sources = 13; // arm 13: pageHeadSources
+  PageHeadVersionIDReply page_head_version_id = 14; // arm 14: pageHeadVersionID
+  PageOKFMetadataReply page_okf_metadata = 15; // arm 15: pageOKFMetadata
+  PageOriginReply page_origin = 16; // arm 16: pageOrigin
+  PageVersionSourcesReply page_version_sources = 17; // arm 17: pageVersionSources
+  RendererInputByteCountReply renderer_input_byte_count = 18; // arm 18: rendererInputByteCount
+  RendererSourcePreferenceReply renderer_source_preference = 19; // arm 19: rendererSourcePreference
+  RendererSourcePresentationReply renderer_source_presentation = 20; // arm 20: rendererSourcePresentation
+  ResolveChatByTitleReply resolve_chat_by_title = 21; // arm 21: resolveChatByTitle
+  ResolveSourceByNameReply resolve_source_by_name = 22; // arm 22: resolveSourceByName
+  ResolveTitleToIDReply resolve_title_to_id = 23; // arm 23: resolveTitleToID
+  SearchSimilarReply search_similar = 24; // arm 24: searchSimilar
+  SearchSimilarChatsReply search_similar_chats = 25; // arm 25: searchSimilarChats
+  SearchSimilarSourcesReply search_similar_sources = 26; // arm 26: searchSimilarSources
+  SetMetadataReply set_metadata = 27; // arm 27: setMetadata
+  SourceMarkdownOKFMetadataReply source_markdown_okf_metadata = 28; // arm 28: sourceMarkdownOKFMetadata
+  SourceMatchingURLIdentityReply source_matching_url_identity = 29; // arm 29: sourceMatchingURLIdentity
+  SourceOriginReply source_origin = 30; // arm 30: sourceOrigin
+  SourceVersionReply source_version = 31; // arm 31: sourceVersion
+  VacuumActivitiesReply vacuum_activities = 32; // arm 32: vacuumActivities
+  VacuumBlobsReply vacuum_blobs = 33; // arm 33: vacuumBlobs
+  VacuumPageVersionsReply vacuum_page_versions = 34; // arm 34: vacuumPageVersions
+  WikiStrategyRevisionReply wiki_strategy_revision = 35; // arm 35: wikiStrategyRevision
+  WorkspacePageVersionReply workspace_page_version = 36; // arm 36: workspacePageVersion
+  WorkspaceSummaryReply workspace_summary = 37; // arm 37: workspaceSummary
+}
+}
+
+
+// ==== BEGIN FRAGMENT: store-list.frag ====
+
+// Part 1: Operation messages.
+// wiki scope carried by envelope
+// Target 1 MiB per encoded list page. A next_page_token is session-bound,
+// not an event position. An absent token means there is no next page.
+// Row and payload types not defined here are shared by the assembled schema.
+
+message ChatMessagesRequest {
+  ChatId chat_id = 1;
+}
+
+message ChatMessagesReply {
+  // NOTE(step-2-review): consider continuation token for the full message history.
+  // Rows follow chat sequence order.
+  repeated ChatMessage messages = 1;
+  optional string next_page_token = 2;
+}
+
+message DeletionImpactRequest {
+  // Page targets precede source targets. Each kind follows ascending ULID order.
+  repeated ResourceDeletionTarget targets = 1;
+}
+
+message DeletionImpactReply {
+  // NOTE(step-2-review): consider continuation token for the nested impact rows.
+  // TODO(step-2-review): Define how pages split the collections while retaining the total count.
+  DeletionImpact impact = 1;
+  optional string next_page_token = 2;
+}
+
+message SourceEmbedEntry {
+  SourceId source_id = 1;
+  SourceEmbedDescriptor descriptor = 2;
+}
+
+message EmbedDescriptorsRequest {}
+
+message EmbedDescriptorsReply {
+  // NOTE(step-2-review): consider continuation token for the full descriptor set.
+  // Entries follow ascending source ID order.
+  repeated SourceEmbedEntry entries = 1;
+  optional string next_page_token = 2;
+}
+
+message ListAllChatsOrderedByIDRequest {}
+
+message ListAllChatsOrderedByIDReply {
+  // NOTE(step-2-review): consider continuation token for the full chat list.
+  // Rows follow ascending chat ID order.
+  repeated ChatSummary chats = 1;
+  optional string next_page_token = 2;
+}
+
+message ListBookmarkNodesRequest {}
+
+message ListBookmarkNodesReply {
+  // NOTE(step-2-review): consider continuation token for the full bookmark tree.
+  // Parents precede children. Siblings follow position order.
+  repeated BookmarkNode nodes = 1;
+  optional string next_page_token = 2;
+}
+
+message ListChatsRequest {}
+
+message ListChatsReply {
+  // NOTE(step-2-review): consider continuation token for the full chat list.
+  // Rows follow most-recently-updated-first order.
+  repeated ChatSummary chats = 1;
+  optional string next_page_token = 2;
+}
+
+message ListPersistedChatTurnsRequest {
+  ChatId chat_id = 1;
+}
+
+message ListPersistedChatTurnsReply {
+  // NOTE(step-2-review): consider continuation token for the full turn history.
+  // Rows follow turn ordinal order.
+  repeated PersistedChatTurn turns = 1;
+  optional string next_page_token = 2;
+}
+
+message ListSourcesRequest {}
+
+message ListSourcesReply {
+  // NOTE(step-2-review): consider continuation token for the full source list.
+  // Rows follow most-recent-first order and omit source bytes.
+  repeated SourceSummary sources = 1;
+  optional string next_page_token = 2;
+}
+
+message MarkedSourceIDsRequest {}
+
+message MarkedSourceIDsReply {
+  // NOTE(step-2-review): consider continuation token for the full marked-source set.
+  repeated SourceId source_ids = 1; // Ascending source ID order.
+  optional string next_page_token = 2;
+}
+
+message PageEditHistoryRequest {
+  PageId page_id = 1;
+}
+
+message PageEditHistoryReply {
+  // NOTE(step-2-review): consider continuation token for the full edit history.
+  repeated PageOrigin entries = 1; // Oldest first. The final row of the full history is HEAD.
+  optional string next_page_token = 2;
+}
+
+message PagesCitingSourcesRequest {
+  repeated SourceId source_ids = 1;
+  int64 limit = 2; // A nonpositive limit returns no pages.
+}
+
+message PagesCitingSourcesReply {
+  // Distinct pages sorted by case-insensitive title, then page ID. Absent titles come last.
+  // A full page does not give the total count.
+  repeated CitedPage pages = 1;
+  optional string next_page_token = 2;
+}
+
+message PageVersionHistoryRequest {
+  PageId page_id = 1;
+}
+
+message PageVersionHistoryReply {
+  // NOTE(step-2-review): consider continuation token for the full version history.
+  repeated PageVersionSummary versions = 1; // Ascending version ULID order.
+  optional string next_page_token = 2;
+}
+
+message MarkdownAgentNameEntry {
+  PageId version_id = 1; // Source Markdown-version ID in its current PageId representation.
+  string agent_name = 2;
+}
+
+message ProcessedMarkdownAgentNamesRequest {
+  SourceId source_id = 1;
+}
+
+message ProcessedMarkdownAgentNamesReply {
+  // NOTE(step-2-review): consider continuation token for the full version set.
+  repeated MarkdownAgentNameEntry entries = 1; // Ascending version ID order.
+  optional string next_page_token = 2;
+}
+
+// The bytes behind a processed Markdown contents handle encode this message.
+message ProcessedMarkdownContents {
+  message Entry {
+    PageId version_id = 1; // Source Markdown-version ID.
+    string content = 2;
+  }
+  repeated Entry entries = 1; // Ascending version ID order.
+}
+
+message ProcessedMarkdownAlternativesRequest {
+  SourceId source_id = 1;
+}
+
+message ProcessedMarkdownAlternativesReply {
+  // NOTE(step-2-review): consider continuation token for the full alternatives list.
+  repeated ExtractionAlternative alternatives = 1; // Newest first.
+  // TODO(step-2-review): Confirm whether the handle covers this page or all pages.
+  PayloadHandle contents = 2; // Encoded ProcessedMarkdownContents.
+  int64 content_byte_count = 3;
+  optional string next_page_token = 4;
+}
+
+message ProcessedMarkdownHistoryRequest {
+  SourceId source_id = 1;
+}
+
+message ProcessedMarkdownHistoryReply {
+  // NOTE(step-2-review): consider continuation token for the full Markdown history.
+  repeated SourceMarkdownVersionHeader versions = 1; // Newest first.
+  // TODO(step-2-review): Confirm whether the handle covers this page or all pages.
+  PayloadHandle contents = 2; // Encoded ProcessedMarkdownContents.
+  int64 content_byte_count = 3;
+  optional string next_page_token = 4;
+}
+
+message ReadChatTranscriptPageRequest {
+  ChatId chat_id = 1;
+  // The query cursor is separate from the byte-budget token in the envelope.
+  optional ChatTranscriptCursor after = 2;
+  int64 limit = 3;
+}
+
+message ReadChatTranscriptPageReply {
+  // The typed transcript page retains its ordered items, checkpoint, and next cursor.
+  // TODO(step-2-review): Confirm how byte-budget pages interact with the transcript next cursor.
+  ChatTranscriptPage page = 1;
+  optional string next_page_token = 2;
+}
+
+message RecentLogEntriesRequest {
+  int64 limit = 1;
+}
+
+message RecentLogEntriesReply {
+  repeated LogEntry entries = 1; // Oldest first within the selected tail.
+  optional string next_page_token = 2;
+}
+
+message SiblingImageResolver {
+  string original_path = 1;
+  SourceId source_id = 2;
+}
+
+message SiblingImageResolverEntry {
+  SourceId source_id = 1;
+  // Preserve the first match for each path and its source ULID order.
+  repeated SiblingImageResolver resolvers = 2;
+}
+
+message SiblingImageResolversRequest {}
+
+message SiblingImageResolversReply {
+  // NOTE(step-2-review): consider continuation token for the full resolver set.
+  repeated SiblingImageResolverEntry entries = 1; // Ascending source ID order.
+  optional string next_page_token = 2;
+}
+
+message SourceDerivedChainEntry {
+  SourceId source_id = 1;
+  repeated PageId chain = 2; // Source Markdown-version IDs in ascending ULID order, starting with v1.
+}
+
+message SourceDerivedChainsRequest {}
+
+message SourceDerivedChainsReply {
+  // NOTE(step-2-review): consider continuation token for the full chain set.
+  repeated SourceDerivedChainEntry entries = 1; // Ascending source ID order.
+  optional string next_page_token = 2;
+}
+
+message SourceEditHistoryRequest {
+  SourceId source_id = 1;
+}
+
+message SourceEditHistoryReply {
+  // NOTE(step-2-review): consider continuation token for the full source history.
+  repeated SourceOrigin origins = 1; // Newest first.
+  optional string next_page_token = 2;
+}
+
+message SourceOriginEntry {
+  SourceId source_id = 1;
+  SourceOrigin origin = 2;
+}
+
+message SourceOriginsBySourceRequest {}
+
+message SourceOriginsBySourceReply {
+  // NOTE(step-2-review): consider continuation token for the full source origin set.
+  repeated SourceOriginEntry entries = 1; // Ascending source ID order.
+  optional string next_page_token = 2;
+}
+
+message SourcesWithPendingFormatJobsRequest {}
+
+message SourcesWithPendingFormatJobsReply {
+  // NOTE(step-2-review): consider continuation token for the full recovery scan.
+  repeated SourceId source_ids = 1; // Preserve store order.
+  optional string next_page_token = 2;
+}
+
+message WorkspaceConflictsRequest {
+  WorkspaceId workspace_id = 1;
+}
+
+message WorkspaceConflictsReply {
+  // NOTE(step-2-review): consider continuation token for the full conflict list.
+  repeated WorkspaceConflict conflicts = 1;
+  optional string next_page_token = 2;
+}
+
+message WorkspaceRefsRequest {
+  WorkspaceId workspace_id = 1;
+}
+
+message WorkspaceRefsReply {
+  // NOTE(step-2-review): consider continuation token for the full workspace write set.
+  repeated WorkspaceRef refs = 1;
+  optional string next_page_token = 2;
+}
+
+// Part 2: Envelope arms.
+// ARM LEDGER (StoreList): arm 1 = chatMessages → ChatMessagesRequest/ChatMessagesReply
+// ARM LEDGER (StoreList): arm 2 = deletionImpact → DeletionImpactRequest/DeletionImpactReply
+// ARM LEDGER (StoreList): arm 3 = embedDescriptors → EmbedDescriptorsRequest/EmbedDescriptorsReply
+// ARM LEDGER (StoreList): arm 4 = listAllChatsOrderedByID → ListAllChatsOrderedByIDRequest/ListAllChatsOrderedByIDReply
+// ARM LEDGER (StoreList): arm 5 = listBookmarkNodes → ListBookmarkNodesRequest/ListBookmarkNodesReply
+// ARM LEDGER (StoreList): arm 6 = listChats → ListChatsRequest/ListChatsReply
+// listPages: dedicated ListPages RPC (excluded from this envelope)
+// ARM LEDGER (StoreList): arm 7 = listPersistedChatTurns → ListPersistedChatTurnsRequest/ListPersistedChatTurnsReply
+// ARM LEDGER (StoreList): arm 8 = listSources → ListSourcesRequest/ListSourcesReply
+// ARM LEDGER (StoreList): arm 9 = markedSourceIDs → MarkedSourceIDsRequest/MarkedSourceIDsReply
+// ARM LEDGER (StoreList): arm 10 = pageEditHistory → PageEditHistoryRequest/PageEditHistoryReply
+// ARM LEDGER (StoreList): arm 11 = pagesCitingSources → PagesCitingSourcesRequest/PagesCitingSourcesReply
+// ARM LEDGER (StoreList): arm 12 = pageVersionHistory → PageVersionHistoryRequest/PageVersionHistoryReply
+// ARM LEDGER (StoreList): arm 13 = processedMarkdownAgentNames → ProcessedMarkdownAgentNamesRequest/ProcessedMarkdownAgentNamesReply
+// ARM LEDGER (StoreList): arm 14 = processedMarkdownAlternatives → ProcessedMarkdownAlternativesRequest/ProcessedMarkdownAlternativesReply
+// ARM LEDGER (StoreList): arm 15 = processedMarkdownHistory → ProcessedMarkdownHistoryRequest/ProcessedMarkdownHistoryReply
+// ARM LEDGER (StoreList): arm 16 = readChatTranscriptPage → ReadChatTranscriptPageRequest/ReadChatTranscriptPageReply
+// ARM LEDGER (StoreList): arm 17 = recentLogEntries → RecentLogEntriesRequest/RecentLogEntriesReply
+// ARM LEDGER (StoreList): arm 18 = siblingImageResolvers → SiblingImageResolversRequest/SiblingImageResolversReply
+// ARM LEDGER (StoreList): arm 19 = sourceDerivedChains → SourceDerivedChainsRequest/SourceDerivedChainsReply
+// ARM LEDGER (StoreList): arm 20 = sourceEditHistory → SourceEditHistoryRequest/SourceEditHistoryReply
+// ARM LEDGER (StoreList): arm 21 = sourceOriginsBySource → SourceOriginsBySourceRequest/SourceOriginsBySourceReply
+// ARM LEDGER (StoreList): arm 22 = sourcesWithPendingFormatJobs → SourcesWithPendingFormatJobsRequest/SourcesWithPendingFormatJobsReply
+// ARM LEDGER (StoreList): arm 23 = workspaceConflicts → WorkspaceConflictsRequest/WorkspaceConflictsReply
+// ARM LEDGER (StoreList): arm 24 = workspaceRefs → WorkspaceRefsRequest/WorkspaceRefsReply
+
+message StoreListRequest {
+  oneof operation {
+    ChatMessagesRequest chat_messages = 1;
+    DeletionImpactRequest deletion_impact = 2;
+    EmbedDescriptorsRequest embed_descriptors = 3;
+    ListAllChatsOrderedByIDRequest list_all_chats_ordered_by_id = 4;
+    ListBookmarkNodesRequest list_bookmark_nodes = 5;
+    ListChatsRequest list_chats = 6;
+    ListPersistedChatTurnsRequest list_persisted_chat_turns = 7;
+    ListSourcesRequest list_sources = 8;
+    MarkedSourceIDsRequest marked_source_ids = 9;
+    PageEditHistoryRequest page_edit_history = 10;
+    PagesCitingSourcesRequest pages_citing_sources = 11;
+    PageVersionHistoryRequest page_version_history = 12;
+    ProcessedMarkdownAgentNamesRequest processed_markdown_agent_names = 13;
+    ProcessedMarkdownAlternativesRequest processed_markdown_alternatives = 14;
+    ProcessedMarkdownHistoryRequest processed_markdown_history = 15;
+    ReadChatTranscriptPageRequest read_chat_transcript_page = 16;
+    RecentLogEntriesRequest recent_log_entries = 17;
+    SiblingImageResolversRequest sibling_image_resolvers = 18;
+    SourceDerivedChainsRequest source_derived_chains = 19;
+    SourceEditHistoryRequest source_edit_history = 20;
+    SourceOriginsBySourceRequest source_origins_by_source = 21;
+    SourcesWithPendingFormatJobsRequest sources_with_pending_format_jobs = 22;
+    WorkspaceConflictsRequest workspace_conflicts = 23;
+    WorkspaceRefsRequest workspace_refs = 24;
+  }
+  WikiId wiki_id = 25;
+  // On continuation, pass the previous reply's token with the same operation and query.
+  optional string page_token = 26;
+}
+
+message StoreListReply {
+  oneof operation {
+    ChatMessagesReply chat_messages = 1;
+    DeletionImpactReply deletion_impact = 2;
+    EmbedDescriptorsReply embed_descriptors = 3;
+    ListAllChatsOrderedByIDReply list_all_chats_ordered_by_id = 4;
+    ListBookmarkNodesReply list_bookmark_nodes = 5;
+    ListChatsReply list_chats = 6;
+    ListPersistedChatTurnsReply list_persisted_chat_turns = 7;
+    ListSourcesReply list_sources = 8;
+    MarkedSourceIDsReply marked_source_ids = 9;
+    PageEditHistoryReply page_edit_history = 10;
+    PagesCitingSourcesReply pages_citing_sources = 11;
+    PageVersionHistoryReply page_version_history = 12;
+    ProcessedMarkdownAgentNamesReply processed_markdown_agent_names = 13;
+    ProcessedMarkdownAlternativesReply processed_markdown_alternatives = 14;
+    ProcessedMarkdownHistoryReply processed_markdown_history = 15;
+    ReadChatTranscriptPageReply read_chat_transcript_page = 16;
+    RecentLogEntriesReply recent_log_entries = 17;
+    SiblingImageResolversReply sibling_image_resolvers = 18;
+    SourceDerivedChainsReply source_derived_chains = 19;
+    SourceEditHistoryReply source_edit_history = 20;
+    SourceOriginsBySourceReply source_origins_by_source = 21;
+    SourcesWithPendingFormatJobsReply sources_with_pending_format_jobs = 22;
+    WorkspaceConflictsReply workspace_conflicts = 23;
+    WorkspaceRefsReply workspace_refs = 24;
+  }
+  WikiId wiki_id = 25;
+}
+
+
+// ==== BEGIN FRAGMENT: store-blob.frag ====
+
+// Part 1: Operation messages.
+// wiki scope carried by envelope
+// Upload handles refer to sealed payloads. Download handles refer to payloads
+// that the daemon issued. Check scope, purpose, direction, and expiry before use.
+// Mutation stamps identify writes for epoch validation and idempotent admission.
+// TODO(step-2-review): Resolve shared value types and ID wrappers in store.proto.
+
+message AddSnapshotImageRequest {
+  string filename = 1;
+  PayloadHandleRef data = 2;
+  ContentTypeDetectionHints detection_hints = 3;
+  string original_path = 4;
+  string source_url = 5;
+  ActivityId activity_id = 6;
+  SourceRole role = 7;
+  MutationStamp stamp = 8;
+}
+
+message AddSnapshotImageReply {
+  SourceSummary source = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AddSourceRequest {
+  string filename = 1;
+  PayloadHandleRef data = 2;
+  ContentTypeDetectionHints detection_hints = 3;
+  optional SourceIngestMetadata ingest_metadata = 4;
+  optional SourceProvenance provenance = 5;
+  SourceRole role = 6;
+  optional string original_path = 7;
+  optional ActivityId activity_id = 8;
+  optional string resolved_display_name = 9;
+  MutationStamp stamp = 10;
+}
+
+message AddSourceReply {
+  SourceSummary source = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AppendChatMessagesRequest {
+  ChatId chat_id = 1;
+  // Staged protobuf collection of ordered AgentEvent values.
+  PayloadHandleRef events = 2;
+  int64 event_count = 3;
+  MutationStamp stamp = 4;
+}
+
+message AppendChatMessagesReply {
+  repeated ChatMessage messages = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AppendChatTranscriptItemsRequest {
+  ChatId chat_id = 1;
+  // Staged protobuf collection of ordered ChatTranscriptItem values.
+  PayloadHandleRef items = 2;
+  int64 item_count = 3;
+  MutationStamp stamp = 4;
+}
+
+message AppendChatTranscriptItemsReply {
+  repeated PersistedChatTranscriptItem items = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AppendContentVersionRequest {
+  SourceId source_id = 1;
+  PayloadHandleRef data = 2;
+  ContentTypeDetectionHints detection_hints = 3;
+  optional SourceProvenance provenance = 4;
+  MutationStamp stamp = 5;
+}
+
+message AppendContentVersionReply {
+  SourceVersion version = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AppendDerivedMarkdownRequest {
+  SourceId source_id = 1;
+  PayloadHandleRef content = 2;
+  SourceMarkdownOrigin origin = 3;
+  optional ExtractionProducer producer = 4;
+  optional ProviderId provider_id = 5;
+  optional ModelId model_id = 6;
+  optional string tool_version = 7;
+  optional PageId source_version_id = 8;
+  optional string note = 9;
+  MutationStamp stamp = 10;
+}
+
+message AppendDerivedMarkdownReply {
+  SourceMarkdownVersionHeader version = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AppendFetchMarkdownRequest {
+  SourceId source_id = 1;
+  PayloadHandleRef content = 2;
+  ExtractorPackageProducer package = 3;
+  optional string external_item_key = 4;
+  optional string external_item_title = 5;
+  PageId source_version_id = 6;
+  MutationStamp stamp = 7;
+}
+
+message AppendFetchMarkdownReply {
+  SourceMarkdownVersionHeader version = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AppendHostSpeechTranscriptRequest {
+  SourceId source_id = 1;
+  PayloadHandleRef content = 2;
+  ExtractionHostSpeechProducer producer = 3;
+  PageId source_version_id = 4;
+  MutationStamp stamp = 5;
+}
+
+message AppendHostSpeechTranscriptReply {
+  SourceMarkdownVersionHeader version = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AppendInstalledPackageMarkdownRequest {
+  SourceId source_id = 1;
+  PayloadHandleRef content = 2;
+  ExtractorPackageProducer package = 3;
+  SourceMarkdownOrigin origin = 4;
+  optional string tool_version = 5;
+  optional PageId source_version_id = 6;
+  optional string note = 7;
+  MutationStamp stamp = 8;
+}
+
+message AppendInstalledPackageMarkdownReply {
+  SourceMarkdownVersionHeader version = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AppendPageVersionRequest {
+  PageId page_id = 1;
+  string title = 2;
+  // An absent body means an empty body.
+  optional PayloadHandleRef body = 3;
+  // An absent head ID means the write does not check the head.
+  optional PageVersionId expected_head_version_id = 4;
+  optional string last_edited_by = 5;
+  repeated PageVersionSourceInput provenance = 6;
+  MutationStamp stamp = 7;
+}
+
+message AppendPageVersionReply {
+  PageVersionId version_id = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AppendProcessedMarkdownRequest {
+  SourceId source_id = 1;
+  PayloadHandleRef content = 2;
+  SourceMarkdownOrigin origin = 3;
+  optional string note = 4;
+  optional string technique = 5;
+  MutationStamp stamp = 6;
+}
+
+message AppendProcessedMarkdownReply {
+  SourceMarkdownVersionHeader version = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AppendUserProcessedMarkdownRequest {
+  SourceId source_id = 1;
+  PayloadHandleRef content = 2;
+  // Source Markdown version ID.
+  PageId expected_head = 3;
+  MutationStamp stamp = 4;
+}
+
+message AppendUserProcessedMarkdownReply {
+  SourceMarkdownVersionHeader version = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message AttachAcquiredBytesRequest {
+  SourceId source_id = 1;
+  PayloadHandleRef bytes = 2;
+  string mime_type = 3;
+  optional string original_filename = 4;
+  optional string external_item_key = 5;
+  optional string external_item_title = 6;
+  optional ExtractorPackageProducer producer = 7;
+  MutationStamp stamp = 8;
+}
+
+message AttachAcquiredBytesReply {
+  SourceVersion version = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message CheckpointStreamingMessageRequest {
+  ChatId chat_id = 1;
+  // TODO(step-2-review): Confirm the wire wrapper for the stable draft handle.
+  string handle = 2;
+  // Staged protobuf AgentEvent value.
+  PayloadHandleRef event = 3;
+  bool is_draft = 4;
+  MutationStamp stamp = 5;
+}
+
+message CheckpointStreamingMessageReply {
+  MutationOutcome outcome = 1;
+  optional ResourceChangeEvent event = 2;
+}
+
+message ClaimNextPersistedChatTurnRequest {
+  ChatId chat_id = 1;
+  ChatTurnClaimId claim_id = 2;
+  google.protobuf.Timestamp claimed_at = 3;
+  optional ProviderId provider_id = 4;
+  optional ModelId model_id = 5;
+  MutationStamp stamp = 6;
+}
+
+message ClaimNextPersistedChatTurnReply {
+  optional PersistedChatTurn turn = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message CreatePageRequest {
+  string title = 1;
+  // An absent body means an empty body.
+  optional PayloadHandleRef body = 2;
+  optional string created_by = 3;
+  repeated PageVersionSourceInput provenance = 4;
+  MutationStamp stamp = 5;
+}
+
+message CreatePageReply {
+  PageMetadata page = 1;
+  // The committed body can differ from the uploaded body.
+  PayloadHandleRef body = 2;
+  int64 body_byte_count = 3;
+  MutationOutcome outcome = 4;
+  optional ResourceChangeEvent event = 5;
+}
+
+message EnqueuePersistedChatTurnRequest {
+  ChatId chat_id = 1;
+  StoreChatTurnSubmission submission = 2;
+  MutationStamp stamp = 3;
+}
+
+message EnqueuePersistedChatTurnReply {
+  PersistedChatTurn turn = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message FinishPersistedChatTurnRequest {
+  ChatId chat_id = 1;
+  ChatTurnId turn_id = 2;
+  ChatTurnClaimId claim_id = 3;
+  ChatTurnPersistenceState state = 4;
+  optional string terminal_message = 5;
+  // The store supplies the time if absent.
+  optional google.protobuf.Timestamp finished_at = 6;
+  optional ChatTurnUsageValues usage = 7;
+  MutationStamp stamp = 8;
+}
+
+message FinishPersistedChatTurnReply {
+  PersistedChatTurn turn = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message GetWikiIndexRequest {}
+
+message GetWikiIndexReply {
+  WikiIndexMetadata metadata = 1;
+  PayloadHandleRef body = 2;
+  int64 body_byte_count = 3;
+}
+
+message GetWikiStrategyRequest {}
+
+message GetWikiStrategyReply {
+  // Absent if the wiki uses the default strategy.
+  optional StrategySnapshot strategy = 1;
+}
+
+message MissingChatEmbeddingWorkRequest {}
+
+message MissingChatEmbeddingWorkReply {
+  // Staged protobuf collection of chat ID and text pairs.
+  PayloadHandleRef work = 1;
+  int64 item_count = 2;
+}
+
+message MissingPageEmbeddingWorkRequest {}
+
+message MissingPageEmbeddingWorkReply {
+  // Staged protobuf collection of page ID and text pairs.
+  PayloadHandleRef work = 1;
+  int64 item_count = 2;
+}
+
+message MissingSourceEmbeddingWorkRequest {}
+
+message MissingSourceEmbeddingWorkReply {
+  // Staged protobuf collection of source ID and text pairs.
+  PayloadHandleRef work = 1;
+  int64 item_count = 2;
+}
+
+message PageVersionBodyRequest {
+  PageVersionId version_id = 1;
+}
+
+message PageVersionBodyReply {
+  // Absent if no version matches.
+  optional PayloadHandleRef body = 1;
+  int64 body_byte_count = 2;
+}
+
+message ProcessedMarkdownHeadRequest {
+  SourceId source_id = 1;
+}
+
+message ProcessedMarkdownHeadReply {
+  optional SourceMarkdownVersionHeader version = 1;
+  // Present exactly when version is present.
+  optional PayloadHandleRef content = 2;
+  int64 content_byte_count = 3;
+}
+
+message ProcessedMarkdownVersionRequest {
+  PageId version_id = 1;
+}
+
+message ProcessedMarkdownVersionReply {
+  optional SourceMarkdownVersionHeader version = 1;
+  optional PayloadHandleRef content = 2;
+  int64 content_byte_count = 3;
+}
+
+message RecordMarkdownExtractionRequest {
+  // TODO(step-2-review): Share this enum with the backend arm of ExtractionProducer.
+  enum Backend {
+    BACKEND_UNSPECIFIED = 0;
+    BACKEND_LOCAL_PDF2MD = 1;
+    BACKEND_ACP = 2;
+    BACKEND_ANTHROPIC = 3;
+    BACKEND_GEMINI = 4;
+    BACKEND_DOCLING_SERVE = 5;
+  }
+
+  SourceId source_id = 1;
+  PayloadHandleRef content = 2;
+  Backend backend = 3;
+  optional PageId source_version_id = 4;
+  optional string note = 5;
+  optional string model_version = 6;
+  MutationStamp stamp = 7;
+}
+
+message RecordMarkdownExtractionReply {
+  SourceMarkdownVersionHeader version = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message SaveWikiStrategyRequest {
+  string name = 1;
+  PayloadHandleRef instructions = 2;
+  // Absent matches only a wiki with no strategy row.
+  optional int64 expected_revision = 3;
+  MutationStamp stamp = 4;
+}
+
+message SaveWikiStrategyReply {
+  WikiStrategySaveOutcome result = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+message SetWorkspaceIndexBodyRequest {
+  WorkspaceId workspace_id = 1;
+  PayloadHandleRef index_body = 2;
+  // TODO(step-2-review): Confirm the format of the index base version string.
+  string index_base_version = 3;
+  MutationStamp stamp = 4;
+}
+
+message SetWorkspaceIndexBodyReply {
+  MutationOutcome outcome = 1;
+  optional ResourceChangeEvent event = 2;
+}
+
+message SourceContentRequest {
+  oneof target {
+    // Resolve the source's active content reference.
+    SourceId active = 1;
+    // Read the exact content version, in the current PageId representation.
+    PageId version = 2;
+  }
+}
+
+message SourceContentReply {
+  // A present handle with byte_count zero is distinct from an absent handle.
+  optional PayloadHandleRef bytes = 1;
+  int64 byte_count = 2;
+}
+
+message StoreChatChunksRequest {
+  ChatId id = 1;
+  // Staged protobuf collection of ordered chunk blobs.
+  PayloadHandleRef chunks = 2;
+  int64 chunk_count = 3;
+  MutationStamp stamp = 4;
+}
+
+message StoreChatChunksReply {
+  // Derived write: no change event.
+  MutationOutcome outcome = 1;
+}
+
+message StorePageChunksRequest {
+  PageId id = 1;
+  // Staged protobuf collection of ordered chunk blobs.
+  PayloadHandleRef chunks = 2;
+  int64 chunk_count = 3;
+  MutationStamp stamp = 4;
+}
+
+message StorePageChunksReply {
+  // Derived write: no change event.
+  MutationOutcome outcome = 1;
+}
+
+message StoreSourceChunksRequest {
+  SourceId id = 1;
+  // Staged protobuf collection of ordered chunk blobs.
+  PayloadHandleRef chunks = 2;
+  int64 chunk_count = 3;
+  MutationStamp stamp = 4;
+}
+
+message StoreSourceChunksReply {
+  // Derived write: no change event.
+  MutationOutcome outcome = 1;
+}
+
+message UpdatePageRequest {
+  PageId id = 1;
+  string title = 2;
+  // An absent body means an empty body.
+  optional PayloadHandleRef body = 3;
+  optional string last_edited_by = 4;
+  repeated PageVersionSourceInput provenance = 5;
+  MutationStamp stamp = 6;
+}
+
+message UpdatePageReply {
+  MutationOutcome outcome = 1;
+  optional ResourceChangeEvent event = 2;
+}
+
+message UpdateWikiIndexRequest {
+  PayloadHandleRef body = 1;
+  MutationStamp stamp = 2;
+}
+
+message UpdateWikiIndexReply {
+  MutationOutcome outcome = 1;
+  optional ResourceChangeEvent event = 2;
+}
+
+message WorkspacePageBodyRequest {
+  WorkspaceId workspace_id = 1;
+  PageId page_id = 2;
+}
+
+message WorkspacePageBodyReply {
+  // Absent if the workspace has no body for this page.
+  optional PayloadHandleRef body = 1;
+  int64 body_byte_count = 2;
+}
+
+message WorkspaceWritePageRequest {
+  WorkspaceId workspace_id = 1;
+  PageId page_id = 2;
+  string title = 3;
+  // An absent body means an empty body.
+  optional PayloadHandleRef body = 4;
+  optional string author = 5;
+  repeated PageVersionSourceInput provenance = 6;
+  MutationStamp stamp = 7;
+}
+
+message WorkspaceWritePageReply {
+  optional PageVersionId version_id = 1;
+  MutationOutcome outcome = 2;
+  optional ResourceChangeEvent event = 3;
+}
+
+// Part 2: StoreBlob oneof arms.
+// getPage/upsertPage: dedicated RPCs (excluded)
+// ARM LEDGER (StoreBlob): arm 1 = addSnapshotImage → AddSnapshotImageRequest/AddSnapshotImageReply
+// ARM LEDGER (StoreBlob): arm 2 = addSource → AddSourceRequest/AddSourceReply
+// ARM LEDGER (StoreBlob): arm 3 = appendChatMessages → AppendChatMessagesRequest/AppendChatMessagesReply
+// ARM LEDGER (StoreBlob): arm 4 = appendChatTranscriptItems → AppendChatTranscriptItemsRequest/AppendChatTranscriptItemsReply
+// ARM LEDGER (StoreBlob): arm 5 = appendContentVersion → AppendContentVersionRequest/AppendContentVersionReply
+// ARM LEDGER (StoreBlob): arm 6 = appendDerivedMarkdown → AppendDerivedMarkdownRequest/AppendDerivedMarkdownReply
+// ARM LEDGER (StoreBlob): arm 7 = appendFetchMarkdown → AppendFetchMarkdownRequest/AppendFetchMarkdownReply
+// ARM LEDGER (StoreBlob): arm 8 = appendHostSpeechTranscript → AppendHostSpeechTranscriptRequest/AppendHostSpeechTranscriptReply
+// ARM LEDGER (StoreBlob): arm 9 = appendInstalledPackageMarkdown → AppendInstalledPackageMarkdownRequest/AppendInstalledPackageMarkdownReply
+// ARM LEDGER (StoreBlob): arm 10 = appendPageVersion → AppendPageVersionRequest/AppendPageVersionReply
+// ARM LEDGER (StoreBlob): arm 11 = appendProcessedMarkdown → AppendProcessedMarkdownRequest/AppendProcessedMarkdownReply
+// ARM LEDGER (StoreBlob): arm 12 = appendUserProcessedMarkdown → AppendUserProcessedMarkdownRequest/AppendUserProcessedMarkdownReply
+// ARM LEDGER (StoreBlob): arm 13 = attachAcquiredBytes → AttachAcquiredBytesRequest/AttachAcquiredBytesReply
+// ARM LEDGER (StoreBlob): arm 14 = checkpointStreamingMessage → CheckpointStreamingMessageRequest/CheckpointStreamingMessageReply
+// ARM LEDGER (StoreBlob): arm 15 = claimNextPersistedChatTurn → ClaimNextPersistedChatTurnRequest/ClaimNextPersistedChatTurnReply
+// ARM LEDGER (StoreBlob): arm 16 = createPage → CreatePageRequest/CreatePageReply
+// ARM LEDGER (StoreBlob): arm 17 = enqueuePersistedChatTurn → EnqueuePersistedChatTurnRequest/EnqueuePersistedChatTurnReply
+// ARM LEDGER (StoreBlob): arm 18 = finishPersistedChatTurn → FinishPersistedChatTurnRequest/FinishPersistedChatTurnReply
+// ARM LEDGER (StoreBlob): arm 20 = getWikiIndex → GetWikiIndexRequest/GetWikiIndexReply
+// ARM LEDGER (StoreBlob): arm 21 = getWikiStrategy → GetWikiStrategyRequest/GetWikiStrategyReply
+// ARM LEDGER (StoreBlob): arm 22 = missingChatEmbeddingWork → MissingChatEmbeddingWorkRequest/MissingChatEmbeddingWorkReply
+// ARM LEDGER (StoreBlob): arm 23 = missingPageEmbeddingWork → MissingPageEmbeddingWorkRequest/MissingPageEmbeddingWorkReply
+// ARM LEDGER (StoreBlob): arm 24 = missingSourceEmbeddingWork → MissingSourceEmbeddingWorkRequest/MissingSourceEmbeddingWorkReply
+// ARM LEDGER (StoreBlob): arm 25 = pageVersionBody → PageVersionBodyRequest/PageVersionBodyReply
+// ARM LEDGER (StoreBlob): arm 26 = processedMarkdownHead → ProcessedMarkdownHeadRequest/ProcessedMarkdownHeadReply
+// ARM LEDGER (StoreBlob): arm 27 = processedMarkdownVersion → ProcessedMarkdownVersionRequest/ProcessedMarkdownVersionReply
+// ARM LEDGER (StoreBlob): arm 28 = recordMarkdownExtraction → RecordMarkdownExtractionRequest/RecordMarkdownExtractionReply
+// ARM LEDGER (StoreBlob): arm 29 = saveWikiStrategy → SaveWikiStrategyRequest/SaveWikiStrategyReply
+// ARM LEDGER (StoreBlob): arm 30 = setWorkspaceIndexBody → SetWorkspaceIndexBodyRequest/SetWorkspaceIndexBodyReply
+// ARM LEDGER (StoreBlob): arm 31 = sourceContent → SourceContentRequest/SourceContentReply
+// ARM LEDGER (StoreBlob): arm 32 = storeChatChunks → StoreChatChunksRequest/StoreChatChunksReply
+// ARM LEDGER (StoreBlob): arm 33 = storePageChunks → StorePageChunksRequest/StorePageChunksReply
+// ARM LEDGER (StoreBlob): arm 34 = storeSourceChunks → StoreSourceChunksRequest/StoreSourceChunksReply
+// ARM LEDGER (StoreBlob): arm 35 = updatePage → UpdatePageRequest/UpdatePageReply
+// ARM LEDGER (StoreBlob): arm 36 = updateWikiIndex → UpdateWikiIndexRequest/UpdateWikiIndexReply
+// ARM LEDGER (StoreBlob): arm 38 = workspacePageBody → WorkspacePageBodyRequest/WorkspacePageBodyReply
+// ARM LEDGER (StoreBlob): arm 39 = workspaceWritePage → WorkspaceWritePageRequest/WorkspaceWritePageReply
+
+message StoreBlobRequest {
+  reserved 19, 37;
+  WikiId wiki_id = 40;
+  oneof operation {
+    AddSnapshotImageRequest add_snapshot_image = 1;
+    AddSourceRequest add_source = 2;
+    AppendChatMessagesRequest append_chat_messages = 3;
+    AppendChatTranscriptItemsRequest append_chat_transcript_items = 4;
+    AppendContentVersionRequest append_content_version = 5;
+    AppendDerivedMarkdownRequest append_derived_markdown = 6;
+    AppendFetchMarkdownRequest append_fetch_markdown = 7;
+    AppendHostSpeechTranscriptRequest append_host_speech_transcript = 8;
+    AppendInstalledPackageMarkdownRequest append_installed_package_markdown = 9;
+    AppendPageVersionRequest append_page_version = 10;
+    AppendProcessedMarkdownRequest append_processed_markdown = 11;
+    AppendUserProcessedMarkdownRequest append_user_processed_markdown = 12;
+    AttachAcquiredBytesRequest attach_acquired_bytes = 13;
+    CheckpointStreamingMessageRequest checkpoint_streaming_message = 14;
+    ClaimNextPersistedChatTurnRequest claim_next_persisted_chat_turn = 15;
+    CreatePageRequest create_page = 16;
+    EnqueuePersistedChatTurnRequest enqueue_persisted_chat_turn = 17;
+    FinishPersistedChatTurnRequest finish_persisted_chat_turn = 18;
+    GetWikiIndexRequest get_wiki_index = 20;
+    GetWikiStrategyRequest get_wiki_strategy = 21;
+    MissingChatEmbeddingWorkRequest missing_chat_embedding_work = 22;
+    MissingPageEmbeddingWorkRequest missing_page_embedding_work = 23;
+    MissingSourceEmbeddingWorkRequest missing_source_embedding_work = 24;
+    PageVersionBodyRequest page_version_body = 25;
+    ProcessedMarkdownHeadRequest processed_markdown_head = 26;
+    ProcessedMarkdownVersionRequest processed_markdown_version = 27;
+    RecordMarkdownExtractionRequest record_markdown_extraction = 28;
+    SaveWikiStrategyRequest save_wiki_strategy = 29;
+    SetWorkspaceIndexBodyRequest set_workspace_index_body = 30;
+    SourceContentRequest source_content = 31;
+    StoreChatChunksRequest store_chat_chunks = 32;
+    StorePageChunksRequest store_page_chunks = 33;
+    StoreSourceChunksRequest store_source_chunks = 34;
+    UpdatePageRequest update_page = 35;
+    UpdateWikiIndexRequest update_wiki_index = 36;
+    WorkspacePageBodyRequest workspace_page_body = 38;
+    WorkspaceWritePageRequest workspace_write_page = 39;
+  }
+}
+
+message StoreBlobReply {
+  WikiId wiki_id = 40;
+  reserved 19, 37;
+  oneof operation {
+    AddSnapshotImageReply add_snapshot_image = 1;
+    AddSourceReply add_source = 2;
+    AppendChatMessagesReply append_chat_messages = 3;
+    AppendChatTranscriptItemsReply append_chat_transcript_items = 4;
+    AppendContentVersionReply append_content_version = 5;
+    AppendDerivedMarkdownReply append_derived_markdown = 6;
+    AppendFetchMarkdownReply append_fetch_markdown = 7;
+    AppendHostSpeechTranscriptReply append_host_speech_transcript = 8;
+    AppendInstalledPackageMarkdownReply append_installed_package_markdown = 9;
+    AppendPageVersionReply append_page_version = 10;
+    AppendProcessedMarkdownReply append_processed_markdown = 11;
+    AppendUserProcessedMarkdownReply append_user_processed_markdown = 12;
+    AttachAcquiredBytesReply attach_acquired_bytes = 13;
+    CheckpointStreamingMessageReply checkpoint_streaming_message = 14;
+    ClaimNextPersistedChatTurnReply claim_next_persisted_chat_turn = 15;
+    CreatePageReply create_page = 16;
+    EnqueuePersistedChatTurnReply enqueue_persisted_chat_turn = 17;
+    FinishPersistedChatTurnReply finish_persisted_chat_turn = 18;
+    GetWikiIndexReply get_wiki_index = 20;
+    GetWikiStrategyReply get_wiki_strategy = 21;
+    MissingChatEmbeddingWorkReply missing_chat_embedding_work = 22;
+    MissingPageEmbeddingWorkReply missing_page_embedding_work = 23;
+    MissingSourceEmbeddingWorkReply missing_source_embedding_work = 24;
+    PageVersionBodyReply page_version_body = 25;
+    ProcessedMarkdownHeadReply processed_markdown_head = 26;
+    ProcessedMarkdownVersionReply processed_markdown_version = 27;
+    RecordMarkdownExtractionReply record_markdown_extraction = 28;
+    SaveWikiStrategyReply save_wiki_strategy = 29;
+    SetWorkspaceIndexBodyReply set_workspace_index_body = 30;
+    SourceContentReply source_content = 31;
+    StoreChatChunksReply store_chat_chunks = 32;
+    StorePageChunksReply store_page_chunks = 33;
+    StoreSourceChunksReply store_source_chunks = 34;
+    UpdatePageReply update_page = 35;
+    UpdateWikiIndexReply update_wiki_index = 36;
+    WorkspacePageBodyReply workspace_page_body = 38;
+    WorkspaceWritePageReply workspace_write_page = 39;
+  }
+}
+
+
+// ==== BEGIN FRAGMENT: store-events.frag ====
+
+// Part 1: Store commit events and mutation outcomes.
+
+// Published after commit and unlock. The subscription envelope owns delivery position.
+message StoreEvent {
+  WikiId wiki_id = 1;
+  string change_token = 2;
+  repeated ResourceChange batch = 3;
+}
+
+message ResourceChange {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_CREATED = 1;
+    KIND_UPDATED = 2;
+    KIND_DELETED = 3;
+  }
+
+  message PageTarget { PageId id = 1; }
+  message SourceTarget { SourceId id = 1; }
+  message ChatTarget { ChatId id = 1; }
+  message BookmarkTarget { BookmarkId id = 1; }
+  message LogTarget { LogEntryId id = 1; }
+
+  // These targets are singletons. Keep the legacy event ID verbatim.
+  message SystemPromptTarget { string legacy_id = 1; }
+  message WikiIndexTarget { string legacy_id = 1; }
+  message StrategyTarget { string legacy_id = 1; }
+
+  // Use only when the legacy event has no resource kind.
+  message LegacyUnclassifiedTarget { string id = 1; }
+
+  Kind kind = 1;
+  oneof target {
+    PageTarget page = 2;
+    SourceTarget source = 3;
+    ChatTarget chat = 4;
+    BookmarkTarget bookmark = 5;
+    SystemPromptTarget system_prompt = 6;
+    WikiIndexTarget wiki_index = 7;
+    LogTarget log = 8;
+    StrategyTarget strategy = 9;
+    LegacyUnclassifiedTarget legacy_unclassified = 10;
+  }
+  // Store-local bus sequence, not a subscription position.
+  uint64 seq = 11;
+}
+
+// Replies carry the event echo separately. Failures use gRPC status details.
+message MutationOutcome {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_COMMITTED = 1;
+    STATUS_JOINED = 2;
+    STATUS_OUTCOME_UNKNOWN = 3;
+  }
+  MutationStamp stamp = 1;
+  Status status = 2;
+}
+
+// Part 2: Operation messages.
+// wiki scope carried by envelope
+// The request envelope also carries the mutation stamp. Reply events retain
+// emission order. An empty list means that the mutation emitted no changes.
+// TODO(step-2-review): Use the shared store value types and ID wrappers at assembly.
+
+message AbandonWorkspaceRequest {
+  WorkspaceId id = 1;
+}
+
+message AbandonWorkspaceReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message AddBytelessSourceRequest {
+  string filename = 1;
+  optional string mime_type = 2;
+  SourceProvenance provenance = 3;
+  SourceRole role = 4;
+}
+
+message AddBytelessSourceReply {
+  SourceSummary source = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message AppendLogRequest {
+  LogEntry.Kind kind = 1;
+  string title = 2;
+  optional string note = 3;
+}
+
+message AppendLogReply {
+  LogEntry entry = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message CancelUnclaimedPersistedChatTurnRequest {
+  ChatId chat_id = 1;
+  ChatTurnId turn_id = 2;
+}
+
+message CancelUnclaimedPersistedChatTurnReply {
+  optional PersistedChatTurn turn = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message CorrectPageOKFVerificationRequest {
+  PageVersionId version_id = 1;
+  OKFVerificationId verification_id = 2;
+  OKFVerifierIdentity correcting_verifier = 3;
+  google.protobuf.Timestamp corrected_at = 4;
+  optional OKFVerificationCorrectionReason reason = 5;
+}
+
+message CorrectPageOKFVerificationReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message CorrectSourceMarkdownOKFVerificationRequest {
+  PageId version_id = 1;
+  OKFVerificationId verification_id = 2;
+  OKFVerifierIdentity correcting_verifier = 3;
+  google.protobuf.Timestamp corrected_at = 4;
+  optional OKFVerificationCorrectionReason reason = 5;
+}
+
+message CorrectSourceMarkdownOKFVerificationReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message CreateBookmarkNodeRequest {
+  optional BookmarkId parent_id = 1;
+  int64 position = 2;
+  BookmarkContent content = 3;
+}
+
+message CreateBookmarkNodeReply {
+  BookmarkNode node = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message CreateChatRequest {
+  ChatKind kind = 1;
+  string title = 2;
+  optional ProviderId model_provider_id = 3;
+  optional ModelId model_id = 4;
+  optional ThinkingOptionId configured_thinking_option_id = 5;
+  optional ThinkingOptionId effective_thinking_option_id = 6;
+  repeated ChatAttachmentTarget attachments = 7;
+}
+
+message CreateChatReply {
+  ChatSummary chat = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message CreateWorkspaceRequest {
+  optional string name = 1;
+  optional ActivityId activity_id = 2;
+}
+
+message CreateWorkspaceReply {
+  WorkspaceId workspace_id = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message DeleteBookmarkNodeRequest {
+  BookmarkId id = 1;
+}
+
+message DeleteBookmarkNodeReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message DeleteChatRequest {
+  ChatId id = 1;
+}
+
+message DeleteChatReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message DeleteResourcesRequest {
+  ResourceDeletionRequest request = 1;
+}
+
+message DeleteResourcesReply {
+  ResourceDeletionResult result = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message EnsureFetchActivityRequest {
+  SourceProvenance provenance = 1;
+}
+
+message EnsureFetchActivityReply {
+  ActivityId activity_id = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message FinalizeStaleDraftsRequest {
+  ChatId chat_id = 1;
+}
+
+message FinalizeStaleDraftsReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message MarkFetchCompleteRequest {
+  SourceId source_id = 1;
+  // Absent selects the unconditional operation.
+  optional PageId expected_content_version_id = 2;
+}
+
+message MarkFetchCompleteReply {
+  // Absent for the unconditional operation. False means the version moved on.
+  optional bool did_advance = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message MarkPersistedChatTurnProviderSubmittedRequest {
+  ChatId chat_id = 1;
+  ChatTurnId turn_id = 2;
+  ChatClaimId claim_id = 3;
+  optional ProviderSessionId provider_session_id = 4;
+  google.protobuf.Timestamp submitted_at = 5;
+}
+
+message MarkPersistedChatTurnProviderSubmittedReply {
+  PersistedChatTurn turn = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message MarkSourceIngestedRequest {
+  SourceId id = 1;
+}
+
+message MarkSourceIngestedReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message MoveBookmarkNodeRequest {
+  BookmarkId id = 1;
+  optional BookmarkId to_parent_id = 2;
+  int64 position = 3;
+}
+
+message MoveBookmarkNodeReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message ReapStaleWorkspacesRequest {
+  // TODO(step-2-review): Set the conversion rule for fractional legacy seconds.
+  google.protobuf.Duration ttl = 1;
+}
+
+message ReapStaleWorkspacesReply {
+  int64 reaped_count = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message RecordPageOKFVerificationRequest {
+  PageVersionId version_id = 1;
+  OKFVerifierIdentity verifier = 2;
+  google.protobuf.Timestamp verified_at = 3;
+  OKFVerificationBasis basis = 4;
+  optional OKFFreshnessPolicy freshness_policy = 5;
+}
+
+message RecordPageOKFVerificationReply {
+  OKFVerificationId verification_id = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message RecordSourceMarkdownOKFVerificationRequest {
+  PageId version_id = 1;
+  OKFVerifierIdentity verifier = 2;
+  google.protobuf.Timestamp verified_at = 3;
+  OKFVerificationBasis basis = 4;
+  optional OKFFreshnessPolicy freshness_policy = 5;
+}
+
+message RecordSourceMarkdownOKFVerificationReply {
+  OKFVerificationId verification_id = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message RemoveRendererSourcePresentationRequest {
+  SourceId source_id = 1;
+}
+
+message RemoveRendererSourcePresentationReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message RenameBookmarkFolderRequest {
+  BookmarkId id = 1;
+  string to = 2;
+}
+
+message RenameBookmarkFolderReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message RenameChatRequest {
+  ChatId id = 1;
+  string to = 2;
+}
+
+message RenameChatReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message RenameSourceRequest {
+  SourceId id = 1;
+  string to = 2;
+}
+
+message RenameSourceReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message RepairMIMERequest {
+  bool dry_run = 1;
+}
+
+message RepairMIMEReply {
+  MIMERepairReport report = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message ReplaceLinksRequest {
+  PageId page_id = 1;
+  repeated ParsedLink parsed_links = 2;
+}
+
+message ReplaceLinksReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message RestorePageRequest {
+  PageId page_id = 1;
+  PageVersionId to = 2;
+}
+
+message RestorePageReply {
+  PageVersionId version_id = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message RetargetBookmarkNodeRequest {
+  BookmarkId id = 1;
+  BookmarkContent to = 2;
+}
+
+message RetargetBookmarkNodeReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message RevertPageRequest {
+  PageId page_id = 1;
+  PageVersionId to = 2;
+}
+
+message RevertPageReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message SetActiveMarkdownRequest {
+  SourceId source_id = 1;
+  PageId to = 2;
+}
+
+message SetActiveMarkdownReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message SetChatAttachmentsRequest {
+  ChatId chat_id = 1;
+  repeated ChatAttachmentTarget targets = 2;
+}
+
+message SetChatAttachmentsReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message SetChatTitleIfRequest {
+  ChatId chat_id = 1;
+  string expected_title = 2;
+  string title = 3;
+}
+
+message SetChatTitleIfReply {
+  bool did_write = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message SetChatTitleIfEmptyRequest {
+  ChatId chat_id = 1;
+  string title = 2;
+}
+
+message SetChatTitleIfEmptyReply {
+  bool did_write = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message SetPageOKFFreshnessRequest {
+  PageVersionId version_id = 1;
+  optional OKFFreshnessPolicy policy = 2;
+}
+
+message SetPageOKFFreshnessReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message SetPageOKFStatusRequest {
+  PageVersionId version_id = 1;
+  optional OKFConceptStatus status = 2;
+}
+
+message SetPageOKFStatusReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message SetRendererSourcePreferenceRequest {
+  SourceId source_id = 1;
+  RendererPreferenceReference preference = 2;
+}
+
+message SetRendererSourcePreferenceReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message SetRendererSourcePresentationRequest {
+  SourceId source_id = 1;
+  RendererSourcePresentationMode presentation = 2;
+}
+
+message SetRendererSourcePresentationReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message SetSourceDisplayNameRequest {
+  SourceId id = 1;
+  string display_name = 2;
+}
+
+message SetSourceDisplayNameReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message SetSourceMarkdownOKFFreshnessRequest {
+  PageId version_id = 1;
+  optional OKFFreshnessPolicy policy = 2;
+}
+
+message SetSourceMarkdownOKFFreshnessReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message SetSourceMarkdownOKFStatusRequest {
+  PageId version_id = 1;
+  optional OKFConceptStatus status = 2;
+}
+
+message SetSourceMarkdownOKFStatusReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message UpdateChatAcpSessionIdRequest {
+  ChatId chat_id = 1;
+  optional AcpSessionId acp_session_id = 2;
+}
+
+message UpdateChatAcpSessionIdReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message UpdateChatModelAndThinkingSelectionRequest {
+  ChatId chat_id = 1;
+  optional ProviderId provider_id = 2;
+  optional ModelId model_id = 3;
+  optional ThinkingOptionId configured_thinking_id = 4;
+  optional ThinkingOptionId effective_thinking_id = 5;
+}
+
+message UpdateChatModelAndThinkingSelectionReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message UpdateChatModelOverrideRequest {
+  ChatId id = 1;
+  optional ProviderId provider_id = 2;
+  optional ModelId model_id = 3;
+}
+
+message UpdateChatModelOverrideReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message UpdateMessageSummaryRequest {
+  ChatId chat_id = 1;
+  ChatTranscriptCursor cursor = 2;
+  string summary = 3;
+  ChatMessageSummaryKind kind = 4;
+}
+
+message UpdateMessageSummaryReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message UpdatePersistedChatTurnUsageRequest {
+  ChatId chat_id = 1;
+  ChatTurnId turn_id = 2;
+  ChatClaimId claim_id = 3;
+  ChatTurnUsageValues usage = 4;
+}
+
+message UpdatePersistedChatTurnUsageReply {
+  PersistedChatTurn turn = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message WorkspaceMergeRequest {
+  WorkspaceId workspace_id = 1;
+}
+
+message WorkspaceMergeReply {
+  repeated PageId merged_page_ids = 1;
+  MutationOutcome outcome = 2;
+  repeated ResourceChange events = 3;
+}
+
+message WorkspaceRefreshRequest {
+  WorkspaceId workspace_id = 1;
+}
+
+message WorkspaceRefreshReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message WorkspaceResolveConflictRequest {
+  WorkspaceId workspace_id = 1;
+  PageId page_id = 2;
+  // TODO(step-2-review): Confirm the inline bound. The legacy DTO has no handle.
+  string body = 3;
+}
+
+message WorkspaceResolveConflictReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+message WorkspaceRetryMergeRequest {
+  WorkspaceId workspace_id = 1;
+}
+
+message WorkspaceRetryMergeReply {
+  MutationOutcome outcome = 1;
+  repeated ResourceChange events = 2;
+}
+
+// Part 3: StoreMutation request and reply arms.
+// ARM LEDGER (StoreMutation): arm 1 = abandonWorkspace → AbandonWorkspaceRequest/AbandonWorkspaceReply
+// ARM LEDGER (StoreMutation): arm 2 = addBytelessSource → AddBytelessSourceRequest/AddBytelessSourceReply
+// ARM LEDGER (StoreMutation): arm 3 = appendLog → AppendLogRequest/AppendLogReply
+// ARM LEDGER (StoreMutation): arm 4 = cancelUnclaimedPersistedChatTurn → CancelUnclaimedPersistedChatTurnRequest/CancelUnclaimedPersistedChatTurnReply
+// ARM LEDGER (StoreMutation): arm 5 = correctPageOKFVerification → CorrectPageOKFVerificationRequest/CorrectPageOKFVerificationReply
+// ARM LEDGER (StoreMutation): arm 6 = correctSourceMarkdownOKFVerification → CorrectSourceMarkdownOKFVerificationRequest/CorrectSourceMarkdownOKFVerificationReply
+// ARM LEDGER (StoreMutation): arm 7 = createBookmarkNode → CreateBookmarkNodeRequest/CreateBookmarkNodeReply
+// ARM LEDGER (StoreMutation): arm 8 = createChat → CreateChatRequest/CreateChatReply
+// ARM LEDGER (StoreMutation): arm 9 = createWorkspace → CreateWorkspaceRequest/CreateWorkspaceReply
+// ARM LEDGER (StoreMutation): arm 10 = deleteBookmarkNode → DeleteBookmarkNodeRequest/DeleteBookmarkNodeReply
+// ARM LEDGER (StoreMutation): arm 11 = deleteChat → DeleteChatRequest/DeleteChatReply
+// ARM LEDGER (StoreMutation): arm 12 = deleteResources → DeleteResourcesRequest/DeleteResourcesReply
+// ARM LEDGER (StoreMutation): arm 13 = ensureFetchActivity → EnsureFetchActivityRequest/EnsureFetchActivityReply
+// ARM LEDGER (StoreMutation): arm 14 = finalizeStaleDrafts → FinalizeStaleDraftsRequest/FinalizeStaleDraftsReply
+// ARM LEDGER (StoreMutation): arm 15 = markFetchComplete → MarkFetchCompleteRequest/MarkFetchCompleteReply
+// ARM LEDGER (StoreMutation): arm 16 = markPersistedChatTurnProviderSubmitted → MarkPersistedChatTurnProviderSubmittedRequest/MarkPersistedChatTurnProviderSubmittedReply
+// ARM LEDGER (StoreMutation): arm 17 = markSourceIngested → MarkSourceIngestedRequest/MarkSourceIngestedReply
+// ARM LEDGER (StoreMutation): arm 18 = moveBookmarkNode → MoveBookmarkNodeRequest/MoveBookmarkNodeReply
+// ARM LEDGER (StoreMutation): arm 19 = reapStaleWorkspaces → ReapStaleWorkspacesRequest/ReapStaleWorkspacesReply
+// ARM LEDGER (StoreMutation): arm 20 = recordPageOKFVerification → RecordPageOKFVerificationRequest/RecordPageOKFVerificationReply
+// ARM LEDGER (StoreMutation): arm 21 = recordSourceMarkdownOKFVerification → RecordSourceMarkdownOKFVerificationRequest/RecordSourceMarkdownOKFVerificationReply
+// ARM LEDGER (StoreMutation): arm 22 = removeRendererSourcePresentation → RemoveRendererSourcePresentationRequest/RemoveRendererSourcePresentationReply
+// ARM LEDGER (StoreMutation): arm 23 = renameBookmarkFolder → RenameBookmarkFolderRequest/RenameBookmarkFolderReply
+// ARM LEDGER (StoreMutation): arm 24 = renameChat → RenameChatRequest/RenameChatReply
+// ARM LEDGER (StoreMutation): arm 25 = renameSource → RenameSourceRequest/RenameSourceReply
+// ARM LEDGER (StoreMutation): arm 26 = repairMIME → RepairMIMERequest/RepairMIMEReply
+// ARM LEDGER (StoreMutation): arm 27 = replaceLinks → ReplaceLinksRequest/ReplaceLinksReply
+// ARM LEDGER (StoreMutation): arm 28 = restorePage → RestorePageRequest/RestorePageReply
+// ARM LEDGER (StoreMutation): arm 29 = retargetBookmarkNode → RetargetBookmarkNodeRequest/RetargetBookmarkNodeReply
+// ARM LEDGER (StoreMutation): arm 30 = revertPage → RevertPageRequest/RevertPageReply
+// ARM LEDGER (StoreMutation): arm 31 = setActiveMarkdown → SetActiveMarkdownRequest/SetActiveMarkdownReply
+// ARM LEDGER (StoreMutation): arm 32 = setChatAttachments → SetChatAttachmentsRequest/SetChatAttachmentsReply
+// ARM LEDGER (StoreMutation): arm 33 = setChatTitleIf → SetChatTitleIfRequest/SetChatTitleIfReply
+// ARM LEDGER (StoreMutation): arm 34 = setChatTitleIfEmpty → SetChatTitleIfEmptyRequest/SetChatTitleIfEmptyReply
+// ARM LEDGER (StoreMutation): arm 35 = setPageOKFFreshness → SetPageOKFFreshnessRequest/SetPageOKFFreshnessReply
+// ARM LEDGER (StoreMutation): arm 36 = setPageOKFStatus → SetPageOKFStatusRequest/SetPageOKFStatusReply
+// ARM LEDGER (StoreMutation): arm 37 = setRendererSourcePreference → SetRendererSourcePreferenceRequest/SetRendererSourcePreferenceReply
+// ARM LEDGER (StoreMutation): arm 38 = setRendererSourcePresentation → SetRendererSourcePresentationRequest/SetRendererSourcePresentationReply
+// ARM LEDGER (StoreMutation): arm 39 = setSourceDisplayName → SetSourceDisplayNameRequest/SetSourceDisplayNameReply
+// ARM LEDGER (StoreMutation): arm 40 = setSourceMarkdownOKFFreshness → SetSourceMarkdownOKFFreshnessRequest/SetSourceMarkdownOKFFreshnessReply
+// ARM LEDGER (StoreMutation): arm 41 = setSourceMarkdownOKFStatus → SetSourceMarkdownOKFStatusRequest/SetSourceMarkdownOKFStatusReply
+// ARM LEDGER (StoreMutation): arm 42 = updateChatAcpSessionId → UpdateChatAcpSessionIdRequest/UpdateChatAcpSessionIdReply
+// ARM LEDGER (StoreMutation): arm 43 = updateChatModelAndThinkingSelection → UpdateChatModelAndThinkingSelectionRequest/UpdateChatModelAndThinkingSelectionReply
+// ARM LEDGER (StoreMutation): arm 44 = updateChatModelOverride → UpdateChatModelOverrideRequest/UpdateChatModelOverrideReply
+// ARM LEDGER (StoreMutation): arm 45 = updateMessageSummary → UpdateMessageSummaryRequest/UpdateMessageSummaryReply
+// ARM LEDGER (StoreMutation): arm 46 = updatePersistedChatTurnUsage → UpdatePersistedChatTurnUsageRequest/UpdatePersistedChatTurnUsageReply
+// ARM LEDGER (StoreMutation): arm 47 = workspaceMerge → WorkspaceMergeRequest/WorkspaceMergeReply
+// ARM LEDGER (StoreMutation): arm 48 = workspaceRefresh → WorkspaceRefreshRequest/WorkspaceRefreshReply
+// ARM LEDGER (StoreMutation): arm 49 = workspaceResolveConflict → WorkspaceResolveConflictRequest/WorkspaceResolveConflictReply
+// ARM LEDGER (StoreMutation): arm 50 = workspaceRetryMerge → WorkspaceRetryMergeRequest/WorkspaceRetryMergeReply
+
+message StoreMutationRequest {
+  WikiId wiki_id = 51;
+  MutationStamp stamp = 52;
+  oneof operation {
+    AbandonWorkspaceRequest abandon_workspace = 1;
+    AddBytelessSourceRequest add_byteless_source = 2;
+    AppendLogRequest append_log = 3;
+    CancelUnclaimedPersistedChatTurnRequest cancel_unclaimed_persisted_chat_turn = 4;
+    CorrectPageOKFVerificationRequest correct_page_okf_verification = 5;
+    CorrectSourceMarkdownOKFVerificationRequest correct_source_markdown_okf_verification = 6;
+    CreateBookmarkNodeRequest create_bookmark_node = 7;
+    CreateChatRequest create_chat = 8;
+    CreateWorkspaceRequest create_workspace = 9;
+    DeleteBookmarkNodeRequest delete_bookmark_node = 10;
+    DeleteChatRequest delete_chat = 11;
+    DeleteResourcesRequest delete_resources = 12;
+    EnsureFetchActivityRequest ensure_fetch_activity = 13;
+    FinalizeStaleDraftsRequest finalize_stale_drafts = 14;
+    MarkFetchCompleteRequest mark_fetch_complete = 15;
+    MarkPersistedChatTurnProviderSubmittedRequest mark_persisted_chat_turn_provider_submitted = 16;
+    MarkSourceIngestedRequest mark_source_ingested = 17;
+    MoveBookmarkNodeRequest move_bookmark_node = 18;
+    ReapStaleWorkspacesRequest reap_stale_workspaces = 19;
+    RecordPageOKFVerificationRequest record_page_okf_verification = 20;
+    RecordSourceMarkdownOKFVerificationRequest record_source_markdown_okf_verification = 21;
+    RemoveRendererSourcePresentationRequest remove_renderer_source_presentation = 22;
+    RenameBookmarkFolderRequest rename_bookmark_folder = 23;
+    RenameChatRequest rename_chat = 24;
+    RenameSourceRequest rename_source = 25;
+    RepairMIMERequest repair_mime = 26;
+    ReplaceLinksRequest replace_links = 27;
+    RestorePageRequest restore_page = 28;
+    RetargetBookmarkNodeRequest retarget_bookmark_node = 29;
+    RevertPageRequest revert_page = 30;
+    SetActiveMarkdownRequest set_active_markdown = 31;
+    SetChatAttachmentsRequest set_chat_attachments = 32;
+    SetChatTitleIfRequest set_chat_title_if = 33;
+    SetChatTitleIfEmptyRequest set_chat_title_if_empty = 34;
+    SetPageOKFFreshnessRequest set_page_okf_freshness = 35;
+    SetPageOKFStatusRequest set_page_okf_status = 36;
+    SetRendererSourcePreferenceRequest set_renderer_source_preference = 37;
+    SetRendererSourcePresentationRequest set_renderer_source_presentation = 38;
+    SetSourceDisplayNameRequest set_source_display_name = 39;
+    SetSourceMarkdownOKFFreshnessRequest set_source_markdown_okf_freshness = 40;
+    SetSourceMarkdownOKFStatusRequest set_source_markdown_okf_status = 41;
+    UpdateChatAcpSessionIdRequest update_chat_acp_session_id = 42;
+    UpdateChatModelAndThinkingSelectionRequest update_chat_model_and_thinking_selection = 43;
+    UpdateChatModelOverrideRequest update_chat_model_override = 44;
+    UpdateMessageSummaryRequest update_message_summary = 45;
+    UpdatePersistedChatTurnUsageRequest update_persisted_chat_turn_usage = 46;
+    WorkspaceMergeRequest workspace_merge = 47;
+    WorkspaceRefreshRequest workspace_refresh = 48;
+    WorkspaceResolveConflictRequest workspace_resolve_conflict = 49;
+    WorkspaceRetryMergeRequest workspace_retry_merge = 50;
+  }
+}
+
+message StoreMutationReply {
+  oneof operation {
+    AbandonWorkspaceReply abandon_workspace = 1;
+    AddBytelessSourceReply add_byteless_source = 2;
+    AppendLogReply append_log = 3;
+    CancelUnclaimedPersistedChatTurnReply cancel_unclaimed_persisted_chat_turn = 4;
+    CorrectPageOKFVerificationReply correct_page_okf_verification = 5;
+    CorrectSourceMarkdownOKFVerificationReply correct_source_markdown_okf_verification = 6;
+    CreateBookmarkNodeReply create_bookmark_node = 7;
+    CreateChatReply create_chat = 8;
+    CreateWorkspaceReply create_workspace = 9;
+    DeleteBookmarkNodeReply delete_bookmark_node = 10;
+    DeleteChatReply delete_chat = 11;
+    DeleteResourcesReply delete_resources = 12;
+    EnsureFetchActivityReply ensure_fetch_activity = 13;
+    FinalizeStaleDraftsReply finalize_stale_drafts = 14;
+    MarkFetchCompleteReply mark_fetch_complete = 15;
+    MarkPersistedChatTurnProviderSubmittedReply mark_persisted_chat_turn_provider_submitted = 16;
+    MarkSourceIngestedReply mark_source_ingested = 17;
+    MoveBookmarkNodeReply move_bookmark_node = 18;
+    ReapStaleWorkspacesReply reap_stale_workspaces = 19;
+    RecordPageOKFVerificationReply record_page_okf_verification = 20;
+    RecordSourceMarkdownOKFVerificationReply record_source_markdown_okf_verification = 21;
+    RemoveRendererSourcePresentationReply remove_renderer_source_presentation = 22;
+    RenameBookmarkFolderReply rename_bookmark_folder = 23;
+    RenameChatReply rename_chat = 24;
+    RenameSourceReply rename_source = 25;
+    RepairMIMEReply repair_mime = 26;
+    ReplaceLinksReply replace_links = 27;
+    RestorePageReply restore_page = 28;
+    RetargetBookmarkNodeReply retarget_bookmark_node = 29;
+    RevertPageReply revert_page = 30;
+    SetActiveMarkdownReply set_active_markdown = 31;
+    SetChatAttachmentsReply set_chat_attachments = 32;
+    SetChatTitleIfReply set_chat_title_if = 33;
+    SetChatTitleIfEmptyReply set_chat_title_if_empty = 34;
+    SetPageOKFFreshnessReply set_page_okf_freshness = 35;
+    SetPageOKFStatusReply set_page_okf_status = 36;
+    SetRendererSourcePreferenceReply set_renderer_source_preference = 37;
+    SetRendererSourcePresentationReply set_renderer_source_presentation = 38;
+    SetSourceDisplayNameReply set_source_display_name = 39;
+    SetSourceMarkdownOKFFreshnessReply set_source_markdown_okf_freshness = 40;
+    SetSourceMarkdownOKFStatusReply set_source_markdown_okf_status = 41;
+    UpdateChatAcpSessionIdReply update_chat_acp_session_id = 42;
+    UpdateChatModelAndThinkingSelectionReply update_chat_model_and_thinking_selection = 43;
+    UpdateChatModelOverrideReply update_chat_model_override = 44;
+    UpdateMessageSummaryReply update_message_summary = 45;
+    UpdatePersistedChatTurnUsageReply update_persisted_chat_turn_usage = 46;
+    WorkspaceMergeReply workspace_merge = 47;
+    WorkspaceRefreshReply workspace_refresh = 48;
+    WorkspaceResolveConflictReply workspace_resolve_conflict = 49;
+    WorkspaceRetryMergeReply workspace_retry_merge = 50;
+  }
+}
