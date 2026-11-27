@@ -147,10 +147,13 @@ public final class AppDaemonServiceProvider: AppDaemonAppDaemon.ServiceProtocol,
         // Subscribe + register OUTSIDE the streaming producer: the handle
         // carries the hub's subscription id (revocation closes exactly
         // this subscriber), and registration refuses a revoked session so
-        // the stream cannot outlive its session atomically.
+        // the stream cannot outlive its session atomically. The RPC's
+        // cancellation handle is captured for the handle so revocation can
+        // interrupt a subscriber stalled in transport flow control.
         let subscription = hub.subscribe()
         let handle = SubscriptionHandle(
             hub: hub, subscriptionID: subscription.id, sessionHex: session.credentialHex)
+        handle.attachCancellation(context.cancellation)
         guard store.registerStream(sessionHex: session.credentialHex, handle) else {
             handle.finish()
             throw AppDaemonFailure(
@@ -166,18 +169,25 @@ public final class AppDaemonServiceProvider: AppDaemonAppDaemon.ServiceProtocol,
 
                 // The revocation/shutdown sentinel (nil) ends this loop with
                 // a plain return. Loop completion WITHOUT the sentinel is
-                // the hub's overflow path (see the hub's buffering policy):
-                // the contract requires the typed resync failure, never a
-                // silent end.
+                // the hub's overflow path: the contract requires the typed
+                // resync failure, never a silent end. The reason is read
+                // from the hub by subscription id — it distinguishes
+                // overflow from revocation even when the sentinel was
+                // dropped by a full buffer.
                 for await event in subscription.stream {
                     guard let event else {
                         return GRPCCore.Metadata()
                     }
                     try await writer.write(event)
                 }
-                throw AppDaemonFailure(
-                    code: .resyncRequired,
-                    message: "Subscription buffer overflow; resync from authoritative state")
+                if self.hub.terminalReason(subscriptionID: subscription.id) == .overflow {
+                    throw AppDaemonFailure(
+                        code: .resyncRequired,
+                        message: "Subscription buffer overflow; resync from authoritative state")
+                }
+                // Revoked or shutdown: plain end, the client resyncs from
+                // authoritative state.
+                return GRPCCore.Metadata()
             }
         }
     }
@@ -236,12 +246,9 @@ public final class AppDaemonServiceProvider: AppDaemonAppDaemon.ServiceProtocol,
     }
 
     /// A registered live subscription. Session revocation calls
-    /// ``finish()`` (idempotent): the stream ends client-visible with a
-    /// plain end and the client resyncs. The handle carries the HUB's
-    /// subscription id — revocation closes exactly the subscriber whose
-    /// stream this RPC is forwarding. The id exists before store
-    /// registration, so revocation can never race a registration into a
-    /// missed termination.
+    /// ``finish()`` (idempotent): the hub ends the stream with the REVOKED
+    /// reason AND the RPC's cancellation handle is cancelled — out-of-band
+    /// interruption for a subscriber stalled in transport flow control.
     // The `terminated` flag is covered by `lock`; hub + ids are immutable
     // after init.
     // swiftlint:disable:next unchecked_sendable
@@ -252,6 +259,7 @@ public final class AppDaemonServiceProvider: AppDaemonAppDaemon.ServiceProtocol,
         private let sessionHex: String
         private let lock = NSLock()
         private var terminated = false
+        private var cancellation: GRPCCore.ServerContext.RPCCancellationHandle?
 
         init(hub: DaemonRegistryEventHub, subscriptionID: UUID, sessionHex: String) {
             self.hub = hub
@@ -259,15 +267,29 @@ public final class AppDaemonServiceProvider: AppDaemonAppDaemon.ServiceProtocol,
             self.sessionHex = sessionHex
         }
 
+        /// Attach the RPC's cancellation handle (called once, right after
+        /// construction, before registration).
+        func attachCancellation(_ handle: GRPCCore.ServerContext.RPCCancellationHandle) {
+            lock.lock()
+            cancellation = handle
+            lock.unlock()
+        }
+
         func finish() {
+            var cancellation: GRPCCore.ServerContext.RPCCancellationHandle?
             lock.lock()
             guard !terminated else {
                 lock.unlock()
                 return
             }
             terminated = true
+            cancellation = self.cancellation
             lock.unlock()
             hub.close(subscriptionID: subscriptionID)
+            // Out-of-band interrupt AFTER the hub state is recorded: a
+            // writer suspended in transport flow control unwinds through
+            // the cancelled task instead of waiting for the queue.
+            cancellation?.cancel()
         }
     }
 }

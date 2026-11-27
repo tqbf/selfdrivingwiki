@@ -6,39 +6,61 @@ import WikiDaemonGRPCContract
 /// In-process fan-out of registry events to gRPC subscribers.
 ///
 /// Producers: the daemon's `wikis.json` mutations publish through
-/// ``publish(kind:wikiID:displayName:)`` at the same call site that feeds the
-/// XPC firehose — one source of truth, two transports.
+/// ``publish(kind:wikiIDRawValue:displayName:)`` at the same call site that
+/// feeds the XPC firehose — one source of truth, two transports.
 ///
 /// Ordering + overflow contract (plans/app-daemon-wire-contract.md):
 /// - The daemon-wide `sequence` stamp is monotonic within this hub (per
-///   daemon process; informational for the self-validating registry family).
-/// - The subscriber's BOUNDED buffer is the service provider's forwarding
-///   loop (``AppDaemonServiceProvider/outstandingEventBound``): it counts
-///   received-minus-forwarded events and fails the stream with the typed
-///   RESYNC_REQUIRED failure when the bound is exceeded. The bound lives
-///   where consumption is observable; this hub never blocks a producer and
-///   never silently drops an event.
+///   daemon process; informational for the self-validating registry
+///   family). Stamp+yield are serialized under the hub lock, so concurrent
+///   publishers cannot deliver sequence N+1 before N.
+/// - Each subscriber's buffer is bounded; a buffer-full publish ENDS that
+///   subscriber's stream and records ``TerminalReason/overflow``. The
+///   provider reads the reason when the stream ends and fails the RPC
+///   typed (RESYNC_REQUIRED). Revocation records ``TerminalReason/revoked``
+///   and cancels the RPC out-of-band — a subscriber stalled in transport
+///   flow control is interrupted rather than waited on.
 /// - Registry events are self-validating (no replay ring): a subscriber
 ///   establishes its baseline with ListWikis, not by replay. On resync the
 ///   client re-lists and resubscribes.
-// `subscribers` and `sequence` are covered by `lock`.
+// `subscribers`, `sequence`, and `endedReasons` are covered by `lock`.
 // swiftlint:disable:next unchecked_sendable
 public final class DaemonRegistryEventHub: @unchecked Sendable {
 
     public init() {}
 
-    // The continuation is immutable after init.
+    // `subscribers` and `sequence` are covered by `lock`.
     // swiftlint:disable:next unchecked_sendable
-    private final class Subscriber: @unchecked Sendable {
+    private final class Subscriber {
         let id = UUID()
         let continuation: AsyncStream<AppDaemonDaemonEvent?>.Continuation
+        /// Set when this subscriber hit its buffer bound. Read by
+        /// ``terminalReason`` AFTER the stream ends; the overflow path
+        /// finishes the stream WITHOUT the revocation sentinel, and this
+        /// flag tells the two endings apart.
+        var overflowed = false
+
         init(continuation: AsyncStream<AppDaemonDaemonEvent?>.Continuation) {
             self.continuation = continuation
         }
     }
+
     private let lock = NSLock()
     private var subscribers: [UUID: Subscriber] = [:]
     private var sequence: UInt64 = 0
+    /// Terminal reasons for subscriptions whose stream has ended. The
+    /// provider consults it via ``terminalReason(subscriptionID:)`` when
+    /// its forwarding loop completes. Bounded: entries live until read.
+    private var endedReasons: [UUID: TerminalReason] = [:]
+
+    /// Why a subscription's stream ended. `.none` is only possible for a
+    /// client-initiated cancellation (the RPC framework cancels the
+    /// handler; the loop never completes on its own).
+    public enum TerminalReason: Sendable, Equatable {
+        case overflow
+        case revoked
+        case shutdown
+    }
 
     /// Live subscriber count. The interop fixtures use it to publish only
     /// once a subscription is actually established (the stream carries no
@@ -48,19 +70,16 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
     }
 
     /// Subscribe. Returns the stream plus the subscription's id — the id
-    /// the caller must present to ``close(subscriptionID:)`` (session
-    /// revocation routes through it). A `nil` stream element is the
-    /// termination sentinel (revocation, shutdown, or a later hub close).
-    /// The caller MUST consume; the bounded buffer plus ``publish``'s
-    /// yield-result check enforce the overflow contract (a buffer-full
-    /// subscriber's stream ENDS without the sentinel, which the provider
-    /// maps to the typed resync failure).
+    /// the caller must present to ``close(subscriptionID:)`` and
+    /// ``terminalReason(subscriptionID:)``. A `nil` stream element is the
+    /// termination sentinel (revocation or shutdown); a sentinel-free end
+    /// is the overflow path. The caller MUST consume.
     public func subscribe() -> (id: UUID, stream: AsyncStream<AppDaemonDaemonEvent?>) {
         let (stream, continuation) = AsyncStream<AppDaemonDaemonEvent?>.makeStream(
             // .bufferingOldest is the observable-overflow policy: when the
             // buffer is full, `yield` returns .dropped (the NEW event is
-            // not silently accepted), which publish() maps to ending the
-            // subscriber's stream — typed resync at the provider.
+            // not accepted), which publish() maps to ending the
+            // subscriber's stream with TerminalReason.overflow.
             bufferingPolicy: .bufferingOldest(Self.perSubscriberBufferBound))
         let subscriber = Subscriber(continuation: continuation)
         lock.lock()
@@ -69,7 +88,8 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
         lock.unlock()
 
         // Capture the ID, not the subscriber: termination must not keep
-        // the subscriber (and its continuation) alive.
+        // the subscriber (and its continuation) alive. Runs OUTSIDE the
+        // hub lock (AsyncStream may invoke this synchronously).
         continuation.onTermination = { [weak self] _ in
             guard let self else { return }
             self.lock.lock()
@@ -79,20 +99,16 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
         return (id: id, stream: stream)
     }
 
-    /// Per-subscriber buffer bound, enforced by the continuation's own
-    /// bounded policy — ``publish`` observes the yield result and ends a
-    /// buffer-full subscriber's stream WITHOUT the revocation sentinel,
-    /// which is how the provider distinguishes overflow (typed resync
-    /// failure) from revocation (plain end).
+    /// The per-subscriber buffer bound. Overflow is OBSERVED (yield result)
+    /// and surfaced typed, never silent.
     static let perSubscriberBufferBound = 256
 
-    /// Publish one registry mutation. Stamps the daemon-wide sequence and
-    /// delivers to every subscriber. The stamp+yield pair runs under the
-    /// lock so concurrent publishers cannot deliver sequence N+1 before
-    /// N (yield is non-blocking and never re-enters this lock). A yield
-    /// into a FULL bounded buffer ends that subscriber's stream — the
-    /// provider loop sees the termination sentinel and fails the RPC
-    /// typed (RESYNC_REQUIRED); no event is silently dropped.
+    /// Publish one registry mutation. The stamp+yield pair runs under the
+    /// hub lock so concurrent publishers cannot deliver sequence N+1
+    /// before N. A buffer-full subscriber is DETACHED under the lock and
+    /// finalized OUTSIDE it — AsyncStream may invoke onTermination
+    /// synchronously from finish(), and that callback takes this same
+    /// lock: finalizing inside would deadlock the hub.
     public func publish(kind: DaemonRegistryEventKind, wikiIDRawValue: String, displayName: String?) {
         let event = AppDaemonDaemonEvent.with {
             $0.registry = AppDaemonRegistryEvent.with {
@@ -104,6 +120,7 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
             }
         }
 
+        var overflowing: Subscriber?
         lock.lock()
         sequence += 1
         var stamped = event
@@ -111,27 +128,32 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
         let targets = Array(subscribers.values)
         for subscriber in targets {
             let result = subscriber.continuation.yield(stamped)
-            if case .terminated = result {
-                // The consumer already went away; onTermination removed it.
-                continue
-            }
             if case .dropped = result {
-                // The bounded buffer is full: end this subscriber's stream
-                // WITHOUT the revocation sentinel — the provider maps a
-                // sentinel-free end to the typed resync failure.
-                subscriber.continuation.finish()
+                // Buffer full: end this subscriber's stream WITHOUT the
+                // revocation sentinel, recorded as TerminalReason.overflow.
+                subscriber.overflowed = true
+                endedReasons[subscriber.id] = .overflow
                 subscribers.removeValue(forKey: subscriber.id)
+                overflowing = subscriber
             }
         }
         lock.unlock()
+
+        // Finalize the overflowed subscriber OUTSIDE the lock: finish()
+        // may invoke onTermination synchronously, which needs the lock.
+        overflowing?.continuation.finish()
     }
 
-    /// End every subscriber stream (daemon shutdown / listener stop). Plain
-    /// end: the client resyncs from authoritative state on reconnect.
+    /// End every subscriber stream with the shutdown reason (daemon
+    /// shutdown / listener stop). Removal happens under the lock; the
+    /// sentinel + finish run outside it.
     public func closeAll() {
         lock.lock()
         let targets = Array(subscribers.values)
         subscribers.removeAll()
+        for subscriber in targets {
+            endedReasons[subscriber.id] = .shutdown
+        }
         lock.unlock()
         for subscriber in targets {
             subscriber.continuation.yield(nil)
@@ -139,21 +161,35 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
         }
     }
 
-    /// Terminate ONE subscriber's stream without ending others (session
-    /// revocation routes here through the stream handle).
+    /// Terminate ONE subscriber's stream with the REVOKED reason (session
+    /// revocation routes here through the stream handle). Detached under
+    /// the lock, finalized outside it — same deadlock discipline as
+    /// ``publish``.
     func close(subscriptionID: UUID) {
+        var subscriber: Subscriber?
         lock.lock()
-        let subscriber = subscribers.removeValue(forKey: subscriptionID)
+        if let removed = subscribers.removeValue(forKey: subscriptionID) {
+            endedReasons[subscriptionID] = .revoked
+            subscriber = removed
+        }
         lock.unlock()
-        subscriber?.continuation.yield(nil)
-        subscriber?.continuation.finish()
+        guard let subscriber else { return }
+        subscriber.continuation.yield(nil)
+        subscriber.continuation.finish()
+    }
+
+    /// Why the given subscription's stream ended. `.none` means the
+    /// consumer cancelled (client-initiated); the provider's loop cannot
+    /// complete on its own without one of the recorded reasons.
+    public func terminalReason(subscriptionID: UUID) -> TerminalReason? {
+        lock.withLock { endedReasons[subscriptionID] }
     }
 }
 
 /// Mapping from the XPC-side registry event kind (the daemon's existing
 /// vocabulary) to the proto enum. Exhaustive: an unrecognized kind is a
 /// coding bug in the daemon, surfaced as `.unspecified` — which every
-/// receiver must treat as "drop after logging" per the semantic rules.
+/// receiver must treat as a typed failure per the semantic rules.
 extension AppDaemonRegistryEvent.Kind {
     init(_ kind: DaemonRegistryEventKind) {
         switch kind {

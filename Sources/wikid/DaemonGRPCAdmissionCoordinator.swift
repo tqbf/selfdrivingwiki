@@ -92,12 +92,13 @@ final class DaemonGRPCAdmissionCoordinator: @unchecked Sendable {
     func admissionReply(
         connectionID: String, connectionIsLive: @escaping @Sendable () -> Bool
     ) async -> Data {
-        // Wait out readiness, then require SUCCESS: a listener that never
-        // verified serving answers the unavailable reply.
+        // Wait out readiness, then require SUCCESS + LIVE state: a
+        // listener that never verified serving, has stopped, or whose
+        // serving loop died answers the unavailable reply.
         while true {
             let succeeded = lock.withLock { readinessSucceeded }
             if let succeeded {
-                if !succeeded {
+                if !succeeded || !listener.isServing {
                     return Self.unavailableReply()
                 }
                 break

@@ -259,6 +259,16 @@ public final class DaemonGRPCListener: @unchecked Sendable {
     /// The memoized teardown task (nil until the first stop()).
     private var stopTask: Task<Void, Never>?
 
+    /// True while the listener is in the `.running` state AND the serving
+    /// task has not recorded a failure. Admission gates on this — a
+    /// listener that stopped or whose serve loop died must not mint new
+    /// sessions for a dead endpoint.
+    public var isServing: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return state == .running && serverFailure.get() == nil
+    }
+
     private func takeGuardFD() -> Int32 {
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -269,13 +279,20 @@ public final class DaemonGRPCListener: @unchecked Sendable {
 
     // MARK: - Probes
 
-    /// True when a client can connect to the endpoint right now. Nonblocking
-    /// connect on a throwaway socket; the fd always closes here.
+    /// True when a client can connect to the endpoint right now. A
+    /// NONBLOCKING connect on a throwaway socket so a wedged listener
+    /// cannot park the probing thread; the fd always closes here.
     public static func endpointAccepts(path: String) async -> Bool {
         await Task.detached(priority: .userInitiated) {
             let fd = socket(AF_UNIX, SOCK_STREAM, 0)
             guard fd >= 0 else { return false }
-            defer { close(fd) }
+            // Nonblocking BEFORE connect so a wedged peer cannot park this
+            // probe thread; connect then returns EINPROGRESS immediately.
+            let flags = fcntl(fd, F_GETFL, 0)
+            guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                close(fd)
+                return false
+            }
             var addr = sockaddr_un()
             addr.sun_family = sa_family_t(AF_UNIX)
             let bytes = Array(path.utf8)
@@ -289,7 +306,16 @@ public final class DaemonGRPCListener: @unchecked Sendable {
                     connect(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
                 }
             }
-            return result == 0 || errno == EISCONN
+            if result == 0 { return true }
+            // Nonblocking connect: EINPROGRESS means the connection is
+            // being established — poll completion via getsockopt SO_ERROR.
+            if errno == EINPROGRESS {
+                var soError: Int32 = 0
+                var length = socklen_t(MemoryLayout<Int32>.size)
+                getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &length)
+                return soError == 0
+            }
+            return errno == EISCONN
         }.value
     }
 

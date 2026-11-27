@@ -70,6 +70,9 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
     /// proved. Locking stays out of async contexts — sync helpers only.
     private let lock = NSLock()
     private var session: SessionState?
+    /// Terminal closed flag: set by close(); a bootstrap racing close never
+    /// publishes, and a subscription racing close is cancelled immediately.
+    private var closed = false
     /// Live subscription tasks; close() cancels them (graceful shutdown
     /// alone does not terminate an open server stream).
     private var subscriptionTasks: [Task<Void, Never>] = []
@@ -117,9 +120,16 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
     /// subscription streams FIRST (graceful shutdown does not terminate an
     /// open server stream), then stops opening new connections.
     public func close() {
-        let tasks = lock.withLock { subscriptionTasks }
+        // ONE lock hold sets the terminal flag, snapshots, and clears the
+        // task table — a subscription racing close registers into the same
+        // critical section and sees `closed`, cancelling itself.
+        let tasks: [Task<Void, Never>] = lock.withLock {
+            closed = true
+            let tasks = subscriptionTasks
+            subscriptionTasks = []
+            return tasks
+        }
         for task in tasks { task.cancel() }
-        lock.withLock { subscriptionTasks = [] }
         client.beginGracefulShutdown()
     }
 
@@ -127,21 +137,29 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
     /// within the bootstrap window (the server returns the same bearer), so
     /// a dropped reply can be re-attempted inside the window.
     public func bootstrap() async throws {
-        // The candidate bearer stays private until verification passes:
-        // workload calls can never use an unverified bearer, and a failed
-        // handshake leaves the session state untouched.
-        let candidateBearer = try await admitSession()
+        // The candidate bearer + the ADMISSION's instance id stay private
+        // until verification passes: workload calls can never use an
+        // unverified bearer, and a failed handshake leaves the session
+        // state untouched.
+        let (candidateBearer, admittedInstanceID) = try await admitSession()
 
         let capabilities = try await getCapabilities(bearer: candidateBearer)
         try Self.verifyCapabilities(
             capabilities,
             expectedInstance: admission.daemonInstanceID,
-            advertisedInstance: capabilities.daemonInstanceID)
+            advertisedInstance: capabilities.daemonInstanceID,
+            admittedInstance: admittedInstanceID)
 
-        lock.withLock {
+        let published: Bool = lock.withLock {
+            guard !closed else { return false }
             session = SessionState(
                 bearerHex: candidateBearer,
                 instanceID: capabilities.daemonInstanceID)
+            return true
+        }
+        guard published else {
+            throw AppDaemonFailure(
+                code: .unauthenticated, message: "Session was closed during bootstrap")
         }
     }
 
@@ -208,8 +226,12 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
                                     // the receiver must not guess — the typed
                                     // failure sends the caller back to
                                     // authoritative state.
-                                    if registryEvent.kind == .unspecified
-                                        || registryEvent.kind == .UNRECOGNIZED(0) {
+                                    switch registryEvent.kind {
+                                    case .created, .renamed, .deleted:
+                                        break
+                                    // .unspecified or ANY unrecognized numeric
+                                    // value: never guess (semantic rules 3/6).
+                                    case .unspecified, .UNRECOGNIZED:
                                         throw AppDaemonFailure(
                                             code: .invalidRequest,
                                             message: "Unknown registry event kind; "
@@ -225,9 +247,14 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
                 }
             }
             // Registered so close() cancels this stream (graceful transport
-            // shutdown does not terminate an open RPC), and so a finished
-            // task stops pinning memory.
-            self.lock.withLock { self.subscriptionTasks.append(task) }
+            // shutdown does not terminate an open RPC); if close() already
+            // ran, cancel immediately. A finished task stops pinning memory.
+            let alreadyClosed = self.lock.withLock { () -> Bool in
+                if self.closed { return true }
+                self.subscriptionTasks.append(task)
+                return false
+            }
+            if alreadyClosed { task.cancel() }
             continuation.onTermination = { [weak self] _ in
                 task.cancel()
                 self?.forgetSubscription(task)
@@ -243,15 +270,19 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
 
     // MARK: - Internals
 
-    /// Exchange the bootstrap credential for the session bearer.
-    private func admitSession() async throws -> String {
+    /// Exchange the bootstrap credential for the session bearer + the
+    /// instance id the reply advertises (cross-checked in the handshake).
+    private func admitSession() async throws -> (bearerHex: String, instanceID: String) {
         try await withDeadline(Deadlines.handshake) { options in
             let reply = try await self.stub.admitSession(
                 request: ClientRequest(
                     message: AppDaemonAdmitSessionRequest(),
                     metadata: Self.authorization(self.admission.bootstrapCredentialHex)),
                 options: options)
-            return Self.hex(Array(reply.sessionCredential))
+            return (
+                bearerHex: Self.hex(Array(reply.sessionCredential)),
+                instanceID: reply.daemonInstanceID
+            )
         }
     }
 
@@ -267,10 +298,13 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
 
     /// Synchronous bearer read (NSLock is unavailable from async bodies).
     private func requireBearerSync() throws -> String {
-        let bearer = lock.withLock { session?.bearerHex }
-        guard let bearer else {
+        let state = lock.withLock { (session?.bearerHex, closed) }
+        guard let bearer = state.0 else {
             throw AppDaemonFailure(
                 code: .unauthenticated, message: "bootstrap() has not completed")
+        }
+        guard !state.1 else {
+            throw AppDaemonFailure(code: .unauthenticated, message: "Session is closed")
         }
         return bearer
     }
@@ -295,8 +329,18 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
     static func verifyCapabilities(
         _ reply: AppDaemonGetCapabilitiesReply,
         expectedInstance: String,
-        advertisedInstance: String
+        advertisedInstance: String,
+        admittedInstance: String
     ) throws {
+        // Four-way agreement: the XPC admission, the AdmitSession reply,
+        // and the capabilities reply must all name the same instance, and
+        // it must be the one this session was built against.
+        guard admittedInstance == expectedInstance else {
+            throw AppDaemonFailure(
+                code: .unauthenticated,
+                message: "Handshake instance mismatch: admission bound to "
+                    + "\(expectedInstance), AdmitSession answer for \(admittedInstance)")
+        }
         guard advertisedInstance == expectedInstance else {
             throw AppDaemonFailure(
                 code: .unauthenticated,
