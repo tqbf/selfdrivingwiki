@@ -528,6 +528,25 @@ let package = Package(
             path: "Sources/wikictl",
             swiftSettings: strictSwiftSettings
         ),
+        // app-daemon-smoke — the signed cold-launch smoke DRIVER (AC.1,
+        // plans/app-daemon-wire-contract.md). Build-only: never bundled
+        // into the app. `make test-signed-app-daemon-grpc` installs the
+        // signed app, then runs this binary to drive XPC admission → gRPC
+        // session → registry read → live event → verified daemon stop →
+        // reconnect-to-new-instance against the REAL daemon.
+        .executableTarget(
+            name: "AppDaemonSmoke",
+            dependencies: [
+                "WikiCtlCore",
+                "WikiDaemonGRPC",
+                "WikiDaemonGRPCContract",
+                "WikiFSTypes",
+                .target(name: "WikiFSCore",
+                        condition: .when(platforms: [.macOS])),
+            ],
+            path: "Sources/AppDaemonSmoke",
+            swiftSettings: strictSwiftSettings
+        ),
         // wikictl-fixture — the BUILD-ONLY companion CLI for disposable fixture
         // databases. It owns everything the shipping wikictl must never have:
         // the `--database-path`/`WIKI_DB_PATH` explicit-database selection
@@ -886,6 +905,7 @@ let package = Package(
         if $0.name == "wikictl" { return false }
         if $0.name == "WikiFS" { return false }
         if $0.name == "WikiFSMLX" { return false }
+        if $0.name == "AppDaemonSmoke" { return false }
         if $0.name == "WikiFSAppTests" { return false }
         #endif
         return podcastTranscriptsEnabled || $0.name != "podcast-token-helper"

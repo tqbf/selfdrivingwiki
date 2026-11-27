@@ -94,11 +94,20 @@ and the schemas' own rulebook, `Protocol/app-daemon/README.md`.
   compatible, negative breaking edit correctly rejected.
 - Rust peer standalone smoke: serve+probe normal, oversize, incompatible,
   injected-error modes all pass (`probe` exit 0 in all four).
-- **Not yet run (recorded honestly)**: the signed cold-launch smoke
-  (`make test-signed-app-daemon-grpc`) and the paired benchmark
-  (`make benchmark-app-daemon-grpc`). Both need this developer Mac with
-  `signing/local.config` and a quiet machine; cutover REQUIRES their
-  recorded evidence (AC.1, AC.6). Their scripts perform the parts that
-  are meaningful now (signing preflight, TCP-listener audit, quiet-machine
-  check) and exit with an explicit not-ready marker until the harness
-  lands with the family-migration PR.
+- AC.1 harness build: `swift build --product AppDaemonSmoke` clean,
+  swiftlint strict clean, `ProcessSignalSafetyAuditTests` green with the
+  smoke's reviewed signal call site.
+- **Not yet run (recorded honestly)**: the signed cold-launch smoke's
+  recorded evidence. The harness is now COMPLETE
+  (`Sources/AppDaemonSmoke` + `make test-signed-app-daemon-grpc`): it
+  installs the signed app, then drives XPC admission → gRPC session →
+  ListWikis → live registry event (scratch wiki created + deleted over
+  the legacy route) → verified daemon stop (`proc_pidpath` identity +
+  TERM; the process-control audit ledger covers the call site) →
+  reconnect to a NEW daemon instance, with TCP audits before and after.
+  Running it replaces this machine's installed app (`make install`
+  behavior) and stops the running instance — the operator's call. The
+  paired benchmark (`make benchmark-app-daemon-grpc`) still needs its
+  measurement harness, which lands with the family-migration PR when the
+  gRPC route carries real workload; cutover REQUIRES both recorded
+  evidence trails (AC.1, AC.6).

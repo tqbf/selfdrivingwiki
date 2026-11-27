@@ -515,6 +515,9 @@ private struct PeerProcess {
         let output = URL(fileURLWithPath: socket)
             .deletingLastPathComponent()
             .appendingPathComponent("serve-output.txt")
+        // A missing/empty file just means the server printed nothing —
+        // that is the common healthy case, not a swallowed error.
+        // swiftlint:disable:next silent_try_optional
         return (try? String(contentsOf: output, encoding: .utf8)) ?? ""
     }
 
