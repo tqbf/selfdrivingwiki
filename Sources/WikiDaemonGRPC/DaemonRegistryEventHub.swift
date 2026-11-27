@@ -105,10 +105,11 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
 
     /// Publish one registry mutation. The stamp+yield pair runs under the
     /// hub lock so concurrent publishers cannot deliver sequence N+1
-    /// before N. A buffer-full subscriber is DETACHED under the lock and
+    /// before N. Buffer-full subscribers are DETACHED under the lock and
     /// finalized OUTSIDE it — AsyncStream may invoke onTermination
     /// synchronously from finish(), and that callback takes this same
-    /// lock: finalizing inside would deadlock the hub.
+    /// lock: finalizing inside would deadlock the hub. EVERY overflowed
+    /// subscriber is finalized, not just the last one.
     public func publish(kind: DaemonRegistryEventKind, wikiIDRawValue: String, displayName: String?) {
         let event = AppDaemonDaemonEvent.with {
             $0.registry = AppDaemonRegistryEvent.with {
@@ -120,7 +121,7 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
             }
         }
 
-        var overflowing: Subscriber?
+        var overflowing: [Subscriber] = []
         lock.lock()
         sequence += 1
         var stamped = event
@@ -134,14 +135,16 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
                 subscriber.overflowed = true
                 endedReasons[subscriber.id] = .overflow
                 subscribers.removeValue(forKey: subscriber.id)
-                overflowing = subscriber
+                overflowing.append(subscriber)
             }
         }
         lock.unlock()
 
-        // Finalize the overflowed subscriber OUTSIDE the lock: finish()
+        // Finalize EVERY overflowed subscriber OUTSIDE the lock: finish()
         // may invoke onTermination synchronously, which needs the lock.
-        overflowing?.continuation.finish()
+        for subscriber in overflowing {
+            subscriber.continuation.finish()
+        }
     }
 
     /// End every subscriber stream with the shutdown reason (daemon
@@ -178,11 +181,16 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
         subscriber.continuation.finish()
     }
 
-    /// Why the given subscription's stream ended. `.none` means the
-    /// consumer cancelled (client-initiated); the provider's loop cannot
-    /// complete on its own without one of the recorded reasons.
+    /// Why the given subscription's stream ended; the record is CONSUMED
+    /// by the read (the provider reads it exactly once on stream end), so
+    /// normal subscription churn cannot grow the map without bound.
+    /// `.none` means the consumer cancelled (client-initiated); the
+    /// provider's loop cannot complete on its own without one of the
+    /// recorded reasons.
     public func terminalReason(subscriptionID: UUID) -> TerminalReason? {
-        lock.withLock { endedReasons[subscriptionID] }
+        lock.lock()
+        defer { lock.unlock() }
+        return endedReasons.removeValue(forKey: subscriptionID)
     }
 }
 

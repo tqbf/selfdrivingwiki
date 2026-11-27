@@ -64,6 +64,10 @@ public final class DaemonGRPCListener: @unchecked Sendable {
     /// read by the readiness probe.
     private let serverFailure = FailureBox()
 
+    /// A clean serve-loop exit, recorded in the failure box so isServing
+    /// reflects ANY exit path, not just throws.
+    private struct ServeExit: Error {}
+
     /// Lock-backed one-slot error carrier between the serving task and the
     /// readiness probe (first failure wins).
     // The single failure slot is covered by `lock`.
@@ -127,9 +131,17 @@ public final class DaemonGRPCListener: @unchecked Sendable {
 
     deinit {
         // Best-effort teardown for a dropped live listener; the normal path
-        // is an explicit stop() before daemon shutdown.
+        // is an explicit stop() before daemon shutdown. The guard fd is
+        // closed ONLY when no teardown owns it: beginTeardown takes the fd
+        // out of the instance, so a running teardown keeps responsibility
+        // (early release here would drop the flock before its unlink ran).
         serverTask?.cancel()
-        if guardFD >= 0 { close(guardFD) }
+        stateLock.lock()
+        let ownsGuard = stopTask == nil && guardFD >= 0
+        let fd = guardFD
+        guardFD = -1
+        stateLock.unlock()
+        if ownsGuard && fd >= 0 { close(fd) }
     }
 
     /// Binds and starts serving. Once-only (like the search-socket server).
@@ -178,6 +190,10 @@ public final class DaemonGRPCListener: @unchecked Sendable {
                 // instead of waiting out its budget.
                 failureBox.set(error)
             }
+            // A CLEAN serve exit is recorded too: isServing must go false
+            // when the loop stops for ANY reason, or admission would mint
+            // sessions for a dead endpoint.
+            failureBox.set(ServeExit())
         }
         serverTask = task
         state = .running
@@ -216,7 +232,9 @@ public final class DaemonGRPCListener: @unchecked Sendable {
     /// The synchronous phase transition behind ``stop``: `.running` →
     /// `.stopped`, creating (once) and returning the teardown task. Returns
     /// the EXISTING teardown on repeat calls, so concurrent stoppers join
-    /// instead of racing.
+    /// instead of racing. The guard fd is TRANSFERRED to the teardown here
+    /// (out of the instance), so teardown completion does not depend on
+    /// the listener's lifetime.
     private func beginTeardown() -> Task<Void, Never>? {
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -225,10 +243,11 @@ public final class DaemonGRPCListener: @unchecked Sendable {
         state = .stopped
         let servingTask = serverTask
         serverTask = nil
+        let guardFD = takeGuardFD()
         let failureBox = serverFailure
         let socketPath = socketPath
         let onShutdown = onShutdown
-        let teardown = Task<Void, Never> { [weak self] in
+        let teardown = Task<Void, Never> {
             // 1. Stop accepting.
             servingTask?.cancel()
             // 2. Revoke sessions + close streams BEFORE awaiting the
@@ -237,8 +256,9 @@ public final class DaemonGRPCListener: @unchecked Sendable {
             // 3. Await the serving loop's exit.
             _ = await servingTask?.result
             _ = failureBox
-            // 4. Unlink under the guard; 5. release the flock.
-            guard let self else { return }
+            // 4. Unlink under the guard (the fd was transferred above —
+            //    completion no longer depends on the listener instance);
+            //    5. release the flock.
             if FileManager.default.fileExists(atPath: socketPath) {
                 // Best-effort unlink under the guard: a leftover file is
                 // next-start's stale fuel, logged but not fatal to shutdown.
@@ -249,7 +269,6 @@ public final class DaemonGRPCListener: @unchecked Sendable {
                         "wikid: could not unlink gRPC socket \(socketPath): \(error)")
                 }
             }
-            let guardFD = self.takeGuardFD()
             if guardFD >= 0 { close(guardFD) } // releases the flock
         }
         stopTask = teardown
@@ -281,16 +300,20 @@ public final class DaemonGRPCListener: @unchecked Sendable {
 
     /// True when a client can connect to the endpoint right now. A
     /// NONBLOCKING connect on a throwaway socket so a wedged listener
-    /// cannot park the probing thread; the fd always closes here.
+    /// cannot park the probing thread; the descriptor closes on EVERY path
+    /// (defer), and an EINPROGRESS completion is resolved with a bounded
+    /// SO_ERROR poll rather than assumed.
     public static func endpointAccepts(path: String) async -> Bool {
         await Task.detached(priority: .userInitiated) {
             let fd = socket(AF_UNIX, SOCK_STREAM, 0)
             guard fd >= 0 else { return false }
+            // The descriptor closes on EVERY path — earlier versions
+            // leaked it on success/refusal/overlong-path.
+            defer { close(fd) }
             // Nonblocking BEFORE connect so a wedged peer cannot park this
             // probe thread; connect then returns EINPROGRESS immediately.
             let flags = fcntl(fd, F_GETFL, 0)
             guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
-                close(fd)
                 return false
             }
             var addr = sockaddr_un()
@@ -307,15 +330,19 @@ public final class DaemonGRPCListener: @unchecked Sendable {
                 }
             }
             if result == 0 { return true }
-            // Nonblocking connect: EINPROGRESS means the connection is
-            // being established — poll completion via getsockopt SO_ERROR.
-            if errno == EINPROGRESS {
+            // Nonblocking connect: EINPROGRESS means completion is pending.
+            // An immediate SO_ERROR read cannot establish that (it may
+            // still report EINPROGRESS); poll with a ~1s budget.
+            guard errno == EINPROGRESS else { return errno == EISCONN }
+            for _ in 0 ..< 100 {
                 var soError: Int32 = 0
                 var length = socklen_t(MemoryLayout<Int32>.size)
                 getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &length)
-                return soError == 0
+                if soError == 0 { return true }
+                if soError != EINPROGRESS { return false }
+                usleep(10_000)
             }
-            return errno == EISCONN
+            return false
         }.value
     }
 

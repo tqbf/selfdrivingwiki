@@ -115,6 +115,14 @@ final class DaemonGRPCAdmissionCoordinator: @unchecked Sendable {
         guard let offer else {
             return Self.unavailableReply()
         }
+        // Post-mint re-check (shrinks the mint-vs-stop race to the
+        // instructions between the store's commit and here): if the
+        // listener stopped in that window, revoke the just-minted session
+        // rather than handing out a credential for a dead endpoint.
+        guard listener.isServing else {
+            store.revokeSession(connectionID: connectionID)
+            return Self.unavailableReply()
+        }
         let reply = DaemonGRPCAdmissionReply(
             endpointAvailable: true,
             socketPath: offer.socketPath,
