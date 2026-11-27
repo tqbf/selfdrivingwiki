@@ -107,7 +107,7 @@ message GetChatSessionStateRequest {
 // The authoritative live-session projection. Typed fields replace the
 // legacy run-flag cluster; absent fields mean "not present", not a
 // default value.
-message ChatSessionState {
+message GetChatSessionStateReply {
   enum Lifecycle {
     LIFECYCLE_UNSPECIFIED = 0;
     LIFECYCLE_READY = 1;

@@ -224,7 +224,7 @@ public nonisolated struct AppDaemonQueueOwnership: Sendable {
   fileprivate var _epoch: AppDaemonQueueOwnershipEpoch? = nil
 }
 
-public nonisolated struct AppDaemonQueueSnapshotRequest: Sendable {
+public nonisolated struct AppDaemonGetQueueSnapshotRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
@@ -1549,8 +1549,8 @@ nonisolated extension AppDaemonQueueOwnership: SwiftProtobuf.Message, SwiftProto
   }
 }
 
-nonisolated extension AppDaemonQueueSnapshotRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".QueueSnapshotRequest"
+nonisolated extension AppDaemonGetQueueSnapshotRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GetQueueSnapshotRequest"
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{c}\u{1}\u{10}")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -1562,7 +1562,7 @@ nonisolated extension AppDaemonQueueSnapshotRequest: SwiftProtobuf.Message, Swif
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: AppDaemonQueueSnapshotRequest, rhs: AppDaemonQueueSnapshotRequest) -> Bool {
+  public static func ==(lhs: AppDaemonGetQueueSnapshotRequest, rhs: AppDaemonGetQueueSnapshotRequest) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

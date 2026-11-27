@@ -29,3 +29,43 @@ message WikiDescriptor {
 message ListWikisReply {
   repeated WikiDescriptor wikis = 1;
 }
+
+// --- Registry mutations (step 2) ---
+
+message CreateWikiRequest {
+  // Trimmed by the daemon; empty defaults to "Untitled Wiki".
+  string name = 1;
+}
+
+message CreateWikiReply {
+  WikiDescriptor descriptor = 1;
+}
+
+message DeleteWikiRequest {
+  WikiId id = 1;
+}
+
+message DeleteWikiReply {
+  reserved 1 to 16;
+}
+
+message RenameWikiRequest {
+  WikiId id = 1;
+  string display_name = 2;
+}
+
+message RenameWikiReply {
+  reserved 1 to 16;
+}
+
+message ResolveWikiRequest {
+  oneof selector {
+    WikiId id = 1;
+    string display_name = 2;
+  }
+}
+
+message ResolveWikiReply {
+  // Absent when no wiki matches the selector.
+  optional WikiDescriptor descriptor = 1;
+}

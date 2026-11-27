@@ -438,14 +438,14 @@ public nonisolated struct AppDaemonGetChatSessionStateRequest: Sendable {
 /// The authoritative live-session projection. Typed fields replace the
 /// legacy run-flag cluster; absent fields mean "not present", not a
 /// default value.
-public nonisolated struct AppDaemonChatSessionState: Sendable {
+public nonisolated struct AppDaemonGetChatSessionStateReply: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  public var lifecycle: AppDaemonChatSessionState.Lifecycle = .unspecified
+  public var lifecycle: AppDaemonGetChatSessionStateReply.Lifecycle = .unspecified
 
-  public var turnState: AppDaemonChatSessionState.TurnState = .unspecified
+  public var turnState: AppDaemonGetChatSessionStateReply.TurnState = .unspecified
 
   /// Queued turn count awaiting generation.
   public var queuedTurns: UInt32 = 0
@@ -540,7 +540,7 @@ public nonisolated struct AppDaemonChatSessionState: Sendable {
     }
 
     // The compiler won't synthesize support with the UNRECOGNIZED case.
-    public static let allCases: [AppDaemonChatSessionState.Lifecycle] = [
+    public static let allCases: [AppDaemonGetChatSessionStateReply.Lifecycle] = [
       .unspecified,
       .ready,
       .recovering,
@@ -582,7 +582,7 @@ public nonisolated struct AppDaemonChatSessionState: Sendable {
     }
 
     // The compiler won't synthesize support with the UNRECOGNIZED case.
-    public static let allCases: [AppDaemonChatSessionState.TurnState] = [
+    public static let allCases: [AppDaemonGetChatSessionStateReply.TurnState] = [
       .unspecified,
       .idle,
       .generating,
@@ -1610,8 +1610,8 @@ nonisolated extension AppDaemonGetChatSessionStateRequest: SwiftProtobuf.Message
   }
 }
 
-nonisolated extension AppDaemonChatSessionState: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".ChatSessionState"
+nonisolated extension AppDaemonGetChatSessionStateReply: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GetChatSessionStateReply"
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}lifecycle\0\u{3}turn_state\0\u{3}queued_turns\0\u{3}provider_id\0\u{3}model_id\0\u{3}attention_count\0\u{1}usage\0\u{1}transcript\0\u{3}pending_permission\0\u{3}run_metadata\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
@@ -1673,7 +1673,7 @@ nonisolated extension AppDaemonChatSessionState: SwiftProtobuf.Message, SwiftPro
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: AppDaemonChatSessionState, rhs: AppDaemonChatSessionState) -> Bool {
+  public static func ==(lhs: AppDaemonGetChatSessionStateReply, rhs: AppDaemonGetChatSessionStateReply) -> Bool {
     if lhs.lifecycle != rhs.lifecycle {return false}
     if lhs.turnState != rhs.turnState {return false}
     if lhs.queuedTurns != rhs.queuedTurns {return false}
@@ -1689,11 +1689,11 @@ nonisolated extension AppDaemonChatSessionState: SwiftProtobuf.Message, SwiftPro
   }
 }
 
-nonisolated extension AppDaemonChatSessionState.Lifecycle: SwiftProtobuf._ProtoNameProviding {
+nonisolated extension AppDaemonGetChatSessionStateReply.Lifecycle: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0LIFECYCLE_UNSPECIFIED\0\u{1}LIFECYCLE_READY\0\u{1}LIFECYCLE_RECOVERING\0\u{1}LIFECYCLE_CLOSED\0")
 }
 
-nonisolated extension AppDaemonChatSessionState.TurnState: SwiftProtobuf._ProtoNameProviding {
+nonisolated extension AppDaemonGetChatSessionStateReply.TurnState: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0TURN_STATE_UNSPECIFIED\0\u{1}TURN_STATE_IDLE\0\u{1}TURN_STATE_GENERATING\0\u{1}TURN_STATE_FAILED\0")
 }
 

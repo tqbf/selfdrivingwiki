@@ -60,7 +60,7 @@ enum QueueItemState {
   QUEUE_ITEM_STATE_CANCELLED = 5;
 }
 
-message QueueSnapshotRequest {
+message GetQueueSnapshotRequest {
   // Intentionally empty; future filters under new field numbers.
   reserved 1 to 16;
 }

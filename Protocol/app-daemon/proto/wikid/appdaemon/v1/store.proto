@@ -3146,3 +3146,198 @@ message StoreMutationReply {
     WorkspaceRetryMergeReply workspace_retry_merge = 50;
   }
 }
+
+// ============================================================================
+// Store lifecycle (WikiDaemonProtocol.swift:33-47)
+// ============================================================================
+
+message OpenStoreRequest {
+  WikiId wiki_id = 1;
+}
+
+message OpenStoreReply {
+  reserved 1 to 16;
+}
+
+message CloseStoreRequest {
+  WikiId wiki_id = 1;
+}
+
+message CloseStoreReply {
+  reserved 1 to 16;
+}
+
+message GetStoreChangeTokenRequest {
+  WikiId wiki_id = 1;
+}
+
+message GetStoreChangeTokenReply {
+  // Absent when the store is not open or the token is unavailable.
+  optional string token = 1;
+}
+
+// ============================================================================
+// Store dedicated hot-path RPCs (GetPage/ListPages/UpsertPage)
+// ============================================================================
+
+message GetPageRequest {
+  WikiId wiki_id = 1;
+  PageId page_id = 2;
+}
+
+message GetPageReply {
+  // Present when the page exists; absent when not found.
+  optional PageBody page = 1;
+
+  message PageBody {
+    PageId page_id = 1;
+    string title = 2;
+    string body = 3;
+    google.protobuf.Timestamp created_at = 4;
+    google.protobuf.Timestamp updated_at = 5;
+  }
+}
+
+message ListPagesRequest {
+  WikiId wiki_id = 1;
+  enum SortOrder {
+    SORT_ORDER_UNSPECIFIED = 0;
+    SORT_ORDER_TITLE = 1;
+    SORT_ORDER_UPDATED_AT = 2;
+    SORT_ORDER_CREATED_AT = 3;
+  }
+  SortOrder sort_order = 2;
+  uint32 byte_budget = 3;
+  optional string continuation_token = 4;
+}
+
+message ListPagesReply {
+  repeated PageSummaryRow pages = 1;
+  optional string next_page_token = 2;
+}
+
+message PageSummaryRow {
+  PageId page_id = 1;
+  string title = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+message UpsertPageRequest {
+  WikiId wiki_id = 1;
+  optional PageId target = 2;
+  string title = 3;
+  bytes body = 4;
+  string author = 5;
+  oneof expectation {
+    Unrestricted unrestricted = 6;
+    ExpectedHead expected_head = 7;
+    ExpectedAbsent expected_absent = 8;
+  }
+
+  message Unrestricted {
+    reserved 1 to 16;
+  }
+  message ExpectedHead {
+    PageId page_id = 1;
+    string expected_version_id = 2;
+  }
+  message ExpectedAbsent {
+    reserved 1 to 16;
+  }
+}
+
+message UpsertPageReply {
+  PageId page_id = 1;
+  MutationOutcome outcome = 2;
+  optional GetPageReply.PageBody page = 3;
+}
+
+// ============================================================================
+// Staged payload handles
+// ============================================================================
+
+message BeginPayloadUploadRequest {
+  WikiId wiki_id = 1;
+  string purpose = 2;
+  uint64 total_bytes = 3;
+  bytes sha256 = 4;
+}
+
+message BeginPayloadUploadReply {
+  bytes upload_id = 1;
+}
+
+message AppendPayloadChunkRequest {
+  bytes upload_id = 1;
+  uint64 chunk_index = 2;
+  bytes chunk = 3;
+  bytes running_sha256 = 4;
+}
+
+message AppendPayloadChunkReply {
+  reserved 1 to 16;
+}
+
+message CommitPayloadUploadRequest {
+  bytes upload_id = 1;
+}
+
+message CommitPayloadUploadReply {
+  PayloadHandleRef handle = 1;
+  uint64 size = 2;
+  bytes sha256 = 3;
+  optional google.protobuf.Timestamp expires_at = 4;
+}
+
+message ReadPayloadChunkRequest {
+  PayloadHandleRef handle = 1;
+  uint64 chunk_index = 2;
+}
+
+message ReadPayloadChunkReply {
+  bytes chunk = 1;
+  uint64 total_size = 2;
+  uint64 chunk_count = 3;
+  bool is_final = 4;
+}
+
+// ============================================================================
+// Mutation outcome resolution
+// ============================================================================
+
+message ResolveStoreOutcomeRequest {
+  WikiId wiki_id = 1;
+  uint32 original_arm = 2;
+  MutationStamp stamp = 3;
+  bytes original_payload_digest = 4;
+}
+
+message ResolveStoreOutcomeReply {
+  oneof outcome {
+    Known known = 1;
+    Unknown unknown = 2;
+  }
+
+  message Known {
+    bytes original_reply_payload = 1;
+  }
+
+  message Unknown {
+    reserved 1 to 16;
+  }
+}
+
+// ============================================================================
+// Store session bootstrap
+// ============================================================================
+
+message GetStoreSessionBootstrapRequest {
+  WikiId wiki_id = 1;
+}
+
+message GetStoreSessionBootstrapReply {
+  repeated string registered_extraction_inputs = 1;
+  repeated string registered_renderer_source_types = 2;
+  optional string change_token = 3;
+  optional string strategy_state = 4;
+}

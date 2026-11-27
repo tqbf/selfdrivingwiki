@@ -94,12 +94,698 @@ public enum AppDaemonAppDaemon: Sendable {
                 type: .serverStreaming
             )
         }
+        /// Namespace for "CreateWiki" metadata.
+        public enum CreateWiki: Sendable {
+            /// Request type for "CreateWiki".
+            public typealias Input = AppDaemonCreateWikiRequest
+            /// Response type for "CreateWiki".
+            public typealias Output = AppDaemonCreateWikiReply
+            /// Descriptor for "CreateWiki".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "CreateWiki",
+                type: .unary
+            )
+        }
+        /// Namespace for "DeleteWiki" metadata.
+        public enum DeleteWiki: Sendable {
+            /// Request type for "DeleteWiki".
+            public typealias Input = AppDaemonDeleteWikiRequest
+            /// Response type for "DeleteWiki".
+            public typealias Output = AppDaemonDeleteWikiReply
+            /// Descriptor for "DeleteWiki".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "DeleteWiki",
+                type: .unary
+            )
+        }
+        /// Namespace for "RenameWiki" metadata.
+        public enum RenameWiki: Sendable {
+            /// Request type for "RenameWiki".
+            public typealias Input = AppDaemonRenameWikiRequest
+            /// Response type for "RenameWiki".
+            public typealias Output = AppDaemonRenameWikiReply
+            /// Descriptor for "RenameWiki".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "RenameWiki",
+                type: .unary
+            )
+        }
+        /// Namespace for "ResolveWiki" metadata.
+        public enum ResolveWiki: Sendable {
+            /// Request type for "ResolveWiki".
+            public typealias Input = AppDaemonResolveWikiRequest
+            /// Response type for "ResolveWiki".
+            public typealias Output = AppDaemonResolveWikiReply
+            /// Descriptor for "ResolveWiki".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "ResolveWiki",
+                type: .unary
+            )
+        }
+        /// Namespace for "OpenStore" metadata.
+        public enum OpenStore: Sendable {
+            /// Request type for "OpenStore".
+            public typealias Input = AppDaemonOpenStoreRequest
+            /// Response type for "OpenStore".
+            public typealias Output = AppDaemonOpenStoreReply
+            /// Descriptor for "OpenStore".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "OpenStore",
+                type: .unary
+            )
+        }
+        /// Namespace for "CloseStore" metadata.
+        public enum CloseStore: Sendable {
+            /// Request type for "CloseStore".
+            public typealias Input = AppDaemonCloseStoreRequest
+            /// Response type for "CloseStore".
+            public typealias Output = AppDaemonCloseStoreReply
+            /// Descriptor for "CloseStore".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "CloseStore",
+                type: .unary
+            )
+        }
+        /// Namespace for "GetStoreChangeToken" metadata.
+        public enum GetStoreChangeToken: Sendable {
+            /// Request type for "GetStoreChangeToken".
+            public typealias Input = AppDaemonGetStoreChangeTokenRequest
+            /// Response type for "GetStoreChangeToken".
+            public typealias Output = AppDaemonGetStoreChangeTokenReply
+            /// Descriptor for "GetStoreChangeToken".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "GetStoreChangeToken",
+                type: .unary
+            )
+        }
+        /// Namespace for "GetPage" metadata.
+        public enum GetPage: Sendable {
+            /// Request type for "GetPage".
+            public typealias Input = AppDaemonGetPageRequest
+            /// Response type for "GetPage".
+            public typealias Output = AppDaemonGetPageReply
+            /// Descriptor for "GetPage".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "GetPage",
+                type: .unary
+            )
+        }
+        /// Namespace for "ListPages" metadata.
+        public enum ListPages: Sendable {
+            /// Request type for "ListPages".
+            public typealias Input = AppDaemonListPagesRequest
+            /// Response type for "ListPages".
+            public typealias Output = AppDaemonListPagesReply
+            /// Descriptor for "ListPages".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "ListPages",
+                type: .unary
+            )
+        }
+        /// Namespace for "UpsertPage" metadata.
+        public enum UpsertPage: Sendable {
+            /// Request type for "UpsertPage".
+            public typealias Input = AppDaemonUpsertPageRequest
+            /// Response type for "UpsertPage".
+            public typealias Output = AppDaemonUpsertPageReply
+            /// Descriptor for "UpsertPage".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "UpsertPage",
+                type: .unary
+            )
+        }
+        /// Namespace for "StoreSmall" metadata.
+        public enum StoreSmall: Sendable {
+            /// Request type for "StoreSmall".
+            public typealias Input = AppDaemonStoreSmallRequest
+            /// Response type for "StoreSmall".
+            public typealias Output = AppDaemonStoreSmallReply
+            /// Descriptor for "StoreSmall".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "StoreSmall",
+                type: .unary
+            )
+        }
+        /// Namespace for "StoreList" metadata.
+        public enum StoreList: Sendable {
+            /// Request type for "StoreList".
+            public typealias Input = AppDaemonStoreListRequest
+            /// Response type for "StoreList".
+            public typealias Output = AppDaemonStoreListReply
+            /// Descriptor for "StoreList".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "StoreList",
+                type: .unary
+            )
+        }
+        /// Namespace for "StoreBlob" metadata.
+        public enum StoreBlob: Sendable {
+            /// Request type for "StoreBlob".
+            public typealias Input = AppDaemonStoreBlobRequest
+            /// Response type for "StoreBlob".
+            public typealias Output = AppDaemonStoreBlobReply
+            /// Descriptor for "StoreBlob".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "StoreBlob",
+                type: .unary
+            )
+        }
+        /// Namespace for "StoreMutation" metadata.
+        public enum StoreMutation: Sendable {
+            /// Request type for "StoreMutation".
+            public typealias Input = AppDaemonStoreMutationRequest
+            /// Response type for "StoreMutation".
+            public typealias Output = AppDaemonStoreMutationReply
+            /// Descriptor for "StoreMutation".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "StoreMutation",
+                type: .unary
+            )
+        }
+        /// Namespace for "BeginPayloadUpload" metadata.
+        public enum BeginPayloadUpload: Sendable {
+            /// Request type for "BeginPayloadUpload".
+            public typealias Input = AppDaemonBeginPayloadUploadRequest
+            /// Response type for "BeginPayloadUpload".
+            public typealias Output = AppDaemonBeginPayloadUploadReply
+            /// Descriptor for "BeginPayloadUpload".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "BeginPayloadUpload",
+                type: .unary
+            )
+        }
+        /// Namespace for "AppendPayloadChunk" metadata.
+        public enum AppendPayloadChunk: Sendable {
+            /// Request type for "AppendPayloadChunk".
+            public typealias Input = AppDaemonAppendPayloadChunkRequest
+            /// Response type for "AppendPayloadChunk".
+            public typealias Output = AppDaemonAppendPayloadChunkReply
+            /// Descriptor for "AppendPayloadChunk".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "AppendPayloadChunk",
+                type: .unary
+            )
+        }
+        /// Namespace for "CommitPayloadUpload" metadata.
+        public enum CommitPayloadUpload: Sendable {
+            /// Request type for "CommitPayloadUpload".
+            public typealias Input = AppDaemonCommitPayloadUploadRequest
+            /// Response type for "CommitPayloadUpload".
+            public typealias Output = AppDaemonCommitPayloadUploadReply
+            /// Descriptor for "CommitPayloadUpload".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "CommitPayloadUpload",
+                type: .unary
+            )
+        }
+        /// Namespace for "ReadPayloadChunk" metadata.
+        public enum ReadPayloadChunk: Sendable {
+            /// Request type for "ReadPayloadChunk".
+            public typealias Input = AppDaemonReadPayloadChunkRequest
+            /// Response type for "ReadPayloadChunk".
+            public typealias Output = AppDaemonReadPayloadChunkReply
+            /// Descriptor for "ReadPayloadChunk".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "ReadPayloadChunk",
+                type: .unary
+            )
+        }
+        /// Namespace for "ResolveStoreOutcome" metadata.
+        public enum ResolveStoreOutcome: Sendable {
+            /// Request type for "ResolveStoreOutcome".
+            public typealias Input = AppDaemonResolveStoreOutcomeRequest
+            /// Response type for "ResolveStoreOutcome".
+            public typealias Output = AppDaemonResolveStoreOutcomeReply
+            /// Descriptor for "ResolveStoreOutcome".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "ResolveStoreOutcome",
+                type: .unary
+            )
+        }
+        /// Namespace for "GetStoreSessionBootstrap" metadata.
+        public enum GetStoreSessionBootstrap: Sendable {
+            /// Request type for "GetStoreSessionBootstrap".
+            public typealias Input = AppDaemonGetStoreSessionBootstrapRequest
+            /// Response type for "GetStoreSessionBootstrap".
+            public typealias Output = AppDaemonGetStoreSessionBootstrapReply
+            /// Descriptor for "GetStoreSessionBootstrap".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "GetStoreSessionBootstrap",
+                type: .unary
+            )
+        }
+        /// Namespace for "Search" metadata.
+        public enum Search: Sendable {
+            /// Request type for "Search".
+            public typealias Input = AppDaemonSearchRequest
+            /// Response type for "Search".
+            public typealias Output = AppDaemonSearchReply
+            /// Descriptor for "Search".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "Search",
+                type: .unary
+            )
+        }
+        /// Namespace for "Autocomplete" metadata.
+        public enum Autocomplete: Sendable {
+            /// Request type for "Autocomplete".
+            public typealias Input = AppDaemonAutocompleteRequest
+            /// Response type for "Autocomplete".
+            public typealias Output = AppDaemonAutocompleteReply
+            /// Descriptor for "Autocomplete".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "Autocomplete",
+                type: .unary
+            )
+        }
+        /// Namespace for "UpgradeSearchIndex" metadata.
+        public enum UpgradeSearchIndex: Sendable {
+            /// Request type for "UpgradeSearchIndex".
+            public typealias Input = AppDaemonUpgradeSearchIndexRequest
+            /// Response type for "UpgradeSearchIndex".
+            public typealias Output = AppDaemonUpgradeSearchIndexReply
+            /// Descriptor for "UpgradeSearchIndex".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "UpgradeSearchIndex",
+                type: .unary
+            )
+        }
+        /// Namespace for "GetQueueSnapshot" metadata.
+        public enum GetQueueSnapshot: Sendable {
+            /// Request type for "GetQueueSnapshot".
+            public typealias Input = AppDaemonGetQueueSnapshotRequest
+            /// Response type for "GetQueueSnapshot".
+            public typealias Output = AppDaemonGetQueueSnapshotReply
+            /// Descriptor for "GetQueueSnapshot".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "GetQueueSnapshot",
+                type: .unary
+            )
+        }
+        /// Namespace for "EnqueueItem" metadata.
+        public enum EnqueueItem: Sendable {
+            /// Request type for "EnqueueItem".
+            public typealias Input = AppDaemonEnqueueItemRequest
+            /// Response type for "EnqueueItem".
+            public typealias Output = AppDaemonEnqueueItemReply
+            /// Descriptor for "EnqueueItem".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "EnqueueItem",
+                type: .unary
+            )
+        }
+        /// Namespace for "CancelItem" metadata.
+        public enum CancelItem: Sendable {
+            /// Request type for "CancelItem".
+            public typealias Input = AppDaemonCancelItemRequest
+            /// Response type for "CancelItem".
+            public typealias Output = AppDaemonCancelItemReply
+            /// Descriptor for "CancelItem".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "CancelItem",
+                type: .unary
+            )
+        }
+        /// Namespace for "CancelAllInFlight" metadata.
+        public enum CancelAllInFlight: Sendable {
+            /// Request type for "CancelAllInFlight".
+            public typealias Input = AppDaemonCancelAllInFlightRequest
+            /// Response type for "CancelAllInFlight".
+            public typealias Output = AppDaemonCancelAllInFlightReply
+            /// Descriptor for "CancelAllInFlight".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "CancelAllInFlight",
+                type: .unary
+            )
+        }
+        /// Namespace for "RetryItem" metadata.
+        public enum RetryItem: Sendable {
+            /// Request type for "RetryItem".
+            public typealias Input = AppDaemonRetryItemRequest
+            /// Response type for "RetryItem".
+            public typealias Output = AppDaemonRetryItemReply
+            /// Descriptor for "RetryItem".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "RetryItem",
+                type: .unary
+            )
+        }
+        /// Namespace for "PauseQueue" metadata.
+        public enum PauseQueue: Sendable {
+            /// Request type for "PauseQueue".
+            public typealias Input = AppDaemonPauseQueueRequest
+            /// Response type for "PauseQueue".
+            public typealias Output = AppDaemonPauseQueueReply
+            /// Descriptor for "PauseQueue".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "PauseQueue",
+                type: .unary
+            )
+        }
+        /// Namespace for "ResumeQueue" metadata.
+        public enum ResumeQueue: Sendable {
+            /// Request type for "ResumeQueue".
+            public typealias Input = AppDaemonResumeQueueRequest
+            /// Response type for "ResumeQueue".
+            public typealias Output = AppDaemonResumeQueueReply
+            /// Descriptor for "ResumeQueue".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "ResumeQueue",
+                type: .unary
+            )
+        }
+        /// Namespace for "HaltQueue" metadata.
+        public enum HaltQueue: Sendable {
+            /// Request type for "HaltQueue".
+            public typealias Input = AppDaemonHaltQueueRequest
+            /// Response type for "HaltQueue".
+            public typealias Output = AppDaemonHaltQueueReply
+            /// Descriptor for "HaltQueue".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "HaltQueue",
+                type: .unary
+            )
+        }
+        /// Namespace for "ReorderItem" metadata.
+        public enum ReorderItem: Sendable {
+            /// Request type for "ReorderItem".
+            public typealias Input = AppDaemonReorderItemRequest
+            /// Response type for "ReorderItem".
+            public typealias Output = AppDaemonReorderItemReply
+            /// Descriptor for "ReorderItem".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "ReorderItem",
+                type: .unary
+            )
+        }
+        /// Namespace for "HasActiveWork" metadata.
+        public enum HasActiveWork: Sendable {
+            /// Request type for "HasActiveWork".
+            public typealias Input = AppDaemonHasActiveWorkRequest
+            /// Response type for "HasActiveWork".
+            public typealias Output = AppDaemonHasActiveWorkReply
+            /// Descriptor for "HasActiveWork".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "HasActiveWork",
+                type: .unary
+            )
+        }
+        /// Namespace for "LoadQueueTranscript" metadata.
+        public enum LoadQueueTranscript: Sendable {
+            /// Request type for "LoadQueueTranscript".
+            public typealias Input = AppDaemonLoadQueueTranscriptRequest
+            /// Response type for "LoadQueueTranscript".
+            public typealias Output = AppDaemonLoadQueueTranscriptReply
+            /// Descriptor for "LoadQueueTranscript".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "LoadQueueTranscript",
+                type: .unary
+            )
+        }
+        /// Namespace for "LoadQueueActivitySnapshots" metadata.
+        public enum LoadQueueActivitySnapshots: Sendable {
+            /// Request type for "LoadQueueActivitySnapshots".
+            public typealias Input = AppDaemonLoadQueueActivitySnapshotsRequest
+            /// Response type for "LoadQueueActivitySnapshots".
+            public typealias Output = AppDaemonLoadQueueActivitySnapshotsReply
+            /// Descriptor for "LoadQueueActivitySnapshots".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "LoadQueueActivitySnapshots",
+                type: .unary
+            )
+        }
+        /// Namespace for "LoadQueueReport" metadata.
+        public enum LoadQueueReport: Sendable {
+            /// Request type for "LoadQueueReport".
+            public typealias Input = AppDaemonLoadQueueReportRequest
+            /// Response type for "LoadQueueReport".
+            public typealias Output = AppDaemonLoadQueueReportReply
+            /// Descriptor for "LoadQueueReport".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "LoadQueueReport",
+                type: .unary
+            )
+        }
+        /// Namespace for "LoadQueueReportSummaries" metadata.
+        public enum LoadQueueReportSummaries: Sendable {
+            /// Request type for "LoadQueueReportSummaries".
+            public typealias Input = AppDaemonLoadQueueReportSummariesRequest
+            /// Response type for "LoadQueueReportSummaries".
+            public typealias Output = AppDaemonLoadQueueReportSummariesReply
+            /// Descriptor for "LoadQueueReportSummaries".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "LoadQueueReportSummaries",
+                type: .unary
+            )
+        }
+        /// Namespace for "GetQueueOwnershipStatus" metadata.
+        public enum GetQueueOwnershipStatus: Sendable {
+            /// Request type for "GetQueueOwnershipStatus".
+            public typealias Input = AppDaemonGetQueueOwnershipStatusRequest
+            /// Response type for "GetQueueOwnershipStatus".
+            public typealias Output = AppDaemonGetQueueOwnershipStatusReply
+            /// Descriptor for "GetQueueOwnershipStatus".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "GetQueueOwnershipStatus",
+                type: .unary
+            )
+        }
+        /// Namespace for "RelinquishQueue" metadata.
+        public enum RelinquishQueue: Sendable {
+            /// Request type for "RelinquishQueue".
+            public typealias Input = AppDaemonRelinquishQueueRequest
+            /// Response type for "RelinquishQueue".
+            public typealias Output = AppDaemonRelinquishQueueReply
+            /// Descriptor for "RelinquishQueue".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "RelinquishQueue",
+                type: .unary
+            )
+        }
+        /// Namespace for "StartChat" metadata.
+        public enum StartChat: Sendable {
+            /// Request type for "StartChat".
+            public typealias Input = AppDaemonStartChatRequest
+            /// Response type for "StartChat".
+            public typealias Output = AppDaemonStartChatReply
+            /// Descriptor for "StartChat".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "StartChat",
+                type: .unary
+            )
+        }
+        /// Namespace for "SubmitChatTurn" metadata.
+        public enum SubmitChatTurn: Sendable {
+            /// Request type for "SubmitChatTurn".
+            public typealias Input = AppDaemonSubmitChatTurnRequest
+            /// Response type for "SubmitChatTurn".
+            public typealias Output = AppDaemonSubmitChatTurnReply
+            /// Descriptor for "SubmitChatTurn".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "SubmitChatTurn",
+                type: .unary
+            )
+        }
+        /// Namespace for "ContinueChat" metadata.
+        public enum ContinueChat: Sendable {
+            /// Request type for "ContinueChat".
+            public typealias Input = AppDaemonContinueChatRequest
+            /// Response type for "ContinueChat".
+            public typealias Output = AppDaemonContinueChatReply
+            /// Descriptor for "ContinueChat".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "ContinueChat",
+                type: .unary
+            )
+        }
+        /// Namespace for "SendChatMessage" metadata.
+        public enum SendChatMessage: Sendable {
+            /// Request type for "SendChatMessage".
+            public typealias Input = AppDaemonSendChatMessageRequest
+            /// Response type for "SendChatMessage".
+            public typealias Output = AppDaemonSendChatMessageReply
+            /// Descriptor for "SendChatMessage".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "SendChatMessage",
+                type: .unary
+            )
+        }
+        /// Namespace for "StopChat" metadata.
+        public enum StopChat: Sendable {
+            /// Request type for "StopChat".
+            public typealias Input = AppDaemonStopChatRequest
+            /// Response type for "StopChat".
+            public typealias Output = AppDaemonStopChatReply
+            /// Descriptor for "StopChat".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "StopChat",
+                type: .unary
+            )
+        }
+        /// Namespace for "GetChatSessionState" metadata.
+        public enum GetChatSessionState: Sendable {
+            /// Request type for "GetChatSessionState".
+            public typealias Input = AppDaemonGetChatSessionStateRequest
+            /// Response type for "GetChatSessionState".
+            public typealias Output = AppDaemonGetChatSessionStateReply
+            /// Descriptor for "GetChatSessionState".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "GetChatSessionState",
+                type: .unary
+            )
+        }
+        /// Namespace for "GetChatDiagnostics" metadata.
+        public enum GetChatDiagnostics: Sendable {
+            /// Request type for "GetChatDiagnostics".
+            public typealias Input = AppDaemonGetChatDiagnosticsRequest
+            /// Response type for "GetChatDiagnostics".
+            public typealias Output = AppDaemonGetChatDiagnosticsReply
+            /// Descriptor for "GetChatDiagnostics".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "GetChatDiagnostics",
+                type: .unary
+            )
+        }
+        /// Namespace for "ResetChatDiagnostics" metadata.
+        public enum ResetChatDiagnostics: Sendable {
+            /// Request type for "ResetChatDiagnostics".
+            public typealias Input = AppDaemonResetChatDiagnosticsRequest
+            /// Response type for "ResetChatDiagnostics".
+            public typealias Output = AppDaemonResetChatDiagnosticsReply
+            /// Descriptor for "ResetChatDiagnostics".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "ResetChatDiagnostics",
+                type: .unary
+            )
+        }
+        /// Namespace for "ResolveChatPermission" metadata.
+        public enum ResolveChatPermission: Sendable {
+            /// Request type for "ResolveChatPermission".
+            public typealias Input = AppDaemonResolveChatPermissionRequest
+            /// Response type for "ResolveChatPermission".
+            public typealias Output = AppDaemonResolveChatPermissionReply
+            /// Descriptor for "ResolveChatPermission".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "ResolveChatPermission",
+                type: .unary
+            )
+        }
+        /// Namespace for "SetChatConfigOption" metadata.
+        public enum SetChatConfigOption: Sendable {
+            /// Request type for "SetChatConfigOption".
+            public typealias Input = AppDaemonSetChatConfigOptionRequest
+            /// Response type for "SetChatConfigOption".
+            public typealias Output = AppDaemonSetChatConfigOptionReply
+            /// Descriptor for "SetChatConfigOption".
+            public static let descriptor = GRPCCore.MethodDescriptor(
+                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wikid.appdaemon.v1.AppDaemon"),
+                method: "SetChatConfigOption",
+                type: .unary
+            )
+        }
         /// Descriptors for all methods in the "wikid.appdaemon.v1.AppDaemon" service.
         public static let descriptors: [GRPCCore.MethodDescriptor] = [
             AdmitSession.descriptor,
             GetCapabilities.descriptor,
             ListWikis.descriptor,
-            SubscribeEvents.descriptor
+            SubscribeEvents.descriptor,
+            CreateWiki.descriptor,
+            DeleteWiki.descriptor,
+            RenameWiki.descriptor,
+            ResolveWiki.descriptor,
+            OpenStore.descriptor,
+            CloseStore.descriptor,
+            GetStoreChangeToken.descriptor,
+            GetPage.descriptor,
+            ListPages.descriptor,
+            UpsertPage.descriptor,
+            StoreSmall.descriptor,
+            StoreList.descriptor,
+            StoreBlob.descriptor,
+            StoreMutation.descriptor,
+            BeginPayloadUpload.descriptor,
+            AppendPayloadChunk.descriptor,
+            CommitPayloadUpload.descriptor,
+            ReadPayloadChunk.descriptor,
+            ResolveStoreOutcome.descriptor,
+            GetStoreSessionBootstrap.descriptor,
+            Search.descriptor,
+            Autocomplete.descriptor,
+            UpgradeSearchIndex.descriptor,
+            GetQueueSnapshot.descriptor,
+            EnqueueItem.descriptor,
+            CancelItem.descriptor,
+            CancelAllInFlight.descriptor,
+            RetryItem.descriptor,
+            PauseQueue.descriptor,
+            ResumeQueue.descriptor,
+            HaltQueue.descriptor,
+            ReorderItem.descriptor,
+            HasActiveWork.descriptor,
+            LoadQueueTranscript.descriptor,
+            LoadQueueActivitySnapshots.descriptor,
+            LoadQueueReport.descriptor,
+            LoadQueueReportSummaries.descriptor,
+            GetQueueOwnershipStatus.descriptor,
+            RelinquishQueue.descriptor,
+            StartChat.descriptor,
+            SubmitChatTurn.descriptor,
+            ContinueChat.descriptor,
+            SendChatMessage.descriptor,
+            StopChat.descriptor,
+            GetChatSessionState.descriptor,
+            GetChatDiagnostics.descriptor,
+            ResetChatDiagnostics.descriptor,
+            ResolveChatPermission.descriptor,
+            SetChatConfigOption.descriptor
         ]
     }
 }
@@ -208,6 +894,692 @@ extension AppDaemonAppDaemon {
             request: GRPCCore.StreamingServerRequest<AppDaemonSubscribeEventsRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonDaemonEvent>
+
+        /// Handle the "CreateWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonCreateWikiRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonCreateWikiReply` messages.
+        func createWiki(
+            request: GRPCCore.StreamingServerRequest<AppDaemonCreateWikiRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonCreateWikiReply>
+
+        /// Handle the "DeleteWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonDeleteWikiRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonDeleteWikiReply` messages.
+        func deleteWiki(
+            request: GRPCCore.StreamingServerRequest<AppDaemonDeleteWikiRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonDeleteWikiReply>
+
+        /// Handle the "RenameWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonRenameWikiRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonRenameWikiReply` messages.
+        func renameWiki(
+            request: GRPCCore.StreamingServerRequest<AppDaemonRenameWikiRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonRenameWikiReply>
+
+        /// Handle the "ResolveWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonResolveWikiRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonResolveWikiReply` messages.
+        func resolveWiki(
+            request: GRPCCore.StreamingServerRequest<AppDaemonResolveWikiRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonResolveWikiReply>
+
+        /// Handle the "OpenStore" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonOpenStoreRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonOpenStoreReply` messages.
+        func openStore(
+            request: GRPCCore.StreamingServerRequest<AppDaemonOpenStoreRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonOpenStoreReply>
+
+        /// Handle the "CloseStore" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonCloseStoreRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonCloseStoreReply` messages.
+        func closeStore(
+            request: GRPCCore.StreamingServerRequest<AppDaemonCloseStoreRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonCloseStoreReply>
+
+        /// Handle the "GetStoreChangeToken" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonGetStoreChangeTokenRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonGetStoreChangeTokenReply` messages.
+        func getStoreChangeToken(
+            request: GRPCCore.StreamingServerRequest<AppDaemonGetStoreChangeTokenRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetStoreChangeTokenReply>
+
+        /// Handle the "GetPage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonGetPageRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonGetPageReply` messages.
+        func getPage(
+            request: GRPCCore.StreamingServerRequest<AppDaemonGetPageRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetPageReply>
+
+        /// Handle the "ListPages" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonListPagesRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonListPagesReply` messages.
+        func listPages(
+            request: GRPCCore.StreamingServerRequest<AppDaemonListPagesRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonListPagesReply>
+
+        /// Handle the "UpsertPage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonUpsertPageRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonUpsertPageReply` messages.
+        func upsertPage(
+            request: GRPCCore.StreamingServerRequest<AppDaemonUpsertPageRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonUpsertPageReply>
+
+        /// Handle the "StoreSmall" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonStoreSmallRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonStoreSmallReply` messages.
+        func storeSmall(
+            request: GRPCCore.StreamingServerRequest<AppDaemonStoreSmallRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStoreSmallReply>
+
+        /// Handle the "StoreList" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonStoreListRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonStoreListReply` messages.
+        func storeList(
+            request: GRPCCore.StreamingServerRequest<AppDaemonStoreListRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStoreListReply>
+
+        /// Handle the "StoreBlob" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonStoreBlobRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonStoreBlobReply` messages.
+        func storeBlob(
+            request: GRPCCore.StreamingServerRequest<AppDaemonStoreBlobRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStoreBlobReply>
+
+        /// Handle the "StoreMutation" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonStoreMutationRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonStoreMutationReply` messages.
+        func storeMutation(
+            request: GRPCCore.StreamingServerRequest<AppDaemonStoreMutationRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStoreMutationReply>
+
+        /// Handle the "BeginPayloadUpload" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonBeginPayloadUploadRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonBeginPayloadUploadReply` messages.
+        func beginPayloadUpload(
+            request: GRPCCore.StreamingServerRequest<AppDaemonBeginPayloadUploadRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonBeginPayloadUploadReply>
+
+        /// Handle the "AppendPayloadChunk" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonAppendPayloadChunkRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonAppendPayloadChunkReply` messages.
+        func appendPayloadChunk(
+            request: GRPCCore.StreamingServerRequest<AppDaemonAppendPayloadChunkRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonAppendPayloadChunkReply>
+
+        /// Handle the "CommitPayloadUpload" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonCommitPayloadUploadRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonCommitPayloadUploadReply` messages.
+        func commitPayloadUpload(
+            request: GRPCCore.StreamingServerRequest<AppDaemonCommitPayloadUploadRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonCommitPayloadUploadReply>
+
+        /// Handle the "ReadPayloadChunk" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonReadPayloadChunkRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonReadPayloadChunkReply` messages.
+        func readPayloadChunk(
+            request: GRPCCore.StreamingServerRequest<AppDaemonReadPayloadChunkRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonReadPayloadChunkReply>
+
+        /// Handle the "ResolveStoreOutcome" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonResolveStoreOutcomeRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonResolveStoreOutcomeReply` messages.
+        func resolveStoreOutcome(
+            request: GRPCCore.StreamingServerRequest<AppDaemonResolveStoreOutcomeRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonResolveStoreOutcomeReply>
+
+        /// Handle the "GetStoreSessionBootstrap" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonGetStoreSessionBootstrapRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonGetStoreSessionBootstrapReply` messages.
+        func getStoreSessionBootstrap(
+            request: GRPCCore.StreamingServerRequest<AppDaemonGetStoreSessionBootstrapRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetStoreSessionBootstrapReply>
+
+        /// Handle the "Search" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonSearchRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonSearchReply` messages.
+        func search(
+            request: GRPCCore.StreamingServerRequest<AppDaemonSearchRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonSearchReply>
+
+        /// Handle the "Autocomplete" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonAutocompleteRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonAutocompleteReply` messages.
+        func autocomplete(
+            request: GRPCCore.StreamingServerRequest<AppDaemonAutocompleteRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonAutocompleteReply>
+
+        /// Handle the "UpgradeSearchIndex" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonUpgradeSearchIndexRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonUpgradeSearchIndexReply` messages.
+        func upgradeSearchIndex(
+            request: GRPCCore.StreamingServerRequest<AppDaemonUpgradeSearchIndexRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonUpgradeSearchIndexReply>
+
+        /// Handle the "GetQueueSnapshot" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonGetQueueSnapshotRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonGetQueueSnapshotReply` messages.
+        func getQueueSnapshot(
+            request: GRPCCore.StreamingServerRequest<AppDaemonGetQueueSnapshotRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetQueueSnapshotReply>
+
+        /// Handle the "EnqueueItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonEnqueueItemRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonEnqueueItemReply` messages.
+        func enqueueItem(
+            request: GRPCCore.StreamingServerRequest<AppDaemonEnqueueItemRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonEnqueueItemReply>
+
+        /// Handle the "CancelItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonCancelItemRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonCancelItemReply` messages.
+        func cancelItem(
+            request: GRPCCore.StreamingServerRequest<AppDaemonCancelItemRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonCancelItemReply>
+
+        /// Handle the "CancelAllInFlight" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonCancelAllInFlightRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonCancelAllInFlightReply` messages.
+        func cancelAllInFlight(
+            request: GRPCCore.StreamingServerRequest<AppDaemonCancelAllInFlightRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonCancelAllInFlightReply>
+
+        /// Handle the "RetryItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonRetryItemRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonRetryItemReply` messages.
+        func retryItem(
+            request: GRPCCore.StreamingServerRequest<AppDaemonRetryItemRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonRetryItemReply>
+
+        /// Handle the "PauseQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonPauseQueueRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonPauseQueueReply` messages.
+        func pauseQueue(
+            request: GRPCCore.StreamingServerRequest<AppDaemonPauseQueueRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonPauseQueueReply>
+
+        /// Handle the "ResumeQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonResumeQueueRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonResumeQueueReply` messages.
+        func resumeQueue(
+            request: GRPCCore.StreamingServerRequest<AppDaemonResumeQueueRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonResumeQueueReply>
+
+        /// Handle the "HaltQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonHaltQueueRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonHaltQueueReply` messages.
+        func haltQueue(
+            request: GRPCCore.StreamingServerRequest<AppDaemonHaltQueueRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonHaltQueueReply>
+
+        /// Handle the "ReorderItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonReorderItemRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonReorderItemReply` messages.
+        func reorderItem(
+            request: GRPCCore.StreamingServerRequest<AppDaemonReorderItemRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonReorderItemReply>
+
+        /// Handle the "HasActiveWork" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonHasActiveWorkRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonHasActiveWorkReply` messages.
+        func hasActiveWork(
+            request: GRPCCore.StreamingServerRequest<AppDaemonHasActiveWorkRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonHasActiveWorkReply>
+
+        /// Handle the "LoadQueueTranscript" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonLoadQueueTranscriptRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonLoadQueueTranscriptReply` messages.
+        func loadQueueTranscript(
+            request: GRPCCore.StreamingServerRequest<AppDaemonLoadQueueTranscriptRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonLoadQueueTranscriptReply>
+
+        /// Handle the "LoadQueueActivitySnapshots" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonLoadQueueActivitySnapshotsRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonLoadQueueActivitySnapshotsReply` messages.
+        func loadQueueActivitySnapshots(
+            request: GRPCCore.StreamingServerRequest<AppDaemonLoadQueueActivitySnapshotsRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonLoadQueueActivitySnapshotsReply>
+
+        /// Handle the "LoadQueueReport" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonLoadQueueReportRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonLoadQueueReportReply` messages.
+        func loadQueueReport(
+            request: GRPCCore.StreamingServerRequest<AppDaemonLoadQueueReportRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonLoadQueueReportReply>
+
+        /// Handle the "LoadQueueReportSummaries" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonLoadQueueReportSummariesRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonLoadQueueReportSummariesReply` messages.
+        func loadQueueReportSummaries(
+            request: GRPCCore.StreamingServerRequest<AppDaemonLoadQueueReportSummariesRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonLoadQueueReportSummariesReply>
+
+        /// Handle the "GetQueueOwnershipStatus" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonGetQueueOwnershipStatusRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonGetQueueOwnershipStatusReply` messages.
+        func getQueueOwnershipStatus(
+            request: GRPCCore.StreamingServerRequest<AppDaemonGetQueueOwnershipStatusRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetQueueOwnershipStatusReply>
+
+        /// Handle the "RelinquishQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonRelinquishQueueRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonRelinquishQueueReply` messages.
+        func relinquishQueue(
+            request: GRPCCore.StreamingServerRequest<AppDaemonRelinquishQueueRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonRelinquishQueueReply>
+
+        /// Handle the "StartChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonStartChatRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonStartChatReply` messages.
+        func startChat(
+            request: GRPCCore.StreamingServerRequest<AppDaemonStartChatRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStartChatReply>
+
+        /// Handle the "SubmitChatTurn" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonSubmitChatTurnRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonSubmitChatTurnReply` messages.
+        func submitChatTurn(
+            request: GRPCCore.StreamingServerRequest<AppDaemonSubmitChatTurnRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonSubmitChatTurnReply>
+
+        /// Handle the "ContinueChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonContinueChatRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonContinueChatReply` messages.
+        func continueChat(
+            request: GRPCCore.StreamingServerRequest<AppDaemonContinueChatRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonContinueChatReply>
+
+        /// Handle the "SendChatMessage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonSendChatMessageRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonSendChatMessageReply` messages.
+        func sendChatMessage(
+            request: GRPCCore.StreamingServerRequest<AppDaemonSendChatMessageRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonSendChatMessageReply>
+
+        /// Handle the "StopChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonStopChatRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonStopChatReply` messages.
+        func stopChat(
+            request: GRPCCore.StreamingServerRequest<AppDaemonStopChatRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStopChatReply>
+
+        /// Handle the "GetChatSessionState" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonGetChatSessionStateRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonGetChatSessionStateReply` messages.
+        func getChatSessionState(
+            request: GRPCCore.StreamingServerRequest<AppDaemonGetChatSessionStateRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetChatSessionStateReply>
+
+        /// Handle the "GetChatDiagnostics" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonGetChatDiagnosticsRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonGetChatDiagnosticsReply` messages.
+        func getChatDiagnostics(
+            request: GRPCCore.StreamingServerRequest<AppDaemonGetChatDiagnosticsRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetChatDiagnosticsReply>
+
+        /// Handle the "ResetChatDiagnostics" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonResetChatDiagnosticsRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonResetChatDiagnosticsReply` messages.
+        func resetChatDiagnostics(
+            request: GRPCCore.StreamingServerRequest<AppDaemonResetChatDiagnosticsRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonResetChatDiagnosticsReply>
+
+        /// Handle the "ResolveChatPermission" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonResolveChatPermissionRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonResolveChatPermissionReply` messages.
+        func resolveChatPermission(
+            request: GRPCCore.StreamingServerRequest<AppDaemonResolveChatPermissionRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonResolveChatPermissionReply>
+
+        /// Handle the "SetChatConfigOption" method.
+        ///
+        /// - Parameters:
+        ///   - request: A streaming request of `AppDaemonSetChatConfigOptionRequest` messages.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A streaming response of `AppDaemonSetChatConfigOptionReply` messages.
+        func setChatConfigOption(
+            request: GRPCCore.StreamingServerRequest<AppDaemonSetChatConfigOptionRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonSetChatConfigOptionReply>
     }
 
     /// Service protocol for the "wikid.appdaemon.v1.AppDaemon" service.
@@ -300,6 +1672,692 @@ extension AppDaemonAppDaemon {
             request: GRPCCore.ServerRequest<AppDaemonSubscribeEventsRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonDaemonEvent>
+
+        /// Handle the "CreateWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCreateWikiRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonCreateWikiReply` message.
+        func createWiki(
+            request: GRPCCore.ServerRequest<AppDaemonCreateWikiRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonCreateWikiReply>
+
+        /// Handle the "DeleteWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonDeleteWikiRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonDeleteWikiReply` message.
+        func deleteWiki(
+            request: GRPCCore.ServerRequest<AppDaemonDeleteWikiRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonDeleteWikiReply>
+
+        /// Handle the "RenameWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonRenameWikiRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonRenameWikiReply` message.
+        func renameWiki(
+            request: GRPCCore.ServerRequest<AppDaemonRenameWikiRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonRenameWikiReply>
+
+        /// Handle the "ResolveWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResolveWikiRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonResolveWikiReply` message.
+        func resolveWiki(
+            request: GRPCCore.ServerRequest<AppDaemonResolveWikiRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonResolveWikiReply>
+
+        /// Handle the "OpenStore" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonOpenStoreRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonOpenStoreReply` message.
+        func openStore(
+            request: GRPCCore.ServerRequest<AppDaemonOpenStoreRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonOpenStoreReply>
+
+        /// Handle the "CloseStore" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCloseStoreRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonCloseStoreReply` message.
+        func closeStore(
+            request: GRPCCore.ServerRequest<AppDaemonCloseStoreRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonCloseStoreReply>
+
+        /// Handle the "GetStoreChangeToken" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetStoreChangeTokenRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonGetStoreChangeTokenReply` message.
+        func getStoreChangeToken(
+            request: GRPCCore.ServerRequest<AppDaemonGetStoreChangeTokenRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonGetStoreChangeTokenReply>
+
+        /// Handle the "GetPage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetPageRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonGetPageReply` message.
+        func getPage(
+            request: GRPCCore.ServerRequest<AppDaemonGetPageRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonGetPageReply>
+
+        /// Handle the "ListPages" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonListPagesRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonListPagesReply` message.
+        func listPages(
+            request: GRPCCore.ServerRequest<AppDaemonListPagesRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonListPagesReply>
+
+        /// Handle the "UpsertPage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonUpsertPageRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonUpsertPageReply` message.
+        func upsertPage(
+            request: GRPCCore.ServerRequest<AppDaemonUpsertPageRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonUpsertPageReply>
+
+        /// Handle the "StoreSmall" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreSmallRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonStoreSmallReply` message.
+        func storeSmall(
+            request: GRPCCore.ServerRequest<AppDaemonStoreSmallRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreSmallReply>
+
+        /// Handle the "StoreList" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreListRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonStoreListReply` message.
+        func storeList(
+            request: GRPCCore.ServerRequest<AppDaemonStoreListRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreListReply>
+
+        /// Handle the "StoreBlob" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreBlobRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonStoreBlobReply` message.
+        func storeBlob(
+            request: GRPCCore.ServerRequest<AppDaemonStoreBlobRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreBlobReply>
+
+        /// Handle the "StoreMutation" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreMutationRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonStoreMutationReply` message.
+        func storeMutation(
+            request: GRPCCore.ServerRequest<AppDaemonStoreMutationRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreMutationReply>
+
+        /// Handle the "BeginPayloadUpload" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonBeginPayloadUploadRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonBeginPayloadUploadReply` message.
+        func beginPayloadUpload(
+            request: GRPCCore.ServerRequest<AppDaemonBeginPayloadUploadRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonBeginPayloadUploadReply>
+
+        /// Handle the "AppendPayloadChunk" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonAppendPayloadChunkRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonAppendPayloadChunkReply` message.
+        func appendPayloadChunk(
+            request: GRPCCore.ServerRequest<AppDaemonAppendPayloadChunkRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonAppendPayloadChunkReply>
+
+        /// Handle the "CommitPayloadUpload" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCommitPayloadUploadRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonCommitPayloadUploadReply` message.
+        func commitPayloadUpload(
+            request: GRPCCore.ServerRequest<AppDaemonCommitPayloadUploadRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonCommitPayloadUploadReply>
+
+        /// Handle the "ReadPayloadChunk" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonReadPayloadChunkRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonReadPayloadChunkReply` message.
+        func readPayloadChunk(
+            request: GRPCCore.ServerRequest<AppDaemonReadPayloadChunkRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonReadPayloadChunkReply>
+
+        /// Handle the "ResolveStoreOutcome" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResolveStoreOutcomeRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonResolveStoreOutcomeReply` message.
+        func resolveStoreOutcome(
+            request: GRPCCore.ServerRequest<AppDaemonResolveStoreOutcomeRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonResolveStoreOutcomeReply>
+
+        /// Handle the "GetStoreSessionBootstrap" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetStoreSessionBootstrapRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonGetStoreSessionBootstrapReply` message.
+        func getStoreSessionBootstrap(
+            request: GRPCCore.ServerRequest<AppDaemonGetStoreSessionBootstrapRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonGetStoreSessionBootstrapReply>
+
+        /// Handle the "Search" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSearchRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonSearchReply` message.
+        func search(
+            request: GRPCCore.ServerRequest<AppDaemonSearchRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonSearchReply>
+
+        /// Handle the "Autocomplete" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonAutocompleteRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonAutocompleteReply` message.
+        func autocomplete(
+            request: GRPCCore.ServerRequest<AppDaemonAutocompleteRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonAutocompleteReply>
+
+        /// Handle the "UpgradeSearchIndex" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonUpgradeSearchIndexRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonUpgradeSearchIndexReply` message.
+        func upgradeSearchIndex(
+            request: GRPCCore.ServerRequest<AppDaemonUpgradeSearchIndexRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonUpgradeSearchIndexReply>
+
+        /// Handle the "GetQueueSnapshot" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetQueueSnapshotRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonGetQueueSnapshotReply` message.
+        func getQueueSnapshot(
+            request: GRPCCore.ServerRequest<AppDaemonGetQueueSnapshotRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonGetQueueSnapshotReply>
+
+        /// Handle the "EnqueueItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonEnqueueItemRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonEnqueueItemReply` message.
+        func enqueueItem(
+            request: GRPCCore.ServerRequest<AppDaemonEnqueueItemRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonEnqueueItemReply>
+
+        /// Handle the "CancelItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCancelItemRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonCancelItemReply` message.
+        func cancelItem(
+            request: GRPCCore.ServerRequest<AppDaemonCancelItemRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonCancelItemReply>
+
+        /// Handle the "CancelAllInFlight" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCancelAllInFlightRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonCancelAllInFlightReply` message.
+        func cancelAllInFlight(
+            request: GRPCCore.ServerRequest<AppDaemonCancelAllInFlightRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonCancelAllInFlightReply>
+
+        /// Handle the "RetryItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonRetryItemRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonRetryItemReply` message.
+        func retryItem(
+            request: GRPCCore.ServerRequest<AppDaemonRetryItemRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonRetryItemReply>
+
+        /// Handle the "PauseQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonPauseQueueRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonPauseQueueReply` message.
+        func pauseQueue(
+            request: GRPCCore.ServerRequest<AppDaemonPauseQueueRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonPauseQueueReply>
+
+        /// Handle the "ResumeQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResumeQueueRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonResumeQueueReply` message.
+        func resumeQueue(
+            request: GRPCCore.ServerRequest<AppDaemonResumeQueueRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonResumeQueueReply>
+
+        /// Handle the "HaltQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonHaltQueueRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonHaltQueueReply` message.
+        func haltQueue(
+            request: GRPCCore.ServerRequest<AppDaemonHaltQueueRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonHaltQueueReply>
+
+        /// Handle the "ReorderItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonReorderItemRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonReorderItemReply` message.
+        func reorderItem(
+            request: GRPCCore.ServerRequest<AppDaemonReorderItemRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonReorderItemReply>
+
+        /// Handle the "HasActiveWork" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonHasActiveWorkRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonHasActiveWorkReply` message.
+        func hasActiveWork(
+            request: GRPCCore.ServerRequest<AppDaemonHasActiveWorkRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonHasActiveWorkReply>
+
+        /// Handle the "LoadQueueTranscript" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueTranscriptRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonLoadQueueTranscriptReply` message.
+        func loadQueueTranscript(
+            request: GRPCCore.ServerRequest<AppDaemonLoadQueueTranscriptRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueTranscriptReply>
+
+        /// Handle the "LoadQueueActivitySnapshots" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueActivitySnapshotsRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonLoadQueueActivitySnapshotsReply` message.
+        func loadQueueActivitySnapshots(
+            request: GRPCCore.ServerRequest<AppDaemonLoadQueueActivitySnapshotsRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueActivitySnapshotsReply>
+
+        /// Handle the "LoadQueueReport" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueReportRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonLoadQueueReportReply` message.
+        func loadQueueReport(
+            request: GRPCCore.ServerRequest<AppDaemonLoadQueueReportRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueReportReply>
+
+        /// Handle the "LoadQueueReportSummaries" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueReportSummariesRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonLoadQueueReportSummariesReply` message.
+        func loadQueueReportSummaries(
+            request: GRPCCore.ServerRequest<AppDaemonLoadQueueReportSummariesRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueReportSummariesReply>
+
+        /// Handle the "GetQueueOwnershipStatus" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetQueueOwnershipStatusRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonGetQueueOwnershipStatusReply` message.
+        func getQueueOwnershipStatus(
+            request: GRPCCore.ServerRequest<AppDaemonGetQueueOwnershipStatusRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonGetQueueOwnershipStatusReply>
+
+        /// Handle the "RelinquishQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonRelinquishQueueRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonRelinquishQueueReply` message.
+        func relinquishQueue(
+            request: GRPCCore.ServerRequest<AppDaemonRelinquishQueueRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonRelinquishQueueReply>
+
+        /// Handle the "StartChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStartChatRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonStartChatReply` message.
+        func startChat(
+            request: GRPCCore.ServerRequest<AppDaemonStartChatRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonStartChatReply>
+
+        /// Handle the "SubmitChatTurn" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSubmitChatTurnRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonSubmitChatTurnReply` message.
+        func submitChatTurn(
+            request: GRPCCore.ServerRequest<AppDaemonSubmitChatTurnRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonSubmitChatTurnReply>
+
+        /// Handle the "ContinueChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonContinueChatRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonContinueChatReply` message.
+        func continueChat(
+            request: GRPCCore.ServerRequest<AppDaemonContinueChatRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonContinueChatReply>
+
+        /// Handle the "SendChatMessage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSendChatMessageRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonSendChatMessageReply` message.
+        func sendChatMessage(
+            request: GRPCCore.ServerRequest<AppDaemonSendChatMessageRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonSendChatMessageReply>
+
+        /// Handle the "StopChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStopChatRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonStopChatReply` message.
+        func stopChat(
+            request: GRPCCore.ServerRequest<AppDaemonStopChatRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonStopChatReply>
+
+        /// Handle the "GetChatSessionState" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetChatSessionStateRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonGetChatSessionStateReply` message.
+        func getChatSessionState(
+            request: GRPCCore.ServerRequest<AppDaemonGetChatSessionStateRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonGetChatSessionStateReply>
+
+        /// Handle the "GetChatDiagnostics" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetChatDiagnosticsRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonGetChatDiagnosticsReply` message.
+        func getChatDiagnostics(
+            request: GRPCCore.ServerRequest<AppDaemonGetChatDiagnosticsRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonGetChatDiagnosticsReply>
+
+        /// Handle the "ResetChatDiagnostics" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResetChatDiagnosticsRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonResetChatDiagnosticsReply` message.
+        func resetChatDiagnostics(
+            request: GRPCCore.ServerRequest<AppDaemonResetChatDiagnosticsRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonResetChatDiagnosticsReply>
+
+        /// Handle the "ResolveChatPermission" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResolveChatPermissionRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonResolveChatPermissionReply` message.
+        func resolveChatPermission(
+            request: GRPCCore.ServerRequest<AppDaemonResolveChatPermissionRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonResolveChatPermissionReply>
+
+        /// Handle the "SetChatConfigOption" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSetChatConfigOptionRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A response containing a single `AppDaemonSetChatConfigOptionReply` message.
+        func setChatConfigOption(
+            request: GRPCCore.ServerRequest<AppDaemonSetChatConfigOptionRequest>,
+            context: GRPCCore.ServerContext
+        ) async throws -> GRPCCore.ServerResponse<AppDaemonSetChatConfigOptionReply>
     }
 
     /// Simple service protocol for the "wikid.appdaemon.v1.AppDaemon" service.
@@ -391,6 +2449,692 @@ extension AppDaemonAppDaemon {
             response: GRPCCore.RPCWriter<AppDaemonDaemonEvent>,
             context: GRPCCore.ServerContext
         ) async throws
+
+        /// Handle the "CreateWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonCreateWikiRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonCreateWikiReply` to respond with.
+        func createWiki(
+            request: AppDaemonCreateWikiRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonCreateWikiReply
+
+        /// Handle the "DeleteWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonDeleteWikiRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonDeleteWikiReply` to respond with.
+        func deleteWiki(
+            request: AppDaemonDeleteWikiRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonDeleteWikiReply
+
+        /// Handle the "RenameWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonRenameWikiRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonRenameWikiReply` to respond with.
+        func renameWiki(
+            request: AppDaemonRenameWikiRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonRenameWikiReply
+
+        /// Handle the "ResolveWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonResolveWikiRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonResolveWikiReply` to respond with.
+        func resolveWiki(
+            request: AppDaemonResolveWikiRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonResolveWikiReply
+
+        /// Handle the "OpenStore" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonOpenStoreRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonOpenStoreReply` to respond with.
+        func openStore(
+            request: AppDaemonOpenStoreRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonOpenStoreReply
+
+        /// Handle the "CloseStore" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonCloseStoreRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonCloseStoreReply` to respond with.
+        func closeStore(
+            request: AppDaemonCloseStoreRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonCloseStoreReply
+
+        /// Handle the "GetStoreChangeToken" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonGetStoreChangeTokenRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonGetStoreChangeTokenReply` to respond with.
+        func getStoreChangeToken(
+            request: AppDaemonGetStoreChangeTokenRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonGetStoreChangeTokenReply
+
+        /// Handle the "GetPage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonGetPageRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonGetPageReply` to respond with.
+        func getPage(
+            request: AppDaemonGetPageRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonGetPageReply
+
+        /// Handle the "ListPages" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonListPagesRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonListPagesReply` to respond with.
+        func listPages(
+            request: AppDaemonListPagesRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonListPagesReply
+
+        /// Handle the "UpsertPage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonUpsertPageRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonUpsertPageReply` to respond with.
+        func upsertPage(
+            request: AppDaemonUpsertPageRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonUpsertPageReply
+
+        /// Handle the "StoreSmall" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonStoreSmallRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonStoreSmallReply` to respond with.
+        func storeSmall(
+            request: AppDaemonStoreSmallRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonStoreSmallReply
+
+        /// Handle the "StoreList" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonStoreListRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonStoreListReply` to respond with.
+        func storeList(
+            request: AppDaemonStoreListRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonStoreListReply
+
+        /// Handle the "StoreBlob" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonStoreBlobRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonStoreBlobReply` to respond with.
+        func storeBlob(
+            request: AppDaemonStoreBlobRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonStoreBlobReply
+
+        /// Handle the "StoreMutation" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonStoreMutationRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonStoreMutationReply` to respond with.
+        func storeMutation(
+            request: AppDaemonStoreMutationRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonStoreMutationReply
+
+        /// Handle the "BeginPayloadUpload" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonBeginPayloadUploadRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonBeginPayloadUploadReply` to respond with.
+        func beginPayloadUpload(
+            request: AppDaemonBeginPayloadUploadRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonBeginPayloadUploadReply
+
+        /// Handle the "AppendPayloadChunk" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonAppendPayloadChunkRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonAppendPayloadChunkReply` to respond with.
+        func appendPayloadChunk(
+            request: AppDaemonAppendPayloadChunkRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonAppendPayloadChunkReply
+
+        /// Handle the "CommitPayloadUpload" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonCommitPayloadUploadRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonCommitPayloadUploadReply` to respond with.
+        func commitPayloadUpload(
+            request: AppDaemonCommitPayloadUploadRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonCommitPayloadUploadReply
+
+        /// Handle the "ReadPayloadChunk" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonReadPayloadChunkRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonReadPayloadChunkReply` to respond with.
+        func readPayloadChunk(
+            request: AppDaemonReadPayloadChunkRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonReadPayloadChunkReply
+
+        /// Handle the "ResolveStoreOutcome" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonResolveStoreOutcomeRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonResolveStoreOutcomeReply` to respond with.
+        func resolveStoreOutcome(
+            request: AppDaemonResolveStoreOutcomeRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonResolveStoreOutcomeReply
+
+        /// Handle the "GetStoreSessionBootstrap" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonGetStoreSessionBootstrapRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonGetStoreSessionBootstrapReply` to respond with.
+        func getStoreSessionBootstrap(
+            request: AppDaemonGetStoreSessionBootstrapRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonGetStoreSessionBootstrapReply
+
+        /// Handle the "Search" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonSearchRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonSearchReply` to respond with.
+        func search(
+            request: AppDaemonSearchRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonSearchReply
+
+        /// Handle the "Autocomplete" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonAutocompleteRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonAutocompleteReply` to respond with.
+        func autocomplete(
+            request: AppDaemonAutocompleteRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonAutocompleteReply
+
+        /// Handle the "UpgradeSearchIndex" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonUpgradeSearchIndexRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonUpgradeSearchIndexReply` to respond with.
+        func upgradeSearchIndex(
+            request: AppDaemonUpgradeSearchIndexRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonUpgradeSearchIndexReply
+
+        /// Handle the "GetQueueSnapshot" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonGetQueueSnapshotRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonGetQueueSnapshotReply` to respond with.
+        func getQueueSnapshot(
+            request: AppDaemonGetQueueSnapshotRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonGetQueueSnapshotReply
+
+        /// Handle the "EnqueueItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonEnqueueItemRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonEnqueueItemReply` to respond with.
+        func enqueueItem(
+            request: AppDaemonEnqueueItemRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonEnqueueItemReply
+
+        /// Handle the "CancelItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonCancelItemRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonCancelItemReply` to respond with.
+        func cancelItem(
+            request: AppDaemonCancelItemRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonCancelItemReply
+
+        /// Handle the "CancelAllInFlight" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonCancelAllInFlightRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonCancelAllInFlightReply` to respond with.
+        func cancelAllInFlight(
+            request: AppDaemonCancelAllInFlightRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonCancelAllInFlightReply
+
+        /// Handle the "RetryItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonRetryItemRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonRetryItemReply` to respond with.
+        func retryItem(
+            request: AppDaemonRetryItemRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonRetryItemReply
+
+        /// Handle the "PauseQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonPauseQueueRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonPauseQueueReply` to respond with.
+        func pauseQueue(
+            request: AppDaemonPauseQueueRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonPauseQueueReply
+
+        /// Handle the "ResumeQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonResumeQueueRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonResumeQueueReply` to respond with.
+        func resumeQueue(
+            request: AppDaemonResumeQueueRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonResumeQueueReply
+
+        /// Handle the "HaltQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonHaltQueueRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonHaltQueueReply` to respond with.
+        func haltQueue(
+            request: AppDaemonHaltQueueRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonHaltQueueReply
+
+        /// Handle the "ReorderItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonReorderItemRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonReorderItemReply` to respond with.
+        func reorderItem(
+            request: AppDaemonReorderItemRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonReorderItemReply
+
+        /// Handle the "HasActiveWork" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonHasActiveWorkRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonHasActiveWorkReply` to respond with.
+        func hasActiveWork(
+            request: AppDaemonHasActiveWorkRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonHasActiveWorkReply
+
+        /// Handle the "LoadQueueTranscript" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonLoadQueueTranscriptRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonLoadQueueTranscriptReply` to respond with.
+        func loadQueueTranscript(
+            request: AppDaemonLoadQueueTranscriptRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonLoadQueueTranscriptReply
+
+        /// Handle the "LoadQueueActivitySnapshots" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonLoadQueueActivitySnapshotsRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonLoadQueueActivitySnapshotsReply` to respond with.
+        func loadQueueActivitySnapshots(
+            request: AppDaemonLoadQueueActivitySnapshotsRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonLoadQueueActivitySnapshotsReply
+
+        /// Handle the "LoadQueueReport" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonLoadQueueReportRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonLoadQueueReportReply` to respond with.
+        func loadQueueReport(
+            request: AppDaemonLoadQueueReportRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonLoadQueueReportReply
+
+        /// Handle the "LoadQueueReportSummaries" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonLoadQueueReportSummariesRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonLoadQueueReportSummariesReply` to respond with.
+        func loadQueueReportSummaries(
+            request: AppDaemonLoadQueueReportSummariesRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonLoadQueueReportSummariesReply
+
+        /// Handle the "GetQueueOwnershipStatus" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonGetQueueOwnershipStatusRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonGetQueueOwnershipStatusReply` to respond with.
+        func getQueueOwnershipStatus(
+            request: AppDaemonGetQueueOwnershipStatusRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonGetQueueOwnershipStatusReply
+
+        /// Handle the "RelinquishQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonRelinquishQueueRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonRelinquishQueueReply` to respond with.
+        func relinquishQueue(
+            request: AppDaemonRelinquishQueueRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonRelinquishQueueReply
+
+        /// Handle the "StartChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonStartChatRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonStartChatReply` to respond with.
+        func startChat(
+            request: AppDaemonStartChatRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonStartChatReply
+
+        /// Handle the "SubmitChatTurn" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonSubmitChatTurnRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonSubmitChatTurnReply` to respond with.
+        func submitChatTurn(
+            request: AppDaemonSubmitChatTurnRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonSubmitChatTurnReply
+
+        /// Handle the "ContinueChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonContinueChatRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonContinueChatReply` to respond with.
+        func continueChat(
+            request: AppDaemonContinueChatRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonContinueChatReply
+
+        /// Handle the "SendChatMessage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonSendChatMessageRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonSendChatMessageReply` to respond with.
+        func sendChatMessage(
+            request: AppDaemonSendChatMessageRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonSendChatMessageReply
+
+        /// Handle the "StopChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonStopChatRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonStopChatReply` to respond with.
+        func stopChat(
+            request: AppDaemonStopChatRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonStopChatReply
+
+        /// Handle the "GetChatSessionState" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonGetChatSessionStateRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonGetChatSessionStateReply` to respond with.
+        func getChatSessionState(
+            request: AppDaemonGetChatSessionStateRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonGetChatSessionStateReply
+
+        /// Handle the "GetChatDiagnostics" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonGetChatDiagnosticsRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonGetChatDiagnosticsReply` to respond with.
+        func getChatDiagnostics(
+            request: AppDaemonGetChatDiagnosticsRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonGetChatDiagnosticsReply
+
+        /// Handle the "ResetChatDiagnostics" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonResetChatDiagnosticsRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonResetChatDiagnosticsReply` to respond with.
+        func resetChatDiagnostics(
+            request: AppDaemonResetChatDiagnosticsRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonResetChatDiagnosticsReply
+
+        /// Handle the "ResolveChatPermission" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonResolveChatPermissionRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonResolveChatPermissionReply` to respond with.
+        func resolveChatPermission(
+            request: AppDaemonResolveChatPermissionRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonResolveChatPermissionReply
+
+        /// Handle the "SetChatConfigOption" method.
+        ///
+        /// - Parameters:
+        ///   - request: A `AppDaemonSetChatConfigOptionRequest` message.
+        ///   - context: Context providing information about the RPC.
+        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
+        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
+        ///     to an internal error.
+        /// - Returns: A `AppDaemonSetChatConfigOptionReply` to respond with.
+        func setChatConfigOption(
+            request: AppDaemonSetChatConfigOptionRequest,
+            context: GRPCCore.ServerContext
+        ) async throws -> AppDaemonSetChatConfigOptionReply
     }
 }
 
@@ -437,6 +3181,545 @@ extension AppDaemonAppDaemon.StreamingServiceProtocol {
             serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonDaemonEvent>(),
             handler: { request, context in
                 try await self.subscribeEvents(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.CreateWiki.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonCreateWikiRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonCreateWikiReply>(),
+            handler: { request, context in
+                try await self.createWiki(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.DeleteWiki.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonDeleteWikiRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonDeleteWikiReply>(),
+            handler: { request, context in
+                try await self.deleteWiki(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.RenameWiki.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonRenameWikiRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonRenameWikiReply>(),
+            handler: { request, context in
+                try await self.renameWiki(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.ResolveWiki.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonResolveWikiRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonResolveWikiReply>(),
+            handler: { request, context in
+                try await self.resolveWiki(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.OpenStore.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonOpenStoreRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonOpenStoreReply>(),
+            handler: { request, context in
+                try await self.openStore(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.CloseStore.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonCloseStoreRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonCloseStoreReply>(),
+            handler: { request, context in
+                try await self.closeStore(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.GetStoreChangeToken.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetStoreChangeTokenRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetStoreChangeTokenReply>(),
+            handler: { request, context in
+                try await self.getStoreChangeToken(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.GetPage.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetPageRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetPageReply>(),
+            handler: { request, context in
+                try await self.getPage(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.ListPages.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonListPagesRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonListPagesReply>(),
+            handler: { request, context in
+                try await self.listPages(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.UpsertPage.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonUpsertPageRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonUpsertPageReply>(),
+            handler: { request, context in
+                try await self.upsertPage(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.StoreSmall.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStoreSmallRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStoreSmallReply>(),
+            handler: { request, context in
+                try await self.storeSmall(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.StoreList.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStoreListRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStoreListReply>(),
+            handler: { request, context in
+                try await self.storeList(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.StoreBlob.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStoreBlobRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStoreBlobReply>(),
+            handler: { request, context in
+                try await self.storeBlob(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.StoreMutation.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStoreMutationRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStoreMutationReply>(),
+            handler: { request, context in
+                try await self.storeMutation(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.BeginPayloadUpload.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonBeginPayloadUploadRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonBeginPayloadUploadReply>(),
+            handler: { request, context in
+                try await self.beginPayloadUpload(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.AppendPayloadChunk.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonAppendPayloadChunkRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonAppendPayloadChunkReply>(),
+            handler: { request, context in
+                try await self.appendPayloadChunk(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.CommitPayloadUpload.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonCommitPayloadUploadRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonCommitPayloadUploadReply>(),
+            handler: { request, context in
+                try await self.commitPayloadUpload(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.ReadPayloadChunk.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonReadPayloadChunkRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonReadPayloadChunkReply>(),
+            handler: { request, context in
+                try await self.readPayloadChunk(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.ResolveStoreOutcome.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonResolveStoreOutcomeRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonResolveStoreOutcomeReply>(),
+            handler: { request, context in
+                try await self.resolveStoreOutcome(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.GetStoreSessionBootstrap.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetStoreSessionBootstrapRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetStoreSessionBootstrapReply>(),
+            handler: { request, context in
+                try await self.getStoreSessionBootstrap(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.Search.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonSearchRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonSearchReply>(),
+            handler: { request, context in
+                try await self.search(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.Autocomplete.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonAutocompleteRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonAutocompleteReply>(),
+            handler: { request, context in
+                try await self.autocomplete(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.UpgradeSearchIndex.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonUpgradeSearchIndexRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonUpgradeSearchIndexReply>(),
+            handler: { request, context in
+                try await self.upgradeSearchIndex(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.GetQueueSnapshot.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetQueueSnapshotRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetQueueSnapshotReply>(),
+            handler: { request, context in
+                try await self.getQueueSnapshot(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.EnqueueItem.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonEnqueueItemRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonEnqueueItemReply>(),
+            handler: { request, context in
+                try await self.enqueueItem(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.CancelItem.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonCancelItemRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonCancelItemReply>(),
+            handler: { request, context in
+                try await self.cancelItem(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.CancelAllInFlight.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonCancelAllInFlightRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonCancelAllInFlightReply>(),
+            handler: { request, context in
+                try await self.cancelAllInFlight(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.RetryItem.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonRetryItemRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonRetryItemReply>(),
+            handler: { request, context in
+                try await self.retryItem(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.PauseQueue.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonPauseQueueRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonPauseQueueReply>(),
+            handler: { request, context in
+                try await self.pauseQueue(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.ResumeQueue.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonResumeQueueRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonResumeQueueReply>(),
+            handler: { request, context in
+                try await self.resumeQueue(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.HaltQueue.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonHaltQueueRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonHaltQueueReply>(),
+            handler: { request, context in
+                try await self.haltQueue(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.ReorderItem.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonReorderItemRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonReorderItemReply>(),
+            handler: { request, context in
+                try await self.reorderItem(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.HasActiveWork.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonHasActiveWorkRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonHasActiveWorkReply>(),
+            handler: { request, context in
+                try await self.hasActiveWork(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.LoadQueueTranscript.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonLoadQueueTranscriptRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonLoadQueueTranscriptReply>(),
+            handler: { request, context in
+                try await self.loadQueueTranscript(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.LoadQueueActivitySnapshots.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonLoadQueueActivitySnapshotsRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonLoadQueueActivitySnapshotsReply>(),
+            handler: { request, context in
+                try await self.loadQueueActivitySnapshots(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.LoadQueueReport.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonLoadQueueReportRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonLoadQueueReportReply>(),
+            handler: { request, context in
+                try await self.loadQueueReport(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.LoadQueueReportSummaries.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonLoadQueueReportSummariesRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonLoadQueueReportSummariesReply>(),
+            handler: { request, context in
+                try await self.loadQueueReportSummaries(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.GetQueueOwnershipStatus.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetQueueOwnershipStatusRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetQueueOwnershipStatusReply>(),
+            handler: { request, context in
+                try await self.getQueueOwnershipStatus(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.RelinquishQueue.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonRelinquishQueueRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonRelinquishQueueReply>(),
+            handler: { request, context in
+                try await self.relinquishQueue(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.StartChat.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStartChatRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStartChatReply>(),
+            handler: { request, context in
+                try await self.startChat(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.SubmitChatTurn.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonSubmitChatTurnRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonSubmitChatTurnReply>(),
+            handler: { request, context in
+                try await self.submitChatTurn(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.ContinueChat.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonContinueChatRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonContinueChatReply>(),
+            handler: { request, context in
+                try await self.continueChat(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.SendChatMessage.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonSendChatMessageRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonSendChatMessageReply>(),
+            handler: { request, context in
+                try await self.sendChatMessage(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.StopChat.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStopChatRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStopChatReply>(),
+            handler: { request, context in
+                try await self.stopChat(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.GetChatSessionState.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetChatSessionStateRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetChatSessionStateReply>(),
+            handler: { request, context in
+                try await self.getChatSessionState(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.GetChatDiagnostics.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetChatDiagnosticsRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetChatDiagnosticsReply>(),
+            handler: { request, context in
+                try await self.getChatDiagnostics(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.ResetChatDiagnostics.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonResetChatDiagnosticsRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonResetChatDiagnosticsReply>(),
+            handler: { request, context in
+                try await self.resetChatDiagnostics(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.ResolveChatPermission.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonResolveChatPermissionRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonResolveChatPermissionReply>(),
+            handler: { request, context in
+                try await self.resolveChatPermission(
+                    request: request,
+                    context: context
+                )
+            }
+        )
+        router.registerHandler(
+            forMethod: AppDaemonAppDaemon.Method.SetChatConfigOption.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonSetChatConfigOptionRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonSetChatConfigOptionReply>(),
+            handler: { request, context in
+                try await self.setChatConfigOption(
                     request: request,
                     context: context
                 )
@@ -490,6 +3773,545 @@ extension AppDaemonAppDaemon.ServiceProtocol {
             context: context
         )
         return response
+    }
+
+    public func createWiki(
+        request: GRPCCore.StreamingServerRequest<AppDaemonCreateWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonCreateWikiReply> {
+        let response = try await self.createWiki(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func deleteWiki(
+        request: GRPCCore.StreamingServerRequest<AppDaemonDeleteWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonDeleteWikiReply> {
+        let response = try await self.deleteWiki(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func renameWiki(
+        request: GRPCCore.StreamingServerRequest<AppDaemonRenameWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonRenameWikiReply> {
+        let response = try await self.renameWiki(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func resolveWiki(
+        request: GRPCCore.StreamingServerRequest<AppDaemonResolveWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonResolveWikiReply> {
+        let response = try await self.resolveWiki(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func openStore(
+        request: GRPCCore.StreamingServerRequest<AppDaemonOpenStoreRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonOpenStoreReply> {
+        let response = try await self.openStore(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func closeStore(
+        request: GRPCCore.StreamingServerRequest<AppDaemonCloseStoreRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonCloseStoreReply> {
+        let response = try await self.closeStore(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func getStoreChangeToken(
+        request: GRPCCore.StreamingServerRequest<AppDaemonGetStoreChangeTokenRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetStoreChangeTokenReply> {
+        let response = try await self.getStoreChangeToken(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func getPage(
+        request: GRPCCore.StreamingServerRequest<AppDaemonGetPageRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetPageReply> {
+        let response = try await self.getPage(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func listPages(
+        request: GRPCCore.StreamingServerRequest<AppDaemonListPagesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonListPagesReply> {
+        let response = try await self.listPages(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func upsertPage(
+        request: GRPCCore.StreamingServerRequest<AppDaemonUpsertPageRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonUpsertPageReply> {
+        let response = try await self.upsertPage(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func storeSmall(
+        request: GRPCCore.StreamingServerRequest<AppDaemonStoreSmallRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStoreSmallReply> {
+        let response = try await self.storeSmall(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func storeList(
+        request: GRPCCore.StreamingServerRequest<AppDaemonStoreListRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStoreListReply> {
+        let response = try await self.storeList(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func storeBlob(
+        request: GRPCCore.StreamingServerRequest<AppDaemonStoreBlobRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStoreBlobReply> {
+        let response = try await self.storeBlob(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func storeMutation(
+        request: GRPCCore.StreamingServerRequest<AppDaemonStoreMutationRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStoreMutationReply> {
+        let response = try await self.storeMutation(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func beginPayloadUpload(
+        request: GRPCCore.StreamingServerRequest<AppDaemonBeginPayloadUploadRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonBeginPayloadUploadReply> {
+        let response = try await self.beginPayloadUpload(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func appendPayloadChunk(
+        request: GRPCCore.StreamingServerRequest<AppDaemonAppendPayloadChunkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonAppendPayloadChunkReply> {
+        let response = try await self.appendPayloadChunk(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func commitPayloadUpload(
+        request: GRPCCore.StreamingServerRequest<AppDaemonCommitPayloadUploadRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonCommitPayloadUploadReply> {
+        let response = try await self.commitPayloadUpload(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func readPayloadChunk(
+        request: GRPCCore.StreamingServerRequest<AppDaemonReadPayloadChunkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonReadPayloadChunkReply> {
+        let response = try await self.readPayloadChunk(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func resolveStoreOutcome(
+        request: GRPCCore.StreamingServerRequest<AppDaemonResolveStoreOutcomeRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonResolveStoreOutcomeReply> {
+        let response = try await self.resolveStoreOutcome(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func getStoreSessionBootstrap(
+        request: GRPCCore.StreamingServerRequest<AppDaemonGetStoreSessionBootstrapRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetStoreSessionBootstrapReply> {
+        let response = try await self.getStoreSessionBootstrap(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func search(
+        request: GRPCCore.StreamingServerRequest<AppDaemonSearchRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonSearchReply> {
+        let response = try await self.search(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func autocomplete(
+        request: GRPCCore.StreamingServerRequest<AppDaemonAutocompleteRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonAutocompleteReply> {
+        let response = try await self.autocomplete(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func upgradeSearchIndex(
+        request: GRPCCore.StreamingServerRequest<AppDaemonUpgradeSearchIndexRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonUpgradeSearchIndexReply> {
+        let response = try await self.upgradeSearchIndex(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func getQueueSnapshot(
+        request: GRPCCore.StreamingServerRequest<AppDaemonGetQueueSnapshotRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetQueueSnapshotReply> {
+        let response = try await self.getQueueSnapshot(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func enqueueItem(
+        request: GRPCCore.StreamingServerRequest<AppDaemonEnqueueItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonEnqueueItemReply> {
+        let response = try await self.enqueueItem(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func cancelItem(
+        request: GRPCCore.StreamingServerRequest<AppDaemonCancelItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonCancelItemReply> {
+        let response = try await self.cancelItem(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func cancelAllInFlight(
+        request: GRPCCore.StreamingServerRequest<AppDaemonCancelAllInFlightRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonCancelAllInFlightReply> {
+        let response = try await self.cancelAllInFlight(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func retryItem(
+        request: GRPCCore.StreamingServerRequest<AppDaemonRetryItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonRetryItemReply> {
+        let response = try await self.retryItem(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func pauseQueue(
+        request: GRPCCore.StreamingServerRequest<AppDaemonPauseQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonPauseQueueReply> {
+        let response = try await self.pauseQueue(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func resumeQueue(
+        request: GRPCCore.StreamingServerRequest<AppDaemonResumeQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonResumeQueueReply> {
+        let response = try await self.resumeQueue(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func haltQueue(
+        request: GRPCCore.StreamingServerRequest<AppDaemonHaltQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonHaltQueueReply> {
+        let response = try await self.haltQueue(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func reorderItem(
+        request: GRPCCore.StreamingServerRequest<AppDaemonReorderItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonReorderItemReply> {
+        let response = try await self.reorderItem(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func hasActiveWork(
+        request: GRPCCore.StreamingServerRequest<AppDaemonHasActiveWorkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonHasActiveWorkReply> {
+        let response = try await self.hasActiveWork(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func loadQueueTranscript(
+        request: GRPCCore.StreamingServerRequest<AppDaemonLoadQueueTranscriptRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonLoadQueueTranscriptReply> {
+        let response = try await self.loadQueueTranscript(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func loadQueueActivitySnapshots(
+        request: GRPCCore.StreamingServerRequest<AppDaemonLoadQueueActivitySnapshotsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonLoadQueueActivitySnapshotsReply> {
+        let response = try await self.loadQueueActivitySnapshots(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func loadQueueReport(
+        request: GRPCCore.StreamingServerRequest<AppDaemonLoadQueueReportRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonLoadQueueReportReply> {
+        let response = try await self.loadQueueReport(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func loadQueueReportSummaries(
+        request: GRPCCore.StreamingServerRequest<AppDaemonLoadQueueReportSummariesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonLoadQueueReportSummariesReply> {
+        let response = try await self.loadQueueReportSummaries(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func getQueueOwnershipStatus(
+        request: GRPCCore.StreamingServerRequest<AppDaemonGetQueueOwnershipStatusRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetQueueOwnershipStatusReply> {
+        let response = try await self.getQueueOwnershipStatus(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func relinquishQueue(
+        request: GRPCCore.StreamingServerRequest<AppDaemonRelinquishQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonRelinquishQueueReply> {
+        let response = try await self.relinquishQueue(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func startChat(
+        request: GRPCCore.StreamingServerRequest<AppDaemonStartChatRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStartChatReply> {
+        let response = try await self.startChat(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func submitChatTurn(
+        request: GRPCCore.StreamingServerRequest<AppDaemonSubmitChatTurnRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonSubmitChatTurnReply> {
+        let response = try await self.submitChatTurn(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func continueChat(
+        request: GRPCCore.StreamingServerRequest<AppDaemonContinueChatRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonContinueChatReply> {
+        let response = try await self.continueChat(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func sendChatMessage(
+        request: GRPCCore.StreamingServerRequest<AppDaemonSendChatMessageRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonSendChatMessageReply> {
+        let response = try await self.sendChatMessage(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func stopChat(
+        request: GRPCCore.StreamingServerRequest<AppDaemonStopChatRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonStopChatReply> {
+        let response = try await self.stopChat(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func getChatSessionState(
+        request: GRPCCore.StreamingServerRequest<AppDaemonGetChatSessionStateRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetChatSessionStateReply> {
+        let response = try await self.getChatSessionState(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func getChatDiagnostics(
+        request: GRPCCore.StreamingServerRequest<AppDaemonGetChatDiagnosticsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonGetChatDiagnosticsReply> {
+        let response = try await self.getChatDiagnostics(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func resetChatDiagnostics(
+        request: GRPCCore.StreamingServerRequest<AppDaemonResetChatDiagnosticsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonResetChatDiagnosticsReply> {
+        let response = try await self.resetChatDiagnostics(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func resolveChatPermission(
+        request: GRPCCore.StreamingServerRequest<AppDaemonResolveChatPermissionRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonResolveChatPermissionReply> {
+        let response = try await self.resolveChatPermission(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
+    }
+
+    public func setChatConfigOption(
+        request: GRPCCore.StreamingServerRequest<AppDaemonSetChatConfigOptionRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.StreamingServerResponse<AppDaemonSetChatConfigOptionReply> {
+        let response = try await self.setChatConfigOption(
+            request: GRPCCore.ServerRequest(stream: request),
+            context: context
+        )
+        return GRPCCore.StreamingServerResponse(single: response)
     }
 }
 
@@ -549,6 +4371,643 @@ extension AppDaemonAppDaemon.SimpleServiceProtocol {
                 )
                 return [:]
             }
+        )
+    }
+
+    public func createWiki(
+        request: GRPCCore.ServerRequest<AppDaemonCreateWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonCreateWikiReply> {
+        return GRPCCore.ServerResponse<AppDaemonCreateWikiReply>(
+            message: try await self.createWiki(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func deleteWiki(
+        request: GRPCCore.ServerRequest<AppDaemonDeleteWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonDeleteWikiReply> {
+        return GRPCCore.ServerResponse<AppDaemonDeleteWikiReply>(
+            message: try await self.deleteWiki(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func renameWiki(
+        request: GRPCCore.ServerRequest<AppDaemonRenameWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonRenameWikiReply> {
+        return GRPCCore.ServerResponse<AppDaemonRenameWikiReply>(
+            message: try await self.renameWiki(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func resolveWiki(
+        request: GRPCCore.ServerRequest<AppDaemonResolveWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonResolveWikiReply> {
+        return GRPCCore.ServerResponse<AppDaemonResolveWikiReply>(
+            message: try await self.resolveWiki(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func openStore(
+        request: GRPCCore.ServerRequest<AppDaemonOpenStoreRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonOpenStoreReply> {
+        return GRPCCore.ServerResponse<AppDaemonOpenStoreReply>(
+            message: try await self.openStore(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func closeStore(
+        request: GRPCCore.ServerRequest<AppDaemonCloseStoreRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonCloseStoreReply> {
+        return GRPCCore.ServerResponse<AppDaemonCloseStoreReply>(
+            message: try await self.closeStore(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func getStoreChangeToken(
+        request: GRPCCore.ServerRequest<AppDaemonGetStoreChangeTokenRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetStoreChangeTokenReply> {
+        return GRPCCore.ServerResponse<AppDaemonGetStoreChangeTokenReply>(
+            message: try await self.getStoreChangeToken(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func getPage(
+        request: GRPCCore.ServerRequest<AppDaemonGetPageRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetPageReply> {
+        return GRPCCore.ServerResponse<AppDaemonGetPageReply>(
+            message: try await self.getPage(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func listPages(
+        request: GRPCCore.ServerRequest<AppDaemonListPagesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonListPagesReply> {
+        return GRPCCore.ServerResponse<AppDaemonListPagesReply>(
+            message: try await self.listPages(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func upsertPage(
+        request: GRPCCore.ServerRequest<AppDaemonUpsertPageRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonUpsertPageReply> {
+        return GRPCCore.ServerResponse<AppDaemonUpsertPageReply>(
+            message: try await self.upsertPage(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func storeSmall(
+        request: GRPCCore.ServerRequest<AppDaemonStoreSmallRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreSmallReply> {
+        return GRPCCore.ServerResponse<AppDaemonStoreSmallReply>(
+            message: try await self.storeSmall(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func storeList(
+        request: GRPCCore.ServerRequest<AppDaemonStoreListRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreListReply> {
+        return GRPCCore.ServerResponse<AppDaemonStoreListReply>(
+            message: try await self.storeList(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func storeBlob(
+        request: GRPCCore.ServerRequest<AppDaemonStoreBlobRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreBlobReply> {
+        return GRPCCore.ServerResponse<AppDaemonStoreBlobReply>(
+            message: try await self.storeBlob(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func storeMutation(
+        request: GRPCCore.ServerRequest<AppDaemonStoreMutationRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreMutationReply> {
+        return GRPCCore.ServerResponse<AppDaemonStoreMutationReply>(
+            message: try await self.storeMutation(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func beginPayloadUpload(
+        request: GRPCCore.ServerRequest<AppDaemonBeginPayloadUploadRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonBeginPayloadUploadReply> {
+        return GRPCCore.ServerResponse<AppDaemonBeginPayloadUploadReply>(
+            message: try await self.beginPayloadUpload(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func appendPayloadChunk(
+        request: GRPCCore.ServerRequest<AppDaemonAppendPayloadChunkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonAppendPayloadChunkReply> {
+        return GRPCCore.ServerResponse<AppDaemonAppendPayloadChunkReply>(
+            message: try await self.appendPayloadChunk(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func commitPayloadUpload(
+        request: GRPCCore.ServerRequest<AppDaemonCommitPayloadUploadRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonCommitPayloadUploadReply> {
+        return GRPCCore.ServerResponse<AppDaemonCommitPayloadUploadReply>(
+            message: try await self.commitPayloadUpload(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func readPayloadChunk(
+        request: GRPCCore.ServerRequest<AppDaemonReadPayloadChunkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonReadPayloadChunkReply> {
+        return GRPCCore.ServerResponse<AppDaemonReadPayloadChunkReply>(
+            message: try await self.readPayloadChunk(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func resolveStoreOutcome(
+        request: GRPCCore.ServerRequest<AppDaemonResolveStoreOutcomeRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonResolveStoreOutcomeReply> {
+        return GRPCCore.ServerResponse<AppDaemonResolveStoreOutcomeReply>(
+            message: try await self.resolveStoreOutcome(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func getStoreSessionBootstrap(
+        request: GRPCCore.ServerRequest<AppDaemonGetStoreSessionBootstrapRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetStoreSessionBootstrapReply> {
+        return GRPCCore.ServerResponse<AppDaemonGetStoreSessionBootstrapReply>(
+            message: try await self.getStoreSessionBootstrap(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func search(
+        request: GRPCCore.ServerRequest<AppDaemonSearchRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonSearchReply> {
+        return GRPCCore.ServerResponse<AppDaemonSearchReply>(
+            message: try await self.search(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func autocomplete(
+        request: GRPCCore.ServerRequest<AppDaemonAutocompleteRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonAutocompleteReply> {
+        return GRPCCore.ServerResponse<AppDaemonAutocompleteReply>(
+            message: try await self.autocomplete(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func upgradeSearchIndex(
+        request: GRPCCore.ServerRequest<AppDaemonUpgradeSearchIndexRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonUpgradeSearchIndexReply> {
+        return GRPCCore.ServerResponse<AppDaemonUpgradeSearchIndexReply>(
+            message: try await self.upgradeSearchIndex(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func getQueueSnapshot(
+        request: GRPCCore.ServerRequest<AppDaemonGetQueueSnapshotRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetQueueSnapshotReply> {
+        return GRPCCore.ServerResponse<AppDaemonGetQueueSnapshotReply>(
+            message: try await self.getQueueSnapshot(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func enqueueItem(
+        request: GRPCCore.ServerRequest<AppDaemonEnqueueItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonEnqueueItemReply> {
+        return GRPCCore.ServerResponse<AppDaemonEnqueueItemReply>(
+            message: try await self.enqueueItem(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func cancelItem(
+        request: GRPCCore.ServerRequest<AppDaemonCancelItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonCancelItemReply> {
+        return GRPCCore.ServerResponse<AppDaemonCancelItemReply>(
+            message: try await self.cancelItem(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func cancelAllInFlight(
+        request: GRPCCore.ServerRequest<AppDaemonCancelAllInFlightRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonCancelAllInFlightReply> {
+        return GRPCCore.ServerResponse<AppDaemonCancelAllInFlightReply>(
+            message: try await self.cancelAllInFlight(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func retryItem(
+        request: GRPCCore.ServerRequest<AppDaemonRetryItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonRetryItemReply> {
+        return GRPCCore.ServerResponse<AppDaemonRetryItemReply>(
+            message: try await self.retryItem(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func pauseQueue(
+        request: GRPCCore.ServerRequest<AppDaemonPauseQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonPauseQueueReply> {
+        return GRPCCore.ServerResponse<AppDaemonPauseQueueReply>(
+            message: try await self.pauseQueue(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func resumeQueue(
+        request: GRPCCore.ServerRequest<AppDaemonResumeQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonResumeQueueReply> {
+        return GRPCCore.ServerResponse<AppDaemonResumeQueueReply>(
+            message: try await self.resumeQueue(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func haltQueue(
+        request: GRPCCore.ServerRequest<AppDaemonHaltQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonHaltQueueReply> {
+        return GRPCCore.ServerResponse<AppDaemonHaltQueueReply>(
+            message: try await self.haltQueue(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func reorderItem(
+        request: GRPCCore.ServerRequest<AppDaemonReorderItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonReorderItemReply> {
+        return GRPCCore.ServerResponse<AppDaemonReorderItemReply>(
+            message: try await self.reorderItem(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func hasActiveWork(
+        request: GRPCCore.ServerRequest<AppDaemonHasActiveWorkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonHasActiveWorkReply> {
+        return GRPCCore.ServerResponse<AppDaemonHasActiveWorkReply>(
+            message: try await self.hasActiveWork(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func loadQueueTranscript(
+        request: GRPCCore.ServerRequest<AppDaemonLoadQueueTranscriptRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueTranscriptReply> {
+        return GRPCCore.ServerResponse<AppDaemonLoadQueueTranscriptReply>(
+            message: try await self.loadQueueTranscript(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func loadQueueActivitySnapshots(
+        request: GRPCCore.ServerRequest<AppDaemonLoadQueueActivitySnapshotsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueActivitySnapshotsReply> {
+        return GRPCCore.ServerResponse<AppDaemonLoadQueueActivitySnapshotsReply>(
+            message: try await self.loadQueueActivitySnapshots(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func loadQueueReport(
+        request: GRPCCore.ServerRequest<AppDaemonLoadQueueReportRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueReportReply> {
+        return GRPCCore.ServerResponse<AppDaemonLoadQueueReportReply>(
+            message: try await self.loadQueueReport(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func loadQueueReportSummaries(
+        request: GRPCCore.ServerRequest<AppDaemonLoadQueueReportSummariesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueReportSummariesReply> {
+        return GRPCCore.ServerResponse<AppDaemonLoadQueueReportSummariesReply>(
+            message: try await self.loadQueueReportSummaries(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func getQueueOwnershipStatus(
+        request: GRPCCore.ServerRequest<AppDaemonGetQueueOwnershipStatusRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetQueueOwnershipStatusReply> {
+        return GRPCCore.ServerResponse<AppDaemonGetQueueOwnershipStatusReply>(
+            message: try await self.getQueueOwnershipStatus(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func relinquishQueue(
+        request: GRPCCore.ServerRequest<AppDaemonRelinquishQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonRelinquishQueueReply> {
+        return GRPCCore.ServerResponse<AppDaemonRelinquishQueueReply>(
+            message: try await self.relinquishQueue(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func startChat(
+        request: GRPCCore.ServerRequest<AppDaemonStartChatRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStartChatReply> {
+        return GRPCCore.ServerResponse<AppDaemonStartChatReply>(
+            message: try await self.startChat(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func submitChatTurn(
+        request: GRPCCore.ServerRequest<AppDaemonSubmitChatTurnRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonSubmitChatTurnReply> {
+        return GRPCCore.ServerResponse<AppDaemonSubmitChatTurnReply>(
+            message: try await self.submitChatTurn(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func continueChat(
+        request: GRPCCore.ServerRequest<AppDaemonContinueChatRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonContinueChatReply> {
+        return GRPCCore.ServerResponse<AppDaemonContinueChatReply>(
+            message: try await self.continueChat(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func sendChatMessage(
+        request: GRPCCore.ServerRequest<AppDaemonSendChatMessageRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonSendChatMessageReply> {
+        return GRPCCore.ServerResponse<AppDaemonSendChatMessageReply>(
+            message: try await self.sendChatMessage(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func stopChat(
+        request: GRPCCore.ServerRequest<AppDaemonStopChatRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStopChatReply> {
+        return GRPCCore.ServerResponse<AppDaemonStopChatReply>(
+            message: try await self.stopChat(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func getChatSessionState(
+        request: GRPCCore.ServerRequest<AppDaemonGetChatSessionStateRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetChatSessionStateReply> {
+        return GRPCCore.ServerResponse<AppDaemonGetChatSessionStateReply>(
+            message: try await self.getChatSessionState(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func getChatDiagnostics(
+        request: GRPCCore.ServerRequest<AppDaemonGetChatDiagnosticsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetChatDiagnosticsReply> {
+        return GRPCCore.ServerResponse<AppDaemonGetChatDiagnosticsReply>(
+            message: try await self.getChatDiagnostics(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func resetChatDiagnostics(
+        request: GRPCCore.ServerRequest<AppDaemonResetChatDiagnosticsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonResetChatDiagnosticsReply> {
+        return GRPCCore.ServerResponse<AppDaemonResetChatDiagnosticsReply>(
+            message: try await self.resetChatDiagnostics(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func resolveChatPermission(
+        request: GRPCCore.ServerRequest<AppDaemonResolveChatPermissionRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonResolveChatPermissionReply> {
+        return GRPCCore.ServerResponse<AppDaemonResolveChatPermissionReply>(
+            message: try await self.resolveChatPermission(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
+        )
+    }
+
+    public func setChatConfigOption(
+        request: GRPCCore.ServerRequest<AppDaemonSetChatConfigOptionRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonSetChatConfigOptionReply> {
+        return GRPCCore.ServerResponse<AppDaemonSetChatConfigOptionReply>(
+            message: try await self.setChatConfigOption(
+                request: request.message,
+                context: context
+            ),
+            metadata: [:]
         )
     }
 }
@@ -663,6 +5122,937 @@ extension AppDaemonAppDaemon {
             deserializer: some GRPCCore.MessageDeserializer<AppDaemonDaemonEvent>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<AppDaemonDaemonEvent>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "CreateWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCreateWikiRequest` message.
+        ///   - serializer: A serializer for `AppDaemonCreateWikiRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonCreateWikiReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func createWiki<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonCreateWikiRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonCreateWikiRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonCreateWikiReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCreateWikiReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "DeleteWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonDeleteWikiRequest` message.
+        ///   - serializer: A serializer for `AppDaemonDeleteWikiRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonDeleteWikiReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func deleteWiki<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonDeleteWikiRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonDeleteWikiRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonDeleteWikiReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonDeleteWikiReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "RenameWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonRenameWikiRequest` message.
+        ///   - serializer: A serializer for `AppDaemonRenameWikiRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonRenameWikiReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func renameWiki<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonRenameWikiRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonRenameWikiRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonRenameWikiReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRenameWikiReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ResolveWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResolveWikiRequest` message.
+        ///   - serializer: A serializer for `AppDaemonResolveWikiRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonResolveWikiReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func resolveWiki<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonResolveWikiRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonResolveWikiRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonResolveWikiReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveWikiReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "OpenStore" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonOpenStoreRequest` message.
+        ///   - serializer: A serializer for `AppDaemonOpenStoreRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonOpenStoreReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func openStore<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonOpenStoreRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonOpenStoreRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonOpenStoreReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonOpenStoreReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "CloseStore" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCloseStoreRequest` message.
+        ///   - serializer: A serializer for `AppDaemonCloseStoreRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonCloseStoreReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func closeStore<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonCloseStoreRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonCloseStoreRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonCloseStoreReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCloseStoreReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "GetStoreChangeToken" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetStoreChangeTokenRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetStoreChangeTokenRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetStoreChangeTokenReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func getStoreChangeToken<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetStoreChangeTokenRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetStoreChangeTokenRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetStoreChangeTokenReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetStoreChangeTokenReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "GetPage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetPageRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetPageRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetPageReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func getPage<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetPageRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetPageRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetPageReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetPageReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ListPages" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonListPagesRequest` message.
+        ///   - serializer: A serializer for `AppDaemonListPagesRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonListPagesReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func listPages<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonListPagesRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonListPagesRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonListPagesReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonListPagesReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "UpsertPage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonUpsertPageRequest` message.
+        ///   - serializer: A serializer for `AppDaemonUpsertPageRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonUpsertPageReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func upsertPage<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonUpsertPageRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonUpsertPageRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonUpsertPageReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonUpsertPageReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "StoreSmall" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreSmallRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStoreSmallRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStoreSmallReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func storeSmall<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStoreSmallRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStoreSmallRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStoreSmallReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreSmallReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "StoreList" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreListRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStoreListRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStoreListReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func storeList<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStoreListRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStoreListRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStoreListReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreListReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "StoreBlob" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreBlobRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStoreBlobRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStoreBlobReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func storeBlob<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStoreBlobRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStoreBlobRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStoreBlobReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreBlobReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "StoreMutation" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreMutationRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStoreMutationRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStoreMutationReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func storeMutation<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStoreMutationRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStoreMutationRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStoreMutationReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreMutationReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "BeginPayloadUpload" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonBeginPayloadUploadRequest` message.
+        ///   - serializer: A serializer for `AppDaemonBeginPayloadUploadRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonBeginPayloadUploadReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func beginPayloadUpload<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonBeginPayloadUploadRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonBeginPayloadUploadRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonBeginPayloadUploadReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonBeginPayloadUploadReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "AppendPayloadChunk" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonAppendPayloadChunkRequest` message.
+        ///   - serializer: A serializer for `AppDaemonAppendPayloadChunkRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonAppendPayloadChunkReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func appendPayloadChunk<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonAppendPayloadChunkRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonAppendPayloadChunkRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonAppendPayloadChunkReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonAppendPayloadChunkReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "CommitPayloadUpload" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCommitPayloadUploadRequest` message.
+        ///   - serializer: A serializer for `AppDaemonCommitPayloadUploadRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonCommitPayloadUploadReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func commitPayloadUpload<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonCommitPayloadUploadRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonCommitPayloadUploadRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonCommitPayloadUploadReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCommitPayloadUploadReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ReadPayloadChunk" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonReadPayloadChunkRequest` message.
+        ///   - serializer: A serializer for `AppDaemonReadPayloadChunkRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonReadPayloadChunkReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func readPayloadChunk<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonReadPayloadChunkRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonReadPayloadChunkRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonReadPayloadChunkReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonReadPayloadChunkReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ResolveStoreOutcome" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResolveStoreOutcomeRequest` message.
+        ///   - serializer: A serializer for `AppDaemonResolveStoreOutcomeRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonResolveStoreOutcomeReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func resolveStoreOutcome<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonResolveStoreOutcomeRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonResolveStoreOutcomeRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonResolveStoreOutcomeReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveStoreOutcomeReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "GetStoreSessionBootstrap" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetStoreSessionBootstrapRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetStoreSessionBootstrapRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetStoreSessionBootstrapReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func getStoreSessionBootstrap<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetStoreSessionBootstrapRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetStoreSessionBootstrapRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetStoreSessionBootstrapReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetStoreSessionBootstrapReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "Search" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSearchRequest` message.
+        ///   - serializer: A serializer for `AppDaemonSearchRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonSearchReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func search<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonSearchRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonSearchRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonSearchReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSearchReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "Autocomplete" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonAutocompleteRequest` message.
+        ///   - serializer: A serializer for `AppDaemonAutocompleteRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonAutocompleteReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func autocomplete<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonAutocompleteRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonAutocompleteRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonAutocompleteReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonAutocompleteReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "UpgradeSearchIndex" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonUpgradeSearchIndexRequest` message.
+        ///   - serializer: A serializer for `AppDaemonUpgradeSearchIndexRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonUpgradeSearchIndexReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func upgradeSearchIndex<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonUpgradeSearchIndexRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonUpgradeSearchIndexRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonUpgradeSearchIndexReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonUpgradeSearchIndexReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "GetQueueSnapshot" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetQueueSnapshotRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetQueueSnapshotRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetQueueSnapshotReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func getQueueSnapshot<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetQueueSnapshotRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetQueueSnapshotRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetQueueSnapshotReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetQueueSnapshotReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "EnqueueItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonEnqueueItemRequest` message.
+        ///   - serializer: A serializer for `AppDaemonEnqueueItemRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonEnqueueItemReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func enqueueItem<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonEnqueueItemRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonEnqueueItemRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonEnqueueItemReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonEnqueueItemReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "CancelItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCancelItemRequest` message.
+        ///   - serializer: A serializer for `AppDaemonCancelItemRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonCancelItemReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func cancelItem<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonCancelItemRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonCancelItemRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonCancelItemReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCancelItemReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "CancelAllInFlight" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCancelAllInFlightRequest` message.
+        ///   - serializer: A serializer for `AppDaemonCancelAllInFlightRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonCancelAllInFlightReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func cancelAllInFlight<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonCancelAllInFlightRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonCancelAllInFlightRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonCancelAllInFlightReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCancelAllInFlightReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "RetryItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonRetryItemRequest` message.
+        ///   - serializer: A serializer for `AppDaemonRetryItemRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonRetryItemReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func retryItem<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonRetryItemRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonRetryItemRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonRetryItemReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRetryItemReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "PauseQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonPauseQueueRequest` message.
+        ///   - serializer: A serializer for `AppDaemonPauseQueueRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonPauseQueueReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func pauseQueue<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonPauseQueueRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonPauseQueueRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonPauseQueueReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonPauseQueueReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ResumeQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResumeQueueRequest` message.
+        ///   - serializer: A serializer for `AppDaemonResumeQueueRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonResumeQueueReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func resumeQueue<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonResumeQueueRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonResumeQueueRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonResumeQueueReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResumeQueueReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "HaltQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonHaltQueueRequest` message.
+        ///   - serializer: A serializer for `AppDaemonHaltQueueRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonHaltQueueReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func haltQueue<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonHaltQueueRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonHaltQueueRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonHaltQueueReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonHaltQueueReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ReorderItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonReorderItemRequest` message.
+        ///   - serializer: A serializer for `AppDaemonReorderItemRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonReorderItemReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func reorderItem<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonReorderItemRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonReorderItemRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonReorderItemReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonReorderItemReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "HasActiveWork" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonHasActiveWorkRequest` message.
+        ///   - serializer: A serializer for `AppDaemonHasActiveWorkRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonHasActiveWorkReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func hasActiveWork<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonHasActiveWorkRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonHasActiveWorkRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonHasActiveWorkReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonHasActiveWorkReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "LoadQueueTranscript" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueTranscriptRequest` message.
+        ///   - serializer: A serializer for `AppDaemonLoadQueueTranscriptRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonLoadQueueTranscriptReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func loadQueueTranscript<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonLoadQueueTranscriptRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonLoadQueueTranscriptRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonLoadQueueTranscriptReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueTranscriptReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "LoadQueueActivitySnapshots" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueActivitySnapshotsRequest` message.
+        ///   - serializer: A serializer for `AppDaemonLoadQueueActivitySnapshotsRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonLoadQueueActivitySnapshotsReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func loadQueueActivitySnapshots<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonLoadQueueActivitySnapshotsRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonLoadQueueActivitySnapshotsRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonLoadQueueActivitySnapshotsReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueActivitySnapshotsReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "LoadQueueReport" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueReportRequest` message.
+        ///   - serializer: A serializer for `AppDaemonLoadQueueReportRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonLoadQueueReportReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func loadQueueReport<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonLoadQueueReportRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonLoadQueueReportRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonLoadQueueReportReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueReportReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "LoadQueueReportSummaries" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueReportSummariesRequest` message.
+        ///   - serializer: A serializer for `AppDaemonLoadQueueReportSummariesRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonLoadQueueReportSummariesReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func loadQueueReportSummaries<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonLoadQueueReportSummariesRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonLoadQueueReportSummariesRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonLoadQueueReportSummariesReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueReportSummariesReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "GetQueueOwnershipStatus" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetQueueOwnershipStatusRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetQueueOwnershipStatusRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetQueueOwnershipStatusReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func getQueueOwnershipStatus<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetQueueOwnershipStatusRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetQueueOwnershipStatusRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetQueueOwnershipStatusReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetQueueOwnershipStatusReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "RelinquishQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonRelinquishQueueRequest` message.
+        ///   - serializer: A serializer for `AppDaemonRelinquishQueueRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonRelinquishQueueReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func relinquishQueue<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonRelinquishQueueRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonRelinquishQueueRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonRelinquishQueueReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRelinquishQueueReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "StartChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStartChatRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStartChatRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStartChatReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func startChat<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStartChatRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStartChatRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStartChatReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStartChatReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "SubmitChatTurn" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSubmitChatTurnRequest` message.
+        ///   - serializer: A serializer for `AppDaemonSubmitChatTurnRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonSubmitChatTurnReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func submitChatTurn<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonSubmitChatTurnRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonSubmitChatTurnRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonSubmitChatTurnReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSubmitChatTurnReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ContinueChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonContinueChatRequest` message.
+        ///   - serializer: A serializer for `AppDaemonContinueChatRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonContinueChatReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func continueChat<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonContinueChatRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonContinueChatRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonContinueChatReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonContinueChatReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "SendChatMessage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSendChatMessageRequest` message.
+        ///   - serializer: A serializer for `AppDaemonSendChatMessageRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonSendChatMessageReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func sendChatMessage<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonSendChatMessageRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonSendChatMessageRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonSendChatMessageReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSendChatMessageReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "StopChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStopChatRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStopChatRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStopChatReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func stopChat<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStopChatRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStopChatRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStopChatReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStopChatReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "GetChatSessionState" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetChatSessionStateRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetChatSessionStateRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetChatSessionStateReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func getChatSessionState<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetChatSessionStateRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetChatSessionStateRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetChatSessionStateReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetChatSessionStateReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "GetChatDiagnostics" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetChatDiagnosticsRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetChatDiagnosticsRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetChatDiagnosticsReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func getChatDiagnostics<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetChatDiagnosticsRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetChatDiagnosticsRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetChatDiagnosticsReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetChatDiagnosticsReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ResetChatDiagnostics" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResetChatDiagnosticsRequest` message.
+        ///   - serializer: A serializer for `AppDaemonResetChatDiagnosticsRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonResetChatDiagnosticsReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func resetChatDiagnostics<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonResetChatDiagnosticsRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonResetChatDiagnosticsRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonResetChatDiagnosticsReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResetChatDiagnosticsReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "ResolveChatPermission" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResolveChatPermissionRequest` message.
+        ///   - serializer: A serializer for `AppDaemonResolveChatPermissionRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonResolveChatPermissionReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func resolveChatPermission<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonResolveChatPermissionRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonResolveChatPermissionRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonResolveChatPermissionReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveChatPermissionReply>) async throws -> Result
+        ) async throws -> Result where Result: Sendable
+
+        /// Call the "SetChatConfigOption" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSetChatConfigOptionRequest` message.
+        ///   - serializer: A serializer for `AppDaemonSetChatConfigOptionRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonSetChatConfigOptionReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        func setChatConfigOption<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonSetChatConfigOptionRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonSetChatConfigOptionRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonSetChatConfigOptionReply>,
+            options: GRPCCore.CallOptions,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSetChatConfigOptionReply>) async throws -> Result
         ) async throws -> Result where Result: Sendable
     }
 
@@ -826,6 +6216,1476 @@ extension AppDaemonAppDaemon {
                 onResponse: handleResponse
             )
         }
+
+        /// Call the "CreateWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCreateWikiRequest` message.
+        ///   - serializer: A serializer for `AppDaemonCreateWikiRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonCreateWikiReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func createWiki<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonCreateWikiRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonCreateWikiRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonCreateWikiReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCreateWikiReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.CreateWiki.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "DeleteWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonDeleteWikiRequest` message.
+        ///   - serializer: A serializer for `AppDaemonDeleteWikiRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonDeleteWikiReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func deleteWiki<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonDeleteWikiRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonDeleteWikiRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonDeleteWikiReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonDeleteWikiReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.DeleteWiki.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "RenameWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonRenameWikiRequest` message.
+        ///   - serializer: A serializer for `AppDaemonRenameWikiRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonRenameWikiReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func renameWiki<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonRenameWikiRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonRenameWikiRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonRenameWikiReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRenameWikiReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.RenameWiki.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ResolveWiki" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResolveWikiRequest` message.
+        ///   - serializer: A serializer for `AppDaemonResolveWikiRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonResolveWikiReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func resolveWiki<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonResolveWikiRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonResolveWikiRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonResolveWikiReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveWikiReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.ResolveWiki.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "OpenStore" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonOpenStoreRequest` message.
+        ///   - serializer: A serializer for `AppDaemonOpenStoreRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonOpenStoreReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func openStore<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonOpenStoreRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonOpenStoreRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonOpenStoreReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonOpenStoreReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.OpenStore.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "CloseStore" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCloseStoreRequest` message.
+        ///   - serializer: A serializer for `AppDaemonCloseStoreRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonCloseStoreReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func closeStore<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonCloseStoreRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonCloseStoreRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonCloseStoreReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCloseStoreReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.CloseStore.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "GetStoreChangeToken" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetStoreChangeTokenRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetStoreChangeTokenRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetStoreChangeTokenReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func getStoreChangeToken<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetStoreChangeTokenRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetStoreChangeTokenRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetStoreChangeTokenReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetStoreChangeTokenReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.GetStoreChangeToken.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "GetPage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetPageRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetPageRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetPageReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func getPage<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetPageRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetPageRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetPageReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetPageReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.GetPage.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ListPages" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonListPagesRequest` message.
+        ///   - serializer: A serializer for `AppDaemonListPagesRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonListPagesReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func listPages<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonListPagesRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonListPagesRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonListPagesReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonListPagesReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.ListPages.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "UpsertPage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonUpsertPageRequest` message.
+        ///   - serializer: A serializer for `AppDaemonUpsertPageRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonUpsertPageReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func upsertPage<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonUpsertPageRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonUpsertPageRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonUpsertPageReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonUpsertPageReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.UpsertPage.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "StoreSmall" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreSmallRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStoreSmallRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStoreSmallReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func storeSmall<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStoreSmallRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStoreSmallRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStoreSmallReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreSmallReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.StoreSmall.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "StoreList" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreListRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStoreListRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStoreListReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func storeList<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStoreListRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStoreListRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStoreListReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreListReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.StoreList.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "StoreBlob" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreBlobRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStoreBlobRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStoreBlobReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func storeBlob<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStoreBlobRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStoreBlobRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStoreBlobReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreBlobReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.StoreBlob.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "StoreMutation" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStoreMutationRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStoreMutationRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStoreMutationReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func storeMutation<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStoreMutationRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStoreMutationRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStoreMutationReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreMutationReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.StoreMutation.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "BeginPayloadUpload" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonBeginPayloadUploadRequest` message.
+        ///   - serializer: A serializer for `AppDaemonBeginPayloadUploadRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonBeginPayloadUploadReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func beginPayloadUpload<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonBeginPayloadUploadRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonBeginPayloadUploadRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonBeginPayloadUploadReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonBeginPayloadUploadReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.BeginPayloadUpload.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "AppendPayloadChunk" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonAppendPayloadChunkRequest` message.
+        ///   - serializer: A serializer for `AppDaemonAppendPayloadChunkRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonAppendPayloadChunkReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func appendPayloadChunk<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonAppendPayloadChunkRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonAppendPayloadChunkRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonAppendPayloadChunkReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonAppendPayloadChunkReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.AppendPayloadChunk.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "CommitPayloadUpload" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCommitPayloadUploadRequest` message.
+        ///   - serializer: A serializer for `AppDaemonCommitPayloadUploadRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonCommitPayloadUploadReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func commitPayloadUpload<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonCommitPayloadUploadRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonCommitPayloadUploadRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonCommitPayloadUploadReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCommitPayloadUploadReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.CommitPayloadUpload.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ReadPayloadChunk" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonReadPayloadChunkRequest` message.
+        ///   - serializer: A serializer for `AppDaemonReadPayloadChunkRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonReadPayloadChunkReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func readPayloadChunk<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonReadPayloadChunkRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonReadPayloadChunkRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonReadPayloadChunkReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonReadPayloadChunkReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.ReadPayloadChunk.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ResolveStoreOutcome" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResolveStoreOutcomeRequest` message.
+        ///   - serializer: A serializer for `AppDaemonResolveStoreOutcomeRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonResolveStoreOutcomeReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func resolveStoreOutcome<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonResolveStoreOutcomeRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonResolveStoreOutcomeRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonResolveStoreOutcomeReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveStoreOutcomeReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.ResolveStoreOutcome.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "GetStoreSessionBootstrap" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetStoreSessionBootstrapRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetStoreSessionBootstrapRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetStoreSessionBootstrapReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func getStoreSessionBootstrap<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetStoreSessionBootstrapRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetStoreSessionBootstrapRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetStoreSessionBootstrapReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetStoreSessionBootstrapReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.GetStoreSessionBootstrap.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "Search" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSearchRequest` message.
+        ///   - serializer: A serializer for `AppDaemonSearchRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonSearchReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func search<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonSearchRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonSearchRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonSearchReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSearchReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.Search.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "Autocomplete" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonAutocompleteRequest` message.
+        ///   - serializer: A serializer for `AppDaemonAutocompleteRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonAutocompleteReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func autocomplete<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonAutocompleteRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonAutocompleteRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonAutocompleteReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonAutocompleteReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.Autocomplete.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "UpgradeSearchIndex" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonUpgradeSearchIndexRequest` message.
+        ///   - serializer: A serializer for `AppDaemonUpgradeSearchIndexRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonUpgradeSearchIndexReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func upgradeSearchIndex<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonUpgradeSearchIndexRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonUpgradeSearchIndexRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonUpgradeSearchIndexReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonUpgradeSearchIndexReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.UpgradeSearchIndex.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "GetQueueSnapshot" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetQueueSnapshotRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetQueueSnapshotRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetQueueSnapshotReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func getQueueSnapshot<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetQueueSnapshotRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetQueueSnapshotRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetQueueSnapshotReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetQueueSnapshotReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.GetQueueSnapshot.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "EnqueueItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonEnqueueItemRequest` message.
+        ///   - serializer: A serializer for `AppDaemonEnqueueItemRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonEnqueueItemReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func enqueueItem<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonEnqueueItemRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonEnqueueItemRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonEnqueueItemReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonEnqueueItemReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.EnqueueItem.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "CancelItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCancelItemRequest` message.
+        ///   - serializer: A serializer for `AppDaemonCancelItemRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonCancelItemReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func cancelItem<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonCancelItemRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonCancelItemRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonCancelItemReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCancelItemReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.CancelItem.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "CancelAllInFlight" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonCancelAllInFlightRequest` message.
+        ///   - serializer: A serializer for `AppDaemonCancelAllInFlightRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonCancelAllInFlightReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func cancelAllInFlight<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonCancelAllInFlightRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonCancelAllInFlightRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonCancelAllInFlightReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCancelAllInFlightReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.CancelAllInFlight.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "RetryItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonRetryItemRequest` message.
+        ///   - serializer: A serializer for `AppDaemonRetryItemRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonRetryItemReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func retryItem<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonRetryItemRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonRetryItemRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonRetryItemReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRetryItemReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.RetryItem.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "PauseQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonPauseQueueRequest` message.
+        ///   - serializer: A serializer for `AppDaemonPauseQueueRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonPauseQueueReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func pauseQueue<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonPauseQueueRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonPauseQueueRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonPauseQueueReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonPauseQueueReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.PauseQueue.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ResumeQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResumeQueueRequest` message.
+        ///   - serializer: A serializer for `AppDaemonResumeQueueRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonResumeQueueReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func resumeQueue<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonResumeQueueRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonResumeQueueRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonResumeQueueReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResumeQueueReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.ResumeQueue.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "HaltQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonHaltQueueRequest` message.
+        ///   - serializer: A serializer for `AppDaemonHaltQueueRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonHaltQueueReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func haltQueue<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonHaltQueueRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonHaltQueueRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonHaltQueueReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonHaltQueueReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.HaltQueue.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ReorderItem" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonReorderItemRequest` message.
+        ///   - serializer: A serializer for `AppDaemonReorderItemRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonReorderItemReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func reorderItem<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonReorderItemRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonReorderItemRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonReorderItemReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonReorderItemReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.ReorderItem.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "HasActiveWork" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonHasActiveWorkRequest` message.
+        ///   - serializer: A serializer for `AppDaemonHasActiveWorkRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonHasActiveWorkReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func hasActiveWork<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonHasActiveWorkRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonHasActiveWorkRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonHasActiveWorkReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonHasActiveWorkReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.HasActiveWork.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "LoadQueueTranscript" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueTranscriptRequest` message.
+        ///   - serializer: A serializer for `AppDaemonLoadQueueTranscriptRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonLoadQueueTranscriptReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func loadQueueTranscript<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonLoadQueueTranscriptRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonLoadQueueTranscriptRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonLoadQueueTranscriptReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueTranscriptReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.LoadQueueTranscript.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "LoadQueueActivitySnapshots" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueActivitySnapshotsRequest` message.
+        ///   - serializer: A serializer for `AppDaemonLoadQueueActivitySnapshotsRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonLoadQueueActivitySnapshotsReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func loadQueueActivitySnapshots<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonLoadQueueActivitySnapshotsRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonLoadQueueActivitySnapshotsRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonLoadQueueActivitySnapshotsReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueActivitySnapshotsReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.LoadQueueActivitySnapshots.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "LoadQueueReport" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueReportRequest` message.
+        ///   - serializer: A serializer for `AppDaemonLoadQueueReportRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonLoadQueueReportReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func loadQueueReport<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonLoadQueueReportRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonLoadQueueReportRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonLoadQueueReportReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueReportReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.LoadQueueReport.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "LoadQueueReportSummaries" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonLoadQueueReportSummariesRequest` message.
+        ///   - serializer: A serializer for `AppDaemonLoadQueueReportSummariesRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonLoadQueueReportSummariesReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func loadQueueReportSummaries<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonLoadQueueReportSummariesRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonLoadQueueReportSummariesRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonLoadQueueReportSummariesReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueReportSummariesReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.LoadQueueReportSummaries.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "GetQueueOwnershipStatus" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetQueueOwnershipStatusRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetQueueOwnershipStatusRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetQueueOwnershipStatusReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func getQueueOwnershipStatus<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetQueueOwnershipStatusRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetQueueOwnershipStatusRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetQueueOwnershipStatusReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetQueueOwnershipStatusReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.GetQueueOwnershipStatus.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "RelinquishQueue" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonRelinquishQueueRequest` message.
+        ///   - serializer: A serializer for `AppDaemonRelinquishQueueRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonRelinquishQueueReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func relinquishQueue<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonRelinquishQueueRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonRelinquishQueueRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonRelinquishQueueReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRelinquishQueueReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.RelinquishQueue.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "StartChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStartChatRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStartChatRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStartChatReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func startChat<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStartChatRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStartChatRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStartChatReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStartChatReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.StartChat.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "SubmitChatTurn" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSubmitChatTurnRequest` message.
+        ///   - serializer: A serializer for `AppDaemonSubmitChatTurnRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonSubmitChatTurnReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func submitChatTurn<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonSubmitChatTurnRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonSubmitChatTurnRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonSubmitChatTurnReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSubmitChatTurnReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.SubmitChatTurn.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ContinueChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonContinueChatRequest` message.
+        ///   - serializer: A serializer for `AppDaemonContinueChatRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonContinueChatReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func continueChat<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonContinueChatRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonContinueChatRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonContinueChatReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonContinueChatReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.ContinueChat.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "SendChatMessage" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSendChatMessageRequest` message.
+        ///   - serializer: A serializer for `AppDaemonSendChatMessageRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonSendChatMessageReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func sendChatMessage<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonSendChatMessageRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonSendChatMessageRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonSendChatMessageReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSendChatMessageReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.SendChatMessage.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "StopChat" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonStopChatRequest` message.
+        ///   - serializer: A serializer for `AppDaemonStopChatRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonStopChatReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func stopChat<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonStopChatRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonStopChatRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonStopChatReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStopChatReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.StopChat.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "GetChatSessionState" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetChatSessionStateRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetChatSessionStateRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetChatSessionStateReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func getChatSessionState<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetChatSessionStateRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetChatSessionStateRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetChatSessionStateReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetChatSessionStateReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.GetChatSessionState.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "GetChatDiagnostics" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonGetChatDiagnosticsRequest` message.
+        ///   - serializer: A serializer for `AppDaemonGetChatDiagnosticsRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonGetChatDiagnosticsReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func getChatDiagnostics<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonGetChatDiagnosticsRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonGetChatDiagnosticsRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonGetChatDiagnosticsReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetChatDiagnosticsReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.GetChatDiagnostics.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ResetChatDiagnostics" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResetChatDiagnosticsRequest` message.
+        ///   - serializer: A serializer for `AppDaemonResetChatDiagnosticsRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonResetChatDiagnosticsReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func resetChatDiagnostics<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonResetChatDiagnosticsRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonResetChatDiagnosticsRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonResetChatDiagnosticsReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResetChatDiagnosticsReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.ResetChatDiagnostics.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "ResolveChatPermission" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonResolveChatPermissionRequest` message.
+        ///   - serializer: A serializer for `AppDaemonResolveChatPermissionRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonResolveChatPermissionReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func resolveChatPermission<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonResolveChatPermissionRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonResolveChatPermissionRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonResolveChatPermissionReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveChatPermissionReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.ResolveChatPermission.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
+
+        /// Call the "SetChatConfigOption" method.
+        ///
+        /// - Parameters:
+        ///   - request: A request containing a single `AppDaemonSetChatConfigOptionRequest` message.
+        ///   - serializer: A serializer for `AppDaemonSetChatConfigOptionRequest` messages.
+        ///   - deserializer: A deserializer for `AppDaemonSetChatConfigOptionReply` messages.
+        ///   - options: Options to apply to this RPC.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
+        /// - Returns: The result of `handleResponse`.
+        public func setChatConfigOption<Result>(
+            request: GRPCCore.ClientRequest<AppDaemonSetChatConfigOptionRequest>,
+            serializer: some GRPCCore.MessageSerializer<AppDaemonSetChatConfigOptionRequest>,
+            deserializer: some GRPCCore.MessageDeserializer<AppDaemonSetChatConfigOptionReply>,
+            options: GRPCCore.CallOptions = .defaults,
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSetChatConfigOptionReply>) async throws -> Result = { response in
+                try response.message
+            }
+        ) async throws -> Result where Result: Sendable {
+            try await self.client.unary(
+                request: request,
+                descriptor: AppDaemonAppDaemon.Method.SetChatConfigOption.descriptor,
+                serializer: serializer,
+                deserializer: deserializer,
+                options: options,
+                onResponse: handleResponse
+            )
+        }
     }
 }
 
@@ -947,6 +7807,1231 @@ extension AppDaemonAppDaemon.ClientProtocol {
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonSubscribeEventsRequest>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonDaemonEvent>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CreateWiki" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonCreateWikiRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func createWiki<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonCreateWikiRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCreateWikiReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.createWiki(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonCreateWikiRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonCreateWikiReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "DeleteWiki" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonDeleteWikiRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func deleteWiki<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonDeleteWikiRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonDeleteWikiReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.deleteWiki(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonDeleteWikiRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonDeleteWikiReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "RenameWiki" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonRenameWikiRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func renameWiki<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonRenameWikiRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRenameWikiReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.renameWiki(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonRenameWikiRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonRenameWikiReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ResolveWiki" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonResolveWikiRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func resolveWiki<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonResolveWikiRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveWikiReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.resolveWiki(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonResolveWikiRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonResolveWikiReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "OpenStore" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonOpenStoreRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func openStore<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonOpenStoreRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonOpenStoreReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.openStore(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonOpenStoreRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonOpenStoreReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CloseStore" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonCloseStoreRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func closeStore<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonCloseStoreRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCloseStoreReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.closeStore(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonCloseStoreRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonCloseStoreReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetStoreChangeToken" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonGetStoreChangeTokenRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getStoreChangeToken<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonGetStoreChangeTokenRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetStoreChangeTokenReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.getStoreChangeToken(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetStoreChangeTokenRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetStoreChangeTokenReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetPage" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonGetPageRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getPage<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonGetPageRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetPageReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.getPage(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetPageRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetPageReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ListPages" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonListPagesRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func listPages<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonListPagesRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonListPagesReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.listPages(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonListPagesRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonListPagesReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "UpsertPage" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonUpsertPageRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func upsertPage<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonUpsertPageRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonUpsertPageReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.upsertPage(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonUpsertPageRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonUpsertPageReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StoreSmall" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonStoreSmallRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func storeSmall<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonStoreSmallRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreSmallReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.storeSmall(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStoreSmallRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStoreSmallReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StoreList" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonStoreListRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func storeList<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonStoreListRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreListReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.storeList(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStoreListRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStoreListReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StoreBlob" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonStoreBlobRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func storeBlob<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonStoreBlobRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreBlobReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.storeBlob(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStoreBlobRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStoreBlobReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StoreMutation" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonStoreMutationRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func storeMutation<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonStoreMutationRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreMutationReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.storeMutation(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStoreMutationRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStoreMutationReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "BeginPayloadUpload" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonBeginPayloadUploadRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func beginPayloadUpload<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonBeginPayloadUploadRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonBeginPayloadUploadReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.beginPayloadUpload(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonBeginPayloadUploadRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonBeginPayloadUploadReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "AppendPayloadChunk" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonAppendPayloadChunkRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func appendPayloadChunk<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonAppendPayloadChunkRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonAppendPayloadChunkReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.appendPayloadChunk(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonAppendPayloadChunkRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonAppendPayloadChunkReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CommitPayloadUpload" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonCommitPayloadUploadRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func commitPayloadUpload<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonCommitPayloadUploadRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCommitPayloadUploadReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.commitPayloadUpload(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonCommitPayloadUploadRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonCommitPayloadUploadReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ReadPayloadChunk" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonReadPayloadChunkRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func readPayloadChunk<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonReadPayloadChunkRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonReadPayloadChunkReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.readPayloadChunk(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonReadPayloadChunkRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonReadPayloadChunkReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ResolveStoreOutcome" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonResolveStoreOutcomeRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func resolveStoreOutcome<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonResolveStoreOutcomeRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveStoreOutcomeReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.resolveStoreOutcome(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonResolveStoreOutcomeRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonResolveStoreOutcomeReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetStoreSessionBootstrap" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonGetStoreSessionBootstrapRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getStoreSessionBootstrap<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonGetStoreSessionBootstrapRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetStoreSessionBootstrapReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.getStoreSessionBootstrap(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetStoreSessionBootstrapRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetStoreSessionBootstrapReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "Search" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonSearchRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func search<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonSearchRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSearchReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.search(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonSearchRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonSearchReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "Autocomplete" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonAutocompleteRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func autocomplete<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonAutocompleteRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonAutocompleteReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.autocomplete(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonAutocompleteRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonAutocompleteReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "UpgradeSearchIndex" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonUpgradeSearchIndexRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func upgradeSearchIndex<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonUpgradeSearchIndexRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonUpgradeSearchIndexReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.upgradeSearchIndex(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonUpgradeSearchIndexRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonUpgradeSearchIndexReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetQueueSnapshot" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonGetQueueSnapshotRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getQueueSnapshot<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonGetQueueSnapshotRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetQueueSnapshotReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.getQueueSnapshot(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetQueueSnapshotRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetQueueSnapshotReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "EnqueueItem" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonEnqueueItemRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func enqueueItem<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonEnqueueItemRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonEnqueueItemReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.enqueueItem(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonEnqueueItemRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonEnqueueItemReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CancelItem" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonCancelItemRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func cancelItem<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonCancelItemRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCancelItemReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.cancelItem(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonCancelItemRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonCancelItemReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CancelAllInFlight" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonCancelAllInFlightRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func cancelAllInFlight<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonCancelAllInFlightRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCancelAllInFlightReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.cancelAllInFlight(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonCancelAllInFlightRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonCancelAllInFlightReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "RetryItem" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonRetryItemRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func retryItem<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonRetryItemRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRetryItemReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.retryItem(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonRetryItemRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonRetryItemReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "PauseQueue" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonPauseQueueRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func pauseQueue<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonPauseQueueRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonPauseQueueReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.pauseQueue(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonPauseQueueRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonPauseQueueReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ResumeQueue" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonResumeQueueRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func resumeQueue<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonResumeQueueRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResumeQueueReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.resumeQueue(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonResumeQueueRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonResumeQueueReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "HaltQueue" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonHaltQueueRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func haltQueue<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonHaltQueueRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonHaltQueueReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.haltQueue(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonHaltQueueRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonHaltQueueReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ReorderItem" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonReorderItemRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func reorderItem<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonReorderItemRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonReorderItemReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.reorderItem(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonReorderItemRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonReorderItemReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "HasActiveWork" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonHasActiveWorkRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func hasActiveWork<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonHasActiveWorkRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonHasActiveWorkReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.hasActiveWork(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonHasActiveWorkRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonHasActiveWorkReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "LoadQueueTranscript" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonLoadQueueTranscriptRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func loadQueueTranscript<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonLoadQueueTranscriptRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueTranscriptReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.loadQueueTranscript(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonLoadQueueTranscriptRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonLoadQueueTranscriptReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "LoadQueueActivitySnapshots" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonLoadQueueActivitySnapshotsRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func loadQueueActivitySnapshots<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonLoadQueueActivitySnapshotsRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueActivitySnapshotsReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.loadQueueActivitySnapshots(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonLoadQueueActivitySnapshotsRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonLoadQueueActivitySnapshotsReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "LoadQueueReport" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonLoadQueueReportRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func loadQueueReport<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonLoadQueueReportRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueReportReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.loadQueueReport(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonLoadQueueReportRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonLoadQueueReportReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "LoadQueueReportSummaries" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonLoadQueueReportSummariesRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func loadQueueReportSummaries<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonLoadQueueReportSummariesRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueReportSummariesReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.loadQueueReportSummaries(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonLoadQueueReportSummariesRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonLoadQueueReportSummariesReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetQueueOwnershipStatus" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonGetQueueOwnershipStatusRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getQueueOwnershipStatus<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonGetQueueOwnershipStatusRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetQueueOwnershipStatusReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.getQueueOwnershipStatus(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetQueueOwnershipStatusRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetQueueOwnershipStatusReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "RelinquishQueue" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonRelinquishQueueRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func relinquishQueue<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonRelinquishQueueRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRelinquishQueueReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.relinquishQueue(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonRelinquishQueueRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonRelinquishQueueReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StartChat" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonStartChatRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func startChat<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonStartChatRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStartChatReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.startChat(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStartChatRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStartChatReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "SubmitChatTurn" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonSubmitChatTurnRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func submitChatTurn<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonSubmitChatTurnRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSubmitChatTurnReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.submitChatTurn(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonSubmitChatTurnRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonSubmitChatTurnReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ContinueChat" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonContinueChatRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func continueChat<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonContinueChatRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonContinueChatReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.continueChat(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonContinueChatRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonContinueChatReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "SendChatMessage" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonSendChatMessageRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func sendChatMessage<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonSendChatMessageRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSendChatMessageReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.sendChatMessage(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonSendChatMessageRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonSendChatMessageReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StopChat" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonStopChatRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func stopChat<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonStopChatRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStopChatReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.stopChat(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonStopChatRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonStopChatReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetChatSessionState" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonGetChatSessionStateRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getChatSessionState<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonGetChatSessionStateRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetChatSessionStateReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.getChatSessionState(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetChatSessionStateRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetChatSessionStateReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetChatDiagnostics" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonGetChatDiagnosticsRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getChatDiagnostics<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonGetChatDiagnosticsRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetChatDiagnosticsReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.getChatDiagnostics(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonGetChatDiagnosticsRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonGetChatDiagnosticsReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ResetChatDiagnostics" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonResetChatDiagnosticsRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func resetChatDiagnostics<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonResetChatDiagnosticsRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResetChatDiagnosticsReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.resetChatDiagnostics(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonResetChatDiagnosticsRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonResetChatDiagnosticsReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ResolveChatPermission" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonResolveChatPermissionRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func resolveChatPermission<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonResolveChatPermissionRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveChatPermissionReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.resolveChatPermission(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonResolveChatPermissionRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonResolveChatPermissionReply>(),
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "SetChatConfigOption" method.
+    ///
+    /// - Parameters:
+    ///   - request: A request containing a single `AppDaemonSetChatConfigOptionRequest` message.
+    ///   - options: Options to apply to this RPC.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func setChatConfigOption<Result>(
+        request: GRPCCore.ClientRequest<AppDaemonSetChatConfigOptionRequest>,
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSetChatConfigOptionReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        try await self.setChatConfigOption(
+            request: request,
+            serializer: GRPCProtobuf.ProtobufSerializer<AppDaemonSetChatConfigOptionRequest>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<AppDaemonSetChatConfigOptionReply>(),
             options: options,
             onResponse: handleResponse
         )
@@ -1086,6 +9171,1427 @@ extension AppDaemonAppDaemon.ClientProtocol {
             metadata: metadata
         )
         return try await self.subscribeEvents(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CreateWiki" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func createWiki<Result>(
+        _ message: AppDaemonCreateWikiRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCreateWikiReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonCreateWikiRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.createWiki(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "DeleteWiki" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func deleteWiki<Result>(
+        _ message: AppDaemonDeleteWikiRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonDeleteWikiReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonDeleteWikiRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.deleteWiki(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "RenameWiki" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func renameWiki<Result>(
+        _ message: AppDaemonRenameWikiRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRenameWikiReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonRenameWikiRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.renameWiki(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ResolveWiki" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func resolveWiki<Result>(
+        _ message: AppDaemonResolveWikiRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveWikiReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonResolveWikiRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.resolveWiki(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "OpenStore" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func openStore<Result>(
+        _ message: AppDaemonOpenStoreRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonOpenStoreReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonOpenStoreRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.openStore(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CloseStore" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func closeStore<Result>(
+        _ message: AppDaemonCloseStoreRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCloseStoreReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonCloseStoreRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.closeStore(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetStoreChangeToken" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getStoreChangeToken<Result>(
+        _ message: AppDaemonGetStoreChangeTokenRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetStoreChangeTokenReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonGetStoreChangeTokenRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.getStoreChangeToken(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetPage" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getPage<Result>(
+        _ message: AppDaemonGetPageRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetPageReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonGetPageRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.getPage(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ListPages" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func listPages<Result>(
+        _ message: AppDaemonListPagesRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonListPagesReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonListPagesRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.listPages(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "UpsertPage" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func upsertPage<Result>(
+        _ message: AppDaemonUpsertPageRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonUpsertPageReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonUpsertPageRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.upsertPage(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StoreSmall" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func storeSmall<Result>(
+        _ message: AppDaemonStoreSmallRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreSmallReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonStoreSmallRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.storeSmall(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StoreList" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func storeList<Result>(
+        _ message: AppDaemonStoreListRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreListReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonStoreListRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.storeList(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StoreBlob" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func storeBlob<Result>(
+        _ message: AppDaemonStoreBlobRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreBlobReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonStoreBlobRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.storeBlob(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StoreMutation" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func storeMutation<Result>(
+        _ message: AppDaemonStoreMutationRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStoreMutationReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonStoreMutationRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.storeMutation(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "BeginPayloadUpload" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func beginPayloadUpload<Result>(
+        _ message: AppDaemonBeginPayloadUploadRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonBeginPayloadUploadReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonBeginPayloadUploadRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.beginPayloadUpload(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "AppendPayloadChunk" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func appendPayloadChunk<Result>(
+        _ message: AppDaemonAppendPayloadChunkRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonAppendPayloadChunkReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonAppendPayloadChunkRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.appendPayloadChunk(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CommitPayloadUpload" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func commitPayloadUpload<Result>(
+        _ message: AppDaemonCommitPayloadUploadRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCommitPayloadUploadReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonCommitPayloadUploadRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.commitPayloadUpload(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ReadPayloadChunk" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func readPayloadChunk<Result>(
+        _ message: AppDaemonReadPayloadChunkRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonReadPayloadChunkReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonReadPayloadChunkRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.readPayloadChunk(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ResolveStoreOutcome" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func resolveStoreOutcome<Result>(
+        _ message: AppDaemonResolveStoreOutcomeRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveStoreOutcomeReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonResolveStoreOutcomeRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.resolveStoreOutcome(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetStoreSessionBootstrap" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getStoreSessionBootstrap<Result>(
+        _ message: AppDaemonGetStoreSessionBootstrapRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetStoreSessionBootstrapReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonGetStoreSessionBootstrapRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.getStoreSessionBootstrap(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "Search" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func search<Result>(
+        _ message: AppDaemonSearchRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSearchReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonSearchRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.search(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "Autocomplete" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func autocomplete<Result>(
+        _ message: AppDaemonAutocompleteRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonAutocompleteReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonAutocompleteRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.autocomplete(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "UpgradeSearchIndex" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func upgradeSearchIndex<Result>(
+        _ message: AppDaemonUpgradeSearchIndexRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonUpgradeSearchIndexReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonUpgradeSearchIndexRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.upgradeSearchIndex(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetQueueSnapshot" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getQueueSnapshot<Result>(
+        _ message: AppDaemonGetQueueSnapshotRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetQueueSnapshotReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonGetQueueSnapshotRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.getQueueSnapshot(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "EnqueueItem" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func enqueueItem<Result>(
+        _ message: AppDaemonEnqueueItemRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonEnqueueItemReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonEnqueueItemRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.enqueueItem(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CancelItem" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func cancelItem<Result>(
+        _ message: AppDaemonCancelItemRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCancelItemReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonCancelItemRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.cancelItem(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "CancelAllInFlight" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func cancelAllInFlight<Result>(
+        _ message: AppDaemonCancelAllInFlightRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonCancelAllInFlightReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonCancelAllInFlightRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.cancelAllInFlight(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "RetryItem" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func retryItem<Result>(
+        _ message: AppDaemonRetryItemRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRetryItemReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonRetryItemRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.retryItem(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "PauseQueue" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func pauseQueue<Result>(
+        _ message: AppDaemonPauseQueueRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonPauseQueueReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonPauseQueueRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.pauseQueue(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ResumeQueue" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func resumeQueue<Result>(
+        _ message: AppDaemonResumeQueueRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResumeQueueReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonResumeQueueRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.resumeQueue(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "HaltQueue" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func haltQueue<Result>(
+        _ message: AppDaemonHaltQueueRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonHaltQueueReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonHaltQueueRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.haltQueue(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ReorderItem" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func reorderItem<Result>(
+        _ message: AppDaemonReorderItemRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonReorderItemReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonReorderItemRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.reorderItem(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "HasActiveWork" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func hasActiveWork<Result>(
+        _ message: AppDaemonHasActiveWorkRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonHasActiveWorkReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonHasActiveWorkRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.hasActiveWork(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "LoadQueueTranscript" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func loadQueueTranscript<Result>(
+        _ message: AppDaemonLoadQueueTranscriptRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueTranscriptReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonLoadQueueTranscriptRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.loadQueueTranscript(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "LoadQueueActivitySnapshots" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func loadQueueActivitySnapshots<Result>(
+        _ message: AppDaemonLoadQueueActivitySnapshotsRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueActivitySnapshotsReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonLoadQueueActivitySnapshotsRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.loadQueueActivitySnapshots(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "LoadQueueReport" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func loadQueueReport<Result>(
+        _ message: AppDaemonLoadQueueReportRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueReportReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonLoadQueueReportRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.loadQueueReport(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "LoadQueueReportSummaries" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func loadQueueReportSummaries<Result>(
+        _ message: AppDaemonLoadQueueReportSummariesRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonLoadQueueReportSummariesReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonLoadQueueReportSummariesRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.loadQueueReportSummaries(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetQueueOwnershipStatus" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getQueueOwnershipStatus<Result>(
+        _ message: AppDaemonGetQueueOwnershipStatusRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetQueueOwnershipStatusReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonGetQueueOwnershipStatusRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.getQueueOwnershipStatus(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "RelinquishQueue" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func relinquishQueue<Result>(
+        _ message: AppDaemonRelinquishQueueRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonRelinquishQueueReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonRelinquishQueueRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.relinquishQueue(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StartChat" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func startChat<Result>(
+        _ message: AppDaemonStartChatRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStartChatReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonStartChatRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.startChat(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "SubmitChatTurn" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func submitChatTurn<Result>(
+        _ message: AppDaemonSubmitChatTurnRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSubmitChatTurnReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonSubmitChatTurnRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.submitChatTurn(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ContinueChat" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func continueChat<Result>(
+        _ message: AppDaemonContinueChatRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonContinueChatReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonContinueChatRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.continueChat(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "SendChatMessage" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func sendChatMessage<Result>(
+        _ message: AppDaemonSendChatMessageRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSendChatMessageReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonSendChatMessageRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.sendChatMessage(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "StopChat" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func stopChat<Result>(
+        _ message: AppDaemonStopChatRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonStopChatReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonStopChatRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.stopChat(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetChatSessionState" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getChatSessionState<Result>(
+        _ message: AppDaemonGetChatSessionStateRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetChatSessionStateReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonGetChatSessionStateRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.getChatSessionState(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "GetChatDiagnostics" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func getChatDiagnostics<Result>(
+        _ message: AppDaemonGetChatDiagnosticsRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonGetChatDiagnosticsReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonGetChatDiagnosticsRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.getChatDiagnostics(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ResetChatDiagnostics" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func resetChatDiagnostics<Result>(
+        _ message: AppDaemonResetChatDiagnosticsRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResetChatDiagnosticsReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonResetChatDiagnosticsRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.resetChatDiagnostics(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "ResolveChatPermission" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func resolveChatPermission<Result>(
+        _ message: AppDaemonResolveChatPermissionRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonResolveChatPermissionReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonResolveChatPermissionRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.resolveChatPermission(
+            request: request,
+            options: options,
+            onResponse: handleResponse
+        )
+    }
+
+    /// Call the "SetChatConfigOption" method.
+    ///
+    /// - Parameters:
+    ///   - message: request message to send.
+    ///   - metadata: Additional metadata to send, defaults to empty.
+    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
+    /// - Returns: The result of `handleResponse`.
+    public func setChatConfigOption<Result>(
+        _ message: AppDaemonSetChatConfigOptionRequest,
+        metadata: GRPCCore.Metadata = [:],
+        options: GRPCCore.CallOptions = .defaults,
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<AppDaemonSetChatConfigOptionReply>) async throws -> Result = { response in
+            try response.message
+        }
+    ) async throws -> Result where Result: Sendable {
+        let request = GRPCCore.ClientRequest<AppDaemonSetChatConfigOptionRequest>(
+            message: message,
+            metadata: metadata
+        )
+        return try await self.setChatConfigOption(
             request: request,
             options: options,
             onResponse: handleResponse
